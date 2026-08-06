@@ -14,6 +14,11 @@ from pathlib import Path
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
+from agm.agl.ir.reserved_nominals import (
+    NO_DECL_ID,
+    RESERVED_NOMINAL_NAMES,
+    reserved_nominal_id,
+)
 from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 from agm.agl.repl import ReplSession
 from agm.agl.scope.program import resolve_program
@@ -35,6 +40,7 @@ from agm.agl.semantics.type_table import (
 )
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
+    COMPATIBILITY_PRELUDE_TYPE_NAMES,
     ArrayType,
     BoolType,
     BottomType,
@@ -52,7 +58,15 @@ from agm.agl.semantics.types import (
     TypeVarType,
     UnitType,
 )
-from agm.agl.syntax.nodes import LetDecl, ParamKind, VarDecl, simple_let_pattern_name
+from agm.agl.syntax.nodes import (
+    EnumDef,
+    ExceptionDef,
+    LetDecl,
+    ParamKind,
+    RecordDef,
+    VarDecl,
+    simple_let_pattern_name,
+)
 from agm.agl.typecheck import AglTypeError, CheckedModule
 from agm.agl.typecheck.program import check_program
 from tests.agl.ir_harness import evaluate_ir_output, make_graph_from_files
@@ -208,10 +222,26 @@ class TestTypeDefHandle:
         handle = typedef.handle(type_args=(IntType(),))
         assert handle == RecordType(name="Box", type_args=(IntType(),), module_id=ENTRY_ID)
 
-    def test_exception_kind_unsupported(self) -> None:
+    def test_exception_handle(self) -> None:
         typedef = TypeDef(kind="exception", name="Boom", module_id=ENTRY_ID)
-        with pytest.raises(ValueError, match="does not support kind"):
-            typedef.handle()
+        assert typedef.handle() == ExceptionType(name="Boom", module_id=ENTRY_ID)
+
+    def test_exception_handle_rejects_type_args(self) -> None:
+        typedef = TypeDef(kind="exception", name="Boom", module_id=ENTRY_ID)
+        with pytest.raises(ValueError, match="does not accept type_args"):
+            typedef.handle(type_args=(IntType(),))
+
+    def test_record_handle_stamps_decl_id_from_decl_node_id(self) -> None:
+        typedef = TypeDef(kind="record", name="Point", module_id=ENTRY_ID, decl_node_id=42)
+        assert typedef.handle().decl_id == 42
+
+    def test_enum_handle_stamps_decl_id_from_decl_node_id(self) -> None:
+        typedef = TypeDef(kind="enum", name="Color", module_id=ENTRY_ID, decl_node_id=43)
+        assert typedef.handle().decl_id == 43
+
+    def test_exception_handle_stamps_decl_id_from_decl_node_id(self) -> None:
+        typedef = TypeDef(kind="exception", name="Boom", module_id=ENTRY_ID, decl_node_id=44)
+        assert typedef.handle().decl_id == 44
 
 
 class TestRegisterAndGet:
@@ -3075,3 +3105,151 @@ class TestFiniteClosure:
         assert message is not None
         assert "mod_a::Perfect" in message
         assert "a parameter type" in message
+
+
+# ---------------------------------------------------------------------------
+# Declaration-keyed identity: RecordType/EnumType/ExceptionType.decl_id and
+# TypeDef.decl_node_id
+# ---------------------------------------------------------------------------
+
+
+class TestDeclarationIdentity:
+    """An ordinary declaration's handle/``TypeDef`` adopt its own AST node id
+    as their declaration identity; the shipped standard library's own
+    declaration of a reserved host-known name instead adopts that name's
+    fixed reserved identity (see ``ir.reserved_nominals``)."""
+
+    def test_the_first_declaration_in_a_program_is_not_read_as_having_no_identity(self) -> None:
+        """A field-less declaration written as a program's very first item owns
+        the lowest AST node id there is, and still carries a real declaration
+        identity rather than the "no declaration identity" value."""
+        checked = _check("record R\n  *\nlet r = R()\n()")
+        record_def = next(
+            item
+            for item in checked.resolved.program.body.items
+            if isinstance(item, RecordDef) and item.name == "R"
+        )
+        assert record_def.node_id == 0
+        r = checked.type_env.get_type("R")
+        assert isinstance(r, RecordType)
+        assert r.decl_id != NO_DECL_ID
+        typedef = checked.type_env.type_table.get(r.module_id, "R")
+        assert typedef is not None
+        assert typedef.decl_node_id != NO_DECL_ID
+
+    def test_record_handle_and_typedef_adopt_the_declaration_node_id(self) -> None:
+        checked = _check("record Point\n  x: int\n  y: int\nlet p = Point(x = 1, y = 2)\np")
+        record_def = next(
+            item
+            for item in checked.resolved.program.body.items
+            if isinstance(item, RecordDef) and item.name == "Point"
+        )
+        point = checked.type_env.get_type("Point")
+        assert isinstance(point, RecordType)
+        assert point.decl_id == record_def.node_id
+        typedef = checked.type_env.type_table.get(point.module_id, "Point")
+        assert typedef is not None
+        assert typedef.decl_node_id == record_def.node_id
+
+    def test_enum_handle_and_typedef_adopt_the_declaration_node_id(self) -> None:
+        checked = _check("enum Color\n  | Red\n  | Green\n  | Blue\nlet c = Red\nc")
+        enum_def = next(
+            item
+            for item in checked.resolved.program.body.items
+            if isinstance(item, EnumDef) and item.name == "Color"
+        )
+        color = checked.type_env.get_type("Color")
+        assert isinstance(color, EnumType)
+        assert color.decl_id == enum_def.node_id
+        typedef = checked.type_env.type_table.get(color.module_id, "Color")
+        assert typedef is not None
+        assert typedef.decl_node_id == enum_def.node_id
+
+    def test_exception_handle_and_typedef_adopt_the_declaration_node_id(self) -> None:
+        checked = _check(
+            'exception Boom extends Exception\n  code: int\nBoom(code = 5, message = "m")'
+        )
+        exception_def = next(
+            item
+            for item in checked.resolved.program.body.items
+            if isinstance(item, ExceptionDef) and item.name == "Boom"
+        )
+        boom = checked.type_env.get_type("Boom")
+        assert isinstance(boom, ExceptionType)
+        assert boom.decl_id == exception_def.node_id
+        typedef = checked.type_env.type_table.get(boom.module_id, "Boom")
+        assert typedef is not None
+        assert typedef.decl_node_id == exception_def.node_id
+
+    def test_generic_record_instantiation_preserves_declaration_identity_across_arguments(
+        self,
+    ) -> None:
+        checked = _check(
+            "record Box[T]\n  value: T\n"
+            'let a: Box[int] = Box(value = 1)\nlet b: Box[text] = Box(value = "x")\n()'
+        )
+        a = _binding_value_type(checked, "a")
+        b = _binding_value_type(checked, "b")
+        assert isinstance(a, RecordType)
+        assert isinstance(b, RecordType)
+        assert a.decl_id != NO_DECL_ID
+        assert a.decl_id == b.decl_id
+
+    def test_generic_type_annotation_resolves_to_the_declarations_identity(self) -> None:
+        """Applying a generic declaration's type arguments in an annotation
+        instantiates its registered template, so the resolved handle names the
+        declaration rather than losing its identity."""
+        checked = _check("record Box[T]\n  value: T\ndef unwrap(b: Box[int]) -> int = b.value\n()")
+        record_def = next(
+            item
+            for item in checked.resolved.program.body.items
+            if isinstance(item, RecordDef) and item.name == "Box"
+        )
+        param_type = checked.function_signatures["unwrap"].params[0].type
+        assert isinstance(param_type, RecordType)
+        assert param_type.type_args == (IntType(),)
+        assert param_type.decl_id == record_def.node_id
+
+    def test_same_named_declarations_in_different_modules_have_different_identities(
+        self, tmp_path: Path
+    ) -> None:
+        """Declaration identity distinguishes two declarations that share a
+        bare name, which is what makes it an identity rather than a label."""
+        checked = _check_program(
+            tmp_path,
+            {
+                "mod_a": "record Point\n  x: int\n",
+                "mod_b": "record Point\n  x: int\n",
+                "entry": "import mod_a\nimport mod_b\n()\n",
+            },
+        )
+        decl_ids = [
+            handle.decl_id
+            for mid, module in checked.modules.items()
+            if not mid.is_entry and mid != STD_CORE_ID
+            for handle in [module.type_env.get_type("Point")]
+            if isinstance(handle, RecordType)
+        ]
+        assert len(decl_ids) == 2
+        assert decl_ids[0] != decl_ids[1]
+        assert all(decl_id != NO_DECL_ID for decl_id in decl_ids)
+
+    def test_stdlib_declarations_of_reserved_names_adopt_the_reserved_identity(
+        self, tmp_path: Path
+    ) -> None:
+        """Every reserved host-known name the shipped standard library declares
+        itself resolves, in ``std/core``'s own namespace, to the fixed reserved
+        identity — so a handle the host mints without any declaration in hand
+        names the same declaration a stdlib-loading program resolves."""
+        checked = _check_program(tmp_path, {"entry": "()"})
+        core = checked.modules[STD_CORE_ID]
+        generics = core.type_env.all_generic_types()
+        declared_reserved = set(RESERVED_NOMINAL_NAMES) - COMPATIBILITY_PRELUDE_TYPE_NAMES
+        assert "Option" in declared_reserved
+        for name in sorted(declared_reserved):
+            handle = core.type_env.get_type(name)
+            if handle is None:
+                # Generic declarations register a template, not a bare handle.
+                handle = generics[name].template
+            assert isinstance(handle, (RecordType, EnumType, ExceptionType))
+            assert handle.decl_id == reserved_nominal_id(name), name

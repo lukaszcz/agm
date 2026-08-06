@@ -117,7 +117,8 @@ def lower_program(
                 ),
             )
         else:
-            handle = ExceptionType(typedef.name, typedef.module_id, scope_path=typedef.scope_path)
+            handle = typedef.handle()
+            assert isinstance(handle, ExceptionType)  # typedef.kind == "exception" guarantees this
             link.nominals[nominal] = NominalDescriptor(
                 nominal=nominal,
                 display_name=display_name,

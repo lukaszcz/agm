@@ -45,6 +45,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from dataclasses import replace
 
+from agm.agl.ir.reserved_nominals import reserved_nominal_id
 from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 from agm.agl.semantics.type_table import (
     BUILTIN_EXCEPTION_TYPE_DEFS,
@@ -90,6 +91,28 @@ _BUILTIN_TYPE_NAMES: frozenset[str] = (
     | BUILTIN_EXCEPTION_NAMES
     | BUILTIN_PRELUDE_TYPE_NAMES
 )
+
+
+def _decl_identity(
+    module_id: ModuleId, scope_path: tuple[str, ...], bare_name: str, node_id: int
+) -> int:
+    """Return the declaration identity for a record/enum/exception declaration.
+
+    The shipped standard library's own declaration of a reserved host-known
+    name (``ExecResult``, ``Option``, ``CastError``, ...), written at
+    ``std/core``'s top scope, denotes the same type the host mints directly
+    (see ``ir.reserved_nominals``), so it adopts that reserved identity
+    instead of its own AST node id — that is how the shipped standard
+    library's declaration comes to denote the same type as a program that
+    declares nothing of its own. Every other declaration — including a
+    ``builtin`` declaration anywhere other than ``std/core``'s root, and any
+    non-reserved name declared at ``std/core``'s root — is identified by its
+    own AST node id instead, which the loader keeps disjoint across a
+    program's modules, so declaration identities stay distinct program-wide.
+    """
+    names_canonical_key = module_id == STD_CORE_ID and scope_path == ()
+    reserved = reserved_nominal_id(bare_name) if names_canonical_key else None
+    return node_id if reserved is None else reserved
 
 
 def _bare_name(name: str) -> str:
@@ -220,12 +243,15 @@ class _TypeBuilder:
                 )
                 self._env.unregister_name(item.name)
                 module_id = self._module_id
+                bare_name = _bare_name(item.name)
+                scope_path = tuple(segment.name for segment in item.scope_path)
                 self._env.register_type(
                     item.name,
                     ExceptionType(
-                        name=_bare_name(item.name),
+                        name=bare_name,
                         module_id=module_id,
-                        scope_path=tuple(segment.name for segment in item.scope_path),
+                        scope_path=scope_path,
+                        decl_id=_decl_identity(module_id, scope_path, bare_name, item.node_id),
                     ),
                 )
                 self._exception_defs[item.name] = item
@@ -238,6 +264,7 @@ class _TypeBuilder:
         module_id = self._module_id
         declared_name = _bare_name(item.name)
         scope_path = tuple(segment.name for segment in item.scope_path)
+        decl_id = _decl_identity(module_id, scope_path, declared_name, item.node_id)
         type_params = item.type_params
         if type_params:
             type_args = tuple(TypeVarType(p) for p in type_params)
@@ -247,6 +274,7 @@ class _TypeBuilder:
                     type_args=type_args,
                     module_id=module_id,
                     scope_path=scope_path,
+                    decl_id=decl_id,
                 )
                 if is_enum
                 else RecordType(
@@ -254,6 +282,7 @@ class _TypeBuilder:
                     type_args=type_args,
                     module_id=module_id,
                     scope_path=scope_path,
+                    decl_id=decl_id,
                 )
             )
             gdef = GenericTypeDef(
@@ -264,9 +293,13 @@ class _TypeBuilder:
             self._env.register_generic_type(item.name, gdef)
         else:
             handle: RecordType | EnumType = (
-                EnumType(name=declared_name, module_id=module_id, scope_path=scope_path)
+                EnumType(
+                    name=declared_name, module_id=module_id, scope_path=scope_path, decl_id=decl_id
+                )
                 if is_enum
-                else RecordType(name=declared_name, module_id=module_id, scope_path=scope_path)
+                else RecordType(
+                    name=declared_name, module_id=module_id, scope_path=scope_path, decl_id=decl_id
+                )
             )
             self._env.register_type(item.name, handle)
 
@@ -345,13 +378,15 @@ class _TypeBuilder:
             fields[fd.name] = self._resolve_field_type(fd)
         module_id = self._module_id
         scope_path = tuple(segment.name for segment in stmt.scope_path)
+        bare_name = _bare_name(stmt.name)
         typedef = TypeDef(
             kind="record",
-            name=_bare_name(stmt.name),
+            name=bare_name,
             module_id=module_id,
             scope_path=scope_path,
             fields=tuple(fields.items()),
             is_builtin=stmt.is_builtin,
+            decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
         )
         self._validate_builtin_shape(stmt, typedef, BUILTIN_PRELUDE_TYPE_DEFS)
         self._env.type_table.register(typedef)
@@ -360,7 +395,7 @@ class _TypeBuilder:
         # like every other declaration — including a builtin one).
         field_kinds = tuple((fd.name, fd.kind) for fd in stmt.fields)
         self._env.register_constructor_field_kinds(
-            _bare_name(stmt.name), None, field_kinds, scope_path=scope_path, module_id=module_id
+            bare_name, None, field_kinds, scope_path=scope_path, module_id=module_id
         )
 
     def _build_enum(self, stmt: EnumDef) -> None:
@@ -382,13 +417,15 @@ class _TypeBuilder:
             variants[vd.name] = vfields
         module_id = self._module_id
         scope_path = tuple(segment.name for segment in stmt.scope_path)
+        bare_name = _bare_name(stmt.name)
         typedef = TypeDef(
             kind="enum",
-            name=_bare_name(stmt.name),
+            name=bare_name,
             module_id=module_id,
             scope_path=scope_path,
             variants=tuple((vname, tuple(vfields.items())) for vname, vfields in variants.items()),
             is_builtin=stmt.is_builtin,
+            decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
         )
         self._validate_builtin_shape(stmt, typedef, BUILTIN_PRELUDE_TYPE_DEFS)
         self._env.type_table.register(typedef)
@@ -397,7 +434,7 @@ class _TypeBuilder:
         for vd in stmt.variants:
             vfield_kinds = tuple((fd.name, fd.kind) for fd in vd.fields)
             self._env.register_constructor_field_kinds(
-                _bare_name(stmt.name),
+                bare_name,
                 vd.name,
                 vfield_kinds,
                 scope_path=scope_path,
@@ -439,6 +476,8 @@ class _TypeBuilder:
             seen_fields[fd.name] = fd.span
             fields[fd.name] = self._resolve_field_type(fd)
         module_id = self._module_id
+        scope_path = tuple(segment.name for segment in stmt.scope_path)
+        bare_name = _bare_name(stmt.name)
         # Own field kinds honor each field's declared @pos/@std/@named marker —
         # exactly like a record's fields — in declaration order, parallel to
         # ``fields`` above.  Stored as ``ParamKind.value`` strings (see
@@ -448,14 +487,15 @@ class _TypeBuilder:
         # ``TypeDef.base``, no build-ordering step needed).
         typedef = TypeDef(
             kind="exception",
-            name=_bare_name(stmt.name),
+            name=bare_name,
             module_id=module_id,
-            scope_path=tuple(segment.name for segment in stmt.scope_path),
+            scope_path=scope_path,
             fields=tuple(fields.items()),
             abstract=stmt.base is None,
             base=base_key,
             field_kinds=tuple(fd.kind.value for fd in stmt.fields),
             is_builtin=stmt.is_builtin,
+            decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
         )
         self._validate_builtin_shape(stmt, typedef, BUILTIN_EXCEPTION_TYPE_DEFS)
         self._env.type_table.register(typedef)
@@ -485,9 +525,13 @@ class _TypeBuilder:
                 )
             )
             assert typedef.base is not None
-            base_handle = ExceptionType(
-                name=typedef.base[2], module_id=typedef.base[0], scope_path=typedef.base[1]
+            base_module, base_scope_path, base_name = typedef.base
+            base_typedef = self._env.type_table.get(base_module, base_name, base_scope_path)
+            assert base_typedef is not None, (
+                f"compiler bug: exception base {typedef.base!r} has no registered TypeDef"
             )
+            base_handle = base_typedef.handle()
+            assert isinstance(base_handle, ExceptionType)
             base_fields = self._env.type_table.exception_fields(base_handle)
             for fd in item.fields:
                 if fd.name in base_fields:
@@ -617,14 +661,19 @@ class _TypeBuilder:
         assert isinstance(template, RecordType)
         module_id = self._module_id
         scope_path = tuple(segment.name for segment in stmt.scope_path)
+        bare_name = _bare_name(stmt.name)
         typedef = TypeDef(
             kind="record",
-            name=_bare_name(stmt.name),
+            name=bare_name,
             module_id=module_id,
             scope_path=scope_path,
             type_params=type_params,
             fields=tuple(fields.items()),
             is_builtin=stmt.is_builtin,
+            # Same identity as the handle template registered in phase 1
+            # (:meth:`_register_record_or_enum_handle`), so the TypeDef and
+            # every instantiated handle agree on which declaration they name.
+            decl_node_id=template.decl_id,
         )
         self._validate_builtin_shape(stmt, typedef, BUILTIN_PRELUDE_TYPE_DEFS)
         self._env.type_table.register(typedef)
@@ -643,7 +692,7 @@ class _TypeBuilder:
         # same owning identity as the TypeDef just above.
         generic_record_field_kinds = tuple((fd.name, fd.kind) for fd in stmt.fields)
         self._env.register_constructor_field_kinds(
-            _bare_name(stmt.name),
+            bare_name,
             None,
             generic_record_field_kinds,
             scope_path=scope_path,
@@ -677,14 +726,19 @@ class _TypeBuilder:
         assert isinstance(template, EnumType)
         module_id = self._module_id
         scope_path = tuple(segment.name for segment in stmt.scope_path)
+        bare_name = _bare_name(stmt.name)
         typedef = TypeDef(
             kind="enum",
-            name=_bare_name(stmt.name),
+            name=bare_name,
             module_id=module_id,
             scope_path=scope_path,
             type_params=type_params,
             variants=tuple((vname, tuple(vfields.items())) for vname, vfields in variants.items()),
             is_builtin=stmt.is_builtin,
+            # Same identity as the handle template registered in phase 1
+            # (:meth:`_register_record_or_enum_handle`), so the TypeDef and
+            # every instantiated handle agree on which declaration they name.
+            decl_node_id=template.decl_id,
         )
         self._validate_builtin_shape(stmt, typedef, BUILTIN_PRELUDE_TYPE_DEFS)
         self._env.type_table.register(typedef)
@@ -706,7 +760,7 @@ class _TypeBuilder:
             # Register field kinds for this generic enum variant constructor.
             vfield_kinds = tuple((fd.name, fd.kind) for fd in vd.fields)
             self._env.register_constructor_field_kinds(
-                _bare_name(stmt.name),
+                bare_name,
                 vd.name,
                 vfield_kinds,
                 scope_path=scope_path,

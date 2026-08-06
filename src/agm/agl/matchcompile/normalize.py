@@ -361,6 +361,7 @@ def normalize_pattern(
                     subject_type.type_args,
                     constructor_ref.owner_module_id,
                     constructor_ref.owner_path,
+                    decl_id=subject_type.decl_id,
                 ),
                 name,
                 checked.type_env.type_table,

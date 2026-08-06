@@ -386,7 +386,7 @@ def _builtin_function_signature(name: str, *, is_method: bool = False) -> Functi
                     _std_param("strict_json", BoolType(), has_default=True),
                     _std_param(
                         "on_parse_error",
-                        EnumType(name="ParsePolicy"),
+                        BUILTIN_PRELUDE_TYPES["ParsePolicy"],
                         has_default=True,
                     ),
                 ),
@@ -399,12 +399,12 @@ def _builtin_function_signature(name: str, *, is_method: bool = False) -> Functi
                     _std_param("prompt", TextType()),
                     _std_param("agent", BUILTIN_PRELUDE_TYPES["Agent"], has_default=True),
                 ),
-                result=RecordType(name="AgentRequest"),
+                result=BUILTIN_PRELUDE_TYPES["AgentRequest"],
             )
         case "exec":
             return FunctionSignature(
                 params=(_std_param("command", TextType()),),
-                result=RecordType(name="ExecResult"),
+                result=BUILTIN_PRELUDE_TYPES["ExecResult"],
             )
         case _:
             return None

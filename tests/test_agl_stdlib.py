@@ -117,6 +117,23 @@ def test_stdlib_ask_signature_is_context_inferred_with_optional_arguments() -> N
     assert p4.has_default is True
 
 
+def test_canonical_builtin_signatures_name_the_shared_prelude_handles() -> None:
+    """Every nominal in a canonical builtin contract is the shared prelude
+    handle for that name, so it carries the same owning module and declaration
+    identity the rest of the pipeline resolves that name to."""
+    ask = _builtin_function_signature("ask")
+    assert ask is not None
+    ask_params = {param.name: param.type for param in ask.params}
+    assert ask_params["agent"] == BUILTIN_PRELUDE_TYPES["Agent"]
+    assert ask_params["on_parse_error"] == BUILTIN_PRELUDE_TYPES["ParsePolicy"]
+    ask_request = _builtin_function_signature("ask-request")
+    assert ask_request is not None
+    assert ask_request.result == BUILTIN_PRELUDE_TYPES["AgentRequest"]
+    exec_sig = _builtin_function_signature("exec")
+    assert exec_sig is not None
+    assert exec_sig.result == BUILTIN_PRELUDE_TYPES["ExecResult"]
+
+
 def test_builtin_function_signature_mismatches_are_rejected() -> None:
     cases = [
         "builtin def print[T](value: T, extra: int) -> unit\n()\n",

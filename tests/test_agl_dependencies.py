@@ -106,6 +106,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
                 "agm.agl.capabilities",
                 "agm.agl.diagnostics",
                 "agm.agl.ir.ids",
+                "agm.agl.ir.reserved_nominals",
                 "agm.agl.modules.ids",
                 "agm.agl.scope",
                 "agm.agl.self_validation",

@@ -53,6 +53,8 @@ from dataclasses import dataclass, field, replace
 from itertools import count
 from typing import assert_never
 
+from agm.agl.ir.reserved_nominals import NO_DECL_ID, reserved_nominal_id
+from agm.agl.ir.reserved_nominals import require_reserved_nominal_id as _reserved_id
 from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 
 # ---------------------------------------------------------------------------
@@ -169,12 +171,20 @@ class RecordType:
     generic instantiation (empty tuple for non-generic records).
     ``module_id`` is the owning module (defaults to ``ENTRY_ID`` so existing
     module paths and built-in/prelude types are unaffected).
+
+    ``decl_id`` is the identity of the declaration this handle names, or
+    ``NO_DECL_ID`` when no declaration identity is attached. It is metadata
+    about which declaration is meant rather than part of the type's shape, so
+    it is excluded from equality/hashing (``compare=False``);
+    ``name``/``module_id``/``scope_path`` remain what resolution and display
+    use.
     """
 
     name: str
     type_args: tuple[Type, ...] = ()
     module_id: ModuleId = field(default_factory=lambda: ENTRY_ID)
     scope_path: tuple[str, ...] = ()
+    decl_id: int = field(default=NO_DECL_ID, compare=False)
 
     @property
     def kind(self) -> str:
@@ -200,12 +210,20 @@ class EnumType:
     the resolved type arguments for a generic instantiation (empty tuple for
     non-generic enums).  ``module_id`` is the owning module (defaults to
     ``ENTRY_ID``).
+
+    ``decl_id`` is the identity of the declaration this handle names, or
+    ``NO_DECL_ID`` when no declaration identity is attached. It is metadata
+    about which declaration is meant rather than part of the type's shape, so
+    it is excluded from equality/hashing (``compare=False``);
+    ``name``/``module_id``/``scope_path`` remain what resolution and display
+    use.
     """
 
     name: str
     type_args: tuple[Type, ...] = ()
     module_id: ModuleId = field(default_factory=lambda: ENTRY_ID)
     scope_path: tuple[str, ...] = ()
+    decl_id: int = field(default=NO_DECL_ID, compare=False)
 
     @property
     def kind(self) -> str:
@@ -240,11 +258,19 @@ class ExceptionType:
     ``"Exception"`` with ``abstract=True`` and only ``message``/``trace_id``
     fields. It is not constructible; the source catch spelling ``Exception``
     is the catch-all form.
+
+    ``decl_id`` is the identity of the declaration this handle names, or
+    ``NO_DECL_ID`` when no declaration identity is attached. It is metadata
+    about which declaration is meant rather than part of the type's shape, so
+    it is excluded from equality/hashing (``compare=False``);
+    ``name``/``module_id``/``scope_path`` remain what resolution and display
+    use.
     """
 
     name: str
     module_id: ModuleId = field(default_factory=lambda: ENTRY_ID)
     scope_path: tuple[str, ...] = ()
+    decl_id: int = field(default=NO_DECL_ID, compare=False)
 
     @property
     def kind(self) -> str:
@@ -620,13 +646,21 @@ def replace_type_children(t: Type, children: tuple[Type, ...]) -> Type:
             return DictType(children[0])
         case FunctionType(params=params):
             return FunctionType(params=children[: len(params)], result=children[-1])
-        case RecordType(name=name, module_id=module_id, scope_path=scope_path):
+        case RecordType(name=name, module_id=module_id, scope_path=scope_path, decl_id=decl_id):
             return RecordType(
-                name=name, type_args=children, module_id=module_id, scope_path=scope_path
+                name=name,
+                type_args=children,
+                module_id=module_id,
+                scope_path=scope_path,
+                decl_id=decl_id,
             )
-        case EnumType(name=name, module_id=module_id, scope_path=scope_path):
+        case EnumType(name=name, module_id=module_id, scope_path=scope_path, decl_id=decl_id):
             return EnumType(
-                name=name, type_args=children, module_id=module_id, scope_path=scope_path
+                name=name,
+                type_args=children,
+                module_id=module_id,
+                scope_path=scope_path,
+                decl_id=decl_id,
             )
         case (
             TextType()
@@ -649,6 +683,12 @@ def transform_type(t: Type, transform: Callable[[Type], Type]) -> Type:
     """Recursively rebuild *t*, applying ``transform`` bottom-up to every node."""
     children = tuple(transform_type(child, transform) for child in type_children(t))
     return transform(replace_type_children(t, children))
+
+
+def _reserved_or_absent(name: str) -> int:
+    """Return *name*'s reserved declaration identity, or ``NO_DECL_ID``."""
+    reserved = reserved_nominal_id(name)
+    return NO_DECL_ID if reserved is None else reserved
 
 
 def reroot_type(
@@ -678,6 +718,16 @@ def reroot_type(
     needs its module remapped, and a handle outside *prefix* still needs
     nothing stripped. Callers that only need the scope-path adjustment (an
     empty *prefix* has nothing to strip) omit *remap_module*.
+
+    A reference's ``decl_id`` denotes the *specific* declaration it names,
+    which necessarily differs between an arbitrary declaration and the
+    canonical ``std/core`` one being compared against, even when the two
+    denote the same host type. So whenever a reference's ``module_id`` is
+    remapped onto the canonical module, its ``decl_id`` is normalized too: to
+    the reserved identity for its name when that name is a host-known
+    reserved nominal (the canonical shape's own handles carry exactly that
+    identity), or to ``NO_DECL_ID`` otherwise. A reference whose module is
+    left alone keeps its ``decl_id`` unchanged.
     """
 
     def strip(node: Type) -> Type:
@@ -685,13 +735,19 @@ def reroot_type(
             return node
         scope_path = node.scope_path
         module_id = node.module_id
+        decl_id = node.decl_id
         if scope_path[: len(prefix)] == prefix:
             scope_path = scope_path[len(prefix) :]
         if remap_module is not None and module_id == remap_module[0]:
             module_id = remap_module[1]
-        if scope_path == node.scope_path and module_id == node.module_id:
+            decl_id = _reserved_or_absent(node.name)
+        if (
+            scope_path == node.scope_path
+            and module_id == node.module_id
+            and decl_id == node.decl_id
+        ):
             return node
-        return replace(node, scope_path=scope_path, module_id=module_id)
+        return replace(node, scope_path=scope_path, module_id=module_id, decl_id=decl_id)
 
     return transform_type(t, strip)
 
@@ -855,40 +911,83 @@ def contains_inference_var(t: Type) -> bool:
 # distinct handle instead, carrying that program's module.
 # ---------------------------------------------------------------------------
 
+
 # Abstract base: the hierarchy root, catchable but not constructible.
-EXCEPTION_BASE = ExceptionType(name="Exception", module_id=STD_CORE_ID)
+EXCEPTION_BASE = ExceptionType(
+    name="Exception", module_id=STD_CORE_ID, decl_id=_reserved_id("Exception")
+)
 
 BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
     "Exception": EXCEPTION_BASE,
-    "AgentCallError": ExceptionType(name="AgentCallError", module_id=STD_CORE_ID),
-    "AgentParseError": ExceptionType(name="AgentParseError", module_id=STD_CORE_ID),
-    "ExecError": ExceptionType(name="ExecError", module_id=STD_CORE_ID),
+    "AgentCallError": ExceptionType(
+        name="AgentCallError", module_id=STD_CORE_ID, decl_id=_reserved_id("AgentCallError")
+    ),
+    "AgentParseError": ExceptionType(
+        name="AgentParseError", module_id=STD_CORE_ID, decl_id=_reserved_id("AgentParseError")
+    ),
+    "ExecError": ExceptionType(
+        name="ExecError", module_id=STD_CORE_ID, decl_id=_reserved_id("ExecError")
+    ),
     # Raised for every runtime failure crossing an extern (Python FFI) call:
     # the Python callable raising, a return-contract violation (including a
     # seal violation), or an argument-conversion failure.
-    "ExternError": ExceptionType(name="ExternError", module_id=STD_CORE_ID),
-    "MaxIterationsExceeded": ExceptionType(name="MaxIterationsExceeded", module_id=STD_CORE_ID),
-    "MatchError": ExceptionType(name="MatchError", module_id=STD_CORE_ID),
-    "IndexError": ExceptionType(name="IndexError", module_id=STD_CORE_ID),
-    "KeyError": ExceptionType(name="KeyError", module_id=STD_CORE_ID),
-    "TypeError": ExceptionType(name="TypeError", module_id=STD_CORE_ID),
-    "ArithmeticError": ExceptionType(name="ArithmeticError", module_id=STD_CORE_ID),
+    "ExternError": ExceptionType(
+        name="ExternError", module_id=STD_CORE_ID, decl_id=_reserved_id("ExternError")
+    ),
+    "MaxIterationsExceeded": ExceptionType(
+        name="MaxIterationsExceeded",
+        module_id=STD_CORE_ID,
+        decl_id=_reserved_id("MaxIterationsExceeded"),
+    ),
+    "MatchError": ExceptionType(
+        name="MatchError", module_id=STD_CORE_ID, decl_id=_reserved_id("MatchError")
+    ),
+    "IndexError": ExceptionType(
+        name="IndexError", module_id=STD_CORE_ID, decl_id=_reserved_id("IndexError")
+    ),
+    "KeyError": ExceptionType(
+        name="KeyError", module_id=STD_CORE_ID, decl_id=_reserved_id("KeyError")
+    ),
+    "TypeError": ExceptionType(
+        name="TypeError", module_id=STD_CORE_ID, decl_id=_reserved_id("TypeError")
+    ),
+    "ArithmeticError": ExceptionType(
+        name="ArithmeticError", module_id=STD_CORE_ID, decl_id=_reserved_id("ArithmeticError")
+    ),
     # Statically prevented by scope/typecheck (assignment to immutable bindings
     # and undeclared names), but still listed as catchable runtime
     # exceptions for any runtime paths that bypass the static passes.
-    "UndefinedVariableError": ExceptionType(name="UndefinedVariableError", module_id=STD_CORE_ID),
-    "ImmutableBindingError": ExceptionType(name="ImmutableBindingError", module_id=STD_CORE_ID),
-    "Abort": ExceptionType(name="Abort", module_id=STD_CORE_ID),
+    "UndefinedVariableError": ExceptionType(
+        name="UndefinedVariableError",
+        module_id=STD_CORE_ID,
+        decl_id=_reserved_id("UndefinedVariableError"),
+    ),
+    "ImmutableBindingError": ExceptionType(
+        name="ImmutableBindingError",
+        module_id=STD_CORE_ID,
+        decl_id=_reserved_id("ImmutableBindingError"),
+    ),
+    "Abort": ExceptionType(name="Abort", module_id=STD_CORE_ID, decl_id=_reserved_id("Abort")),
     # AgL: RecursionError raised when the call-depth limit is exceeded.
-    "RecursionError": ExceptionType(name="RecursionError", module_id=STD_CORE_ID),
-    "CastError": ExceptionType(name="CastError", module_id=STD_CORE_ID),
-    "JsonParseError": ExceptionType(name="JsonParseError", module_id=STD_CORE_ID),
-    "RangeError": ExceptionType(name="RangeError", module_id=STD_CORE_ID),
+    "RecursionError": ExceptionType(
+        name="RecursionError", module_id=STD_CORE_ID, decl_id=_reserved_id("RecursionError")
+    ),
+    "CastError": ExceptionType(
+        name="CastError", module_id=STD_CORE_ID, decl_id=_reserved_id("CastError")
+    ),
+    "JsonParseError": ExceptionType(
+        name="JsonParseError", module_id=STD_CORE_ID, decl_id=_reserved_id("JsonParseError")
+    ),
+    "RangeError": ExceptionType(
+        name="RangeError", module_id=STD_CORE_ID, decl_id=_reserved_id("RangeError")
+    ),
     # Reference semantics makes cyclic array/dict values constructible; raised
     # when rendering or JSON conversion re-enters a container already on its
     # path. Extern array/dict arguments cross as lazy views; repr of a view or
     # FFI view rendering that reaches a cycle raises this exception instead.
-    "CyclicValueError": ExceptionType(name="CyclicValueError", module_id=STD_CORE_ID),
+    "CyclicValueError": ExceptionType(
+        name="CyclicValueError", module_id=STD_CORE_ID, decl_id=_reserved_id("CyclicValueError")
+    ),
 }
 
 # Names of built-in exception types (cannot be redeclared as records/enums/aliases).
@@ -908,34 +1007,56 @@ BUILTIN_EXCEPTION_NAMES: frozenset[str] = frozenset(BUILTIN_EXCEPTIONS)
 # These prelude constants are pure handles — their field/variant shapes are
 # defined once as explicit ``TypeDef`` literals in
 # ``semantics.type_table.BUILTIN_PRELUDE_TYPE_DEFS``.
-_EXEC_RESULT_TYPE = RecordType(name="ExecResult", module_id=STD_CORE_ID)
+_EXEC_RESULT_TYPE = RecordType(
+    name="ExecResult", module_id=STD_CORE_ID, decl_id=_reserved_id("ExecResult")
+)
 
 # ``ParsePolicy`` — controls ``ask``/``exec`` error handling.
 # ``Abort`` — abort on parse error (no fields).
 # ``Retry(n: int)`` — retry up to ``n`` times.
-_PARSE_POLICY_TYPE = EnumType(name="ParsePolicy", module_id=STD_CORE_ID)
+_PARSE_POLICY_TYPE = EnumType(
+    name="ParsePolicy", module_id=STD_CORE_ID, decl_id=_reserved_id("ParsePolicy")
+)
 
 # ``Agent`` — a plain enum data value that specifies an agent backend.
-_AGENT_TYPE = EnumType(name="Agent", module_id=STD_CORE_ID)
+_AGENT_TYPE = EnumType(name="Agent", module_id=STD_CORE_ID, decl_id=_reserved_id("Agent"))
 
-_OPTION_TEXT_TYPE = EnumType(name="Option", type_args=(TextType(),), module_id=STD_CORE_ID)
+_OPTION_TEXT_TYPE = EnumType(
+    name="Option",
+    type_args=(TextType(),),
+    module_id=STD_CORE_ID,
+    decl_id=_reserved_id("Option"),
+)
 
 # Public alias for the ``Option[text]`` type — the single source of truth
 # shared with engine_keys and any other module that needs this type.
 OPTION_TEXT_TYPE: EnumType = _OPTION_TEXT_TYPE
 
-_OPTION_JSON_TYPE = EnumType(name="Option", type_args=(JsonType(),), module_id=STD_CORE_ID)
+_OPTION_JSON_TYPE = EnumType(
+    name="Option",
+    type_args=(JsonType(),),
+    module_id=STD_CORE_ID,
+    decl_id=_reserved_id("Option"),
+)
 
-_OUTPUT_CONTRACT_TYPE = RecordType(name="OutputContract", module_id=STD_CORE_ID)
+_OUTPUT_CONTRACT_TYPE = RecordType(
+    name="OutputContract", module_id=STD_CORE_ID, decl_id=_reserved_id("OutputContract")
+)
 
-_OUTPUT_CONTRACT_OPTION_TYPE = EnumType(name="OutputContractOption", module_id=STD_CORE_ID)
+_OUTPUT_CONTRACT_OPTION_TYPE = EnumType(
+    name="OutputContractOption",
+    module_id=STD_CORE_ID,
+    decl_id=_reserved_id("OutputContractOption"),
+)
 
 # ``AgentRequest`` — the request that the corresponding ``ask`` call would
 # dispatch to its agent, surfaced as an AgL value by ``ask-request``.  This is
 # the first-attempt request: ``attempt`` is always ``0`` and there is no
 # retry context (no ``previous_invalid_output`` / ``validation_errors``),
 # because ``ask-request`` never invokes the agent.
-_AGENT_REQUEST_TYPE = RecordType(name="AgentRequest", module_id=STD_CORE_ID)
+_AGENT_REQUEST_TYPE = RecordType(
+    name="AgentRequest", module_id=STD_CORE_ID, decl_id=_reserved_id("AgentRequest")
+)
 
 BUILTIN_PRELUDE_TYPES: dict[str, Type] = {
     "ExecResult": _EXEC_RESULT_TYPE,

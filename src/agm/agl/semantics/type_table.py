@@ -51,6 +51,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal, assert_never, cast
 
+from agm.agl.ir.reserved_nominals import NO_DECL_ID
+from agm.agl.ir.reserved_nominals import require_reserved_nominal_id as _reserved_id
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.types import (
@@ -160,6 +162,16 @@ class TypeDef:
                    :meth:`_TypeBuilder._validate_builtin_shape` compares a
                    ``builtin`` declaration's whole ``TypeDef`` against a
                    seeded canonical literal, which never sets this flag.
+    ``decl_node_id`` — the identity of the declaration this ``TypeDef``
+                   describes (an AST node id, or a reserved id for a
+                   host-known built-in name — see ``ir.reserved_nominals``),
+                   or ``NO_DECL_ID`` when none is attached. Like
+                   ``is_builtin``, it is metadata about the declaration
+                   rather than part of its shape, so it too is excluded from
+                   equality/hashing (``compare=False``) for the same reason:
+                   :meth:`_TypeBuilder._validate_builtin_shape`'s comparison
+                   against a seeded canonical literal must not fail merely
+                   because the two carry different declaration identities.
     """
 
     kind: TypeDefKind
@@ -173,30 +185,48 @@ class TypeDef:
     base: DeclKey | None = None
     field_kinds: tuple[str, ...] = ()
     is_builtin: bool = field(default=False, compare=False)
+    decl_node_id: int = field(default=NO_DECL_ID, compare=False)
 
-    def handle(self, type_args: tuple[Type, ...] = ()) -> RecordType | EnumType:
-        """Return the ``RecordType``/``EnumType`` handle naming this ``TypeDef``.
+    def handle(self, type_args: tuple[Type, ...] = ()) -> RecordType | EnumType | ExceptionType:
+        """Return the ``RecordType``/``EnumType``/``ExceptionType`` handle naming this ``TypeDef``.
 
         Convenience for call sites that hold a ``TypeDef`` and need the
         corresponding handle (e.g. to register a value, or to pass to
-        :meth:`TypeTable.record_fields`/:meth:`TypeTable.enum_variants`).
-        *type_args* defaults to ``()`` for non-generic defs.
+        :meth:`TypeTable.record_fields`/:meth:`TypeTable.enum_variants`/
+        :meth:`TypeTable.exception_fields`). *type_args* defaults to ``()``
+        for non-generic defs and must be empty for an exception (exceptions
+        are never generic) — passing a non-empty tuple for one raises
+        ``ValueError``. The returned handle's ``decl_id`` is stamped from
+        ``self.decl_node_id``.
         """
-        if self.kind == "record":
-            return RecordType(
-                name=self.name,
-                type_args=type_args,
-                module_id=self.module_id,
-                scope_path=self.scope_path,
-            )
-        if self.kind == "enum":
-            return EnumType(
-                name=self.name,
-                type_args=type_args,
-                module_id=self.module_id,
-                scope_path=self.scope_path,
-            )
-        raise ValueError(f"TypeDef.handle() does not support kind {self.kind!r}")
+        match self.kind:
+            case "record":
+                return RecordType(
+                    name=self.name,
+                    type_args=type_args,
+                    module_id=self.module_id,
+                    scope_path=self.scope_path,
+                    decl_id=self.decl_node_id,
+                )
+            case "enum":
+                return EnumType(
+                    name=self.name,
+                    type_args=type_args,
+                    module_id=self.module_id,
+                    scope_path=self.scope_path,
+                    decl_id=self.decl_node_id,
+                )
+            case "exception":
+                if type_args:
+                    raise ValueError("TypeDef.handle() does not accept type_args for an exception")
+                return ExceptionType(
+                    name=self.name,
+                    module_id=self.module_id,
+                    scope_path=self.scope_path,
+                    decl_id=self.decl_node_id,
+                )
+            case _ as unreachable:  # pragma: no cover
+                assert_never(unreachable)
 
 
 class TypeTable:
@@ -706,6 +736,7 @@ class TypeTable:
                     type_args=self._canonical_schema_args(t, relevant_params),
                     module_id=t.module_id,
                     scope_path=t.scope_path,
+                    decl_id=t.decl_id,
                 )
             case EnumType():
                 return EnumType(
@@ -713,6 +744,7 @@ class TypeTable:
                     type_args=self._canonical_schema_args(t, relevant_params),
                     module_id=t.module_id,
                     scope_path=t.scope_path,
+                    decl_id=t.decl_id,
                 )
             case ArrayType(elem=elem):
                 return ArrayType(self._canonical_schema_type(elem, relevant_params))
@@ -1235,6 +1267,7 @@ def cast_classification(source: Type, target: Type, table: TypeTable) -> CastKin
 # is exactly one definition of each prelude shape.
 # ---------------------------------------------------------------------------
 
+
 BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = {
     "ExecResult": TypeDef(
         kind="record",
@@ -1246,6 +1279,7 @@ BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = {
             ("stderr", TextType()),
             ("timed_out", BoolType()),
         ),
+        decl_node_id=_reserved_id("ExecResult"),
     ),
     "ParsePolicy": TypeDef(
         kind="enum",
@@ -1255,6 +1289,7 @@ BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = {
             ("Abort", ()),
             ("Retry", (("n", IntType()),)),
         ),
+        decl_node_id=_reserved_id("ParsePolicy"),
     ),
     "Agent": TypeDef(
         kind="enum",
@@ -1269,6 +1304,7 @@ BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = {
                 (("provider", TextType()), ("model", TextType()), ("thinking", TextType())),
             ),
         ),
+        decl_node_id=_reserved_id("Agent"),
     ),
     "OutputContract": TypeDef(
         kind="record",
@@ -1282,6 +1318,7 @@ BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = {
             ("json_schema", JsonType()),
             ("structured_exec", BoolType()),
         ),
+        decl_node_id=_reserved_id("OutputContract"),
     ),
     "OutputContractOption": TypeDef(
         kind="enum",
@@ -1289,35 +1326,72 @@ BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = {
         module_id=STD_CORE_ID,
         variants=(
             ("None", ()),
-            ("Some", (("value", RecordType(name="OutputContract", module_id=STD_CORE_ID)),)),
+            (
+                "Some",
+                (
+                    (
+                        "value",
+                        RecordType(
+                            name="OutputContract",
+                            module_id=STD_CORE_ID,
+                            decl_id=_reserved_id("OutputContract"),
+                        ),
+                    ),
+                ),
+            ),
         ),
+        decl_node_id=_reserved_id("OutputContractOption"),
     ),
     "AgentRequest": TypeDef(
         kind="record",
         name="AgentRequest",
         module_id=STD_CORE_ID,
         fields=(
-            ("agent", EnumType(name="Agent", module_id=STD_CORE_ID)),
+            (
+                "agent",
+                EnumType(name="Agent", module_id=STD_CORE_ID, decl_id=_reserved_id("Agent")),
+            ),
             ("prompt", TextType()),
             (
                 "target_type",
-                EnumType(name="Option", type_args=(TextType(),), module_id=STD_CORE_ID),
+                EnumType(
+                    name="Option",
+                    type_args=(TextType(),),
+                    module_id=STD_CORE_ID,
+                    decl_id=_reserved_id("Option"),
+                ),
             ),
             (
                 "format_instructions",
-                EnumType(name="Option", type_args=(TextType(),), module_id=STD_CORE_ID),
+                EnumType(
+                    name="Option",
+                    type_args=(TextType(),),
+                    module_id=STD_CORE_ID,
+                    decl_id=_reserved_id("Option"),
+                ),
             ),
             (
                 "json_schema",
-                EnumType(name="Option", type_args=(JsonType(),), module_id=STD_CORE_ID),
+                EnumType(
+                    name="Option",
+                    type_args=(JsonType(),),
+                    module_id=STD_CORE_ID,
+                    decl_id=_reserved_id("Option"),
+                ),
             ),
             ("attempt", IntType()),
             (
                 "previous_error",
-                EnumType(name="Option", type_args=(TextType(),), module_id=STD_CORE_ID),
+                EnumType(
+                    name="Option",
+                    type_args=(TextType(),),
+                    module_id=STD_CORE_ID,
+                    decl_id=_reserved_id("Option"),
+                ),
             ),
             ("metadata", JsonType()),
         ),
+        decl_node_id=_reserved_id("AgentRequest"),
     ),
 }
 
@@ -1335,6 +1409,7 @@ OPTION_TYPE_DEF = TypeDef(
         ("None", ()),
         ("Some", (("value", TypeVarType("T")),)),
     ),
+    decl_node_id=_reserved_id("Option"),
 )
 
 # ---------------------------------------------------------------------------
@@ -1364,25 +1439,27 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         fields=(("message", TextType()), ("trace_id", TextType())),
         abstract=True,
         field_kinds=_named_only(2),
+        decl_node_id=_reserved_id("Exception"),
     ),
     "AgentCallError": TypeDef(
         kind="exception",
         name="AgentCallError",
         module_id=STD_CORE_ID,
         fields=(
-            ("agent", EnumType(name="Agent", module_id=STD_CORE_ID)),
+            ("agent", EnumType(name="Agent", module_id=STD_CORE_ID, decl_id=_reserved_id("Agent"))),
             ("cause", TextType()),
             ("metadata", JsonType()),
         ),
         base=_EXCEPTION_ROOT_KEY,
         field_kinds=_named_only(3),
+        decl_node_id=_reserved_id("AgentCallError"),
     ),
     "AgentParseError": TypeDef(
         kind="exception",
         name="AgentParseError",
         module_id=STD_CORE_ID,
         fields=(
-            ("agent", EnumType(name="Agent", module_id=STD_CORE_ID)),
+            ("agent", EnumType(name="Agent", module_id=STD_CORE_ID, decl_id=_reserved_id("Agent"))),
             ("target_type", TextType()),
             ("expected_schema", JsonType()),
             ("raw", TextType()),
@@ -1393,6 +1470,7 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         ),
         base=_EXCEPTION_ROOT_KEY,
         field_kinds=_named_only(8),
+        decl_node_id=_reserved_id("AgentParseError"),
     ),
     "ExecError": TypeDef(
         kind="exception",
@@ -1407,6 +1485,7 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         ),
         base=_EXCEPTION_ROOT_KEY,
         field_kinds=_named_only(5),
+        decl_node_id=_reserved_id("ExecError"),
     ),
     # ``python_type`` is the raising Python exception's class name, or empty for
     # a contract violation (no Python exception was involved).
@@ -1417,6 +1496,7 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         fields=(("function", TextType()), ("python_type", TextType())),
         base=_EXCEPTION_ROOT_KEY,
         field_kinds=_named_only(2),
+        decl_node_id=_reserved_id("ExternError"),
     ),
     "MaxIterationsExceeded": TypeDef(
         kind="exception",
@@ -1430,6 +1510,7 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         ),
         base=_EXCEPTION_ROOT_KEY,
         field_kinds=_named_only(4),
+        decl_node_id=_reserved_id("MaxIterationsExceeded"),
     ),
     "MatchError": TypeDef(
         kind="exception",
@@ -1438,6 +1519,7 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         fields=(("scrutinee_type", TextType()), ("scrutinee", JsonType())),
         base=_EXCEPTION_ROOT_KEY,
         field_kinds=_named_only(2),
+        decl_node_id=_reserved_id("MatchError"),
     ),
     "IndexError": TypeDef(
         kind="exception",
@@ -1446,6 +1528,7 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         fields=(("index", IntType()), ("length", IntType())),
         base=_EXCEPTION_ROOT_KEY,
         field_kinds=_named_only(2),
+        decl_node_id=_reserved_id("IndexError"),
     ),
     "KeyError": TypeDef(
         kind="exception",
@@ -1454,12 +1537,14 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         fields=(("key", TextType()),),
         base=_EXCEPTION_ROOT_KEY,
         field_kinds=_named_only(1),
+        decl_node_id=_reserved_id("KeyError"),
     ),
     "TypeError": TypeDef(
         kind="exception",
         name="TypeError",
         module_id=STD_CORE_ID,
         base=_EXCEPTION_ROOT_KEY,
+        decl_node_id=_reserved_id("TypeError"),
     ),
     "ArithmeticError": TypeDef(
         kind="exception",
@@ -1468,6 +1553,7 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         fields=(("operation", TextType()),),
         base=_EXCEPTION_ROOT_KEY,
         field_kinds=_named_only(1),
+        decl_node_id=_reserved_id("ArithmeticError"),
     ),
     # Statically prevented by scope/typecheck (assignment to immutable bindings
     # and undeclared names), but still listed as catchable runtime exceptions
@@ -1479,6 +1565,7 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         fields=(("name", TextType()),),
         base=_EXCEPTION_ROOT_KEY,
         field_kinds=_named_only(1),
+        decl_node_id=_reserved_id("UndefinedVariableError"),
     ),
     "ImmutableBindingError": TypeDef(
         kind="exception",
@@ -1487,12 +1574,14 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         fields=(("name", TextType()), ("operation", TextType())),
         base=_EXCEPTION_ROOT_KEY,
         field_kinds=_named_only(2),
+        decl_node_id=_reserved_id("ImmutableBindingError"),
     ),
     "Abort": TypeDef(
         kind="exception",
         name="Abort",
         module_id=STD_CORE_ID,
         base=_EXCEPTION_ROOT_KEY,
+        decl_node_id=_reserved_id("Abort"),
     ),
     # AgL: RecursionError raised when the call-depth limit is exceeded.
     "RecursionError": TypeDef(
@@ -1502,6 +1591,7 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         fields=(("limit", IntType()),),
         base=_EXCEPTION_ROOT_KEY,
         field_kinds=_named_only(1),
+        decl_node_id=_reserved_id("RecursionError"),
     ),
     "CastError": TypeDef(
         kind="exception",
@@ -1514,6 +1604,7 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         ),
         base=_EXCEPTION_ROOT_KEY,
         field_kinds=_named_only(3),
+        decl_node_id=_reserved_id("CastError"),
     ),
     "JsonParseError": TypeDef(
         kind="exception",
@@ -1522,18 +1613,21 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         fields=(("raw", TextType()),),
         base=_EXCEPTION_ROOT_KEY,
         field_kinds=_named_only(1),
+        decl_node_id=_reserved_id("JsonParseError"),
     ),
     "RangeError": TypeDef(
         kind="exception",
         name="RangeError",
         module_id=STD_CORE_ID,
         base=_EXCEPTION_ROOT_KEY,
+        decl_node_id=_reserved_id("RangeError"),
     ),
     "CyclicValueError": TypeDef(
         kind="exception",
         name="CyclicValueError",
         module_id=STD_CORE_ID,
         base=_EXCEPTION_ROOT_KEY,
+        decl_node_id=_reserved_id("CyclicValueError"),
     ),
 }
 

@@ -958,7 +958,9 @@ class TypeEnvironment:
         # No field/variant substitution: the result is a bare handle with the
         # supplied type_args; field/variant shapes are looked up by handle in
         # the shared TypeTable (which substitutes type_args into the
-        # registered TypeDef's templates on demand).
+        # registered TypeDef's templates on demand). decl_id carries over
+        # unchanged: instantiating at different type arguments still names
+        # the same declaration.
         template = gdef.template
         if isinstance(template, RecordType):
             return RecordType(
@@ -966,12 +968,14 @@ class TypeEnvironment:
                 type_args=args,
                 module_id=template.module_id,
                 scope_path=template.scope_path,
+                decl_id=template.decl_id,
             )
         return EnumType(
             name=template.name,
             type_args=args,
             module_id=template.module_id,
             scope_path=template.scope_path,
+            decl_id=template.decl_id,
         )
 
     def instantiate_alias(

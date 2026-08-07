@@ -161,23 +161,12 @@ def _run_request(
 
 def decode_agent_value(value: EnumValue) -> "AgentSpec":
     """Decode a runtime ``Agent`` enum value into its host-side specification."""
-    from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi
+    from agm.agent.spec import AGENT_SPECS
 
-    match value.variant:
-        case "AgentCommand":
-            return AgentCommand(_text_field(value, "command"))
-        case "AgentClaude":
-            return AgentClaude(_text_field(value, "model"), _text_field(value, "thinking"))
-        case "AgentCodex":
-            return AgentCodex(_text_field(value, "model"), _text_field(value, "thinking"))
-        case "AgentPi":
-            return AgentPi(
-                _text_field(value, "provider"),
-                _text_field(value, "model"),
-                _text_field(value, "thinking"),
-            )
-        case variant:
-            raise ValueError(f"unsupported Agent variant: {variant}")
+    spec_cls = AGENT_SPECS.get(value.variant)
+    if spec_cls is None:
+        raise ValueError(f"unsupported Agent variant: {value.variant}")
+    return spec_cls(*(_text_field(value, name) for name in spec_cls.PAYLOAD_FIELDS))
 
 
 def _text_field(value: EnumValue, name: str) -> str:

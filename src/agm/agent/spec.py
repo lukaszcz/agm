@@ -9,7 +9,9 @@ to the shared prompt preparation and process-execution helpers in
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import ClassVar, TypeAlias
 
 from agm.agent.runner import parse_command
@@ -19,6 +21,7 @@ __all__ = [
     "AgentCodex",
     "AgentCommand",
     "AgentPi",
+    "AGENT_SPECS",
     "AgentSpec",
 ]
 
@@ -29,6 +32,7 @@ class AgentCommand:
 
     command: str
 
+    PAYLOAD_FIELDS: ClassVar[tuple[str, ...]] = ("command",)
     prompt_via_stdin: ClassVar[bool] = False
 
     def argv(self) -> list[str]:
@@ -48,6 +52,7 @@ class AgentClaude:
     model: str
     thinking: str
 
+    PAYLOAD_FIELDS: ClassVar[tuple[str, ...]] = ("model", "thinking")
     prompt_via_stdin: ClassVar[bool] = False
 
     def argv(self) -> list[str]:
@@ -69,6 +74,7 @@ class AgentCodex:
     model: str
     thinking: str
 
+    PAYLOAD_FIELDS: ClassVar[tuple[str, ...]] = ("model", "thinking")
     prompt_via_stdin: ClassVar[bool] = True
 
     def argv(self) -> list[str]:
@@ -88,6 +94,7 @@ class AgentPi:
     model: str
     thinking: str
 
+    PAYLOAD_FIELDS: ClassVar[tuple[str, ...]] = ("provider", "model", "thinking")
     prompt_via_stdin: ClassVar[bool] = False
 
     def argv(self) -> list[str]:
@@ -102,6 +109,16 @@ class AgentPi:
 
 
 AgentSpec: TypeAlias = AgentCommand | AgentClaude | AgentCodex | AgentPi
+
+#: Runtime projection of the checked ``std/core::Agent`` variants.
+AGENT_SPECS: Mapping[str, type[AgentSpec]] = MappingProxyType(
+    {
+        "AgentCommand": AgentCommand,
+        "AgentClaude": AgentClaude,
+        "AgentCodex": AgentCodex,
+        "AgentPi": AgentPi,
+    }
+)
 
 
 def _flag(flag: str, value: str) -> tuple[str, ...]:

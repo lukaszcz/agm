@@ -2,13 +2,58 @@
 
 from __future__ import annotations
 
+from dataclasses import fields
+from typing import get_type_hints
+
 import pytest
 
+from agm.agent.spec import AGENT_SPECS
 from agm.agl import PipelineDriver
-from agm.agl.runtime.agents import value_driven_agent_factory
+from agm.agl.runtime.agents import decode_agent_value, value_driven_agent_factory
+from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS
+from agm.agl.semantics.types import TextType
 from agm.agl.semantics.values import EnumValue
 from tests._agl_helpers import agent_value
 from tests.conftest import FakeAgentTransport
+
+
+def test_host_specs_match_declared_agent_variants() -> None:
+    """The host decoder catalog must track the checked ``Agent`` prelude shape."""
+    declared = {
+        variant: tuple(name for name, _ in payload)
+        for variant, payload in BUILTIN_PRELUDE_TYPE_DEFS["Agent"].variants
+    }
+
+    assert set(AGENT_SPECS) == set(declared)
+    for variant, spec_cls in AGENT_SPECS.items():
+        spec_fields = fields(spec_cls)
+        assert tuple(field.name for field in spec_fields) == spec_cls.PAYLOAD_FIELDS
+        assert spec_cls.PAYLOAD_FIELDS == declared[variant]
+        hints = get_type_hints(spec_cls)
+        assert all(hints[field.name] is str for field in spec_fields)
+    assert all(
+        isinstance(field_type, TextType)
+        for _, payload in BUILTIN_PRELUDE_TYPE_DEFS["Agent"].variants
+        for _, field_type in payload
+    )
+
+
+def test_decode_accepts_every_declared_agent_variant() -> None:
+    for variant, payload in BUILTIN_PRELUDE_TYPE_DEFS["Agent"].variants:
+        value = agent_value(variant, **{name: name for name, _ in payload})
+
+        assert isinstance(decode_agent_value(value), AGENT_SPECS[variant])
+
+
+def test_decode_rejects_declared_variant_without_a_host_spec(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog = dict(AGENT_SPECS)
+    del catalog["AgentCommand"]
+    monkeypatch.setattr("agm.agent.spec.AGENT_SPECS", catalog)
+
+    with pytest.raises(ValueError):
+        decode_agent_value(agent_value("AgentCommand", command="runner"))
 
 
 @pytest.mark.parametrize(

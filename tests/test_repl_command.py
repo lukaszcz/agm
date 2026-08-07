@@ -174,6 +174,7 @@ def _args(
     log_file: str | None = None,
     max_iters: int | None = None,
     agent: str | None = None,
+    no_stdlib: bool = False,
 ) -> ReplArgs:
     """Build ``ReplArgs`` with sensible defaults, overriding named fields."""
     return ReplArgs(
@@ -185,6 +186,7 @@ def _args(
         log_file=log_file,
         max_iters=max_iters,
         agent=agent,
+        no_stdlib=no_stdlib,
     )
 
 
@@ -228,7 +230,7 @@ class TestReplRun:
         assert session._setting_overrides["default-agent"] == SettingOverride(
             source='AgentCommand("configured")', origin="--agent"
         )
-        assert "default-agent" not in session._engine_base
+        assert "default-agent" not in session._engine_seed
 
         assert session.eval_entry("import std/config").ok
         seeded = session.eval_entry("std/config::default-agent")
@@ -290,7 +292,7 @@ class TestReplRun:
         repl_command.run(_args())
 
         session: ReplSession = fake_console[0]["session"]
-        assert set(session._engine_base) == {
+        assert set(session._engine_seed) == {
             "strict-json",
             "max-iters",
             "timeout",
@@ -314,7 +316,7 @@ class TestReplRun:
         repl_command.run(_args(strict_json=False))
 
         session: ReplSession = fake_console[0]["session"]
-        assert session._engine_base["strict-json"] == BoolValue(False)
+        assert session._engine_seed["strict-json"] == BoolValue(False)
 
     def test_history_path_uses_agm_home_override(
         self,
@@ -505,6 +507,46 @@ class TestReplRun:
         assert "--agent" in capsys.readouterr().err
         assert fake_console == []
 
+    def test_malformed_agent_literal_with_no_stdlib_fails_at_session_open(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """``--no-stdlib`` never loads ``std/config``, but ``--agent`` is still an
+        explicit request the host cannot silently drop: it must still exit 1 at
+        session-open time (before the console starts), not be deferred to a
+        later entry that happens to import ``std/config`` (or never come)."""
+        _isolated_home(monkeypatch, tmp_path)
+
+        with pytest.raises(SystemExit) as exc_info:
+            repl_command.run(_args(agent="(", no_stdlib=True))
+
+        assert exc_info.value.code == 1
+        assert "--agent" in capsys.readouterr().err
+        assert fake_console == []
+
+    def test_config_default_agent_with_no_stdlib_opens_cleanly(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        """A project-configured ``[exec] default-agent`` is ambient configuration,
+        not a request: with ``--no-stdlib`` (``std/config`` never loads), it must
+        be inert rather than block the session from opening."""
+        home = _isolated_home(monkeypatch, tmp_path)
+        agm_dir = home / ".agm"
+        agm_dir.mkdir()
+        agm_dir.joinpath("config.toml").write_text(
+            "[exec]\ndefault-agent = 'AgentCommand(\"echo cfg\")'\n"
+        )
+
+        repl_command.run(_args(no_stdlib=True))
+
+        assert len(fake_console) == 1
+
     def test_stale_stdlib_exits_1(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -590,7 +632,7 @@ class TestReplRun:
         repl_command.run(_args())
 
         session: ReplSession = fake_console[0]["session"]
-        seeded = session._engine_base["default-agent"]
+        seeded = session._engine_seed["default-agent"]
         assert isinstance(seeded, EnumValue)
         assert seeded.variant == "AgentCommand"
         assert seeded.fields["command"] == TextValue("claude")

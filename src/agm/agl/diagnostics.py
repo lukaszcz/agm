@@ -12,7 +12,6 @@ for backward compatibility (the lexer and other callers use
 
 from __future__ import annotations
 
-import enum
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal, Sequence
@@ -21,20 +20,6 @@ from typing import Literal, Sequence
 from agm.agl.syntax.spans import UNKNOWN_SOURCE as UNKNOWN_SOURCE
 from agm.agl.syntax.spans import SourceSpan as SourceSpan
 from agm.core.path import display_path
-
-
-class DiagnosticPhase(enum.Enum):
-    """The frontend pass that produced a diagnostic.
-
-    Lets consumers classify a diagnostic by the pass that produced it without
-    pattern-matching on ``message`` text. Deliberately minimal: only the
-    granularity a consumer needs today, not a full taxonomy of frontend
-    passes — every other pass (lexing, parsing, module loading, match
-    compilation) leaves the tag unset.
-    """
-
-    SCOPE = "scope"
-    TYPECHECK = "typecheck"
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,10 +56,6 @@ class Diagnostic:
     passed to :func:`format_diagnostic_location` / :func:`format_diagnostic`.
     Populated automatically by :func:`diagnostic_from_span` from
     ``span.source.label``.
-    ``phase`` identifies the frontend pass that produced the diagnostic (errors
-    and warnings alike), for callers that need to classify it programmatically;
-    it is never rendered by :func:`format_diagnostic` /
-    :func:`format_diagnostic_location`.
     """
 
     message: str
@@ -85,7 +66,6 @@ class Diagnostic:
     severity: Literal["error", "warning"] = "error"
     source_label: str | None = None
     related: tuple[RelatedDiagnostic, ...] = ()
-    phase: DiagnosticPhase | None = None
 
 
 def _source_label_from_span(span: SourceSpan) -> str | None:
@@ -189,13 +169,8 @@ class AglError(Exception):
     """Base class for all fatal AgL pipeline errors.
 
     ``related`` carries semantic ``(message, SourceSpan)`` pairs until the
-    error is converted into a source-aware :class:`Diagnostic`. ``phase`` is a
-    class-level attribute overridden by subclasses tied to a specific
-    frontend pass (see :class:`AglScopeError`, :class:`AglTypeError`); it is
-    stamped onto the :class:`Diagnostic` built by :meth:`to_diagnostic`.
+    error is converted into a source-aware :class:`Diagnostic`.
     """
-
-    phase: DiagnosticPhase | None = None
 
     def __init__(
         self,
@@ -213,6 +188,6 @@ class AglError(Exception):
             related_diagnostic_from_span(message, span) for message, span in self.related
         )
         if self.span is None:
-            return Diagnostic(message=str(self), line=1, related=related, phase=self.phase)
+            return Diagnostic(message=str(self), line=1, related=related)
         primary = diagnostic_from_span(str(self), self.span)
-        return replace(primary, related=related, phase=self.phase)
+        return replace(primary, related=related)

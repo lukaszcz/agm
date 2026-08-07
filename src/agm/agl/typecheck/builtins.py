@@ -13,8 +13,9 @@ from enum import StrEnum
 from typing import Protocol
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.diagnostics import Diagnostic, DiagnosticPhase
+from agm.agl.diagnostics import Diagnostic
 from agm.agl.ir.reserved_nominals import reserved_nominal_id
+from agm.agl.modules.ids import spell_declaration
 from agm.agl.scope.symbols import ConstructorRef
 from agm.agl.semantics.analyses import nominal_references
 from agm.agl.semantics.types import (
@@ -86,7 +87,6 @@ class PendingBuiltinObligation:
     # Retained so region-close diagnostics point at the offending argument rather
     # than the whole call span.
     parse_option_spans: tuple[tuple[str, SourceSpan], ...]
-    has_agent_argument: bool
 
     @property
     def has_parse_shaping_option(self) -> bool:
@@ -287,7 +287,7 @@ class BuiltinCallChecker:
         # lowering builds the request record itself and allocates no contract.
         # The contract resolved above is threaded through so the coherence walk
         # does not run a second time for this call site.
-        named = self._validate_ask_like_arguments(
+        self._validate_ask_like_arguments(
             node,
             "ask-request",
             allowed_named=frozenset() if receiver_type is not None else frozenset({"agent"}),
@@ -305,7 +305,6 @@ class BuiltinCallChecker:
                 strict_json=None,
                 parse_policy="default",
                 parse_option_spans=(),
-                has_agent_argument="agent" in named,
             )
         )
         return agent_request_type
@@ -340,7 +339,6 @@ class BuiltinCallChecker:
                 strict_json=strict_json,
                 parse_policy=parse_policy,
                 parse_option_spans=self._collect_parse_option_spans(named),
-                has_agent_argument="agent" in named,
             )
         )
 
@@ -459,7 +457,6 @@ class BuiltinCallChecker:
                 end_line=obligation.span.end_line,
                 end_column=obligation.span.end_col,
                 severity="warning",
-                phase=DiagnosticPhase.TYPECHECK,
             )
         )
 
@@ -517,7 +514,6 @@ class BuiltinCallChecker:
                 strict_json=strict_json,
                 parse_policy=parse_policy,
                 parse_option_spans=self._collect_parse_option_spans(named),
-                has_agent_argument=False,
             )
         )
         return target_type
@@ -565,7 +561,7 @@ class BuiltinCallChecker:
         return contract_type
 
     def check_caught_exception_contract(self, exc_type: ExceptionType, *, span: SourceSpan) -> None:
-        """Reject a ``catch`` clause naming an incoherent host exception contract.
+        """Reject a ``catch`` clause naming an incoherent or shadowed host exception.
 
         A ``builtin exception`` is raised by the host, which fills its fields
         itself — ``AgentCallError``/``AgentParseError`` carry an ``agent``
@@ -576,10 +572,51 @@ class BuiltinCallChecker:
         ordinary, non-``builtin`` exception is never host-raised: its fields
         always hold whatever the source that constructed it put there, so it
         carries no requirement of its own and is skipped.
+
+        Independently of field coherence, a ``catch`` clause must also name
+        the declaration the host actually mints under this bare name — the
+        live registered ``builtin`` declaration
+        (:meth:`~agm.agl.semantics.type_table.TypeTable.builtin_declaration`),
+        the same resolution :meth:`_builtin_contract_type` and the host's own
+        minting table (``lower.lowerer.builtin_nominals_from_declarations``)
+        both use. A program's own ``builtin exception`` of a reserved name
+        shadows the standard declaration for that name everywhere, not only
+        inside the declaration's own scope region; a ``catch`` clause written
+        outside that region still resolves the bare name to the standard
+        declaration by ordinary scope rules, which the host can then never
+        actually raise there — a handler that is statically well-typed but
+        provably dead. When nothing shadows this bare name at all (no
+        redeclaration anywhere, or a program loaded without the standard
+        library), :meth:`~agm.agl.semantics.type_table.TypeTable.builtin_declaration`
+        returns ``None`` and this is skipped.
         """
-        typedef = self._ctx._env.type_table.get_by_id(exc_type.decl_id)
+        table = self._ctx._env.type_table
+        typedef = table.get_by_id(exc_type.decl_id)
         if typedef is not None and typedef.is_builtin:
             self._check_host_contract_coherent(exc_type, span=span)
+        live_declaration = table.builtin_declaration(exc_type.name)
+        if live_declaration is None:
+            return
+        live_handle = live_declaration.handle()
+        assert isinstance(live_handle, ExceptionType), (
+            f"{exc_type.name!r} is registered as a builtin exception name but its live "
+            "declaration is not an exception"
+        )
+        if live_handle == exc_type:
+            return
+        caught_spelling = spell_declaration(
+            exc_type.module_id, (*exc_type.scope_path, exc_type.name)
+        )
+        live_spelling = spell_declaration(
+            live_handle.module_id, (*live_handle.scope_path, live_handle.name)
+        )
+        raise AglTypeError(
+            f"'catch {exc_type.name}' names '{caught_spelling}', but the host raises "
+            f"'{exc_type.name}' here as '{live_spelling}' — this program's own "
+            f"'builtin exception {exc_type.name}' declaration shadows the standard one, "
+            "so this clause can never match.",
+            span=span,
+        )
 
     def _check_host_contract_coherent(
         self, contract_type: RecordType | ExceptionType, *, span: SourceSpan

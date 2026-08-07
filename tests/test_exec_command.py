@@ -3054,6 +3054,159 @@ class TestReservedFileStem:
         assert result is None
 
 
+class TestReservedDeclaredProgramName:
+    """regression: a reserved declared ``program NAME`` must be rejected up front.
+
+    Before the fix, ``parsed.program_name`` was adopted as ``program_key`` without
+    checking it against the reserved-name set, so a declaration like ``program
+    exec`` silently selected the ``[exec]`` config table and any bad engine-seed
+    literal there (e.g. ``default-agent = 42``) was reported as a config error
+    instead of the real problem: the declared name itself is reserved.
+    """
+
+    def test_reserved_declared_name_with_bad_config_reports_reserved_name(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """'program exec' + a bad [exec] literal must surface the reserved-name error,
+        not the unrelated config-literal error the [exec] table happens to trigger."""
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text("[exec]\ndefault-agent = 42\n")
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        agl_file = tmp_path / "r.agl"
+        agl_file.write_text("program exec\nlet x = 1\nx\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert "reserved" in err
+        assert "default-agent" not in err
+
+    def test_reserved_declared_name_without_config_reports_reserved_name(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """'program exec' with no config present still reports the reserved-name problem."""
+        agl_file = tmp_path / "r.agl"
+        agl_file.write_text("program exec\nlet x = 1\nx\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+
+        assert exc_info.value.code == 1
+        assert "reserved" in capsys.readouterr().err
+
+    def test_non_reserved_declared_name_still_selects_its_config_table(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-reserved declared name is not over-rejected and still picks up its
+        own [<name>] config table (guard against over-rejection)."""
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text("[myprog]\nmax-iters = 5\n")
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        agl_file = tmp_path / "r.agl"
+        agl_file.write_text("program myprog\nlet x = 1\nx\n")
+
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None
+
+    def test_reserved_file_stem_with_matching_config_still_reports_stem_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Unchanged: a reserved *file stem* (no program decl) with a bad literal in
+        its matching config table still reports the reserved-stem error, not the
+        config-literal error — the existing file-stem guard keeps working."""
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text("[exec]\ndefault-agent = 42\n")
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        agl_file = tmp_path / "exec.agl"
+        agl_file.write_text("let x = 1\nx\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert "reserved" in err
+        assert "default-agent" not in err
+
+
+class TestSettingOverrideProvenanceWithNoStdlib:
+    """``--no-stdlib`` interacts differently with a CLI flag vs. ambient config.
+
+    A ``default-agent`` override reaching the engine as AgL literal source
+    (``--agent`` or ``[exec]``/``[<program>] default-agent``) can only be
+    spliced into ``std/config``'s own declaration when that module is loaded.
+    ``--no-stdlib`` on a program that never explicitly imports ``std/config``
+    means it never is. An ambient config value is then simply inert (the key
+    does not apply to this run); an explicit ``--agent`` flag is a request the
+    host cannot silently drop, so it still fails the run.
+    """
+
+    def test_config_default_agent_is_inert_without_stdlib(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A project-configured ``[exec] default-agent`` must not break every
+        ``--no-stdlib`` program, including one that never mentions an agent."""
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            "[exec]\ndefault-agent = 'AgentCommand(\"echo cfg\")'\n"
+        )
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        agl_file = tmp_path / "plain.agl"
+        agl_file.write_text("let x = 1\n")
+
+        result = exec_command.run(_exec_args_no_log(agl_file, no_stdlib=True))
+        assert result is None
+
+    def test_agent_flag_still_fails_without_stdlib(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """An explicit ``--agent`` literal is a request, not ambient config: it
+        must still fail (rather than be silently dropped) when the program
+        never loads ``std/config``."""
+        agl_file = tmp_path / "plain.agl"
+        agl_file.write_text("let x = 1\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file, no_stdlib=True, agent="("))
+
+        assert exc_info.value.code == 1
+        assert "--agent" in capsys.readouterr().err
+
+
 class TestF1StemVsProgramNameBug:
     """regression: file stem != program NAME decl must not split engine/param key."""
 

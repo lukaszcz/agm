@@ -34,7 +34,7 @@ Checked artifacts contain concrete types and no solver state; a leaked flexible 
 
 ## Code Entry Points
 
-- `src/agm/agl/semantics/` — the value model, semantic types, `TypeTable`, whole-table analyses, and exceptions. `semantics/type_syntax.py` renders a semantic `Type` back to AgL type-annotation syntax — a partial mapping (unlike `Type.__repr__`, which is total and debug-only) used where a `Type` must be spliced into program text.
+- `src/agm/agl/semantics/` — the value model, semantic types, `TypeTable`, whole-table analyses, and exceptions.
 - `src/agm/agl/typecheck/` — the checker, built-in typing rules, the inference solver, and argument binding.
 - `src/agm/agl/type_schema.py` — compile-time JSON schema and format-instruction derivation.
-- Tests: `tests/test_agl_typecheck.py`, `tests/test_agl_types.py`, `tests/test_agl_type_table.py`, `tests/test_agl_inference.py`, `tests/test_agl_arguments.py`, `tests/test_agl_typecheck_program.py`, `tests/test_agl_type_syntax.py`.
+- Tests: `tests/test_agl_typecheck.py`, `tests/test_agl_types.py`, `tests/test_agl_type_table.py`, `tests/test_agl_inference.py`, `tests/test_agl_arguments.py`, `tests/test_agl_typecheck_program.py`.

@@ -62,6 +62,161 @@ def test_agent_transport_failures_become_typed_errors(
     assert run.error.type_name == "AgentCallError"
 
 
+def test_nonzero_exit_message_includes_the_exit_code(
+    fake_agent_transport: FakeAgentTransport,
+) -> None:
+    """A caught ``AgentCallError.message`` still names the exit code (not just metadata)."""
+    fake_agent_transport.queue(
+        fake_agent_transport.failure(returncode=7, stderr="boom", elapsed=1.0)
+    )
+    runtime = PipelineDriver(agent_dispatcher=value_driven_agent_factory(idle_timeout=None))
+
+    run = runtime.run('let answer: text = ask("hello", agent = AgentCommand("runner"))\nanswer')
+
+    assert not run.ok
+    assert run.error is not None
+    assert run.error.type_name == "AgentCallError"
+    assert "(exit 7)" in run.error.fields["message"]
+
+
+def test_composed_prompt_is_unchanged_when_no_output_contract(
+    fake_agent_transport: FakeAgentTransport,
+) -> None:
+    """No contract, no retry: the prompt sent is exactly the request's prompt."""
+    from agm.agl.runtime.request import AgentRequest
+
+    dispatch = value_driven_agent_factory(idle_timeout=None)
+    agent = agent_value("AgentCommand", command="runner")
+
+    dispatch(AgentRequest(agent=agent, prompt="Do X."))
+
+    assert fake_agent_transport.calls == [("Do X.", ["runner"])]
+
+
+def test_composed_prompt_appends_format_instructions_after_the_prompt(
+    fake_agent_transport: FakeAgentTransport,
+) -> None:
+    from agm.agl.runtime.contract import TypelessOutputContract
+    from agm.agl.runtime.request import AgentRequest
+
+    dispatch = value_driven_agent_factory(idle_timeout=None)
+    agent = agent_value("AgentCommand", command="runner")
+    contract = TypelessOutputContract(
+        target_type="int",
+        codec_name="json",
+        strict_json=True,
+        format_instructions="Return only valid JSON matching the schema.",
+        json_schema=None,
+    )
+
+    dispatch(AgentRequest(agent=agent, prompt="Do X.", output_contract=contract))
+
+    prompt = fake_agent_transport.calls[0][0]
+    assert "Do X." in prompt
+    assert "Return only valid JSON matching the schema." in prompt
+    assert prompt.index("Do X.") < prompt.index("Return only valid JSON matching the schema.")
+
+
+def test_composed_prompt_omits_format_instructions_when_the_contract_has_none(
+    fake_agent_transport: FakeAgentTransport,
+) -> None:
+    """An empty ``format_instructions`` (e.g. the text codec) adds nothing."""
+    from agm.agl.runtime.contract import TypelessOutputContract
+    from agm.agl.runtime.request import AgentRequest
+
+    dispatch = value_driven_agent_factory(idle_timeout=None)
+    agent = agent_value("AgentCommand", command="runner")
+    contract = TypelessOutputContract(
+        target_type="text",
+        codec_name="text",
+        strict_json=None,
+        format_instructions="",
+        json_schema=None,
+    )
+
+    dispatch(AgentRequest(agent=agent, prompt="Do X.", output_contract=contract))
+
+    assert fake_agent_transport.calls == [("Do X.", ["runner"])]
+
+
+def test_composed_prompt_includes_retry_feedback_on_a_retry_attempt(
+    fake_agent_transport: FakeAgentTransport,
+) -> None:
+    """A retry (attempt >= 1) appends the previous output and validation errors."""
+    from agm.agl.runtime.request import AgentRequest, ValidationError
+
+    dispatch = value_driven_agent_factory(idle_timeout=None)
+    agent = agent_value("AgentCommand", command="runner")
+
+    dispatch(
+        AgentRequest(
+            agent=agent,
+            prompt="Do X.",
+            attempt=1,
+            previous_invalid_output="the-bad-output-xyz",
+            validation_errors=[
+                ValidationError(category="missing_field", message="missing field 'name'"),
+                ValidationError(category="wrong_type", message="type mismatch: expected int"),
+            ],
+        )
+    )
+
+    prompt = fake_agent_transport.calls[0][0]
+    assert "Your previous response did not match the required output format" in prompt
+    assert "- missing field 'name'" in prompt
+    assert "- type mismatch: expected int" in prompt
+    assert "the-bad-output-xyz" in prompt
+    assert "Return only valid JSON matching the schema." in prompt
+
+
+def test_composed_prompt_has_no_retry_feedback_on_the_first_attempt(
+    fake_agent_transport: FakeAgentTransport,
+) -> None:
+    from agm.agl.runtime.request import AgentRequest
+
+    dispatch = value_driven_agent_factory(idle_timeout=None)
+    agent = agent_value("AgentCommand", command="runner")
+
+    dispatch(AgentRequest(agent=agent, prompt="Do X.", attempt=0))
+
+    prompt = fake_agent_transport.calls[0][0]
+    assert "Your previous response did not match" not in prompt
+
+
+def test_composed_prompt_orders_format_instructions_before_retry_feedback(
+    fake_agent_transport: FakeAgentTransport,
+) -> None:
+    """Ordering: prompt, then format_instructions, then the retry-feedback block."""
+    from agm.agl.runtime.contract import TypelessOutputContract
+    from agm.agl.runtime.request import AgentRequest
+
+    dispatch = value_driven_agent_factory(idle_timeout=None)
+    agent = agent_value("AgentCommand", command="runner")
+    contract = TypelessOutputContract(
+        target_type="int",
+        codec_name="json",
+        strict_json=True,
+        format_instructions="Return JSON.",
+        json_schema=None,
+    )
+
+    dispatch(
+        AgentRequest(
+            agent=agent,
+            prompt="Do X.",
+            attempt=1,
+            previous_invalid_output="bad",
+            output_contract=contract,
+        )
+    )
+
+    prompt = fake_agent_transport.calls[0][0]
+    prompt_pos = prompt.index("Do X.")
+    fmt_pos = prompt.index("Return JSON.")
+    retry_pos = prompt.index("Your previous response")
+    assert prompt_pos < fmt_pos < retry_pos
+
+
 def test_codex_agent_dispatch_delivers_prompt_via_stdin(monkeypatch: pytest.MonkeyPatch) -> None:
     """The full value-driven dispatch path sends codex's prompt as stdin, not ``@<path>``."""
     from agm.agl.runtime.request import AgentRequest

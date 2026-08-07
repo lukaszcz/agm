@@ -71,7 +71,10 @@ def _raise_agent_call_error(
             nominal=nominal,
             display_name=nominals.display_name("AgentCallError"),
             fields={
-                "message": TextValue(f"Agent {agent_label!r} failed: {error.cause}"),
+                "message": TextValue(
+                    f"Agent {agent_label!r} failed: {error.cause}"
+                    + (f" (exit {error.exit_code})" if error.exit_code is not None else "")
+                ),
                 "trace_id": TextValue(new_trace_id()),
                 "agent": agent,
                 "cause": TextValue(error.cause),

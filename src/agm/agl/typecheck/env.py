@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Literal, cast
 
-from agm.agl.diagnostics import AglError, Diagnostic, DiagnosticPhase
+from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, require_reserved_nominal_id
 from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId, spell_declaration
@@ -230,8 +230,6 @@ class AglTypeError(AglError):
     Raised by the type checker on the first type violation.  Carries an
     optional ``SourceSpan`` for source location.
     """
-
-    phase = DiagnosticPhase.TYPECHECK
 
 
 # ---------------------------------------------------------------------------

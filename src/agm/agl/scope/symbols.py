@@ -25,7 +25,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import TypeVar
 
-from agm.agl.diagnostics import AglError, Diagnostic, DiagnosticPhase
+from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.semantics.types import EnumType
 from agm.agl.syntax.nodes import (
@@ -855,5 +855,3 @@ class AglScopeError(AglError):
     (first-error abort policy).  Carries an optional ``SourceSpan`` for
     precise source location.
     """
-
-    phase = DiagnosticPhase.SCOPE

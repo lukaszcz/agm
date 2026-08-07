@@ -259,6 +259,26 @@ class TestOverrideApplicationRejections:
         assert prepared.resolved is None
         assert origin in _diagnostic_text(prepared)
 
+    def test_non_required_override_is_inert_when_stdlib_is_missing(self) -> None:
+        """Ambient configuration (``required=False``) never blocks a run: with
+        no loaded ``std/config``, the key simply does not apply -- unlike a
+        ``required`` override (e.g. ``--agent``, tested above), which still
+        reports a diagnostic in the same situation.
+        """
+        _driver, prepared = _prepare(
+            "let x = 1\nx",
+            overrides={
+                "default-agent": SettingOverride(
+                    source='AgentClaude("sonnet", "medium")',
+                    origin="[exec] default-agent",
+                    required=False,
+                )
+            },
+            default_stdlib=False,
+        )
+        assert prepared.diagnostics == ()
+        assert prepared.resolved is not None
+
     def test_no_exception_escapes_a_rejected_override(self) -> None:
         """Every rejection path is a diagnostic, never a raised exception."""
         for source, origin in (

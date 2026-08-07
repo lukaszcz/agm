@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.types import HostEnvironment
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
-    from agm.agl.semantics.values import BoolValue, EnumValue, Frame, Value
+    from agm.agl.semantics.values import Frame, Value
     from agm.agl.setting_overrides import SettingOverride
     from agm.agl.syntax.advisories import SpacedQualifier
     from agm.agl.syntax.nodes import ImportDecl, Item, OpenDecl, Program, ScopeRegion
@@ -63,15 +63,19 @@ class EntryPipelineCtx(Protocol):
     _ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]]
     _ambient_type_names: frozenset[str]
     _trace_path: Path | None
-    _default_strict_json: bool
     _default_loop_limit: int | None
     _default_call_depth_limit: int
     _default_stdlib: bool
     _shell_exec_timeout: float | None
-    _persisted_host_settings: dict[str, Value]
-    _persisted_strict_json: BoolValue | None
-    _persisted_timeout_setting: EnumValue | None
+    # The current-value register for the five engine keys with a ``Value``
+    # form (strict-json, timeout, log, log-file, default-agent); a key is
+    # present only once a host seed or a learned declared default has made it
+    # meaningful. See ``ReplSession._current``.
+    _current: dict[str, Value]
     _host_settings_policy: HostSettingsPolicy | None
+
+    @property
+    def _default_strict_json(self) -> bool: ...
 
     def _ensure_roots(self) -> RootSet: ...
 
@@ -86,16 +90,10 @@ class EntryPipelineCtx(Protocol):
     ) -> tuple[EntryResult | None, dict[str, Value], str | None, dict[str, object]]: ...
 
     def _record_declared_engine_defaults(
-        self, declared_keys: frozenset[str], effective_values: Mapping[str, Value]
+        self, declared_keys: frozenset[str], interp: IrInterpreter
     ) -> None: ...
 
-    def _update_engine_settings(
-        self,
-        *,
-        strict_json: bool,
-        loop_limit: int | None,
-        shell_exec_timeout: float | None,
-    ) -> None: ...
+    def _update_engine_settings(self, interp: IrInterpreter) -> None: ...
 
     def _advance_node_ids(self, next_start_id: int) -> None: ...
 
@@ -173,6 +171,7 @@ class EntryPipeline:
         host_env: HostEnvironment,
         next_start_id: int,
         spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
+        validate_missing_std_config: bool = False,
     ) -> LoadedCheckedProgram:
         """Build the module graph, splice overrides, resolve, and type-check.
 
@@ -180,18 +179,31 @@ class EntryPipeline:
         compilation, lowering, and evaluation) and ``ReplSession.open``
         (which stops here and promotes only the loaded library modules,
         before the session accepts its first entry): builds on the session's
-        retained import/scope-open preamble and cached library modules,
-        splices ``setting_overrides`` in the first time ``std/config`` loads
-        into the graph, then resolves and type-checks the result.
+        retained import/scope-open preamble and cached library modules, then
+        applies ``setting_overrides`` via
+        :func:`~agm.agl.pipeline.apply_setting_overrides` — which owns both
+        the splice-once-per-session apply condition and the module-cache
+        reconciliation a caller that caches ``new_modules`` needs — before
+        resolving and type-checking the result.
+
+        ``validate_missing_std_config`` is ``False`` for an ordinary entry
+        (:meth:`eval_entry`): a ``required`` override (e.g. ``--agent``) that
+        ``std/config`` never loads for stays unvalidated until whichever
+        later entry, if any, first loads it, matching how a non-``required``
+        override already behaves. ``ReplSession.open`` passes ``True``
+        instead, so a ``required`` override is validated at session-open
+        time even when the initial image never loads ``std/config`` (e.g.
+        ``--no-stdlib`` with no explicit import) — reported before the
+        session accepts its first entry rather than deferred to one that may
+        never come.
 
         Raises the underlying ``AglSyntaxError``/module-loading
         error/``AglScopeError``/``AglTypeError`` on failure, or
         :class:`OverrideRejected` when the override splice itself is
         rejected — callers adapt these to their own failure-reporting shape.
         """
-        from agm.agl.modules.ids import STD_CONFIG_ID
         from agm.agl.modules.loader import build_repl_graph
-        from agm.agl.pipeline import _apply_setting_overrides
+        from agm.agl.pipeline import apply_setting_overrides
         from agm.agl.scope.program import resolve_program
         from agm.agl.typecheck.program import check_program
 
@@ -210,31 +222,15 @@ class EntryPipeline:
             spaced_qualifiers=spaced_qualifiers,
         )
 
-        # Splice any host-supplied engine-setting overrides in as soon as
-        # ``std/config`` is FIRST loaded into the session's module graph —
-        # ``new_modules`` (not ``cached``) means this call loaded it fresh, so
-        # this fires exactly once per session: at session-open time for the
-        # ordinary case where the initial image loads ``std/config``, or —
-        # when it does not (e.g. ``--no-stdlib`` with no explicit import) —
-        # the first later entry that does, and again after a ``:reset``,
-        # which clears the module cache. A later call reuses the
-        # already-spliced, cached module, so re-splicing would both waste
-        # work and mint a new, unstable declaration identity for the same
-        # builtin var every time.
-        if self._ctx._setting_overrides and STD_CONFIG_ID in new_modules:
-            graph, new_next_id, override_diagnostics = _apply_setting_overrides(
-                graph, new_next_id, self._ctx._setting_overrides
-            )
-            if override_diagnostics:
-                raise OverrideRejected(override_diagnostics)
-            # ``_apply_setting_overrides`` returns a new ``graph`` carrying the
-            # spliced ``std/config``, but ``new_modules`` is a separate dict
-            # snapshotted before the splice — reconcile it so whichever caller
-            # caches ``new_modules`` (an evaluated entry, or ``ReplSession.open``)
-            # caches the SPLICED module, not the pre-splice one. Without this, a
-            # later reuse from that cache would silently see the un-overridden
-            # declared default again.
-            new_modules = {**new_modules, STD_CONFIG_ID: graph.modules[STD_CONFIG_ID]}
+        graph, new_next_id, override_diagnostics, new_modules = apply_setting_overrides(
+            graph,
+            new_next_id,
+            self._ctx._setting_overrides,
+            newly_loaded_modules=new_modules,
+            validate_when_absent=validate_missing_std_config,
+        )
+        if override_diagnostics:
+            raise OverrideRejected(override_diagnostics)
 
         resolved_program = resolve_program(
             graph,
@@ -694,9 +690,7 @@ class EntryPipeline:
                 loop_limit=self._ctx._default_loop_limit,
                 max_call_depth=self._ctx._default_call_depth_limit,
                 shell_exec_timeout=(
-                    self._ctx._shell_exec_timeout
-                    if self._ctx._persisted_timeout_setting is None
-                    else None
+                    self._ctx._shell_exec_timeout if "timeout" not in self._ctx._current else None
                 ),
                 trace=trace,
                 param_values=ir_params,
@@ -704,19 +698,12 @@ class EntryPipeline:
                 base_frame=self._ctx._ir_base_frame,
                 extern_registry=host_env.extern_registry,
                 host_reconfigurer=reconfigurer,
-                builtin_host_settings={
-                    **self._ctx._persisted_host_settings,
-                    **(
-                        {}
-                        if self._ctx._persisted_strict_json is None
-                        else {"strict-json": self._ctx._persisted_strict_json}
-                    ),
-                    **(
-                        {}
-                        if self._ctx._persisted_timeout_setting is None
-                        else {"timeout": self._ctx._persisted_timeout_setting}
-                    ),
-                },
+                # The current-value register already carries every key that is
+                # meaningful yet (a host seed, or a declared default learned by
+                # an earlier entry): a key genuinely absent here is exactly one
+                # this interpreter should learn its own ``std/config`` declared
+                # default for, rather than have imposed on it.
+                builtin_host_settings=dict(self._ctx._current),
             )
         except AglRaise as exc:
             error = exception_value_to_run_error(exc.exc, span=exc.span)
@@ -766,16 +753,8 @@ class EntryPipeline:
                 ok=False,
                 trace_path=self._ctx._trace_path,
             )
-        from agm.agl.semantics.values import BoolValue, IntValue
-
         self._ctx._record_declared_engine_defaults(
-            frozenset(lowered.program.builtin_setting_defaults),
-            {
-                **interp.builtin_host_settings,
-                "strict-json": BoolValue(interp.strict_json),
-                "max-iters": IntValue(interp.loop_limit or 0),
-                "timeout": interp.timeout_setting,
-            },
+            frozenset(lowered.program.builtin_setting_defaults), interp
         )
 
         def promote(*, partial: bool, promoted_declaration_ids: frozenset[int]) -> tuple[str, ...]:
@@ -1121,13 +1100,7 @@ class EntryPipeline:
 
     def _persist_interpreter_settings(self, interp: "IrInterpreter", trace: "TraceStore") -> None:
         """Persist completed setting writes and the live trace destination."""
-        self._ctx._update_engine_settings(
-            strict_json=interp.strict_json,
-            loop_limit=interp.loop_limit,
-            shell_exec_timeout=interp.shell_exec_timeout,
-        )
-        self._ctx._persisted_host_settings = interp.builtin_host_settings
-        self._ctx._persisted_timeout_setting = interp.timeout_setting
+        self._ctx._update_engine_settings(interp)
         # A store disabled by a failed write nulls its own path for the rest of
         # the entry; that is a transient I/O condition, not a destination the
         # session should adopt.  Keeping the session path lets the next entry

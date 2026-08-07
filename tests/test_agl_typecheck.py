@@ -1841,6 +1841,129 @@ class TestBuiltinTypeModuleIdentity:
         assert "std/core" not in message
 
 
+class TestCaughtExceptionShadowedByBuiltinRedeclaration:
+    """A ``catch`` clause must name the declaration the host actually mints.
+
+    A program that declares its own ``builtin exception`` of a reserved name
+    shadows the standard declaration for that name everywhere the host might
+    raise it -- not only inside the declaration's own scope region. A
+    ``catch`` clause written OUTSIDE that region still resolves the bare name
+    by ordinary scope rules, which finds the standard (unshadowed)
+    declaration; without a dedicated check, that clause type-checks against a
+    declaration the host can never actually raise, so it can never match.
+    """
+
+    def test_catch_outside_declaring_scope_of_a_shadowing_builtin_is_rejected(self) -> None:
+        """Regression: the outside-the-region half of the identity mismatch.
+
+        ``scope A`` declares its own ``builtin exception ExecError``, so the
+        host mints ``A::ExecError`` under the bare name ``ExecError``
+        everywhere. The ``catch`` clause below sits OUTSIDE ``scope A``, so
+        the bare name resolves to the standard ``std/core::ExecError``
+        instead -- a declaration the host will never raise here -- and must
+        be rejected rather than silently accepted as a dead handler.
+        """
+        err = reject_type(
+            "scope A\n"
+            "builtin\n"
+            "exception ExecError extends Exception\n"
+            "  *\n"
+            "  command: text\n"
+            "  exit_code: int\n"
+            "  stdout: text\n"
+            "  stderr: text\n"
+            "  timed_out: bool\n"
+            "end A\n"
+            "def f() -> int =\n"
+            "  try\n"
+            "    1\n"
+            "  catch ExecError as e =>\n"
+            "    2\n"
+            "f()\n"
+        )
+        message = err.to_diagnostic().message
+        assert "ExecError" in message
+
+    def test_catch_inside_declaring_scope_of_a_shadowing_builtin_still_accepted(self) -> None:
+        """The in-scope half: a ``catch`` clause inside the declaring region
+        resolves the bare name to that region's own declaration -- exactly
+        the identity the host mints there -- so it is unaffected."""
+        r = accept_type(
+            "scope A\n"
+            "builtin\n"
+            "exception ExecError extends Exception\n"
+            "  *\n"
+            "  command: text\n"
+            "  exit_code: int\n"
+            "  stdout: text\n"
+            "  stderr: text\n"
+            "  timed_out: bool\n"
+            "def f() -> int =\n"
+            "  try\n"
+            "    1\n"
+            "  catch ExecError as e =>\n"
+            "    2\n"
+            "end A\n"
+            "A::f()\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_catch_with_no_redeclaration_still_matches_the_standard_declaration(self) -> None:
+        """Guard against over-rejection: with no program-declared ``builtin``
+        of the name at all, the standard declaration is not shadowed by
+        anything, so an ordinary ``catch`` still matches it."""
+        r = accept_type("def f() -> int =\n  try\n    1\n  catch ExecError as e =>\n    2\nf()\n")
+        assert r.resolved.program is not None
+
+    def test_catch_of_an_ordinary_exception_sharing_a_builtin_bare_name_is_accepted(self) -> None:
+        """Guard against over-rejection: an ordinary, non-``builtin`` exception
+        is raised only by the program itself, never by the host, so the
+        host-minting rule does not apply to it even when its bare name
+        collides with a built-in one."""
+        r = accept_type(
+            "scope A\n"
+            "exception ExecError extends Exception\n"
+            "  code: int\n"
+            "def f() -> int =\n"
+            "  try\n"
+            '    raise ExecError(message = "boom", code = 5)\n'
+            "  catch ExecError as e =>\n"
+            "    e.code\n"
+            "end A\n"
+            "A::f()\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_catch_without_stdlib_and_no_redeclaration_is_unaffected(self) -> None:
+        """Guard against over-rejection without the standard library: a
+        program loaded with ``default_stdlib=False`` that declares its own
+        whole exception hierarchy and never redeclares it a second time has
+        nothing shadowing it either, so ``catch`` still matches normally."""
+        r = accept_type(
+            "builtin\n"
+            "exception Exception\n"
+            "  *\n"
+            "  message: text\n"
+            "  trace_id: text\n"
+            "builtin\n"
+            "exception ExecError extends Exception\n"
+            "  *\n"
+            "  command: text\n"
+            "  exit_code: int\n"
+            "  stdout: text\n"
+            "  stderr: text\n"
+            "  timed_out: bool\n"
+            "def f() -> int =\n"
+            "  try\n"
+            "    1\n"
+            "  catch ExecError as e =>\n"
+            "    2\n"
+            "f()\n",
+            default_stdlib=False,
+        )
+        assert r.resolved.program is not None
+
+
 class TestBuiltinOptionShape:
     """``Option`` is the generic prelude template (``OPTION_TYPE_DEF``,
     ``semantics/type_table.py``), seeded separately from the non-generic
@@ -9689,7 +9812,6 @@ class TestGenerics:
                     strict_json=None,
                     parse_policy="default",
                     parse_option_spans=(),
-                    has_agent_argument=False,
                 )
             )
 

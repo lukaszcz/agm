@@ -1,11 +1,8 @@
 """Shared helpers for AgL test modules.
 
-Provides a recursive ``node_id`` collector used by the seeded parsing and
-seeded type-checking tests, plus ``ambient_agents_for`` — used by non-scope
-unit tests (typecheck/eval/codec/trace) to resolve programs that *call* named
-agents without forcing an explicit ``agent`` declaration in every test source.
-The agent-declaration RULE itself is exercised by ``tests/test_agl_scope.py``
-and the e2e suite; these other modules only need the calls to bind.
+Provides a recursive ``node_id`` collector (``all_node_ids``) used by the
+seeded parsing and seeded type-checking tests, and ``let_root_capture`` for
+extracting the binding IR from a simple or destructuring immutable ``let``.
 
 ``type_table_for`` is the shared helper for tests that build ad-hoc
 ``RecordType``/``EnumType`` handles directly (rather than through the real

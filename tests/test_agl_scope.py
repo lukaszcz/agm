@@ -602,7 +602,7 @@ class TestScopedBindingOpenPrecedence:
     A local ``open`` records its target scope path together with its full
     selection (mode, items, renames) and resolves it against the scope tree
     at every later bare reference, never through a snapshot taken when the
-    ``open`` itself is walked. A declaration (``def``/type/``agent``) is
+    ``open`` itself is walked. A declaration (``def``/type) is
     fully collected in the pre-pass, so every ``open`` sees it regardless of
     order; a scoped binder is registered only when the walk reaches it, so a
     reference textually walked *after* the binder's own registration still

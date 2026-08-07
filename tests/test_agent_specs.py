@@ -178,6 +178,65 @@ def test_stdin_delivered_run_sends_prompt_as_stdin_and_appends_no_target(
     assert captured["stdin_text"] == "rendered prompt text"
 
 
+def test_stdin_delivered_prompt_does_not_read_the_prompt_back_off_disk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression test: the stdin-delivered prompt reaches the child process from
+    the already-rendered text handed to ``prepare_rendered_prompt_run``, not by
+    writing it to a temp file and reading it back. The old implementation
+    silently depended on that temp file surviving between
+    ``prepare_rendered_prompt_run`` and ``run_prepared_prompt_result``; no temp
+    file is created for this delivery mode at all, and nothing may read one
+    back off disk.
+    """
+    from agm.agent.runner import (
+        cleanup_temp_files,
+        prepare_rendered_prompt_run,
+        run_prepared_prompt_result,
+    )
+    from agm.core.process import ProcessCaptureResult
+
+    captured: dict[str, object] = {}
+
+    def fake_run_capture_result(cmd: list[str], **kwargs: object) -> ProcessCaptureResult:
+        captured["stdin_text"] = kwargs.get("stdin_text")
+        return ProcessCaptureResult(
+            returncode=0,
+            stdout="ok",
+            stderr="",
+            elapsed=0.1,
+            timed_out=False,
+            spawn_error=None,
+            spawn_errno=None,
+        )
+
+    monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
+
+    def _forbidden_read_text(self: Path, *args: object, **kwargs: object) -> str:
+        raise AssertionError("stdin-delivered prompt must not be read back off disk")
+
+    monkeypatch.setattr(Path, "read_text", _forbidden_read_text)
+
+    temp_files: list[Path] = []
+    try:
+        prepared = prepare_rendered_prompt_run(
+            "rendered prompt text",
+            runner=AgentCodex("o3", "high").argv(),
+            temp_files=temp_files,
+            env={},
+            prompt_via_stdin=True,
+        )
+        # Nothing needs to read this delivery mode's prompt back off disk, so
+        # no temp file should be created for it in the first place.
+        assert temp_files == []
+
+        run_prepared_prompt_result(prepared, idle_timeout=None)
+    finally:
+        cleanup_temp_files(temp_files)
+
+    assert captured["stdin_text"] == "rendered prompt text"
+
+
 def test_file_delivered_run_is_unchanged_by_the_stdin_delivery_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -99,6 +99,10 @@ like any other static error.
   selects the value used by `ask` calls that omit `agent`. An `AgentCommand(...)`
   literal's command text is shell-split and validated the same way as `[exec] runner`
   before execution; a malformed command (e.g. an unclosed quote) exits 1 with nothing run.
+  Because `--agent` is an explicit request, it still exits 1 when combined with
+  `--no-stdlib` on a program that never loads `std/config` — unlike
+  `[<program>]`/`[exec] default-agent`, which is simply inert (has no effect) in
+  that situation.
 - `--log` / `--log-file PATH` / `--no-log`: Control trace logging, which is **off by
   default**. `--log` enables it with an auto-generated timestamped path under
   `.agent-files/`; `--log-file PATH` writes a structured JSONL trace to `PATH`;
@@ -290,7 +294,10 @@ available and agent calls fire exactly once.
 
 The REPL reuses `[exec]` settings for `default-agent`, the max-iters valve,
 call-depth limit, JSON strictness, and timeout. Like `agm exec`, each typed
-`Agent` value selects its own backend command; settings do not select it.
+`Agent` value selects its own backend command; settings do not select it. Like
+`agm exec`, `--agent` combined with `--no-stdlib` still fails — at session-open
+time, before the prompt appears — if the session never loads `std/config`;
+`[<program>]`/`[exec] default-agent` is simply inert in that same situation.
 
 Like `agm exec`, the REPL automatically opens `std/core` throughout each loaded
 program, so standard-library names such as `Option`, `Some`, and `None` are available

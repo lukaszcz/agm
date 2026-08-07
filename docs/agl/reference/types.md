@@ -531,7 +531,10 @@ under that name: an unannotated `exec` returns that program's
 `builtin exception` of that name. Such a value carries that declaration's own
 path, so it renders under that path and a `catch` clause naming the declaration
 matches it. A name the program declares no `builtin` for keeps the standard
-core type described in [Standard core types](#standard-core-types).
+core type described in [Standard core types](#standard-core-types). A `catch`
+clause naming the standard declaration of a name the program declares its own
+`builtin` for is rejected, wherever in the program it is written, because the
+host raises the program's own declaration under that name instead.
 
 The host fills the fields of such a value itself, always with standard
 values, so any field of one whose type is itself a nominal type must keep the

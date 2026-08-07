@@ -125,6 +125,22 @@ def run(args: ExecArgs) -> None:
     # built and threaded into the single module-load-and-scope pass.
     parsed = PipelineDriver.parse_entry(source, entry_path=entry_path)
 
+    # Reserved declared-name check: a ``program NAME`` declaration naming a reserved
+    # AGM command or config-section name must be rejected here, before it is ever
+    # adopted as ``program_key`` and used to select a config table or build engine
+    # seeds. Without this, the reserved name would silently select its own config
+    # table and any bad value there would be misreported as a config error instead
+    # of the real problem. The resolver enforces the same rule during scope
+    # resolution (using the same ``RESERVED_PROGRAM_NAMES`` set); this check only
+    # gives a clean, up-front error before config/engine-seed work happens.
+    if parsed.program_name is not None and parsed.program_name in RESERVED_PROGRAM_NAMES:
+        print(
+            f"Error: declared program name '{parsed.program_name}' is a reserved "
+            "program name. Use a non-reserved name in the 'program NAME' declaration.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
     # Resolve the single final program key for BOTH engine-key overrides and param
     # resolution. The declared ``program NAME`` takes precedence over the file stem;
     # a stem in the stable reserved-program-name set produces no key (and triggers

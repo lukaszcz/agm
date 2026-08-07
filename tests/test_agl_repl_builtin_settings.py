@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.host_settings import HostSettingsPolicy
@@ -257,7 +259,7 @@ def _host_seeded_session(
     ``max-iters`` is seeded through the ``default_loop_limit`` driver
     argument; ``engine_base["max-iters"]`` is the other channel, exercised by
     ``TestMaxItersEngineBaseSeed`` below. ``ReplSession.__init__`` folds both
-    into the same ``_engine_base`` entry.  ``default_agent`` is the raw
+    into the same ``_engine_seed`` entry.  ``default_agent`` is the raw
     ``AgentCommand`` command text (not AgL source) — a host-seeded ``Value``,
     like ``[exec] runner`` builds in production, rather than the AgL-literal
     ``SettingOverride`` path ``--agent``/``[exec] default-agent`` use.
@@ -498,11 +500,12 @@ class TestSeedGovernsRuntimeEffectOverDriverArgument:
 class TestMaxItersRegisterIsolation:
     """A ``max-iters`` host seed never leaks into the host-consumed settings register.
 
-    ``max-iters`` is a runtime-live key: normalizing it into ``_engine_base``
-    must not let it reach ``_persisted_host_settings`` (the register mapping
-    fed to the interpreter as ``builtin_host_settings`` for
-    log/log-file/default-agent), or the interpreter would receive a
-    register value it never reads a max-iters control from.
+    ``max-iters`` is a runtime-live key: normalizing it into ``_engine_seed``
+    must not let it reach ``_current`` (which backs the ``_persisted_host_settings``
+    property below, the register mapping fed to the interpreter as
+    ``builtin_host_settings`` for log/log-file/default-agent), or the
+    interpreter would receive a register value it never reads a max-iters
+    control from.
     """
 
     def test_default_loop_limit_seed_is_absent_from_the_host_settings_register(self) -> None:
@@ -685,6 +688,56 @@ class TestResetSeedWinsOverDriverArgument:
         value = _read(s, "timeout")
         assert isinstance(value, EnumValue)
         assert value.variant == "None"
+
+
+class TestResetRestoresMixedSeedOrigins:
+    """One ``:reset`` restores every key together, regardless of its origin.
+
+    The per-key tests above (``TestResetHostSeedPrecedence``,
+    ``TestResetDeclaredDefaultPrecedence``) each isolate a single key against
+    its own dedicated session. This pins the state the seed-map/current-map
+    consolidation (folding ``_engine_base`` and ``_declared_engine_defaults``
+    into one ``_engine_seed``, and the three persisted-register fields into
+    one ``_current``) put most at risk: a single session seeded with an
+    explicit CLI/host value for one key (``max-iters``) AND a std/config
+    declared default LEARNED FROM SOURCE for another (``log-file``), with both
+    then overwritten by a source write, must have one ``:reset`` restore both
+    together from the same seed map.
+    """
+
+    def test_reset_restores_a_cli_seeded_key_and_a_source_learned_declared_default(
+        self, tmp_path: Path
+    ) -> None:
+        stdlib_root = tmp_path / "stdlib"
+        config_path = stdlib_root / "std" / "config.agl"
+        config_path.parent.mkdir(parents=True)
+        config_path.write_text(
+            "import std/core using Option, Agent\n"
+            'builtin var default-agent: Agent = AgentCommand("declared")\n'
+            "builtin var max-iters: int = 3\n"
+            'builtin var log-file: Option[text] = Option[text]::Some("declared.jsonl")\n',
+            encoding="utf-8",
+        )
+        (config_path.parent / "core.agl").write_text(
+            (_STDLIB_ROOT / "std" / "core.agl").read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        s = ReplSession(
+            stdlib_root=stdlib_root,
+            engine_base=build_engine_config_seeds({"max-iters": 5}),
+        )
+
+        _ok(s, "import std/config")
+        # log-file's declared default is now learned from source (recorded
+        # into the seed); write over both keys before resetting.
+        _ok(s, "std/config::max-iters := 9")
+        _ok(s, 'std/config::log-file := Some("written.jsonl")')
+        s.reset()
+
+        assert s._default_loop_limit == 5
+        _ok(s, "import std/config")
+        value = _read(s, "log-file")
+        assert isinstance(value, EnumValue)
+        assert value.fields["value"] == TextValue("declared.jsonl")
 
 
 # ---------------------------------------------------------------------------
@@ -979,3 +1032,51 @@ class TestSettingOverrideThreading:
         assert isinstance(value, EnumValue)
         assert value.variant == "AgentCommand"
         assert value.fields["command"] == TextValue("overridden")
+
+    def test_reimporting_std_config_does_not_resplice_the_override(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A later entry that re-imports ``std/config`` reuses the cached,
+        already-spliced module rather than re-running the splice: re-splicing
+        would waste work and mint a new, unstable declaration identity for the
+        same builtin var each time (see ``apply_setting_overrides`` in
+        ``agm.agl.pipeline``). Spies on the module loader the same way
+        ``test_stdlib_is_loaded_exactly_once_across_open_and_two_entries``
+        (``test_agl_repl_session.py``) does, counting freshly loaded modules
+        per call rather than call count.
+        """
+        import agm.agl.modules.loader as loader_mod
+
+        original = loader_mod.build_repl_graph
+        new_module_counts: list[int] = []
+
+        def spy(*args: object, **kwargs: object) -> object:
+            result = original(*args, **kwargs)
+            _graph, _next_id, new_modules = result
+            new_module_counts.append(len(new_modules))
+            return result
+
+        monkeypatch.setattr(loader_mod, "build_repl_graph", spy)
+
+        s = _session(
+            setting_overrides={
+                "default-agent": SettingOverride(
+                    source='AgentCommand("overridden")', origin="--agent"
+                )
+            }
+        )
+        first = _ok(s, "import std/config\nstd/config::default-agent")
+        assert isinstance(first.value, EnumValue)
+        assert first.value.variant == "AgentCommand"
+        assert first.value.fields["command"] == TextValue("overridden")
+        assert new_module_counts[0] > 0
+
+        second = _ok(s, "import std/config\nstd/config::default-agent")
+        assert isinstance(second.value, EnumValue)
+        assert second.value.variant == "AgentCommand"
+        assert second.value.fields["command"] == TextValue("overridden")
+
+        # The re-import found ``std/config`` already cached: nothing freshly
+        # loaded, so the splice's own declaration identity (and the module's)
+        # is the one the first entry already minted, never a second one.
+        assert new_module_counts[1] == 0

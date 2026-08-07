@@ -6026,3 +6026,129 @@ class TestSessionOpen:
         assert s.eval_entry("2 + 2").ok
 
         assert new_module_counts[1:] == [0, 0]
+
+    def test_open_rejects_a_required_override_when_std_config_never_loads(self) -> None:
+        """``--no-stdlib`` never loads ``std/config``, but a ``required`` override
+        (the default; mirrors a CLI ``--agent`` flag) is a request the host
+        cannot silently drop -- it still fails ``open()`` up front, rather than
+        being deferred to whichever entry, if any, first imports ``std/config``.
+        """
+        from agm.agl.diagnostics import format_diagnostic
+        from agm.agl.setting_overrides import SettingOverride
+
+        s = ReplSession(
+            default_stdlib=False,
+            setting_overrides={
+                "default-agent": SettingOverride(source='AgentCommand("x")', origin="--agent")
+            },
+        )
+        diagnostics = s.open()
+        assert diagnostics
+        assert any("--agent" in format_diagnostic(d) for d in diagnostics)
+        assert s._loaded_lib_modules == {}
+
+    def test_open_with_non_required_override_and_no_stdlib_is_a_harmless_no_op(self) -> None:
+        """A non-``required`` override (ambient configuration, e.g.
+        ``[exec] default-agent``) is simply inert when ``std/config`` never
+        loads: ``open()`` must not fail because of it.
+        """
+        from agm.agl.setting_overrides import SettingOverride
+
+        s = ReplSession(
+            default_stdlib=False,
+            setting_overrides={
+                "default-agent": SettingOverride(
+                    source='AgentCommand("x")', origin="[exec] default-agent", required=False
+                )
+            },
+        )
+        assert s.open() == ()
+        assert s._loaded_lib_modules == {}
+
+    def test_open_reports_an_unreadable_stdlib_module_instead_of_raising(
+        self, tmp_path: Path
+    ) -> None:
+        """A module under the stdlib root that fails to read is a diagnostic, not a crash.
+
+        ``open`` documents "Never raises": every failure
+        ``load_and_check_program`` can produce must come back as a diagnostic
+        tuple, the same as it already does for a syntax/scope/type error. A
+        module file's own I/O failure -- invalid UTF-8 here, the same class of
+        failure a permission-denied file would raise via
+        ``agm.core.fs.read_text`` -- was previously left uncaught, an
+        unhandled ``UnicodeDecodeError`` breaking the "Never raises" contract.
+        """
+        std_dir = tmp_path / "std"
+        std_dir.mkdir()
+        (std_dir / "core.agl").write_bytes(b"\xff\xfe not valid utf-8 \x80\x81")
+        s = ReplSession(stdlib_root=tmp_path)
+
+        diagnostics = s.open()
+
+        assert diagnostics
+        assert s._loaded_lib_modules == {}
+
+
+class TestDeferredStdlibResolution:
+    """Constructing a session without an explicit ``stdlib_root`` stays total.
+
+    ``resolve_stdlib_root`` can raise ``StaleStdlibError`` when the default
+    search chain finds nothing usable. Resolving it eagerly in the
+    constructor would let that raise escape before any session exists to
+    report a diagnostic through, so it is deferred to first use
+    (``_ensure_roots``) instead.
+    """
+
+    def test_construction_does_not_raise_against_a_stale_default_stdlib(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import agm.config.module_roots as module_roots
+        from agm.config.module_roots import StaleStdlibError
+
+        def _raise_stale(*, home: Path) -> Path:
+            raise StaleStdlibError(home / ".agm" / "stdlib")
+
+        monkeypatch.delenv("AGM_STDLIB", raising=False)
+        monkeypatch.setattr(module_roots, "resolve_stdlib_root", _raise_stale)
+
+        # Must not raise: resolution has not happened yet.
+        s = ReplSession()
+
+        # The raise, reached lazily on first use, is caught by ``open``'s own
+        # "Never raises" contract rather than propagating.
+        diagnostics = s.open()
+        assert diagnostics
+        assert "out of date" in diagnostics[0].message
+
+    def test_default_stdlib_resolution_honors_agm_home(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A relocated ``AGM_HOME`` -- not the process home directory -- selects the stdlib.
+
+        Mirrors how ``commands/repl.py`` resolves this session's stdlib root
+        (``current_config_context(...).home``): the deferred resolution in
+        ``_ensure_roots`` must use the same seam, not a hardcoded
+        ``Path.home()``, so a relocated ``AGM_HOME`` is honored here exactly
+        as it is for every other AGM home lookup.
+        """
+        from agm.config.module_roots import STDLIB_CONTRACT_ID
+
+        agm_home = tmp_path / "relocated-agm"
+        stdlib_root = agm_home / "stdlib"
+        std_dir = stdlib_root / "std"
+        std_dir.mkdir(parents=True)
+        real_stdlib = Path(__file__).resolve().parents[1] / "stdlib" / "std"
+        for name in ("core.agl", "config.agl"):
+            (std_dir / name).write_text(
+                (real_stdlib / name).read_text(encoding="utf-8"), encoding="utf-8"
+            )
+        (stdlib_root / "STDLIB_CONTRACT").write_text(STDLIB_CONTRACT_ID, encoding="utf-8")
+
+        monkeypatch.delenv("AGM_STDLIB", raising=False)
+        monkeypatch.setenv("AGM_HOME", str(agm_home))
+
+        s = ReplSession()
+        assert s.open() == ()
+
+        assert s._roots is not None
+        assert stdlib_root.resolve() in s._roots.roots

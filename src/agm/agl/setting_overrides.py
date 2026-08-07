@@ -27,7 +27,18 @@ class SettingOverride:
     ``origin`` is a short, human-readable label for where the override came
     from (e.g. ``"--agent"``, ``"[exec] default-agent"``), used to name the
     source in diagnostics produced while compiling it.
+
+    ``required`` records the override's PROVENANCE, not its content: it is
+    ``True`` for an explicit per-run request (a CLI flag such as ``--agent``)
+    that the host cannot silently drop, and ``False`` for a value sourced from
+    ambient configuration (e.g. ``[exec] default-agent``) that is simply
+    inert when the target ``std/config`` module never loads. A graph with no
+    loaded ``std/config`` still produces a diagnostic for a ``required``
+    override, naming its origin; a non-``required`` override is skipped
+    silently in that case instead. Defaults to ``True`` (a request), since
+    that was every override's behavior before this field existed.
     """
 
     source: str
     origin: str
+    required: bool = True

@@ -119,6 +119,15 @@ def build_host_engine_seeds(
     additionally shell-split with :func:`~agm.agent.runner.parse_command` right
     here, so a malformed command (e.g. an unclosed quote) also exits 1 before
     anything runs rather than surfacing later as a runtime agent-call failure.
+
+    The two AgL-literal sources carry different
+    :attr:`~agm.agl.setting_overrides.SettingOverride.required` provenance:
+    ``--agent`` is an explicit per-run request, so it is marked
+    ``required=True`` and still produces a diagnostic when the loaded program
+    never brings in ``std/config`` (e.g. ``--no-stdlib``); ``[exec]``/
+    ``[<program>] default-agent`` is ambient configuration, marked
+    ``required=False``, so it is simply inert — no diagnostic — in that same
+    situation.
     """
     fallback: "Mapping[str, object]" = fallback_table if fallback_table is not None else {}
     configured = {key for key in ENGINE_KEY_NAMES if key in primary_table or key in fallback}
@@ -159,10 +168,14 @@ def build_host_engine_seeds(
 
     if agent is not None:
         literal = _require_agent_literal_text(agent, source="--agent")
-        overrides["default-agent"] = SettingOverride(source=literal, origin="--agent")
+        overrides["default-agent"] = SettingOverride(
+            source=literal, origin="--agent", required=True
+        )
     elif config.default_agent is not None:
         literal = _require_agent_literal_text(config.default_agent, source="[exec] configuration")
-        overrides["default-agent"] = SettingOverride(source=literal, origin="[exec] default-agent")
+        overrides["default-agent"] = SettingOverride(
+            source=literal, origin="[exec] default-agent", required=False
+        )
     elif config.runner is not None:
         try:
             parse_command(config.runner, kind="[exec] runner")

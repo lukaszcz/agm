@@ -55,6 +55,13 @@ class PreparedPromptRun:
     standard input rather than from an interpolated placeholder or an
     appended ``@<path>`` argument (see ``AgentCodex``); it is ``False`` for
     every other spec, which keep the existing file-based delivery.
+
+    ``rendered_prompt`` carries the already-rendered prompt text when the
+    prompt originated as an in-memory string (see
+    ``prepare_rendered_prompt_run``). When ``prompt_via_stdin`` is set,
+    ``run_prepared_prompt_result`` pipes this text in directly rather than
+    reading ``effective_file`` back off disk; it is ``None`` for file-sourced
+    prompts, which have no such string to carry.
     """
 
     command: list[str]
@@ -62,6 +69,7 @@ class PreparedPromptRun:
     env: dict[str, str]
     temp_files: list[Path]
     prompt_via_stdin: bool = False
+    rendered_prompt: str | None = None
 
 
 @dataclass(slots=True)
@@ -401,7 +409,7 @@ def prepare_rendered_prompt_run(
 ) -> PreparedPromptRun:
     """Prepare a runner invocation for an already-rendered AgL prompt.
 
-    Writes *rendered_prompt* verbatim to a temporary file.  Crucially:
+    Crucially:
 
     - Does **not** call ``expand_prompt_env_vars``: AgL interpolation has
       already produced the final text and interpolated values may legitimately
@@ -414,10 +422,25 @@ def prepare_rendered_prompt_run(
       a string round-trip before the prepared invocation is run.
 
     *prompt_via_stdin* is carried onto the returned ``PreparedPromptRun`` so
-    ``run_prepared_prompt_result`` knows to pipe the prompt file's contents in
-    rather than attach it via placeholder or ``@<path>``.
+    ``run_prepared_prompt_result`` knows to pipe *rendered_prompt* straight in
+    rather than attach it via placeholder or ``@<path>``. In that case no
+    temp file is written at all: the rendered text travels on
+    ``PreparedPromptRun.rendered_prompt`` instead, since nothing reads a file
+    back for this delivery mode. File-sourced delivery still writes
+    *rendered_prompt* verbatim to a temp file, because argv interpolation may
+    bind ``%{PROMPT_FILE}``/``%%`` to it and the backend reads the prompt from
+    that path.
     """
     command = runner.copy()
+    if prompt_via_stdin:
+        return PreparedPromptRun(
+            command=command,
+            effective_file=Path(os.devnull),
+            env=env,
+            temp_files=temp_files,
+            prompt_via_stdin=True,
+            rendered_prompt=rendered_prompt,
+        )
     with NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".md") as handle:
         handle.write(rendered_prompt)
         temp_path = Path(handle.name)
@@ -427,7 +450,7 @@ def prepare_rendered_prompt_run(
         effective_file=temp_path,
         env=env,
         temp_files=temp_files,
-        prompt_via_stdin=prompt_via_stdin,
+        prompt_via_stdin=False,
     )
 
 
@@ -442,23 +465,22 @@ def run_prepared_prompt_result(
     **never prints to stderr** and **never raises SystemExit**.  All outcomes
     are represented in the returned :class:`PromptRunResult`.
 
-    When ``prepared.prompt_via_stdin`` is set, the prompt file's contents are
+    When ``prepared.prompt_via_stdin`` is set, ``prepared.rendered_prompt`` is
     piped in as ``stdin_text`` instead of being attached via placeholder or
-    ``@<path>``.
+    ``@<path>`` — it is delivered directly from the already-rendered text
+    rather than read back off disk.
     """
     # An empty ``prepared.env`` means the child inherits ``os.environ`` (see the
     # ``env=None`` passed to ``run_capture_result`` below); interpolate argv
     # holes against the same effective mapping so both agree on variable values.
     child_env = prepared.env if prepared.env else os.environ
-    stdin_text = None
     argv = command_with_prompt_target(
         prepared.command,
         prepared.effective_file,
         child_env,
         append_target=not prepared.prompt_via_stdin,
     )
-    if prepared.prompt_via_stdin:
-        stdin_text = prepared.effective_file.read_text(encoding="utf-8")
+    stdin_text = prepared.rendered_prompt if prepared.prompt_via_stdin else None
     capture: ProcessCaptureResult = run_capture_result(
         argv,
         env=prepared.env if prepared.env else None,

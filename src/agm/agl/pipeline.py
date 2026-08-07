@@ -18,7 +18,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, TypeVar
 
-from agm.agl.diagnostics import AglError, Diagnostic, DiagnosticPhase, diagnostic_from_span
+from agm.agl.diagnostics import AglError, Diagnostic, diagnostic_from_span
 from agm.agl.eval.ir_interpreter import HostConfigurationError, IrInterpreter
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.params import _materialize_ir_contracts, _prepare_ir_params
@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     from agm.agl.ir.program import ExecutableProgram, NominalDescriptor
     from agm.agl.matchcompile import MatchCompiledProgram
     from agm.agl.modules.ids import ModuleId
-    from agm.agl.modules.loader import ModuleGraph
+    from agm.agl.modules.loader import LoadedModule, ModuleGraph
     from agm.agl.modules.roots import RootSet
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.externs import ExternRegistry
@@ -631,17 +631,29 @@ class PipelineDriver:
         if roots is None:
             from pathlib import Path
 
-            from agm.agl.modules.roots import assemble_roots
+            from agm.agl.modules.roots import RootSet, assemble_roots
             from agm.config.module_roots import (
                 ModuleRootsConfig,
+                StaleStdlibError,
                 resolve_lib_root,
                 resolve_stdlib_root,
             )
 
             cwd = Path.cwd()
+            try:
+                default_stdlib_root = resolve_stdlib_root(home=Path.home())
+            except StaleStdlibError as exc:
+                return PreparedProgram(
+                    entry_source,
+                    entry_path,
+                    RootSet(roots=frozenset()),
+                    None,
+                    (Diagnostic(message=str(exc), line=1),),
+                    parsed.warnings,
+                )
             roots = assemble_roots(
                 invocation_root=entry_path.resolve().parent if entry_path is not None else cwd,
-                stdlib_root=resolve_stdlib_root(home=Path.home()),
+                stdlib_root=default_stdlib_root,
                 lib_root=resolve_lib_root(
                     ModuleRootsConfig(lib_root=None, extra=()), home=Path.home()
                 ),
@@ -657,7 +669,7 @@ class PipelineDriver:
 
         with tab_warning_collector() as tab_sink:
             try:
-                graph, next_id, _newly_loaded = build_repl_graph(
+                graph, next_id, newly_loaded_modules = build_repl_graph(
                     parsed.program,
                     parsed.next_id,
                     path=entry_path,
@@ -713,8 +725,16 @@ class PipelineDriver:
         warnings: tuple[Diagnostic, ...] = (*parsed.warnings, *tab_sink)
 
         if setting_overrides:
-            graph, next_id, override_diagnostics = _apply_setting_overrides(
-                graph, next_id, setting_overrides
+            # A one-shot compile: whether or not ``std/config`` is in this
+            # graph, this is the only chance to apply/validate the overrides,
+            # so a ``required`` override (e.g. ``--agent``) must be validated
+            # even when ``std/config`` never loads (``validate_when_absent=True``).
+            graph, next_id, override_diagnostics, _newly_loaded_modules = apply_setting_overrides(
+                graph,
+                next_id,
+                setting_overrides,
+                newly_loaded_modules=newly_loaded_modules,
+                validate_when_absent=True,
             )
             if override_diagnostics:
                 return PreparedProgram(
@@ -737,7 +757,7 @@ class PipelineDriver:
                 entry_path,
                 roots,
                 None,
-                (Diagnostic(message=f"Scope error: {exc}", line=1, phase=DiagnosticPhase.SCOPE),),
+                (Diagnostic(message=f"Scope error: {exc}", line=1),),
                 warnings,
             )
 
@@ -1185,6 +1205,69 @@ def _append_checker_warnings(
     warnings.extend(checked.warnings)
 
 
+def apply_setting_overrides(
+    graph: "ModuleGraph",
+    next_id: int,
+    overrides: "Mapping[str, SettingOverride]",
+    *,
+    newly_loaded_modules: "Mapping[ModuleId, LoadedModule]",
+    validate_when_absent: bool,
+) -> "tuple[ModuleGraph, int, list[Diagnostic], dict[ModuleId, LoadedModule]]":
+    """Own the splice-once apply condition and module-cache reconciliation.
+
+    The public seam both one-shot hosts (``PipelineDriver.prepare_parsed_entry``)
+    and incremental ones (``EntryPipeline.load_and_check_program``, shared by
+    the REPL's ``open()`` and ``eval_entry``) call, so neither has to
+    rediscover *when* ``_apply_setting_overrides`` may run or how to keep a
+    caller's own module cache in sync with the spliced result.
+
+    *newly_loaded_modules* is the ``build_repl_graph``/``load_and_check_program``
+    "loaded during this call" dict (not the caller's whole cache): it decides
+    which of three states *graph* is in for ``std/config``, keyed off
+    :data:`~agm.agl.modules.ids.STD_CONFIG_ID`:
+
+    - Already spliced by an earlier call this session (present in
+      ``graph.modules`` but not freshly loaded this round) — a no-op, since
+      splicing a second time would both waste work and mint a new, unstable
+      declaration identity for the same ``builtin var``.
+    - Freshly loaded this round — splice via :func:`_apply_setting_overrides`,
+      then return *newly_loaded_modules* updated with the spliced module, so
+      whichever cache the caller promotes it into (the REPL's
+      ``_loaded_lib_modules``) holds the SPLICED module, not the pre-splice one.
+    - Never loaded at all — nothing to splice into. *validate_when_absent*
+      decides whether this is reported now: ``True`` (every one-shot host,
+      and the REPL's ``open()``, which validates a CLI-required override up
+      front even without ``std/config``) still runs
+      :func:`_apply_setting_overrides` so a ``required`` override's
+      diagnostic surfaces as early as the host can report it; ``False`` (an
+      ordinary REPL entry) defers entirely, leaving even a ``required``
+      override unvalidated until whichever later entry, if any, first loads
+      ``std/config``.
+
+    Returns *overrides* unchanged (empty diagnostics, *newly_loaded_modules*
+    as given) when *overrides* is empty, so every caller can call this
+    unconditionally.
+    """
+    from agm.agl.modules.ids import STD_CONFIG_ID
+
+    if not overrides:
+        return graph, next_id, [], dict(newly_loaded_modules)
+
+    freshly_loaded = STD_CONFIG_ID in newly_loaded_modules
+    already_loaded = STD_CONFIG_ID in graph.modules
+
+    if not freshly_loaded and already_loaded:
+        return graph, next_id, [], dict(newly_loaded_modules)
+    if not freshly_loaded and not already_loaded and not validate_when_absent:
+        return graph, next_id, [], dict(newly_loaded_modules)
+
+    graph, next_id, diagnostics = _apply_setting_overrides(graph, next_id, overrides)
+    if diagnostics or not freshly_loaded:
+        return graph, next_id, diagnostics, dict(newly_loaded_modules)
+    reconciled = {**newly_loaded_modules, STD_CONFIG_ID: graph.modules[STD_CONFIG_ID]}
+    return graph, next_id, [], reconciled
+
+
 def _apply_setting_overrides(
     graph: "ModuleGraph",
     next_id: int,
@@ -1210,9 +1293,15 @@ def _apply_setting_overrides(
     Diagnostics — never exceptions — are returned for: unparseable override
     source, an override that is not exactly one expression, an engine key no
     loaded ``builtin var`` declares, and a graph with no loaded ``std/config``
-    module (e.g. ``default_stdlib=False`` with no explicit import of it).
-    Each diagnostic names the offending override's ``origin``. Overrides are
-    processed in sorted key order for deterministic diagnostics.
+    module (e.g. ``default_stdlib=False`` with no explicit import of it) when
+    the override is :attr:`~agm.agl.setting_overrides.SettingOverride.required`
+    — a non-``required`` override is skipped silently in that case instead,
+    since it is ambient configuration rather than a request the host must
+    honor. Each diagnostic names the offending override's ``origin``.
+    Overrides are processed in sorted key order for deterministic diagnostics.
+
+    Callers reach this only through :func:`apply_setting_overrides`, which
+    decides *when* it may run; this function itself has no opinion on that.
     """
     from dataclasses import replace as dc_replace
 
@@ -1228,6 +1317,10 @@ def _apply_setting_overrides(
 
     for key in sorted(overrides):
         override = overrides[key]
+        if std_config is None and not override.required:
+            # Ambient configuration, not a request: inert when std/config
+            # never loads, so it is skipped without even being parsed.
+            continue
         try:
             override_program, next_id = parse_program_seeded(
                 override.source, start_id=next_id, source=SourceId(label=override.origin)
@@ -1355,9 +1448,7 @@ def _run_typecheck_program(
     except AglError as exc:
         return None, (exc.to_diagnostic(),)
     except Exception as exc:
-        diagnostic = Diagnostic(
-            message=f"Type error: {exc}", line=1, phase=DiagnosticPhase.TYPECHECK
-        )
+        diagnostic = Diagnostic(message=f"Type error: {exc}", line=1)
         return None, (diagnostic,)
 
 

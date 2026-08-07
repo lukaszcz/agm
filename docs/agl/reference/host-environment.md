@@ -119,8 +119,8 @@ key:
 Import `std/config` and read or write a setting through a qualified target
 (`std/config::max-iters`); writing zero disables that safety valve.
 `default-agent` is a typed `Agent` value used by `ask` when its `agent` option
-is omitted; there is no runner engine setting. The `Option[text]` settings
-(`log-file`, `timeout`) take a `Some("…")` or `None` value.
+is omitted. The `Option[text]` settings (`log-file`, `timeout`) take a
+`Some("…")` or `None` value.
 
 ### Precedence
 

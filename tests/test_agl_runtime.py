@@ -3195,7 +3195,7 @@ class TestPreparedProgramDefensivePaths:
         roots = RootSet(roots=frozenset({tmp_path.resolve(), _STDLIB_ROOT}))
         related = SourceSpan(2, 1, 2, 2, 2, 3)
         error = AglError("load failed", related=(("constraint", related),))
-        with patch("agm.agl.modules.loader.load_graph", side_effect=error):
+        with patch("agm.agl.modules.loader.build_repl_graph", side_effect=error):
             prepared = PipelineDriver.prepare_program("let x = 1", entry_path=None, roots=roots)
 
         assert prepared.diagnostics[0].related[0].message == "constraint"
@@ -3217,13 +3217,13 @@ class TestPreparedProgramDefensivePaths:
         assert prepared.diagnostics[0].related[0].message == "constraint"
 
     def test_prepare_program_generic_exception_during_load(self, tmp_path: pathlib.Path) -> None:
-        """A non-AglError exception during load_graph is captured as a diagnostic."""
+        """A non-AglError exception during graph loading is captured as a diagnostic."""
         from unittest.mock import patch
 
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({tmp_path.resolve(), _STDLIB_ROOT}))
-        with patch("agm.agl.modules.loader.load_graph", side_effect=RuntimeError("boom")):
+        with patch("agm.agl.modules.loader.build_repl_graph", side_effect=RuntimeError("boom")):
             prepared = PipelineDriver.prepare_program("let x = 1\nx", entry_path=None, roots=roots)
         assert len(prepared.diagnostics) >= 1
         assert "boom" in prepared.diagnostics[0].message

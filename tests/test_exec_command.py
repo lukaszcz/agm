@@ -777,9 +777,12 @@ class TestExecParsesSourceOnce:
     ) -> None:
         import agm.agl.modules.loader as loader_mod
         import agm.agl.scope.program as scope_graph_mod
-        from agm.agl.modules.loader import ModuleGraph
+        from agm.agl.modules.ids import ModuleId
+        from agm.agl.modules.loader import LoadedModule, ModuleGraph
         from agm.agl.modules.roots import RootSet
         from agm.agl.scope.program import ResolvedProgram
+        from agm.agl.syntax.advisories import SpacedQualifier
+        from agm.agl.syntax.nodes import Program
         from agm.core import dry_run
 
         agl_file = tmp_path / "prog.agl"
@@ -787,25 +790,35 @@ class TestExecParsesSourceOnce:
         # static pipeline, the exact scenario that previously parsed twice.
         agl_file.write_text('let impl = AgentCommand("impl")\nask("do it", agent = impl)\n')
 
-        real_load = loader_mod.load_graph
+        real_build_repl_graph = loader_mod.build_repl_graph
         real_resolve_program = scope_graph_mod.resolve_program
-        load_calls = 0
+        build_graph_calls = 0
         resolve_program_calls = 0
 
-        def counting_load(
-            entry_source: str,
+        def counting_build_repl_graph(
+            program: Program,
+            next_start_id: int,
             *,
-            entry_path: Path | None,
+            path: Path | None,
+            cached: dict[ModuleId, LoadedModule],
             roots: RootSet,
             default_stdlib: bool = True,
-        ) -> ModuleGraph:
-            nonlocal load_calls
-            load_calls += 1
-            return real_load(
-                entry_source,
-                entry_path=entry_path,
+            spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
+            default_label: str = "<repl>",
+            source_text: str = "",
+        ) -> tuple[ModuleGraph, int, dict[ModuleId, LoadedModule]]:
+            nonlocal build_graph_calls
+            build_graph_calls += 1
+            return real_build_repl_graph(
+                program,
+                next_start_id,
+                path=path,
+                cached=cached,
                 roots=roots,
                 default_stdlib=default_stdlib,
+                spaced_qualifiers=spaced_qualifiers,
+                default_label=default_label,
+                source_text=source_text,
             )
 
         def counting_resolve_program(
@@ -815,14 +828,14 @@ class TestExecParsesSourceOnce:
             resolve_program_calls += 1
             return real_resolve_program(graph)
 
-        monkeypatch.setattr(loader_mod, "load_graph", counting_load)
+        monkeypatch.setattr(loader_mod, "build_repl_graph", counting_build_repl_graph)
         monkeypatch.setattr(scope_graph_mod, "resolve_program", counting_resolve_program)
         # Dry-run drives the full static pipeline (parse → scope → typecheck →
         # reconcile) without executing any agent.
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         assert exec_command.run(_exec_args(agl_file)) is None
-        assert load_calls == 1
+        assert build_graph_calls == 1
         assert resolve_program_calls == 1
 
 
@@ -2717,6 +2730,29 @@ class TestExecModuleRoots:
         captured = capsys.readouterr()
         assert "Error:" in captured.err
         assert "module roots" in captured.err.lower()
+
+    def test_stale_stdlib_exits_1(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A StaleStdlibError from resolve_stdlib_root causes exit 1 with its message."""
+        from agm.config.module_roots import StaleStdlibError
+
+        entry = tmp_path / "prog.agl"
+        entry.write_text("let x = 1\nx\n")
+        stale_path = tmp_path / "stale" / "stdlib"
+
+        def fake_resolve_stdlib_root(*, home: Path) -> Path:
+            raise StaleStdlibError(stale_path)
+
+        monkeypatch.setattr(exec_command, "resolve_stdlib_root", fake_resolve_stdlib_root)
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(entry))
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+        assert str(stale_path) in captured.err
+        assert "just install" in captured.err
 
     def test_configured_lib_root_is_resolved(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch

@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import BoolValue, EnumValue, Frame, Value
+    from agm.agl.setting_overrides import SettingOverride
     from agm.agl.syntax.advisories import SpacedQualifier
     from agm.agl.syntax.nodes import ImportDecl, Item, OpenDecl, Program, ScopeRegion
     from agm.agl.typecheck.env import CheckedModule, TypeEnvironment
@@ -53,6 +54,7 @@ class EntryPipelineCtx(Protocol):
     _accumulated_opens: list[tuple[OpenDecl | ImportDecl | ScopeRegion, ...]]
     _link_image: LinkImage
     _ir_base_frame: Frame
+    _setting_overrides: dict[str, SettingOverride]
     _session_scope: ScopeNode
     _session_scope_nodes: dict[tuple[str, ...], ScopeNode]
     _session_type_paths: dict[tuple[str, ...], str | None]
@@ -161,9 +163,10 @@ class EntryPipeline:
             ModuleNotFound,
             ModulePrefixNotFound,
         )
-        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.modules.ids import ENTRY_ID, STD_CONFIG_ID
         from agm.agl.modules.loader import build_repl_graph
         from agm.agl.parser import AglSyntaxError
+        from agm.agl.pipeline import _apply_setting_overrides
         from agm.agl.scope import AglScopeError
         from agm.agl.scope.program import resolve_program
         from agm.agl.typecheck import AglTypeError
@@ -198,6 +201,20 @@ class EntryPipeline:
             return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
         except Exception as exc:
             return self._ctx._fail([Diagnostic(message=str(exc), line=1)], tab_warnings)
+
+        # Splice any host-supplied engine-setting overrides in as soon as
+        # ``std/config`` is FIRST loaded into the session's module graph —
+        # ``new_modules`` (not ``cached``) means this entry loaded it fresh, so
+        # this fires exactly once per session (again after a ``:reset``, which
+        # clears the module cache). A later entry reuses the already-spliced,
+        # cached module, so re-splicing would both waste work and mint a new,
+        # unstable declaration identity for the same builtin var on every entry.
+        if self._ctx._setting_overrides and STD_CONFIG_ID in new_modules:
+            graph, new_next_id, override_diagnostics = _apply_setting_overrides(
+                graph, new_next_id, self._ctx._setting_overrides
+            )
+            if override_diagnostics:
+                return self._ctx._fail(override_diagnostics, tab_warnings)
 
         try:
             resolved_program = resolve_program(
@@ -514,7 +531,7 @@ class EntryPipeline:
         contract_payloads: Mapping[int, "ContractPayload"],
     ) -> EntryResult:
         """Lower and execute one program entry in the persistent IR image."""
-        from agm.agl.eval.ir_interpreter import IrInterpreter
+        from agm.agl.eval.ir_interpreter import HostConfigurationError, IrInterpreter
         from agm.agl.lower import lower_repl_program
         from agm.agl.pipeline import _wire_extern_registry, exception_value_to_run_error
         from agm.agl.runtime.params import _materialize_ir_contracts
@@ -556,9 +573,16 @@ class EntryPipeline:
             nominals=lowered.program.nominals,
         )
         if extern_diagnostics:
-            # A pre-execution rejection: nothing ran and nothing promoted, so
-            # the node-id range stays available to the next entry.
+            # A pre-execution rejection: nothing ran and nothing promoted, but
+            # ``_wire_extern_registry`` registers this entry's nominals with
+            # the extern registry before it imports any companion, and that
+            # registration is never rolled back (the registry's nominal class
+            # cache is insert-only). The node-id range must therefore not be
+            # reused -- reusing it would let a later entry's redeclaration
+            # collide with an identity this rejected entry already registered
+            # under its own, now-abandoned shape.
             self._ctx._link_image.restore_state(link_snapshot)
+            self._ctx._advance_node_ids(new_next_id)
             return self._ctx._fail(extern_diagnostics, warnings)
         ir_params = {
             param.symbol: param_values[param.public_name]
@@ -633,6 +657,27 @@ class EntryPipeline:
                 diagnostics=[],
                 warnings=warnings,
                 error=error,
+                ok=False,
+                trace_path=self._ctx._trace_path,
+            )
+        except HostConfigurationError as exc:
+            # The materialized ``default-agent`` value cannot be dispatched: a
+            # pre-execution host-configuration rejection rather than an
+            # uncaught AgL exception, so it is reported as an ordinary
+            # diagnostic -- like any other per-entry error, this never exits
+            # the REPL process.
+            trace.run_end(ok=False)
+            self._ctx._link_image.restore_state(link_snapshot)
+            self._ctx._advance_node_ids(new_next_id)
+            kind, name = self._ctx._classify(orig_program)
+            return EntryResult(
+                kind=kind,
+                name=name,
+                value=None,
+                value_type=None,
+                diagnostics=[Diagnostic(message=str(exc), line=1)],
+                warnings=warnings,
+                error=None,
                 ok=False,
                 trace_path=self._ctx._trace_path,
             )

@@ -172,7 +172,25 @@ if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract
     from agm.agl.runtime.host_settings import HostSettingsReconfigurer
 
-__all__ = ["IrInterpreter", "_apply_coercion", "_make_exc_value"]
+__all__ = ["HostConfigurationError", "IrInterpreter", "_apply_coercion", "_make_exc_value"]
+
+
+class HostConfigurationError(Exception):
+    """The materialized ``default-agent`` value cannot be dispatched.
+
+    Raised by :class:`IrInterpreter`'s constructor when the winning
+    ``default-agent`` value — a host seed (``[exec] runner``, already
+    validated before this point) or a declared/spliced ``builtin var``
+    default (``--agent``, ``[exec]``/``[<program>] default-agent``, or
+    ``std/config``'s own default) — is an ``AgentCommand`` whose command text
+    does not shell-split (see :func:`agm.agent.runner.parse_command`).
+
+    This only covers the value materialized at construction time, before any
+    statement of the entry runs: a later ``std/config::default-agent := ...``
+    source write is never checked here, so a malformed command written at
+    runtime stays an ordinary AgL runtime error raised from the ``ask`` call
+    site that actually dispatches it, not a host-configuration failure.
+    """
 
 
 class _FlexibleParse(Protocol):
@@ -486,6 +504,9 @@ class IrInterpreter:
         self._builtin_host_settings = {
             key: effective[key] for key in HOST_CONSUMED_ENGINE_KEYS if key in effective
         }
+        default_agent = self._builtin_host_settings.get("default-agent")
+        if isinstance(default_agent, EnumValue):
+            self._check_default_agent_dispatchable(default_agent)
         if self._host_reconfigurer is not None:
             self._reconfigure_host_service()
         self._host_contracts: Mapping[ContractId, OutputContract] = (
@@ -1614,6 +1635,25 @@ class IrInterpreter:
 
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
+
+    def _check_default_agent_dispatchable(self, value: EnumValue) -> None:
+        """Eagerly validate a materialized ``default-agent`` value's command shape.
+
+        Only the ``AgentCommand`` variant needs this: its command text is
+        host-supplied and must shell-split, exactly like a configured runner
+        command.  The other ``Agent`` variants build their argv from typed
+        fields with no parsing step, so decoding and building argv for them
+        here is cheap and can never fail — reusing
+        :func:`~agm.agl.runtime.agents.decode_agent_value` keeps this in sync
+        with the variant shapes dispatch itself relies on, rather than
+        duplicating them.
+        """
+        from agm.agl.runtime.agents import decode_agent_value
+
+        try:
+            decode_agent_value(value).argv()
+        except ValueError as exc:
+            raise HostConfigurationError(str(exc)) from exc
 
     # ------------------------------------------------------------------
     # Builtin-var register access

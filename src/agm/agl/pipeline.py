@@ -18,8 +18,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, TypeVar
 
-from agm.agl.diagnostics import AglError, Diagnostic, DiagnosticPhase
-from agm.agl.eval.ir_interpreter import IrInterpreter
+from agm.agl.diagnostics import AglError, Diagnostic, DiagnosticPhase, diagnostic_from_span
+from agm.agl.eval.ir_interpreter import HostConfigurationError, IrInterpreter
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.params import _materialize_ir_contracts, _prepare_ir_params
 from agm.agl.runtime.types import (
@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from agm.agl.ir.program import ExecutableProgram, NominalDescriptor
     from agm.agl.matchcompile import MatchCompiledProgram
     from agm.agl.modules.ids import ModuleId
+    from agm.agl.modules.loader import ModuleGraph
     from agm.agl.modules.roots import RootSet
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.externs import ExternRegistry
@@ -48,6 +49,9 @@ if TYPE_CHECKING:
     from agm.agl.scope.symbols import ModuleResolution
     from agm.agl.semantics.type_table import TypeTable
     from agm.agl.semantics.values import ExceptionValue, Value
+    from agm.agl.setting_overrides import SettingOverride
+    from agm.agl.syntax.advisories import SpacedQualifier
+    from agm.agl.syntax.nodes import Program
     from agm.agl.typecheck.env import OutputContractSpec
     from agm.agl.typecheck.program import CheckedProgram
 
@@ -92,6 +96,45 @@ class ParamPreflight:
 
     result: "RunResult"
     executable: "ExecutableProgram | None"
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedEntry:
+    """Result of :meth:`PipelineDriver.parse_entry`.
+
+    The entry source parsed once, ahead of module-graph loading and scope
+    resolution. Lets a caller read the declared program name and choose
+    engine-setting overrides before :meth:`PipelineDriver.prepare_parsed_entry`
+    loads imports and resolves the whole program.
+
+    ``program``
+        The parsed entry AST, or ``None`` when parsing failed (in which case
+        ``diagnostics`` holds the error).
+    ``next_id``
+        The first node id not yet consumed by this parse — the seed for
+        module-graph loading.
+    ``program_name``
+        The declared ``program NAME``, read directly from the parsed AST
+        without requiring scope resolution; ``None`` when the entry declares
+        none (or parsing failed).
+    ``spaced_qualifiers``
+        Lexical advisories collected while parsing the entry, threaded into
+        module-graph loading exactly as :func:`~agm.agl.modules.loader.load_graph`
+        does.
+    ``diagnostics``
+        A parse failure, or empty on success.
+    ``warnings``
+        TAB advisories collected while parsing the entry.
+    """
+
+    source: str
+    entry_path: "Path | None"
+    program: "Program | None"
+    next_id: int
+    program_name: str | None
+    spaced_qualifiers: "tuple[SpacedQualifier, ...]"
+    diagnostics: tuple[Diagnostic, ...]
+    warnings: tuple[Diagnostic, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -450,6 +493,21 @@ class PipelineDriver:
                 bindings={},
                 trace_path=trace.path,
             )
+        except HostConfigurationError as exc:
+            # The materialized ``default-agent`` value cannot be dispatched: a
+            # pre-execution host-configuration failure (exit 1 per the CLI
+            # contract), not an uncaught AgL exception — nothing has executed
+            # yet, so it is reported as an ordinary diagnostic rather than
+            # ``result.error``.
+            trace.run_end(ok=False)
+            return RunResult(
+                ok=False,
+                diagnostics=[Diagnostic(message=str(exc), line=1)],
+                error=None,
+                warnings=list(warnings),
+                bindings={},
+                trace_path=trace.path,
+            )
 
         trace.run_end(ok=True)
 
@@ -463,24 +521,95 @@ class PipelineDriver:
         )
 
     @staticmethod
-    def prepare_program(
+    def parse_entry(
         entry_source: str,
         *,
         entry_path: "Path | None" = None,
+    ) -> ParsedEntry:
+        """Parse *entry_source* once, ahead of module-graph loading.
+
+        The first half of :meth:`prepare_program`, split out so a caller can
+        read :attr:`ParsedEntry.program_name` — and so a host driving a
+        second program-point step (e.g. choosing engine-setting overrides)
+        never re-parses the entry to get there.  Collects TAB and
+        spaced-qualifier advisories exactly as
+        :func:`~agm.agl.modules.loader.load_graph` does for its own entry
+        parse.  Non-raising: an ``AglSyntaxError`` is captured into
+        :attr:`ParsedEntry.diagnostics` with ``program`` left ``None``.
+        """
+        from agm.agl.lexer import spaced_qualifier_collector, tab_warning_collector
+        from agm.agl.parser import AglSyntaxError
+        from agm.agl.parser.parser import parse_program_seeded
+        from agm.agl.syntax.nodes import ProgramDecl
+        from agm.agl.syntax.spans import SourceId
+
+        canonical_entry_path = entry_path.resolve() if entry_path is not None else None
+        label = str(canonical_entry_path) if canonical_entry_path is not None else "<command>"
+        entry_source_id = SourceId(label=label)
+
+        with tab_warning_collector() as tab_sink, spaced_qualifier_collector() as spaced_sink:
+            try:
+                program, next_id = parse_program_seeded(
+                    entry_source, start_id=0, source=entry_source_id
+                )
+            except AglSyntaxError as exc:
+                return ParsedEntry(
+                    source=entry_source,
+                    entry_path=entry_path,
+                    program=None,
+                    next_id=0,
+                    program_name=None,
+                    spaced_qualifiers=tuple(spaced_sink),
+                    diagnostics=(exc.to_diagnostic(),),
+                    warnings=tuple(tab_sink),
+                )
+
+        program_name: str | None = None
+        for item in program.body.items:
+            if isinstance(item, ProgramDecl):
+                program_name = item.name
+                break
+
+        return ParsedEntry(
+            source=entry_source,
+            entry_path=entry_path,
+            program=program,
+            next_id=next_id,
+            program_name=program_name,
+            spaced_qualifiers=tuple(spaced_sink),
+            diagnostics=(),
+            warnings=tuple(tab_sink),
+        )
+
+    @staticmethod
+    def prepare_parsed_entry(
+        parsed: ParsedEntry,
+        *,
         roots: "RootSet | None" = None,
         default_stdlib: bool = True,
+        setting_overrides: "Mapping[str, SettingOverride] | None" = None,
     ) -> PreparedProgram:
-        """Load and resolve the program rooted at *entry_source* once.
+        """Load imports and resolve scope for an already-parsed entry.
 
-        Drives ``parse → load imports → resolve_program`` for the entry module
-        and every reachable module.
+        The second half of :meth:`prepare_program`, taking
+        :meth:`parse_entry`'s result: drives
+        ``load imports → apply setting_overrides → resolve_program``.
 
-        Non-raising: any load (``ModuleNotFound``, ``AmbiguousModule``,
-        ``ModulePrefixNotFound``, ``ImportEntryError``), parse
-        (``AglSyntaxError``), or scope (``AglScopeError``) failure is
-        captured into :attr:`PreparedProgram.diagnostics` rather than raised,
-        with ``resolved`` left ``None``.  TAB advisories are captured
-        as warnings via the lex-pass context manager.
+        ``setting_overrides``, when given, splices each named engine key's
+        AgL source text in as its ``std/config`` ``builtin var`` declaration's
+        default *after* the module graph is loaded but *before* scope
+        resolution — so the override is resolved, type-checked, and
+        constant-checked by this same pass, never by a second compilation.  A
+        rejected override (unparseable source, not exactly one expression, an
+        unknown engine key, or a graph with no loaded ``std/config``) is
+        captured as a diagnostic naming the override's origin; a type or
+        constant-expression violation surfaces later, from the ordinary
+        ``builtin var`` checking in :meth:`run_prepared`/:meth:`discover_params`.
+
+        Non-raising in the same way as :meth:`prepare_program`: every load,
+        override, or scope failure is captured into
+        :attr:`PreparedProgram.diagnostics` rather than raised, with
+        ``resolved`` left ``None``.
         """
         from agm.agl.lexer import tab_warning_collector
         from agm.agl.modules.errors import (
@@ -490,10 +619,14 @@ class PipelineDriver:
             ModuleNotFound,
             ModulePrefixNotFound,
         )
-        from agm.agl.modules.loader import load_graph
+        from agm.agl.modules.loader import build_repl_graph
         from agm.agl.parser import AglSyntaxError
         from agm.agl.scope import AglScopeError
         from agm.agl.scope.program import resolve_program
+        from agm.util.text import normalize_newlines
+
+        entry_source = parsed.source
+        entry_path = parsed.entry_path
 
         if roots is None:
             from pathlib import Path
@@ -517,13 +650,23 @@ class PipelineDriver:
                 cwd=cwd,
             )
 
+        if parsed.program is None:
+            return PreparedProgram(
+                entry_source, entry_path, roots, None, parsed.diagnostics, parsed.warnings
+            )
+
         with tab_warning_collector() as tab_sink:
             try:
-                graph = load_graph(
-                    entry_source,
-                    entry_path=entry_path,
+                graph, next_id, _newly_loaded = build_repl_graph(
+                    parsed.program,
+                    parsed.next_id,
+                    path=entry_path,
+                    cached={},
                     roots=roots,
                     default_stdlib=default_stdlib,
+                    spaced_qualifiers=parsed.spaced_qualifiers,
+                    default_label="<command>",
+                    source_text=normalize_newlines(entry_source),
                 )
             except AglSyntaxError as exc:
                 return PreparedProgram(
@@ -532,7 +675,7 @@ class PipelineDriver:
                     roots,
                     None,
                     (exc.to_diagnostic(),),
-                    tuple(tab_sink),
+                    (*parsed.warnings, *tab_sink),
                 )
             except (
                 ModuleNotFound,
@@ -547,7 +690,7 @@ class PipelineDriver:
                     roots,
                     None,
                     (exc.to_diagnostic(),),
-                    tuple(tab_sink),
+                    (*parsed.warnings, *tab_sink),
                 )
             except AglError as exc:
                 return PreparedProgram(
@@ -556,7 +699,7 @@ class PipelineDriver:
                     roots,
                     None,
                     (exc.to_diagnostic(),),
-                    tuple(tab_sink),
+                    (*parsed.warnings, *tab_sink),
                 )
             except Exception as exc:
                 return PreparedProgram(
@@ -565,9 +708,18 @@ class PipelineDriver:
                     roots,
                     None,
                     (Diagnostic(message=str(exc), line=1),),
-                    tuple(tab_sink),
+                    (*parsed.warnings, *tab_sink),
                 )
-        warnings: tuple[Diagnostic, ...] = tuple(tab_sink)
+        warnings: tuple[Diagnostic, ...] = (*parsed.warnings, *tab_sink)
+
+        if setting_overrides:
+            graph, next_id, override_diagnostics = _apply_setting_overrides(
+                graph, next_id, setting_overrides
+            )
+            if override_diagnostics:
+                return PreparedProgram(
+                    entry_source, entry_path, roots, None, tuple(override_diagnostics), warnings
+                )
 
         try:
             resolved = resolve_program(graph)
@@ -594,6 +746,42 @@ class PipelineDriver:
         companion_paths = {mid: lm.companion_path for mid, lm in graph.modules.items()}
         return PreparedProgram(
             entry_source, entry_path, roots, resolved, (), all_warnings, companion_paths
+        )
+
+    @staticmethod
+    def prepare_program(
+        entry_source: str,
+        *,
+        entry_path: "Path | None" = None,
+        roots: "RootSet | None" = None,
+        default_stdlib: bool = True,
+        setting_overrides: "Mapping[str, SettingOverride] | None" = None,
+    ) -> PreparedProgram:
+        """Load and resolve the program rooted at *entry_source* once.
+
+        Drives ``parse → load imports → resolve_program`` for the entry module
+        and every reachable module — a thin wrapper over :meth:`parse_entry`
+        followed by :meth:`prepare_parsed_entry`, kept for callers that have
+        no use for the split (most of them).
+
+        ``setting_overrides`` maps an engine key (e.g. ``"default-agent"``) to
+        a :class:`~agm.agl.setting_overrides.SettingOverride` supplying its
+        default as host-provided AgL source text; see
+        :meth:`prepare_parsed_entry` for how it is applied and diagnosed.
+
+        Non-raising: any load (``ModuleNotFound``, ``AmbiguousModule``,
+        ``ModulePrefixNotFound``, ``ImportEntryError``), parse
+        (``AglSyntaxError``), or scope (``AglScopeError``) failure is
+        captured into :attr:`PreparedProgram.diagnostics` rather than raised,
+        with ``resolved`` left ``None``.  TAB advisories are captured
+        as warnings via the lex-pass context manager.
+        """
+        parsed = PipelineDriver.parse_entry(entry_source, entry_path=entry_path)
+        return PipelineDriver.prepare_parsed_entry(
+            parsed,
+            roots=roots,
+            default_stdlib=default_stdlib,
+            setting_overrides=setting_overrides,
         )
 
     def run(
@@ -995,6 +1183,110 @@ def _append_checker_warnings(
 ) -> None:
     """Append one checked artifact's warnings at the typecheck phase boundary."""
     warnings.extend(checked.warnings)
+
+
+def _apply_setting_overrides(
+    graph: "ModuleGraph",
+    next_id: int,
+    overrides: "Mapping[str, SettingOverride]",
+) -> "tuple[ModuleGraph, int, list[Diagnostic]]":
+    """Splice each override's parsed expression in as its engine key's default.
+
+    Runs after the module graph is loaded and before scope resolution, so
+    every spliced expression is resolved, type-checked, and constant-checked
+    by the ordinary ``std/config`` ``builtin var`` machinery
+    (``typecheck.checker._check_builtin_var``) exactly as if it had been
+    written in ``std/config.agl`` itself — no separate compilation. Node ids
+    for the parsed override expressions are seeded from *next_id*, the first
+    id not yet used anywhere in *graph*, so they stay disjoint from every
+    loaded module.  The returned ``int`` is the first id still unused after
+    every override's expression was parsed — a one-shot batch caller (e.g.
+    ``prepare_parsed_entry``) has no further use for it, but an incremental
+    host that keeps minting node ids afterward (the REPL, which caches and
+    reuses the spliced module across later entries) must continue from it
+    rather than from the pre-splice *next_id*, to keep every later entry's
+    ids disjoint from the ones spliced here.
+
+    Diagnostics — never exceptions — are returned for: unparseable override
+    source, an override that is not exactly one expression, an engine key no
+    loaded ``builtin var`` declares, and a graph with no loaded ``std/config``
+    module (e.g. ``default_stdlib=False`` with no explicit import of it).
+    Each diagnostic names the offending override's ``origin``. Overrides are
+    processed in sorted key order for deterministic diagnostics.
+    """
+    from dataclasses import replace as dc_replace
+
+    from agm.agl.modules.ids import STD_CONFIG_ID
+    from agm.agl.parser import AglSyntaxError
+    from agm.agl.parser.parser import parse_program_seeded
+    from agm.agl.syntax.nodes import BuiltinVarDecl, Expr
+    from agm.agl.syntax.spans import SourceId
+
+    diagnostics: list[Diagnostic] = []
+    modules = dict(graph.modules)
+    std_config = modules.get(STD_CONFIG_ID)
+
+    for key in sorted(overrides):
+        override = overrides[key]
+        try:
+            override_program, next_id = parse_program_seeded(
+                override.source, start_id=next_id, source=SourceId(label=override.origin)
+            )
+        except AglSyntaxError as exc:
+            base = exc.to_diagnostic()
+            diagnostics.append(
+                dc_replace(
+                    base,
+                    message=f"{override.origin}: invalid AgL expression: {base.message}",
+                )
+            )
+            continue
+
+        items = override_program.body.items
+        if len(items) != 1 or not isinstance(items[0], Expr):
+            diagnostics.append(
+                diagnostic_from_span(
+                    f"{override.origin}: expected exactly one AgL expression, "
+                    f"got {override.source!r}",
+                    override_program.span,
+                )
+            )
+            continue
+        value_expr = items[0]
+
+        if std_config is None:
+            diagnostics.append(
+                diagnostic_from_span(
+                    f"{override.origin}: cannot override engine key {key!r}: the "
+                    "standard library module 'std/config' is not loaded",
+                    override_program.span,
+                )
+            )
+            continue
+
+        target_index: int | None = None
+        target_decl: BuiltinVarDecl | None = None
+        for i, item in enumerate(std_config.program.body.items):
+            if isinstance(item, BuiltinVarDecl) and item.name == key:
+                target_index = i
+                target_decl = item
+                break
+        if target_index is None or target_decl is None:
+            diagnostics.append(
+                diagnostic_from_span(
+                    f"{override.origin}: unknown engine key {key!r}", override_program.span
+                )
+            )
+            continue
+
+        new_items = list(std_config.program.body.items)
+        new_items[target_index] = dc_replace(target_decl, default=value_expr)
+        new_body = dc_replace(std_config.program.body, items=tuple(new_items))
+        new_program = dc_replace(std_config.program, body=new_body)
+        std_config = dc_replace(std_config, program=new_program)
+        modules[STD_CONFIG_ID] = std_config
+
+    return dc_replace(graph, modules=modules), next_id, diagnostics
 
 
 def _check_artifact_provenance(

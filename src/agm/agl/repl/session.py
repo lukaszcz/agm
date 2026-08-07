@@ -41,6 +41,7 @@ if TYPE_CHECKING:
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import BoolValue, EnumValue, Frame, Value
+    from agm.agl.setting_overrides import SettingOverride
     from agm.agl.syntax.nodes import (
         ImportDecl,
         InfixAssoc,
@@ -126,6 +127,7 @@ class ReplSession:
         trace_path: "Path | None" = None,
         params_config_loader: "Callable[[str], dict[str, object]] | None" = None,
         engine_base: "Mapping[str, Value] | None" = None,
+        setting_overrides: "Mapping[str, SettingOverride] | None" = None,
         host_settings_policy: "HostSettingsPolicy | None" = None,
         cwd: "Path | None" = None,
         stdlib_root: "Path | None" = None,
@@ -160,6 +162,15 @@ class ReplSession:
         # ``False`` must stay a driver floor (``_initial_strict_json`` below),
         # or no declared ``std/config`` default could ever be recorded for it.
         self._engine_base: dict[str, Value] = dict(engine_base) if engine_base is not None else {}
+        # Host-supplied AgL source overrides (currently only ``default-agent``
+        # from ``--agent``/``[exec] default-agent``) spliced into the module
+        # graph the FIRST time it loads ``std/config`` (see
+        # ``EntryPipeline.eval_entry``), so the override is resolved,
+        # type-checked, and constant-checked by that entry's own compilation
+        # rather than a separate one run before the session exists.
+        self._setting_overrides: dict[str, SettingOverride] = (
+            dict(setting_overrides) if setting_overrides is not None else {}
+        )
         if "max-iters" not in self._engine_base and default_loop_limit is not None:
             self._engine_base["max-iters"] = IntValue(default_loop_limit)
         if "timeout" not in self._engine_base and shell_exec_timeout is not None:

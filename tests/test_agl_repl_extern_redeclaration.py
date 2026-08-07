@@ -404,3 +404,48 @@ class TestLiveViewsUnaffectedByNominalRedeclaration:
 
         assert r.ok, r.diagnostics
         assert r.value == ArrayValue([IntValue(1), IntValue(2), IntValue(99)])
+
+
+# ---------------------------------------------------------------------------
+# A companion-import rejection registers its declarations' nominal identity
+# with the extern registry before it fails, so it must not release its
+# node-id range: doing so would let a later entry's redeclaration reuse an
+# identity the (insert-only) registry already has on file under the old shape.
+# ---------------------------------------------------------------------------
+
+
+class TestRejectedCompanionImportReleasesNoStaleIdentity:
+    def test_redeclaration_after_a_failed_companion_import_gets_the_new_shape(
+        self, tmp_path: Path
+    ) -> None:
+        _write_extern_lib(
+            tmp_path,
+            "broken_companion",
+            "extern def noop() -> int\n",
+            "raise RuntimeError('boom')\n",
+        )
+        _write_extern_lib(
+            tmp_path,
+            "report_shape",
+            "extern def make_and_report(v: text) -> text\n",
+            (
+                "from agl import R, nominals\n"
+                "def make_and_report(v):\n"
+                "    assert R is nominals.entry.R\n"
+                "    fields = sorted(R._agl_fields)\n"
+                "    R(**{name: v for name in fields})\n"
+                "    return ','.join(fields)\n"
+            ),
+        )
+        s = _make_session_with_root(tmp_path)
+
+        rejected = s.eval_entry("open import broken_companion\nrecord R\n  a: int")
+        assert not rejected.ok
+
+        redeclared = s.eval_entry("open import report_shape\nrecord R\n  b: text")
+        assert redeclared.ok, redeclared.diagnostics
+
+        r = s.eval_entry('make_and_report("x")')
+
+        assert r.ok, r.diagnostics
+        assert r.value == TextValue("b")

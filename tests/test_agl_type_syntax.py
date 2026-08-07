@@ -1,10 +1,9 @@
 """Tests for rendering a semantic ``Type`` as AgL type-annotation syntax.
 
-``render_type_syntax`` is the renderer ``agm.cli_support.agl_constant.parse_constant``
-uses to spell the expected type of a host-supplied constant expression. Unlike
-``Type.__repr__`` (total, debug-only), the renderer is partial and its output
-must be valid AgL source — the round-trip tests below are what actually pins
-that property.
+``render_type_syntax`` renders a semantic ``Type`` back to the AgL
+type-annotation text a program would write for it. Unlike ``Type.__repr__``
+(total, debug-only), the renderer is partial and its output must be valid
+AgL source — the round-trip tests below are what actually pins that property.
 """
 
 from __future__ import annotations

@@ -42,7 +42,12 @@ from agm.config.general import (
     load_repl_config,
     save_repl_theme,
 )
-from agm.config.module_roots import load_module_roots, resolve_lib_root, resolve_stdlib_root
+from agm.config.module_roots import (
+    StaleStdlibError,
+    load_module_roots,
+    resolve_lib_root,
+    resolve_stdlib_root,
+)
 from agm.core import dry_run
 from agm.core.log import (
     LiveTracePathResolver,
@@ -115,13 +120,19 @@ def run(args: ReplArgs) -> None:
         return load_program_config(program_name, home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
 
     mod_roots_cfg = load_module_roots(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
-    stdlib_root = resolve_stdlib_root(home=ctx.home)
+    try:
+        stdlib_root = resolve_stdlib_root(home=ctx.home)
+    except StaleStdlibError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
     lib_root = resolve_lib_root(mod_roots_cfg, home=ctx.home)
 
-    # Seed only explicit CLI/config controls.  Agent and trace-service
-    # fallbacks remain absent so a ``builtin var`` initializer can provide the
-    # setting default.  The raw timeout preserves its configured spelling.
-    engine_base = build_host_engine_seeds(
+    # Seed only explicit CLI/config controls.  Trace-service fallbacks remain
+    # absent so a ``builtin var`` initializer can provide the setting default.
+    # The raw timeout preserves its configured spelling.  An AgL agent literal
+    # (``--agent``/``[exec] default-agent``) becomes an override spliced into
+    # the session's own first-loaded ``std/config`` rather than a seed value.
+    engine_seeds = build_host_engine_seeds(
         config=config,
         primary_table=toml_dict(merged_config.get("exec")),
         log_enabled=log_decision.enabled,
@@ -141,7 +152,8 @@ def run(args: ReplArgs) -> None:
         shell_exec_timeout=config.timeout,
         trace_path=trace_path,
         params_config_loader=_params_config_loader,
-        engine_base=engine_base,
+        engine_base=engine_seeds.values,
+        setting_overrides=engine_seeds.overrides,
         host_settings_policy=host_settings_policy,
         cwd=ctx.cwd,
         stdlib_root=stdlib_root,

@@ -96,7 +96,9 @@ like any other static error.
 - `--agent AGL_LITERAL`: Seed `std/config::default-agent` with one constant `Agent`
   expression, for example `AgentClaude("sonnet", "medium")`. The literal is parsed and
   typechecked before execution; it overrides `[<program>]`/`[exec]` configuration. It
-  selects the value used by `ask` calls that omit `agent`.
+  selects the value used by `ask` calls that omit `agent`. An `AgentCommand(...)`
+  literal's command text is shell-split and validated the same way as `[exec] runner`
+  before execution; a malformed command (e.g. an unclosed quote) exits 1 with nothing run.
 - `--log` / `--log-file PATH` / `--no-log`: Control trace logging, which is **off by
   default**. `--log` enables it with an auto-generated timestamped path under
   `.agent-files/`; `--log-file PATH` writes a structured JSONL trace to `PATH`;
@@ -147,8 +149,9 @@ environment overlaid with `PROMPT_FILE`, which wins on conflicts. Unlike `agm lo
 runner and selector, no workflow-specific variables are added. See
 [Runner command interpolation](agents.md#runner-command-interpolation) for the shared
 `%%`/`PROMPT_FILE` alias, `\%{` escape, and shlex-split rules. A prompt-file placeholder
-places the rendered prompt file at that position; otherwise AGM appends `@<path>`.
-Because an AgL text literal interpolates `%{…}` itself, spell the placeholder as
+places the rendered prompt file at that position; otherwise AGM appends `@<path>`, except
+for `AgentCodex`, which pipes the prompt in on standard input instead of appending a
+target. Because an AgL text literal interpolates `%{…}` itself, spell the placeholder as
 `\%{PROMPT_FILE}` inside `AgentCommand("…")` so it reaches the host as literal text. An
 unresolvable hole fails the call with a catchable `AgentCallError` whose `cause` is
 `"spawn_failure"`.
@@ -161,6 +164,7 @@ source `std/config` writes can override:
 ```toml
 [exec]
 default-agent = 'AgentClaude("sonnet", "medium")' # typed default Agent value
+# runner = "claude"         # bare host agent command; lower precedence than default-agent
 strict-json = false         # lenient JSON recovery is the default
 max-iters = 5               # opt into a safety-valve cap for unbounded loops
 timeout = "30m"             # initial shell-exec and agent idle timeout
@@ -169,8 +173,17 @@ log = false                 # trace logging off by default; set true to enable
 
 ```
 
+`runner` is a bare host command (like `[loop] runner`), not AgL literal syntax; when
+set, it seeds `default-agent` as `AgentCommand(runner)`. It applies only when neither
+`--agent` nor `default-agent` (CLI or config) supplies a value: precedence, highest
+first, is `--agent` > `[<program>]`/`[exec] default-agent` > `[exec] runner` > the
+`std/config` declaration's own default. `runner` is shell-split and validated as soon
+as configuration is read, before the module graph loads; a malformed command exits 1
+with nothing run.
+
 A top-level `[<program>]` table provides per-program overrides of `[exec]`
-engine settings and supplies that program's param values.
+engine settings (`runner` excepted — it is read from `[exec]` only) and supplies
+that program's param values.
 
 #### Source-level engine settings (`std/config`)
 
@@ -201,7 +214,8 @@ value.
 Precedence differs by kind:
 
 - **Engine settings** (`default-agent`, `log`, `strict-json`, `max-iters`, `log-file`, `timeout`):
-  `source std/config::X write > CLI > [<program>].X > [exec].X > engine default`
+  `source std/config::X write > CLI > [<program>].X > [exec].X > engine default`.
+  `default-agent` has one extra fallback below `[exec] default-agent`: `[exec] runner`.
 - **Param values** (`param NAME`):
   `CLI > [<program>].NAME > source default > required error`. `NAME` is a
   scoped param's full path spelling (`Deploy::region`) when it is declared as
@@ -397,12 +411,19 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
 ### Exit codes
 
 The REPL itself only fails before the loop starts; per-entry errors are reported inline
-and never exit the process.
+and never exit the process. A blank or non-string `--agent`/`[exec] default-agent`
+value is one such pre-loop failure; a syntactically present but otherwise malformed
+literal — including an `AgentCommand(...)` whose command text does not shell-split —
+is not caught until the first entry that loads `std/config` (typically the session's
+very first entry, via the automatic `std/core` prelude), since it is resolved,
+type-checked, and validated by that entry's own compilation rather than a separate one
+run before the session exists — that entry then reports it inline like any other
+per-entry error, without exiting the process.
 
 | Code | Meaning |
 |------|---------|
 | `0` | The session ended normally (`:quit`/`:exit` or Ctrl-D) |
-| `1` | Pre-loop setup failure: invalid `[exec] default-agent` or `--agent` AgL literal, or an unwritable `--log-file` — reported before the prompt appears |
+| `1` | Pre-loop setup failure: a blank/non-string `[exec] default-agent` or `--agent` value, or an unwritable `--log-file` — reported before the prompt appears |
 
 ### Examples
 

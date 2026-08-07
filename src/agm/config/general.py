@@ -592,6 +592,10 @@ class ExecConfig:
     log_file: str | None
     # Raw TOML value: only exec/repl may parse it as an AgL Agent literal.
     default_agent: object | None = None
+    # Bare host agent command (e.g. "claude"), the pre-Agent-value spelling of
+    # a default agent. Lower precedence than default_agent; decoded into an
+    # AgentCommand value rather than parsed as AgL source (see engine_seeds.py).
+    runner: str | None = None
     default_loop_limit: int | None = None
     # Optional recursion call-depth override (None = use the canonical default).
     max_call_depth: int | None = None
@@ -662,6 +666,9 @@ def exec_config_from_merged(
     # value raw so exec/repl can diagnose an empty or non-string value at their
     # AgL host boundary; other commands stay free of AgL imports.
     resolved_default_agent = effective.get("default-agent")
+    # A bare host agent command, not an engine key: read straight from the
+    # command's own [exec] table (never overridden per-program).
+    resolved_runner = _optional_str(exec_table, "runner")
 
     return ExecConfig(
         strict_json=resolved_strict_json,
@@ -671,6 +678,7 @@ def exec_config_from_merged(
         log=resolved_log,
         log_file=resolved_log_file,
         default_agent=resolved_default_agent,
+        runner=resolved_runner,
     )
 
 

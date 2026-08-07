@@ -361,6 +361,42 @@ def _load_into_graph(
     return graph, next_id, newly_loaded
 
 
+def _build_entry_loaded_module(
+    program: syntax.Program,
+    next_id: int,
+    *,
+    canonical_entry_path: Path | None,
+    entry_source_id: SourceId,
+    default_stdlib: bool,
+    spaced_qualifiers: tuple[SpacedQualifier, ...],
+    source_text: str,
+) -> tuple[LoadedModule, int]:
+    """Build the entry :class:`LoadedModule` from an already-parsed program.
+
+    Shared by :func:`load_graph` (parses the entry itself first) and
+    :func:`build_repl_graph` (given an already-parsed entry from the REPL's
+    own per-entry parse). Injects the ``std/core`` prelude import when
+    *default_stdlib* is set, consuming one more node id, and derives the
+    companion path for a declared extern. Returns the built module together
+    with the next free node id.
+    """
+    if default_stdlib:
+        program = _with_default_stdlib_import(program, import_node_id=next_id)
+        next_id += 1
+    entry_loaded = LoadedModule(
+        module_id=ENTRY_ID,
+        program=program,
+        path=canonical_entry_path,
+        source=entry_source_id,
+        imports=_extract_imports(program),
+        export_decls=_extract_exports(program),
+        source_text=source_text,
+        spaced_qualifiers=spaced_qualifiers,
+        companion_path=_companion_path_for(ENTRY_ID, program, canonical_entry_path),
+    )
+    return entry_loaded, next_id
+
+
 def load_graph(
     entry_source: str,
     *,
@@ -411,22 +447,14 @@ def load_graph(
             start_id=0,
             source=entry_source_id,
         )
-    if default_stdlib:
-        entry_program = _with_default_stdlib_import(
-            entry_program,
-            import_node_id=next_id,
-        )
-        next_id += 1
-    entry_loaded = LoadedModule(
-        module_id=ENTRY_ID,
-        program=entry_program,
-        path=canonical_entry_path,
-        source=entry_source_id,
-        imports=_extract_imports(entry_program),
-        export_decls=_extract_exports(entry_program),
-        source_text=normalize_newlines(entry_source),
+    entry_loaded, next_id = _build_entry_loaded_module(
+        entry_program,
+        next_id,
+        canonical_entry_path=canonical_entry_path,
+        entry_source_id=entry_source_id,
+        default_stdlib=default_stdlib,
         spaced_qualifiers=tuple(entry_spaced_sink),
-        companion_path=_companion_path_for(ENTRY_ID, entry_program, canonical_entry_path),
+        source_text=normalize_newlines(entry_source),
     )
 
     graph, _next_id, _newly_loaded = _load_into_graph(
@@ -449,14 +477,18 @@ def build_repl_graph(
     roots: RootSet,
     default_stdlib: bool = True,
     spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
+    default_label: str = "<repl>",
+    source_text: str = "",
 ) -> tuple[ModuleGraph, int, dict[ModuleId, LoadedModule]]:
     """Build a module graph from an already-parsed entry program.
 
     Unlike :func:`load_graph`, this function accepts an already-parsed
-    ``Program`` AST (from the REPL's per-entry parse) and performs BFS loading
-    only for library modules that are not already cached.  Node ids in
-    newly-loaded modules are seeded from *next_start_id* so they remain
-    disjoint from the entry and from any previously loaded modules.
+    ``Program`` AST (from the REPL's per-entry parse, or from a host-side
+    pipeline step that needs the parsed entry before it loads the rest of the
+    graph) and performs BFS loading only for library modules that are not
+    already cached. Node ids in newly-loaded modules are seeded from
+    *next_start_id* so they remain disjoint from the entry and from any
+    previously loaded modules.
 
     Parameters
     ----------
@@ -476,6 +508,18 @@ def build_repl_graph(
         newly loaded library modules.
     spaced_qualifiers:
         Spaced-qualifier advisories collected while *program* was lexed.
+    default_label:
+        The entry source label used when *path* is ``None`` (inline entry).
+        Defaults to ``"<repl>"`` for the REPL's own incremental sessions;
+        callers outside the REPL (e.g. an ``exec -c`` style host pipeline)
+        pass their own label so diagnostics match :func:`load_graph`.
+    source_text:
+        The entry's normalized source text, recorded on the entry
+        ``LoadedModule`` for deep IR-validation span checks and runtime
+        source slicing.  Defaults to ``""``, which is what the REPL wants:
+        its own lowering step supplies the per-entry text directly (see
+        ``agm.agl.lower.repl``), so the loader's copy is never consulted. A
+        caller outside the REPL passes the real entry source here.
 
     Returns
     -------
@@ -485,24 +529,18 @@ def build_repl_graph(
         - A dict of newly-loaded modules (not in *cached*) for promotion.
     """
     canonical_entry_path: Path | None = path.resolve() if path is not None else None
-    label = str(canonical_entry_path) if canonical_entry_path is not None else "<repl>"
+    label = str(canonical_entry_path) if canonical_entry_path is not None else default_label
     entry_source_id = SourceId(label=label)
 
     seed_modules = dict(cached)
-    if default_stdlib:
-        program = _with_default_stdlib_import(program, import_node_id=next_start_id)
-        next_start_id += 1
-
-    entry_loaded = LoadedModule(
-        module_id=ENTRY_ID,
-        program=program,
-        path=canonical_entry_path,
-        source=entry_source_id,
-        imports=_extract_imports(program),
-        export_decls=_extract_exports(program),
-        source_text="",
+    entry_loaded, next_start_id = _build_entry_loaded_module(
+        program,
+        next_start_id,
+        canonical_entry_path=canonical_entry_path,
+        entry_source_id=entry_source_id,
+        default_stdlib=default_stdlib,
         spaced_qualifiers=spaced_qualifiers,
-        companion_path=_companion_path_for(ENTRY_ID, program, canonical_entry_path),
+        source_text=source_text,
     )
 
     return _load_into_graph(

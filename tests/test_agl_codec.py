@@ -288,12 +288,15 @@ class _Bindings(dict[str, object]):
 # ``std/config``, so the bare ``ask(...)`` calls built by ``_ask_call`` have no
 # declared ``default-agent`` to read. ``_run_with_json_codec`` seeds one — its
 # concrete variant is irrelevant, since every ``agent_dispatcher`` in this file
-# ignores ``request.agent`` and responds from the prompt alone.
+# ignores ``request.agent`` and responds from the prompt alone. The command
+# text must still be non-empty and shell-splittable: ``IrInterpreter``
+# validates the materialized ``default-agent`` value eagerly at construction,
+# regardless of whether anything ever dispatches it.
 _TEST_DEFAULT_AGENT = EnumValue(
     nominal=NominalId(require_reserved_nominal_id("Agent")),
     display_name="Agent",
     variant="AgentCommand",
-    fields={"command": TextValue("")},
+    fields={"command": TextValue("unused")},
 )
 
 

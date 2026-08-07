@@ -9,10 +9,13 @@ in either command.
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from agm.agl.runtime.params import build_engine_config_seeds, raw_option_str
+from agm.agent.runner import parse_command
+from agm.agl.runtime.params import build_engine_config_seeds, convert_config_value, raw_option_str
 from agm.agl.semantics.engine_keys import get_engine_key_type
+from agm.agl.setting_overrides import SettingOverride
 from agm.config.engine_keys import ENGINE_KEY_NAMES
 
 if TYPE_CHECKING:
@@ -21,7 +24,29 @@ if TYPE_CHECKING:
     from agm.agl.semantics.values import Value
     from agm.config.general import ExecConfig
 
-__all__ = ["build_host_engine_seeds", "check_max_iters", "parse_default_agent_literal"]
+__all__ = ["EngineSeeds", "build_host_engine_seeds", "check_max_iters"]
+
+
+@dataclass(frozen=True, slots=True)
+class EngineSeeds:
+    """Host-controlled engine-setting seeds, split by how they reach the program.
+
+    ``values`` are typed ``Value`` seeds threaded straight into the interpreter
+    (``PipelineDriver.run_prepared``'s/``ReplSession``'s ``builtin_host_settings``
+    / ``engine_base``), exactly as every non-agent engine key already works.
+
+    ``overrides`` are host-supplied AgL source text for ``std/config`` keys —
+    currently only ``default-agent`` when it comes from an AgL literal
+    (``--agent`` or ``[exec] default-agent``) — meant for
+    ``PipelineDriver.prepare_parsed_entry``'s (or the REPL's) ``setting_overrides``
+    seam, so the literal is resolved, type-checked, and constant-checked by the
+    program's own compilation rather than a separate throwaway one.
+
+    A key never appears in both mappings.
+    """
+
+    values: "dict[str, Value]" = field(default_factory=dict)
+    overrides: "dict[str, SettingOverride]" = field(default_factory=dict)
 
 
 def check_max_iters(max_iters: int | None) -> None:
@@ -36,22 +61,22 @@ def check_max_iters(max_iters: int | None) -> None:
         raise SystemExit(1)
 
 
-def parse_default_agent_literal(literal: object, *, source: str) -> "Value":
-    """Parse a host-supplied ``Agent`` literal into a typed AgL value."""
+def _require_agent_literal_text(literal: object, *, source: str) -> str:
+    """Validate that a raw host value is usable as AgL ``Agent`` literal source.
+
+    This is the one check that must happen before the literal is handed to the
+    AgL pipeline at all: a non-string or blank value is a host-shape error, not
+    an AgL question, so it is diagnosed here rather than surfacing as a
+    confusing parse failure downstream.
+    """
     if not isinstance(literal, str) or not literal.strip():
-        raise ValueError(
-            f"invalid default-agent literal from {source}: "
-            f"expected a non-empty AgL Agent literal, got {literal!r}"
+        print(
+            f"Error: invalid default-agent literal from {source}: "
+            f"expected a non-empty AgL Agent literal, got {literal!r}",
+            file=sys.stderr,
         )
-
-    from agm.cli_support.agl_constant import ConstantExpressionError, parse_constant
-
-    expected_type = get_engine_key_type("default-agent")
-    assert expected_type is not None
-    try:
-        return parse_constant(literal, expected_type)
-    except ConstantExpressionError as exc:
-        raise ValueError(f"invalid default-agent literal from {source}: {exc}") from exc
+        raise SystemExit(1)
+    return literal
 
 
 def build_host_engine_seeds(
@@ -69,7 +94,7 @@ def build_host_engine_seeds(
     timeout: str | None = None,
     no_timeout: bool = False,
     no_log_file: bool = False,
-) -> "dict[str, Value]":
+) -> EngineSeeds:
     """Decode the engine settings the host explicitly controls into seed values.
 
     Only explicit controls are seeded: a setting left to its default stays
@@ -80,7 +105,20 @@ def build_host_engine_seeds(
     empty ``Option``, which is a control rather than an absence; commands
     without those flags leave them unset.
 
-    An unparseable ``Agent`` literal exits 1 here, before anything runs.
+    ``default-agent`` precedence, highest first: ``--agent``, then
+    ``[exec]``/``[<program>] default-agent``, then ``[exec] runner``.  Exactly
+    one of the three ever supplies the key, and it lands in exactly one of the
+    two result mappings: an AgL literal (``--agent``/``default-agent``) becomes
+    a :class:`~agm.agl.setting_overrides.SettingOverride` in ``overrides`` so
+    the program's own compilation resolves it; a bare host command
+    (``[exec] runner``) is decoded directly into an ``AgentCommand`` value in
+    ``values``, since it is host text, not AgL source — rendering it as AgL
+    source would have to re-escape quotes, backslashes, and ``%{``, which
+    ``AgentCommand`` deliberately carries verbatim.  A blank or non-string raw
+    config/CLI value exits 1 here, before anything runs.  ``[exec] runner`` is
+    additionally shell-split with :func:`~agm.agent.runner.parse_command` right
+    here, so a malformed command (e.g. an unclosed quote) also exits 1 before
+    anything runs rather than surfacing later as a runtime agent-call failure.
     """
     fallback: "Mapping[str, object]" = fallback_table if fallback_table is not None else {}
     configured = {key for key in ENGINE_KEY_NAMES if key in primary_table or key in fallback}
@@ -117,15 +155,26 @@ def build_host_engine_seeds(
         seed_raw["log-file"] = config.log_file
 
     seeds = build_engine_config_seeds(seed_raw)
+    overrides: dict[str, SettingOverride] = {}
 
-    default_agent_literal = agent if agent is not None else config.default_agent
-    if default_agent_literal is not None:
-        source = "--agent" if agent is not None else "[exec] configuration"
+    if agent is not None:
+        literal = _require_agent_literal_text(agent, source="--agent")
+        overrides["default-agent"] = SettingOverride(source=literal, origin="--agent")
+    elif config.default_agent is not None:
+        literal = _require_agent_literal_text(config.default_agent, source="[exec] configuration")
+        overrides["default-agent"] = SettingOverride(source=literal, origin="[exec] default-agent")
+    elif config.runner is not None:
         try:
-            seeds["default-agent"] = parse_default_agent_literal(
-                default_agent_literal, source=source
-            )
+            parse_command(config.runner, kind="[exec] runner")
         except ValueError as exc:
-            print(f"Error: {exc}", file=sys.stderr)
+            print(f"Error: {exc}.", file=sys.stderr)
             raise SystemExit(1) from exc
-    return seeds
+        agent_type = get_engine_key_type("default-agent")
+        assert agent_type is not None
+        seeds["default-agent"] = convert_config_value(
+            "default-agent",
+            {"$case": "AgentCommand", "command": config.runner},
+            agent_type,
+        )
+
+    return EngineSeeds(values=seeds, overrides=overrides)

@@ -10,6 +10,7 @@ by ``ReplSession`` via the narrow ``EntryPipelineCtx`` Protocol. Must NOT import
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, cast
 
 from agm.agl.diagnostics import Diagnostic
@@ -122,6 +123,34 @@ class EntryPipelineCtx(Protocol):
     def _quote_strings_for_entry(self, program: Program) -> bool: ...
 
 
+class OverrideRejected(Exception):
+    """Internal signal: a setting-override splice was rejected.
+
+    Raised by :meth:`EntryPipeline.load_and_check_program` when
+    ``_apply_setting_overrides`` returns diagnostics rather than succeeding,
+    so that stage can share one raise-on-failure contract with the syntax,
+    module-loading, scope, and type-check stages around it. Callers catch it
+    and read :attr:`diagnostics` the same way they read a caught
+    ``AglError.to_diagnostic()``.
+    """
+
+    def __init__(self, diagnostics: list[Diagnostic]) -> None:
+        super().__init__("setting override rejected")
+        self.diagnostics = diagnostics
+
+
+@dataclass(frozen=True, slots=True)
+class LoadedCheckedProgram:
+    """Result of :meth:`EntryPipeline.load_and_check_program`."""
+
+    checked_program: "CheckedProgram"
+    new_modules: "dict[ModuleId, LoadedModule]"
+    new_next_id: int
+    entry_imports: "tuple[ImportDecl, ...]"
+    entry_opens: "tuple[OpenDecl | ImportDecl | ScopeRegion, ...]"
+    resolved_warnings: "tuple[Diagnostic, ...]"
+
+
 # ---------------------------------------------------------------------------
 # Collaborator class
 # ---------------------------------------------------------------------------
@@ -136,6 +165,97 @@ class EntryPipeline:
 
     def __init__(self, ctx: EntryPipelineCtx) -> None:
         self._ctx = ctx
+
+    def load_and_check_program(
+        self,
+        *,
+        pipeline_program: Program,
+        host_env: HostEnvironment,
+        next_start_id: int,
+        spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
+    ) -> LoadedCheckedProgram:
+        """Build the module graph, splice overrides, resolve, and type-check.
+
+        Shared by :meth:`eval_entry` (which continues on to match
+        compilation, lowering, and evaluation) and ``ReplSession.open``
+        (which stops here and promotes only the loaded library modules,
+        before the session accepts its first entry): builds on the session's
+        retained import/scope-open preamble and cached library modules,
+        splices ``setting_overrides`` in the first time ``std/config`` loads
+        into the graph, then resolves and type-checks the result.
+
+        Raises the underlying ``AglSyntaxError``/module-loading
+        error/``AglScopeError``/``AglTypeError`` on failure, or
+        :class:`OverrideRejected` when the override splice itself is
+        rejected — callers adapt these to their own failure-reporting shape.
+        """
+        from agm.agl.modules.ids import STD_CONFIG_ID
+        from agm.agl.modules.loader import build_repl_graph
+        from agm.agl.pipeline import _apply_setting_overrides
+        from agm.agl.scope.program import resolve_program
+        from agm.agl.typecheck.program import check_program
+
+        roots = self._ctx._ensure_roots()
+
+        entry_program, next_start_id, entry_imports, entry_opens = self._prepare_entry_program(
+            pipeline_program, next_start_id, roots
+        )
+        graph, new_next_id, new_modules = build_repl_graph(
+            entry_program,
+            next_start_id,
+            path=None,
+            cached=self._ctx._loaded_lib_modules,
+            roots=roots,
+            default_stdlib=self._ctx._default_stdlib,
+            spaced_qualifiers=spaced_qualifiers,
+        )
+
+        # Splice any host-supplied engine-setting overrides in as soon as
+        # ``std/config`` is FIRST loaded into the session's module graph —
+        # ``new_modules`` (not ``cached``) means this call loaded it fresh, so
+        # this fires exactly once per session: at session-open time for the
+        # ordinary case where the initial image loads ``std/config``, or —
+        # when it does not (e.g. ``--no-stdlib`` with no explicit import) —
+        # the first later entry that does, and again after a ``:reset``,
+        # which clears the module cache. A later call reuses the
+        # already-spliced, cached module, so re-splicing would both waste
+        # work and mint a new, unstable declaration identity for the same
+        # builtin var every time.
+        if self._ctx._setting_overrides and STD_CONFIG_ID in new_modules:
+            graph, new_next_id, override_diagnostics = _apply_setting_overrides(
+                graph, new_next_id, self._ctx._setting_overrides
+            )
+            if override_diagnostics:
+                raise OverrideRejected(override_diagnostics)
+            # ``_apply_setting_overrides`` returns a new ``graph`` carrying the
+            # spliced ``std/config``, but ``new_modules`` is a separate dict
+            # snapshotted before the splice — reconcile it so whichever caller
+            # caches ``new_modules`` (an evaluated entry, or ``ReplSession.open``)
+            # caches the SPLICED module, not the pre-splice one. Without this, a
+            # later reuse from that cache would silently see the un-overridden
+            # declared default again.
+            new_modules = {**new_modules, STD_CONFIG_ID: graph.modules[STD_CONFIG_ID]}
+
+        resolved_program = resolve_program(
+            graph,
+            entry_ambient_constructor_candidates=self._ctx._ambient_constructor_candidates,
+            entry_ambient_type_names=self._ctx._ambient_type_names,
+            entry_parent_scope=self._ctx._session_scope,
+            entry_repl_session_scope=self._ctx._session_scope,
+            entry_repl_session_scope_nodes=self._ctx._session_scope_nodes,
+            entry_repl_session_type_paths=self._ctx._session_type_paths,
+        )
+        checked_program = check_program(
+            resolved_program, host_env.capabilities, entry_seed_env=self._ctx._type_env
+        )
+        return LoadedCheckedProgram(
+            checked_program=checked_program,
+            new_modules=new_modules,
+            new_next_id=new_next_id,
+            entry_imports=entry_imports,
+            entry_opens=entry_opens,
+            resolved_warnings=resolved_program.warnings,
+        )
 
     def eval_entry(
         self,
@@ -163,28 +283,16 @@ class EntryPipeline:
             ModuleNotFound,
             ModulePrefixNotFound,
         )
-        from agm.agl.modules.ids import ENTRY_ID, STD_CONFIG_ID
-        from agm.agl.modules.loader import build_repl_graph
+        from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.parser import AglSyntaxError
-        from agm.agl.pipeline import _apply_setting_overrides
         from agm.agl.scope import AglScopeError
-        from agm.agl.scope.program import resolve_program
         from agm.agl.typecheck import AglTypeError
-        from agm.agl.typecheck.program import check_program
-
-        roots = self._ctx._ensure_roots()
 
         try:
-            entry_program, next_start_id, entry_imports, entry_opens = self._prepare_entry_program(
-                pipeline_program, next_start_id, roots
-            )
-            graph, new_next_id, new_modules = build_repl_graph(
-                entry_program,
-                next_start_id,
-                path=None,
-                cached=self._ctx._loaded_lib_modules,
-                roots=roots,
-                default_stdlib=self._ctx._default_stdlib,
+            loaded = self.load_and_check_program(
+                pipeline_program=pipeline_program,
+                host_env=host_env,
+                next_start_id=next_start_id,
                 spaced_qualifiers=spaced_qualifiers,
             )
         except AglSyntaxError as exc:
@@ -197,51 +305,28 @@ class EntryPipeline:
             MissingExternCompanion,
         ) as exc:
             return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
+        except OverrideRejected as exc:
+            return self._ctx._fail(exc.diagnostics, tab_warnings)
+        except AglScopeError as exc:
+            return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
+        except AglTypeError as exc:
+            return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
         except AglError as exc:
             return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
         except Exception as exc:
             return self._ctx._fail([Diagnostic(message=str(exc), line=1)], tab_warnings)
 
-        # Splice any host-supplied engine-setting overrides in as soon as
-        # ``std/config`` is FIRST loaded into the session's module graph —
-        # ``new_modules`` (not ``cached``) means this entry loaded it fresh, so
-        # this fires exactly once per session (again after a ``:reset``, which
-        # clears the module cache). A later entry reuses the already-spliced,
-        # cached module, so re-splicing would both waste work and mint a new,
-        # unstable declaration identity for the same builtin var on every entry.
-        if self._ctx._setting_overrides and STD_CONFIG_ID in new_modules:
-            graph, new_next_id, override_diagnostics = _apply_setting_overrides(
-                graph, new_next_id, self._ctx._setting_overrides
-            )
-            if override_diagnostics:
-                return self._ctx._fail(override_diagnostics, tab_warnings)
-
-        try:
-            resolved_program = resolve_program(
-                graph,
-                entry_ambient_constructor_candidates=self._ctx._ambient_constructor_candidates,
-                entry_ambient_type_names=self._ctx._ambient_type_names,
-                entry_parent_scope=self._ctx._session_scope,
-                entry_repl_session_scope=self._ctx._session_scope,
-                entry_repl_session_scope_nodes=self._ctx._session_scope_nodes,
-                entry_repl_session_type_paths=self._ctx._session_type_paths,
-            )
-        except AglScopeError as exc:
-            return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
-
-        try:
-            checked_program = check_program(
-                resolved_program, host_env.capabilities, entry_seed_env=self._ctx._type_env
-            )
-        except AglTypeError as exc:
-            return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
-
+        checked_program = loaded.checked_program
+        new_modules = loaded.new_modules
+        new_next_id = loaded.new_next_id
+        entry_imports = loaded.entry_imports
+        entry_opens = loaded.entry_opens
         entry_cm = checked_program.modules[ENTRY_ID]
 
         # Collect warnings from all passes.
         warnings: list[Diagnostic] = [
             *tab_warnings,
-            *resolved_program.warnings,
+            *loaded.resolved_warnings,
             *checked_program.warnings,
         ]
 

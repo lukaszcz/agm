@@ -317,6 +317,68 @@ class ReplSession:
         return self._roots
 
     # ------------------------------------------------------------------
+    # Session bootstrap
+    # ------------------------------------------------------------------
+
+    def open(self) -> tuple[Diagnostic, ...]:
+        """Load the session's initial library image before any entry runs.
+
+        Builds the module graph a first entry would build (honoring
+        ``default_stdlib``), splicing any host-supplied ``setting_overrides``
+        into ``std/config`` the first time it loads, then resolves and
+        type-checks the result. A rejected override — an unparseable literal,
+        the wrong type, a non-constant expression, an unknown engine key, or
+        a graph with no loaded ``std/config`` — is reported here rather than
+        deferred to whichever entry happens to load ``std/config`` first.
+
+        On success, the loaded library modules, the node-id counter, and the
+        session's type environment are promoted into the session's caches
+        the same way a successful entry promotes its own ``new_modules`` (see
+        ``EntryPipeline._evaluate_ir_program``), so the first real entry finds
+        them already cached rather than recompiling them — this method never
+        lowers or evaluates anything, so a module is marked ``linked`` (and
+        the standard-library companion, if any, imported) only once an entry
+        actually executes, exactly as today.
+
+        Returns the rejection diagnostics, or an empty tuple on success.
+        Never raises: a host calls this once, right after constructing the
+        session and before it accepts any entry or prints a banner. Every
+        failure ``load_and_check_program`` can raise -- a syntax, module-
+        loading, scope, or type error -- is a subclass of ``AglError``
+        (:class:`OverrideRejected` is the sole exception, carrying its
+        diagnostics directly), so one pair of ``except`` clauses adapts them
+        all, exactly as :meth:`EntryPipeline.eval_entry` adapts the same
+        raises for an ordinary entry.
+        """
+        from agm.agl.diagnostics import AglError
+        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.parser import parse_program_seeded
+        from agm.agl.repl.entry_pipeline import OverrideRejected
+
+        host_env = self._runtime.host_environment()
+        # A throwaway unit expression: side-effect-free and never a Binder or
+        # Declaration, so it never becomes a scope member. Its own node ids
+        # are consumed from the counter like any other entry's and never
+        # referenced again once ``_next_node_id`` moves past them.
+        program, next_start_id = parse_program_seeded("()", start_id=self._next_node_id)
+
+        try:
+            loaded = self._entry_pipeline.load_and_check_program(
+                pipeline_program=program,
+                host_env=host_env,
+                next_start_id=next_start_id,
+            )
+        except OverrideRejected as exc:
+            return tuple(exc.diagnostics)
+        except AglError as exc:
+            return (exc.to_diagnostic(),)
+
+        self._loaded_lib_modules.update(loaded.new_modules)
+        self._next_node_id = loaded.new_next_id
+        self._type_env = loaded.checked_program.modules[ENTRY_ID].type_env
+        return ()
+
+    # ------------------------------------------------------------------
     # Core evaluation
     # ------------------------------------------------------------------
 

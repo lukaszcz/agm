@@ -244,6 +244,28 @@ class TestReplRun:
         assert result.value.variant == "AgentClaude"
         assert result.value.fields["model"] == TextValue("haiku")
 
+    def test_cli_agent_override_still_applies_after_reset(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        """``:reset`` clears the session's cached stdlib, but the override reapplies."""
+        from agm.agl.semantics.values import EnumValue, TextValue
+
+        _isolated_home(monkeypatch, tmp_path)
+        repl_command.run(_args(agent='AgentCommand("configured")'))
+        session: ReplSession = fake_console[0]["session"]
+
+        assert session.eval_entry("import std/config").ok
+        session.reset()
+
+        result = session.eval_entry("import std/config\nstd/config::default-agent")
+        assert result.ok
+        assert isinstance(result.value, EnumValue)
+        assert result.value.variant == "AgentCommand"
+        assert result.value.fields["command"] == TextValue("configured")
+
     def test_exec_config_seeds_each_configured_engine_setting(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -426,30 +448,62 @@ class TestReplRun:
         assert "default-agent" in capsys.readouterr().err
         assert fake_console == []
 
-    def test_malformed_agent_literal_builds_the_session_and_fails_the_first_entry(
+    def test_malformed_agent_literal_exits_1_before_the_session_builds(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
         fake_console: list[dict[str, object]],
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """A syntactically valid but wrong-typed ``--agent`` literal defers to the first entry.
+        """A syntactically valid but wrong-typed ``--agent`` literal exits 1 up front.
 
         Unlike a blank value, ``"true"`` is a non-empty string, so it becomes a
         ``SettingOverride`` resolved by the program's own compilation rather
-        than a second throwaway one: the REPL session builds and starts, and
-        only the entry that loads ``std/config`` fails, naming the flag.
+        than a second throwaway one — but that compilation now runs as part of
+        opening the session, before the console (and its banner) ever starts.
         """
         _isolated_home(monkeypatch, tmp_path)
 
-        repl_command.run(_args(agent="true"))
+        with pytest.raises(SystemExit) as exc_info:
+            repl_command.run(_args(agent="true"))
 
-        session: ReplSession = fake_console[0]["session"]
-        result = session.eval_entry("import std/config")
-        assert not result.ok
-        assert result.diagnostics
-        from agm.agl.diagnostics import format_diagnostic
+        assert exc_info.value.code == 1
+        assert "--agent" in capsys.readouterr().err
+        assert fake_console == []
 
-        assert any("--agent" in format_diagnostic(diag) for diag in result.diagnostics)
+    def test_unparseable_agent_literal_exits_1_before_the_session_builds(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A ``--agent`` literal that fails to parse as AgL also exits before the banner."""
+        _isolated_home(monkeypatch, tmp_path)
+
+        with pytest.raises(SystemExit) as exc_info:
+            repl_command.run(_args(agent="("))
+
+        assert exc_info.value.code == 1
+        assert "--agent" in capsys.readouterr().err
+        assert fake_console == []
+
+    def test_non_constant_agent_literal_exits_1_before_the_session_builds(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A well-typed but non-constant ``--agent`` literal also exits before the banner."""
+        _isolated_home(monkeypatch, tmp_path)
+
+        with pytest.raises(SystemExit) as exc_info:
+            repl_command.run(_args(agent='AgentCommand("not " + "constant")'))
+
+        assert exc_info.value.code == 1
+        assert "--agent" in capsys.readouterr().err
+        assert fake_console == []
 
     def test_stale_stdlib_exits_1(
         self,
@@ -499,27 +553,25 @@ class TestReplRun:
         assert "default-agent" in error
         assert fake_console == []
 
-    def test_malformed_default_agent_config_literal_fails_the_first_entry(
+    def test_malformed_default_agent_config_literal_exits_1_before_the_session_builds(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
         fake_console: list[dict[str, object]],
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """A non-blank but malformed ``[exec] default-agent`` also defers to the first entry."""
+        """A non-blank but malformed ``[exec] default-agent`` exits 1 up front, naming it."""
         home = _isolated_home(monkeypatch, tmp_path)
         config_dir = home / ".agm"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text('[exec]\ndefault-agent = "not an agent"\n')
 
-        repl_command.run(_args())
+        with pytest.raises(SystemExit) as exc_info:
+            repl_command.run(_args())
 
-        session: ReplSession = fake_console[0]["session"]
-        result = session.eval_entry("import std/config")
-        assert not result.ok
-        assert result.diagnostics
-        from agm.agl.diagnostics import format_diagnostic
-
-        assert any("[exec] default-agent" in format_diagnostic(diag) for diag in result.diagnostics)
+        assert exc_info.value.code == 1
+        assert "[exec] default-agent" in capsys.readouterr().err
+        assert fake_console == []
 
     def test_exec_runner_config_seeds_default_agent_as_agent_command(
         self,

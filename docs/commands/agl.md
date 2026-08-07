@@ -412,18 +412,21 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
 
 The REPL itself only fails before the loop starts; per-entry errors are reported inline
 and never exit the process. A blank or non-string `--agent`/`[exec] default-agent`
-value is one such pre-loop failure; a syntactically present but otherwise malformed
-literal — including an `AgentCommand(...)` whose command text does not shell-split —
-is not caught until the first entry that loads `std/config` (typically the session's
-very first entry, via the automatic `std/core` prelude), since it is resolved,
-type-checked, and validated by that entry's own compilation rather than a separate one
-run before the session exists — that entry then reports it inline like any other
-per-entry error, without exiting the process.
+value is one such pre-loop failure. A syntactically present but malformed literal —
+unparseable, the wrong type, a non-constant expression, or an unknown engine key — is
+also a pre-loop failure: opening the session loads the standard library and splices the
+literal into `std/config` before the console starts, so it is resolved, type-checked,
+and constant-checked (and any rejection reported, naming the flag or config key) before
+the banner appears, with nothing printed and no entry accepted. An `AgentCommand(...)`
+whose command text does not shell-split is the one case still deferred to the first
+entry that actually dispatches it, since that check runs only when the interpreter
+evaluates the winning value, not while opening the session; it is reported inline like
+any other per-entry error, without exiting the process.
 
 | Code | Meaning |
 |------|---------|
 | `0` | The session ended normally (`:quit`/`:exit` or Ctrl-D) |
-| `1` | Pre-loop setup failure: a blank/non-string `[exec] default-agent` or `--agent` value, or an unwritable `--log-file` — reported before the prompt appears |
+| `1` | Pre-loop setup failure: a blank/non-string, unparseable, wrongly typed, or non-constant `[exec] default-agent` or `--agent` value, or an unwritable `--log-file` — reported before the prompt appears |
 
 ### Examples
 

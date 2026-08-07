@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import sys
 
+from agm.agl.diagnostics import format_diagnostic
 from agm.agl.repl import ReplSession
 from agm.agl.repl.agentmode import AgentMode
 from agm.agl.repl.agents import ConfirmingAgent
@@ -161,6 +162,17 @@ def run(args: ReplArgs) -> None:
         configured_roots=mod_roots_cfg.extra,
         default_stdlib=not args.no_stdlib,
     )
+
+    # Load and check the session's initial library image now, so a rejected
+    # ``--agent``/``[exec] default-agent`` override (or any other startup
+    # failure loading the standard library) exits before the console opens
+    # and prints its banner, rather than surfacing only once the first entry
+    # happens to load ``std/config``.
+    open_diagnostics = session.open()
+    if open_diagnostics:
+        for diagnostic in open_diagnostics:
+            print(f"Error: {format_diagnostic(diagnostic)}", file=sys.stderr)
+        raise SystemExit(1)
 
     history_path = agm_home_dir(home=ctx.home) / "repl_history"
     history_path.parent.mkdir(parents=True, exist_ok=True)

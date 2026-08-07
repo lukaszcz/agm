@@ -5868,3 +5868,161 @@ class TestBareTypeEntry:
         assert r.ok
         assert r.kind == "type"
         assert render_entry_result(r, echo=True, check_only=True) == "<type: int>"
+
+
+# ---------------------------------------------------------------------------
+# Session bootstrap (ReplSession.open)
+# ---------------------------------------------------------------------------
+
+
+class TestSessionOpen:
+    """``ReplSession.open`` loads the initial library image before any entry runs.
+
+    A host (``agm repl``) calls it once, right after constructing the
+    session and before printing a banner or accepting input, so a rejected
+    engine-setting override is reported before the session appears to have
+    started. The loaded library modules become the cache the first entry
+    reuses, so opening the session never doubles the standard-library
+    compile a lone first entry would otherwise perform on its own.
+    """
+
+    def test_open_with_no_overrides_preloads_the_default_stdlib(self) -> None:
+        from agm.agl.modules.ids import STD_CONFIG_ID, STD_CORE_ID
+
+        s = ReplSession()
+        assert s.open() == ()
+        assert STD_CORE_ID in s._loaded_lib_modules
+        assert STD_CONFIG_ID in s._loaded_lib_modules
+        assert s._next_node_id > 0
+
+    def test_open_without_stdlib_is_a_harmless_no_op(self) -> None:
+        s = ReplSession(default_stdlib=False)
+        assert s.open() == ()
+        assert s._loaded_lib_modules == {}
+
+    def test_open_applies_a_well_formed_override_before_the_first_entry(self) -> None:
+        from agm.agl.semantics.values import EnumValue, TextValue
+        from agm.agl.setting_overrides import SettingOverride
+
+        s = ReplSession(
+            setting_overrides={
+                "default-agent": SettingOverride(
+                    source='AgentCommand("preloaded")', origin="--agent"
+                )
+            }
+        )
+        assert s.open() == ()
+
+        result = s.eval_entry("import std/config\nstd/config::default-agent")
+        assert result.ok
+        assert isinstance(result.value, EnumValue)
+        assert result.value.variant == "AgentCommand"
+        assert result.value.fields["command"] == TextValue("preloaded")
+
+    def test_open_rejects_an_unparseable_override_naming_its_origin(self) -> None:
+        from agm.agl.setting_overrides import SettingOverride
+
+        s = ReplSession(
+            setting_overrides={"default-agent": SettingOverride(source="(", origin="--agent")}
+        )
+        diagnostics = s.open()
+        assert diagnostics
+        from agm.agl.diagnostics import format_diagnostic
+
+        assert any("--agent" in format_diagnostic(d) for d in diagnostics)
+        # A rejected override promotes nothing, so the session is left exactly
+        # as constructed rather than with a half-applied initial image.
+        assert s._loaded_lib_modules == {}
+        assert s._next_node_id == 0
+
+    def test_open_rejects_a_wrong_typed_override_naming_its_origin(self) -> None:
+        from agm.agl.setting_overrides import SettingOverride
+
+        s = ReplSession(
+            setting_overrides={
+                "default-agent": SettingOverride(source='"not-an-agent"', origin="--agent")
+            }
+        )
+        diagnostics = s.open()
+        assert diagnostics
+        from agm.agl.diagnostics import format_diagnostic
+
+        assert any("--agent" in format_diagnostic(d) for d in diagnostics)
+
+    def test_open_rejects_a_non_constant_override_naming_its_origin(self) -> None:
+        from agm.agl.setting_overrides import SettingOverride
+
+        s = ReplSession(
+            setting_overrides={
+                "default-agent": SettingOverride(
+                    source='AgentCommand("not " + "constant")', origin="--agent"
+                )
+            }
+        )
+        diagnostics = s.open()
+        assert diagnostics
+        from agm.agl.diagnostics import format_diagnostic
+
+        assert any("--agent" in format_diagnostic(d) for d in diagnostics)
+
+    def test_reset_leaves_the_override_in_force(self) -> None:
+        from agm.agl.semantics.values import EnumValue, TextValue
+        from agm.agl.setting_overrides import SettingOverride
+
+        s = ReplSession(
+            setting_overrides={
+                "default-agent": SettingOverride(
+                    source='AgentCommand("preloaded")', origin="--agent"
+                )
+            }
+        )
+        assert s.open() == ()
+        assert s.eval_entry("import std/config").ok
+
+        s.reset()
+
+        result = s.eval_entry("import std/config\nstd/config::default-agent")
+        assert result.ok
+        assert isinstance(result.value, EnumValue)
+        assert result.value.variant == "AgentCommand"
+        assert result.value.fields["command"] == TextValue("preloaded")
+
+    def test_stdlib_is_loaded_exactly_once_across_open_and_two_entries(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The initial image ``open`` builds is the cache every entry reuses.
+
+        Spies on the module loader the way the ``agm exec`` guard does
+        (``test_agl_pipeline_setting_overrides.py``), but counts freshly
+        loaded modules per call rather than call count -- ``open`` calls
+        ``build_repl_graph`` too, same as an entry, so counting calls alone
+        would not distinguish "loaded the stdlib" from "reused the cache".
+        """
+        import agm.agl.modules.loader as loader_mod
+        from agm.agl.setting_overrides import SettingOverride
+
+        original = loader_mod.build_repl_graph
+        new_module_counts: list[int] = []
+
+        def spy(*args: object, **kwargs: object) -> object:
+            result = original(*args, **kwargs)
+            _graph, _next_id, new_modules = result
+            new_module_counts.append(len(new_modules))
+            return result
+
+        monkeypatch.setattr(loader_mod, "build_repl_graph", spy)
+
+        s = ReplSession(
+            setting_overrides={
+                "default-agent": SettingOverride(
+                    source='AgentCommand("preloaded")', origin="--agent"
+                )
+            }
+        )
+        assert s.open() == ()
+        assert new_module_counts and new_module_counts[0] > 0
+
+        assert s.eval_entry("1 + 1").ok
+        assert s.eval_entry("2 + 2").ok
+
+        assert new_module_counts[1:] == [0, 0]

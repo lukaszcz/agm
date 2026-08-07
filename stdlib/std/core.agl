@@ -1,5 +1,6 @@
 import std/config
 
+builtin
 enum Option[T] =
   | None
   | Some(value: T)

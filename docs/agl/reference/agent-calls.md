@@ -113,12 +113,19 @@ command string; the provider variants carry their model and thinking settings:
 | --- | --- |
 | `AgentCommand(command)` | the supplied command, with the normal prompt-file handling |
 | `AgentClaude(model, thinking)` | `claude -p --model <model> --effort <thinking>` |
-| `AgentCodex(model, thinking)` | `codex exec --model <model> -c model_reasoning_effort=<thinking>` |
+| `AgentCodex(model, thinking)` | `codex exec --model <model> -c model_reasoning_effort=<thinking> -` (prompt on stdin) |
 | `AgentPi(provider, model, thinking)` | `pi -p --provider <provider> --model <model> --thinking <thinking>` |
 
 An empty provider, model, or thinking field omits its flag. `Agent` values are
 ordinary enum data: they can be stored, passed to functions, rendered,
 inspected, and JSON-encoded like other enum values.
+
+Because `Agent` is ordinary enum data, it is also decodable: an `ask` whose
+target type is `Agent`, or a cast of foreign JSON to `Agent`, produces a value
+whose `AgentCommand` variant carries the command the host will spawn on the
+next call through it. Data reaching such a decode therefore chooses a
+subprocess. Construct `Agent` values in source, or from data you trust, when
+that matters.
 
 ### The default agent
 

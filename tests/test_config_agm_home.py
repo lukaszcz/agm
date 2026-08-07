@@ -7,7 +7,22 @@ from pathlib import Path
 import pytest
 
 from agm.config.general import agm_home_dir, agm_path_candidates
-from agm.config.module_roots import ModuleRootsConfig, resolve_lib_root, resolve_stdlib_root
+from agm.config.module_roots import (
+    STDLIB_CONTRACT_ID,
+    STDLIB_CONTRACT_MARKER_NAME,
+    ModuleRootsConfig,
+    resolve_lib_root,
+    resolve_stdlib_root,
+)
+
+
+def _write_stdlib_marker(stdlib_dir: Path) -> None:
+    """Give a synthetic stdlib tree a matching ``STDLIB_CONTRACT`` marker.
+
+    Used by tests whose intent is to check override/relocation path selection,
+    not the contract compatibility check itself.
+    """
+    (stdlib_dir / STDLIB_CONTRACT_MARKER_NAME).write_text(STDLIB_CONTRACT_ID, encoding="utf-8")
 
 
 class TestAgmHomeDir:
@@ -97,6 +112,7 @@ class TestResolveStdlibRootEnvOverride:
         home = tmp_path / "home"
         stdlib = home / ".agm" / "stdlib"
         stdlib.mkdir(parents=True)
+        _write_stdlib_marker(stdlib)
         assert resolve_stdlib_root(home=home, env={"AGM_STDLIB": ""}) == stdlib
 
     def test_agm_home_override_relocates_stdlib_candidate(self, tmp_path: Path) -> None:
@@ -104,5 +120,6 @@ class TestResolveStdlibRootEnvOverride:
         override = tmp_path / "custom-agm"
         stdlib = override / "stdlib"
         stdlib.mkdir(parents=True)
+        _write_stdlib_marker(stdlib)
         result = resolve_stdlib_root(home=home, env={"AGM_HOME": str(override)})
         assert result == stdlib

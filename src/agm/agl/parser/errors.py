@@ -74,9 +74,30 @@ _RAW_TAIL_BAD_POSITION = (
     "line; use the call form or an indented block form."
 )
 
+# Terminals that open an expression and can never be a name or a pattern.  A
+# name slot (binder, field, declaration name) and a pattern slot both admit
+# ``NAME``; only an expression slot admits these, which is what separates
+# "this name is reserved" from "this call is in the wrong position".
+_COMPOSITE_EXPRESSION_STARTERS: frozenset[str] = frozenset(
+    {
+        "LBRACE",
+        "LPAR",
+        "LSQB",
+        "MINUS",
+        "NOT",
+    }
+)
+
 # Terminals that end an item.  When one is expected, the parser had a complete
 # item in hand, so an unexpected indent is stray rather than a missing body.
 _ITEM_ENDERS: frozenset[str] = frozenset({"$END", "_DEDENT", "_NEWLINE", "SEMICOLON"})
+
+
+def _expects_identifier(expected: set[str]) -> bool:
+    """Return whether Lark expected a name slot rather than an expression."""
+    return bool({"NAME", "OP_NAME"} & expected) and not bool(
+        _COMPOSITE_EXPRESSION_STARTERS & expected
+    )
 
 
 def _raw_tail_name_on_stack(exc: UnexpectedToken) -> str | None:
@@ -317,6 +338,11 @@ def syntax_error_from_lark(
         ):
             return _make_placeholder_position_error(span)
         if tok.type == "RAW_TAIL_NAME":
+            if str(tok) in RAW_TAIL_NAMES and _expects_identifier(set(exc.expected)):
+                return AglSyntaxError(
+                    f"{str(tok)!r} is reserved for raw-tail calls.",
+                    span=span,
+                )
             return AglSyntaxError(_RAW_TAIL_BAD_POSITION, span=span)
         if tok.type == "RAW_TAIL_END":
             name = _raw_tail_name_on_stack(exc) or "raw-tail form"

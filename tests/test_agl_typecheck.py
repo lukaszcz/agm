@@ -1841,6 +1841,38 @@ class TestBuiltinTypeModuleIdentity:
         assert "std/core" not in message
 
 
+class TestBuiltinOptionShape:
+    """``Option`` is the generic prelude template (``OPTION_TYPE_DEF``,
+    ``semantics/type_table.py``), seeded separately from the non-generic
+    prelude records/enums but validated by the same ``builtin`` shape-check
+    machinery as every other reserved name."""
+
+    def test_builtin_option_wrong_shape_is_rejected(self) -> None:
+        err = reject_type(
+            "builtin\nenum Option[T] =\n  | None\n  | Some(value: T, extra: int)\n\n()",
+            default_stdlib=False,
+        )
+        assert "Option" in err.to_diagnostic().message
+
+    def test_builtin_option_renamed_variant_is_rejected(self) -> None:
+        err = reject_type(
+            "builtin\nenum Option[T] =\n  | None\n  | Just(value: T)\n\n()",
+            default_stdlib=False,
+        )
+        assert "Option" in err.to_diagnostic().message
+
+    def test_builtin_option_canonical_shape_typechecks(self) -> None:
+        r = accept_type(
+            "builtin\nenum Option[T] =\n  | None\n  | Some(value: T)\n\n"
+            "let x: Option[int] = Some(value = 1)\n"
+            "case x of\n"
+            '  | Option::None => "none"\n'
+            '  | Option::Some(value) => "some"\n',
+            default_stdlib=False,
+        )
+        assert r.resolved.program is not None
+
+
 class TestBlockTyping:
     def test_block_last_expr_is_block_type(self) -> None:
         r = accept_type("let x = 1\nx")
@@ -2403,6 +2435,26 @@ class TestAskRequest:
         call = r.resolved.program.body.items[0]
         assert isinstance(call, Call)
         assert r.contract_specs[call.node_id].target_type == TextType()
+
+    def test_resolves_agent_request_contract_exactly_once(self) -> None:
+        """A single ``ask-request`` call site must not pay the ``AgentRequest``
+        coherence walk twice: the checker resolves it once up front and
+        threads the result through the rest of the call's own validation."""
+        from unittest.mock import patch
+
+        from agm.agl.typecheck.builtins import BuiltinCallChecker
+
+        original = BuiltinCallChecker._resolve_host_record_contract
+        calls: list[str] = []
+
+        def counting(self: BuiltinCallChecker, name: str, *, span: SourceSpan) -> RecordType:
+            calls.append(name)
+            return original(self, name, span=span)
+
+        with patch.object(BuiltinCallChecker, "_resolve_host_record_contract", counting):
+            r = accept_type('ask-request("Q")')
+        assert r.resolved.program is not None
+        assert calls == ["AgentRequest"]
 
 
 # ---------------------------------------------------------------------------

@@ -285,11 +285,14 @@ class BuiltinCallChecker:
         # ask's parse-shaping options. The obligation still records the fixed text
         # target so the call site is reported like any other agent call site;
         # lowering builds the request record itself and allocates no contract.
+        # The contract resolved above is threaded through so the coherence walk
+        # does not run a second time for this call site.
         named = self._validate_ask_like_arguments(
             node,
             "ask-request",
             allowed_named=frozenset() if receiver_type is not None else frozenset({"agent"}),
             receiver_type=receiver_type,
+            agent_request_type=agent_request_type,
         )
         self._ctx._register_builtin_obligation(
             PendingBuiltinObligation(
@@ -348,6 +351,7 @@ class BuiltinCallChecker:
         *,
         allowed_named: frozenset[str],
         receiver_type: Type | None = None,
+        agent_request_type: RecordType | None = None,
     ) -> dict[str, NamedArg]:
         """Check syntax and value arguments that do not need the target type.
 
@@ -361,6 +365,11 @@ class BuiltinCallChecker:
         its retry machinery for ``ask``) either way, filling a missing
         ``agent`` from the canonical default agent, so the contract must be
         host-coherent (:meth:`_resolve_host_record_contract`) regardless.
+        *agent_request_type* lets a caller that already resolved the contract
+        itself (``check_ask_request``, which needs it before this method runs
+        anyway) pass the resolved handle through instead of paying the
+        coherence walk a second time; when omitted (``ask``'s path), this
+        method resolves it itself, at this same point in the check order.
 
         The agent the request is built with is that resolved contract's own
         ``agent`` FIELD type -- the type the value is actually stored as --
@@ -382,7 +391,8 @@ class BuiltinCallChecker:
             )
         prompt_type = self._ctx._check_expr(node.args[0], expected=TextType())
         self._ctx._assert_assignable_from(prompt_type, TextType(), node.args[0].span, node.args[0])
-        agent_request_type = self._resolve_host_record_contract("AgentRequest", span=node.span)
+        if agent_request_type is None:
+            agent_request_type = self._resolve_host_record_contract("AgentRequest", span=node.span)
         expected_agent_type = self._ctx._env.type_table.record_fields(agent_request_type)["agent"]
         if receiver_type is not None:
             self._ctx._assert_assignable_from(receiver_type, expected_agent_type, node.span, node)

@@ -212,7 +212,11 @@ def test_std_core_declares_every_public_builtin() -> None:
         item.name for item in program.body.items if isinstance(item, FuncDef) and item.is_builtin
     }
 
-    public_prelude = set(BUILTIN_PRELUDE_TYPES) - set(COMPATIBILITY_PRELUDE_TYPE_NAMES)
+    # ``Option`` is validated against its own canonical generic template
+    # (``semantics.type_table.OPTION_TYPE_DEF``), registered separately from
+    # ``BUILTIN_PRELUDE_TYPES`` (see ``create_seeded_type_table``), so it is
+    # declared ``builtin`` in ``std/core`` without appearing in that table.
+    public_prelude = set(BUILTIN_PRELUDE_TYPES) - set(COMPATIBILITY_PRELUDE_TYPE_NAMES) | {"Option"}
     assert records | enums == public_prelude
     assert exceptions == set(BUILTIN_EXCEPTIONS)
     assert functions == set(BUILTIN_CALL_NAMES)
@@ -226,6 +230,11 @@ def test_unknown_builtin_type_is_rejected() -> None:
 def test_builtin_type_shape_must_match() -> None:
     with pytest.raises(AglTypeError, match="Builtin type 'ExecResult' has an invalid definition"):
         _check("builtin record ExecResult\n  stdout: text\n()\n")
+
+
+def test_builtin_option_shape_must_match() -> None:
+    with pytest.raises(AglTypeError, match="Builtin type 'Option' has an invalid definition"):
+        _check("builtin\nenum Option[T] =\n  | None\n  | Some(value: T, extra: int)\n()\n")
 
 
 def test_builtin_exception_shape_must_match() -> None:

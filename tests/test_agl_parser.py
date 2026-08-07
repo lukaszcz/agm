@@ -148,8 +148,8 @@ def first(prog: Program) -> object:
 
 
 def assert_raw_tail_name_span(error: AglSyntaxError, source: str) -> None:
-    """Assert that a misplaced raw-tail error covers its raw name."""
-    assert "raw-tail forms" in str(error)
+    """Assert that a raw-tail reservation error covers its reserved name."""
+    assert "reserved for raw-tail calls" in str(error)
     span = error.span
     assert span is not None
     name = next(name for name in ("exec!", "ask!") if name in source)
@@ -4480,6 +4480,37 @@ print exec! true
         with pytest.raises(AglSyntaxError) as exc_info:
             parse(source)
         assert_raw_tail_name_span(exc_info.value, source)
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            pytest.param("let exec! = 1", id="let_binder"),
+            pytest.param("var exec! = 1", id="var_binder"),
+            pytest.param("record R\n  exec!: int", id="record_field_name"),
+            pytest.param("enum E\n  | ask!", id="enum_variant_name"),
+            pytest.param("program exec!\n()", id="program_name"),
+            pytest.param("for exec! in [] do 1 done", id="for_binder"),
+            pytest.param("type exec! = int", id="type_name"),
+        ),
+    )
+    def test_reserved_raw_name_in_a_name_slot_names_the_spelling(self, source: str) -> None:
+        # A raw-tail spelling used where the grammar expects an identifier (a
+        # binder, a field/variant/program/type name) cannot be a call, so the
+        # diagnostic must say the spelling is reserved rather than suggesting
+        # the call-form / block-form remedies that apply to expression misuse.
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(source)
+        assert_raw_tail_name_span(exc_info.value, source)
+
+    def test_expression_position_raw_tail_keeps_the_positional_message(self) -> None:
+        # A raw-tail spelling used mid-expression (not in a name slot) is a
+        # genuine misplaced call, so it keeps the positional guidance instead
+        # of the "reserved" wording used for name slots.
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse("let command = 1 + exec! true")
+        message = str(exc_info.value)
+        assert "reserved" not in message
+        assert "call form" in message and "block form" in message
 
     def test_raw_tail_in_unsupported_lambda_suite_is_rejected_at_its_location(self) -> None:
         source = "let f = fn() =>\n  exec! date"

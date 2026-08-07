@@ -50,6 +50,7 @@ from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 from agm.agl.semantics.type_table import (
     BUILTIN_EXCEPTION_TYPE_DEFS,
     BUILTIN_PRELUDE_TYPE_DEFS,
+    OPTION_TYPE_DEF,
     TypeDef,
 )
 from agm.agl.semantics.types import (
@@ -91,6 +92,17 @@ _BUILTIN_TYPE_NAMES: frozenset[str] = (
     | BUILTIN_EXCEPTION_NAMES
     | BUILTIN_PRELUDE_TYPE_NAMES
 )
+
+# Expected-shape lookup for a ``builtin`` enum declaration. ``Option`` is
+# generic and seeded separately from ``BUILTIN_PRELUDE_TYPE_DEFS`` (see
+# ``semantics.type_table.create_seeded_type_table``), so its canonical shape
+# (``OPTION_TYPE_DEF``) is folded in here rather than into that table — a
+# record can never be named ``Option``, so ``BUILTIN_PRELUDE_TYPE_DEFS`` alone
+# remains correct for record sites.
+_BUILTIN_ENUM_TYPE_DEFS: Mapping[str, TypeDef] = {
+    **BUILTIN_PRELUDE_TYPE_DEFS,
+    "Option": OPTION_TYPE_DEF,
+}
 
 
 def _decl_identity(
@@ -229,7 +241,7 @@ class _TypeBuilder:
                     item.name,
                     item.span,
                     is_builtin=item.is_builtin,
-                    expected_defs=BUILTIN_PRELUDE_TYPE_DEFS,
+                    expected_defs=_BUILTIN_ENUM_TYPE_DEFS,
                 )
                 self._env.unregister_name(item.name)
                 self._register_record_or_enum_handle(item, is_enum=True)
@@ -339,11 +351,12 @@ class _TypeBuilder:
         # canonical types, never a scope path.
         #
         # Every caller that can pass `is_builtin=True` passes the table for
-        # its own kind (records/enums against BUILTIN_PRELUDE_TYPE_DEFS,
-        # exceptions against BUILTIN_EXCEPTION_TYPE_DEFS), so this one check
-        # rejects both an entirely unknown name and a name declared under the
-        # wrong kind — the latter being exactly what `_validate_builtin_shape`
-        # would otherwise assume was present.
+        # its own kind (records against BUILTIN_PRELUDE_TYPE_DEFS, enums
+        # against `_BUILTIN_ENUM_TYPE_DEFS` — the same table plus the generic
+        # `Option` template — exceptions against BUILTIN_EXCEPTION_TYPE_DEFS),
+        # so this one check rejects both an entirely unknown name and a name
+        # declared under the wrong kind — the latter being exactly what
+        # `_validate_builtin_shape` would otherwise assume was present.
         bare_name = _bare_name(name)
         if is_builtin and expected_defs is not None and bare_name not in expected_defs:
             raise AglTypeError(
@@ -427,7 +440,7 @@ class _TypeBuilder:
             is_builtin=stmt.is_builtin,
             decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
         )
-        self._validate_builtin_shape(stmt, typedef, BUILTIN_PRELUDE_TYPE_DEFS)
+        self._validate_builtin_shape(stmt, typedef, _BUILTIN_ENUM_TYPE_DEFS)
         self._env.type_table.register(typedef)
         # Register field kinds for each variant constructor, under the same
         # owning identity as the TypeDef just above.
@@ -765,7 +778,7 @@ class _TypeBuilder:
             # every instantiated handle agree on which declaration they name.
             decl_node_id=template.decl_id,
         )
-        self._validate_builtin_shape(stmt, typedef, BUILTIN_PRELUDE_TYPE_DEFS)
+        self._validate_builtin_shape(stmt, typedef, _BUILTIN_ENUM_TYPE_DEFS)
         self._env.type_table.register(typedef)
         # Register one ConstructorSignature and field kinds per variant, under
         # the same owning identity as the TypeDef just above.

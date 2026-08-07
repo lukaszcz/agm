@@ -1,1 +1,1 @@
-{"diagnostic": {"line": 1, "message_contains": ["raw-tail"]}}
+{"diagnostic": {"line": 1, "message_contains": ["reserved", "raw-tail"]}}

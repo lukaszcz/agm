@@ -8,7 +8,9 @@ A config context locates the directories that contribute configuration. The proj
 
 ## Home Directory Overrides
 
-The AGM home directory defaults to `~/.agm` but is relocatable through the environment. `AGM_HOME` overrides the whole directory — config, prompts, sandbox settings, the AgL global library, and the stdlib all resolve beneath it. `AGM_STDLIB` overrides just the AgL standard-library root, taking precedence over every other stdlib candidate. Both accept a leading `~`. These env overrides are the only way to redirect the home layer, since it is where `config.toml` itself lives; project and workspace layers remain path-discovered as usual.
+The AGM home directory defaults to `~/.agm` but is relocatable through the environment. `AGM_HOME` overrides the whole directory — config, prompts, sandbox settings, the AgL global library, and the stdlib all resolve beneath it. `AGM_STDLIB` overrides just the AgL standard-library root, taking precedence over every other stdlib candidate and skipping the compatibility check described below (the deliberate escape hatch for synthetic or in-progress trees). Both accept a leading `~`. These env overrides are the only way to redirect the home layer, since it is where `config.toml` itself lives; project and workspace layers remain path-discovered as usual.
+
+Every non-override stdlib candidate (home, installation prefix, then the repository checkout) carries a top-level `STDLIB_CONTRACT` marker file holding a contract id; a candidate is only selected if its marker matches the id the running code expects, so an older installed tree left behind by an unforced upgrade is skipped in favor of a compatible one rather than silently loaded. When every candidate exists but none matches, resolution fails fast with an error naming the stale path and pointing at `just install`; when no candidate exists at all, the home destination is returned unresolved so diagnostics can name the path `just install` would populate.
 
 ## Layering and Precedence
 

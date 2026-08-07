@@ -23,7 +23,6 @@ For ``roots``, entries from *all* layers are accumulated (union).
 from __future__ import annotations
 
 import os
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -140,23 +139,39 @@ def resolve_lib_root(
     return agm_home_dir(home=default_home, env=env) / "lib"
 
 
-_LEGACY_AGENT_FIELD = re.compile(r"(?m)^\s*agent\s*:\s*(?:text|agent)\b")
+STDLIB_CONTRACT_MARKER_NAME = "STDLIB_CONTRACT"
+
+# The contract id the running code expects a selected stdlib tree to declare
+# in its top-level ``STDLIB_CONTRACT`` marker file. Bump this whenever a
+# shipped stdlib change (a builtin type, a runtime-checked field, ...) is
+# incompatible with an older installed tree, and update ``stdlib/STDLIB_CONTRACT``
+# in the same change so a fresh ``just install`` ships a matching marker.
+STDLIB_CONTRACT_ID = "1"
 
 
-def _has_incompatible_stdlib_surface(stdlib_root: Path) -> bool:
-    """Return whether *stdlib_root* predates the current built-in contracts.
+class StaleStdlibError(RuntimeError):
+    """Raised when no candidate AgL standard-library root matches the current contract.
 
-    An installed standard library can survive a non-forced ``agm install``.
-    Its old ``agent: text`` fields remain syntactically valid, but conflict
-    with host-minted ``Agent`` enum values at execution. Prefer the checked-out
-    standard library when one is available rather than deferring that failure
-    until an ``ask`` raises an error.
+    Every default search-chain candidate (home, installation prefix, and the
+    repository checkout) either was absent or carried a missing/mismatched
+    ``STDLIB_CONTRACT`` marker, so returning one anyway would defer an opaque
+    frontend failure to program load time instead of failing fast here.
     """
-    core = stdlib_root / "std" / "core.agl"
-    if not core.is_file():
+
+    def __init__(self, stale_path: Path) -> None:
+        self.stale_path = stale_path
+        super().__init__(
+            f"AgL standard library at {stale_path} is out of date. Re-run `just install` "
+            "to refresh it."
+        )
+
+
+def _stdlib_contract_matches(stdlib_root: Path) -> bool:
+    """Return whether *stdlib_root* declares the expected ``STDLIB_CONTRACT`` id."""
+    marker = stdlib_root / STDLIB_CONTRACT_MARKER_NAME
+    if not marker.is_file():
         return False
-    source = core.read_text(encoding="utf-8")
-    return "ParsePolicy.Abort" in source or _LEGACY_AGENT_FIELD.search(source) is not None
+    return marker.read_text(encoding="utf-8").strip() == STDLIB_CONTRACT_ID
 
 
 def resolve_stdlib_root(*, home: Path, env: Mapping[str, str] | None = None) -> Path:
@@ -164,24 +179,39 @@ def resolve_stdlib_root(*, home: Path, env: Mapping[str, str] | None = None) -> 
 
     The stdlib is a normal module tree installed under ``.agm/stdlib``.  An
     explicit ``AGM_STDLIB`` environment override wins outright (a leading ``~``
-    is expanded and a relative override is anchored to the current directory).
+    is expanded and a relative override is anchored to the current directory)
+    and is deliberately never marker-checked: it is the escape hatch for
+    pointing at a synthetic or in-progress tree, which tests and manual
+    debugging both rely on.
+
     Otherwise a user-writable home stdlib wins when present (honouring
     ``AGM_HOME``), then an installation-prefix stdlib, then the repository
-    ``stdlib/`` tree for source-checkout workflows. An installed stdlib with
-    legacy constructor syntax or an outdated ``AgentRequest`` field is skipped when a
-    source-checkout stdlib is available. If none exists yet, return the home destination so
-    diagnostics mention the path that ``just install`` populates.
+    ``stdlib/`` tree for source-checkout workflows. Every one of those
+    candidates is checked against :data:`STDLIB_CONTRACT_ID` via its
+    top-level ``STDLIB_CONTRACT`` marker file, regardless of which other
+    candidates exist; a candidate whose marker is missing or does not match
+    is skipped in favour of the next one in precedence order. If none exists
+    yet, return the home destination so diagnostics mention the path that
+    ``just install`` populates. If at least one candidate directory exists
+    but none is compatible, raise :class:`StaleStdlibError` naming the
+    highest-precedence stale path instead of silently returning it.
     """
     override = resolve_env(env).get("AGM_STDLIB")
     if override is not None and override.strip():
         return expand_env_root(override)
     candidates = agm_path_candidates(home=home, relative_path=Path("stdlib"), env=env)
     repo_stdlib = Path(__file__).resolve().parents[3] / "stdlib"
-    for candidate in reversed(candidates):
-        if candidate.is_dir() and not (
-            repo_stdlib.is_dir() and _has_incompatible_stdlib_surface(candidate)
-        ):
+    search_order = [*reversed(candidates), repo_stdlib]
+
+    stale_path: Path | None = None
+    for candidate in search_order:
+        if not candidate.is_dir():
+            continue
+        if _stdlib_contract_matches(candidate):
             return candidate
-    if repo_stdlib.is_dir():
-        return repo_stdlib
+        if stale_path is None:
+            stale_path = candidate
+
+    if stale_path is not None:
+        raise StaleStdlibError(stale_path)
     return candidates[-1]

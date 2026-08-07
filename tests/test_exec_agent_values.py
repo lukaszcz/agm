@@ -29,7 +29,7 @@ def _invoke(runner: CliRunner, argv: list[str]):
         ),
         (
             'AgentCodex("o3", "high")',
-            ["codex", "exec", "--model", "o3", "-c", "model_reasoning_effort=high"],
+            ["codex", "exec", "--model", "o3", "-c", "model_reasoning_effort=high", "-"],
         ),
         (
             'AgentPi("openai", "gpt", "low")',

@@ -88,7 +88,11 @@ def _raise_agent_call_error(
 
 
 def _run_request(
-    request: AgentRequest, command: list[str], idle_timeout: float | None
+    request: AgentRequest,
+    command: list[str],
+    idle_timeout: float | None,
+    *,
+    prompt_via_stdin: bool,
 ) -> AgentResponse:
     """Compose a request and run already-built argv through the shared runner seam."""
     from agm.agent.runner import (
@@ -112,7 +116,11 @@ def _run_request(
     temp_files: list[Path] = []
     try:
         prepared = prepare_rendered_prompt_run(
-            "\n\n".join(parts), runner=command, temp_files=temp_files, env=clone_env()
+            "\n\n".join(parts),
+            runner=command,
+            temp_files=temp_files,
+            env=clone_env(),
+            prompt_via_stdin=prompt_via_stdin,
         )
         result = run_prepared_prompt_result(prepared, idle_timeout=idle_timeout)
     except InterpolationError as exc:
@@ -182,7 +190,8 @@ def value_driven_agent_factory(*, idle_timeout: float | None) -> AgentFn:
 
     def dispatch(request: AgentRequest) -> AgentResponse:
         try:
-            command = decode_agent_value(request.agent).argv()
+            spec = decode_agent_value(request.agent)
+            command = spec.argv()
         except ValueError as exc:
             raise AgentCallHostError(
                 cause="invalid_agent",
@@ -190,7 +199,7 @@ def value_driven_agent_factory(*, idle_timeout: float | None) -> AgentFn:
                 stderr_tail=str(exc),
                 elapsed=0.0,
             ) from exc
-        return _run_request(request, command, idle_timeout)
+        return _run_request(request, command, idle_timeout, prompt_via_stdin=spec.prompt_via_stdin)
 
     return dispatch
 

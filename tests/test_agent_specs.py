@@ -63,6 +63,7 @@ def test_agent_argv_includes_all_configured_flags_verbatim() -> None:
         "o3",
         "-c",
         "model_reasoning_effort=tool-defined",
+        "-",
     ]
     assert AgentPi("openai", "gpt", "tool-defined").argv() == [
         "pi",
@@ -78,8 +79,19 @@ def test_agent_argv_includes_all_configured_flags_verbatim() -> None:
 
 def test_agent_argv_omits_empty_field_flags() -> None:
     assert AgentClaude("", "").argv() == ["claude", "-p"]
-    assert AgentCodex("", "").argv() == ["codex", "exec"]
+    assert AgentCodex("", "").argv() == ["codex", "exec", "-"]
     assert AgentPi("", "", "").argv() == ["pi", "-p"]
+
+
+def test_agent_codex_argv_ends_with_stdin_marker() -> None:
+    assert AgentCodex("o3", "high").argv()[-1] == "-"
+
+
+def test_agent_prompt_via_stdin_flag_per_spec() -> None:
+    assert AgentCommand("runner").prompt_via_stdin is False
+    assert AgentClaude("sonnet", "high").prompt_via_stdin is False
+    assert AgentPi("openai", "gpt", "high").prompt_via_stdin is False
+    assert AgentCodex("o3", "high").prompt_via_stdin is True
 
 
 def test_built_argv_feeds_shared_prompt_preparation() -> None:
@@ -97,6 +109,119 @@ def test_built_argv_feeds_shared_prompt_preparation() -> None:
         cleanup_temp_files(temp_files)
 
     assert prepared.command == ["claude", "-p", "--model", "sonnet", "--effort", "high"]
+    assert prepared.prompt_via_stdin is False
+
+
+def test_prepare_rendered_prompt_run_records_the_stdin_delivery_flag() -> None:
+    from agm.agent.runner import cleanup_temp_files, prepare_rendered_prompt_run
+
+    temp_files: list[Path] = []
+    try:
+        prepared = prepare_rendered_prompt_run(
+            "prompt",
+            runner=AgentCodex("o3", "high").argv(),
+            temp_files=temp_files,
+            env={},
+            prompt_via_stdin=True,
+        )
+    finally:
+        cleanup_temp_files(temp_files)
+
+    assert prepared.prompt_via_stdin is True
+
+
+def test_stdin_delivered_run_sends_prompt_as_stdin_and_appends_no_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A prepared codex run sends the rendered prompt via stdin, not ``@<path>``."""
+    from agm.agent.runner import (
+        cleanup_temp_files,
+        prepare_rendered_prompt_run,
+        run_prepared_prompt_result,
+    )
+    from agm.core.process import ProcessCaptureResult
+
+    captured: dict[str, object] = {}
+
+    def fake_run_capture_result(cmd: list[str], **kwargs: object) -> ProcessCaptureResult:
+        captured["cmd"] = cmd
+        captured["stdin_text"] = kwargs.get("stdin_text")
+        return ProcessCaptureResult(
+            returncode=0,
+            stdout="ok",
+            stderr="",
+            elapsed=0.1,
+            timed_out=False,
+            spawn_error=None,
+            spawn_errno=None,
+        )
+
+    monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
+
+    temp_files: list[Path] = []
+    try:
+        prepared = prepare_rendered_prompt_run(
+            "rendered prompt text",
+            runner=AgentCodex("o3", "high").argv(),
+            temp_files=temp_files,
+            env={},
+            prompt_via_stdin=True,
+        )
+        run_prepared_prompt_result(prepared, idle_timeout=None)
+    finally:
+        cleanup_temp_files(temp_files)
+
+    cmd = captured["cmd"]
+    assert isinstance(cmd, list)
+    assert not any(str(element).startswith("@") for element in cmd)
+    assert cmd[-1] == "-"
+    assert captured["stdin_text"] == "rendered prompt text"
+
+
+def test_file_delivered_run_is_unchanged_by_the_stdin_delivery_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Claude/Pi (and any non-stdin spec) keep appending ``@<path>`` with no stdin text."""
+    from agm.agent.runner import (
+        cleanup_temp_files,
+        prepare_rendered_prompt_run,
+        run_prepared_prompt_result,
+    )
+    from agm.core.process import ProcessCaptureResult
+
+    captured: dict[str, object] = {}
+
+    def fake_run_capture_result(cmd: list[str], **kwargs: object) -> ProcessCaptureResult:
+        captured["cmd"] = cmd
+        captured["stdin_text"] = kwargs.get("stdin_text")
+        return ProcessCaptureResult(
+            returncode=0,
+            stdout="ok",
+            stderr="",
+            elapsed=0.1,
+            timed_out=False,
+            spawn_error=None,
+            spawn_errno=None,
+        )
+
+    monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
+
+    temp_files: list[Path] = []
+    try:
+        prepared = prepare_rendered_prompt_run(
+            "rendered prompt text",
+            runner=AgentClaude("sonnet", "high").argv(),
+            temp_files=temp_files,
+            env={},
+        )
+        run_prepared_prompt_result(prepared, idle_timeout=None)
+    finally:
+        cleanup_temp_files(temp_files)
+
+    cmd = captured["cmd"]
+    assert isinstance(cmd, list)
+    assert cmd[-1].startswith("@")
+    assert captured["stdin_text"] is None
 
 
 def test_agent_command_preserves_prompt_file_substitution() -> None:
@@ -120,6 +245,29 @@ def test_agent_command_appends_prompt_file_without_placeholder() -> None:
         "runner",
         "--quiet",
         "@prompt.md",
+    ]
+
+
+def test_command_with_prompt_target_can_suppress_the_append_fallback() -> None:
+    """A stdin-delivered command still interpolates argv but never gets ``@<target>``."""
+    from agm.agent.runner import command_with_prompt_target
+
+    command = AgentCommand("runner --quiet").argv()
+
+    assert (
+        command_with_prompt_target(command, Path("prompt.md"), {}, append_target=False) == command
+    )
+
+
+def test_command_with_prompt_target_still_resolves_the_hole_when_append_is_suppressed() -> None:
+    """A ``%{PROMPT_FILE}`` hole still resolves even with the ``@<target>`` fallback off."""
+    from agm.agent.runner import command_with_prompt_target
+
+    command = AgentCommand("runner --input=%{PROMPT_FILE}").argv()
+
+    assert command_with_prompt_target(command, Path("prompt.md"), {}, append_target=False) == [
+        "runner",
+        "--input=prompt.md",
     ]
 
 

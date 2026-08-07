@@ -10,7 +10,7 @@ to the shared prompt preparation and process-execution helpers in
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TypeAlias
+from typing import ClassVar, TypeAlias
 
 from agm.agent.runner import parse_command
 
@@ -29,6 +29,8 @@ class AgentCommand:
 
     command: str
 
+    prompt_via_stdin: ClassVar[bool] = False
+
     def argv(self) -> list[str]:
         """Split the configured command, retaining its prompt-file semantics.
 
@@ -46,6 +48,8 @@ class AgentClaude:
     model: str
     thinking: str
 
+    prompt_via_stdin: ClassVar[bool] = False
+
     def argv(self) -> list[str]:
         """Build the argv for a one-shot Claude prompt invocation."""
         return ["claude", "-p", *_flag("--model", self.model), *_flag("--effort", self.thinking)]
@@ -53,16 +57,26 @@ class AgentClaude:
 
 @dataclass(frozen=True, slots=True)
 class AgentCodex:
-    """The model and thinking settings for a Codex prompt invocation."""
+    """The model and thinking settings for a Codex prompt invocation.
+
+    ``codex exec`` treats a positional ``@<path>`` argument as literal prompt
+    text rather than expanding it (that expansion is a TUI-only feature), so
+    the prompt is delivered on stdin instead: the argv ends with ``-`` and
+    ``prompt_via_stdin`` tells the runner to pipe the rendered prompt in
+    rather than appending a prompt-file target.
+    """
 
     model: str
     thinking: str
 
+    prompt_via_stdin: ClassVar[bool] = True
+
     def argv(self) -> list[str]:
-        """Build the argv for a one-shot Codex prompt invocation."""
+        """Build the argv for a one-shot Codex prompt invocation, reading stdin."""
         command = ["codex", "exec", *_flag("--model", self.model)]
         if self.thinking:
             command.extend(("-c", f"model_reasoning_effort={self.thinking}"))
+        command.append("-")
         return command
 
 
@@ -73,6 +87,8 @@ class AgentPi:
     provider: str
     model: str
     thinking: str
+
+    prompt_via_stdin: ClassVar[bool] = False
 
     def argv(self) -> list[str]:
         """Build the argv for a one-shot Pi prompt invocation."""

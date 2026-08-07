@@ -21,7 +21,7 @@ from tests.conftest import FakeAgentTransport
         ),
         (
             'AgentCodex("o3", "high")',
-            ["codex", "exec", "--model", "o3", "-c", "model_reasoning_effort=high"],
+            ["codex", "exec", "--model", "o3", "-c", "model_reasoning_effort=high", "-"],
         ),
         (
             'AgentPi("openai", "gpt", "low")',
@@ -60,6 +60,41 @@ def test_agent_transport_failures_become_typed_errors(
     assert not run.ok
     assert run.error is not None
     assert run.error.type_name == "AgentCallError"
+
+
+def test_codex_agent_dispatch_delivers_prompt_via_stdin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The full value-driven dispatch path sends codex's prompt as stdin, not ``@<path>``."""
+    from agm.agl.runtime.request import AgentRequest
+    from agm.core.process import ProcessCaptureResult
+
+    captured: dict[str, object] = {}
+
+    def fake_run_capture_result(cmd: list[str], **kwargs: object) -> ProcessCaptureResult:
+        captured["cmd"] = cmd
+        captured["stdin_text"] = kwargs.get("stdin_text")
+        return ProcessCaptureResult(
+            returncode=0,
+            stdout="ok",
+            stderr="",
+            elapsed=0.1,
+            timed_out=False,
+            spawn_error=None,
+            spawn_errno=None,
+        )
+
+    monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
+
+    agent = agent_value("AgentCodex", model="o3", thinking="high")
+    dispatch = value_driven_agent_factory(idle_timeout=None)
+
+    response = dispatch(AgentRequest(agent=agent, prompt="hello"))
+
+    assert response.content == "ok"
+    cmd = captured["cmd"]
+    assert isinstance(cmd, list)
+    assert not any(str(element).startswith("@") for element in cmd)
+    assert cmd[-1] == "-"
+    assert captured["stdin_text"] == "hello"
 
 
 def test_unrecognized_agent_variant_becomes_a_typed_error() -> None:

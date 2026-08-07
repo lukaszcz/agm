@@ -49,12 +49,19 @@ class ResolvedPrompt:
 
 @dataclass(slots=True)
 class PreparedPromptRun:
-    """Prepared agent prompt command and prompt files."""
+    """Prepared agent prompt command and prompt files.
+
+    ``prompt_via_stdin`` marks a spec whose backend reads the prompt from
+    standard input rather than from an interpolated placeholder or an
+    appended ``@<path>`` argument (see ``AgentCodex``); it is ``False`` for
+    every other spec, which keep the existing file-based delivery.
+    """
 
     command: list[str]
     effective_file: Path
     env: dict[str, str]
     temp_files: list[Path]
+    prompt_via_stdin: bool = False
 
 
 @dataclass(slots=True)
@@ -148,14 +155,15 @@ def validate_command(command: list[str], *, kind: str, env: MutableMapping[str, 
         raise SystemExit(1)
 
 
-def command_with_prompt_target(
+def _interpolate_command(
     command: list[str], target: Path, env: MutableMapping[str, str]
-) -> list[str]:
+) -> tuple[list[str], bool]:
     """Interpolate *command* against *env*, binding ``PROMPT_FILE``/``%%`` to *target*.
 
-    *env* must be the same mapping the child process will actually receive
-    (see ``run_capture``'s ``env`` argument) so argv holes and the spawned
-    process resolve names identically.
+    Returns the interpolated argv and whether any element targeted
+    ``PROMPT_FILE``/``%%``. *env* must be the same mapping the child process
+    will actually receive (see ``run_capture``'s ``env`` argument) so argv
+    holes and the spawned process resolve names identically.
     """
     variables = ChainMap({PROMPT_FILE_VAR: str(target)}, env)
     interpolated: list[str] = []
@@ -170,7 +178,26 @@ def command_with_prompt_target(
             exc.context = f"in command element {arg!r}"
             raise
 
-    if targeted:
+    return interpolated, targeted
+
+
+def command_with_prompt_target(
+    command: list[str],
+    target: Path,
+    env: MutableMapping[str, str],
+    *,
+    append_target: bool = True,
+) -> list[str]:
+    """Interpolate *command* against *env*, binding ``PROMPT_FILE``/``%%`` to *target*.
+
+    When no element targeted ``PROMPT_FILE``/``%%`` and *append_target* is
+    true (the default), ``@<target>`` is appended so the backend still
+    receives the prompt. A stdin-delivered spec passes ``append_target=False``
+    so its argv is interpolated the same way but never gets an ``@<target>``
+    argument — the prompt reaches the process on standard input instead.
+    """
+    interpolated, targeted = _interpolate_command(command, target, env)
+    if targeted or not append_target:
         return interpolated
     return [*interpolated, f"@{target}"]
 
@@ -370,6 +397,7 @@ def prepare_rendered_prompt_run(
     runner: list[str],
     temp_files: list[Path],
     env: dict[str, str],
+    prompt_via_stdin: bool = False,
 ) -> PreparedPromptRun:
     """Prepare a runner invocation for an already-rendered AgL prompt.
 
@@ -384,6 +412,10 @@ def prepare_rendered_prompt_run(
       returned by ``run_prepared_prompt_result``.
     - Accepts an already-tokenized argv from an agent command builder, avoiding
       a string round-trip before the prepared invocation is run.
+
+    *prompt_via_stdin* is carried onto the returned ``PreparedPromptRun`` so
+    ``run_prepared_prompt_result`` knows to pipe the prompt file's contents in
+    rather than attach it via placeholder or ``@<path>``.
     """
     command = runner.copy()
     with NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".md") as handle:
@@ -395,6 +427,7 @@ def prepare_rendered_prompt_run(
         effective_file=temp_path,
         env=env,
         temp_files=temp_files,
+        prompt_via_stdin=prompt_via_stdin,
     )
 
 
@@ -408,14 +441,28 @@ def run_prepared_prompt_result(
     Unlike ``run_prepared_prompt`` / ``run_prompt_command``, this function
     **never prints to stderr** and **never raises SystemExit**.  All outcomes
     are represented in the returned :class:`PromptRunResult`.
+
+    When ``prepared.prompt_via_stdin`` is set, the prompt file's contents are
+    piped in as ``stdin_text`` instead of being attached via placeholder or
+    ``@<path>``.
     """
     # An empty ``prepared.env`` means the child inherits ``os.environ`` (see the
     # ``env=None`` passed to ``run_capture_result`` below); interpolate argv
     # holes against the same effective mapping so both agree on variable values.
     child_env = prepared.env if prepared.env else os.environ
+    stdin_text = None
+    argv = command_with_prompt_target(
+        prepared.command,
+        prepared.effective_file,
+        child_env,
+        append_target=not prepared.prompt_via_stdin,
+    )
+    if prepared.prompt_via_stdin:
+        stdin_text = prepared.effective_file.read_text(encoding="utf-8")
     capture: ProcessCaptureResult = run_capture_result(
-        command_with_prompt_target(prepared.command, prepared.effective_file, child_env),
+        argv,
         env=prepared.env if prepared.env else None,
+        stdin_text=stdin_text,
         idle_timeout=idle_timeout,
         isolate_process_group=True,
     )

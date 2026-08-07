@@ -108,7 +108,7 @@ def test_prepare_review_expands_scope_and_aspects(
     )
 
 
-def test_prepare_review_does_not_use_loop_runner(
+def test_prepare_review_uses_loop_runner_as_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home = _setup_home(tmp_path)
@@ -121,7 +121,43 @@ def test_prepare_review_does_not_use_loop_runner(
 
     prepared = prepare_review(_review_args(runner=None), temp_files=[])
 
-    assert prepared.command == ["claude", "-p"]
+    assert prepared.command == ["loop-runner", "-p"]
+
+
+def test_prepare_review_config_runner_wins_over_loop_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    (home / ".agm" / "config.toml").write_text(
+        '[loop]\nrunner = "loop-runner -p"\n[review]\nrunner = "review-runner"\n'
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("PROJ_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: None)
+
+    prepared = prepare_review(_review_args(runner=None), temp_files=[])
+
+    assert prepared.command == ["review-runner"]
+
+
+def test_prepare_review_cli_runner_wins_over_loop_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    (home / ".agm" / "config.toml").write_text(
+        '[loop]\nrunner = "loop-runner -p"\n[review]\nrunner = "review-runner"\n'
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("PROJ_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: None)
+
+    prepared = prepare_review(_review_args(runner="cli-runner"), temp_files=[])
+
+    assert prepared.command == ["cli-runner"]
 
 
 def test_prepare_review_uses_builtin_runner_when_loop_runner_is_unset(
@@ -743,7 +779,7 @@ def test_revise_stream_callbacks_write_non_empty_chunks(capsys: pytest.CaptureFi
     assert captured.err == "err"
 
 
-def test_prepare_revise_does_not_use_loop_runner(
+def test_prepare_revise_uses_loop_runner_as_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home = _setup_home(tmp_path)
@@ -755,6 +791,61 @@ def test_prepare_revise_does_not_use_loop_runner(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
     monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: None)
+
+    prepared = prepare_revise(_revise_args("review.md", runner=None), temp_files=[])
+
+    assert prepared.command == ["loop-runner", "-p"]
+
+
+def test_prepare_revise_config_runner_wins_over_loop_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    (home / ".agm" / "config.toml").write_text(
+        '[loop]\nrunner = "loop-runner -p"\n[revise]\nrunner = "revise-runner"\n'
+    )
+    review_file = tmp_path / "review.md"
+    review_file.write_text("review\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("PROJ_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: None)
+
+    prepared = prepare_revise(_revise_args("review.md", runner=None), temp_files=[])
+
+    assert prepared.command == ["revise-runner"]
+
+
+def test_prepare_revise_cli_runner_wins_over_loop_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    (home / ".agm" / "config.toml").write_text(
+        '[loop]\nrunner = "loop-runner -p"\n[revise]\nrunner = "revise-runner"\n'
+    )
+    review_file = tmp_path / "review.md"
+    review_file.write_text("review\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("PROJ_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: None)
+
+    prepared = prepare_revise(_revise_args("review.md", runner="cli-runner"), temp_files=[])
+
+    assert prepared.command == ["cli-runner"]
+
+
+def test_prepare_revise_uses_builtin_runner_when_loop_runner_is_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    review_file = tmp_path / "review.md"
+    review_file.write_text("review\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
 
     prepared = prepare_revise(_revise_args("review.md", runner=None), temp_files=[])
 

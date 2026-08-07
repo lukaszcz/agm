@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from agm.agent.defaults import DEFAULT_AGENT_RUNNER
+from agm.agent.config import default_agent_runner
 from agm.agent.io import StreamCallback, write_stderr, write_stdout
 from agm.agent.prompt_source import PromptSourceOptions
 from agm.agent.review.prompt_pass import prepare_prompt_pass
@@ -56,7 +56,7 @@ def prepare_review(
     context = current_config_context()
     if config is None:
         config = _review_config(args.command_name, require_command=args.require_command_config)
-    runner = args.runner or config.runner or DEFAULT_AGENT_RUNNER
+    runner = args.runner or config.runner or default_agent_runner()
     scope = args.scope or config.scope or DEFAULT_REVIEW_SCOPE
     aspects = _resolved_review_aspects(args, config)
     env = clone_env()

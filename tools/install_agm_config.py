@@ -49,6 +49,20 @@ def _path_depth(path: Path) -> int:
     return len(path.parts)
 
 
+def _prepare_managed_destination(destination_dir: Path) -> None:
+    """Create *destination_dir*, refusing trees that contain symlinks."""
+    if destination_dir.is_symlink():
+        raise RuntimeError(f"Refusing to refresh symlinked directory: {destination_dir}")
+
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    symlink = next(
+        (path for path in destination_dir.rglob("*") if path.is_symlink()),
+        None,
+    )
+    if symlink is not None:
+        raise RuntimeError(f"Refusing to refresh directory containing symlink: {symlink}")
+
+
 def _install_tree_files(
     *,
     source_dir: Path,
@@ -116,7 +130,6 @@ def install_user_config(
     micro_syntax_dir = install_root / ".config" / "micro" / "syntax"
     sandbox_dir.mkdir(parents=True, exist_ok=True)
     prompts_dir.mkdir(parents=True, exist_ok=True)
-    stdlib_dir.mkdir(parents=True, exist_ok=True)
 
     installed: list[Path] = []
     skipped: list[Path] = []
@@ -152,6 +165,7 @@ def install_user_config(
     # `force`) and pruned to an exact mirror of the shipped tree, so a stale
     # destination file can never survive to satisfy the STDLIB_CONTRACT gate
     # in `agm.config.module_roots.resolve_stdlib_root` with old sources.
+    _prepare_managed_destination(stdlib_dir)
     _install_tree_files(
         source_dir=repo_root / "stdlib",
         destination_dir=stdlib_dir,

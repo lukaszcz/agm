@@ -134,7 +134,7 @@ def compute_uninhabited(table: TypeTable) -> frozenset[DeclId]:
     the wrapper's body is evaluated with that argument substituted, so it does
     not hide unguarded recursion.
     """
-    defs = _all_defs(table)
+    defs = table.defs
     inhabited: set[DeclId] = set()
     changed = True
     while changed:
@@ -361,7 +361,7 @@ def compute_non_data_reachability(table: TypeTable) -> NonDataReachability:
     ``relevant_params`` — reproducing the substitute-then-walk answer exactly,
     without ever expanding an instantiation.
     """
-    defs = _all_defs(table)
+    defs = table.defs
     exception_children: dict[DeclId, set[DeclId]] = {decl_id: set() for decl_id in defs}
     for decl_id, typedef in defs.items():
         if typedef.kind == "exception" and typedef.base in exception_children:
@@ -587,7 +587,7 @@ def compute_finite_closure(table: TypeTable) -> FiniteClosure:
     records/enums, recursive exceptions) is always finite — matching the
     inhabitation-checked recursion that is already unconditionally legal.
     """
-    defs = _all_defs(table)
+    defs = table.defs
     relevant = _compute_schema_relevant_params(defs)
     edges = _reference_edges(defs, relevant)
     successors: dict[DeclId, frozenset[DeclId]] = {
@@ -885,19 +885,3 @@ def _merge_growing(a: dict[str, bool], b: dict[str, bool]) -> dict[str, bool]:
     for name, growing in b.items():
         result[name] = result.get(name, False) or growing
     return result
-
-
-# ---------------------------------------------------------------------------
-# Shared helpers
-# ---------------------------------------------------------------------------
-
-
-def _all_defs(table: TypeTable) -> dict[DeclId, TypeDef]:
-    """Return every registered ``TypeDef`` in *table*, keyed by its identity.
-
-    Includes every declaration the table has ever registered, superseded or
-    not: a still-registered declaration's field/base references are handles
-    naming a specific identity, and a reference to a superseded declaration
-    must still resolve to that declaration's own shape here.
-    """
-    return {typedef.decl_node_id: typedef for typedef in table.entries()}

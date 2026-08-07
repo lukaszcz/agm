@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
-from agm.agl.semantics.values import EnumValue, Value
+from agm.agl.semantics.values import EnumValue, TextValue, Value
 
 _OPTION_NOMINAL = NominalId(require_reserved_nominal_id("Option"))
 
@@ -32,3 +32,18 @@ def none_value() -> EnumValue:
         variant="None",
         fields={},
     )
+
+
+def option_text(value: EnumValue) -> str | None:
+    """Return the text a ``std/core::Option[text]`` *value* carries, or ``None``.
+
+    The decode counterpart of :func:`some_value` / :func:`none_value`: the
+    ``None`` variant answers ``None``, and ``Some(t)`` answers with ``t``.
+    Reading the shape back here rather than at each call site keeps the
+    Option enum value shape spelled out exactly once in both directions.
+    """
+    if value.variant != "Some":
+        return None
+    payload = value.fields["value"]
+    assert isinstance(payload, TextValue)
+    return payload.value

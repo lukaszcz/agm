@@ -204,9 +204,7 @@ class ReplSession:
         # (:meth:`_update_engine_settings`), and is restored to the seed by
         # :meth:`reset`. ``_default_strict_json`` is a read-only view onto
         # this map rather than a separately stored copy.
-        self._current: dict[str, Value] = {
-            key: value for key, value in self._engine_seed.items() if key != "max-iters"
-        }
+        self._current: dict[str, Value] = self._current_from_seed()
         self._host_settings_policy = host_settings_policy
         # Trace destination: when set, each evaluated entry opens a fresh
         # ``TraceStore`` (its own ``run_id``) appending JSONL records to this one
@@ -659,14 +657,21 @@ class ReplSession:
         ``None`` covers both an absent register and an explicit ``None``
         variant (a host or declared "no timeout" control).
         """
-        from agm.agl.semantics.values import TextValue
+        from agm.agl.runtime.option import option_text
         from agm.core.parse import parse_timeout
 
-        if seed is None or seed.variant != "Some":
-            return None
-        timeout_value = seed.fields["value"]
-        assert isinstance(timeout_value, TextValue)
-        return parse_timeout(timeout_value.value)
+        raw = None if seed is None else option_text(seed)
+        return None if raw is None else parse_timeout(raw)
+
+    def _current_from_seed(self) -> dict[str, Value]:
+        """Return the live setting map the unified seed implies.
+
+        ``max-iters`` is excluded: it is not a live readable register, and is
+        carried by ``_default_loop_limit`` instead (:meth:`_seeded_loop_limit`).
+        Shared by construction and :meth:`reset`, like the two seeded scalars
+        beside it, so the exclusion rule is stated once.
+        """
+        return {key: value for key, value in self._engine_seed.items() if key != "max-iters"}
 
     def _seeded_loop_limit(self) -> int | None:
         """Return the max-iters cap the unified seed map implies, or ``None``.
@@ -1495,9 +1500,7 @@ class ReplSession:
         # control where one exists and a declared default otherwise -- the
         # same precedence construction applies, since a declared default is
         # only ever added via ``setdefault`` and never outranks a host seed.
-        self._current = {
-            key: value for key, value in self._engine_seed.items() if key != "max-iters"
-        }
+        self._current = self._current_from_seed()
         self._default_loop_limit = self._seeded_loop_limit()
         self._shell_exec_timeout = self._seeded_timeout_seconds()
         self._trace_path = self._initial_trace_path

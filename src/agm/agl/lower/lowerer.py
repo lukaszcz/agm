@@ -163,7 +163,7 @@ from agm.agl.matchcompile import (
     OccurrenceId,
     RecordConstructor,
 )
-from agm.agl.modules.ids import STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import STD_CORE_ID, ModuleId, spell_scope_path
 from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
 from agm.agl.semantics.type_table import MethodDef, TypeTable
 from agm.agl.semantics.types import (
@@ -297,7 +297,6 @@ def _add_builtin_nominals(
                 module_id=STD_CORE_ID,
                 scope_path=(),
                 declared_name=name,
-                display_name=name,
                 kind=NominalKind.RECORD,
                 fields=tuple(type_table.record_fields(typ).keys()),
                 variants=(),
@@ -309,7 +308,6 @@ def _add_builtin_nominals(
             module_id=STD_CORE_ID,
             scope_path=(),
             declared_name=name,
-            display_name=name,
             kind=NominalKind.ENUM,
             fields=(),
             variants=tuple(
@@ -325,16 +323,13 @@ def _add_builtin_nominals(
             module_id=STD_CORE_ID,
             scope_path=(),
             declared_name=exc_name,
-            display_name=exc_name,
             kind=NominalKind.EXCEPTION,
             fields=tuple(type_table.exception_fields(exc_type).keys()),
             variants=(),
         )
 
 
-def builtin_nominals_from_declarations(
-    modules: Mapping[ModuleId, CheckedModule],
-) -> BuiltinNominals:
+def builtin_nominals_from_declarations(type_table: TypeTable) -> BuiltinNominals:
     """Return the built-in nominal table for every currently-resolved ``builtin`` declaration.
 
     Maps each bare name with a live ``builtin`` declaration to a
@@ -344,20 +339,17 @@ def builtin_nominals_from_declarations(
     same orphan skip) the checker itself queries
     (:meth:`~agm.agl.semantics.type_table.TypeTable.builtin_declaration`) to
     type a host call (e.g. ``exec``'s default result type) against a
-    program's own declaration, rather than an independent walk of *modules*'
-    ASTs with its own separate tie-break -- so the two can never disagree
-    about which declaration a built-in name denotes. Every per-module
-    ``TypeEnvironment`` in a checked program graph shares one ``TypeTable``
-    instance, so any one module's env reaches it. A name no module declares
-    is simply absent -- the resulting table then answers it with the shipped
-    standard library's own identity (see
-    :meth:`~agm.agl.ir.builtin_nominals.BuiltinNominals.nominal`).
+    program's own declaration, rather than an independent walk of the
+    modules' ASTs with its own separate tie-break -- so the two can never
+    disagree about which declaration a built-in name denotes. A name no
+    declaration claims is simply absent -- the resulting table then answers
+    it with the shipped standard library's own identity (see
+    :meth:`~agm.agl.ir.builtin_nominals.BuiltinNominals.resolve`).
     """
-    type_table = next(iter(modules.values())).type_env.type_table
     declared = {
         name: DeclaredNominal(
             nominal=NominalId(typedef.decl_node_id),
-            display_name="::".join((*typedef.scope_path, typedef.name)),
+            display_name=spell_scope_path((*typedef.scope_path, typedef.name)),
         )
         for name, typedef in type_table.builtin_declarations().items()
     }
@@ -1496,8 +1488,9 @@ class _Lowerer:
                 step_value = IrConstInt(location=loc, value=1)
             pre_items.append(IrBind(location=loc, symbol=step_sym, value=step_value))
             # Step guard: if __step <= 0 => raise RangeError(...)
-            range_error_nominal = self._link.builtin_nominals.nominal("RangeError")
-            range_error_display_name = self._link.builtin_nominals.display_name("RangeError")
+            range_error = self._link.builtin_nominals.resolve("RangeError")
+            range_error_nominal = range_error.nominal
+            range_error_display_name = range_error.display_name
             pre_items.append(
                 IrIf(
                     location=loc,
@@ -1695,12 +1688,9 @@ class _Lowerer:
                 self._source_slice(until_cond_expr.span) if until_cond_expr is not None else "false"
             )
             # Inner if: if __count == 0 => IrBreak else => IrRaise(MaxIterationsExceeded)
-            max_iterations_exceeded_nominal = self._link.builtin_nominals.nominal(
-                "MaxIterationsExceeded"
-            )
-            max_iterations_exceeded_display_name = self._link.builtin_nominals.display_name(
-                "MaxIterationsExceeded"
-            )
+            max_iterations_exceeded = self._link.builtin_nominals.resolve("MaxIterationsExceeded")
+            max_iterations_exceeded_nominal = max_iterations_exceeded.nominal
+            max_iterations_exceeded_display_name = max_iterations_exceeded.display_name
             inner_if = IrIf(
                 location=loc,
                 branches=(
@@ -3495,7 +3485,6 @@ class _Lowerer:
                     module_id=typ.module_id,
                     scope_path=typ.scope_path,
                     declared_name=typ.name,
-                    display_name="::".join((*typ.scope_path, typ.name)),
                     kind=NominalKind.RECORD,
                     fields=tuple(table.record_fields(typ).keys()),
                     variants=(),
@@ -3511,7 +3500,6 @@ class _Lowerer:
                     module_id=typ.module_id,
                     scope_path=typ.scope_path,
                     declared_name=typ.name,
-                    display_name="::".join((*typ.scope_path, typ.name)),
                     kind=NominalKind.ENUM,
                     fields=(),
                     variants=variants,
@@ -3523,7 +3511,6 @@ class _Lowerer:
                     module_id=typ.module_id,
                     scope_path=typ.scope_path,
                     declared_name=typ.name,
-                    display_name="::".join((*typ.scope_path, typ.name)),
                     kind=NominalKind.EXCEPTION,
                     fields=tuple(table.exception_fields(typ).keys()),
                     variants=(),
@@ -3556,7 +3543,6 @@ class _Lowerer:
                     module_id=typ.module_id,
                     scope_path=typ.scope_path,
                     declared_name=typ.name,
-                    display_name="::".join((*typ.scope_path, typ.name)),
                     kind=NominalKind.RECORD,
                     fields=tuple(fname for fname, _ in typedef.fields),
                 )
@@ -3566,7 +3552,6 @@ class _Lowerer:
                     module_id=typ.module_id,
                     scope_path=typ.scope_path,
                     declared_name=typ.name,
-                    display_name="::".join((*typ.scope_path, typ.name)),
                     kind=NominalKind.ENUM,
                     variants=tuple(
                         VariantDescriptor(vname, tuple(fname for fname, _ in vfields))

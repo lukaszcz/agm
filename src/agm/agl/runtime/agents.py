@@ -32,13 +32,13 @@ class AgentCallHostError(Exception):
 
 
 def dispatch_agent_value(
-    agent: EnumValue,
     request: AgentRequest,
     dispatcher: AgentFn | None,
     *,
     nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS,
 ) -> AgentResponse:
-    """Execute an encoded ``Agent`` through the host dispatcher."""
+    """Execute *request*'s encoded ``Agent`` through the host dispatcher."""
+    agent = request.agent
     agent_label = render_value(agent)
     if dispatcher is None:
         _raise_agent_call_error(
@@ -65,11 +65,11 @@ def _raise_agent_call_error(
     from agm.agl.semantics.exceptions import AglRaise
     from agm.agl.semantics.values import ExceptionValue
 
-    nominal = nominals.nominal("AgentCallError")
+    declared = nominals.resolve("AgentCallError")
     raise AglRaise(
         ExceptionValue(
-            nominal=nominal,
-            display_name=nominals.display_name("AgentCallError"),
+            nominal=declared.nominal,
+            display_name=declared.display_name,
             fields={
                 "message": TextValue(
                     f"Agent {agent_label!r} failed: {error.cause}"

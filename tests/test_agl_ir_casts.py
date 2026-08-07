@@ -582,7 +582,6 @@ def test_validate_accepts_recursive_recipe_with_matching_defs() -> None:
                 module_id=ENTRY_ID,
                 scope_path=(),
                 declared_name="Tree",
-                display_name="Tree",
                 kind=NominalKind.ENUM,
                 variants=(
                     VariantDescriptor("Leaf", ()),

@@ -761,11 +761,9 @@ class PipelineDriver:
                 warnings,
             )
 
-        # Collect scope warnings from the resolved program.
-        all_warnings = (*warnings, *resolved.warnings)
         companion_paths = {mid: lm.companion_path for mid, lm in graph.modules.items()}
         return PreparedProgram(
-            entry_source, entry_path, roots, resolved, (), all_warnings, companion_paths
+            entry_source, entry_path, roots, resolved, (), warnings, companion_paths
         )
 
     @staticmethod

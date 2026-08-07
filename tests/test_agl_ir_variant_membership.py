@@ -188,7 +188,6 @@ def test_validate_rejects_ir_variant_is_with_unknown_variant() -> None:
         module_id=ENTRY_ID,
         scope_path=(),
         declared_name="Color",
-        display_name="Color",
         kind=NominalKind.ENUM,
         fields=(),
         variants=(VariantDescriptor(name="Red", fields=()),),

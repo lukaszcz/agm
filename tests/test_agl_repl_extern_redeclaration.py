@@ -223,7 +223,7 @@ class TestFreshImportSeesTheCurrentDeclaration:
         self, tmp_path: Path
     ) -> None:
         """A failed, never-promoted redeclaration still lands its own identity
-        in the type table (see ``TestUnpromotedNominalRollback`` in
+        in the type table (see ``TestUnpromotedNominalDeclarationEffects`` in
         ``test_agl_repl_session.py``): a fresh import afterward must see the
         declaration that survived promotion, not the orphaned failed one,
         and not the declaration before it either.

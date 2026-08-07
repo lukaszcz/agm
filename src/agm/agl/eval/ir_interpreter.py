@@ -131,7 +131,7 @@ from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.codec import ParseResult, _parse_contract_output
 from agm.agl.runtime.convert import StrictJsonParseError, parse_json_strict
 from agm.agl.runtime.externs import ExternRegistry
-from agm.agl.runtime.option import none_value, some_value
+from agm.agl.runtime.option import none_value, option_text, some_value
 from agm.agl.runtime.params import engine_default_settings
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.serialize import value_to_json_obj
@@ -1723,12 +1723,9 @@ class IrInterpreter:
         assert isinstance(log, BoolValue)
         log_file_reg = self._builtin_host_settings["log-file"]
         assert isinstance(log_file_reg, EnumValue)
-        log_file: str | None = None
-        if log_file_reg.variant == "Some":
-            payload = log_file_reg.fields["value"]
-            assert isinstance(payload, TextValue)
-            log_file = payload.value
-        self._host_reconfigurer.reconfigure_trace(enabled=log.value, log_file=log_file)
+        self._host_reconfigurer.reconfigure_trace(
+            enabled=log.value, log_file=option_text(log_file_reg)
+        )
 
     # ------------------------------------------------------------------
     # Engine-setting effect
@@ -1758,14 +1755,12 @@ class IrInterpreter:
         else:
             assert public_name == "timeout"
             assert isinstance(config_value, EnumValue)
-            if config_value.variant == "None":
+            raw = option_text(config_value)
+            if raw is None:
                 self._shell_exec_timeout = None
             else:
-                assert config_value.variant == "Some"
-                raw = config_value.fields.get("value")
-                assert isinstance(raw, TextValue)
                 try:
-                    self._shell_exec_timeout = _parse_timeout(raw.value)
+                    self._shell_exec_timeout = _parse_timeout(raw)
                 except ValueError as exc:
                     raise AglRaise(
                         _make_exc_value(

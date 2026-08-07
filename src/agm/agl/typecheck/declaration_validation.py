@@ -4,11 +4,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Literal
 
 from agm.agl.modules.ids import ModuleId, spell_declaration
 from agm.agl.scope.symbols import ModuleResolution
-from agm.agl.semantics.type_table import DeclId, TypeTable, qualified_decl_name
+from agm.agl.semantics.type_table import (
+    DeclId,
+    TypeTable,
+    decl_id_sort_key,
+    qualified_decl_name,
+)
 from agm.agl.syntax.nodes import (
     EnumDef,
     ExceptionDef,
@@ -304,10 +310,9 @@ def validate_method_declaration_collisions(
     index = _member_declarations(modules, type_table)
     descendant_index = _descendant_index(type_table)
 
-    def _sort_key(owner_id: DeclId) -> tuple[tuple[str, ...], tuple[str, ...], str]:
-        return _owner_sort_key(type_table, owner_id)
-
-    for owner_id in sorted(index.declared, key=_sort_key):
+    # Order owners deterministically so a program reports one stable collision.
+    sort_key = partial(decl_id_sort_key, type_table.defs)
+    for owner_id in sorted(index.declared, key=sort_key):
         ancestors, descendants = _relatives(index, type_table, descendant_index, owner_id)
         for name, same_named_members in index.members[owner_id].items():
             if len(same_named_members) > 1:
@@ -325,12 +330,3 @@ def validate_method_declaration_collisions(
                 conflict = _related_member(index, related, name)
                 if conflict is not None:
                     _raise_collision(type_table, owner_id, name, member, *conflict)
-
-
-def _owner_sort_key(
-    type_table: TypeTable, owner_id: DeclId
-) -> tuple[tuple[str, ...], tuple[str, ...], str]:
-    """Order owners deterministically so a program reports one stable collision."""
-    typedef = type_table.get_by_id(owner_id)
-    assert typedef is not None, "compiler bug: collision owner is not registered"
-    return (typedef.module_id.segments, typedef.scope_path, typedef.name)

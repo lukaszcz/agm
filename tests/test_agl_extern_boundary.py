@@ -535,7 +535,6 @@ def _synthesize_box_class() -> tuple[NominalId, type[object]]:
         module_id=ENTRY_ID,
         scope_path=(),
         declared_name="Box",
-        display_name="Box",
         kind=NominalKind.RECORD,
         fields=("value",),
     )
@@ -550,7 +549,6 @@ def _synthesize_choice_classes() -> tuple[NominalId, type[object]]:
         module_id=ENTRY_ID,
         scope_path=(),
         declared_name="Choice",
-        display_name="Choice",
         kind=NominalKind.ENUM,
         variants=(VariantDescriptor("Some", ("value",)), VariantDescriptor("None", ())),
     )
@@ -565,7 +563,6 @@ def _synthesize_problem_class() -> tuple[NominalId, type[object]]:
         module_id=ENTRY_ID,
         scope_path=(),
         declared_name="Problem",
-        display_name="Problem",
         kind=NominalKind.EXCEPTION,
         fields=("detail",),
     )
@@ -777,7 +774,6 @@ def test_synthesized_nominals_support_non_python_field_names() -> None:
         module_id=ENTRY_ID,
         scope_path=(),
         declared_name="Prompt",
-        display_name="Prompt",
         kind=NominalKind.RECORD,
         fields=("ask-prompt", "count"),
     )
@@ -800,7 +796,6 @@ def test_deep_recursive_nominal_construction_completes_quickly() -> None:
         module_id=ENTRY_ID,
         scope_path=(),
         declared_name="Box",
-        display_name="Box",
         kind=NominalKind.RECORD,
         fields=("value", "inner"),
     )
@@ -838,7 +833,6 @@ def test_synthesizing_an_already_present_identity_reuses_its_class_unchanged() -
         module_id=ENTRY_ID,
         scope_path=(),
         declared_name="Choice",
-        display_name="Choice",
         kind=NominalKind.ENUM,
         variants=(VariantDescriptor("Some", ("value",)), VariantDescriptor("Gone", ())),
     )
@@ -851,7 +845,6 @@ def test_synthesizing_an_already_present_identity_reuses_its_class_unchanged() -
         module_id=ENTRY_ID,
         scope_path=(),
         declared_name="Choice",
-        display_name="Choice",
         kind=NominalKind.ENUM,
         variants=(VariantDescriptor("Some", ("value", "extra")),),
     )
@@ -874,7 +867,6 @@ def test_companion_namespace_keeps_same_named_nominals_distinct() -> None:
                 module_id=ModuleId.from_path("left"),
                 scope_path=(),
                 declared_name="Box",
-                display_name="Box",
                 kind=NominalKind.RECORD,
                 fields=("left",),
             ),
@@ -883,7 +875,6 @@ def test_companion_namespace_keeps_same_named_nominals_distinct() -> None:
                 module_id=ModuleId.from_path("right"),
                 scope_path=(),
                 declared_name="Box",
-                display_name="Box",
                 kind=NominalKind.RECORD,
                 fields=("right",),
             ),
@@ -911,7 +902,6 @@ def test_companion_namespace_resolves_a_shared_name_path_to_the_current_bearer()
         module_id=ENTRY_ID,
         scope_path=(),
         declared_name="Box",
-        display_name="Box",
         kind=NominalKind.RECORD,
         fields=("new",),
     )
@@ -925,7 +915,6 @@ def test_companion_namespace_resolves_a_shared_name_path_to_the_current_bearer()
                 module_id=ENTRY_ID,
                 scope_path=(),
                 declared_name="Box",
-                display_name="Box",
                 kind=NominalKind.RECORD,
                 fields=("old",),
                 bears_name_path=False,
@@ -946,7 +935,6 @@ def test_re_registering_the_same_identity_reuses_its_synthesized_class() -> None
         module_id=ENTRY_ID,
         scope_path=(),
         declared_name="Box",
-        display_name="Box",
         kind=NominalKind.RECORD,
         fields=("value",),
     )
@@ -976,7 +964,6 @@ def test_redeclaring_a_nominal_keeps_default_argument_captured_classes_on_the_ol
         module_id=ENTRY_ID,
         scope_path=(),
         declared_name="Box",
-        display_name="Box",
         kind=NominalKind.RECORD,
         fields=("old",),
     )
@@ -985,7 +972,6 @@ def test_redeclaring_a_nominal_keeps_default_argument_captured_classes_on_the_ol
         module_id=ENTRY_ID,
         scope_path=(),
         declared_name="Box",
-        display_name="Box",
         kind=NominalKind.RECORD,
         fields=("new",),
     )
@@ -1004,7 +990,6 @@ def test_redeclaring_a_nominal_keeps_default_argument_captured_classes_on_the_ol
         module_id=ENTRY_ID,
         scope_path=(),
         declared_name="Box",
-        display_name="Box",
         kind=NominalKind.RECORD,
         fields=("old",),
         bears_name_path=False,
@@ -1028,7 +1013,6 @@ def test_stashed_view_with_nominal_elements_decodes_outside_any_call(tmp_path: P
         module_id=ENTRY_ID,
         scope_path=(),
         declared_name="Inner",
-        display_name="Inner",
         kind=NominalKind.RECORD,
         fields=("x",),
     )
@@ -1062,7 +1046,6 @@ def test_registry_wraps_unexpected_decode_errors_as_extern_errors() -> None:
         module_id=ENTRY_ID,
         scope_path=(),
         declared_name="Box",
-        display_name="Box",
         kind=NominalKind.RECORD,
         fields=("value",),
     )

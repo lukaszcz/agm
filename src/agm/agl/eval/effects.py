@@ -126,9 +126,7 @@ class EffectHandlers:
     # Agent call helpers
     # ------------------------------------------------------------------
 
-    def _dispatch_agent(
-        self, agent: EnumValue, request: AgentRequest, node: IrAsk
-    ) -> AgentResponse:
+    def _dispatch_agent(self, request: AgentRequest, node: IrAsk) -> AgentResponse:
         """Dispatch an agent call, annotating cancellation with the ask span.
 
         ``AgentCancelled`` (and a bare ``KeyboardInterrupt`` from an unwrapped
@@ -142,7 +140,6 @@ class EffectHandlers:
 
         try:
             return dispatch_agent_value(
-                agent,
                 request,
                 self._ctx._agent_dispatcher,
                 nominals=self._ctx._program.builtin_nominals,
@@ -151,7 +148,9 @@ class EffectHandlers:
             exc.span = node.location
             raise
         except KeyboardInterrupt as exc:
-            raise AgentCancelled(render_value(agent), "interrupted", span=node.location) from exc
+            raise AgentCancelled(
+                render_value(request.agent), "interrupted", span=node.location
+            ) from exc
 
     @staticmethod
     def _classify_parse_errors(result: ParseResult) -> tuple[ReqValidationError, ...]:
@@ -230,7 +229,7 @@ class EffectHandlers:
                 prompt=prompt_text,
                 output_contract=None,
             )
-            self._dispatch_agent(agent_val, request, _node)
+            self._dispatch_agent(request, _node)
             return VOID_VALUE
 
         effective_strict = (
@@ -273,7 +272,7 @@ class EffectHandlers:
                 validation_errors=list(last_errors),
                 output_contract=output_contract,
             )
-            response = self._dispatch_agent(agent_val, request, _node)
+            response = self._dispatch_agent(request, _node)
             raw = response.content
 
             result = self._ctx._parse_host_output(
@@ -326,10 +325,10 @@ class EffectHandlers:
 
         prompt_text = self._text_of(self._ctx._eval(prompt_expr))
 
-        agent_request_nominal = self._ctx._program.builtin_nominals.nominal("AgentRequest")
+        agent_request = self._ctx._program.builtin_nominals.resolve("AgentRequest")
         return RecordValue(
-            nominal=agent_request_nominal,
-            display_name=self._ctx._program.builtin_nominals.display_name("AgentRequest"),
+            nominal=agent_request.nominal,
+            display_name=agent_request.display_name,
             fields={
                 "agent": request_agent,
                 "prompt": TextValue(prompt_text),
@@ -483,10 +482,10 @@ class EffectHandlers:
         # 3. Structured exec: return ExecResult regardless of exit code
         if contract.structured_exec:
             actual_exit_code = returncode if returncode is not None else 0
-            exec_result_nominal = self._ctx._program.builtin_nominals.nominal("ExecResult")
+            exec_result = self._ctx._program.builtin_nominals.resolve("ExecResult")
             return RecordValue(
-                nominal=exec_result_nominal,
-                display_name=self._ctx._program.builtin_nominals.display_name("ExecResult"),
+                nominal=exec_result.nominal,
+                display_name=exec_result.display_name,
                 fields={
                     "stdout": TextValue(stdout.rstrip("\n")),
                     "exit_code": IntValue(actual_exit_code),

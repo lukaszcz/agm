@@ -1337,7 +1337,7 @@ class TestBuiltinNominalsTable:
         """Whatever a program declares, every host-minted identity is describable.
 
         The host stamps ``builtin_nominals.nominal(name)`` on the values it
-        mints and spells them with ``builtin_nominals.display_name(name)``.
+        mints and spells them with ``builtin_nominals.resolve(name)``.
         Both must agree with the linked program's own descriptor table, or a
         host-minted value would carry an identity the evaluator, the extern
         boundary, and rendering cannot resolve. Covers the four arrangements
@@ -1353,7 +1353,7 @@ class TestBuiltinNominalsTable:
             descriptor = program.nominals.get(program.builtin_nominals.nominal(name))
             assert descriptor is not None, f"no descriptor for host-minted {name!r}"
             assert descriptor.declared_name == name
-            assert descriptor.display_name == program.builtin_nominals.display_name(name)
+            assert descriptor.display_name == program.builtin_nominals.resolve(name).display_name
 
 
 # ---------------------------------------------------------------------------

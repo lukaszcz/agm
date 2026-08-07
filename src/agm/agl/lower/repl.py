@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, cast
 
-from agm.agl.ir.builtin_nominals import BuiltinNominals
 from agm.agl.ir.contracts import ContractPayload
 from agm.agl.ir.ids import SymbolId
 from agm.agl.ir.program import ExecutableProgram
@@ -93,54 +92,6 @@ class LinkImage:
     def restore_state(self, snapshot: _LinkState) -> None:
         """Restore a previously snapshotted incremental linker state."""
         self._state = snapshot
-
-    def snapshot_builtin_nominals(self) -> BuiltinNominals:
-        """Return a rollback snapshot of host-minted built-in identities."""
-        return self._state.builtin_nominals
-
-    def restore_builtin_nominals(
-        self,
-        snapshot: BuiltinNominals,
-        names: Iterable[str],
-    ) -> None:
-        """Restore selected built-in identities from *snapshot*.
-
-        This is the only nominal state a partially failed entry rolls back.
-        ``_LinkState.nominals`` needs none of its own because it is DERIVED,
-        not authoritative: every lowering call rebuilds it from the shared
-        ``TypeTable``'s registered declarations (``lower.program``, step 2),
-        and that table retains an unpromoted declaration under its own
-        identity exactly as it retains a superseded one -- so dropping a
-        descriptor here would simply be re-added by the next entry. What
-        actually takes the declaration out of reach is the type table marking
-        it as never having taken effect (``TypeTable.orphan``), which releases
-        its name and excludes it from every whole-table query about what the
-        session declares, alongside the environment's own type namespace going
-        back to the declaration that survived.
-
-        :attr:`BuiltinNominals.declared` is the one piece of nominal state
-        that is name-keyed AND authoritative -- a BARE-NAME override every
-        host-minting site consults directly
-        (:meth:`BuiltinNominals.nominal`/:meth:`BuiltinNominals.display_name`),
-        accumulated across entries rather than rebuilt -- so an orphaned entry
-        left here would keep steering every later host mint of that name at
-        the identity this entry never promoted. *names* are always freshly
-        declared by the entry being rolled back, so restoring one always means
-        dropping it back to whatever (or nothing) *snapshot* had, never
-        reinstating a stale value under a name another entry still owns.
-        """
-        restored_names = frozenset(names)
-        restored = {
-            name: declared
-            for name, declared in self._state.builtin_nominals.declared.items()
-            if name not in restored_names
-        }
-        restored.update(
-            (name, declared)
-            for name, declared in snapshot.declared.items()
-            if name in restored_names
-        )
-        self._state.builtin_nominals = BuiltinNominals(declared=MappingProxyType(restored))
 
 
 @dataclass(frozen=True, slots=True)

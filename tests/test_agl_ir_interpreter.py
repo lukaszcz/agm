@@ -957,7 +957,6 @@ class TestIrField:
                     module_id=ENTRY_ID,
                     scope_path=(),
                     declared_name="Point",
-                    display_name="Point",
                     kind=NominalKind.RECORD,
                     fields=("x", "y"),
                 )
@@ -1066,7 +1065,6 @@ class TestIrField:
                     module_id=ENTRY_ID,
                     scope_path=(),
                     declared_name="Wrapper",
-                    display_name="Wrapper",
                     kind=NominalKind.ENUM,
                     variants=(VariantDescriptor("wrap", ("value",)),),
                 )
@@ -1145,7 +1143,6 @@ class TestIrUpdateRecord:
                     module_id=ENTRY_ID,
                     scope_path=(),
                     declared_name="Point",
-                    display_name="Point",
                     kind=NominalKind.RECORD,
                     fields=("x", "y"),
                 )

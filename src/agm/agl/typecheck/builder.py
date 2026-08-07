@@ -464,7 +464,6 @@ class _TypeBuilder:
         and constructor-callability are checked later, once every
         exception's shape is buildable (see :meth:`_finalize_exceptions`).
         """
-        base_id: int | None = None
         base_type: ExceptionType | None = None
         if stmt.base is not None:
             resolved_base = self._env.resolve_named_type(stmt.base)
@@ -474,7 +473,6 @@ class _TypeBuilder:
                     span=stmt.span,
                 )
             base_type = resolved_base
-            base_id = resolved_base.decl_id
         fields: dict[str, Type] = {}
         seen_fields: dict[str, SourceSpan] = {}
         for fd in stmt.fields:
@@ -507,7 +505,7 @@ class _TypeBuilder:
             scope_path=scope_path,
             fields=tuple(fields.items()),
             abstract=stmt.base is None,
-            base=base_id,
+            base=None if base_type is None else base_type.decl_id,
             field_kinds=tuple(fd.kind.value for fd in stmt.fields),
             is_builtin=stmt.is_builtin,
             decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
@@ -644,10 +642,7 @@ class _TypeBuilder:
             for vname, vfields in typedef.variants
         )
         base = typedef.base
-        if base is not None:
-            assert base_type is not None, (
-                "compiler bug: exception has a base identity but no resolved base handle"
-            )
+        if base_type is not None:
             rerooted_base = _reroot(base_type)
             assert isinstance(rerooted_base, ExceptionType)
             names_canonical_frame = (

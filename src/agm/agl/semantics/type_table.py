@@ -54,7 +54,8 @@ diagnostic (agent output target, cast target, parameter type).
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, assert_never, cast
 
 from agm.agl.ir.reserved_nominals import NO_DECL_ID
@@ -670,6 +671,17 @@ class TypeTable:
     def entries(self) -> tuple[TypeDef, ...]:
         """Return all registered ``TypeDef``s (used for REPL and program table sharing)."""
         return tuple(self._defs.values())
+
+    @property
+    def defs(self) -> Mapping[DeclId, TypeDef]:
+        """Every registered ``TypeDef``, keyed by its identity, as a read-only view.
+
+        Includes every declaration the table has ever registered, superseded
+        or not: a still-registered declaration's field/base references are
+        handles naming a specific identity, and a reference to a superseded
+        declaration must still resolve to that declaration's own shape.
+        """
+        return MappingProxyType(self._defs)
 
     def builtin_declaration(self, name: str) -> TypeDef | None:
         """Return the live registered ``builtin`` declaration named *name*, if any.
@@ -1398,7 +1410,20 @@ def cast_classification(source: Type, target: Type, table: TypeTable) -> CastKin
 # ---------------------------------------------------------------------------
 
 
-BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = {
+def _with_reserved_ids(defs: Mapping[str, TypeDef]) -> Mapping[str, TypeDef]:
+    """Stamp each canonical entry with the reserved identity its own key names.
+
+    A prelude shape is keyed by the built-in name it defines, so its
+    declaration identity is implied by that key; deriving it here rather than
+    repeating ``_reserved_id("Name")`` in every entry keeps a shape from ever
+    carrying another name's identity.
+    """
+    return {
+        name: replace(typedef, decl_node_id=_reserved_id(name)) for name, typedef in defs.items()
+    }
+
+
+_PRELUDE_SHAPES: Mapping[str, TypeDef] = {
     "ExecResult": TypeDef(
         kind="record",
         name="ExecResult",
@@ -1409,7 +1434,6 @@ BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = {
             ("stderr", TextType()),
             ("timed_out", BoolType()),
         ),
-        decl_node_id=_reserved_id("ExecResult"),
     ),
     "ParsePolicy": TypeDef(
         kind="enum",
@@ -1419,7 +1443,6 @@ BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = {
             ("Abort", ()),
             ("Retry", (("n", IntType()),)),
         ),
-        decl_node_id=_reserved_id("ParsePolicy"),
     ),
     "Agent": TypeDef(
         kind="enum",
@@ -1434,7 +1457,6 @@ BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = {
                 (("provider", TextType()), ("model", TextType()), ("thinking", TextType())),
             ),
         ),
-        decl_node_id=_reserved_id("Agent"),
     ),
     "OutputContract": TypeDef(
         kind="record",
@@ -1448,7 +1470,6 @@ BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = {
             ("json_schema", JsonType()),
             ("structured_exec", BoolType()),
         ),
-        decl_node_id=_reserved_id("OutputContract"),
     ),
     "OutputContractOption": TypeDef(
         kind="enum",
@@ -1470,7 +1491,6 @@ BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = {
                 ),
             ),
         ),
-        decl_node_id=_reserved_id("OutputContractOption"),
     ),
     "AgentRequest": TypeDef(
         kind="record",
@@ -1521,9 +1541,10 @@ BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = {
             ),
             ("metadata", JsonType()),
         ),
-        decl_node_id=_reserved_id("AgentRequest"),
     ),
 }
+
+BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = _with_reserved_ids(_PRELUDE_SHAPES)
 
 # Generic ``Option`` template under ``STD_CORE_ID`` (type parameter ``T``,
 # variants ``None``/``Some(value: T)``), matching the shape of the concrete
@@ -1561,7 +1582,7 @@ def _named_only(count: int) -> tuple[str, ...]:
     return ("named_only",) * count
 
 
-BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
+_EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
     "Exception": TypeDef(
         kind="exception",
         name="Exception",
@@ -1569,27 +1590,31 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         fields=(("message", TextType()), ("trace_id", TextType())),
         abstract=True,
         field_kinds=_named_only(2),
-        decl_node_id=_reserved_id("Exception"),
     ),
     "AgentCallError": TypeDef(
         kind="exception",
         name="AgentCallError",
         module_id=STD_CORE_ID,
         fields=(
-            ("agent", EnumType(name="Agent", module_id=STD_CORE_ID, decl_id=_reserved_id("Agent"))),
+            (
+                "agent",
+                EnumType(name="Agent", module_id=STD_CORE_ID, decl_id=_reserved_id("Agent")),
+            ),
             ("cause", TextType()),
             ("metadata", JsonType()),
         ),
         base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(3),
-        decl_node_id=_reserved_id("AgentCallError"),
     ),
     "AgentParseError": TypeDef(
         kind="exception",
         name="AgentParseError",
         module_id=STD_CORE_ID,
         fields=(
-            ("agent", EnumType(name="Agent", module_id=STD_CORE_ID, decl_id=_reserved_id("Agent"))),
+            (
+                "agent",
+                EnumType(name="Agent", module_id=STD_CORE_ID, decl_id=_reserved_id("Agent")),
+            ),
             ("target_type", TextType()),
             ("expected_schema", JsonType()),
             ("raw", TextType()),
@@ -1600,7 +1625,6 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         ),
         base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(8),
-        decl_node_id=_reserved_id("AgentParseError"),
     ),
     "ExecError": TypeDef(
         kind="exception",
@@ -1615,7 +1639,6 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         ),
         base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(5),
-        decl_node_id=_reserved_id("ExecError"),
     ),
     # ``python_type`` is the raising Python exception's class name, or empty for
     # a contract violation (no Python exception was involved).
@@ -1626,7 +1649,6 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         fields=(("function", TextType()), ("python_type", TextType())),
         base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(2),
-        decl_node_id=_reserved_id("ExternError"),
     ),
     "MaxIterationsExceeded": TypeDef(
         kind="exception",
@@ -1640,7 +1662,6 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         ),
         base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(4),
-        decl_node_id=_reserved_id("MaxIterationsExceeded"),
     ),
     "MatchError": TypeDef(
         kind="exception",
@@ -1649,7 +1670,6 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         fields=(("scrutinee_type", TextType()), ("scrutinee", JsonType())),
         base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(2),
-        decl_node_id=_reserved_id("MatchError"),
     ),
     "IndexError": TypeDef(
         kind="exception",
@@ -1658,7 +1678,6 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         fields=(("index", IntType()), ("length", IntType())),
         base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(2),
-        decl_node_id=_reserved_id("IndexError"),
     ),
     "KeyError": TypeDef(
         kind="exception",
@@ -1667,14 +1686,12 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         fields=(("key", TextType()),),
         base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(1),
-        decl_node_id=_reserved_id("KeyError"),
     ),
     "TypeError": TypeDef(
         kind="exception",
         name="TypeError",
         module_id=STD_CORE_ID,
         base=_EXCEPTION_ROOT_ID,
-        decl_node_id=_reserved_id("TypeError"),
     ),
     "ArithmeticError": TypeDef(
         kind="exception",
@@ -1683,7 +1700,6 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         fields=(("operation", TextType()),),
         base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(1),
-        decl_node_id=_reserved_id("ArithmeticError"),
     ),
     # Statically prevented by scope/typecheck (assignment to immutable bindings
     # and undeclared names), but still listed as catchable runtime exceptions
@@ -1695,7 +1711,6 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         fields=(("name", TextType()),),
         base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(1),
-        decl_node_id=_reserved_id("UndefinedVariableError"),
     ),
     "ImmutableBindingError": TypeDef(
         kind="exception",
@@ -1704,14 +1719,12 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         fields=(("name", TextType()), ("operation", TextType())),
         base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(2),
-        decl_node_id=_reserved_id("ImmutableBindingError"),
     ),
     "Abort": TypeDef(
         kind="exception",
         name="Abort",
         module_id=STD_CORE_ID,
         base=_EXCEPTION_ROOT_ID,
-        decl_node_id=_reserved_id("Abort"),
     ),
     # AgL: RecursionError raised when the call-depth limit is exceeded.
     "RecursionError": TypeDef(
@@ -1721,7 +1734,6 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         fields=(("limit", IntType()),),
         base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(1),
-        decl_node_id=_reserved_id("RecursionError"),
     ),
     "CastError": TypeDef(
         kind="exception",
@@ -1734,7 +1746,6 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         ),
         base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(3),
-        decl_node_id=_reserved_id("CastError"),
     ),
     "JsonParseError": TypeDef(
         kind="exception",
@@ -1743,23 +1754,22 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         fields=(("raw", TextType()),),
         base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(1),
-        decl_node_id=_reserved_id("JsonParseError"),
     ),
     "RangeError": TypeDef(
         kind="exception",
         name="RangeError",
         module_id=STD_CORE_ID,
         base=_EXCEPTION_ROOT_ID,
-        decl_node_id=_reserved_id("RangeError"),
     ),
     "CyclicValueError": TypeDef(
         kind="exception",
         name="CyclicValueError",
         module_id=STD_CORE_ID,
         base=_EXCEPTION_ROOT_ID,
-        decl_node_id=_reserved_id("CyclicValueError"),
     ),
 }
+
+BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = _with_reserved_ids(_EXCEPTION_SHAPES)
 
 
 def create_seeded_type_table() -> TypeTable:

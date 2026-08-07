@@ -326,7 +326,6 @@ def test_disabled_validation_accepts_a_set_nominals_re_registration_with_a_diffe
                 module_id=ENTRY_ID,
                 scope_path=(),
                 declared_name="Box",
-                display_name="Box",
                 kind=NominalKind.RECORD,
                 fields=("value",),
             )
@@ -340,7 +339,6 @@ def test_disabled_validation_accepts_a_set_nominals_re_registration_with_a_diffe
                 module_id=ENTRY_ID,
                 scope_path=(),
                 declared_name="Box",
-                display_name="Box",
                 kind=NominalKind.RECORD,
                 fields=("other",),
             )
@@ -361,7 +359,6 @@ def test_enabled_validation_rejects_a_conflicting_set_nominals_re_registration()
                 module_id=ENTRY_ID,
                 scope_path=(),
                 declared_name="Box",
-                display_name="Box",
                 kind=NominalKind.RECORD,
                 fields=("value",),
             )
@@ -376,7 +373,6 @@ def test_enabled_validation_rejects_a_conflicting_set_nominals_re_registration()
                     module_id=ENTRY_ID,
                     scope_path=(),
                     declared_name="Box",
-                    display_name="Box",
                     kind=NominalKind.RECORD,
                     fields=("other",),
                 )

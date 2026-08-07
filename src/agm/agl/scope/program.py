@@ -28,7 +28,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.loader import ModuleGraph
 from agm.agl.scope.imports import (
@@ -125,8 +124,6 @@ class ResolvedProgram:
     ``import_sccs``
         Loader-computed import strongly-connected components, retained in their
         deterministic reverse-topological order for downstream program passes.
-    ``warnings``
-        Collected non-fatal scope-pass diagnostics from all modules.
     """
 
     modules: dict[ModuleId, ResolvedModule]
@@ -134,7 +131,6 @@ class ResolvedProgram:
     all_public_funcs: dict[QName, FuncDef]
     all_public_types: dict[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias]
     import_sccs: tuple[tuple[ModuleId, ...], ...]
-    warnings: tuple[Diagnostic, ...]
 
 
 # ---------------------------------------------------------------------------
@@ -590,7 +586,6 @@ def resolve_program(
     # Step 6: Resolve each module's bodies.
     # ------------------------------------------------------------------
     resolved_modules: dict[ModuleId, ResolvedModule] = {}
-    all_warnings: list[Diagnostic] = []
 
     for mid, loaded in graph.modules.items():
         is_entry = mid.is_entry
@@ -628,7 +623,6 @@ def resolve_program(
             ambient_constructor_candidates=constructor_candidates or None,
             ambient_type_names=type_names,
         )
-        all_warnings.extend(resolved.warnings)
         resolved_modules[mid] = ResolvedModule(
             module_id=mid,
             resolved=resolved,
@@ -643,5 +637,4 @@ def resolve_program(
         all_public_funcs=all_public_funcs,
         all_public_types=all_public_types,
         import_sccs=graph.sccs,
-        warnings=tuple(all_warnings),
     )

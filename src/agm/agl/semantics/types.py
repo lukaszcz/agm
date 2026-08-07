@@ -913,82 +913,52 @@ def contains_inference_var(t: Type) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _builtin_exception(name: str) -> ExceptionType:
+    """Build the built-in exception handle for *name*, carrying its reserved identity.
+
+    Each name is spelled once, here, and stamped with its own reserved
+    identity, so a handle can never be paired with another name's identity.
+    """
+    return ExceptionType(name=name, module_id=STD_CORE_ID, decl_id=_reserved_id(name))
+
+
 # Abstract base: the hierarchy root, catchable but not constructible.
-EXCEPTION_BASE = ExceptionType(
-    name="Exception", module_id=STD_CORE_ID, decl_id=_reserved_id("Exception")
-)
+EXCEPTION_BASE = _builtin_exception("Exception")
 
 BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
-    "Exception": EXCEPTION_BASE,
-    "AgentCallError": ExceptionType(
-        name="AgentCallError", module_id=STD_CORE_ID, decl_id=_reserved_id("AgentCallError")
-    ),
-    "AgentParseError": ExceptionType(
-        name="AgentParseError", module_id=STD_CORE_ID, decl_id=_reserved_id("AgentParseError")
-    ),
-    "ExecError": ExceptionType(
-        name="ExecError", module_id=STD_CORE_ID, decl_id=_reserved_id("ExecError")
-    ),
-    # Raised for every runtime failure crossing an extern (Python FFI) call:
-    # the Python callable raising, a return-contract violation (including a
-    # seal violation), or an argument-conversion failure.
-    "ExternError": ExceptionType(
-        name="ExternError", module_id=STD_CORE_ID, decl_id=_reserved_id("ExternError")
-    ),
-    "MaxIterationsExceeded": ExceptionType(
-        name="MaxIterationsExceeded",
-        module_id=STD_CORE_ID,
-        decl_id=_reserved_id("MaxIterationsExceeded"),
-    ),
-    "MatchError": ExceptionType(
-        name="MatchError", module_id=STD_CORE_ID, decl_id=_reserved_id("MatchError")
-    ),
-    "IndexError": ExceptionType(
-        name="IndexError", module_id=STD_CORE_ID, decl_id=_reserved_id("IndexError")
-    ),
-    "KeyError": ExceptionType(
-        name="KeyError", module_id=STD_CORE_ID, decl_id=_reserved_id("KeyError")
-    ),
-    "TypeError": ExceptionType(
-        name="TypeError", module_id=STD_CORE_ID, decl_id=_reserved_id("TypeError")
-    ),
-    "ArithmeticError": ExceptionType(
-        name="ArithmeticError", module_id=STD_CORE_ID, decl_id=_reserved_id("ArithmeticError")
-    ),
-    # Statically prevented by scope/typecheck (assignment to immutable bindings
-    # and undeclared names), but still listed as catchable runtime
-    # exceptions for any runtime paths that bypass the static passes.
-    "UndefinedVariableError": ExceptionType(
-        name="UndefinedVariableError",
-        module_id=STD_CORE_ID,
-        decl_id=_reserved_id("UndefinedVariableError"),
-    ),
-    "ImmutableBindingError": ExceptionType(
-        name="ImmutableBindingError",
-        module_id=STD_CORE_ID,
-        decl_id=_reserved_id("ImmutableBindingError"),
-    ),
-    "Abort": ExceptionType(name="Abort", module_id=STD_CORE_ID, decl_id=_reserved_id("Abort")),
-    # AgL: RecursionError raised when the call-depth limit is exceeded.
-    "RecursionError": ExceptionType(
-        name="RecursionError", module_id=STD_CORE_ID, decl_id=_reserved_id("RecursionError")
-    ),
-    "CastError": ExceptionType(
-        name="CastError", module_id=STD_CORE_ID, decl_id=_reserved_id("CastError")
-    ),
-    "JsonParseError": ExceptionType(
-        name="JsonParseError", module_id=STD_CORE_ID, decl_id=_reserved_id("JsonParseError")
-    ),
-    "RangeError": ExceptionType(
-        name="RangeError", module_id=STD_CORE_ID, decl_id=_reserved_id("RangeError")
-    ),
-    # Reference semantics makes cyclic array/dict values constructible; raised
-    # when rendering or JSON conversion re-enters a container already on its
-    # path. Extern array/dict arguments cross as lazy views; repr of a view or
-    # FFI view rendering that reaches a cycle raises this exception instead.
-    "CyclicValueError": ExceptionType(
-        name="CyclicValueError", module_id=STD_CORE_ID, decl_id=_reserved_id("CyclicValueError")
-    ),
+    name: _builtin_exception(name)
+    for name in (
+        "Exception",
+        "AgentCallError",
+        "AgentParseError",
+        "ExecError",
+        # Raised for every runtime failure crossing an extern (Python FFI) call:
+        # the Python callable raising, a return-contract violation (including a
+        # seal violation), or an argument-conversion failure.
+        "ExternError",
+        "MaxIterationsExceeded",
+        "MatchError",
+        "IndexError",
+        "KeyError",
+        "TypeError",
+        "ArithmeticError",
+        # Statically prevented by scope/typecheck (assignment to immutable bindings
+        # and undeclared names), but still listed as catchable runtime
+        # exceptions for any runtime paths that bypass the static passes.
+        "UndefinedVariableError",
+        "ImmutableBindingError",
+        "Abort",
+        # AgL: RecursionError raised when the call-depth limit is exceeded.
+        "RecursionError",
+        "CastError",
+        "JsonParseError",
+        "RangeError",
+        # Reference semantics makes cyclic array/dict values constructible; raised
+        # when rendering or JSON conversion re-enters a container already on its
+        # path. Extern array/dict arguments cross as lazy views; repr of a view or
+        # FFI view rendering that reaches a cycle raises this exception instead.
+        "CyclicValueError",
+    )
 }
 
 # Names of built-in exception types (cannot be redeclared as records/enums/aliases).

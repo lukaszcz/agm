@@ -2288,22 +2288,6 @@ class TestResolveGraphReplSeams:
         with pytest.raises(AglScopeError, match="helper"):
             resolve_program(graph, entry_parent_scope=session_scope)
 
-    def test_warnings_aggregated_across_modules(self, tmp_path: Path) -> None:
-        """Warnings from non-entry modules are also collected into result.warnings."""
-        # A non-entry module that declares an agent would be a scope error (agents are
-        # entry-only), so we cannot test cross-module warnings that way.
-        # Instead, confirm that the empty-warnings case is also correct: when no module
-        # produces warnings, result.warnings is empty.
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "open import mylib\n()",
-                "mylib": "def foo() -> int = 42",
-            },
-        )
-        result = resolve_program(graph)
-        assert result.warnings == ()
-
 
 # ---------------------------------------------------------------------------
 # Re-export behaviour

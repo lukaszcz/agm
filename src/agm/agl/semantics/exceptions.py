@@ -28,12 +28,11 @@ def make_builtin_exception(
 ) -> ExceptionValue:
     """Create an ``ExceptionValue`` for a built-in exception type.
 
-    The exception's nominal is ``nominals.nominal(type_name)`` — the caller's
-    built-in nominal table, so the value carries the identity that table
-    resolves for *type_name* rather than a hardcoded one. ``display_name``
-    is ``nominals.display_name(type_name)``, the same table's declared
-    spelling, so a scoped declaration reports its own spelling instead of the
-    bare name.
+    The exception's identity and spelling both come from
+    ``nominals.resolve(type_name)`` — the caller's built-in nominal table —
+    so the value carries the identity and the declared spelling that table
+    resolves for *type_name* rather than hardcoded ones, and a scoped
+    declaration reports its own spelling instead of the bare name.
     ``trace_id`` is minted by the *caller's* evaluator (per-evaluator identity).
     Extra keyword arguments become additional fields beyond ``message`` and
     ``trace_id``.
@@ -43,9 +42,10 @@ def make_builtin_exception(
         "trace_id": TextValue(trace_id),
     }
     fields.update(extra)
+    declared = nominals.resolve(type_name)
     return ExceptionValue(
-        nominal=nominals.nominal(type_name),
-        display_name=nominals.display_name(type_name),
+        nominal=declared.nominal,
+        display_name=declared.display_name,
         fields=fields,
     )
 

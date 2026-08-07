@@ -50,48 +50,30 @@ class BuiltinNominals:
 
     declared: Mapping[str, DeclaredNominal]
 
-    def nominal(self, name: str) -> NominalId:
-        """Return the ``NominalId`` a host mints for the built-in type *name*.
+    def resolve(self, name: str) -> DeclaredNominal:
+        """Return the identity and spelling a host mints for the built-in type *name*.
 
         A name present in :attr:`declared` answers with its declaration's own
-        identity. A name the program declares nothing for answers with the
-        shipped standard library's own reserved identity for it (see
-        ``ir.reserved_nominals``), which is the correct identity for it, not
-        a placeholder for a missing lookup.
+        identity and its own declared scoped spelling. A name the program
+        declares nothing for answers with the shipped standard library's own
+        reserved identity for it (see ``ir.reserved_nominals``) and its bare
+        name — the shipped library's own declaration of a reserved name is
+        always written bare, at ``std/core``'s root. That is the correct
+        answer for such a name, not a placeholder for a missing lookup.
+
+        Identity and spelling are resolved together so a value can never be
+        stamped with one declaration's identity and another's spelling.
         """
         declared = self.declared.get(name)
         if declared is not None:
-            return declared.nominal
-        return NominalId(require_reserved_nominal_id(name))
+            return declared
+        return DeclaredNominal(
+            nominal=NominalId(require_reserved_nominal_id(name)), display_name=name
+        )
 
-    def display_name(self, name: str) -> str:
-        """Return the source spelling a host mints for the built-in type *name*.
-
-        A name present in :attr:`declared` answers with its own declared
-        scoped spelling. A name the program declares nothing for answers with
-        its own bare name — the shipped standard library's own declaration of
-        a reserved name is always written bare, at ``std/core``'s root.
-        """
-        declared = self.declared.get(name)
-        return declared.display_name if declared is not None else name
-
-    def accumulate(self, update: "BuiltinNominals") -> "BuiltinNominals":
-        """Return this table with *update*'s declarations folded in, *update* winning.
-
-        A REPL session lowers one compile unit (entry) at a time, but reuses
-        one link image across the whole session: an earlier entry's
-        ``builtin`` declaration must stay live for a later entry that does
-        not redeclare it, so the link image ACCUMULATES declarations across
-        calls rather than being replaced wholesale by each call's own
-        (necessarily partial) table. When the same name is declared again —
-        e.g. a later entry redeclares it at a different scope path — *update*
-        is the newer one and wins.
-        """
-        if not update.declared:
-            return self
-        merged = dict(self.declared)
-        merged.update(update.declared)
-        return BuiltinNominals(declared=types.MappingProxyType(merged))
+    def nominal(self, name: str) -> NominalId:
+        """Return the ``NominalId`` a host mints for the built-in type *name*."""
+        return self.resolve(name).nominal
 
 
 #: The table for a program with no ``builtin`` declarations of its own: every

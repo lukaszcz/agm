@@ -110,7 +110,9 @@ def lower_compiled_module(
     artifact, from ``lower_program``'s own module set).
     """
     checked = compiled.checked
-    link = _LinkState(builtin_nominals=builtin_nominals_from_declarations({ENTRY_ID: checked}))
+    link = _LinkState(
+        builtin_nominals=builtin_nominals_from_declarations(checked.type_env.type_table)
+    )
     source_id = SourceId(link.next_source)
     link.next_source += 1
     link.sources[source_id] = SourceFile(

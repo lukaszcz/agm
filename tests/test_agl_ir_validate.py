@@ -160,7 +160,6 @@ def _make_program(
         module_id=MOD_A,
         scope_path=(),
         declared_name="Foo",
-        display_name="Foo",
         kind=NominalKind.RECORD,
     )
     sf = _source_file()
@@ -237,7 +236,6 @@ def test_case_arm_cannot_bind_multiple_fields_to_one_symbol() -> None:
                 module_id=MOD_A,
                 scope_path=(),
                 declared_name="Pair",
-                display_name="Pair",
                 kind=NominalKind.ENUM,
                 variants=(VariantDescriptor("Both", ("left", "right")),),
             )
@@ -283,7 +281,6 @@ def test_case_rejects_closure_capture_outside_payload_dominance() -> None:
                 module_id=MOD_A,
                 scope_path=(),
                 declared_name="Payload",
-                display_name="Payload",
                 kind=NominalKind.ENUM,
                 variants=(VariantDescriptor("Empty", ()), VariantDescriptor("Full", ("value",))),
             )
@@ -338,7 +335,6 @@ def test_case_arm_cannot_bind_a_private_source_symbol() -> None:
                 module_id=MOD_A,
                 scope_path=(),
                 declared_name="Box",
-                display_name="Box",
                 kind=NominalKind.ENUM,
                 variants=(VariantDescriptor("Box", ("value",)),),
             )
@@ -416,7 +412,6 @@ def test_case_without_default_requires_complete_enum_domain() -> None:
                 module_id=MOD_A,
                 scope_path=(),
                 declared_name="Result",
-                display_name="Result",
                 kind=NominalKind.ENUM,
                 variants=(VariantDescriptor("Ok", ()), VariantDescriptor("Error", ())),
             )
@@ -455,7 +450,6 @@ def test_case_without_default_allows_complete_enum_domain() -> None:
                 module_id=MOD_A,
                 scope_path=(),
                 declared_name="Result",
-                display_name="Result",
                 kind=NominalKind.ENUM,
                 variants=(VariantDescriptor("Ok", ()), VariantDescriptor("Error", ())),
             )
@@ -773,7 +767,6 @@ class TestDeepTierNominalDescriptor:
             module_id=MOD_A,
             scope_path=(),
             declared_name="Foo",
-            display_name="Foo",
             kind=NominalKind.RECORD,
         )
         prog = _make_program(nominals={NOM0: nom_desc})
@@ -787,7 +780,6 @@ class TestDeepTierNominalDescriptor:
             module_id=MOD_A,
             scope_path=(),
             declared_name="Foo",
-            display_name="Foo",
             kind=NominalKind.RECORD,
         )
         prog = _make_program(nominals={NOM0: nom_desc})
@@ -1230,7 +1222,6 @@ class TestIrFieldValidation:
                 module_id=MOD_A,
                 scope_path=(),
                 declared_name="Foo",
-                display_name="Foo",
                 kind=NominalKind.RECORD,
                 fields=("x",),
             ),
@@ -1239,7 +1230,6 @@ class TestIrFieldValidation:
                 module_id=MOD_A,
                 scope_path=(),
                 declared_name="Foo",
-                display_name="Foo",
                 kind=NominalKind.ENUM,
                 variants=(VariantDescriptor("some", ("x",)),),
             ),
@@ -1262,7 +1252,6 @@ class TestIrFieldValidation:
                 module_id=MOD_A,
                 scope_path=(),
                 declared_name="Foo",
-                display_name="Foo",
                 kind=NominalKind.RECORD,
                 fields=("x",),
             ),
@@ -1271,7 +1260,6 @@ class TestIrFieldValidation:
                 module_id=MOD_A,
                 scope_path=(),
                 declared_name="Foo",
-                display_name="Foo",
                 kind=NominalKind.ENUM,
                 variants=(VariantDescriptor("some", ("x",)),),
             ),
@@ -1322,7 +1310,6 @@ class TestIrFieldValidation:
                     module_id=MOD_A,
                     scope_path=(),
                     declared_name="Foo",
-                    display_name="Foo",
                     kind=NominalKind.RECORD,
                     fields=("x",),
                 )
@@ -2024,7 +2011,6 @@ class TestIrExecValidation:
             module_id=MOD_A,
             scope_path=(),
             declared_name="Foo",
-            display_name="Foo",
             kind=NominalKind.RECORD,
         )
         return ExecutableProgram(

@@ -188,12 +188,12 @@ class TestBuiltinNominals:
             declared={"Foo": DeclaredNominal(nominal=declared_nominal, display_name="Foo")}
         )
         assert table.nominal("Foo") == declared_nominal
-        assert table.display_name("Foo") == "Foo"
+        assert table.resolve("Foo").display_name == "Foo"
 
     def test_undeclared_name_answers_with_the_shipped_standard_library_identity(self) -> None:
         table = BuiltinNominals(declared={})
         assert table.nominal("RangeError") == NominalId(require_reserved_nominal_id("RangeError"))
-        assert table.display_name("RangeError") == "RangeError"
+        assert table.resolve("RangeError").display_name == "RangeError"
 
     def test_no_builtin_declarations_answers_every_name_with_the_shipped_identity(self) -> None:
         assert NO_BUILTIN_DECLARATIONS.nominal("ExecResult") == NominalId(
@@ -703,7 +703,6 @@ class TestNominalDescriptor:
             module_id=MOD_A,
             scope_path=(),
             declared_name="Foo",
-            display_name="Foo",
             kind=NominalKind.RECORD,
         )
         assert desc.nominal == NOM0
@@ -719,11 +718,10 @@ class TestNominalDescriptor:
             module_id=MOD_A,
             scope_path=(),
             declared_name="Foo",
-            display_name="Foo",
             kind=NominalKind.ENUM,
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
-            setattr(desc, "display_name", "Bar")
+            setattr(desc, "declared_name", "Bar")
 
 
 # ---------------------------------------------------------------------------
@@ -774,7 +772,6 @@ class TestExecutableProgram:
             module_id=MOD_A,
             scope_path=(),
             declared_name="Foo",
-            display_name="Foo",
             kind=NominalKind.RECORD,
         )
         sf = SourceFile(display_name="main.agl", normalized_text="")

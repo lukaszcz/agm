@@ -5036,13 +5036,16 @@ class TestImports:
 # Unpromoted nominal declarations: a declaration a partially failed entry
 # never promotes drops out of name resolution -- the previous declaration
 # (or its absence) stays in effect for every later entry exactly as before
-# the failed entry -- except a ``builtin`` declaration's host-mint override,
-# which is bare-name keyed and consulted directly by every later host mint,
-# so it is rolled back explicitly.
+# the failed entry. This holds uniformly for every declaration kind,
+# ``builtin`` included: the link image's nominal state -- descriptors and
+# the host-mint table alike -- is rebuilt from the shared type table on
+# every lowering, and that table excludes a declaration it marked as never
+# having taken effect (``TypeTable.orphan``) while retaining the one that
+# survived.
 # ---------------------------------------------------------------------------
 
 
-class TestUnpromotedNominalRollback:
+class TestUnpromotedNominalDeclarationEffects:
     def test_runtime_failure_leaves_the_previous_record_declaration_in_effect(self) -> None:
         s = ReplSession()
         assert s.eval_entry("record R\n  x: int").ok
@@ -5103,13 +5106,12 @@ class TestUnpromotedNominalRollback:
 
         assert not use.ok
 
-    def test_runtime_failure_restores_unpromoted_builtin_nominal_identity(self) -> None:
-        """A ``builtin`` declaration's host-mint override is the one exception
-        to the rule above: unlike an ordinary nominal descriptor, it is a
-        bare-name override every host-minting site consults directly, so it
-        alone still needs rollback -- proven here by a later host mint (no
-        earlier declaration exists) falling back to the canonical identity
-        and still being catchable."""
+    def test_runtime_failure_leaves_the_canonical_builtin_identity_in_effect(self) -> None:
+        """A ``builtin`` declaration is unpromoted the same way as any other
+        kind: proven here by a later host mint of ``RangeError`` (no earlier
+        program declaration exists) still landing on the canonical identity
+        and remaining catchable, exactly as an ordinary nominal falls back to
+        whatever preceded the failed entry."""
         s = ReplSession(default_stdlib=False)
 
         failed = s.eval_entry(
@@ -5132,10 +5134,11 @@ class TestUnpromotedNominalRollback:
 
         assert caught.ok, caught.diagnostics
 
-    def test_runtime_failure_restores_previous_builtin_nominal_identity(self) -> None:
-        """The same override, but with an earlier declaration already in
-        effect: the rollback must restore THAT declaration's own spelling
-        rather than leaving the failed, scoped redeclaration's spelling live.
+    def test_runtime_failure_leaves_the_previous_builtin_declaration_in_effect(self) -> None:
+        """The same declaration kind, but with an earlier one already in
+        effect: an unpromoted, scoped redeclaration must leave THAT earlier
+        declaration's own spelling live rather than the failed entry's
+        scoped spelling.
 
         A later ``catch RangeError`` cannot itself observe which identity is
         live here: the standard-library exception namespace always reseeds a
@@ -5143,13 +5146,14 @@ class TestUnpromotedNominalRollback:
         ``TypeEnvironment.seed_from``'s ``BUILTIN_EXCEPTIONS`` exclusion), so
         a catch clause resolves to the canonical identity regardless of any
         program declaration, in every entry but the declaring one itself.
-        What the rollback controls is which spelling a fresh host mint
-        raises under (``BuiltinNominals.display_name``, baked into the raised
-        value's ``display_name`` at the mint site) -- a later entry's
+        What is actually in effect is which spelling a fresh host mint
+        raises under (``DeclaredNominal.display_name``, baked into the
+        raised value's ``display_name`` at the mint site) -- a later entry's
         uncaught error reports the identity the mint actually used, which is
-        exactly the previously-declared, unscoped ``"RangeError"`` when the
-        rollback restores it, or the failed entry's own scoped
-        ``"Failed::RangeError"`` when it does not.
+        the previously-declared, unscoped ``"RangeError"`` here, since the
+        host-mint table is rebuilt from the shared type table on every
+        lowering and that table still carries the earlier declaration under
+        its own identity.
         """
         s = ReplSession(default_stdlib=False)
         declared = s.eval_entry("builtin exception RangeError extends Exception()")

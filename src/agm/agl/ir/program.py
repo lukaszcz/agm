@@ -23,7 +23,7 @@ from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
 from agm.agl.ir.contracts import ContractRequest, ParamDecoder
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import IrExpr, IrFunctionParam
-from agm.agl.modules.ids import ModuleId
+from agm.agl.modules.ids import ModuleId, spell_scope_path
 
 __all__ = [
     "ContractId",
@@ -105,8 +105,10 @@ class NominalDescriptor:
     ``scope_path``   — the declaration's scope path within its module.
     ``declared_name``— the bare name the declaration was written under (no
                        scope prefix).
-    ``display_name`` — the scoped source spelling (``scope_path`` joined with
-                       ``declared_name``); used for diagnostics and rendering.
+    ``display_name`` — the scoped source spelling, DERIVED from ``scope_path``
+                       and ``declared_name`` rather than stored, so a
+                       descriptor can never contradict its own path; used for
+                       diagnostics and rendering.
     ``kind``         — RECORD, ENUM, or EXCEPTION.
     ``fields``       — declared field names in declaration order (names only;
                        used for RECORD and EXCEPTION; ``()`` for ENUM which
@@ -137,11 +139,15 @@ class NominalDescriptor:
     module_id: ModuleId
     scope_path: tuple[str, ...]
     declared_name: str
-    display_name: str
     kind: NominalKind
     fields: tuple[str, ...] = ()
     variants: tuple[VariantDescriptor, ...] = ()
     bears_name_path: bool = field(default=True, compare=False)
+
+    @property
+    def display_name(self) -> str:
+        """The scoped source spelling this declaration was written under."""
+        return spell_scope_path((*self.scope_path, self.declared_name))
 
 
 # ---------------------------------------------------------------------------

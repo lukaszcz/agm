@@ -25,7 +25,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import TypeVar
 
-from agm.agl.diagnostics import AglError, Diagnostic
+from agm.agl.diagnostics import AglError
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.semantics.types import EnumType
 from agm.agl.syntax.nodes import (
@@ -766,9 +766,6 @@ class ModuleResolution:
     ``program_name``
         The source-declared program name from a ``program NAME`` declaration,
         or ``None`` when undeclared.
-    ``warnings``
-        Non-fatal scope-pass diagnostics (severity ``"warning"``), e.g. an
-        Empty by default.
     ``declarations``
         Every named declaration keyed by ``(module_id, scope_path, name)``.
         Root declarations use the empty path just like any other scope.
@@ -816,7 +813,6 @@ class ModuleResolution:
     scope_nodes: dict[ScopePath, ScopeNode] = field(default_factory=dict)
     declared_functions: dict[str, FuncDef] = field(default_factory=dict)
     program_name: str | None = None
-    warnings: tuple[Diagnostic, ...] = ()
     declared_type_names: frozenset[str] = frozenset()
     declared_type_paths: frozenset[ScopePath] = frozenset()
     constructor_candidates: dict[str, tuple[ConstructorRef, ...]] = field(default_factory=dict)

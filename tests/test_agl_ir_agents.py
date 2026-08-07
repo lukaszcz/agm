@@ -1513,7 +1513,6 @@ def test_validate_contract_request_recursive_decode_defs() -> None:
                 module_id=ENTRY_ID,
                 scope_path=(),
                 declared_name="Tree",
-                display_name="Tree",
                 kind=NominalKind.ENUM,
                 variants=(
                     VariantDescriptor("Leaf", ()),

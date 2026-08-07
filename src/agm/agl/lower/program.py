@@ -56,20 +56,20 @@ def lower_program(
     # the IR self-check over its own output below.
     checked = compiled.checked
     link = _link if _link is not None else _LinkState()
-    # Folded into the link's accumulated table rather than replacing it
-    # outright: a reused REPL link persists across entries even though each
-    # call re-checks only the CURRENT compile unit's modules, so an earlier
-    # entry's ``builtin`` declaration must stay live for a later entry that
-    # does not redeclare it. The current compile unit's own declarations win
-    # on a name collision (e.g. a later entry redeclaring the same name at a
-    # different scope path).
-    link.builtin_nominals = link.builtin_nominals.accumulate(
-        builtin_nominals_from_declarations(checked.modules)
-    )
 
     # Every per-module TypeEnvironment shares one TypeTable instance (built
     # during checking); pick the entry module's env to reach it.
     type_table = checked.modules[checked.entry_id].type_env.type_table
+
+    # Rebuilt from scratch rather than folded into the link's prior table: the
+    # shared ``TypeTable`` is itself what accumulates across REPL entries (a
+    # new entry's type environment is seeded from the session's, merging in
+    # every prior entry's declarations and its orphan set -- see
+    # ``TypeEnvironment.seed_from``/``TypeTable.merge_from``), so rebuilding
+    # from it on every lowering already keeps an earlier entry's ``builtin``
+    # declaration live for a later entry that does not redeclare it, while
+    # automatically dropping one an entry never promoted.
+    link.builtin_nominals = builtin_nominals_from_declarations(type_table)
 
     # Step 1: Register a SourceFile for every module.
     module_source_ids: dict[ModuleId, SourceId] = {}
@@ -103,7 +103,6 @@ def lower_program(
     # nominal lookup.
     for typedef in type_table.entries():
         nominal = NominalId(typedef.decl_node_id)
-        display_name = "::".join((*typedef.scope_path, typedef.name))
         bears_name_path = type_table.is_current(typedef)
         if typedef.kind == "record":
             link.nominals[nominal] = NominalDescriptor(
@@ -111,7 +110,6 @@ def lower_program(
                 module_id=typedef.module_id,
                 scope_path=typedef.scope_path,
                 declared_name=typedef.name,
-                display_name=display_name,
                 kind=NominalKind.RECORD,
                 fields=tuple(name for name, _ in typedef.fields),
                 variants=(),
@@ -123,7 +121,6 @@ def lower_program(
                 module_id=typedef.module_id,
                 scope_path=typedef.scope_path,
                 declared_name=typedef.name,
-                display_name=display_name,
                 kind=NominalKind.ENUM,
                 fields=(),
                 variants=tuple(
@@ -140,7 +137,6 @@ def lower_program(
                 module_id=typedef.module_id,
                 scope_path=typedef.scope_path,
                 declared_name=typedef.name,
-                display_name=display_name,
                 kind=NominalKind.EXCEPTION,
                 fields=tuple(type_table.exception_fields(handle).keys()),
                 variants=(),
@@ -172,7 +168,6 @@ def lower_program(
                     module_id=typ.module_id,
                     scope_path=typ.scope_path,
                     declared_name=typ.name,
-                    display_name="::".join((*typ.scope_path, typ.name)),
                     kind=NominalKind.RECORD,
                     fields=tuple(fname for fname, _ in generic_typedef.fields),
                     bears_name_path=bears_name_path,
@@ -183,7 +178,6 @@ def lower_program(
                     module_id=typ.module_id,
                     scope_path=typ.scope_path,
                     declared_name=typ.name,
-                    display_name="::".join((*typ.scope_path, typ.name)),
                     kind=NominalKind.ENUM,
                     variants=tuple(
                         VariantDescriptor(vname, tuple(fname for fname, _ in vfields))
@@ -241,7 +235,7 @@ def lower_program(
     # Lower declared engine defaults separately from program initializers. They
     # are constant expressions evaluated only while an interpreter is seeded.
     builtin_setting_defaults = {
-        item.name: lowerer.lower_coerced(item.default, lowerer._node_type(item.default.node_id))
+        item.name: lowerer.lower_expr(item.default)
         for mid, lowerer in module_lowerers.items()
         for item in static_items(checked.modules[mid].resolved.program.body.items)
         if isinstance(item, BuiltinVarDecl) and item.default is not None

@@ -18,6 +18,7 @@ from agm.agl.ir.reserved_nominals import reserved_nominal_id
 from agm.agl.modules.ids import spell_declaration
 from agm.agl.scope.symbols import ConstructorRef
 from agm.agl.semantics.analyses import nominal_references
+from agm.agl.semantics.type_table import DeclId
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
     BoolType,
@@ -170,6 +171,13 @@ class BuiltinCallChecker:
 
     def __init__(self, ctx: BuiltinCheckCtx) -> None:
         self._ctx = ctx
+        # Contracts already found coherent (:meth:`_check_host_contract_coherent`).
+        # The verdict depends only on the declaration and the type table, not
+        # on the call site, and every obligation is checked after registration
+        # settles -- so a contract reached from many call sites is walked once
+        # rather than once per site. Only successes are recorded; the first
+        # incoherent contract raises.
+        self._coherent_contracts: set[DeclId] = set()
 
     # --- print ---
 
@@ -638,6 +646,8 @@ class BuiltinCallChecker:
         contract is rejected here (an ordinary, user-facing static error)
         rather than left to crash the evaluator.
         """
+        if contract_type.decl_id in self._coherent_contracts:
+            return
         table = self._ctx._env.type_table
         field_types = (
             table.record_fields(contract_type)
@@ -662,6 +672,7 @@ class BuiltinCallChecker:
                         "here.",
                         span=span,
                     )
+        self._coherent_contracts.add(contract_type.decl_id)
 
     # --- shared explicit-target resolver for --
 

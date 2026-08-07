@@ -102,7 +102,6 @@ def _make_minimal_program(
             module_id=STD_CORE_ID,
             scope_path=(),
             declared_name="MaxIterationsExceeded",
-            display_name="MaxIterationsExceeded",
             kind=NominalKind.EXCEPTION,
             fields=tuple(exc_fields.keys()),
             variants=(),

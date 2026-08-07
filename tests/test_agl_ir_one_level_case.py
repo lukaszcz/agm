@@ -66,7 +66,6 @@ def _color_descriptor() -> NominalDescriptor:
         module_id=ENTRY_ID,
         scope_path=(),
         declared_name="Color",
-        display_name="Color",
         kind=NominalKind.ENUM,
         variants=(
             VariantDescriptor("Plain", ()),
@@ -194,7 +193,6 @@ def test_validation_rejects_non_enum_nominal_and_corrupted_literal_key() -> None
         module_id=ENTRY_ID,
         scope_path=(),
         declared_name="Color",
-        display_name="Color",
         kind=NominalKind.RECORD,
     )
     enum_case = IrCase(

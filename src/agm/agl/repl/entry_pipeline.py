@@ -9,7 +9,7 @@ by ``ReplSession`` via the narrow ``EntryPipelineCtx`` Protocol. Must NOT import
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, cast
 
@@ -20,7 +20,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from agm.agl.eval.ir_interpreter import IrInterpreter
-    from agm.agl.ir.builtin_nominals import BuiltinNominals
     from agm.agl.ir.contracts import ContractPayload
     from agm.agl.ir.ids import SymbolId
     from agm.agl.lower import LinkImage
@@ -146,7 +145,6 @@ class LoadedCheckedProgram:
     new_next_id: int
     entry_imports: "tuple[ImportDecl, ...]"
     entry_opens: "tuple[OpenDecl | ImportDecl | ScopeRegion, ...]"
-    resolved_warnings: "tuple[Diagnostic, ...]"
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +248,6 @@ class EntryPipeline:
             new_next_id=new_next_id,
             entry_imports=entry_imports,
             entry_opens=entry_opens,
-            resolved_warnings=resolved_program.warnings,
         )
 
     def eval_entry(
@@ -320,11 +317,7 @@ class EntryPipeline:
         entry_cm = checked_program.modules[ENTRY_ID]
 
         # Collect warnings from all passes.
-        warnings: list[Diagnostic] = [
-            *tab_warnings,
-            *loaded.resolved_warnings,
-            *checked_program.warnings,
-        ]
+        warnings: list[Diagnostic] = [*tab_warnings, *checked_program.warnings]
 
         from agm.agl.matchcompile import compile_program_matches, diagnostics_from_match_issues
 
@@ -630,16 +623,13 @@ class EntryPipeline:
         }
         companion_paths.update({mid: lm.companion_path for mid, lm in new_modules.items()})
         # Lowering allocates into the persistent image, so every way this entry
-        # can fail from here on rolls back against one of these snapshots: an
-        # entry rejected before anything is promoted discards its whole link
-        # delta, while one that partially ran keeps that delta and rolls back
-        # only the one piece of nominal state that is both name-keyed and
-        # authoritative: a ``builtin`` declaration's host-mint override (see
-        # ``_restore_unpromoted_entry_builtin_nominals``). Linked nominal
-        # descriptors need no rollback because lowering rebuilds them from
-        # the shared type table on every entry.
+        # can fail from here on rolls back against this snapshot: an entry
+        # rejected before anything is promoted discards its whole link delta
+        # via ``restore_state``. A partially run entry keeps its delta and
+        # needs no nominal rollback at all -- the link image's nominal state
+        # is rebuilt from the shared type table on every lowering, so it is
+        # always current regardless of what this entry did or did not promote.
         link_snapshot = self._ctx._link_image.snapshot_state()
-        builtin_nominal_snapshot = self._ctx._link_image.snapshot_builtin_nominals()
         lowered = lower_repl_program(
             compiled,
             image=self._ctx._link_image,
@@ -780,9 +770,10 @@ class EntryPipeline:
             itself is conservative: it excludes params whose symbols were not
             installed and applies the declaration-dependency fixpoint. Unlike a
             rejected entry, this one keeps a partial link delta rather than
-            being restored wholesale, so the only nominal state it rolls back
-            is a ``builtin`` declaration's bare-name host-mint override, which
-            later host mints would otherwise keep consulting.
+            being restored wholesale, and needs no nominal rollback of its
+            own: the link image's nominal state, including any ``builtin``
+            declaration's host-mint override, is rebuilt from the shared type
+            table on every lowering.
             """
             trace.run_end(ok=False)
             self._persist_interpreter_settings(interp, trace)
@@ -791,11 +782,6 @@ class EntryPipeline:
                 interp.entry_param_symbols_installed,
             )
             installed = promote(partial=True, promoted_declaration_ids=promoted)
-            self._restore_unpromoted_entry_builtin_nominals(
-                orig_program,
-                promoted,
-                builtin_nominal_snapshot,
-            )
             kind, name = self._ctx._classify(orig_program)
             return EntryResult(
                 kind=kind,
@@ -1108,45 +1094,3 @@ class EntryPipeline:
         # mode deliberately (``std/config::log := false``) does persist ``None``.
         if not trace.disabled:
             self._ctx._trace_path = trace.path
-
-    def _restore_unpromoted_entry_builtin_nominals(
-        self,
-        program: Program,
-        promoted_declaration_ids: frozenset[int],
-        builtin_nominal_snapshot: "BuiltinNominals",
-    ) -> None:
-        """Roll back host-mint overrides for this entry's unpromoted ``builtin`` declarations.
-
-        An ordinary unpromoted record/enum/exception declaration needs no
-        nominal rollback of its own, because the link image's descriptors are
-        rebuilt from the shared type table on every entry rather than being
-        authoritative state; marking the declaration as never having taken
-        effect (``TypeTable.orphan``) and restoring the session's own type
-        namespace are what put the surviving declaration back in reach. A
-        ``builtin`` declaration is the one exception, because its identity
-        ALSO lives in
-        ``BuiltinNominals.declared`` -- a bare-name-keyed override that
-        accumulates across entries and that every host-minting site consults
-        directly -- so an orphaned entry left there would still steer every
-        later host mint of that name at the identity this entry never
-        promoted. See ``LinkImage.restore_builtin_nominals``.
-        """
-        from agm.agl.syntax.nodes import EnumDef, ExceptionDef, RecordDef, ScopeRegion
-
-        def type_declarations(
-            items: tuple[object, ...],
-        ) -> Iterator[RecordDef | EnumDef | ExceptionDef]:
-            for item in items:
-                if isinstance(item, ScopeRegion):
-                    yield from type_declarations(item.items)
-                elif isinstance(item, (RecordDef, EnumDef, ExceptionDef)):
-                    yield item
-
-        unpromoted_builtin_names = (
-            item.name
-            for item in type_declarations(program.body.items)
-            if item.node_id not in promoted_declaration_ids and item.is_builtin
-        )
-        self._ctx._link_image.restore_builtin_nominals(
-            builtin_nominal_snapshot, unpromoted_builtin_names
-        )

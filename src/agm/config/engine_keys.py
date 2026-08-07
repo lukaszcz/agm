@@ -46,28 +46,71 @@ class EngineKeyConsumer(Enum):
 
 @dataclass(frozen=True)
 class EngineKeySpec:
-    """One engine key: its kebab-case name, value kind, and consuming side.
+    """One engine key: its shape, config accessor, and host default.
 
     ``reconfigures_host`` marks a host-consumed key whose write reconfigures a
-    live host service (the trace destination).  A register-only key leaves it
-    false: the value is read back on demand, with nothing to reconfigure.
+    live host service (the trace destination). ``config_attr`` names the
+    corresponding ``ExecConfig`` attribute without making this pure data leaf
+    import the config layer. ``has_default`` distinguishes an absent host
+    default from an ``Option`` default whose value is ``None``.
     """
 
     name: str
     kind: EngineKeyKind
     consumer: EngineKeyConsumer
     reconfigures_host: bool = False
+    config_attr: str | None = None
+    default: object = None
+    has_default: bool = True
 
 
 # Ordered catalog of every engine key.  This is the one place a key is declared;
 # every projection below is derived from it.
 ENGINE_KEYS: tuple[EngineKeySpec, ...] = (
-    EngineKeySpec("log", EngineKeyKind.BOOL, EngineKeyConsumer.HOST_CONSUMED, True),
-    EngineKeySpec("strict-json", EngineKeyKind.BOOL, EngineKeyConsumer.RUNTIME_LIVE),
-    EngineKeySpec("max-iters", EngineKeyKind.INT, EngineKeyConsumer.RUNTIME_LIVE),
-    EngineKeySpec("default-agent", EngineKeyKind.AGENT, EngineKeyConsumer.HOST_CONSUMED),
-    EngineKeySpec("log-file", EngineKeyKind.OPTION_TEXT, EngineKeyConsumer.HOST_CONSUMED, True),
-    EngineKeySpec("timeout", EngineKeyKind.OPTION_TEXT, EngineKeyConsumer.RUNTIME_LIVE),
+    EngineKeySpec(
+        "log",
+        EngineKeyKind.BOOL,
+        EngineKeyConsumer.HOST_CONSUMED,
+        reconfigures_host=True,
+        config_attr="log",
+        default=False,
+    ),
+    EngineKeySpec(
+        "strict-json",
+        EngineKeyKind.BOOL,
+        EngineKeyConsumer.RUNTIME_LIVE,
+        config_attr="strict_json",
+        default=False,
+    ),
+    EngineKeySpec(
+        "max-iters",
+        EngineKeyKind.INT,
+        EngineKeyConsumer.RUNTIME_LIVE,
+        config_attr="default_loop_limit",
+        default=0,
+    ),
+    EngineKeySpec(
+        "default-agent",
+        EngineKeyKind.AGENT,
+        EngineKeyConsumer.HOST_CONSUMED,
+        config_attr="default_agent",
+        has_default=False,
+    ),
+    EngineKeySpec(
+        "log-file",
+        EngineKeyKind.OPTION_TEXT,
+        EngineKeyConsumer.HOST_CONSUMED,
+        reconfigures_host=True,
+        config_attr="log_file",
+        default=None,
+    ),
+    EngineKeySpec(
+        "timeout",
+        EngineKeyKind.OPTION_TEXT,
+        EngineKeyConsumer.RUNTIME_LIVE,
+        config_attr="timeout",
+        default=None,
+    ),
 )
 
 # Ordered projection for consumers that only need name -> value kind.

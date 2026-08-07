@@ -133,15 +133,22 @@ def run(args: ReplArgs) -> None:
     # The raw timeout preserves its configured spelling.  An AgL agent literal
     # (``--agent``/``[exec] default-agent``) becomes an override spliced into
     # the session's own first-loaded ``std/config`` rather than a seed value.
+    cli_values: dict[str, object | None] = {}
+    if args.strict_json is not None:
+        cli_values["strict-json"] = args.strict_json
+    if args.max_iters is not None:
+        cli_values["max-iters"] = args.max_iters
+    if args.no_log:
+        cli_values["log"] = False
+    elif args.log:
+        cli_values["log"] = True
+    if args.log_file is not None:
+        cli_values["log-file"] = args.log_file
+
     engine_seeds = build_host_engine_seeds(
         config=config,
         primary_table=toml_dict(merged_config.get("exec")),
-        log_enabled=log_decision.enabled,
-        strict_json=args.strict_json,
-        max_iters=args.max_iters,
-        log=args.log,
-        no_log=args.no_log,
-        log_file=args.log_file,
+        cli_values=cli_values,
         agent=args.agent,
     )
 

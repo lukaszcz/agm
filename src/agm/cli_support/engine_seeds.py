@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from agm.agent.runner import parse_command
 from agm.agl.runtime.params import build_engine_config_seeds, convert_config_value, raw_option_str
 from agm.agl.semantics.engine_keys import get_engine_key_type
 from agm.agl.setting_overrides import SettingOverride
-from agm.config.engine_keys import ENGINE_KEY_NAMES
+from agm.config.engine_keys import ENGINE_KEY_NAMES, ENGINE_KEYS, EngineKeyKind, EngineKeySpec
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -79,31 +79,38 @@ def _require_agent_literal_text(literal: object, *, source: str) -> str:
     return literal
 
 
+def _configured_value(
+    spec: EngineKeySpec,
+    config: "ExecConfig",
+    primary_table: "Mapping[str, object]",
+    fallback_table: "Mapping[str, object]",
+) -> object | None:
+    """Return one configured engine value, preserving raw ``Option[text]`` spelling."""
+    assert spec.config_attr is not None
+    configured_value = cast(object | None, getattr(config, spec.config_attr))
+    if configured_value is None:
+        return None
+    if spec.kind is EngineKeyKind.OPTION_TEXT:
+        return raw_option_str(primary_table, fallback_table, spec.name)
+    return configured_value
+
+
 def build_host_engine_seeds(
     *,
     config: "ExecConfig",
     primary_table: "Mapping[str, object]",
     fallback_table: "Mapping[str, object] | None" = None,
-    log_enabled: bool,
-    strict_json: bool | None,
-    max_iters: int | None,
-    log: bool,
-    no_log: bool,
-    log_file: str | None,
+    cli_values: "Mapping[str, object | None]",
     agent: str | None,
-    timeout: str | None = None,
-    no_timeout: bool = False,
-    no_log_file: bool = False,
 ) -> EngineSeeds:
     """Decode the engine settings the host explicitly controls into seed values.
 
     Only explicit controls are seeded: a setting left to its default stays
     absent from the result, so a ``builtin var`` initializer supplies it instead
-    of being suppressed by a host-side floor.  CLI flags win over the
-    configuration tables, which are consulted in *primary_table* then
-    *fallback_table* order.  ``--no-timeout``/``--no-log-file`` seed an explicit
-    empty ``Option``, which is a control rather than an absence; commands
-    without those flags leave them unset.
+    of being suppressed by a host-side floor. ``cli_values`` contains only
+    explicitly supplied CLI values; its present ``None`` values represent an
+    explicit empty ``Option``. CLI values win over configuration tables, which
+    are consulted in *primary_table* then *fallback_table* order.
 
     ``default-agent`` precedence, highest first: ``--agent``, then
     ``[exec]``/``[<program>] default-agent``, then ``[exec] runner``.  Exactly
@@ -133,35 +140,29 @@ def build_host_engine_seeds(
     configured = {key for key in ENGINE_KEY_NAMES if key in primary_table or key in fallback}
 
     seed_raw: dict[str, object] = {}
-    if strict_json is not None:
-        seed_raw["strict-json"] = strict_json
-    elif "strict-json" in configured:
-        seed_raw["strict-json"] = config.strict_json
+    for spec in ENGINE_KEYS:
+        # ``log`` is implied by log-file and ``default-agent`` has distinct
+        # source-text/runner precedence, so neither follows per-key resolution.
+        if spec.name in {"log", "default-agent"}:
+            continue
+        if spec.name in cli_values:
+            seed_raw[spec.name] = cli_values[spec.name]
+        elif spec.name in configured:
+            value = _configured_value(spec, config, primary_table, fallback)
+            # A ``None`` config result is absent, not an explicit control. In
+            # particular this lets a builtin initializer supply invalid/empty
+            # max-iters and Option values just as before.
+            if value is not None:
+                seed_raw[spec.name] = value
 
-    if max_iters is not None:
-        seed_raw["max-iters"] = max_iters
-    elif "max-iters" in configured and config.default_loop_limit is not None:
-        seed_raw["max-iters"] = config.default_loop_limit
-
-    if timeout is not None:
-        seed_raw["timeout"] = timeout
-    elif no_timeout:
-        seed_raw["timeout"] = None
-    elif "timeout" in configured:
-        # The raw spelling (e.g. "30s") is preserved for the Option[text] key.
-        raw_timeout = raw_option_str(primary_table, fallback, "timeout")
-        if raw_timeout is not None:
-            seed_raw["timeout"] = raw_timeout
-
-    if no_log or log or log_file is not None or configured & {"log", "log-file"}:
-        seed_raw["log"] = log_enabled
-
-    if log_file is not None:
-        seed_raw["log-file"] = log_file
-    elif no_log_file:
-        seed_raw["log-file"] = None
-    elif "log-file" in configured and config.log_file is not None:
-        seed_raw["log-file"] = config.log_file
+    # ``log`` is not an ordinary setting: a supplied log-file implies it. Keep
+    # that relationship explicit instead of encoding it in the catalog loop.
+    if "log" in cli_values:
+        seed_raw["log"] = cli_values["log"]
+    elif cli_values.get("log-file") is not None:
+        seed_raw["log"] = True
+    elif configured & {"log", "log-file"}:
+        seed_raw["log"] = config.log or config.log_file is not None
 
     seeds = build_engine_config_seeds(seed_raw)
     overrides: dict[str, SettingOverride] = {}

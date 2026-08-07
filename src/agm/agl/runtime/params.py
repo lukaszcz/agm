@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from agm.agl.diagnostics import Diagnostic
+from agm.config.engine_keys import ENGINE_KEYS
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -56,18 +57,6 @@ def raw_option_str(
     return None
 
 
-# The SINGLE owner of the host-side engine-key defaults: the IR evaluator seeds
-# its registers from engine_default_settings rather than carrying a table of its
-# own.  ``default-agent`` has no host-side default (see engine_default_settings).
-_ENGINE_DEFAULTS: dict[str, object] = {
-    "log": False,
-    "strict-json": False,
-    "max-iters": 0,
-    "log-file": None,
-    "timeout": None,
-}
-
-
 def build_engine_config_seeds(raw_values: "Mapping[str, object]") -> "dict[str, Value]":
     """Decode explicitly supplied scalar or ``Option`` host engine settings.
 
@@ -93,16 +82,19 @@ def build_engine_config_seeds(raw_values: "Mapping[str, object]") -> "dict[str, 
 def engine_default_settings() -> "dict[str, Value]":
     """Build the typed engine-default value for every scalar/``Option[text]`` engine key.
 
-    Decodes the keys in :data:`_ENGINE_DEFAULTS` via :func:`convert_config_value`
-    (``false``/``false``/``0``/``none``/``none``, where zero represents the
-    disabled ``max-iters`` safety valve), building its own fresh seeded
-    ``TypeTable`` rather than requiring one from the caller.
+    Derives the raw values from the shared engine-key catalog, then decodes
+    them via :func:`convert_config_value` (``false``/``false``/``0``/``none``/
+    ``none``, where zero represents the disabled ``max-iters`` safety valve),
+    building its own fresh seeded ``TypeTable`` rather than requiring one from
+    the caller.
 
     ``default-agent`` is an ``Agent`` value rather than a scalar or
     ``Option[text]`` one and has no host-side default: it comes from the
     ``std/config`` ``builtin var`` declaration like any other declared default.
     """
-    return build_engine_config_seeds(_ENGINE_DEFAULTS)
+    return build_engine_config_seeds(
+        {spec.name: spec.default for spec in ENGINE_KEYS if spec.has_default}
+    )
 
 
 def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":

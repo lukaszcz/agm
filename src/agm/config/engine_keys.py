@@ -35,9 +35,8 @@ class EngineKeyConsumer(Enum):
         cap, the strict-json mode, the shell timeout), so a write takes effect
         inside the evaluator itself.
     ``HOST_CONSUMED``
-        The key has no interpreter field; its value lives in a register.  A
-        host-consumed key additionally sets ``reconfigures_host`` when a write
-        must be reflected into a live host service rather than only stored.
+        The key has no interpreter field; its value lives in a register for the
+        host to read on demand.
     """
 
     RUNTIME_LIVE = "runtime_live"
@@ -48,17 +47,15 @@ class EngineKeyConsumer(Enum):
 class EngineKeySpec:
     """One engine key: its shape, config accessor, and host default.
 
-    ``reconfigures_host`` marks a host-consumed key whose write reconfigures a
-    live host service (the trace destination). ``config_attr`` names the
-    corresponding ``ExecConfig`` attribute without making this pure data leaf
-    import the config layer. ``has_default`` distinguishes an absent host
-    default from an ``Option`` default whose value is ``None``.
+    ``config_attr`` names the corresponding ``ExecConfig`` attribute without
+    making this pure data leaf import the config layer. ``has_default``
+    distinguishes an absent host default from an ``Option`` default whose value
+    is ``None``.
     """
 
     name: str
     kind: EngineKeyKind
     consumer: EngineKeyConsumer
-    reconfigures_host: bool = False
     config_attr: str | None = None
     default: object = None
     has_default: bool = True
@@ -71,7 +68,6 @@ ENGINE_KEYS: tuple[EngineKeySpec, ...] = (
         "log",
         EngineKeyKind.BOOL,
         EngineKeyConsumer.HOST_CONSUMED,
-        reconfigures_host=True,
         config_attr="log",
         default=False,
     ),
@@ -100,7 +96,6 @@ ENGINE_KEYS: tuple[EngineKeySpec, ...] = (
         "log-file",
         EngineKeyKind.OPTION_TEXT,
         EngineKeyConsumer.HOST_CONSUMED,
-        reconfigures_host=True,
         config_attr="log_file",
         default=None,
     ),
@@ -133,7 +128,19 @@ RUNTIME_LIVE_ENGINE_KEYS: frozenset[str] = engine_keys_for(EngineKeyConsumer.RUN
 # Keys backed by a host-owned register.
 HOST_CONSUMED_ENGINE_KEYS: frozenset[str] = engine_keys_for(EngineKeyConsumer.HOST_CONSUMED)
 
-# Keys whose write must be reflected into a live host service.
-HOST_RECONFIGURING_ENGINE_KEYS: frozenset[str] = frozenset(
-    spec.name for spec in ENGINE_KEYS if spec.reconfigures_host
+#: The register pair backing the trace destination. A write to either repoints
+#: the same trace store; see ``IrInterpreter._reconfigure_host_service``.
+TRACE_ENGINE_KEYS: frozenset[str] = frozenset(
+    spec.name
+    for spec in ENGINE_KEYS
+    if spec.consumer is EngineKeyConsumer.HOST_CONSUMED and spec.name in {"log", "log-file"}
 )
+
+
+def trace_write_implies_enabled(key: str, value_is_some: bool) -> bool:
+    """Return whether a trace-register write also enables trace logging.
+
+    A ``Some`` write to ``log-file`` supplies a trace destination and therefore
+    implies the ``log`` register is enabled.
+    """
+    return key == "log-file" and value_is_some

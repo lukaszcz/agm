@@ -16,6 +16,10 @@ The Python FFI is split between `runtime/externs.py`, which loads companions and
 
 A second sentinel, `AglNonDataValue` (`runtime/serialize.py`), covers the other way JSON serialization can fail: a value kind with no JSON representation at all (`unit`, constructor, function, iterator). Unlike the cycle sentinel it has no catchable-exception form, because every evaluator route into serialization is statically gated by `is_json_convertible` — it can only arrive via the two ungated reporters, trace logging and in-flight error reporting, which degrade it to a marker exactly as they do a cycle. A record or exception field may legitimately hold such a value even though casting its type to `json` is a static error.
 
+## Live Trace Settings
+
+The trace destination is the sole live host service configured by an AgL `builtin var` write. The engine-key catalog names its `log`/`log-file` register pair explicitly; either write repoints the same trace store, while other host-consumed settings remain registers read on demand. `runtime/host_settings.py` applies the command-supplied trace-path policy without importing the command layer.
+
 ## Pipeline Orchestrator
 
 The pipeline sits on top: it drives the compile → lower → evaluate sequence and assembles the host environment, and it is the public entry point used by `agm exec` and the REPL. Programs are parameterized by `param` declarations resolved at evaluation time (external value > default expression > error for a required param), and the pipeline can discover the parameter inventory before execution so a host can wire external values ([repl.md](agl/repl.md)). Every artifact a pass produces is handed forward rather than recomputed, so however many times a host resumes the pipeline, the program compiles and lowers exactly once. Pure compile-time schema and format-instruction generation lives in its own helper so lowering stays independent of runtime execution.

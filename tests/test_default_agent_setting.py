@@ -75,6 +75,34 @@ def test_default_agent_initializer_and_qualified_write_are_visible() -> None:
     assert result.bindings["updated"] == agent_value("AgentCommand", command="command")
 
 
+@pytest.mark.parametrize(
+    ("write", "expected"),
+    [
+        ("std/config::log := true", (True, None)),
+        ('std/config::log-file := Some("trace.jsonl")', (True, "trace.jsonl")),
+    ],
+)
+def test_trace_setting_writes_reconfigure_trace(
+    write: str, expected: tuple[bool, str | None]
+) -> None:
+    """Each trace-register write repoints the same live trace store."""
+    from agm.agl.runtime.host_settings import HostSettingsPolicy
+
+    trace_settings: list[tuple[bool, str | None]] = []
+
+    def resolve_trace_path(enabled: bool, log_file: str | None) -> None:
+        trace_settings.append((enabled, log_file))
+        return None
+
+    result = _run(
+        f"import std/config\n{write}\n()\n",
+        host_settings_policy=HostSettingsPolicy(resolve_trace_path=resolve_trace_path),
+    )
+
+    assert result.ok
+    assert trace_settings == [(False, None), expected]
+
+
 def test_default_agent_write_does_not_reconfigure_host_services() -> None:
     from agm.agl.runtime.host_settings import HostSettingsPolicy
 

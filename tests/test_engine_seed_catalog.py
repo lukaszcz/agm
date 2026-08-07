@@ -6,7 +6,7 @@ import pytest
 
 from agm.agl.runtime.params import engine_default_settings, raw_option_str
 from agm.cli_support.engine_seeds import build_host_engine_seeds
-from agm.config.engine_keys import ENGINE_KEYS
+from agm.config.engine_keys import ENGINE_KEY_NAMES, ENGINE_KEYS, TRACE_ENGINE_KEYS
 from agm.config.general import ExecConfig
 
 _CONFIG_RAW_VALUES: dict[str, object] = {
@@ -125,6 +125,11 @@ def test_configured_numeric_timeout_is_seeded_from_its_raw_spelling() -> None:
     )
 
     assert "timeout" in seeds.values
+
+
+def test_trace_engine_keys_are_declared_engine_keys() -> None:
+    """The trace register pair remains a projection of the engine-key catalog."""
+    assert TRACE_ENGINE_KEYS <= ENGINE_KEY_NAMES
 
 
 def test_engine_defaults_cover_exactly_the_catalog_keys_with_defaults() -> None:

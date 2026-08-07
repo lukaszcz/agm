@@ -162,8 +162,9 @@ from agm.agl.semantics.values import (
 )
 from agm.config.engine_keys import (
     HOST_CONSUMED_ENGINE_KEYS,
-    HOST_RECONFIGURING_ENGINE_KEYS,
     RUNTIME_LIVE_ENGINE_KEYS,
+    TRACE_ENGINE_KEYS,
+    trace_write_implies_enabled,
 )
 from agm.core.parse import format_timeout as _format_timeout
 from agm.core.parse import parse_timeout as _parse_timeout
@@ -1688,8 +1689,9 @@ class IrInterpreter:
         The three runtime-live keys route through ``_apply_config_effect`` so the
         live effect (loop cap, strict-json mode, shell timeout) takes hold from
         the write onward; the host-consumed keys update their register.
-        ``log`` and ``log-file`` additionally reconfigure the live trace service
-        when a host reconfigurer is present; ``default-agent`` does not.
+        Writes to the ``log``/``log-file`` trace-register pair additionally
+        reconfigure the live trace service when a host reconfigurer is present;
+        ``default-agent`` remains a register-only value.
         """
         if key in RUNTIME_LIVE_ENGINE_KEYS:
             self._apply_config_effect(key, value)
@@ -1700,11 +1702,11 @@ class IrInterpreter:
 
         previous = dict(self._builtin_host_settings)
         self._builtin_host_settings[key] = value
-        if key == "log-file":
-            assert isinstance(value, EnumValue)
-            if value.variant == "Some":
-                self._builtin_host_settings["log"] = BoolValue(True)
-        if self._host_reconfigurer is None or key not in HOST_RECONFIGURING_ENGINE_KEYS:
+        if trace_write_implies_enabled(
+            key, isinstance(value, EnumValue) and value.variant == "Some"
+        ):
+            self._builtin_host_settings["log"] = BoolValue(True)
+        if self._host_reconfigurer is None or key not in TRACE_ENGINE_KEYS:
             return
         try:
             self._reconfigure_host_service()

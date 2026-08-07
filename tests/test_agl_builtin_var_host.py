@@ -1,9 +1,9 @@
 """Host-service reconfiguration for host-consumed ``builtin var`` settings.
 
-Writing the ``runner``, ``log``, or ``log-file`` engine settings (via
-``std/config::NAME := ...``) reflects into the live host services: ``runner``
-rebuilds the default agent that unnamed ``ask`` calls dispatch through, and
-``log``/``log-file`` repoint the trace store.  These tests drive the ``agm exec``
+Writing the ``default-agent``, ``log``, or ``log-file`` engine settings (via
+``std/config::NAME := ...``) updates the host-visible state: ``default-agent``
+changes what unnamed ``ask`` calls dispatch through, and ``log``/``log-file``
+repoint the trace store. These tests drive the ``agm exec``
 command with the agent runner subprocess mocked, plus a direct pipeline test with
 a recording policy for the reconfiguration hooks.
 """
@@ -131,7 +131,7 @@ class TestCommandEngineSeeding:
         assert exc_info.value.code == 2
 
 
-class TestRunnerReconfiguration:
+class TestDefaultAgentReconfiguration:
     def test_default_agent_write_reconfigures_ask(
         self, tmp_path: Path, fake_agent_transport: FakeAgentTransport
     ) -> None:

@@ -694,8 +694,12 @@ class _Checker:
     def _preregister_funcdef(self, node: FuncDef) -> None:
         """Resolve and register the signature of a top-level ``def``."""
         receiver_owner = self._resolved.receiver_owner_for(self._module_id, node)
-        self._validate_funcdef_header(node, is_method=receiver_owner is not None)
+        is_method = receiver_owner is not None
+        self._validate_funcdef_header(node, is_method=is_method)
         if node.return_type is None:
+            inferred_sig = self._env.get_function_signature_by_node_id(node.node_id)
+            if inferred_sig is not None:
+                self._validate_program_signature(node, inferred_sig)
             return
 
         sig, func_type, receiver = resolve_function_header(
@@ -707,7 +711,8 @@ class _Checker:
         if node.is_extern:
             self._validate_extern_signature(node, sig)
             self._env.register_extern_node_id(node.node_id)
-        self._register_funcdef_signature(node, sig, func_type, is_method=receiver_owner is not None)
+        self._validate_program_signature(node, sig)
+        self._register_funcdef_signature(node, sig, func_type, is_method=is_method)
         register_method_header(self._env, node, sig, receiver)
 
     def _validate_funcdef_header(self, node: FuncDef, *, is_method: bool) -> None:
@@ -718,6 +723,21 @@ class _Checker:
         declarations; builtin methods are rejected because they have no host
         dispatch contract.
         """
+        if node.is_program:
+            if node.is_builtin or node.is_extern:
+                raise AglTypeError("Program def cannot be builtin or extern.", span=node.span)
+            if node.type_param_slots:
+                raise AglTypeError(
+                    f"Program function '{node.name}' cannot declare type parameters.",
+                    span=node.span,
+                )
+            if node.params:
+                raise AglTypeError(
+                    f"Program function '{node.name}' cannot declare value parameters.",
+                    span=node.span,
+                )
+            if is_method:
+                raise AglTypeError("Program def cannot be a method.", span=node.span)
         if not is_method and node.name in _BUILTIN_TYPE_NAMES:
             raise AglTypeError(
                 f"'{node.name}' is a built-in type name and cannot be used as a function name.",
@@ -745,6 +765,11 @@ class _Checker:
                     f"Extern function '{node.name}' must declare a return type.",
                     span=node.span,
                 )
+
+    def _validate_program_signature(self, node: FuncDef, sig: FunctionSignature) -> None:
+        """Ensure a ``program def`` resolves to the required unit result."""
+        if node.is_program and not isinstance(sig.result, UnitType):
+            raise AglTypeError(f"Program function '{node.name}' must return unit.", span=node.span)
 
     def _validate_extern_signature(self, node: FuncDef, sig: FunctionSignature) -> None:
         """Reject types that cannot cross the Python boundary in an extern's signature.

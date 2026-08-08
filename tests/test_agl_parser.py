@@ -793,6 +793,22 @@ class TestDeclarations:
         assert fd.body is None
         assert len(fd.params) == 1
 
+    def test_program_func_def(self) -> None:
+        fd = first(parse("program def main() -> unit = ()"))
+
+        assert isinstance(fd, FuncDef)
+        assert fd.name == "main"
+        assert fd.is_program is True
+        assert fd.is_builtin is False
+        assert fd.is_extern is False
+        assert isinstance(fd.body, UnitLit)
+
+    def test_program_func_def_accepts_newline_before_def(self) -> None:
+        fd = first(parse("program\ndef main() -> unit = ()"))
+
+        assert isinstance(fd, FuncDef)
+        assert fd.is_program is True
+
     def test_builtin_record_def(self) -> None:
         rec = first(parse("builtin record Token(id: int)"))
         assert isinstance(rec, RecordDef)
@@ -822,6 +838,15 @@ class TestScopeRegions:
         assert region.segment.span.start_line == 1
         assert len(region.items) == 1
         assert isinstance(region.items[0], FuncDef)
+
+    def test_region_contains_program_func_def(self) -> None:
+        region = first(parse("scope App\nprogram def main() -> unit = ()\nend App"))
+
+        assert isinstance(region, ScopeRegion)
+        (member,) = region.items
+        assert isinstance(member, FuncDef)
+        assert member.is_program is True
+        assert [segment.name for segment in member.scope_path] == ["App"]
 
     def test_textually_nested_regions_preserve_nesting(self) -> None:
         region = first(

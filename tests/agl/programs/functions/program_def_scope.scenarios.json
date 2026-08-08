@@ -1,0 +1,8 @@
+{
+  "scenarios": [
+    {
+      "name": "scoped_program_function_is_callable",
+      "expect": {"stdout": "scoped\n"}
+    }
+  ]
+}

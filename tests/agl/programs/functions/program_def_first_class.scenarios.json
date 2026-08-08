@@ -1,0 +1,8 @@
+{
+  "scenarios": [
+    {
+      "name": "program_function_is_an_ordinary_first_class_function",
+      "expect": {"stdout": "called\n"}
+    }
+  ]
+}

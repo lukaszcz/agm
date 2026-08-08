@@ -501,6 +501,7 @@ class FuncDef(GenericDeclaration):
     type_param_slots: tuple[str, ...] = ()
     is_builtin: bool = False
     is_extern: bool = False
+    is_program: bool = False
     scope_path: tuple[ScopeSegment, ...] = ()
 
 

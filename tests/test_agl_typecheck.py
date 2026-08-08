@@ -8155,8 +8155,72 @@ class TestIndexTypechecking:
 
 
 # ---------------------------------------------------------------------------
-# TestDefensiveGuards — direct AST construction to cover defensive branches
+# Program function definitions
 # ---------------------------------------------------------------------------
+
+
+class TestProgramFunctionDefinitions:
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "program def main[T]() -> unit = ()",
+            "program def main(value: int) -> unit = ()",
+            "program def main() -> int = 1",
+            "record Receiver()\nprogram def Receiver::main(self) -> unit = ()",
+        ),
+        ids=("type-parameters", "value-parameters", "non-unit-result", "method"),
+    )
+    def test_program_func_def_rejects_invalid_headers(self, source: str) -> None:
+        reject_type(source)
+
+    def test_program_func_def_infers_unit_result(self) -> None:
+        checked = accept_type("program def main() = ()")
+
+        assert checked.function_signatures["main"].result == UnitType()
+
+    def test_program_func_def_rejects_inferred_non_unit_result(self) -> None:
+        reject_type("program def main() = 1")
+
+    def test_program_func_def_method_is_rejected_defensively(self) -> None:
+        sp = mk_span()
+        fd = FuncDef(
+            name="main",
+            params=(),
+            return_type=UnitT(span=sp, node_id=_mk_node_id()),
+            body=UnitLit(span=sp, node_id=_mk_node_id()),
+            span=sp,
+            node_id=_mk_node_id(),
+            is_program=True,
+        )
+        from agm.agl.typecheck.checker import _Checker
+
+        with pytest.raises(AglTypeError, match="Program def"):
+            _Checker._validate_funcdef_header(cast(_Checker, None), fd, is_method=True)
+
+    @pytest.mark.parametrize(
+        ("name", "is_builtin", "is_extern"),
+        (("print", True, False), ("external_function", False, True)),
+        ids=("builtin", "extern"),
+    )
+    def test_program_func_def_host_modifier_is_rejected_defensively(
+        self, name: str, is_builtin: bool, is_extern: bool
+    ) -> None:
+        sp = mk_span()
+        fd = FuncDef(
+            name=name,
+            params=(),
+            return_type=UnitT(span=sp, node_id=_mk_node_id()),
+            body=UnitLit(span=sp, node_id=_mk_node_id()),
+            span=sp,
+            node_id=_mk_node_id(),
+            is_builtin=is_builtin,
+            is_extern=is_extern,
+            is_program=True,
+        )
+        from agm.agl.typecheck.checker import _Checker
+
+        with pytest.raises(AglTypeError, match="Program def"):
+            _Checker._validate_funcdef_header(cast(_Checker, None), fd, is_method=False)
 
 
 class TestDefensiveGuards:

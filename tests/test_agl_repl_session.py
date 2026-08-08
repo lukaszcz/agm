@@ -509,6 +509,17 @@ class TestPersistence:
         assert constructor_result.ok, constructor_result.diagnostics
         assert constructor_result.value == BoolValue(True)
 
+    def test_program_func_def_is_callable_across_entries(self) -> None:
+        session = ReplSession()
+
+        declared = session.eval_entry("program def answer() -> unit = ()")
+        result = session.eval_entry("answer()")
+
+        assert declared.ok, declared.diagnostics
+        assert declared.kind == "declaration"
+        assert result.ok, result.diagnostics
+        assert result.value == UnitValue()
+
     def test_partial_application_closure_persists_into_next_entry(self) -> None:
         s = ReplSession()
 

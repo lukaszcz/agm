@@ -136,6 +136,7 @@ _sep: _NEWLINE | SEMICOLON
             | program_decl
             | infix_decl
             | func_def
+            | program_func_def
             | builtin_var_def
             | builtin_record_def
             | builtin_enum_def
@@ -252,7 +253,10 @@ priority_delta: PLUS INT  -> priority_delta_plus
 // The return type may be omitted when it can be inferred from the body.
 // Inline bodies require `=`. Suite bodies may either keep `=` before the newline
 // or omit it, because _INDENT does not start any expr form.
-func_def: "def" decl_head type_params? LPAR param_list? RPAR (THIN_ARROW type_expr)? (EQ func_body | suite_expr)
+func_def: "def" _func_def_tail
+program_func_def: "program" _NEWLINE? "def" _func_def_tail
+
+_func_def_tail: decl_head type_params? LPAR param_list? RPAR (THIN_ARROW type_expr)? (EQ func_body | suite_expr)
 
 // Host-implemented builtin function declaration. It has a signature but no body.
 // `builtin` is a decorator-style modifier: the `_NEWLINE?` makes the newline

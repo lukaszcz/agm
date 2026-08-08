@@ -953,10 +953,8 @@ class AstBuilder(Transformer):
     # func_def / param_list / param_def / func_body
     # ------------------------------------------------------------------
 
-    def func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
-        """func_def: "def" name type_params? LPAR param_list? RPAR
-        (THIN_ARROW type_expr)? (EQ func_body | suite_expr)
-        """
+    def _func_def(self, meta: Meta, args: _Args, *, is_program: bool = False) -> syntax.FuncDef:
+        """Build an ordinary or ``program``-marked function definition."""
         name, scope_path = self._declaration_head(args)
         type_params_val: tuple[str, ...] = ()
         for a in args:
@@ -972,8 +970,17 @@ class AstBuilder(Transformer):
             type_param_slots=type_params_val,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
+            is_program=is_program,
             scope_path=scope_path,
         )
+
+    def func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
+        """func_def: "def" func_def_tail"""
+        return self._func_def(meta, args)
+
+    def program_func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
+        """program_func_def: "program" "def" func_def_tail"""
+        return self._func_def(meta, args, is_program=True)
 
     def _bodyless_func_def(
         self, meta: Meta, args: _Args, *, is_builtin: bool = False, is_extern: bool = False

@@ -1,0 +1,5 @@
+program def entry() -> unit = print "called"
+
+def invoke(f: () -> unit) -> unit = f()
+
+invoke(entry)

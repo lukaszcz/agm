@@ -32,8 +32,8 @@ vulture:
 typecheck:
     MYPYPATH=src:stubs uv run mypy src/agm/ --strict --python-version 3.12
 
-# Run linting, dead-code checks, tests, and type-checking
-check: lint vulture test typecheck
+# Run type-checking, linting, dead-code checks, tests
+check: typecheck lint vulture test
 
 # Install the agm CLI into an isolated environment
 install-agm:

@@ -223,7 +223,7 @@ class TestTraceReconfiguration:
 
         exec_command.run(_exec_args(agl_file))
 
-        logs = list(tmp_path.glob("exec-*.log"))
+        logs = list(tmp_path.glob("exec-*.jsonl"))
         assert len(logs) == 1, f"expected exactly one auto-named log, got {logs}"
         text = logs[0].read_text(encoding="utf-8")
         import json
@@ -279,7 +279,7 @@ class TestTraceReconfiguration:
         with patch("agm.core.log.datetime", _StepClock()):
             exec_command.run(_exec_args(agl_file, no_log=False, log=True))
 
-        logs = list(tmp_path.glob("exec-*.log"))
+        logs = list(tmp_path.glob("exec-*.jsonl"))
         assert len(logs) == 1, f"the run split its trace across {logs}"
         kinds, rendered = _trace_kinds_and_prints(logs[0])
         assert "run_start" in kinds
@@ -305,7 +305,7 @@ class TestTraceReconfiguration:
         with patch("agm.core.log.datetime", _StepClock()):
             exec_command.run(_exec_args(agl_file))
 
-        logs = list(tmp_path.glob("exec-*.log"))
+        logs = list(tmp_path.glob("exec-*.jsonl"))
         assert len(logs) == 1, f"re-enabling logging minted a second file: {logs}"
         _, rendered = _trace_kinds_and_prints(logs[0])
         assert rendered == ["first", "third"]
@@ -326,7 +326,7 @@ class TestTraceReconfiguration:
         with patch("agm.core.log.datetime", _StepClock()):
             exec_command.run(_exec_args(agl_file, no_log=False, log_file=str(trace_path)))
 
-        assert list(auto_dir.glob("exec-*.log")) == []
+        assert list(auto_dir.glob("exec-*.jsonl")) == []
         kinds, rendered = _trace_kinds_and_prints(trace_path)
         assert "run_start" in kinds
         assert "run_end" in kinds

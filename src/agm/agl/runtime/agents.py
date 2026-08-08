@@ -1,15 +1,18 @@
-"""Value-driven AgL ``Agent`` dispatch."""
+"""Value-driven AgL ``Agent`` transport dispatch."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING
 
-from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
-from agm.agl.runtime.render import render_value
-from agm.agl.runtime.request import AgentRequest, AgentResponse
-from agm.agl.semantics.values import EnumValue, JsonValue, TextValue
+from agm.agl.runtime.request import (
+    AgentCallHostError,
+    AgentCallInfo,
+    AgentRequest,
+    AgentResponse,
+)
+from agm.agl.semantics.values import EnumValue, TextValue
 from agm.core.env import clone_env
 
 if TYPE_CHECKING:
@@ -18,76 +21,10 @@ if TYPE_CHECKING:
 AgentFn = Callable[[AgentRequest], AgentResponse | str]
 
 
-class AgentCallHostError(Exception):
-    """Python-level transport failure mapped to catchable ``AgentCallError``."""
-
-    def __init__(
-        self, *, cause: str, exit_code: int | None, stderr_tail: str, elapsed: float
-    ) -> None:
-        super().__init__(cause)
-        self.cause = cause
-        self.exit_code = exit_code
-        self.stderr_tail = stderr_tail
-        self.elapsed = elapsed
-
-
-def dispatch_agent_value(
-    request: AgentRequest,
-    dispatcher: AgentFn | None,
-    *,
-    nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS,
-) -> AgentResponse:
-    """Execute *request*'s encoded ``Agent`` through the host dispatcher."""
-    agent = request.agent
-    agent_label = render_value(agent)
-    if dispatcher is None:
-        _raise_agent_call_error(
-            agent,
-            agent_label,
-            AgentCallHostError(cause="no_dispatcher", exit_code=None, stderr_tail="", elapsed=0.0),
-            nominals=nominals,
-        )
-    try:
-        raw = dispatcher(request)
-    except AgentCallHostError as error:
-        _raise_agent_call_error(agent, agent_label, error, nominals=nominals)
+def dispatch_agent_value(request: AgentRequest, dispatcher: AgentFn) -> AgentResponse:
+    """Dispatch one request, preserving host failures for the effects seam."""
+    raw = dispatcher(request)
     return AgentResponse(content=raw) if isinstance(raw, str) else raw
-
-
-def _raise_agent_call_error(
-    agent: EnumValue,
-    agent_label: str,
-    error: AgentCallHostError,
-    *,
-    nominals: BuiltinNominals,
-) -> NoReturn:
-    from agm.agl.runtime.trace import new_trace_id
-    from agm.agl.semantics.exceptions import AglRaise
-    from agm.agl.semantics.values import ExceptionValue
-
-    declared = nominals.resolve("AgentCallError")
-    raise AglRaise(
-        ExceptionValue(
-            nominal=declared.nominal,
-            display_name=declared.display_name,
-            fields={
-                "message": TextValue(
-                    f"Agent {agent_label!r} failed: {error.cause}"
-                    + (f" (exit {error.exit_code})" if error.exit_code is not None else "")
-                ),
-                "trace_id": TextValue(new_trace_id()),
-                "agent": agent,
-                "cause": TextValue(error.cause),
-                "metadata": JsonValue(
-                    {
-                        "exit_code": error.exit_code,
-                        "stderr_tail": error.stderr_tail,
-                        "elapsed": error.elapsed,
-                    }
-                ),
-            },
-        )
-    )
 
 
 def _run_request(
@@ -97,7 +34,7 @@ def _run_request(
     *,
     prompt_via_stdin: bool,
 ) -> AgentResponse:
-    """Compose a request and run already-built argv through the shared runner seam."""
+    """Send the already-composed request prompt through the shared runner seam."""
     from agm.agent.runner import (
         cleanup_temp_files,
         prepare_rendered_prompt_run,
@@ -105,33 +42,25 @@ def _run_request(
     )
     from agm.util.interp import InterpolationError
 
-    parts = [request.prompt]
-    if request.output_contract is not None and request.output_contract.format_instructions:
-        parts.append(request.output_contract.format_instructions)
-    if request.attempt:
-        errors = "\n".join(f"- {error.message}" for error in request.validation_errors) or "(none)"
-        parts.append(
-            "Your previous response did not match the required output format.\n\n"
-            f"Validation errors:\n{errors}\n\nPrevious response:\n"
-            f"{request.previous_invalid_output or ''}\n\n"
-            "Return only valid JSON matching the schema."
-        )
     temp_files: list[Path] = []
     try:
         prepared = prepare_rendered_prompt_run(
-            "\n\n".join(parts),
+            request.prompt,
             runner=command,
             temp_files=temp_files,
             env=clone_env(),
             prompt_via_stdin=prompt_via_stdin,
         )
         result = run_prepared_prompt_result(prepared, idle_timeout=idle_timeout)
+        call_info = AgentCallInfo(
+            argv=prepared.argv or [],
+            prompt_via_stdin=prepared.prompt_via_stdin,
+            elapsed=result.elapsed,
+            exit_code=result.returncode,
+        )
     except InterpolationError as exc:
         raise AgentCallHostError(
-            cause="spawn_failure",
-            exit_code=None,
-            stderr_tail=str(exc),
-            elapsed=0.0,
+            cause="spawn_failure", exit_code=None, stderr_tail=str(exc), elapsed=0.0
         ) from exc
     finally:
         cleanup_temp_files(temp_files)
@@ -141,6 +70,7 @@ def _run_request(
             exit_code=result.returncode,
             stderr_tail=_stderr_tail(result.stderr),
             elapsed=result.elapsed,
+            call_info=call_info,
         )
     if result.timed_out:
         raise AgentCallHostError(
@@ -148,6 +78,7 @@ def _run_request(
             exit_code=result.returncode,
             stderr_tail=_stderr_tail(result.stderr),
             elapsed=result.elapsed,
+            call_info=call_info,
         )
     if result.returncode not in (None, 0):
         raise AgentCallHostError(
@@ -155,8 +86,13 @@ def _run_request(
             exit_code=result.returncode,
             stderr_tail=_stderr_tail(result.stderr),
             elapsed=result.elapsed,
+            call_info=call_info,
         )
-    return AgentResponse(content=result.stdout, metadata={"elapsed": result.elapsed})
+    return AgentResponse(
+        content=result.stdout,
+        metadata={"elapsed": result.elapsed},
+        call_info=call_info,
+    )
 
 
 def decode_agent_value(value: EnumValue) -> "AgentSpec":
@@ -170,7 +106,6 @@ def decode_agent_value(value: EnumValue) -> "AgentSpec":
 
 
 def _text_field(value: EnumValue, name: str) -> str:
-    """Read a text payload field from a typechecked runtime enum value."""
     field = value.fields[name]
     if not isinstance(field, TextValue):
         raise ValueError(f"Agent field {name!r} must be text")
@@ -186,10 +121,7 @@ def value_driven_agent_factory(*, idle_timeout: float | None) -> AgentFn:
             command = spec.argv()
         except ValueError as exc:
             raise AgentCallHostError(
-                cause="invalid_agent",
-                exit_code=None,
-                stderr_tail=str(exc),
-                elapsed=0.0,
+                cause="invalid_agent", exit_code=None, stderr_tail=str(exc), elapsed=0.0
             ) from exc
         return _run_request(request, command, idle_timeout, prompt_via_stdin=spec.prompt_via_stdin)
 

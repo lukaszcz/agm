@@ -10,18 +10,17 @@ uncaught, terminate the program. There are no sentinel return values.
 
 Every exception is a value of a concrete built-in or user-declared exception
 type. Every exception type extends the abstract base type `Exception`, which
-declares two fields present on every exception:
+declares one field present on every exception:
 
 ```text
 message: text     # human-readable description
-trace_id: text    # links the exception to its record in the run trace
 ```
 
 `Exception` itself is **not constructible** — `raise Exception(…)` is a
 static error. It exists for typing: a wildcard catch binds its variable as
-`Exception`, so only `message`, `trace_id`, and whole-value interpolation
-(`%{e}`) are available there. Accessing a subtype field such as `e.raw`
-requires catching the concrete type.
+`Exception`, so only `message` and whole-value interpolation (`%{e}`) are
+available there. Accessing a subtype field such as `e.raw` requires catching
+the concrete type.
 
 Programs may declare concrete exception types:
 
@@ -33,8 +32,10 @@ exception DeployError extends Exception
 
 An exception extends exactly one base exception type. Constructor fields include
 the inherited fields first, followed by fields declared on the subtype.
-`builtin exception` is the standard-library form for host-recognized exception
-types; the name, base, and fields must match the recognized shape exactly.
+`trace_id` is not reserved: a user-declared exception may use it as one of its
+own fields. `builtin exception` is the standard-library form for host-recognized
+exception types; the name, base, and fields must match the recognized shape
+exactly.
 
 ### Methods
 
@@ -93,11 +94,11 @@ field cycle is.
 
 Exception values support field access (`e.raw`), equality, and rendering.
 In interpolation and `print` an exception renders in **AgL record form**,
-including all fields (`message`, `trace_id`, and any type-specific fields)
-in declaration order — for example:
+including all fields (`message` and any type-specific fields) in declaration
+order — for example:
 
 ```
-CastError(message = "cannot parse \"x\" as int", trace_id = "evt-7", source_type = "text", target_type = "int", raw = "x")
+CastError(message = "cannot parse \"x\" as int", source_type = "text", target_type = "int", raw = "x")
 ```
 
 See [Strings and interpolation](strings-and-interpolation.md) for the uniform
@@ -208,9 +209,8 @@ raise DeployError("api", 1, message = "deployment failed")
 ```
 
 Any concrete built-in exception type is constructible with named arguments
-for its fields; `trace_id` is injected by the runtime and is not written
-in source when omitted. The same construction rule applies to user-declared
-exception types. `Abort` is the conventional type for user-initiated failures.
+for its fields. The same construction rule applies to user-declared exception
+types. `Abort` is the conventional type for user-initiated failures.
 
 Exception values support the
 [record update](expressions.md#record-update) operator. Field names are
@@ -227,7 +227,7 @@ catch Exception as e =>
 
 ## Built-in exception catalog
 
-Field lists below are in addition to the base `message` and `trace_id`.
+Field lists below are in addition to the base `message`.
 
 ### `AgentCallError`
 

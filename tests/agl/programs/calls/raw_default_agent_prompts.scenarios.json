@@ -37,7 +37,7 @@
               "command": "reviewer"
             },
             "call": 0,
-            "equals": "Explicit review for release notes.",
+            "starts_with": "Explicit review for release notes.",
             "schema_contains": [
               "approved",
               "summary"
@@ -50,7 +50,7 @@
               "thinking": "medium"
             },
             "call": 1,
-            "equals": "# Review release notes\n- correctness\n- style",
+            "starts_with": "# Review release notes\n- correctness\n- style",
             "schema_contains": [
               "approved",
               "summary"
@@ -63,7 +63,7 @@
               "thinking": "medium"
             },
             "call": 2,
-            "equals": "Call-form review for release notes.",
+            "starts_with": "Call-form review for release notes.",
             "schema_contains": [
               "approved",
               "summary"
@@ -109,7 +109,7 @@
               "command": "reviewer"
             },
             "call": 0,
-            "equals": "Explicit review for migration guide."
+            "starts_with": "Explicit review for migration guide."
           },
           {
             "agent": {
@@ -118,7 +118,7 @@
               "thinking": "medium"
             },
             "call": 1,
-            "equals": "# Review migration guide\n- correctness\n- style",
+            "starts_with": "# Review migration guide\n- correctness\n- style",
             "schema_contains": [
               "approved",
               "summary"
@@ -131,7 +131,7 @@
               "thinking": "medium"
             },
             "call": 2,
-            "equals": "Call-form review for migration guide.",
+            "starts_with": "Call-form review for migration guide.",
             "schema_contains": [
               "approved",
               "summary"

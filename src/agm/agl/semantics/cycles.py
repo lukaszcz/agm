@@ -75,7 +75,7 @@ def enter_container(container_id: int, active: "set[int] | None") -> "set[int]":
     return active
 
 
-def cyclic_value_raise(trace_id: str, *, nominals: BuiltinNominals) -> AglRaise:
+def cyclic_value_raise(*, nominals: BuiltinNominals) -> AglRaise:
     """Build the catchable ``AglRaise(CyclicValueError)`` for a detected cycle.
 
     Single shared constructor so every caller that converts an
@@ -86,7 +86,6 @@ def cyclic_value_raise(trace_id: str, *, nominals: BuiltinNominals) -> AglRaise:
         make_builtin_exception(
             "CyclicValueError",
             CYCLE_MESSAGE,
-            trace_id=trace_id,
             nominals=nominals,
         )
     )

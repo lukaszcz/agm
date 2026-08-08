@@ -244,7 +244,6 @@ def test_builtin_exception_shape_must_match() -> None:
             "exception Exception\n"
             "  *\n"
             "  message: text\n"
-            "  trace_id: text\n"
             "builtin\n"
             "exception ExecError extends Exception\n"
             "  command: text\n"
@@ -341,7 +340,7 @@ def test_builtin_named_value_call_is_not_classified_as_builtin() -> None:
     _check("enum E\n  | print\nlet x: E = print()\nx\n")
 
 
-def test_source_defined_exception_extends_base_and_trace_id_is_optional() -> None:
+def test_source_defined_exception_extends_base_with_message() -> None:
     _check('raise Abort(message = "stop")\n')
 
 

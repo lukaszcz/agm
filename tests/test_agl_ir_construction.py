@@ -12,7 +12,6 @@ import pytest
 
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.nodes import (
-    AutoTraceField,
     IrBind,
     IrMakeConstructor,
     IrMakeEnum,
@@ -335,11 +334,7 @@ let c3 = Color::Blue()
 
 
 def test_exception_construction_builtin_explicit_fields() -> None:
-    """Exception construction using a built-in exception type with explicit fields.
-
-    ArithmeticError has (message, trace_id, operation); we provide message and
-    operation; trace_id is auto-injected.
-    """
+    """Exception construction preserves all caller-supplied built-in fields."""
     source = """\
 let e = ArithmeticError(message = "div/0", operation = "/")
 ()
@@ -349,27 +344,6 @@ let e = ArithmeticError(message = "div/0", operation = "/")
     assert isinstance(e, ExceptionValue)
     assert e.fields["message"] == TextValue("div/0")
     assert e.fields["operation"] == TextValue("/")
-    # trace_id was auto-injected
-    assert isinstance(e.fields["trace_id"], TextValue)
-
-
-def test_exception_auto_trace_single_id_per_construction() -> None:
-    """Two separately constructed exceptions have different trace_ids (distinct events).
-
-    The IR pipeline assigns a distinct trace_id to each construction.
-    """
-    source = """\
-let e1 = ArithmeticError(message = "one", operation = "+")
-let e2 = ArithmeticError(message = "two", operation = "+")
-()
-"""
-    ir = evaluate_ir(source)
-    e1 = ir["e1"]
-    e2 = ir["e2"]
-    assert isinstance(e1, ExceptionValue)
-    assert isinstance(e2, ExceptionValue)
-    # Different constructions get different trace IDs
-    assert e1.fields["trace_id"] != e2.fields["trace_id"]
 
 
 # ---------------------------------------------------------------------------
@@ -539,12 +513,8 @@ let c = Color::Red()
     assert found, "Expected IrBind(value=IrMakeEnum) in initializers"
 
 
-def test_golden_exception_lowers_to_ir_make_exception_with_auto_trace() -> None:
-    """Exception construction lowers to IrMakeException with AutoTraceField sentinels.
-
-    Uses ArithmeticError(message, operation) — trace_id is not provided so it
-    gets an AutoTraceField sentinel in the IR.
-    """
+def test_golden_exception_lowers_to_ir_make_exception() -> None:
+    """Exception construction lowers each caller-supplied field to an expression."""
     source = """\
 let e = ArithmeticError(message = "oops", operation = "/")
 ()
@@ -558,14 +528,7 @@ let e = ArithmeticError(message = "oops", operation = "/")
         ):
             me = let_root_capture(node).value
             assert me.display_name == "ArithmeticError"
-            # Fields in declaration order: message, trace_id, operation
-            field_names = [name for name, _ in me.fields]
-            assert field_names == ["message", "trace_id", "operation"]
-            # trace_id should be AutoTraceField (not provided by caller)
-            trace_slot = dict(me.fields).get("trace_id")
-            assert isinstance(trace_slot, AutoTraceField), (
-                f"expected AutoTraceField for trace_id, got {trace_slot!r}"
-            )
+            assert [name for name, _ in me.fields] == ["message", "operation"]
             found = True
     assert found, "Expected IrBind(value=IrMakeException) in initializers"
 
@@ -671,8 +634,7 @@ def test_nominals_table_contains_builtin_exception_fields() -> None:
     assert nominal_id in prog.nominals
     desc = prog.nominals[nominal_id]
     assert desc.kind == NominalKind.EXCEPTION
-    # ArithmeticError fields: message, trace_id, operation (in declaration order)
-    assert desc.fields == ("message", "trace_id", "operation")
+    assert desc.fields == ("message", "operation")
 
 
 def test_nominals_table_contains_builtin_exceptions() -> None:
@@ -881,18 +843,6 @@ def test_ir_make_record_node_frozen() -> None:
         setattr(node, "display_name", "Other")
 
 
-def test_auto_trace_field_sentinel() -> None:
-    """AutoTraceField is a distinct marker object, not an IrExpr."""
-    from agm.agl.ir.nodes import AutoTraceField
-
-    atf = AutoTraceField()
-    # It must NOT be an instance of any IrExpr union member
-    # (it's a sentinel, not an expression)
-    assert not isinstance(atf, IrMakeException)
-    # It must be hashable (frozen dataclass)
-    assert hash(atf) == hash(AutoTraceField())
-
-
 # ---------------------------------------------------------------------------
 # Validate tests — non-deep mode (shallow structural checks only)
 # ---------------------------------------------------------------------------
@@ -967,7 +917,7 @@ def test_validate_non_deep_accepts_unknown_nominal_in_ir_make_exception() -> Non
         location=loc,
         nominal=NominalId(1),
         display_name="Ghost",
-        fields=(("trace_id", AutoTraceField()),),
+        fields=(),
     )
     from agm.agl.modules.ids import ENTRY_ID as EID
 

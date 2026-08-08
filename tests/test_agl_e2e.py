@@ -282,6 +282,8 @@ def _assert_calls(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -> N
         prompt = prompts[call]
         if "equals" in spec:
             assert prompt == spec["equals"]
+        if "starts_with" in spec:
+            assert prompt.startswith(spec["starts_with"])
         for needle in spec.get("contains", []):
             assert needle in prompt, f"{needle!r} not in prompt {prompt!r}"
         for needle in spec.get("not_contains", []):
@@ -544,7 +546,6 @@ def test_scoped_builtin_hierarchy_declared_in_the_entry_module_catches_a_host_ra
         "exception Exception\n"
         "  *\n"
         "  message: text\n"
-        "  trace_id: text\n"
         "builtin\n"
         "exception ExecError extends Exception\n"
         "  *\n"

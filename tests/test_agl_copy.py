@@ -151,7 +151,7 @@ class TestShallowCopyOneLevel:
         original = ExceptionValue(
             nominal=_NOMINAL,
             display_name="Oops",
-            fields={"message": TextValue("m"), "trace_id": TextValue(""), "data": inner},
+            fields={"message": TextValue("m"), "data": inner},
         )
         copied = shallow_copy_value(original)
         assert isinstance(copied, ExceptionValue)
@@ -290,7 +290,7 @@ class TestDeepCopySharingAndCycles:
         shared_exc = ExceptionValue(
             nominal=_NOMINAL,
             display_name="Oops",
-            fields={"message": TextValue("m"), "trace_id": TextValue("")},
+            fields={"message": TextValue("m")},
         )
         outer = ArrayValue(elements=[shared_exc, shared_exc])
         copied = deep_copy_value(outer)

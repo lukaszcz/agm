@@ -22,7 +22,6 @@ builtin
 exception Exception
   *
   message: text
-  trace_id: text
 
 builtin exception RangeError extends Exception()
 

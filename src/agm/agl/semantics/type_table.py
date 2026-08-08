@@ -587,7 +587,7 @@ class TypeTable:
         Exceptions are non-generic, so unlike :meth:`record_fields`/
         :meth:`enum_variants` there is no ``type_args`` substitution — the
         result is memoized directly per ``decl_id``. Base fields come first
-        (the root contributes ``message``/``trace_id``), followed by the
+        (the root contributes ``message``), followed by the
         exception's own fields, matching declaration order.
 
         Raises ``KeyError`` if no ``TypeDef`` is registered for the handle's
@@ -621,8 +621,6 @@ class TypeTable:
         exception's OWN fields honor their declared ``@pos``/``@std``/
         ``@named`` marker exactly like a record's fields do (see
         ``TypeDef.field_kinds``); only inheritance is exception-specific.
-        ``trace_id`` (present only on the hierarchy root) is excluded: it is
-        auto-filled at construction time, never supplied by the caller.
 
         Each kind is a ``ParamKind.value`` string, not the enum itself (see
         the module-level comment on ``TypeDef.field_kinds``); the caller
@@ -644,7 +642,6 @@ class TypeTable:
             (fname, kind)
             for _chain_id, typedef in self._exception_chain(decl_id, caller="exception_field_kinds")
             for (fname, _ftype), kind in zip(typedef.fields, typedef.field_kinds, strict=True)
-            if fname != "trace_id"
         )
 
     def exception_def(self, handle: ExceptionType) -> TypeDef:
@@ -1566,7 +1563,7 @@ OPTION_TYPE_DEF = TypeDef(
 # ---------------------------------------------------------------------------
 # Built-in exception shapes — the single source of truth for every entry of
 # ``semantics.types.BUILTIN_EXCEPTIONS``.  ``fields`` holds each exception's
-# OWN fields only (the root's ``message``/``trace_id`` are NOT repeated on
+# OWN fields only (the root's ``message`` is NOT repeated on
 # every concrete exception — see :meth:`TypeTable.exception_fields`, which
 # flattens the ``base`` chain on demand).  ``field_kinds`` is likewise own-
 # fields-only; every built-in exception field is NAMED_ONLY (there is no
@@ -1587,9 +1584,9 @@ _EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
         kind="exception",
         name="Exception",
         module_id=STD_CORE_ID,
-        fields=(("message", TextType()), ("trace_id", TextType())),
+        fields=(("message", TextType()),),
         abstract=True,
-        field_kinds=_named_only(2),
+        field_kinds=_named_only(1),
     ),
     "AgentCallError": TypeDef(
         kind="exception",

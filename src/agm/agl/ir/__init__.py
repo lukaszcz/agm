@@ -38,7 +38,6 @@ from agm.agl.ir.ids import (
     SymbolId,
 )
 from agm.agl.ir.nodes import (
-    AutoTraceField,
     IrAnd,
     IrArith,
     IrAssign,
@@ -145,7 +144,6 @@ __all__ = [
     "ArithKind",
     "ArithOp",
     "ArrayDecode",
-    "AutoTraceField",
     "BuiltinNominals",
     "CmpOp",
     "Coercion",

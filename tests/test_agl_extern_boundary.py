@@ -997,7 +997,7 @@ def test_redeclaring_a_nominal_keeps_default_argument_captured_classes_on_the_ol
     registry.set_nominals({old_nominal: old_superseded, new_nominal: new})
 
     assert registry._nominal_classes[old_nominal] is before
-    assert registry.invoke("make", registry.resolve(ENTRY_ID, "make"), (), "trace") == RecordValue(
+    assert registry.invoke("make", registry.resolve(ENTRY_ID, "make"), ()) == RecordValue(
         old_nominal, "Box", {"old": IntValue(2)}
     )
 
@@ -1029,7 +1029,7 @@ def test_stashed_view_with_nominal_elements_decodes_outside_any_call(tmp_path: P
     module = registry.load_companion(ENTRY_ID, companion)
     inner = registry._nominal_classes[nominal](x=1)
     array_value = ArrayValue([decode_boundary_value(inner)])
-    registry.invoke("stash", registry.resolve(ENTRY_ID, "stash"), [array_value], "trace")
+    registry.invoke("stash", registry.resolve(ENTRY_ID, "stash"), [array_value])
 
     # Read the stashed view's nominal element completely outside any `invoke`
     # call, exactly as a companion callback running later would.
@@ -1055,6 +1055,6 @@ def test_registry_wraps_unexpected_decode_errors_as_extern_errors() -> None:
     del broken._agl_values["value"]
 
     with pytest.raises(AglRaise) as excinfo:
-        registry.invoke("broken", lambda: broken, (), "trace")
+        registry.invoke("broken", lambda: broken, ())
 
     assert excinfo.value.exc.fields["python_type"] == TextValue("KeyError")

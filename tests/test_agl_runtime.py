@@ -1367,10 +1367,10 @@ class TestRenderValue:
         assert render_value(v) == "E::V(a = 1, b = 2, c = 3)"
 
     # ------------------------------------------------------------------
-    # exception: record-style with all fields incl. trace_id
+    # exception: record-style with declared fields
     # ------------------------------------------------------------------
 
-    def test_exception_renders_record_style_with_trace_id(self) -> None:
+    def test_exception_renders_record_style(self) -> None:
         """Exception renders like a record with all fields in declaration order."""
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import ExceptionValue, TextValue
@@ -1380,7 +1380,6 @@ class TestRenderValue:
             display_name="CastError",
             fields={
                 "message": TextValue('cannot parse "x" as int'),
-                "trace_id": TextValue("evt-7"),
                 "source_type": TextValue("text"),
                 "target_type": TextValue("int"),
                 "raw": TextValue("x"),
@@ -1388,26 +1387,23 @@ class TestRenderValue:
         )
         out = render_value(v)
         expected = (
-            'CastError(message = "cannot parse \\"x\\" as int", trace_id = "evt-7", '
+            'CastError(message = "cannot parse \\"x\\" as int", '
             'source_type = "text", target_type = "int", raw = "x")'
         )
         assert out == expected
 
-    def test_exception_abort_renders_with_trace_id(self) -> None:
-        """Abort exception includes both message and trace_id."""
+    def test_exception_abort_renders_with_message(self) -> None:
+        """Abort exception renders its sole message field."""
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import ExceptionValue, TextValue
 
         v = ExceptionValue(
             nominal=NominalId(1),
             display_name="Abort",
-            fields={
-                "message": TextValue("fatal"),
-                "trace_id": TextValue("abc123"),
-            },
+            fields={"message": TextValue("fatal")},
         )
         out = render_value(v)
-        assert out == 'Abort(message = "fatal", trace_id = "abc123")'
+        assert out == 'Abort(message = "fatal")'
         assert "<dsl-value" not in out
 
     # ------------------------------------------------------------------
@@ -1826,7 +1822,7 @@ class TestRuntimeErrorPaths:
                 ExceptionValue(
                     nominal=NominalId(1),
                     display_name="Abort",
-                    fields={"message": TextValue("stopped"), "trace_id": TextValue("")},
+                    fields={"message": TextValue("stopped")},
                 )
             )
 
@@ -1946,7 +1942,6 @@ class TestRuntimeErrorPaths:
             display_name="AgentParseError",
             fields={
                 "message": TextValue("failed"),
-                "trace_id": TextValue(""),
                 "raw": TextValue("abc"),
                 "agent": TextValue("ask"),
                 "attempts": IntValue(1),
@@ -2025,7 +2020,7 @@ class TestRuntimeErrorPaths:
             exc_val = ExceptionValue(
                 nominal=NominalId(1),
                 display_name="Abort",
-                fields={"message": TextValue("fatal"), "trace_id": TextValue("")},
+                fields={"message": TextValue("fatal")},
             )
             raise AglRaise(exc_val)
 
@@ -2738,22 +2733,20 @@ class TestIrHostMetadataCoverage:
 
 
 class TestRunErrorToMessage:
-    """RunError.to_message with include_trace_id=True/False."""
-
-    def test_to_message_with_trace_id(self) -> None:
+    def test_to_message_includes_message_and_location(self) -> None:
         from agm.agl.pipeline import RunError
 
         err = RunError(
             type_name="AgentParseError",
-            fields={"message": "bad output", "trace_id": "abc123"},
+            fields={"message": "bad output"},
             line=5,
             col=3,
         )
-        msg = err.to_message(include_trace_id=True)
-        assert "trace_id=abc123" in msg
+        msg = err.to_message()
+        assert "bad output" in msg
         assert "at line 5, col 3" in msg
 
-    def test_to_message_without_trace_id(self) -> None:
+    def test_to_message_includes_line_without_column(self) -> None:
         from agm.agl.pipeline import RunError
 
         err = RunError(
@@ -2761,8 +2754,7 @@ class TestRunErrorToMessage:
             fields={"message": "oops"},
             line=2,
         )
-        msg = err.to_message(include_trace_id=False)
-        assert "trace_id" not in msg
+        msg = err.to_message()
         assert "at line 2" in msg
 
 

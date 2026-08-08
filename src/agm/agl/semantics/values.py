@@ -304,8 +304,7 @@ class ExceptionValue:
     ``display_name`` is the user-facing exception class name (e.g.
     ``"AgentParseError"``); it is excluded from equality.
     ``fields`` maps the exception's declared field names to their values.
-    The ``"message"`` and ``"trace_id"`` fields are always present (base
-    ``Exception`` contract).
+    The ``"message"`` field is always present (base ``Exception`` contract).
 
     Equality is by ``(nominal, fields)``; ``display_name`` is
     excluded (rendering metadata only). Unhashable: ``fields`` may hold a

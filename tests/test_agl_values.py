@@ -413,7 +413,7 @@ def test_builtin_exception_value_uses_std_core_id() -> None:
     exc = ExceptionValue(
         nominal=NominalId(require_reserved_nominal_id("AgentParseError")),
         display_name="AgentParseError",
-        fields={"message": TextValue("fail"), "trace_id": TextValue("")},
+        fields={"message": TextValue("fail")},
     )
     assert exc.nominal == NominalId(require_reserved_nominal_id("AgentParseError"))
     assert exc.display_name == "AgentParseError"

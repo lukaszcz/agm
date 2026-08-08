@@ -66,6 +66,7 @@ class PreparedPromptRun:
     env: dict[str, str]
     temp_files: list[Path]
     stdin_prompt: str | None = None
+    argv: list[str] | None = None
 
     @property
     def prompt_via_stdin(self) -> bool:
@@ -434,22 +435,29 @@ def prepare_rendered_prompt_run(
     """
     command = runner.copy()
     if prompt_via_stdin:
+        effective_file = Path(os.devnull)
+        child_env = env if env else os.environ
         return PreparedPromptRun(
             command=command,
-            effective_file=Path(os.devnull),
+            effective_file=effective_file,
             env=env,
             temp_files=temp_files,
             stdin_prompt=rendered_prompt,
+            argv=command_with_prompt_target(
+                command, effective_file, child_env, append_target=False
+            ),
         )
     with NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".md") as handle:
         handle.write(rendered_prompt)
         temp_path = Path(handle.name)
     temp_files.append(temp_path)
+    child_env = env if env else os.environ
     return PreparedPromptRun(
         command=command,
         effective_file=temp_path,
         env=env,
         temp_files=temp_files,
+        argv=command_with_prompt_target(command, temp_path, child_env, append_target=True),
     )
 
 
@@ -473,7 +481,7 @@ def run_prepared_prompt_result(
     # ``env=None`` passed to ``run_capture_result`` below); interpolate argv
     # holes against the same effective mapping so both agree on variable values.
     child_env = prepared.env if prepared.env else os.environ
-    argv = command_with_prompt_target(
+    argv = prepared.argv or command_with_prompt_target(
         prepared.command,
         prepared.effective_file,
         child_env,

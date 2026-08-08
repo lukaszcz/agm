@@ -1615,7 +1615,6 @@ class TestScopedBuiltinTypes:
             "exception Exception\n"
             "  *\n"
             "  message: text\n"
-            "  trace_id: text\n"
             "builtin exception Abort extends Exception()\n"
             "end A\n"
             "()\n",
@@ -1811,7 +1810,6 @@ class TestBuiltinTypeModuleIdentity:
             "exception Exception\n"
             "  *\n"
             "  message: text\n"
-            "  trace_id: text\n"
             "builtin exception RangeError extends Exception()\n"
             "()\n",
             default_stdlib=False,
@@ -1944,7 +1942,6 @@ class TestCaughtExceptionShadowedByBuiltinRedeclaration:
             "exception Exception\n"
             "  *\n"
             "  message: text\n"
-            "  trace_id: text\n"
             "builtin\n"
             "exception ExecError extends Exception\n"
             "  *\n"
@@ -5746,8 +5743,17 @@ class TestConstructors:
         err = reject_type("exception Bad extends Exception\n  code: int\n  code: text\n()\n")
         assert "duplicate" in str(err).lower()
 
-    def test_user_exception_cannot_declare_trace_id_field(self) -> None:
-        err = reject_type("exception Root\n  trace_id: int\n()\n")
+    def test_user_exception_may_declare_trace_id_field(self) -> None:
+        result = accept_type(
+            "exception Tagged extends Exception\n"
+            "  trace_id: int\n"
+            'let tagged = Tagged(message = "marked", trace_id = 7)\n'
+            "tagged.trace_id\n"
+        )
+        assert result.resolved.program is not None
+
+    def test_builtin_exception_has_no_trace_id_field(self) -> None:
+        err = reject_type('Abort(message = "stop").trace_id\n')
         assert "trace_id" in str(err)
 
     def test_unknown_constructor_raises(self) -> None:

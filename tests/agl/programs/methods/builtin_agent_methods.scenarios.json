@@ -7,7 +7,7 @@
       "expect": {
         "stdout": "42\n",
         "calls": {"typed": 1},
-        "prompts": [{"agent": "typed", "call": 0, "equals": "How many?"}]
+        "prompts": [{"agent": "typed", "call": 0, "starts_with": "How many?"}]
       }
     },
     {

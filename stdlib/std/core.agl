@@ -39,7 +39,6 @@ builtin
 exception Exception
   *
   message: text
-  trace_id: text
 
 builtin
 exception AgentCallError extends Exception

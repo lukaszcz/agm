@@ -15,7 +15,7 @@
           {
             "agent": "raw",
             "call": 1,
-            "equals": "Review the release notes and identify the key change.",
+            "starts_with": "Review the release notes and identify the key change.",
             "schema_contains": ["summary"]
           },
           {"agent": "chain", "call": 0, "equals": "Continue the release notes."}
@@ -37,7 +37,7 @@
           {
             "agent": "raw",
             "call": 1,
-            "equals": "Review the migration guide and identify the key change.",
+            "starts_with": "Review the migration guide and identify the key change.",
             "schema_contains": ["summary"]
           },
           {"agent": "chain", "call": 0, "equals": "Continue the migration guide."}

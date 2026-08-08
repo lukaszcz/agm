@@ -43,7 +43,6 @@ from agm.agl.eval.indexing import AglIndexOutOfRange, AglMissingKey, index_get, 
 from agm.agl.ir.contracts import ContractRequest, ConversionFailureMode
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SymbolId
 from agm.agl.ir.nodes import (
-    AutoTraceField,
     IrAnd,
     IrArith,
     IrAsk,
@@ -603,7 +602,6 @@ class IrInterpreter:
                         "IndexError",
                         f"Array index {err.index} out of range for length {err.length}",
                         nominals=self._program.builtin_nominals,
-                        trace_id=self._trace.new_event_id(),
                         index=IntValue(err.index),
                         length=IntValue(err.length),
                     ),
@@ -614,7 +612,6 @@ class IrInterpreter:
                         "KeyError",
                         f"Dict key {err.key!r} is missing",
                         nominals=self._program.builtin_nominals,
-                        trace_id=self._trace.new_event_id(),
                         key=TextValue(err.key),
                     ),
                 )
@@ -628,9 +625,7 @@ class IrInterpreter:
         conversion so every ``render``/``as json``/coercion site that can
         reach a cyclic array or dict raises identical exception fields.
         """
-        return cyclic_value_raise(
-            self._trace.new_event_id(), nominals=self._program.builtin_nominals
-        )
+        return cyclic_value_raise(nominals=self._program.builtin_nominals)
 
     def _render_or_raise(
         self, value: Value, *, pretty: bool = False, quote_strings: bool = False
@@ -656,7 +651,6 @@ class IrInterpreter:
                         "CastError",
                         exc.message,
                         nominals=self._program.builtin_nominals,
-                        trace_id=self._trace.new_event_id(),
                         source_type=TextValue(exc.source_label),
                         target_type=TextValue(exc.target_label),
                         raw=TextValue(exc.raw),
@@ -749,7 +743,6 @@ class IrInterpreter:
                 "RecursionError",
                 f"Maximum call depth ({self._max_call_depth}) exceeded",
                 nominals=self._program.builtin_nominals,
-                trace_id=self._trace.new_event_id(),
                 limit=IntValue(self._max_call_depth),
             )
         )
@@ -1143,7 +1136,6 @@ class IrInterpreter:
                             "ArithmeticError",
                             "Division by zero",
                             nominals=self._program.builtin_nominals,
-                            trace_id=self._trace.new_event_id(),
                             operation=TextValue("/"),
                         )
                     )
@@ -1287,14 +1279,9 @@ class IrInterpreter:
                 )
 
             case IrMakeException(nominal=nominal, display_name=display_name, fields=fields):
-                # Allocate ONE trace id per construction; reuse for all AutoTraceField slots.
-                tid: TextValue = TextValue(self._trace.new_event_id())
-                exc_fields: dict[str, Value] = {}
-                for fname, field_slot in fields:
-                    if isinstance(field_slot, AutoTraceField):
-                        exc_fields[fname] = tid
-                    else:
-                        exc_fields[fname] = self._eval(field_slot)
+                exc_fields: dict[str, Value] = {
+                    fname: self._eval(field_expr) for fname, field_expr in fields
+                }
                 return ExceptionValue(
                     nominal=nominal,
                     display_name=display_name,
@@ -1438,7 +1425,6 @@ class IrInterpreter:
                                 "MaxIterationsExceeded",
                                 f"Loop exhausted after {self._loop_limit} iterations",
                                 nominals=self._program.builtin_nominals,
-                                trace_id=self._trace.new_event_id(),
                                 limit=IntValue(self._loop_limit),
                                 condition=TextValue("loop limit"),
                                 last_condition_value=BoolValue(False),
@@ -1579,7 +1565,6 @@ class IrInterpreter:
                             "JsonParseError",
                             exc.message,
                             nominals=self._program.builtin_nominals,
-                            trace_id=self._trace.new_event_id(),
                             raw=TextValue(val.value),
                         ),
                         span=node.location,
@@ -1750,7 +1735,6 @@ class IrInterpreter:
                         "TypeError",
                         "invalid max-iters: expected a non-negative integer",
                         nominals=self._program.builtin_nominals,
-                        trace_id=self._trace.new_event_id(),
                     )
                 )
             self._loop_limit = config_value.value or None
@@ -1769,7 +1753,6 @@ class IrInterpreter:
                             "TypeError",
                             f"invalid timeout: {exc}",
                             nominals=self._program.builtin_nominals,
-                            trace_id=self._trace.new_event_id(),
                         )
                     ) from exc
 

@@ -198,14 +198,8 @@ class RunError:
     line: int | None = None
     col: int | None = None
 
-    def to_message(self, *, include_trace_id: bool = False) -> str:
-        """Render the single-line ``AgL exception: ...`` report for this error.
-
-        Format: ``AgL exception: <Type>[: <message>][: at line L[, col C]]``,
-        with a trailing ``: trace_id=<id>`` when *include_trace_id* is set and a
-        trace id is present.  Shared by ``agm exec`` (with the trace id, design
-        ) and the REPL failure echo so the two never diverge.
-        """
+    def to_message(self) -> str:
+        """Render the single-line ``AgL exception: ...`` report for this error."""
         parts: list[str] = [f"AgL exception: {self.type_name}"]
         message = self.fields.get("message")
         if isinstance(message, str) and message:
@@ -215,10 +209,6 @@ class RunError:
                 parts.append(f"at line {self.line}, col {self.col}")
             else:
                 parts.append(f"at line {self.line}")
-        if include_trace_id:
-            trace_id = self.fields.get("trace_id")
-            if isinstance(trace_id, str) and trace_id:
-                parts.append(f"trace_id={trace_id}")
         return ": ".join(parts)
 
 
@@ -477,11 +467,9 @@ class PipelineDriver:
             # rather than masquerade as a user-facing pre-execution diagnostic.
             error = exception_value_to_run_error(exc.exc, span=exc.span)
             # Record the uncaught exception in the trace.
-            trace_id = str(error.fields.get("trace_id", ""))
             trace.exception(
                 type_name=error.type_name,
                 message=str(error.fields.get("message", "")),
-                trace_id=trace_id,
                 span=exc.span,
             )
             trace.run_end(ok=False)

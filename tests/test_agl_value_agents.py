@@ -142,7 +142,7 @@ def test_composed_prompt_appends_format_instructions_after_the_prompt(
     fake_agent_transport: FakeAgentTransport,
 ) -> None:
     from agm.agl.runtime.contract import TypelessOutputContract
-    from agm.agl.runtime.request import AgentRequest
+    from agm.agl.runtime.request import AgentRequest, compose_agent_prompt
 
     dispatch = value_driven_agent_factory(idle_timeout=None)
     agent = agent_value("AgentCommand", command="runner")
@@ -154,7 +154,9 @@ def test_composed_prompt_appends_format_instructions_after_the_prompt(
         json_schema=None,
     )
 
-    dispatch(AgentRequest(agent=agent, prompt="Do X.", output_contract=contract))
+    request = AgentRequest(agent=agent, prompt="Do X.", output_contract=contract)
+    request.prompt = compose_agent_prompt(request)
+    dispatch(request)
 
     prompt = fake_agent_transport.calls[0][0]
     assert "Do X." in prompt
@@ -188,23 +190,23 @@ def test_composed_prompt_includes_retry_feedback_on_a_retry_attempt(
     fake_agent_transport: FakeAgentTransport,
 ) -> None:
     """A retry (attempt >= 1) appends the previous output and validation errors."""
-    from agm.agl.runtime.request import AgentRequest, ValidationError
+    from agm.agl.runtime.request import AgentRequest, ValidationError, compose_agent_prompt
 
     dispatch = value_driven_agent_factory(idle_timeout=None)
     agent = agent_value("AgentCommand", command="runner")
 
-    dispatch(
-        AgentRequest(
-            agent=agent,
-            prompt="Do X.",
-            attempt=1,
-            previous_invalid_output="the-bad-output-xyz",
-            validation_errors=[
-                ValidationError(category="missing_field", message="missing field 'name'"),
-                ValidationError(category="wrong_type", message="type mismatch: expected int"),
-            ],
-        )
+    request = AgentRequest(
+        agent=agent,
+        prompt="Do X.",
+        attempt=1,
+        previous_invalid_output="the-bad-output-xyz",
+        validation_errors=[
+            ValidationError(category="missing_field", message="missing field 'name'"),
+            ValidationError(category="wrong_type", message="type mismatch: expected int"),
+        ],
     )
+    request.prompt = compose_agent_prompt(request)
+    dispatch(request)
 
     prompt = fake_agent_transport.calls[0][0]
     assert "Your previous response did not match the required output format" in prompt
@@ -233,7 +235,7 @@ def test_composed_prompt_orders_format_instructions_before_retry_feedback(
 ) -> None:
     """Ordering: prompt, then format_instructions, then the retry-feedback block."""
     from agm.agl.runtime.contract import TypelessOutputContract
-    from agm.agl.runtime.request import AgentRequest
+    from agm.agl.runtime.request import AgentRequest, compose_agent_prompt
 
     dispatch = value_driven_agent_factory(idle_timeout=None)
     agent = agent_value("AgentCommand", command="runner")
@@ -245,15 +247,15 @@ def test_composed_prompt_orders_format_instructions_before_retry_feedback(
         json_schema=None,
     )
 
-    dispatch(
-        AgentRequest(
-            agent=agent,
-            prompt="Do X.",
-            attempt=1,
-            previous_invalid_output="bad",
-            output_contract=contract,
-        )
+    request = AgentRequest(
+        agent=agent,
+        prompt="Do X.",
+        attempt=1,
+        previous_invalid_output="bad",
+        output_contract=contract,
     )
+    request.prompt = compose_agent_prompt(request)
+    dispatch(request)
 
     prompt = fake_agent_transport.calls[0][0]
     prompt_pos = prompt.index("Do X.")

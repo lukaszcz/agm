@@ -22,8 +22,16 @@ from agm.agl.runtime.contract import OutputContract
 from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.runtime.option import none_value, some_value
 from agm.agl.runtime.render import render_value
-from agm.agl.runtime.request import AgentRequest, AgentResponse
-from agm.agl.runtime.request import ValidationError as ReqValidationError
+from agm.agl.runtime.request import (
+    AgentCallHostError,
+    AgentCancelled,
+    AgentRequest,
+    AgentResponse,
+    compose_agent_prompt,
+)
+from agm.agl.runtime.request import (
+    ValidationError as ReqValidationError,
+)
 from agm.agl.runtime.trace import TraceStore
 from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise
 from agm.agl.semantics.exceptions import AglRaise
@@ -32,6 +40,7 @@ from agm.agl.semantics.values import (
     VOID_VALUE,
     BoolValue,
     EnumValue,
+    ExceptionValue,
     IntValue,
     JsonValue,
     RecordValue,
@@ -92,9 +101,7 @@ class EffectHandlers:
         try:
             return render_value(value)
         except AglCyclicValue as exc:
-            raise cyclic_value_raise(
-                self._ctx._trace.new_event_id(), nominals=self._ctx._program.builtin_nominals
-            ) from exc
+            raise cyclic_value_raise(nominals=self._ctx._program.builtin_nominals) from exc
 
     # ------------------------------------------------------------------
     # Extern (Python FFI) call helper
@@ -103,7 +110,7 @@ class EffectHandlers:
     def eval_extern_call(
         self, module_id: ModuleId, extern: ExternFunctionBody, args: Sequence[Value]
     ) -> Value:
-        """Handle a call to an ``extern def``: resolve, mint a trace id, invoke.
+        """Handle a call to an ``extern def``: resolve and invoke.
 
         The companion callable was already imported at program load
         (``pipeline._wire_extern_registry``); this only looks it up by name.
@@ -113,44 +120,111 @@ class EffectHandlers:
         ``AglRaise(ExternError)``, mirroring the ``exec`` model.
         """
         fn = self._ctx._extern_registry.resolve(module_id, extern.name)
-        trace_id = self._ctx._trace.new_event_id()
         return self._ctx._extern_registry.invoke(
-            extern.name,
-            fn,
-            args,
-            trace_id,
-            nominals=self._ctx._program.builtin_nominals,
+            extern.name, fn, args, nominals=self._ctx._program.builtin_nominals
         )
 
     # ------------------------------------------------------------------
     # Agent call helpers
     # ------------------------------------------------------------------
 
-    def _dispatch_agent(self, request: AgentRequest, node: IrAsk) -> AgentResponse:
-        """Dispatch an agent call, annotating cancellation with the ask span.
+    @staticmethod
+    def _agent_trace_value(agent: EnumValue) -> dict[str, object]:
+        """Return the agent variant and payload without re-decoding it."""
+        return {
+            "variant": agent.variant,
+            "payload": {
+                name: value.value if isinstance(value, TextValue) else render_value(value)
+                for name, value in agent.fields.items()
+            },
+        }
 
-        ``AgentCancelled`` (and a bare ``KeyboardInterrupt`` from an unwrapped
-        dispatcher) has no source context. The REPL session reports this location
-        with the cancellation; initializer-completion tracking independently
-        determines which prior effects are promoted. A raw ``KeyboardInterrupt``
-        is normalized to ``AgentCancelled(reason="interrupted")`` to match the
-        ``ConfirmingAgent`` conversion and give the session a uniform carrier.
-        """
-        from agm.agl.runtime.request import AgentCancelled
-
+    def _dispatch_agent(
+        self,
+        request: AgentRequest,
+        node: IrAsk,
+        *,
+        max_attempts: int,
+        target_type: str,
+        codec: str,
+        strict_json: bool | None,
+        json_schema: object | None,
+    ) -> AgentResponse:
+        """Trace, dispatch, and map every agent outcome at one boundary."""
+        self._ctx._trace.agent_request(
+            agent=self._agent_trace_value(request.agent),
+            attempt=request.attempt,
+            max_attempts=max_attempts,
+            prompt=request.prompt,
+            target_type=target_type,
+            codec=codec,
+            strict_json=strict_json,
+            json_schema=json_schema,
+            span=node.location,
+        )
         try:
-            return dispatch_agent_value(
-                request,
-                self._ctx._agent_dispatcher,
-                nominals=self._ctx._program.builtin_nominals,
+            if self._ctx._agent_dispatcher is None:
+                raise AgentCallHostError(
+                    cause="no_dispatcher", exit_code=None, stderr_tail="", elapsed=0.0
+                )
+            response = dispatch_agent_value(request, self._ctx._agent_dispatcher)
+        except AgentCallHostError as exc:
+            call_info = exc.call_info.to_trace() if exc.call_info is not None else None
+            if call_info is None:
+                call_info = {"exit_code": exc.exit_code, "elapsed": exc.elapsed}
+            call_info["stderr_tail"] = exc.stderr_tail
+            self._ctx._trace.agent_response(
+                ok=False, cause=exc.cause, call_info=call_info, span=node.location
             )
+            self._raise_agent_call_error(request.agent, exc)
         except AgentCancelled as exc:
+            self._ctx._trace.agent_response(
+                ok=False, cancelled=True, reason=exc.reason, span=node.location
+            )
             exc.span = node.location
             raise
         except KeyboardInterrupt as exc:
-            raise AgentCancelled(
+            cancelled = AgentCancelled(
                 render_value(request.agent), "interrupted", span=node.location
-            ) from exc
+            )
+            self._ctx._trace.agent_response(
+                ok=False, cancelled=True, reason=cancelled.reason, span=node.location
+            )
+            raise cancelled from exc
+        self._ctx._trace.agent_response(
+            ok=True,
+            content=response.content,
+            metadata=response.metadata,
+            call_info=response.call_info.to_trace() if response.call_info is not None else None,
+            span=node.location,
+        )
+        return response
+
+    def _raise_agent_call_error(self, agent: EnumValue, error: AgentCallHostError) -> NoReturn:
+        """Convert a transport failure after it was recorded in the trace."""
+        declared = self._ctx._program.builtin_nominals.resolve("AgentCallError")
+        agent_label = render_value(agent)
+        raise AglRaise(
+            ExceptionValue(
+                nominal=declared.nominal,
+                display_name=declared.display_name,
+                fields={
+                    "message": TextValue(
+                        f"Agent {agent_label!r} failed: {error.cause}"
+                        + (f" (exit {error.exit_code})" if error.exit_code is not None else "")
+                    ),
+                    "agent": agent,
+                    "cause": TextValue(error.cause),
+                    "metadata": JsonValue(
+                        {
+                            "exit_code": error.exit_code,
+                            "stderr_tail": error.stderr_tail,
+                            "elapsed": error.elapsed,
+                        }
+                    ),
+                },
+            )
+        )
 
     @staticmethod
     def _classify_parse_errors(result: ParseResult) -> tuple[ReqValidationError, ...]:
@@ -188,7 +262,6 @@ class EffectHandlers:
                 "AgentParseError",
                 message,
                 nominals=self._ctx._program.builtin_nominals,
-                trace_id=self._ctx._trace.new_event_id(),
                 raw=TextValue(last_raw or ""),
                 normalized_raw=TextValue(normalized_text),
                 agent=agent,
@@ -222,14 +295,19 @@ class EffectHandlers:
 
         contract = self._ctx._program.contracts[contract_id]
 
-        # Unit-typed ask: dispatch once, no output parsing.
+        # Unit-typed asks still produce a complete request/response trace pair.
         if contract.is_unit:
-            request = AgentRequest(
-                agent=agent_val,
-                prompt=prompt_text,
-                output_contract=None,
+            request = AgentRequest(agent=agent_val, prompt=prompt_text, output_contract=None)
+            request.prompt = compose_agent_prompt(request)
+            self._dispatch_agent(
+                request,
+                _node,
+                max_attempts=1,
+                target_type=contract.target_type_label,
+                codec=contract.codec_name,
+                strict_json=contract.strict_json,
+                json_schema=None,
             )
-            self._dispatch_agent(request, _node)
             return VOID_VALUE
 
         effective_strict = (
@@ -257,13 +335,10 @@ class EffectHandlers:
         last_normalized: str | None = None
         last_errors: tuple[ReqValidationError, ...] = ()
 
+        json_schema = (
+            None if contract.json_schema is None else cast(object, json.loads(contract.json_schema))
+        )
         for attempt in range(max_attempts):
-            self._ctx._trace.agent_call_attempt(
-                agent=agent_name,
-                attempt=attempt,
-                prompt=prompt_text,
-                span=_node.location,
-            )
             request = AgentRequest(
                 agent=agent_val,
                 prompt=prompt_text,
@@ -272,7 +347,16 @@ class EffectHandlers:
                 validation_errors=list(last_errors),
                 output_contract=output_contract,
             )
-            response = self._dispatch_agent(request, _node)
+            request.prompt = compose_agent_prompt(request)
+            response = self._dispatch_agent(
+                request,
+                _node,
+                max_attempts=max_attempts,
+                target_type=contract.target_type_label,
+                codec=contract.codec_name,
+                strict_json=contract.strict_json,
+                json_schema=json_schema,
+            )
             raw = response.content
 
             result = self._ctx._parse_host_output(
@@ -360,20 +444,17 @@ class EffectHandlers:
         stdout: str,
         stderr: str,
         timed_out: bool = False,
-        trace_id: str | None = None,
     ) -> NoReturn:
         """Raise the builtin ``ExecError`` carrying one shell invocation's outcome.
 
         Every ``exec`` failure — spawn, timeout, non-zero exit, and typed-output
-        parse failure — reports through this one shape.  *trace_id* reuses an
-        already-minted event id; otherwise a fresh one is minted here.
+        parse failure — reports through this one shape.
         """
         raise AglRaise(
             _make_exc_value(
                 "ExecError",
                 message,
                 nominals=self._ctx._program.builtin_nominals,
-                trace_id=trace_id if trace_id is not None else self._ctx._trace.new_event_id(),
                 command=TextValue(command),
                 exit_code=IntValue(exit_code),
                 stdout=TextValue(stdout),
@@ -416,7 +497,7 @@ class EffectHandlers:
         )
         if result.spawn_error is not None:
             spawn_error = str(result.spawn_error)
-            trace_id = self._ctx._trace.exec_command(
+            self._ctx._trace.exec_command(
                 command=cmd,
                 exit_code=-1,
                 duration=result.elapsed,
@@ -431,7 +512,6 @@ class EffectHandlers:
                 exit_code=-1,
                 stdout="",
                 stderr=spawn_error,
-                trace_id=trace_id,
             )
         if result.timed_out:
             exit_code = result.returncode if result.returncode is not None else -1
@@ -531,7 +611,6 @@ class EffectHandlers:
                             "ExecError",
                             f"Shell command exited with code {rc2}: {cmd!r}",
                             nominals=self._ctx._program.builtin_nominals,
-                            trace_id=self._ctx._trace.new_event_id(),
                             command=TextValue(cmd),
                             exit_code=IntValue(rc2),
                             stdout=TextValue(stdout2.rstrip("\n")),

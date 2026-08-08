@@ -524,9 +524,8 @@ class ConstructorChecker:
                     callee_kind="constructor",
                 )
 
-        # Type-check each user field (exceptions skip trace_id, which is excluded
-        # from field_kinds at registration time). Placeholder fields are checked
-        # when the produced function is invoked.
+        # Type-check each supplied field. Placeholder fields are checked when
+        # the produced function is invoked.
         for fname, _fkind in field_kinds:
             expected_field_type = fields[fname]
             arg_expr = bound_exprs[fname]
@@ -909,7 +908,7 @@ class ConstructorChecker:
         owner = self._ctx._zonk_constructor_owner(owner)
         fields, context_desc = self._constructor_fields_and_context(owner, variant)
 
-        # Get field kinds (excludes trace_id for exceptions). The env helper
+        # Get field kinds. The env helper
         # owns the lookup convention (registered table for records/enums,
         # derived from exception_fields for exceptions).
         field_kinds = self._ctx._env.get_constructor_field_kinds_for_type(

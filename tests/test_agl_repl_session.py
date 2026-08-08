@@ -962,11 +962,7 @@ class TestStdlib:
                 assert not result.ok
                 assert any("abstract" in diagnostic.message for diagnostic in result.diagnostics)
                 continue
-            fields = {
-                field_name: field_type
-                for field_name, field_type in table.exception_fields(typ).items()
-                if field_name != "trace_id"
-            }
+            fields = table.exception_fields(typ)
             result = s.eval_entry(f"{name}({_constructor_args(fields)})")
             assert result.ok, (name, result.diagnostics)
             assert result.value_type is not None
@@ -1151,7 +1147,7 @@ class TestBuiltinIdentityAcrossEntries:
         declare = s.eval_entry(
             f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
             "builtin def exec(command: text) -> ExecResult\n"
-            "builtin\nexception Exception\n  *\n  message: text\n  trace_id: text\n"
+            "builtin\nexception Exception\n  *\n  message: text\n"
             "builtin exception Abort extends Exception()\n"
         )
         assert declare.ok, declare.diagnostics
@@ -3785,7 +3781,8 @@ class TestTraceLogging:
         kinds = [rec["kind"] for rec in records]
         assert "run_start" in kinds
         assert "run_end" in kinds
-        assert "agent_call_attempt" in kinds
+        assert "agent_request" in kinds
+        assert "agent_response" in kinds
 
     def test_each_entry_is_its_own_run(self, tmp_path: Path) -> None:
         import json
@@ -3817,6 +3814,10 @@ class TestTraceLogging:
         records = [json.loads(line) for line in trace.read_text().splitlines() if line]
         run_end = [rec for rec in records if rec["kind"] == "run_end"]
         assert run_end and run_end[-1]["ok"] is False
+        assert any(rec["kind"] == "agent_request" for rec in records)
+        responses = [rec for rec in records if rec["kind"] == "agent_response"]
+        assert responses and responses[-1]["cancelled"] is True
+        assert responses[-1]["reason"]
 
     def test_write_failure_disables_logging_for_that_entry_only(self, tmp_path: Path) -> None:
         """A transient write failure must not kill logging for the whole session."""

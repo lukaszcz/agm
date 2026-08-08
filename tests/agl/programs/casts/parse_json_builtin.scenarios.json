@@ -38,7 +38,7 @@
         "raw": "{bad json}"
       },
       "expect": {
-        "stdout": "\"{bad json}\"\nparse error\n{bad json}\nhas_message: true\nhas_trace_id: true\n"
+        "stdout": "\"{bad json}\"\nparse error\n{bad json}\nhas_message: true\n"
       }
     },
     {
@@ -47,7 +47,7 @@
         "raw": "not json at all"
       },
       "expect": {
-        "stdout": "\"not json at all\"\nparse error\nnot json at all\nhas_message: true\nhas_trace_id: true\n"
+        "stdout": "\"not json at all\"\nparse error\nnot json at all\nhas_message: true\n"
       }
     }
   ]

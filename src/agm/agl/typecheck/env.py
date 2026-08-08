@@ -2432,10 +2432,9 @@ class TypeEnvironment:
         derived directly from ``type_table.exception_field_kinds``, which
         flattens the ``extends`` base chain (base kinds first, then own kinds,
         each honoring its declaration's ``@pos``/``@std``/``@named`` marker —
-        exactly like a record's fields) and excludes ``trace_id`` (auto-filled
-        at construction time, never supplied by the caller), rather than
-        through the registered-kinds table records/enums use, since an
-        exception's kinds are never pre-registered (see ``TypeEnvironment.
+        exactly like a record's fields), rather than through the registered-kinds
+        table records/enums use, since an exception's kinds are never pre-registered
+        (see ``TypeEnvironment.
         __init__``).  ``exception_field_kinds`` returns ``ParamKind.value``
         strings rather than the enum (``semantics`` may not import
         ``syntax.nodes``), so each is converted back with ``ParamKind(...)``

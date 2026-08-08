@@ -44,7 +44,6 @@ from agm.agl.ir.contracts import (
 )
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
-    AutoTraceField,
     IrAnd,
     IrArith,
     IrAsk,
@@ -1513,7 +1512,6 @@ class _Lowerer:
                                                 value="loop step must be positive",
                                             ),
                                         ),
-                                        ("trace_id", AutoTraceField()),
                                     ),
                                 ),
                             ),
@@ -1720,7 +1718,6 @@ class _Lowerer:
                                             ),
                                         ),
                                     ),
-                                    ("trace_id", AutoTraceField()),
                                     ("limit", IrLoad(location=loc, symbol=n_sym)),
                                     (
                                         "condition",
@@ -2393,19 +2390,14 @@ class _Lowerer:
 
         if isinstance(typ, ExceptionType):
             nominal = NominalId(typ.decl_id)
-            # ONE trace id allocation sentinel per construction (auto-fill any
-            # declared field not present in arg_slots).
-            exc_fields: list[tuple[str, IrExpr | AutoTraceField]] = []
-            for fname in self._type_table.exception_fields(typ):
-                if fname in arg_slots:
-                    exc_fields.append((fname, arg_slots[fname]))
-                else:
-                    exc_fields.append((fname, AutoTraceField()))
+            exc_fields = tuple(
+                (fname, arg_slots[fname]) for fname in self._type_table.exception_fields(typ)
+            )
             return IrMakeException(
                 location=loc,
                 nominal=nominal,
                 display_name="::".join((*typ.scope_path, typ.name)),
-                fields=tuple(exc_fields),
+                fields=exc_fields,
             )
 
         if isinstance(typ, EnumType):

@@ -208,22 +208,27 @@ host default.
 
 ## Tracing
 
-While tracing is active, a conforming host records execution so runs can be
-audited and debugged. Positional source writes may enable or disable tracing,
-so records outside the active interval (including run start or end) can be
-absent. The trace can contain:
+While tracing is active, a conforming host writes one JSON object per line.
+Every record has the envelope `ts`, `run_id`, and `kind`: `ts` is an
+ISO-8601 local timestamp with an offset, and `run_id` distinguishes runs that
+append to the same file. Positional source writes may enable or disable
+tracing, so records outside the active interval (including run start or end)
+can be absent.
+
+Tracing records only observable boundaries:
 
 - run start and end (with success/failure);
-- every agent call attempt (agent, attempt number, rendered prompt) and
-  every parse result (raw output, normalized output, error summary);
-- every `exec` invocation (command, exit code, duration, stdout, stderr,
+- stdout emitted by `print`;
+- each agent request and response. A request records the fully composed prompt,
+  selected agent and payload, attempt information, and output contract; a
+  response records its full content or transport/cancellation outcome;
+- every `exec` invocation (command, exit code, duration, stdout, stderr, and
   timeout flag);
-- every `print`;
-- every raised exception.
+- an exception only when it escapes the program uncaught.
 
-Every exception value carries a `trace_id` field linking it to the
-corresponding trace record. The normalized (recovered) JSON of a lenient
-parse is traced alongside the raw output.
+Ordinary expression evaluation is not traced. Trace records and exception
+values have no host-generated `trace_id`; a user-declared exception may still
+have a field with that name.
 
 ## Results and termination
 

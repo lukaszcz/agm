@@ -7,7 +7,7 @@
         "target": "int"
       },
       "expect": {
-        "stdout": "source: text\ntarget: int\nraw: abc\nhas_message: true\nhas_trace_id: true\n"
+        "stdout": "source: text\ntarget: int\nraw: abc\nhas_message: true\n"
       }
     },
     {
@@ -27,7 +27,7 @@
         "target": "decimal"
       },
       "expect": {
-        "stdout": "source: text\ntarget: decimal\nraw: xyz\nhas_message: true\nhas_trace_id: true\n"
+        "stdout": "source: text\ntarget: decimal\nraw: xyz\nhas_message: true\n"
       }
     },
     {

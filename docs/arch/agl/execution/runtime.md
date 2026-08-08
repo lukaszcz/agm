@@ -16,7 +16,18 @@ The Python FFI is split between `runtime/externs.py`, which loads companions and
 
 A second sentinel, `AglNonDataValue` (`runtime/serialize.py`), covers the other way JSON serialization can fail: a value kind with no JSON representation at all (`unit`, constructor, function, iterator). Unlike the cycle sentinel it has no catchable-exception form, because every evaluator route into serialization is statically gated by `is_json_convertible` — it can only arrive via the two ungated reporters, trace logging and in-flight error reporting, which degrade it to a marker exactly as they do a cycle. A record or exception field may legitimately hold such a value even though casting its type to `json` is a static error.
 
-## Live Trace Settings
+## Tracing and Live Trace Settings
+
+`runtime/trace.py` writes best-effort JSONL records. Every record starts with
+`ts`, `run_id`, and `kind`; the store records only run boundaries, `print`
+stdout, agent requests and responses, shell executions, and exceptions that
+escape uncaught. It deliberately does not trace ordinary expression evaluation
+or attach a `trace_id` to records or exception values.
+
+`eval/effects.py` is the agent logging seam: it composes the prompt, records the
+request before dispatch, and records every response path, including unit calls,
+transport failures, and cancellation. `runtime/agents.py` remains the
+value-driven transport boundary and sends that composed prompt verbatim.
 
 The trace destination is the sole live host service configured by an AgL `builtin var` write. The engine-key catalog names its `log`/`log-file` register pair explicitly; either write repoints the same trace store, while other host-consumed settings remain registers read on demand. `runtime/host_settings.py` applies the command-supplied trace-path policy without importing the command layer.
 
@@ -26,7 +37,8 @@ The pipeline sits on top: it drives the compile → lower → evaluate sequence 
 
 ## Code Entry Points
 
-- `src/agm/agl/runtime/agents.py` — decodes `Agent` enum values and runs their builder-produced argv through the shared prompt/process seam.
+- `src/agm/agl/eval/effects.py` — the evaluator's observable-effect seam for agent request/response logging and shell execution.
+- `src/agm/agl/runtime/agents.py` — decodes `Agent` enum values and runs their builder-produced argv through the shared prompt/process seam; `runtime/trace.py` writes the JSONL trace records.
 - `src/agm/agl/runtime/` — codecs, parameter conversion, host-environment types, and the renderer; `runtime/externs.py` owns extern loading/dispatch and `runtime/boundary.py` owns boundary conversion and live views.
 - `src/agm/agl/pipeline.py` — the orchestrator; `src/agm/agl/type_schema.py` — compile-time schema/format generation.
 - Tests: `tests/test_agl_runtime.py`, `tests/test_agl_codec.py`, `tests/test_agl_pipeline_*.py`, `tests/test_agl_extern_boundary.py`, `tests/test_agl_extern_views.py`.

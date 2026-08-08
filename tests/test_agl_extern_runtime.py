@@ -83,7 +83,7 @@ def test_exception_values_cross_as_plain_nominal_objects(tmp_path: Path) -> None
         "from agl import Problem\n"
         "def add_detail(problem):\n"
         "    return Problem(\n"
-        "        message=problem.message, trace_id=problem.trace_id,\n"
+        "        message=problem.message,\n"
         "        detail=problem.detail + '!'\n"
         "    )\n"
     )

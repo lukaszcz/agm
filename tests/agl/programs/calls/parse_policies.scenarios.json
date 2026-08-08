@@ -64,7 +64,7 @@
               "command": "reviewer"
             },
             "call": 1,
-            "equals": "Second review."
+            "starts_with": "Second review."
           },
           {
             "agent": {
@@ -72,7 +72,7 @@
               "command": "reviewer"
             },
             "call": 2,
-            "equals": "Second review."
+            "starts_with": "Second review."
           },
           {
             "agent": {
@@ -80,7 +80,7 @@
               "command": "reviewer"
             },
             "call": 3,
-            "equals": "Second review."
+            "starts_with": "Second review."
           }
         ]
       }

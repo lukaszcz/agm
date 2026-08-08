@@ -257,9 +257,8 @@ class ExceptionType:
     of that name, in which case it carries that program's module instead.
 
     The abstract ``Exception`` root is the ``TypeDef`` registered under name
-    ``"Exception"`` with ``abstract=True`` and only ``message``/``trace_id``
-    fields. It is not constructible; the source catch spelling ``Exception``
-    is the catch-all form.
+    ``"Exception"`` with ``abstract=True`` and only a ``message`` field. It is
+    not constructible; the source catch spelling ``Exception`` is the catch-all form.
 
     ``decl_id`` is the identity of the declaration this handle names, or
     ``NO_DECL_ID`` when no declaration identity is attached. It participates

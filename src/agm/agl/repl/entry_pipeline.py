@@ -700,7 +700,6 @@ class EntryPipeline:
             trace.exception(
                 type_name=error.type_name,
                 message=str(error.fields.get("message", "")),
-                trace_id=str(error.fields.get("trace_id", "")),
                 span=exc.span,
             )
             trace.run_end(ok=False)
@@ -803,7 +802,6 @@ class EntryPipeline:
             trace.exception(
                 type_name=error.type_name,
                 message=str(error.fields.get("message", "")),
-                trace_id=str(error.fields.get("trace_id", "")),
                 span=exc.span,
             )
             return partial_failure(diagnostics=[], error=error)

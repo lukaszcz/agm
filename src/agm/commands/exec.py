@@ -435,5 +435,5 @@ def run(args: ExecArgs) -> None:
         raise SystemExit(1)
 
     # Uncaught AgL exception: print and exit 2.
-    print(result.error.to_message(include_trace_id=True), file=sys.stderr)
+    print(result.error.to_message(), file=sys.stderr)
     raise SystemExit(2)

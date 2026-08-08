@@ -44,7 +44,6 @@ from agm.agl.ir.operations import (
 )
 
 __all__ = [
-    "AutoTraceField",
     "IrAnd",
     "IrArith",
     "IrAsk",
@@ -521,19 +520,6 @@ class IrRenderTemplate:
 
 
 @dataclass(frozen=True, slots=True)
-class AutoTraceField:
-    """Sentinel marker for an auto-injected trace_id field in IrMakeException.
-
-    Each slot in ``IrMakeException.fields`` that was NOT provided by the caller
-    carries this sentinel rather than an ``IrExpr``.  The evaluator allocates
-    ONE ``TextValue(trace.new_event_id())`` per construction and substitutes it
-    for every ``AutoTraceField`` slot in that construction.
-
-    This is NOT an ``IrExpr`` member — it cannot appear in any other IR position.
-    """
-
-
-@dataclass(frozen=True, slots=True)
 class IrMakeRecord:
     """IR record construction: ``RecordName(field: expr, ...)``.
 
@@ -578,16 +564,14 @@ class IrMakeException:
         declaration's own identity otherwise — a program-declared
         ``builtin exception`` included.
     ``display_name`` — user-facing exception type name.
-    ``fields`` — declaration-order tuple of ``(field_name, slot)`` where
-        ``slot`` is either a coerced ``IrExpr`` (explicitly provided by the
-        caller) or an ``AutoTraceField`` sentinel (declared but not provided —
-        will receive the construction's freshly allocated trace id).
+    ``fields`` — declaration-order tuple of ``(field_name, expr)`` pairs;
+        each expression is coerced to the declared field type by the lowerer.
     """
 
     location: Location
     nominal: NominalId
     display_name: str
-    fields: "tuple[tuple[str, IrExpr | AutoTraceField], ...]"
+    fields: "tuple[tuple[str, IrExpr], ...]"
 
 
 @dataclass(frozen=True, slots=True)

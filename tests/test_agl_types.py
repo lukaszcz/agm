@@ -359,7 +359,6 @@ class TestTypeEnvironmentPrelude:
         assert isinstance(t, ExceptionType)
         fields = env.type_table.exception_fields(t)
         assert fields["message"] == TextType()
-        assert fields["trace_id"] == TextType()
         assert fields["limit"] == IntType()
 
     def test_resolve_named_type_exec_result(self) -> None:

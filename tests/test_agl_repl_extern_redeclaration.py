@@ -142,7 +142,7 @@ class TestCapturedClassSurvivesRedeclaration:
             (
                 "from agl import Problem\n"
                 "def make_and_read(detail, problem_cls=Problem):\n"
-                "    box = problem_cls(message='boom', trace_id='t', detail=detail)\n"
+                "    box = problem_cls(message='boom', detail=detail)\n"
                 "    return box.detail\n"
             ),
         )

@@ -1,13 +1,4 @@
-"""AgentRequest, AgentResponse and related runtime request types.
-
-These are the objects passed to host-registered agent callables.
-``AgentRequest.prompt`` is the already-rendered prompt template (the rendered
-text that the agent should receive as its user message).
-
-Design  / : ``AgentRequest`` carries the rendered prompt,
-attempt counter, retry context, and an ``OutputContract`` so agents can
-inspect format instructions and the JSON schema for native structured output.
-"""
+"""Runtime request and response types for host-registered agent calls."""
 
 from __future__ import annotations
 
@@ -20,34 +11,15 @@ from agm.agl.semantics.values import EnumValue
 if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract, TypelessOutputContract
 
-
-# The documented validation-error categories:
-# - ``missing_field``  — a required field was absent.
-# - ``unknown_field``  — an undeclared field was present (``additionalProperties``).
-# - ``wrong_type``     — a field's JSON type did not match the schema.
-# - ``bad_case``       — an enum object's ``$case`` did not name a known variant
-#                        (or was missing / not a string).
-# - ``invalid_json``   — the agent response contained no extractable JSON value
-#                        at all.
 ValidationErrorCategory = Literal[
-    "missing_field",
-    "unknown_field",
-    "wrong_type",
-    "bad_case",
-    "invalid_json",
+    "missing_field", "unknown_field", "wrong_type", "bad_case", "invalid_json"
 ]
 
 
 class AgentCancelled(Exception):
     """Signal that a host agent call was declined or interrupted."""
 
-    def __init__(
-        self,
-        callee: str,
-        reason: str,
-        *,
-        span: Location | None = None,
-    ) -> None:
+    def __init__(self, callee: str, reason: str, *, span: Location | None = None) -> None:
         super().__init__(f"Agent call to {callee!r} cancelled ({reason}).")
         self.callee = callee
         self.reason = reason
@@ -56,25 +28,7 @@ class AgentCancelled(Exception):
 
 @dataclass(frozen=True, slots=True)
 class ValidationError:
-    """A structured parse/validation error.
-
-    Produced by the JSON codec when an agent response parses as JSON but fails
-    strict schema validation.  Carries enough structure that retry feedback and
-    ``AgentParseError.validation_errors`` can describe *what* went wrong without
-    leaking jsonschema-internal phrasing (e.g. "is not valid under any of the
-    given schemas").
-
-    ``category``
-        One of the documented categories (see :data:`ValidationErrorCategory`).
-    ``message``
-        A human-readable, type-directed description of the failure.
-    ``path``
-        A JSON-path-like location of the offending value (``"$"`` for the root,
-        ``"$.field"`` for a record field, etc.).
-    ``field``
-        The offending field name when applicable (``None`` for root-level or
-        ``$case`` failures).
-    """
+    """A structured JSON-output validation error used for retry feedback."""
 
     category: ValidationErrorCategory
     message: str
@@ -82,7 +36,6 @@ class ValidationError:
     field: str | None = None
 
     def to_json_obj(self) -> dict[str, object]:
-        """JSON-shaped representation (for tracing / retry-feedback prompts)."""
         return {
             "category": self.category,
             "message": self.message,
@@ -91,32 +44,47 @@ class ValidationError:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class AgentCallInfo:
+    """Transport details from one agent invocation, when a process was prepared."""
+
+    argv: list[str]
+    prompt_via_stdin: bool
+    elapsed: float
+    exit_code: int | None
+
+    def to_trace(self) -> dict[str, object]:
+        return {
+            "argv": self.argv,
+            "prompt_via_stdin": self.prompt_via_stdin,
+            "elapsed": self.elapsed,
+            "exit_code": self.exit_code,
+        }
+
+
+class AgentCallHostError(Exception):
+    """Python-level transport failure mapped to catchable ``AgentCallError``."""
+
+    def __init__(
+        self,
+        *,
+        cause: str,
+        exit_code: int | None,
+        stderr_tail: str,
+        elapsed: float,
+        call_info: AgentCallInfo | None = None,
+    ) -> None:
+        super().__init__(cause)
+        self.cause = cause
+        self.exit_code = exit_code
+        self.stderr_tail = stderr_tail
+        self.elapsed = elapsed
+        self.call_info = call_info
+
+
 @dataclass(slots=True)
 class AgentRequest:
-    """The request object passed to a host-registered agent callable.
-
-    ``agent``
-        The encoded ``Agent`` enum value selected by the call. It is retained
-        unchanged for dispatch, retry context, and catchable error values.
-    ``prompt``
-        The fully rendered user-authored prompt template.  Interpolated
-        values have already been processed by the renderer pipeline.  The
-        agent should use this verbatim as its user message.
-    ``attempt``
-        0-based attempt counter (0 = first call, 1 = first retry, …).
-    ``previous_invalid_output``
-        The raw text returned by the previous (failed) attempt, or ``None``
-        on the first attempt. Useful for retry-feedback messages.
-    ``validation_errors``
-        Structured :class:`ValidationError` records from the previous failed
-        attempt.  Empty on the first attempt; populated on
-        retries so the agent can be told *what* was wrong.
-    ``output_contract``
-        The materialized output contract for this call site.
-        Carries ``format_instructions`` and ``json_schema`` so agents can
-        relay them to the underlying model.  ``None`` for ``unit`` calls,
-        whose response is intentionally ignored.
-    """
+    """The fully composed request passed verbatim to a host dispatcher."""
 
     agent: EnumValue
     prompt: str
@@ -129,12 +97,24 @@ class AgentRequest:
 
 @dataclass(slots=True)
 class AgentResponse:
-    """A structured response from a host agent callable.
-
-    A host agent may return either a plain ``str`` (treated as
-    ``AgentResponse(content=value, metadata={})``) or an ``AgentResponse``
-    directly.
-    """
+    """A host agent response, optionally including process-call information."""
 
     content: str
     metadata: dict[str, object] = field(default_factory=dict)
+    call_info: AgentCallInfo | None = None
+
+
+def compose_agent_prompt(request: AgentRequest) -> str:
+    """Compose the exact prompt sent to the agent for one attempt."""
+    parts = [request.prompt]
+    if request.output_contract is not None and request.output_contract.format_instructions:
+        parts.append(request.output_contract.format_instructions)
+    if request.attempt:
+        errors = "\n".join(f"- {error.message}" for error in request.validation_errors) or "(none)"
+        parts.append(
+            "Your previous response did not match the required output format.\n\n"
+            f"Validation errors:\n{errors}\n\nPrevious response:\n"
+            f"{request.previous_invalid_output or ''}\n\n"
+            "Return only valid JSON matching the schema."
+        )
+    return "\n\n".join(parts)

@@ -397,16 +397,13 @@ class TestExceptionAccessors:
                 kind="exception",
                 name="Exception",
                 module_id=ENTRY_ID,
-                fields=(("message", TextType()), ("trace_id", TextType())),
+                fields=(("message", TextType()),),
                 abstract=True,
                 decl_node_id=700007,
             )
         )
         handle = ExceptionType(name="Exception", module_id=ENTRY_ID, decl_id=700007)
-        assert dict(table.exception_fields(handle)) == {
-            "message": TextType(),
-            "trace_id": TextType(),
-        }
+        assert dict(table.exception_fields(handle)) == {"message": TextType()}
 
     def test_exception_fields_flattens_base_chain_root_mid_leaf_order(self) -> None:
         """A three-level ``extends`` chain flattens base-first, in declaration order."""
@@ -416,7 +413,7 @@ class TestExceptionAccessors:
                 kind="exception",
                 name="Root",
                 module_id=ENTRY_ID,
-                fields=(("message", TextType()), ("trace_id", TextType())),
+                fields=(("message", TextType()),),
                 abstract=True,
                 decl_node_id=700008,
             )
@@ -442,12 +439,7 @@ class TestExceptionAccessors:
             )
         )
         handle = ExceptionType(name="Leaf", module_id=ENTRY_ID, decl_id=700010)
-        assert list(table.exception_fields(handle).keys()) == [
-            "message",
-            "trace_id",
-            "code",
-            "detail",
-        ]
+        assert list(table.exception_fields(handle).keys()) == ["message", "code", "detail"]
 
     def test_exception_fields_resolves_cross_module_base(self) -> None:
         table = TypeTable()
@@ -456,7 +448,7 @@ class TestExceptionAccessors:
                 kind="exception",
                 name="Base",
                 module_id=_LIB_ID,
-                fields=(("message", TextType()), ("trace_id", TextType())),
+                fields=(("message", TextType()),),
                 abstract=True,
                 decl_node_id=700011,
             )
@@ -474,7 +466,6 @@ class TestExceptionAccessors:
         handle = ExceptionType(name="Child", module_id=ENTRY_ID, decl_id=700012)
         assert dict(table.exception_fields(handle)) == {
             "message": TextType(),
-            "trace_id": TextType(),
             "code": IntType(),
         }
 
@@ -1031,16 +1022,16 @@ class TestExceptionFieldKinds:
     field_kinds`` stores the stable string values instead (converted back to
     ``ParamKind`` by ``typecheck.env``)."""
 
-    def test_root_only_excludes_trace_id(self) -> None:
+    def test_root_only_returns_declared_field_kinds(self) -> None:
         table = TypeTable()
         table.register(
             TypeDef(
                 kind="exception",
                 name="Exception",
                 module_id=ENTRY_ID,
-                fields=(("message", TextType()), ("trace_id", TextType())),
+                fields=(("message", TextType()),),
                 abstract=True,
-                field_kinds=(ParamKind.NAMED_ONLY.value, ParamKind.NAMED_ONLY.value),
+                field_kinds=(ParamKind.NAMED_ONLY.value,),
                 decl_node_id=700007,
             )
         )
@@ -1057,9 +1048,9 @@ class TestExceptionFieldKinds:
                 kind="exception",
                 name="Root",
                 module_id=ENTRY_ID,
-                fields=(("message", TextType()), ("trace_id", TextType())),
+                fields=(("message", TextType()),),
                 abstract=True,
-                field_kinds=(ParamKind.NAMED_ONLY.value, ParamKind.NAMED_ONLY.value),
+                field_kinds=(ParamKind.NAMED_ONLY.value,),
                 decl_node_id=700008,
             )
         )
@@ -1099,9 +1090,9 @@ class TestExceptionFieldKinds:
                 kind="exception",
                 name="Base",
                 module_id=_LIB_ID,
-                fields=(("message", TextType()), ("trace_id", TextType())),
+                fields=(("message", TextType()),),
                 abstract=True,
-                field_kinds=(ParamKind.NAMED_ONLY.value, ParamKind.NAMED_ONLY.value),
+                field_kinds=(ParamKind.NAMED_ONLY.value,),
                 decl_node_id=700011,
             )
         )

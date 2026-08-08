@@ -1,27 +1,16 @@
-"""AgL trace store — records every significant runtime event as JSONL.
+"""Best-effort JSONL tracing for observable AgL runtime effects.
 
-Records every agent-call attempt, parse result, retry, ``print``, ``exec``
-command (with exit code, duration, and outputs), and exception, with a
-``trace_id`` + source span.  Persisted under ``.agent-files/`` via
-``core/log`` helpers.  Honors ``--no-log``/``--log-file``.
-
-Design :
-- Every record carries: ``run_id``, ``kind``, ``trace_id``, ``line``,
-  ``col`` (from the source span when available).
-- ``agent_call_attempt``: agent name, attempt index, prompt text.
-- ``parse_result``: ok flag, normalized output, error summary.
-- ``print``: rendered console output.
-- ``exec_command``: command text, exit_code, duration, stdout, stderr, timed_out.
-- ``exception``: exception type_name + trace_id (for linkage to
-  ``ExceptionValue.fields['trace_id']``).
-- ``run_start`` / ``run_end``: boundary markers; ``run_end`` carries
-  ``ok`` (whether the run succeeded).
+Trace records contain an ISO-8601 offset-aware timestamp, the run identifier,
+and a kind-specific payload.  Only run boundaries, stdout, agent requests and
+responses, and shell execution are traced; ordinary expression evaluation is
+intentionally absent.
 """
 
 from __future__ import annotations
 
 import sys
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -32,143 +21,133 @@ if TYPE_CHECKING:
     from agm.agl.syntax.spans import SourceSpan
 
 
-def new_trace_id() -> str:
-    """Generate a fresh unique trace/event identifier (UUID4 hex string).
-
-    Public module-level helper so other components (e.g. the interpreter) can
-    mint ids without importing a private symbol across modules.
-    """
-    return uuid.uuid4().hex
-
-
 class TraceStore:
-    """Writes structured JSONL trace records for one AgL run.
-
-    The per-run ``run_id`` ties all records together.  Each record also gets
-    its own ``trace_id`` (a fresh UUID per event) — this is the value placed
-    in ``ExceptionValue.fields['trace_id']`` so exceptions can be linked back
-    to the matching record in the trace file.
-
-    When *path* is ``None`` every method is a no-op (no-log mode).
-    """
+    """Write structured records for one AgL run without affecting its semantics."""
 
     def __init__(self, path: Path | None) -> None:
         self._path = path
-        self._run_id: str = new_trace_id()
-        # Set once a trace write fails: logging is disabled for the rest of the
-        # run and a single warning is emitted.  Program semantics are
-        # unaffected — a failed trace write must never abort the run.
-        self._disabled: bool = False
-
-    def new_event_id(self) -> str:
-        """Return a fresh event-level trace id.
-
-        Cheap and always valid, even when logging is disabled (``path`` is
-        ``None``).  Callers (e.g. the interpreter at a built-in raise site) mint
-        an id here and place it in both an ``ExceptionValue.fields['trace_id']``
-        and the eventual ``exception`` record so the two can be cross-referenced.
-        When logging is disabled the id still exists; a ``trace_id`` that
-        references no record is acceptable as long as the field is present.
-        """
-        return new_trace_id()
+        self._run_id = uuid.uuid4().hex
+        self._disabled = False
+        self._last_timestamp = ""
 
     def disable(self, reason: OSError) -> None:
-        """Disable best-effort logging after a filesystem failure, warning once."""
+        """Disable logging after a filesystem failure, warning exactly once."""
         if not self._disabled:
             print(f"warning: trace logging disabled: {reason}", file=sys.stderr)
         self._disabled = True
         self._path = None
 
     def activate(self, path: Path | None) -> None:
-        """Repoint the store at *path*, the trace destination settings now imply.
-
-        When *path* is ``None`` the store settles into no-log mode and later
-        events short-circuit. A store disabled by an I/O failure stays disabled
-        for the rest of that run.
-        """
-        if self._disabled:
-            return
-        self._path = path
+        """Repoint the store according to the current live log settings."""
+        if not self._disabled:
+            self._path = path
 
     @property
     def path(self) -> Path | None:
-        """The trace file path, or ``None`` when logging is disabled."""
+        """The trace destination, if tracing is currently enabled."""
         return self._path
 
     @property
     def disabled(self) -> bool:
-        """Whether an I/O failure disabled this store (as opposed to no-log mode).
-
-        A store settled into no-log mode by settings reports ``False`` here with
-        a ``None`` path; a store knocked out by a failed write reports ``True``.
-        Callers that outlive one store (the REPL, which builds one per entry)
-        use this to tell a deliberate no-log destination apart from a transient
-        failure they should retry.
-        """
+        """Whether an I/O failure, rather than settings, disabled this store."""
         return self._disabled
 
     @property
     def run_id(self) -> str:
-        """Per-run identifier shared by all records in this trace."""
+        """The identifier shared by records written during this run."""
         return self._run_id
 
-    def _emit(self, kind: str, trace_id: str, extra: dict[str, object]) -> None:
-        """Append one JSONL record to the trace file (best-effort).
-
-        A trace write must never corrupt program semantics: if the file becomes
-        unwritable mid-run (e.g. permissions change), the ``OSError`` is caught,
-        a single ``warning: trace logging disabled: <reason>`` line is emitted to
-        stderr, and the store is disabled for the rest of the run.
-        """
-        record: dict[str, object] = {
-            "run_id": self._run_id,
-            "kind": kind,
-            "trace_id": trace_id,
-        }
+    def _emit(self, kind: str, extra: dict[str, object]) -> None:
+        """Append a record, disabling this best-effort service on I/O failure."""
+        timestamp = datetime.now().astimezone().isoformat(timespec="milliseconds")
+        # Wall clocks may move backwards; preserve trace-file ordering as an
+        # ordering guarantee even when NTP adjusts the local clock.
+        if timestamp < self._last_timestamp:
+            timestamp = self._last_timestamp
+        self._last_timestamp = timestamp
+        record: dict[str, object] = {"ts": timestamp, "run_id": self._run_id, "kind": kind}
         record.update(extra)
         try:
             append_jsonl(self._path, record)
         except OSError as exc:
             self.disable(exc)
 
-    def run_start(self) -> None:
-        """Record the start of a run (boundary marker)."""
-        if self._path is None:
-            return
-        self._emit("run_start", new_trace_id(), {})
-
-    def run_end(self, *, ok: bool) -> None:
-        """Record the end of a run with the overall outcome."""
-        if self._path is None:
-            return
-        self._emit("run_end", new_trace_id(), {"ok": ok})
-
-    def agent_call_attempt(
-        self,
-        *,
-        agent: str,
-        attempt: int,
-        prompt: str,
-        span: "SourceSpan | Location | None" = None,
-    ) -> str:
-        """Record one agent-call attempt; return the event's ``trace_id``.
-
-        Returns a fresh id even when logging is disabled (no record written) so
-        callers can always thread a valid ``trace_id`` through.
-        """
-        trace_id = new_trace_id()
-        if self._path is None:
-            return trace_id
-        extra: dict[str, object] = {
-            "agent": agent,
-            "attempt": attempt,
-            "prompt": prompt,
-        }
+    @staticmethod
+    def _with_span(
+        extra: dict[str, object], span: "SourceSpan | Location | None"
+    ) -> dict[str, object]:
         if span is not None:
             extra["line"] = span.start_line
             extra["col"] = span.start_col
-        self._emit("agent_call_attempt", trace_id, extra)
-        return trace_id
+        return extra
+
+    def run_start(self) -> None:
+        if self._path is not None:
+            self._emit("run_start", {})
+
+    def run_end(self, *, ok: bool) -> None:
+        if self._path is not None:
+            self._emit("run_end", {"ok": ok})
+
+    def agent_request(
+        self,
+        *,
+        agent: dict[str, object],
+        attempt: int,
+        max_attempts: int,
+        prompt: str,
+        target_type: str,
+        codec: str,
+        strict_json: bool | None,
+        json_schema: object | None,
+        span: "SourceSpan | Location | None" = None,
+    ) -> None:
+        if self._path is not None:
+            self._emit(
+                "agent_request",
+                self._with_span(
+                    {
+                        "agent": agent,
+                        "attempt": attempt,
+                        "max_attempts": max_attempts,
+                        "prompt": prompt,
+                        "target_type": target_type,
+                        "codec": codec,
+                        "strict_json": strict_json,
+                        "json_schema": json_schema,
+                    },
+                    span,
+                ),
+            )
+
+    def agent_response(
+        self,
+        *,
+        ok: bool,
+        content: str | None = None,
+        metadata: dict[str, object] | None = None,
+        cause: str | None = None,
+        cancelled: bool = False,
+        reason: str | None = None,
+        call_info: dict[str, object] | None = None,
+        span: "SourceSpan | Location | None" = None,
+    ) -> None:
+        if self._path is None:
+            return
+        extra: dict[str, object] = {"ok": ok}
+        if content is not None:
+            extra["content"] = content
+        if metadata:
+            extra["metadata"] = metadata
+        if cause is not None:
+            extra["cause"] = cause
+        if cancelled:
+            extra["cancelled"] = True
+        if reason is not None:
+            extra["reason"] = reason
+        if call_info:
+            extra.update(call_info)
+        self._emit("agent_response", self._with_span(extra, span))
 
     def parse_result(
         self,
@@ -179,34 +158,23 @@ class TraceStore:
         error_summary: str,
         span: "SourceSpan | Location | None" = None,
     ) -> None:
-        """Record the outcome of a codec parse attempt."""
-        if self._path is None:
-            return
-        extra: dict[str, object] = {
-            "ok": ok,
-            "raw": raw,
-            "normalized_raw": normalized_raw,
-            "error_summary": error_summary,
-        }
-        if span is not None:
-            extra["line"] = span.start_line
-            extra["col"] = span.start_col
-        self._emit("parse_result", new_trace_id(), extra)
+        if self._path is not None:
+            self._emit(
+                "parse_result",
+                self._with_span(
+                    {
+                        "ok": ok,
+                        "raw": raw,
+                        "normalized_raw": normalized_raw,
+                        "error_summary": error_summary,
+                    },
+                    span,
+                ),
+            )
 
-    def print_stmt(
-        self,
-        *,
-        rendered: str,
-        span: "SourceSpan | Location | None" = None,
-    ) -> None:
-        """Record a ``print`` statement output."""
-        if self._path is None:
-            return
-        extra: dict[str, object] = {"rendered": rendered}
-        if span is not None:
-            extra["line"] = span.start_line
-            extra["col"] = span.start_col
-        self._emit("print", new_trace_id(), extra)
+    def print_stmt(self, *, rendered: str, span: "SourceSpan | Location | None" = None) -> None:
+        if self._path is not None:
+            self._emit("print", self._with_span({"rendered": rendered}, span))
 
     def exec_command(
         self,
@@ -218,58 +186,38 @@ class TraceStore:
         stderr: str,
         timed_out: bool,
         span: "SourceSpan | Location | None" = None,
-    ) -> str:
-        """Record a completed ``exec`` shell command; return the event ``trace_id``.
-
-        Returns a fresh id even when logging is disabled (no record written) so
-        callers can always thread a valid ``trace_id`` through — mirroring
-        ``agent_call_attempt`` so an ``ExecError`` can link to the
-        ``exec_command`` record.
-        """
-        trace_id = new_trace_id()
-        if self._path is None:
-            return trace_id
-        extra: dict[str, object] = {
-            "command": command,
-            "exit_code": exit_code,
-            "duration": duration,
-            "stdout": stdout,
-            "stderr": stderr,
-            "timed_out": timed_out,
-        }
-        if span is not None:
-            extra["line"] = span.start_line
-            extra["col"] = span.start_col
-        self._emit("exec_command", trace_id, extra)
-        return trace_id
+    ) -> None:
+        if self._path is not None:
+            self._emit(
+                "exec_command",
+                self._with_span(
+                    {
+                        "command": command,
+                        "exit_code": exit_code,
+                        "duration": duration,
+                        "stdout": stdout,
+                        "stderr": stderr,
+                        "timed_out": timed_out,
+                    },
+                    span,
+                ),
+            )
 
     def exception(
         self,
         *,
         type_name: str,
         message: str,
-        trace_id: str,
         span: "SourceSpan | Location | None" = None,
     ) -> None:
-        """Record an uncaught AgL exception that escapes the program.
-
-        *trace_id* is the same value placed in
-        ``ExceptionValue.fields['trace_id']`` — this linkage lets callers
-        cross-reference the exception record in the trace file with the raised
-        exception.
-        """
-        if self._path is None:
-            return
-        extra: dict[str, object] = {
-            "type_name": type_name,
-            "message": message,
-        }
-        if span is not None:
-            extra["line"] = span.start_line
-            extra["col"] = span.start_col
-        self._emit("exception", trace_id, extra)
+        """Record an uncaught AgL exception that escapes the program."""
+        if self._path is not None:
+            self._emit(
+                "exception",
+                self._with_span({"type_name": type_name, "message": message}, span),
+            )
 
 
 def noop_trace() -> TraceStore:
-    """Return a no-op ``TraceStore`` (path=None → all writes are silent)."""
+    """Return a disabled-by-settings trace store."""
     return TraceStore(path=None)

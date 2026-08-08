@@ -57,7 +57,6 @@ from agm.agl.ir.contracts import (
 )
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
-    AutoTraceField,
     IrAnd,
     IrArith,
     IrAsk,
@@ -825,11 +824,8 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             _validate_location(node.location, ctx)
             if ctx.deep:
                 _check_nominal_in_table(nominal, ctx)
-            for _fname, slot in fields:
-                if isinstance(slot, AutoTraceField):
-                    pass
-                else:
-                    _validate_expr(slot, ctx)
+            for _fname, field_expr in fields:
+                _validate_expr(field_expr, ctx)
 
         case IrMakeConstructor(nominal=nominal, variant=variant):
             _validate_location(node.location, ctx)

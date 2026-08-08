@@ -23,7 +23,6 @@ from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.contracts import ConversionFailureMode, ConversionStrategy
 from agm.agl.ir.ids import NominalId, SymbolId
 from agm.agl.ir.nodes import (
-    AutoTraceField,
     IrArith,
     IrAsk,
     IrAssign,
@@ -1147,7 +1146,7 @@ class TestNominalsEmpty:
         assert boom_nominal in prog.nominals
         descriptor = prog.nominals[boom_nominal]
         assert descriptor.kind is NominalKind.EXCEPTION
-        assert set(descriptor.fields) == {"message", "trace_id", "code"}
+        assert set(descriptor.fields) == {"message", "code"}
 
     def test_type_alias_does_not_create_spurious_nominal(self) -> None:
         """A type alias does NOT register a spurious NominalId in program.nominals.
@@ -3139,16 +3138,14 @@ class TestTemplateLowering:
 
 
 # ---------------------------------------------------------------------------
-# Structural lowering: IrMakeException / AutoTraceField
+# Structural lowering: IrMakeException
 # ---------------------------------------------------------------------------
 
 
 class TestIrMakeExceptionLowering:
     """Structural tests for exception construction lowering.
 
-    IrMakeException.fields contains IrExpr for explicitly provided fields and
-    AutoTraceField sentinels for declared-but-omitted fields.  These tests pin
-    the exact slot shape so a wrong AutoTraceField placement fails.
+    IrMakeException.fields contains the expressions supplied by the caller.
     """
 
     def _get_raise_in_fn(self, source: str) -> IrRaise:
@@ -3177,8 +3174,8 @@ class TestIrMakeExceptionLowering:
         assert isinstance(exc, IrMakeException)
         assert exc.display_name == "Abort"
 
-    def test_provided_field_is_ir_expr_not_auto_trace_field(self) -> None:
-        """Explicitly provided 'message' field → IrConstText, not AutoTraceField."""
+    def test_provided_field_is_ir_expr(self) -> None:
+        """An explicitly provided message field lowers to IrConstText."""
         source = 'def stop_fn() -> unit =\n  raise Abort(message = "stop")\nstop_fn()\n'
         raise_node = self._get_raise_in_fn(source)
         exc = raise_node.exc
@@ -3189,27 +3186,6 @@ class TestIrMakeExceptionLowering:
             f"explicitly provided 'message' must be IrConstText, got {type(msg_slot).__name__}"
         )
         assert msg_slot.value == "stop"
-
-    def test_unprovided_trace_id_field_is_auto_trace_field(self) -> None:
-        """Undeclared 'trace_id' field → AutoTraceField sentinel, not an IrExpr.
-
-        When a caller omits a declared exception field, the lowerer places an
-        AutoTraceField sentinel; the evaluator fills in a fresh trace id at
-        construction time.  This test pins that exactly one AutoTraceField
-        is present for the omitted trace_id.
-        """
-        source = 'def stop_fn() -> unit =\n  raise Abort(message = "stop")\nstop_fn()\n'
-        raise_node = self._get_raise_in_fn(source)
-        exc = raise_node.exc
-        assert isinstance(exc, IrMakeException)
-        fields_dict = dict(exc.fields)
-        trace_slot = fields_dict["trace_id"]
-        assert isinstance(trace_slot, AutoTraceField), (
-            f"omitted 'trace_id' must be AutoTraceField, got {type(trace_slot).__name__}"
-        )
-        # Only the omitted field gets an AutoTraceField; the provided 'message' does not.
-        auto_fields = [v for _, v in exc.fields if isinstance(v, AutoTraceField)]
-        assert len(auto_fields) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -3346,22 +3322,19 @@ class TestLoopDesugar:
         exc = raise_node.exc
         assert isinstance(exc, IrMakeException)
         fields = exc.fields
-        # Declaration order: message, trace_id, limit, condition,
-        #                    last_condition_value, metadata
-        assert len(fields) == 6
-        assert fields[0][0] == "message"
+        assert [name for name, _ in fields] == [
+            "message",
+            "limit",
+            "condition",
+            "last_condition_value",
+            "metadata",
+        ]
         assert isinstance(fields[0][1], IrRenderTemplate)
-        assert fields[1][0] == "trace_id"
-        assert isinstance(fields[1][1], AutoTraceField)
-        assert fields[2][0] == "limit"
-        assert isinstance(fields[2][1], IrLoad)  # IrLoad(__n_sym)
-        assert fields[3][0] == "condition"
-        assert isinstance(fields[3][1], IrConstText)
-        assert fields[4][0] == "last_condition_value"
-        assert isinstance(fields[4][1], IrConstBool)
-        assert fields[4][1].value is False
-        assert fields[5][0] == "metadata"
-        assert isinstance(fields[5][1], IrConstJsonNull)
+        assert isinstance(fields[1][1], IrLoad)  # IrLoad(__n_sym)
+        assert isinstance(fields[2][1], IrConstText)
+        assert isinstance(fields[3][1], IrConstBool)
+        assert fields[3][1].value is False
+        assert isinstance(fields[4][1], IrConstJsonNull)
 
     def test_done_terminator_condition_source_is_false(self) -> None:
         """``do[n] … done`` sets ``condition="false"`` in MaxIterationsExceeded."""
@@ -3664,8 +3637,6 @@ class TestRangeForDesugar:
         fields_dict = dict(exc.fields)
         assert "message" in fields_dict
         assert isinstance(fields_dict["message"], IrConstText)
-        assert "trace_id" in fields_dict
-        assert isinstance(fields_dict["trace_id"], AutoTraceField)
         # IrLoop is last
         assert isinstance(loop, IrLoop)
 
@@ -3775,7 +3746,7 @@ class TestRangeForDesugar:
         assert advance.op is ArithOp.SUB
 
     def test_step_guard_raises_range_error_ir(self) -> None:
-        """The step guard IrMakeException has nominal RangeError, message+trace_id fields."""
+        """The step guard IrMakeException has the RangeError message field."""
         from tests.agl.ir_harness import nominal_id_for
 
         source = "for i in 1 to 5 do\n  ()\ndone\n"
@@ -3791,9 +3762,8 @@ class TestRangeForDesugar:
         assert exc.nominal == nominal_id_for(program, "RangeError")
         assert exc.display_name == "RangeError"
         fields_dict = dict(exc.fields)
-        assert set(fields_dict.keys()) == {"message", "trace_id"}
+        assert set(fields_dict.keys()) == {"message"}
         assert isinstance(fields_dict["message"], IrConstText)
-        assert isinstance(fields_dict["trace_id"], AutoTraceField)
 
     def test_range_with_n_bound_preloop_order(self) -> None:
         """``for i in 1 to 5 do[3]`` range pre-loop precedes __n/__count.
@@ -3960,6 +3930,5 @@ class TestRangeForDesugar:
         exc = BUILTIN_EXCEPTIONS["RangeError"]
         assert exc.name == "RangeError"
         fields = create_seeded_type_table().exception_fields(exc)
-        assert set(fields.keys()) == {"message", "trace_id"}
+        assert set(fields.keys()) == {"message"}
         assert isinstance(fields["message"], _TextType)
-        assert isinstance(fields["trace_id"], _TextType)

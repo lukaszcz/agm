@@ -752,7 +752,7 @@ def test_ir_try_handler_binding_stored_in_frame() -> None:
             scope_path=(),
             declared_name="Abort",
             kind=NominalKind.EXCEPTION,
-            fields=("message", "trace_id"),
+            fields=("message",),
             variants=(),
         ),
     }
@@ -815,7 +815,7 @@ def test_validate_ir_try_handler_symbol_missing() -> None:
             scope_path=(),
             declared_name="Abort",
             kind=NominalKind.EXCEPTION,
-            fields=("message", "trace_id"),
+            fields=("message",),
             variants=(),
         ),
     }

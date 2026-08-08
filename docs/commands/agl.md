@@ -79,8 +79,7 @@ like any other static error.
   to `ask`.
 - `--no-strict-json`: Use lenient JSON recovery (the default): the runtime recovers
   exactly one JSON value from chatty output (stripping fences/prose, repairing
-  trivially malformed JSON), then validates it strictly against the schema. The
-  recovered (normalized) value is traced alongside the raw output.
+  trivially malformed JSON), then validates it strictly against the schema.
 - `--max-iters N`: Override the host's `max-iters` safety valve with a positive
   integer, which caps
   **unbounded** loops (a bare `while … do … done` or `do … until E` with no
@@ -199,7 +198,7 @@ by the live engine. Each setting is also readable through a qualified reference:
 import std/config
 
 std/config::log := true             # enable trace logging for this program
-std/config::log-file := Some("trace.log")  # explicit trace path
+std/config::log-file := Some("trace.jsonl")  # explicit trace path
 std/config::strict-json := true     # require bare JSON from agents
 std/config::max-iters := 10         # host safety valve cap for unbounded loops
 std/config::default-agent := AgentClaude("sonnet", "medium")

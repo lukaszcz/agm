@@ -2276,7 +2276,8 @@ class TestIrExec:
         assert record["command"] == "dummy"
         assert record["exit_code"] == -1
         assert record["stderr"] == "No such file or directory"
-        assert exc_info.value.exc.fields["trace_id"].value == record["trace_id"]
+        assert "trace_id" not in exc_info.value.exc.fields
+        assert "trace_id" not in record
 
     def test_ir_exec_preserves_command_expression_raise_span(self) -> None:
         """IrExec does not overwrite a span from its command expression."""

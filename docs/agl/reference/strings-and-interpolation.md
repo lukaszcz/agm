@@ -61,7 +61,7 @@ hole raises a catchable `ExternError` from `std/text::interp`.
 | `dict[text, V]` | `{"k1": value1, "k2": value2}` — AgL dict syntax; keys always quoted |
 | record | `TypeName(f1 = value1, f2 = value2)` — AgL constructor form; fields in declaration order |
 | enum | `TypeName::Variant(f1 = value1, …)` — qualified; nullary variant as `TypeName::Variant` (no parens) |
-| exception | `TypeName(f1 = value1, …)` — record-style with all fields including `trace_id`, in declaration order |
+| exception | `TypeName(f1 = value1, …)` — record-style with all fields in declaration order |
 
 AgL structured values (`array`, `dict`, record, enum, exception) always render on
 a **single line** — no injected newlines. A `json` value renders as **compact**

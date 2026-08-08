@@ -1,8 +1,8 @@
 """Behavior tests for the AgL trace store.
 
 All assertions are on *observable* outcomes: what ends up in the trace file,
-whether a file is created at all, and whether exception trace_ids match
-records in the file.  No internal TraceStore methods are called directly.
+whether a file is created at all. No internal implementation state is
+asserted.
 """
 
 from __future__ import annotations
@@ -218,7 +218,8 @@ class TestAgentCallRecord:
         )
         records = _load_jsonl(log_path)
         kinds = [r.get("kind") for r in records]
-        assert "agent_call_attempt" in kinds
+        assert "agent_request" in kinds
+        assert "agent_response" in kinds
 
     def test_agent_call_record_has_rendered_agent_value(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
@@ -228,9 +229,26 @@ class TestAgentCallRecord:
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
-        call_recs = [r for r in records if r.get("kind") == "agent_call_attempt"]
+        call_recs = [r for r in records if r.get("kind") == "agent_request"]
         assert call_recs
-        assert call_recs[0].get("agent") == 'Agent::AgentCommand(command = "critic")'
+        assert call_recs[0]["agent"] == {
+            "variant": "AgentCommand",
+            "payload": {"command": "critic"},
+        }
+
+    def test_agent_request_preserves_agent_variant_payload(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        _agent_runtime(_agent_returning("ok")).run(
+            'let a = AgentClaude("sonnet", "high")\nlet x: text = ask("review", agent = a)\nx',
+            log_file=log_path,
+        )
+        request = next(
+            record for record in _load_jsonl(log_path) if record["kind"] == "agent_request"
+        )
+        assert request["agent"] == {
+            "variant": "AgentClaude",
+            "payload": {"model": "sonnet", "thinking": "high"},
+        }
 
     def test_agent_call_record_has_attempt_number(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
@@ -240,13 +258,48 @@ class TestAgentCallRecord:
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
-        call_recs = [r for r in records if r.get("kind") == "agent_call_attempt"]
+        call_recs = [r for r in records if r.get("kind") == "agent_request"]
         assert call_recs
         assert isinstance(call_recs[0].get("attempt"), int)
+        assert call_recs[0].get("max_attempts") == 1
+
+    def test_unit_ask_logs_a_request_and_response(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        result = _agent_runtime(_agent_returning("ignored")).run(
+            'let a = AgentCommand("a")\nlet value: unit = ask "do it"\nvalue',
+            log_file=log_path,
+        )
+        assert result.ok
+        records = _load_jsonl(log_path)
+        kinds = [record["kind"] for record in records]
+        assert kinds.count("agent_request") == kinds.count("agent_response") == 1
+        assert "parse_result" not in kinds
+
+    def test_request_prompt_is_the_dispatcher_prompt_and_has_contract(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        received: list[str] = []
+
+        def agent(request: AgentRequest) -> AgentResponse:
+            received.append(request.prompt)
+            return AgentResponse(content="42")
+
+        result = _agent_runtime(agent, strict_json=True).run(
+            'let a = AgentCommand("a")\nlet value: int = ask("number", agent = a)\nvalue',
+            log_file=log_path,
+        )
+        assert result.ok
+        request = next(
+            record for record in _load_jsonl(log_path) if record["kind"] == "agent_request"
+        )
+        assert request["prompt"] == received[0]
+        assert request["codec"] == "json"
+        assert request["target_type"] == "int"
+        assert request["strict_json"] is None
+        assert request["json_schema"] is not None
 
 
 # ---------------------------------------------------------------------------
-# 3. Retry: multiple agent_call_attempt records
+# 3. Retry: multiple agent request/response records
 # ---------------------------------------------------------------------------
 
 
@@ -270,8 +323,24 @@ class TestRetryRecords:
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
-        call_recs = [r for r in records if r.get("kind") == "agent_call_attempt"]
+        call_recs = [r for r in records if r.get("kind") == "agent_request"]
         assert len(call_recs) == 3
+        assert len([r for r in records if r.get("kind") == "agent_response"]) == 3
+        assert "Your previous response did not match" in str(call_recs[1]["prompt"])
+        assert "not json" in str(call_recs[1]["prompt"])
+        call_pairs = [
+            record["kind"]
+            for record in records
+            if record["kind"] in {"agent_request", "agent_response"}
+        ]
+        assert call_pairs == [
+            "agent_request",
+            "agent_response",
+            "agent_request",
+            "agent_response",
+            "agent_request",
+            "agent_response",
+        ]
 
     def test_retry_records_carry_attempt_index(self, tmp_path: Path) -> None:
         """Attempt indices should be 0, 1, 2 for three attempts."""
@@ -292,12 +361,12 @@ class TestRetryRecords:
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
-        call_recs = [r for r in records if r.get("kind") == "agent_call_attempt"]
+        call_recs = [r for r in records if r.get("kind") == "agent_request"]
         attempts = [r.get("attempt") for r in call_recs]
         assert attempts == [0, 1, 2]
 
     def test_parse_result_record_emitted_for_each_attempt(self, tmp_path: Path) -> None:
-        """A parse_result record follows each agent_call_attempt."""
+        """A parse_result record follows each agent response."""
         log_path = tmp_path / "trace.jsonl"
 
         def agent(request: AgentRequest) -> AgentResponse:
@@ -317,9 +386,33 @@ class TestRetryRecords:
         kinds = [r.get("kind") for r in records]
         assert "parse_result" in kinds
 
+    def test_transport_failure_has_failed_agent_response(self, tmp_path: Path) -> None:
+        from agm.agl.runtime.request import AgentCallHostError
+
+        log_path = tmp_path / "trace.jsonl"
+
+        def agent(_request: AgentRequest) -> AgentResponse:
+            raise AgentCallHostError(
+                cause="timeout", exit_code=9, stderr_tail="too slow", elapsed=1.5
+            )
+
+        result = _agent_runtime(agent).run(
+            'let a = AgentCommand("a")\nlet value: text = ask("work", agent = a)\nvalue',
+            log_file=log_path,
+        )
+        assert not result.ok
+        response = next(
+            record for record in _load_jsonl(log_path) if record["kind"] == "agent_response"
+        )
+        assert response["ok"] is False
+        assert response["cause"] == "timeout"
+        assert response["exit_code"] == 9
+        assert response["elapsed"] == 1.5
+        assert response["stderr_tail"] == "too slow"
+
 
 # ---------------------------------------------------------------------------
-# 4. Exception record + trace_id linkage
+# 4. Exception records
 # ---------------------------------------------------------------------------
 
 
@@ -359,50 +452,16 @@ class TestExceptionRecord:
         exc_recs = [r for r in records if r.get("kind") == "exception"]
         assert exc_recs[0].get("type_name") == "AgentParseError"
 
-    def test_exception_record_has_trace_id(self, tmp_path: Path) -> None:
+    def test_exception_record_and_value_have_no_trace_id(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-
-        def agent(request: AgentRequest) -> AgentResponse:
-            return AgentResponse(content="not json")
-
-        rt = _agent_runtime(agent, strict_json=True)
-        result = rt.run(
+        result = _agent_runtime(_agent_returning("not json"), strict_json=True).run(
             'let impl = AgentCommand("impl")\nlet x: int = ask("get int", agent = impl)\nx',
             log_file=log_path,
         )
-        assert not result.ok
-
-        records = _load_jsonl(log_path)
-        exc_recs = [r for r in records if r.get("kind") == "exception"]
-        trace_id = exc_recs[0].get("trace_id")
-        assert isinstance(trace_id, str) and trace_id
-
-    def test_exception_trace_id_matches_agl_exception_field(self, tmp_path: Path) -> None:
-        """The trace_id in the exception record matches the .trace_id field on
-        the uncaught AgL exception (RunResult.error.fields['trace_id'])."""
-        log_path = tmp_path / "trace.jsonl"
-
-        def agent(request: AgentRequest) -> AgentResponse:
-            return AgentResponse(content="not json")
-
-        rt = _agent_runtime(agent, strict_json=True)
-        result = rt.run(
-            'let impl = AgentCommand("impl")\nlet x: int = ask("get int", agent = impl)\nx',
-            log_file=log_path,
-        )
-        assert not result.ok
         assert result.error is not None
-
-        records = _load_jsonl(log_path)
-        exc_recs = [r for r in records if r.get("kind") == "exception"]
-        assert exc_recs
-
-        # The trace_id in the exception record must match the one on the raised
-        # AgL exception (RunResult.error.fields['trace_id']).
-        rec_trace_id = exc_recs[0].get("trace_id")
-        agl_trace_id = result.error.fields.get("trace_id")
-        assert rec_trace_id == agl_trace_id
-        assert isinstance(rec_trace_id, str) and rec_trace_id
+        exc_recs = [r for r in _load_jsonl(log_path) if r.get("kind") == "exception"]
+        assert exc_recs and "trace_id" not in exc_recs[0]
+        assert "trace_id" not in result.error.fields
 
     def test_caught_exception_does_not_produce_exception_record(self, tmp_path: Path) -> None:
         """An exception caught by try/catch is NOT written as an 'exception' record
@@ -431,14 +490,12 @@ class TestExceptionRecord:
 
 
 # ---------------------------------------------------------------------------
-# 4b. Built-in runtime exceptions also carry a linked, non-empty trace_id
+# 4b. Built-in runtime exceptions carry no base trace identifier
 # ---------------------------------------------------------------------------
 
 
-class TestBuiltinExceptionTraceId:
-    """Built-in runtime exceptions (ArithmeticError, MatchError,
-    MaxIterationsExceeded, ExecError) must carry a non-empty ``trace_id`` that
-    matches their ``exception`` trace record — mirroring AgentParseError."""
+class TestBuiltinExceptionFields:
+    """Built-in runtime exceptions expose their declared fields only."""
 
     def test_arithmetic_error_trace_id_non_empty_with_logging(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
@@ -449,26 +506,17 @@ class TestBuiltinExceptionTraceId:
         assert result.error is not None
         assert result.error.type_name == "ArithmeticError"
 
-        agl_trace_id = result.error.fields.get("trace_id")
-        assert isinstance(agl_trace_id, str) and agl_trace_id
-
-        records = _load_jsonl(log_path)
-        exc_recs = [r for r in records if r.get("kind") == "exception"]
-        assert exc_recs
-        rec_trace_id = exc_recs[0].get("trace_id")
-        # Linkage: the exception record's trace_id matches the raised exception.
-        assert rec_trace_id == agl_trace_id
-        assert isinstance(rec_trace_id, str) and rec_trace_id
+        assert "trace_id" not in result.error.fields
+        exc_recs = [r for r in _load_jsonl(log_path) if r.get("kind") == "exception"]
+        assert exc_recs and "trace_id" not in exc_recs[0]
 
     def test_arithmetic_error_trace_id_non_empty_without_logging(self) -> None:
         rt = PipelineDriver()
-        # With logging OFF the trace_id still exists; only the field must be present.
         result = rt.run("let x = 1 / 0\nx", log_file=None)
         assert not result.ok
         assert result.error is not None
         assert result.error.type_name == "ArithmeticError"
-        agl_trace_id = result.error.fields.get("trace_id")
-        assert isinstance(agl_trace_id, str) and agl_trace_id
+        assert "trace_id" not in result.error.fields
 
     def test_match_error_trace_id_non_empty_without_logging(self) -> None:
         rt = PipelineDriver()
@@ -484,8 +532,7 @@ class TestBuiltinExceptionTraceId:
         assert not result.ok
         assert result.error is not None
         assert result.error.type_name == "MatchError"
-        agl_trace_id = result.error.fields.get("trace_id")
-        assert isinstance(agl_trace_id, str) and agl_trace_id
+        assert "trace_id" not in result.error.fields
 
     def test_max_iterations_trace_id_linked_with_logging(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
@@ -499,13 +546,9 @@ class TestBuiltinExceptionTraceId:
         assert result.error is not None
         assert result.error.type_name == "MaxIterationsExceeded"
 
-        agl_trace_id = result.error.fields.get("trace_id")
-        assert isinstance(agl_trace_id, str) and agl_trace_id
-
-        records = _load_jsonl(log_path)
-        exc_recs = [r for r in records if r.get("kind") == "exception"]
-        assert exc_recs
-        assert exc_recs[0].get("trace_id") == agl_trace_id
+        assert "trace_id" not in result.error.fields
+        exc_recs = [r for r in _load_jsonl(log_path) if r.get("kind") == "exception"]
+        assert exc_recs and "trace_id" not in exc_recs[0]
 
 
 # ---------------------------------------------------------------------------
@@ -551,6 +594,23 @@ class TestRunBoundaryRecords:
         assert len(run_ids) == 1
         (run_id,) = run_ids
         assert isinstance(run_id, str) and run_id
+
+    def test_every_record_has_an_ordered_offset_aware_timestamp(self, tmp_path: Path) -> None:
+        from datetime import datetime
+
+        log_path = tmp_path / "trace.jsonl"
+        _agent_runtime(_agent_returning("agent output")).run(
+            'let a = AgentCommand("a")\n'
+            'let x: text = ask("prompt", agent = a)\n'
+            'let y: text = exec "printf shell"\n'
+            "print x\ny",
+            log_file=log_path,
+        )
+        records = _load_jsonl(log_path)
+        timestamps = [datetime.fromisoformat(str(record["ts"])) for record in records]
+        assert all(timestamp.utcoffset() is not None for timestamp in timestamps)
+        assert timestamps == sorted(timestamps)
+        assert all("trace_id" not in record for record in records)
 
 
 # ---------------------------------------------------------------------------
@@ -669,7 +729,7 @@ class TestSourceSpans:
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
-        call_recs = [r for r in records if r.get("kind") == "agent_call_attempt"]
+        call_recs = [r for r in records if r.get("kind") == "agent_request"]
         assert call_recs
         rec = call_recs[0]
         has_span = "line" in rec or ("span" in rec and isinstance(rec["span"], dict))
@@ -819,26 +879,6 @@ class TestTraceStoreProperties:
         ts = TraceStore(path=tmp_path / "t.jsonl")
         assert isinstance(ts.run_id, str) and ts.run_id
 
-    def test_new_event_id_fresh_each_call(self) -> None:
-        """``new_event_id`` returns a fresh non-empty id even when disabled."""
-        from agm.agl.runtime.trace import TraceStore
-
-        ts = TraceStore(path=None)
-        a = ts.new_event_id()
-        b = ts.new_event_id()
-        assert isinstance(a, str) and a
-        assert a != b
-
-    def test_module_level_new_trace_id_public(self) -> None:
-        """A public module-level ``new_trace_id`` exists so callers never import
-        a private symbol across modules."""
-        from agm.agl.runtime.trace import new_trace_id
-
-        a = new_trace_id()
-        b = new_trace_id()
-        assert isinstance(a, str) and a
-        assert a != b
-
     def test_trace_store_records_without_span(self, tmp_path: Path) -> None:
         """Methods called with span=None still emit valid JSONL (no line/col keys)."""
         import json as _json
@@ -848,7 +888,18 @@ class TestTraceStoreProperties:
         p = tmp_path / "t.jsonl"
         ts = TraceStore(path=p)
         ts.run_start()
-        ts.agent_call_attempt(agent="x", attempt=0, prompt="p", span=None)
+        ts.agent_request(
+            agent={"variant": "AgentCommand", "payload": {"command": "x"}},
+            attempt=0,
+            max_attempts=1,
+            prompt="p",
+            target_type="text",
+            codec="text",
+            strict_json=None,
+            json_schema=None,
+            span=None,
+        )
+        ts.agent_response(ok=True, content="r", metadata={"source": "test"}, span=None)
         ts.parse_result(ok=True, raw="r", normalized_raw="n", error_summary="", span=None)
         ts.print_stmt(rendered="hi", span=None)
         ts.exec_command(
@@ -860,7 +911,7 @@ class TestTraceStoreProperties:
             timed_out=False,
             span=None,
         )
-        ts.exception(type_name="Abort", message="stop", trace_id="abc", span=None)
+        ts.exception(type_name="Abort", message="stop", span=None)
         ts.run_end(ok=True)
 
         lines = p.read_text(encoding="utf-8").splitlines()
@@ -869,6 +920,33 @@ class TestTraceStoreProperties:
         for rec in records:
             assert "line" not in rec
             assert "col" not in rec
+
+    def test_clock_rollback_keeps_timestamps_non_decreasing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from datetime import datetime, timezone
+
+        from agm.agl.runtime import trace as trace_module
+        from agm.agl.runtime.trace import TraceStore
+
+        class Clock:
+            values = iter(
+                [
+                    datetime(2026, 1, 2, tzinfo=timezone.utc),
+                    datetime(2026, 1, 1, tzinfo=timezone.utc),
+                ]
+            )
+
+            @staticmethod
+            def now() -> datetime:
+                return next(Clock.values)
+
+        monkeypatch.setattr(trace_module, "datetime", Clock)
+        trace = TraceStore(tmp_path / "trace.jsonl")
+        trace.run_start()
+        trace.run_end(ok=True)
+        timestamps = [record["ts"] for record in _load_jsonl(tmp_path / "trace.jsonl")]
+        assert timestamps[0] == timestamps[1]
 
     def test_trace_store_exception_with_span(self, tmp_path: Path) -> None:
         """exception() records line/col when a span is provided."""
@@ -887,7 +965,7 @@ class TestTraceStoreProperties:
             start_offset=40,
             end_offset=47,
         )
-        ts.exception(type_name="Abort", message="stop", trace_id="abc", span=span)
+        ts.exception(type_name="Abort", message="stop", span=span)
 
         content = p.read_text(encoding="utf-8").strip()
         rec = _json.loads(content)

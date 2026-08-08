@@ -266,7 +266,6 @@ class ExternRegistry:
         function_name: str,
         fn: ExternCallable,
         args: Sequence[Value],
-        trace_id: str,
         *,
         nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS,
     ) -> Value:
@@ -293,7 +292,6 @@ class ExternRegistry:
             raise _extern_error(
                 function_name,
                 f"argument cannot cross the boundary: {exc}",
-                trace_id,
                 python_type="",
                 nominals=nominals,
             ) from exc
@@ -302,16 +300,15 @@ class ExternRegistry:
             with decimal.localcontext():
                 result = fn(*encoded_args)
         except AglCyclicValue as exc:
-            raise cyclic_value_raise(trace_id, nominals=nominals) from exc
+            raise cyclic_value_raise(nominals=nominals) from exc
         except Exception as exc:
             try:
                 message = str(exc) or type(exc).__name__
             except AglCyclicValue as cyclic_exc:
-                raise cyclic_value_raise(trace_id, nominals=nominals) from cyclic_exc
+                raise cyclic_value_raise(nominals=nominals) from cyclic_exc
             raise _extern_error(
                 function_name,
                 message,
-                trace_id,
                 python_type=type(exc).__name__,
                 nominals=nominals,
             ) from exc
@@ -322,7 +319,6 @@ class ExternRegistry:
             raise _extern_error(
                 function_name,
                 f"return value cannot cross the boundary: {exc}",
-                trace_id,
                 python_type="",
                 nominals=nominals,
             ) from exc
@@ -330,7 +326,6 @@ class ExternRegistry:
             raise _extern_error(
                 function_name,
                 f"return value validation failed: {exc}",
-                trace_id,
                 python_type=type(exc).__name__,
                 nominals=nominals,
             ) from exc
@@ -374,7 +369,6 @@ def _build_nominal_namespace(root: ModuleType, leaves: dict[tuple[str, ...], typ
 def _extern_error(
     function_name: str,
     message: str,
-    trace_id: str,
     *,
     python_type: str,
     nominals: BuiltinNominals,
@@ -385,7 +379,6 @@ def _extern_error(
             "ExternError",
             message,
             nominals=nominals,
-            trace_id=trace_id,
             function=TextValue(function_name),
             python_type=TextValue(python_type),
         )

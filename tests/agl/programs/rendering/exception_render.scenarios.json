@@ -14,12 +14,12 @@
           "\"target_type\": \"int\"",
           "\"raw\": \"abc\"",
           "no int\n",
-          "ArithmeticError(message = \"Division by zero\", trace_id = \"",
-          "operation = \"/\")",
+          "ArithmeticError(message = \"Division by zero\", operation = \"/\")",
           "operation: /\n"
         ],
         "stdout_not_contains": [
-          "parsed:"
+          "parsed:",
+          "trace_id"
         ]
       }
     },
@@ -32,13 +32,13 @@
         "stdout_contains": [
           "parsed: 42\n",
           "got int\n",
-          "ArithmeticError(message = \"Division by zero\", trace_id = \"",
-          "operation = \"/\")",
+          "ArithmeticError(message = \"Division by zero\", operation = \"/\")",
           "operation: /\n"
         ],
         "stdout_not_contains": [
           "CastError",
-          "caught:"
+          "caught:",
+          "trace_id"
         ]
       }
     }

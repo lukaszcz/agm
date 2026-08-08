@@ -929,8 +929,7 @@ conversion:
 - **record** → a JSON object with one key per field, in declaration order.
 - **enum** → a JSON object with a `"$case"` key holding the variant name, plus
   one key per variant field.
-- **exception** → a JSON object with all fields including `trace_id`, in
-  declaration order.
+- **exception** → a JSON object with all fields in declaration order.
 - **`array[E]`/`dict[text, V]`** → the JSON array/object obtained by
   converting each element/value the same way — so `array[R] as json` is a
   JSON array of record objects, and a nested `array[array[R]]` or

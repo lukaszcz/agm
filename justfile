@@ -4,6 +4,11 @@ default_prefix := env_var_or_default("HOME", "") + "/.local"
 prefix := default_prefix
 prompts_dir := justfile_directory() + "/prompts"
 
+# Display the available recipes when no recipe is specified
+[private]
+default:
+    @just --list
+
 # Create the virtualenv and install the project with dev dependencies
 setup:
     uv venv .venv --python 3.12

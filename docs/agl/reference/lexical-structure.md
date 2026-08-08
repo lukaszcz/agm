@@ -62,10 +62,10 @@ A semicolon `;` also separates items in a block; see
 ## Keywords
 
 The following words are **always reserved** and can never be used as
-variable, agent, or function names:
+variable or function names:
 
 ```text
-record enum type param program agent def fn let var for while do until done
+record enum type param program def fn let var for while do until done
 if else case of try catch raise return break continue exception extends builtin extern as as?
 and or not is in to downto by with true false null
 infixl infixr prio
@@ -76,10 +76,8 @@ lexeme. There is no whitespace permitted between `as` and `?`; with
 whitespace, `as` is the cast keyword and `?` starts a separate placeholder
 spelling. `as?` is always reserved and cannot be used as an identifier.
 
-`agent` is reserved (it leads an `agent` declaration) but is accepted
-as a **field name** (record/enum field definitions, named constructor
-arguments, dict shorthand keys, postfix field access, and pattern field keys).
-It cannot be used as a variable binder, pattern binder, or catch binder.
+`agent` is an ordinary identifier, including in binding, pattern, and field
+positions.
 
 `to`, `downto`, and `by` are reserved (they introduce the range tail of a
 `for` clause) but are still accepted as **field names** (record/enum field
@@ -98,7 +96,7 @@ as a field name or an annotated function parameter.
 **Contextual keywords** — `print`, `ask`, and `exec` are NOT reserved; they
 lex as plain `NAME` tokens and are given their built-in meaning during scope
 resolution. They may not be declared with `let`, `var`, or `param`, may not be
-declared as agents or functions, and may not appear as pattern or catch
+declared as functions, and may not appear as pattern or catch
 binders — but they remain legal as field and method names, which live in a
 type's own member namespace. The distinct raw-tail spellings
 `exec!` and `ask!` are reserved for their raw forms and cannot be used as names.
@@ -183,7 +181,7 @@ operand and is unaffected.
 A type-owning chain segment may carry type arguments, as in
 `Option[int]::Some`; type arguments on a plain scope segment are a static
 error. The type-argument form `callee::[T]` and typed-call form
-`callee::[T](args)` (e.g. `ask-request::[Review](…)`) instead apply to the
+`callee::[T](args)` (e.g. `ask::[Review](…)`) instead apply to the
 complete callee and are not qualifier segments.
 ## Identifiers
 
@@ -237,7 +235,7 @@ variables, functions, and constructors.
 
 | Token | Start | Used for |
 | ----- | ----- | -------- |
-| `NAME` | a letter (any Unicode letter, not just ASCII) or `_` | Every kind of name: types, constructors, variables, fields, agents, functions, parameters, type parameters |
+| `NAME` | a letter (any Unicode letter, not just ASCII) or `_` | Every kind of name: types, constructors, variables, fields, functions, parameters, type parameters |
 | `OP_NAME` | an operator-name character | Variables, functions, constructors, and other grammar positions that accept a name |
 
 **Capitalization carries no syntactic or semantic meaning.** The case of an
@@ -316,15 +314,17 @@ semantics are covered in [Strings and interpolation](strings-and-interpolation.m
 
 ## Raw-tail forms
 
-`exec!` and `ask!` begin raw-tail calls. The lexer emits a `RAW_TAIL_NAME`,
-then `RAW_TAIL_START`, one or more `RAW_FRAGMENT` and interpolation-token
-runs, and `RAW_TAIL_END`. Optional type arguments must be byte-adjacent to the
-name: `exec!::[T]` and `ask!::[T]`. In `exec! ::[T]` or `ask! ::[T]`, the
-spaced `::[T]` instead begins the payload. The payload is either the rest of
-that line or a following indented block. In both cases it is one template: its
-text is verbatim except that `%{expr}` interpolates and `\%{` is a literal
-`%{`. Inline payloads discard trailing spaces and tabs; block payloads drop the
-blank lines that trail the last content line.
+`exec!` and `ask!` begin raw-tail calls, either directly or after a `.`
+projection: `receiver.ask! prompt`. The lexer emits a `RAW_TAIL_NAME`, then
+`RAW_TAIL_START`, one or more `RAW_FRAGMENT` and interpolation-token runs, and
+`RAW_TAIL_END`. Optional type arguments must be byte-adjacent to the raw name:
+`ask!::[T]` and `receiver.ask!::[T]`. In `ask! ::[T]` or
+`receiver.ask! ::[T]`, the spaced `::[T]` instead begins the payload. The
+payload is either the rest of that line or a following indented block. In both
+cases it is one template: its text is verbatim except that `%{expr}`
+interpolates and `\%{` is a literal `%{`. Inline payloads discard trailing
+spaces and tabs; block payloads drop the blank lines that trail the last
+content line.
 
 A raw-tail call requires a nonempty inline payload or a block with at least one
 nonblank line. It is only recognized at bracket depth zero and must occupy a

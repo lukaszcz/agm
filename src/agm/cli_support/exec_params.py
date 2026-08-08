@@ -91,7 +91,7 @@ def discover_params_from_source(source: str) -> tuple[ParamDeclInfo, ...]:
 
         prepared = PipelineDriver.prepare_program(source)
         discovery = PipelineDriver(
-            default_agent=lambda request: AgentResponse(content="")
+            agent_dispatcher=lambda request: AgentResponse(content="")
         ).discover_params(prepared)
         return discovery.params
     except (Exception, SystemExit):

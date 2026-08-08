@@ -31,10 +31,10 @@ def _setup_home(tmp_path: Path) -> Path:
     prompt_dir = home / ".agm" / "prompts"
     prompt_dir.mkdir(parents=True)
     (prompt_dir / "review.md").write_text(
-        "review $REVIEW_SCOPE for $REVIEW_ASPECTS\n",
+        "review %{REVIEW_SCOPE} for %{REVIEW_ASPECTS}\n",
         encoding="utf-8",
     )
-    (prompt_dir / "revise.md").write_text("revise @${REVIEW_FILE}\n", encoding="utf-8")
+    (prompt_dir / "revise.md").write_text("revise @%{REVIEW_FILE}\n", encoding="utf-8")
     return home
 
 
@@ -108,7 +108,7 @@ def test_prepare_review_expands_scope_and_aspects(
     )
 
 
-def test_prepare_review_uses_default_loop_runner(
+def test_prepare_review_uses_loop_runner_as_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home = _setup_home(tmp_path)
@@ -122,6 +122,42 @@ def test_prepare_review_uses_default_loop_runner(
     prepared = prepare_review(_review_args(runner=None), temp_files=[])
 
     assert prepared.command == ["loop-runner", "-p"]
+
+
+def test_prepare_review_config_runner_wins_over_loop_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    (home / ".agm" / "config.toml").write_text(
+        '[loop]\nrunner = "loop-runner -p"\n[review]\nrunner = "review-runner"\n'
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("PROJ_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: None)
+
+    prepared = prepare_review(_review_args(runner=None), temp_files=[])
+
+    assert prepared.command == ["review-runner"]
+
+
+def test_prepare_review_cli_runner_wins_over_loop_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    (home / ".agm" / "config.toml").write_text(
+        '[loop]\nrunner = "loop-runner -p"\n[review]\nrunner = "review-runner"\n'
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("PROJ_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: None)
+
+    prepared = prepare_review(_review_args(runner="cli-runner"), temp_files=[])
+
+    assert prepared.command == ["cli-runner"]
 
 
 def test_prepare_review_uses_builtin_runner_when_loop_runner_is_unset(
@@ -147,8 +183,8 @@ def test_prepare_review_uses_inline_prompt_and_extra_prompt(
 
     prepared = prepare_review(
         _review_args(
-            prompt="inline $REVIEW_SCOPE",
-            extra_prompt="extra $REVIEW_ASPECTS",
+            prompt="inline %{REVIEW_SCOPE}",
+            extra_prompt="extra %{REVIEW_ASPECTS}",
         ),
         temp_files=[],
     )
@@ -163,7 +199,7 @@ def test_prepare_review_uses_cli_prompt_files(
 ) -> None:
     home = _setup_home(tmp_path)
     prompt = tmp_path / "review-custom.md"
-    prompt.write_text("custom $REVIEW_SCOPE", encoding="utf-8")
+    prompt.write_text("custom %{REVIEW_SCOPE}", encoding="utf-8")
     extra = tmp_path / "extra.md"
     extra.write_text("extra", encoding="utf-8")
     monkeypatch.setenv("HOME", str(home))
@@ -185,7 +221,7 @@ def test_prepare_review_uses_config_prompt_and_extra(
 ) -> None:
     home = _setup_home(tmp_path)
     (home / ".agm" / "config.toml").write_text(
-        '[review]\nprompt = "from config $REVIEW_SCOPE"\nextra_prompt = "extra"\n'
+        '[review]\nprompt = "from config %{REVIEW_SCOPE}"\nextra_prompt = "extra"\n'
     )
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(tmp_path)
@@ -204,7 +240,7 @@ def test_prepare_review_uses_named_config_prompt_and_extra(
     home = _setup_home(tmp_path)
     (home / ".agm" / "config.toml").write_text(
         '[review]\nextra_prompt = "base extra"\n'
-        '[review.frontend]\nprompt = "frontend $REVIEW_SCOPE"\n'
+        '[review.frontend]\nprompt = "frontend %{REVIEW_SCOPE}"\n'
     )
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(tmp_path)
@@ -306,7 +342,7 @@ def test_prepare_revise_uses_config_prompt_files(
 ) -> None:
     home = _setup_home(tmp_path)
     prompt = home / ".agm" / "configured-revise.md"
-    prompt.write_text("configured $REVIEW_FILE", encoding="utf-8")
+    prompt.write_text("configured %{REVIEW_FILE}", encoding="utf-8")
     extra = home / ".agm" / "configured-revise-extra.md"
     extra.write_text("extra", encoding="utf-8")
     (home / ".agm" / "config.toml").write_text(
@@ -330,7 +366,7 @@ def test_prepare_revise_uses_config_inline_prompt(
 ) -> None:
     home = _setup_home(tmp_path)
     (home / ".agm" / "config.toml").write_text(
-        '[revise]\nprompt = "configured $REVIEW_FILE"\nextra_prompt = "extra"\n'
+        '[revise]\nprompt = "configured %{REVIEW_FILE}"\nextra_prompt = "extra"\n'
     )
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(tmp_path)
@@ -350,7 +386,7 @@ def test_prepare_revise_uses_named_config_inline_prompt(
     home = _setup_home(tmp_path)
     (home / ".agm" / "config.toml").write_text(
         '[revise]\nextra_prompt = "base extra"\n'
-        '[revise.frontend]\nprompt = "frontend $REVIEW_FILE"\n'
+        '[revise.frontend]\nprompt = "frontend %{REVIEW_FILE}"\n'
     )
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(tmp_path)
@@ -743,7 +779,7 @@ def test_revise_stream_callbacks_write_non_empty_chunks(capsys: pytest.CaptureFi
     assert captured.err == "err"
 
 
-def test_prepare_revise_uses_default_loop_runner(
+def test_prepare_revise_uses_loop_runner_as_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home = _setup_home(tmp_path)
@@ -782,6 +818,61 @@ def test_review_once_dry_run_preserves_generated_prompt(
         )
     finally:
         prompt_file.unlink(missing_ok=True)
+
+
+def test_prepare_revise_config_runner_wins_over_loop_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    (home / ".agm" / "config.toml").write_text(
+        '[loop]\nrunner = "loop-runner -p"\n[revise]\nrunner = "revise-runner"\n'
+    )
+    review_file = tmp_path / "review.md"
+    review_file.write_text("review\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("PROJ_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: None)
+
+    prepared = prepare_revise(_revise_args("review.md", runner=None), temp_files=[])
+
+    assert prepared.command == ["revise-runner"]
+
+
+def test_prepare_revise_cli_runner_wins_over_loop_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    (home / ".agm" / "config.toml").write_text(
+        '[loop]\nrunner = "loop-runner -p"\n[revise]\nrunner = "revise-runner"\n'
+    )
+    review_file = tmp_path / "review.md"
+    review_file.write_text("review\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("PROJ_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: None)
+
+    prepared = prepare_revise(_revise_args("review.md", runner="cli-runner"), temp_files=[])
+
+    assert prepared.command == ["cli-runner"]
+
+
+def test_prepare_revise_uses_builtin_runner_when_loop_runner_is_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    review_file = tmp_path / "review.md"
+    review_file.write_text("review\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+
+    prepared = prepare_revise(_revise_args("review.md", runner=None), temp_files=[])
+
+    assert prepared.command == ["claude", "-p"]
 
 
 def test_review_once_dry_run_prints_configuration(

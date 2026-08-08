@@ -2,52 +2,102 @@
   "scenarios": [
     {
       "name": "nullary_variant",
-      "params": {"fallback": "n/a"},
-      "agents": {"worker": ["{\"$case\": \"Done\"}"]},
+      "params": {
+        "fallback": "n/a"
+      },
+      "agents": {
+        "worker": [
+          "{\"$case\": \"Done\"}"
+        ]
+      },
       "expect": {
         "stdout": "done\nno work left\nOutcome::Partial(left = 2)\nOutcome::Failed(reason = \"n/a\", fatal = false)\n",
-        "calls": {"worker": 1}
+        "calls": {
+          "worker": 1
+        }
       }
     },
     {
       "name": "payload_variant_destructured",
-      "params": {"fallback": "n/a"},
-      "agents": {"worker": ["{\"$case\": \"Partial\", \"left\": 4}"]},
+      "params": {
+        "fallback": "n/a"
+      },
+      "agents": {
+        "worker": [
+          "{\"$case\": \"Partial\", \"left\": 4}"
+        ]
+      },
       "expect": {
         "stdout": "not failed\nremaining 4\nOutcome::Partial(left = 2)\nOutcome::Failed(reason = \"n/a\", fatal = false)\n",
-        "calls": {"worker": 1}
+        "calls": {
+          "worker": 1
+        }
       }
     },
     {
       "name": "multi_field_fatal_branch",
-      "params": {"fallback": "n/a"},
+      "params": {
+        "fallback": "n/a"
+      },
       "agents": {
-        "worker": ["{\"$case\": \"Failed\", \"reason\": \"disk full\", \"fatal\": true}"]
+        "worker": [
+          "{\"$case\": \"Failed\", \"reason\": \"disk full\", \"fatal\": true}"
+        ]
       },
       "expect": {
-        "stdout_contains": ["failed\nfatal: disk full\n"],
-        "calls": {"worker": 1}
+        "stdout_contains": [
+          "failed\nfatal: disk full\n"
+        ],
+        "calls": {
+          "worker": 1
+        }
       }
     },
     {
       "name": "multi_field_recoverable_branch",
-      "params": {"fallback": "manual review"},
+      "params": {
+        "fallback": "manual review"
+      },
       "agents": {
-        "worker": ["{\"$case\": \"Failed\", \"reason\": \"rate limit\", \"fatal\": false}"]
+        "worker": [
+          "{\"$case\": \"Failed\", \"reason\": \"rate limit\", \"fatal\": false}"
+        ]
       },
       "expect": {
-        "stdout_contains": ["failed\nretry later: rate limit\n", "\"manual review\""],
-        "calls": {"worker": 1}
+        "stdout_contains": [
+          "failed\nretry later: rate limit\n",
+          "\"manual review\""
+        ],
+        "calls": {
+          "worker": 1
+        }
       }
     },
     {
       "name": "unknown_case_tag_is_parse_error",
-      "params": {"fallback": "n/a"},
-      "agents": {"worker": ["{\"$case\": \"Exploded\"}"]},
+      "params": {
+        "fallback": "n/a"
+      },
+      "agents": {
+        "worker": [
+          "{\"$case\": \"Exploded\"}"
+        ]
+      },
       "expect": {
         "stdout": "",
-        "calls": {"worker": 1},
-        "raises": {"type": "AgentParseError", "fields": {"agent": "worker", "attempts": 1}}
+        "calls": {
+          "worker": 1
+        },
+        "raises": {
+          "type": "AgentParseError",
+          "fields": {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "worker"
+            },
+            "attempts": 1
+          }
+        }
       }
     }
   ]

@@ -524,9 +524,8 @@ class ConstructorChecker:
                     callee_kind="constructor",
                 )
 
-        # Type-check each user field (exceptions skip trace_id, which is excluded
-        # from field_kinds at registration time). Placeholder fields are checked
-        # when the produced function is invoked.
+        # Type-check each supplied field. Placeholder fields are checked when
+        # the produced function is invoked.
         for fname, _fkind in field_kinds:
             expected_field_type = fields[fname]
             arg_expr = bound_exprs[fname]
@@ -564,17 +563,39 @@ class ConstructorChecker:
     ) -> RecordType | EnumType | ExceptionType:
         """Resolve the owner type for a constructor ref.
 
-        Falls back to the unqualified import map for cross-module types that
-        are open-imported but not registered in the local environment.
+        The whole-program type pre-pass registers every module's own
+        declarations into the shared program type table before any body is
+        checked, so a resolved ``ConstructorRef`` usually finds its owner
+        there. Falls back to the unqualified local registry for cross-module
+        types that are open-imported but not registered in the shared table
+        — including a host builtin (e.g. an exception like ``Abort``) whose
+        constructor candidate is ambiently seeded under ``std/core``'s module
+        id even when the standard library is not loaded, so the shared table
+        never gained an entry for it. Raises a proper diagnostic, rather than
+        returning ``None``, when neither lookup finds a constructible owner.
         """
         owner = self._ctx._env.resolve_constructible_type_by_module_id(
             ref.owner_module_id, ref.owner_name, scope_path=ref.owner_path
         )
         if owner is None:
             candidate = self._ctx._env.get_type(ref.owner_name)
-            assert isinstance(candidate, (RecordType, EnumType, ExceptionType))
+            if not isinstance(candidate, (RecordType, EnumType, ExceptionType)):
+                raise AglTypeError(
+                    f"'{ref.owner_name}' is not a known constructible type.", span=span
+                )
             owner = candidate
         if ref.variant is None:
+            if isinstance(owner, EnumType):
+                # An enum is constructed through a variant, so a bare-name
+                # constructor spelling never denotes one. The two can meet
+                # when a name is redeclared under a different kind and a
+                # constructor reference to the record or exception it used to
+                # name is still reachable.
+                raise AglTypeError(
+                    f"'{ref.owner_name}' is an enum type; name one of its variants to "
+                    "construct it.",
+                    span=span,
+                )
             return owner
         if not isinstance(owner, EnumType):
             if isinstance(owner, (RecordType, ExceptionType)) and ref.variant == ref.owner_name:
@@ -887,7 +908,7 @@ class ConstructorChecker:
         owner = self._ctx._zonk_constructor_owner(owner)
         fields, context_desc = self._constructor_fields_and_context(owner, variant)
 
-        # Get field kinds (excludes trace_id for exceptions). The env helper
+        # Get field kinds. The env helper
         # owns the lookup convention (registered table for records/enums,
         # derived from exception_fields for exceptions).
         field_kinds = self._ctx._env.get_constructor_field_kinds_for_type(

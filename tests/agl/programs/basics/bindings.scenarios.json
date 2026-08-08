@@ -2,30 +2,93 @@
   "scenarios": [
     {
       "name": "two_step_refinement",
-      "params": {"start": "a sketch"},
-      "agents": {"impl": ["draft", "revised"], "ask": ["noted"]},
+      "params": {
+        "start": "a sketch"
+      },
+      "agents": {
+        "impl": [
+          "draft",
+          "revised"
+        ],
+        "ask": [
+          "noted"
+        ]
+      },
       "expect": {
         "stdout": "draft\nrevised\n6\ndone\n",
-        "calls": {"impl": 2, "ask": 1},
+        "calls": {
+          "impl": 2,
+          "ask": 1
+        },
         "prompts": [
-          {"agent": "impl", "call": 0, "contains": ["Start from", "a sketch"]},
-          {"agent": "impl", "call": 1, "contains": ["Refine:", "draft"]},
-          {"agent": "ask", "call": 0, "contains": ["hello", "1.5", "true"]}
+          {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "impl"
+            },
+            "call": 0,
+            "contains": [
+              "Start from",
+              "a sketch"
+            ]
+          },
+          {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "impl"
+            },
+            "call": 1,
+            "contains": [
+              "Refine:",
+              "draft"
+            ]
+          },
+          {
+            "agent": {
+              "$case": "AgentClaude",
+              "model": "sonnet",
+              "thinking": "medium"
+            },
+            "call": 0,
+            "contains": [
+              "hello",
+              "1.5",
+              "true"
+            ]
+          }
         ]
       }
     },
     {
       "name": "responses_flow_between_calls",
-      "params": {"start": "an empty file"},
-      "agents": {"impl": ["draft with %{marker} inside", "final"], "ask": ["ok"]},
+      "params": {
+        "start": "an empty file"
+      },
+      "agents": {
+        "impl": [
+          "draft with %{marker} inside",
+          "final"
+        ],
+        "ask": [
+          "ok"
+        ]
+      },
       "expect": {
         "stdout": "draft with %{marker} inside\nfinal\n6\ndone\n",
-        "calls": {"impl": 2, "ask": 1},
+        "calls": {
+          "impl": 2,
+          "ask": 1
+        },
         "prompts": [
           {
-            "agent": "impl",
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "impl"
+            },
             "call": 1,
-            "contains": ["draft with %{marker} inside"]
+            "contains": [
+              "draft with %{marker} inside"
+            ]
           }
         ]
       }

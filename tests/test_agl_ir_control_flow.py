@@ -47,7 +47,7 @@ from agm.agl.ir.program import (
     SymbolDescriptor,
 )
 from agm.agl.ir.validate import InvalidIrError, validate_ir
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID
 from agm.agl.semantics.values import (
     ExceptionValue,
     IntValue,
@@ -56,7 +56,7 @@ from agm.agl.semantics.values import (
 )
 from agm.agl.typecheck import AglTypeError
 from tests._agl_helpers import let_root_capture
-from tests.agl.ir_harness import _compiled_checked, evaluate_ir, evaluate_ir_raises
+from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises, lower_ir
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -536,14 +536,8 @@ catch CastError =>
 def _lower(source: str) -> object:
     """Parse → check → lower; return ExecutableProgram."""
     from agm.agl.capabilities import HostCapabilities
-    from agm.agl.lower import lower_module
-    from agm.agl.parser import parse_program
-    from agm.agl.scope import resolve_module
-    from agm.agl.typecheck import check_module
 
     caps = HostCapabilities(
-        agent_names=frozenset(),
-        has_default_agent=False,
         supports_shell_exec=False,
         codec_kinds={
             "text": frozenset({"text"}),
@@ -552,14 +546,7 @@ def _lower(source: str) -> object:
             ),
         },
     )
-    prog = parse_program(source)
-    resolved = resolve_module(prog)
-    checked = check_module(resolved, caps)
-    return lower_module(
-        _compiled_checked(checked),
-        source_text=source,
-        source_label="<test>",
-    )
+    return lower_ir(source, caps=caps)
 
 
 def test_lower_if_no_else_shape() -> None:
@@ -732,7 +719,7 @@ def test_ir_try_handler_binding_stored_in_frame() -> None:
     loc = _DUMMY_LOC
     exc_sym = SymbolId(0)
     result_sym = SymbolId(1)
-    exc_nominal = NominalId(PRELUDE_ID, "Abort")
+    exc_nominal = NominalId(1)
 
     exc_node = IrMakeException(
         location=loc,
@@ -761,9 +748,11 @@ def test_ir_try_handler_binding_stored_in_frame() -> None:
     nominals = {
         exc_nominal: NominalDescriptor(
             nominal=exc_nominal,
-            display_name="Abort",
+            module_id=STD_CORE_ID,
+            scope_path=(),
+            declared_name="Abort",
             kind=NominalKind.EXCEPTION,
-            fields=("message", "trace_id"),
+            fields=("message",),
             variants=(),
         ),
     }
@@ -786,7 +775,7 @@ def test_ir_try_handler_binding_stored_in_frame() -> None:
 def test_validate_ir_try_handler_nominal_missing() -> None:
     """Negative validate: IrTry handler with nominal missing from program.nominals."""
     loc = _DUMMY_LOC
-    missing_nominal = NominalId(PRELUDE_ID, "NonExistentError")
+    missing_nominal = NominalId(2)
     handler = IrCatchHandler(
         nominal=missing_nominal,
         display_name="NonExistentError",
@@ -799,14 +788,14 @@ def test_validate_ir_try_handler_nominal_missing() -> None:
         handlers=(handler,),
     )
     prog = _make_program((ir_try,))
-    with pytest.raises(InvalidIrError, match="NonExistentError"):
+    with pytest.raises(InvalidIrError, match="not in program.nominals"):
         validate_ir(prog, deep=True)
 
 
 def test_validate_ir_try_handler_symbol_missing() -> None:
     """Negative validate: IrTry handler with symbol not in program.symbols."""
     loc = _DUMMY_LOC
-    exc_nominal = NominalId(PRELUDE_ID, "Abort")
+    exc_nominal = NominalId(3)
     orphan_sym = SymbolId(999)
     handler = IrCatchHandler(
         nominal=exc_nominal,
@@ -822,9 +811,11 @@ def test_validate_ir_try_handler_symbol_missing() -> None:
     nominals = {
         exc_nominal: NominalDescriptor(
             nominal=exc_nominal,
-            display_name="Abort",
+            module_id=STD_CORE_ID,
+            scope_path=(),
+            declared_name="Abort",
             kind=NominalKind.EXCEPTION,
-            fields=("message", "trace_id"),
+            fields=("message",),
             variants=(),
         ),
     }
@@ -856,7 +847,7 @@ def test_validate_ir_return_cheap_ok() -> None:
 def test_validate_ir_try_cheap_ok() -> None:
     """Validate IrTry without deep: location + body only, no nominal/symbol cross-ref."""
     loc = _DUMMY_LOC
-    exc_nominal = NominalId(PRELUDE_ID, "Abort")
+    exc_nominal = NominalId(4)
     handler = IrCatchHandler(
         nominal=exc_nominal,
         display_name="Abort",

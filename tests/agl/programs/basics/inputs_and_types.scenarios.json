@@ -7,17 +7,43 @@
         "rounds": 3,
         "ratio": 2.5,
         "flag": true,
-        "meta": {"k": [1, null]}
+        "meta": {
+          "k": [
+            1,
+            null
+          ]
+        }
       },
-      "agents": {"ask": ["ok summary"]},
+      "agents": {
+        "ask": [
+          "ok summary"
+        ]
+      },
       "expect": {
-        "stdout_contains": ["unit tests\n", "3\n", "2.5\n", "true\n", "\"k\"", "ok summary\n"],
-        "calls": {"ask": 1},
+        "stdout_contains": [
+          "unit tests\n",
+          "3\n",
+          "2.5\n",
+          "true\n",
+          "\"k\"",
+          "ok summary\n"
+        ],
+        "calls": {
+          "ask": 1
+        },
         "prompts": [
           {
-            "agent": "ask",
+            "agent": {
+              "$case": "AgentClaude",
+              "model": "sonnet",
+              "thinking": "medium"
+            },
             "call": 0,
-            "contains": ["unit tests", "in 3 rounds", "(ratio 2.5, flag true)."]
+            "contains": [
+              "unit tests",
+              "in 3 rounds",
+              "(ratio 2.5, flag true)."
+            ]
           }
         ]
       }
@@ -25,30 +51,64 @@
     {
       "name": "unicode_multiline_and_falsy_values",
       "params": {
-        "topic": "café ✓\nline two",
+        "topic": "caf\u00e9 \u2713\nline two",
         "rounds": 0,
         "ratio": 0.1,
         "flag": false,
         "meta": null
       },
-      "agents": {"ask": ["done"]},
+      "agents": {
+        "ask": [
+          "done"
+        ]
+      },
       "expect": {
-        "stdout_contains": ["café ✓\nline two\n", "0\n", "0.1\n", "false\n", "null", "done\n"],
-        "calls": {"ask": 1},
+        "stdout_contains": [
+          "caf\u00e9 \u2713\nline two\n",
+          "0\n",
+          "0.1\n",
+          "false\n",
+          "null",
+          "done\n"
+        ],
+        "calls": {
+          "ask": 1
+        },
         "prompts": [
           {
-            "agent": "ask",
+            "agent": {
+              "$case": "AgentClaude",
+              "model": "sonnet",
+              "thinking": "medium"
+            },
             "call": 0,
-            "contains": ["café ✓\nline two", "in 0 rounds", "(ratio 0.1, flag false)."]
+            "contains": [
+              "caf\u00e9 \u2713\nline two",
+              "in 0 rounds",
+              "(ratio 0.1, flag false)."
+            ]
           }
         ]
       }
     },
     {
       "name": "missing_declared_input",
-      "params": {"topic": "x", "ratio": 1.5, "flag": true, "meta": {}},
-      "agents": {"ask": []},
-      "expect": {"host_error": {"message_contains": ["rounds"]}}
+      "params": {
+        "topic": "x",
+        "ratio": 1.5,
+        "flag": true,
+        "meta": {}
+      },
+      "agents": {
+        "ask": []
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": [
+            "rounds"
+          ]
+        }
+      }
     },
     {
       "name": "undeclared_extra_input",
@@ -60,17 +120,42 @@
         "meta": {},
         "bogus": "nope"
       },
-      "agents": {"ask": ["summary"]},
+      "agents": {
+        "ask": [
+          "summary"
+        ]
+      },
       "expect": {
-        "stdout_contains": ["x\n", "1\n", "1.5\n", "true\n"],
-        "calls": {"ask": 1}
+        "stdout_contains": [
+          "x\n",
+          "1\n",
+          "1.5\n",
+          "true\n"
+        ],
+        "calls": {
+          "ask": 1
+        }
       }
     },
     {
       "name": "type_invalid_input",
-      "params": {"topic": "x", "rounds": "three", "ratio": 1.5, "flag": true, "meta": {}},
-      "agents": {"ask": []},
-      "expect": {"host_error": {"message_contains": ["rounds"]}}
+      "params": {
+        "topic": "x",
+        "rounds": "three",
+        "ratio": 1.5,
+        "flag": true,
+        "meta": {}
+      },
+      "agents": {
+        "ask": []
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": [
+            "rounds"
+          ]
+        }
+      }
     }
   ]
 }

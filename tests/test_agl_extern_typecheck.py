@@ -6,8 +6,8 @@ for `extern def`:
   defaults, type params, no body to check).
 - extern-specific header checks: Python-identifier/keyword name rule,
   builtin-name collision guard.
-- the function/agent type ban anywhere in an extern's signature (type
-  variables permitted).
+- the function-type ban anywhere in an extern's signature (type variables
+  permitted), while `Agent` enum values cross the boundary as ordinary data.
 - calls to externs type exactly like calls to ordinary declared functions.
 - direct extern call sites (own-module and imported) are recorded in
   ``call_sites`` like ``ask``/``exec`` call sites.
@@ -26,7 +26,6 @@ import pytest
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.parser import parse_program
-from agm.agl.scope import resolve_module
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import AglScopeError, ModuleResolution, ScopeNode
 from agm.agl.semantics.types import CastSpec
@@ -39,17 +38,24 @@ from agm.agl.typecheck import (
     FunctionType,
     IntType,
     TextType,
-    check_module,
     check_program,
 )
-from agm.agl.typecheck.env import CallSiteRecord, OutputContractSpec, PartialCallSpec
+from agm.agl.typecheck.env import (
+    CallSiteRecord,
+    OutputContractSpec,
+    PartialCallSpec,
+)
 from tests.agl.ir_harness import make_graph_from_files, write_companion_file
+from tests.agl.module_graph import (
+    check_resolved,
+    resolve_and_check_program_ast,
+    resolve_entry,
+    resolve_program_ast,
+)
 
 _PATH = Path("/virtual/extern_typecheck.agl")
 
 _CAPS = HostCapabilities(
-    agent_names=frozenset(),
-    has_default_agent=True,
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
@@ -59,11 +65,51 @@ _CAPS = HostCapabilities(
 
 _TYPE_REJECTIONS_DIR = Path(__file__).resolve().parent / "agl" / "rejections" / "type"
 
+# ``check_extern``/``resolve_program_ast`` build a hand-crafted single-module
+# graph that never imports ``std/core`` (see
+# ``tests.agl.module_graph.resolve_and_check_program_ast``), so a bare
+# ``ask(...)`` call in one of these sources needs its own reachable
+# declaration: a bare built-in call is classified only once it resolves to a
+# ``builtin def``, exactly like any other reference.
+_ASK_BUILTIN_SOURCE = (
+    "builtin\n"
+    "enum ParsePolicy =\n"
+    "  | Abort\n"
+    "  | Retry(n: int)\n"
+    "\n"
+    "builtin\n"
+    "enum Agent =\n"
+    "  | AgentCommand(command: text)\n"
+    "  | AgentClaude(model: text, thinking: text)\n"
+    "  | AgentCodex(model: text, thinking: text)\n"
+    "  | AgentPi(provider: text, model: text, thinking: text)\n"
+    "\n"
+    "builtin def ask[T](\n"
+    "  prompt: text,\n"
+    '  agent: Agent = AgentCommand(""),\n'
+    '  format: text = "",\n'
+    "  strict_json: bool = false,\n"
+    "  on_parse_error: ParsePolicy = ParsePolicy::Abort,\n"
+    ") -> T\n"
+)
+
 
 def check_extern(source: str, capabilities: HostCapabilities | None = None) -> CheckedModule:
-    """Parse + resolve (file-backed) + check *source*, returning the CheckedModule."""
-    resolved = resolve_module(parse_program(source), origin_path=_PATH)
-    return check_module(resolved, capabilities or _CAPS)
+    """Parse + resolve (file-backed) + check *source*, returning the CheckedModule.
+
+    Uses ``resolve_and_check_program_ast``'s hand-built single-module graph
+    rather than a real loaded one: *_PATH* is a virtual, non-existent file,
+    deliberately exercising the scope/typecheck layers' own rule that an
+    extern needs a file-backed origin -- independent of whether a companion
+    ``.py`` file actually exists on disk, which only the module loader (a
+    separate, already graph-tested concern; see ``check_extern_graph`` below
+    and ``test_agl_extern_syntax.py``) enforces. Building a real loaded graph
+    here would hit that loader check first and mask the one this class means
+    to test.
+    """
+    return resolve_and_check_program_ast(
+        parse_program(source), capabilities or _CAPS, origin_path=_PATH
+    )
 
 
 def reject_extern(source: str, capabilities: HostCapabilities | None = None) -> AglTypeError:
@@ -163,26 +209,21 @@ class TestExternCollisionGuard:
 
 
 # ---------------------------------------------------------------------------
-# Function/agent type ban — type variables permitted
+# Function type ban — type variables permitted
 # ---------------------------------------------------------------------------
 
 
-class TestExternFunctionAgentTypeBan:
+class TestExternFunctionTypeBan:
     def test_function_typed_param_rejected(self) -> None:
         err = reject_extern("extern def f(cb: (int) -> int) -> int\n0")
         assert "function" in str(err).lower()
 
-    def test_agent_typed_param_rejected(self) -> None:
-        err = reject_extern("extern def f(a: agent) -> int\n0")
-        assert "agent" in str(err).lower()
+    def test_agent_enum_param_and_return_are_accepted(self) -> None:
+        check_extern(_ASK_BUILTIN_SOURCE + "extern def identity(a: Agent) -> Agent\n0")
 
     def test_function_typed_return_rejected(self) -> None:
         err = reject_extern("extern def f(x: int) -> (int) -> int\n0")
         assert "function" in str(err).lower()
-
-    def test_agent_typed_return_rejected(self) -> None:
-        err = reject_extern("extern def f(x: int) -> agent\n0")
-        assert "agent" in str(err).lower()
 
     def test_function_type_nested_in_array_rejected(self) -> None:
         err = reject_extern("extern def f(cbs: array[(int) -> int]) -> int\n0")
@@ -205,11 +246,6 @@ class TestExternFunctionAgentTypeBan:
         err = reject_extern(source)
         assert "function" in str(err).lower()
 
-    def test_agent_type_nested_in_enum_variant_rejected(self) -> None:
-        source = "enum Holder\n  | with-agent(a: agent)\nextern def f(h: Holder) -> int\n0"
-        err = reject_extern(source)
-        assert "agent" in str(err).lower()
-
     def test_function_type_nested_in_exception_field_rejected(self) -> None:
         source = (
             "exception BadExc extends Exception\n  cb: (int) -> int\n"
@@ -217,6 +253,26 @@ class TestExternFunctionAgentTypeBan:
         )
         err = reject_extern(source)
         assert "function" in str(err).lower()
+
+    def test_recursive_exception_signature_is_walked_once(self) -> None:
+        check_extern(
+            "exception Loop extends Exception\n  children: array[Loop]\n"
+            "extern def f(value: Loop) -> int\n0"
+        )
+
+    def test_growing_generic_signature_is_rejected_before_the_type_walk(self) -> None:
+        source = (
+            "record Pair[A, B]\n"
+            "  first: A\n"
+            "  second: B\n"
+            "enum Perfect[T]\n"
+            "  | Single(value: T)\n"
+            "  | Succ(next: Perfect[Pair[T, T]])\n"
+            "extern def f(value: Perfect[int]) -> int\n"
+            "0"
+        )
+        err = reject_extern(source)
+        assert "no finite json schema" in str(err).lower()
 
     def test_type_variables_permitted(self) -> None:
         check_extern("extern def id[T](x: T) -> T\nid(1)")
@@ -344,7 +400,7 @@ class TestExternCallSiteRecording:
 
     def test_generic_extern_and_builtin_inventory_preserves_source_order(self) -> None:
         cp = check_extern(
-            "extern def id[T](value: T) -> T\n"
+            _ASK_BUILTIN_SOURCE + "extern def id[T](value: T) -> T\n"
             "def choose[T](first: T, second: T) -> T = first\n"
             'let value: int = choose(ask("answer"), id(1))\n'
             "value"
@@ -353,14 +409,19 @@ class TestExternCallSiteRecording:
         assert [site.target_type for site in cp.call_sites] == [IntType(), IntType()]
 
     def test_failed_region_rolls_back_extern_inventory_before_checker_reuse(self) -> None:
+        # Direct resolve_program_ast bypass, not resolve_and_check_entry: see
+        # check_extern's docstring -- this builds a _Checker by hand from a
+        # virtual origin_path with no real companion file, which is exactly
+        # what a real module graph's loader would reject before this
+        # internal-state assertion ever ran.
         from agm.agl.syntax.nodes import Call
         from agm.agl.typecheck.builder import _TypeBuilder
         from agm.agl.typecheck.checker import _Checker
         from agm.agl.typecheck.env import TypeEnvironment
 
-        resolved = resolve_module(
+        resolved = resolve_program_ast(
             parse_program(
-                "extern def id[T](value: T) -> T\n"
+                _ASK_BUILTIN_SOURCE + "extern def id[T](value: T) -> T\n"
                 "extern def same[T](left: T, right: T) -> T\n"
                 "def choose[T](first: T, second: T) -> T = first\n"
                 'choose(id(same(?, fn(value: int) -> int => value)), ask("answer"))'
@@ -427,7 +488,7 @@ class TestExternCallSiteRecording:
         from agm.agl.typecheck.env import TypeEnvironment
         from agm.agl.typecheck.inference import InferenceEngine
 
-        checker = _Checker(TypeEnvironment(), resolve_module(parse_program("()")), _CAPS)
+        checker = _Checker(TypeEnvironment(), resolve_entry("()"), _CAPS)
         target = _ExternTarget("id", IntType(), 1, ENTRY_ID)
         checker._extern_expr_targets[10] = (target,)
         checker._extern_binding_targets[11] = (target,)
@@ -457,7 +518,7 @@ class TestExternCallSiteRecording:
         from agm.agl.typecheck.env import TypeEnvironment
         from agm.agl.typecheck.inference import InferenceEngine
 
-        checker = _Checker(TypeEnvironment(), resolve_module(parse_program("()")), _CAPS)
+        checker = _Checker(TypeEnvironment(), resolve_entry("()"), _CAPS)
         unresolved = InferenceEngine().fresh("target")
         with pytest.raises(AglTypeError, match="concrete target"):
             checker._finalize_extern_call_obligation(
@@ -470,7 +531,7 @@ class TestExternCallSiteRecording:
             )
 
     def test_ask_exec_recording_unaffected_by_extern_presence(self) -> None:
-        cp = check_extern('extern def f(x: int) -> int\nask("hi")')
+        cp = check_extern(_ASK_BUILTIN_SOURCE + 'extern def f(x: int) -> int\nask("hi")')
         callees = [s.callee for s in cp.call_sites]
         assert callees == ["ask"]
 
@@ -762,4 +823,4 @@ class TestExternDefensiveGuards:
             declared_functions={"f": fd},
         )
         with pytest.raises(AglTypeError, match="must declare a return type"):
-            check_module(resolved, _CAPS)
+            check_resolved(resolved, _CAPS)

@@ -1,0 +1,26 @@
+# A program-declared `builtin exception ExecError` inside a named scope
+# region shadows the standard library's own declaration for every
+# host-raised `exec` failure -- the host mints THIS declaration under the
+# bare name `ExecError` from here on, not the standard one. The `catch`
+# clause lives inside the very same scope, so the bare name it names
+# resolves to that same shadowing declaration: exactly the identity the
+# host mints there, so the failure is caught normally.
+scope A
+builtin
+exception ExecError extends Exception
+  *
+  command: text
+  exit_code: int
+  stdout: text
+  stderr: text
+  timed_out: bool
+
+def run() -> text =
+  try
+    let out: text = exec("false")
+    "no-error"
+  catch ExecError as e =>
+    "caught: %{e.exit_code}"
+end A
+
+print(A::run())

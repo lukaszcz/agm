@@ -2,21 +2,39 @@
   "scenarios": [
     {
       "name": "everything_present",
-      "params": {"needle": "alpha", "numbers": [1, 2, 3], "k": 2},
+      "params": {
+        "needle": "alpha",
+        "numbers": [
+          1,
+          2,
+          3
+        ],
+        "k": 2
+      },
       "expect": {
         "stdout": "true\ntrue\ntrue\ntrue\nfalse\ntrue\ntrue\ntrue\n"
       }
     },
     {
       "name": "nothing_present",
-      "params": {"needle": "delta", "numbers": [], "k": 99},
+      "params": {
+        "needle": "delta",
+        "numbers": [],
+        "k": 99
+      },
       "expect": {
         "stdout": "false\nfalse\nfalse\nfalse\ntrue\nfalse\nfalse\ntrue\n"
       }
     },
     {
       "name": "substring_but_not_element",
-      "params": {"needle": "bet", "numbers": [7], "k": 7},
+      "params": {
+        "needle": "bet",
+        "numbers": [
+          7
+        ],
+        "k": 7
+      },
       "expect": {
         "stdout": "false\ntrue\nfalse\ntrue\ntrue\nfalse\ntrue\ntrue\n"
       }

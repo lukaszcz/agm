@@ -1,8 +1,7 @@
 # copy/shallow_copy are identity on opaque values -- an agent handle and a
 # first-class function value are returned as-is, and remain fully usable
 # through the copy.
-agent impl
-
+let impl = AgentCommand("impl")
 def inc(x: int) -> int = x + 1
 
 let copied_agent = copy(impl)

@@ -27,14 +27,16 @@ Flag notes:
       ``--log-file PATH`` writes to PATH; ``--no-log`` disables it.  At most one
       of these three flags may be given (mutually exclusive).  ``[exec] log =
       true`` in config also enables logging; CLI flags override config.
-    - ``--runner COMMAND`` overrides the default agent runner command from config.
-      When set, it is used as the default runner for all unnamed agents.
+    - ``--agent AGL_LITERAL`` seeds ``std/config::default-agent`` from one typed
+      constant Agent expression, taking precedence over ``[exec]``/
+      ``[<program>] default-agent``, which in turn takes precedence over the
+      bare host command in ``[exec] runner``.
     - Every loaded entry and library module opens ``std/core`` by default
       (except ``std/core`` itself). ``--no-stdlib`` disables that automatic
       opening throughout the loaded program. Ordinary imports are qualified by
       default; ``open import`` and ``using`` make selected names bare.
     - A program reads and writes the engine settings (``strict-json``,
-      ``max-iters``, ``runner``, ``timeout``, ``log``, ``log-file``) through the
+      ``max-iters``, ``default-agent``, ``timeout``, ``log``, ``log-file``) through the
       ``std/config`` module; a ``std/config::KEY := VALUE`` write takes effect
       from its program point onward and overrides the CLI flag, which overrides
       the config-file layer.  ``--max-call-depth`` remains a host/runtime
@@ -51,22 +53,14 @@ import sys
 from pathlib import Path
 from typing import TypeVar
 
-from agm.agent.config import default_agent_runner
-from agm.agent.runner import parse_command, split_command
 from agm.agl import PipelineDriver
 from agm.agl.diagnostics import format_diagnostic
 from agm.agl.modules.roots import assemble_roots
-from agm.agl.runtime.agents import AgentFn, runner_backed_agent_factory
+from agm.agl.runtime.agents import value_driven_agent_factory
 from agm.agl.runtime.host_settings import HostSettingsPolicy
-from agm.agl.runtime.params import convert_config_value, raw_option_str
-from agm.agl.semantics.engine_keys import (
-    ENGINE_KEY_NAMES,
-    RESERVED_PROGRAM_NAMES,
-    get_engine_key_type,
-)
-from agm.agl.semantics.types import Type
-from agm.agl.semantics.values import BoolValue, TextValue, Value
+from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES, RESERVED_PROGRAM_NAMES
 from agm.cli_support.args import ExecArgs
+from agm.cli_support.engine_seeds import build_host_engine_seeds, check_max_iters
 from agm.cli_support.exec_params import (
     check_param_collisions,
     parse_param_tokens,
@@ -78,7 +72,12 @@ from agm.config.general import (
     load_merged_config,
     program_config_from_merged,
 )
-from agm.config.module_roots import load_module_roots, resolve_lib_root, resolve_stdlib_root
+from agm.config.module_roots import (
+    StaleStdlibError,
+    load_module_roots,
+    resolve_lib_root,
+    resolve_stdlib_root,
+)
 from agm.core import dry_run
 from agm.core.fs import read_text_arg
 from agm.core.log import (
@@ -86,7 +85,7 @@ from agm.core.log import (
     prepare_trace_log_from_decision,
     resolve_log_decision,
 )
-from agm.core.parse import format_timeout, parse_timeout
+from agm.core.parse import parse_timeout
 from agm.core.toml import toml_dict
 from agm.parser import exit_with_usage_error
 
@@ -96,34 +95,6 @@ _T = TypeVar("_T")
 def _first(*values: _T | None) -> _T | None:
     """Return the first non-None value, or None if all are None."""
     return next((v for v in values if v is not None), None)
-
-
-def check_max_iters(max_iters: int | None) -> None:
-    """Reject a non-positive ``--max-iters`` before anything runs.
-
-    The ``max-iters`` safety valve counts iterations, so zero and negatives are
-    meaningless; ``None`` means the flag was not given.  Shared by ``agm exec``
-    and ``agm repl``, which take the flag with identical semantics.
-    """
-    if max_iters is not None and max_iters <= 0:
-        print("Error: --max-iters must be a positive integer", file=sys.stderr)
-        raise SystemExit(1)
-
-
-def _project_option_text(
-    value: str | None, *, no_flag: bool, key_name: str, key_type: Type
-) -> Value | None:
-    """Project an Option[text] CLI flag pair to an EnumValue or None.
-
-    - *value* is set: ``some(value)`` via :func:`convert_config_value`.
-    - *no_flag* is ``True``: ``none`` via :func:`convert_config_value`.
-    - Both absent: returns ``None``.
-    """
-    if value is not None:
-        return convert_config_value(key_name, value, key_type)
-    if no_flag:
-        return convert_config_value(key_name, None, key_type)
-    return None
 
 
 def run(args: ExecArgs) -> None:
@@ -144,52 +115,38 @@ def run(args: ExecArgs) -> None:
         raise SystemExit(1)
 
     # Load the merged config once; program_table and exec config are deferred until
-    # after prepare_program so the declared program name is available.
+    # after the entry is parsed so the declared program name is available.
     ctx = current_config_context()
     raw_stem: str | None = Path(args.file).stem if args.file is not None else None
     merged_config = load_merged_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
 
-    # ----------------------------------------------------------------
-    # Assemble module roots and load + scope the graph ONCE.  A source
-    # ``std/config::KEY := VALUE`` write takes effect at its program point and
-    # overrides the CLI flag, which overrides the config-file layer.
-    # ----------------------------------------------------------------
-    try:
-        mr_config = load_module_roots(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
-    except ValueError as exc:
-        print(f"Error: invalid module roots configuration: {exc}", file=sys.stderr)
-        raise SystemExit(1) from exc
+    # Parse the entry ONCE, ahead of module loading, so its declared ``program
+    # NAME`` can drive config-table resolution (below) before overrides are
+    # built and threaded into the single module-load-and-scope pass.
+    parsed = PipelineDriver.parse_entry(source, entry_path=entry_path)
 
-    # Resolve the lib_root path.
-    stdlib_root = resolve_stdlib_root(home=ctx.home)
-    resolved_lib_root = resolve_lib_root(mr_config, home=ctx.home)
-
-    # The invocation root is the entry file's directory (for file exec) or
-    # the cwd (for -c inline exec).
-    if entry_path is not None:
-        invocation_root = entry_path.parent
-    else:
-        invocation_root = ctx.cwd
-
-    roots = assemble_roots(
-        invocation_root=invocation_root,
-        stdlib_root=stdlib_root,
-        lib_root=resolved_lib_root,
-        configured=mr_config.extra,
-        cli=args.module_paths,
-        cwd=ctx.cwd,
-    )
-
-    prepared = PipelineDriver.prepare_program(
-        source, entry_path=entry_path, roots=roots, default_stdlib=not args.no_stdlib
-    )
+    # Reserved declared-name check: a ``program NAME`` declaration naming a reserved
+    # AGM command or config-section name must be rejected here, before it is ever
+    # adopted as ``program_key`` and used to select a config table or build engine
+    # seeds. Without this, the reserved name would silently select its own config
+    # table and any bad value there would be misreported as a config error instead
+    # of the real problem. The resolver enforces the same rule during scope
+    # resolution (using the same ``RESERVED_PROGRAM_NAMES`` set); this check only
+    # gives a clean, up-front error before config/engine-seed work happens.
+    if parsed.program_name is not None and parsed.program_name in RESERVED_PROGRAM_NAMES:
+        print(
+            f"Error: declared program name '{parsed.program_name}' is a reserved "
+            "program name. Use a non-reserved name in the 'program NAME' declaration.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 
     # Resolve the single final program key for BOTH engine-key overrides and param
     # resolution. The declared ``program NAME`` takes precedence over the file stem;
     # a stem in the stable reserved-program-name set produces no key (and triggers
     # the reserved-stem error below when no ``program NAME`` declaration exists).
-    if prepared.program_name is not None:
-        program_key: str | None = prepared.program_name
+    if parsed.program_name is not None:
+        program_key: str | None = parsed.program_name
     elif raw_stem is not None and raw_stem not in RESERVED_PROGRAM_NAMES:
         program_key = raw_stem
     else:
@@ -199,11 +156,7 @@ def run(args: ExecArgs) -> None:
     # a reserved stem would select a conflicting or invalid program config key.
     # Require an explicit non-reserved name instead. Inline ``-c`` (no file stem)
     # is unaffected.
-    if (
-        raw_stem is not None
-        and raw_stem in RESERVED_PROGRAM_NAMES
-        and prepared.program_name is None
-    ):
+    if raw_stem is not None and raw_stem in RESERVED_PROGRAM_NAMES and parsed.program_name is None:
         print(
             f"Error: file stem '{raw_stem}' is a reserved program name. "
             "Add a 'program NAME' declaration with a non-reserved name.",
@@ -222,13 +175,6 @@ def run(args: ExecArgs) -> None:
     except ValueError as exc:
         print(f"Error: invalid exec configuration: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
-
-    # The log-file engine-key type is needed to seed the host-consumed
-    # ``log-file`` register from the resolved CLI/config layers.
-    _log_file_type = get_engine_key_type("log-file")
-    assert _log_file_type is not None  # always a valid engine key
-
-    base_runner_cmd = config.runner or default_agent_runner(merged=merged_config)
 
     # Resolve strict_json: CLI > config. A source ``std/config::strict-json :=
     # VALUE`` write is applied at runtime when it updates the live setting.
@@ -264,70 +210,103 @@ def run(args: ExecArgs) -> None:
     else:
         resolved_timeout = config.timeout
 
-    # ----------------------------------------------------------------
-    # Resolve declared agents and wire each one against a single runner-backed
-    # factory whose per-agent command map merges in precedence order (high →
-    # low):
-    #
-    #     [exec.agents.<name>]   (config, per-agent)
-    #     source `agent` runner hint
-    #     resolved default runner (runner_cmd, the floor)
-    #
-    # The source program OWNS the agent name set: every named agent must be
-    # declared.  One factory backs ``prompt`` (the default) and every declared
-    # name; it dispatches by ``request.agent`` against ``per_agent_cmds``,
-    # falling back to the default runner (the floor).  The agent idle-timeout is
-    # start-resolved from CLI > [exec] config > engine default and fixed for the
-    # lifetime of this factory.  A source ``std/config::timeout := e`` write
-    # updates ONLY the live shell-exec timeout from its program point onward.
-    # The runner command resolves CLI flag > [exec] config > shared loop default
-    # (the same default used by agm loop/review).
-    decls = prepared.declared_agents
-    from agm.agl.ir.ids import AgentId
+    factory = value_driven_agent_factory(idle_timeout=resolved_timeout)
 
-    source_hints = {
-        AgentId(declaration.name, declaration.scope_path): declaration.runner
-        for declaration in decls
-        if declaration.runner is not None
-    }
-    config_overrides = {AgentId(name): command for name, command in config.agents.items()}
-    per_agent_cmds = {**source_hints, **config_overrides}
-    runner_cmd = args.runner or config.runner or base_runner_cmd
-    # Validate the resolved runner command eagerly: malformed quoting (e.g.
-    # unclosed quote) and whitespace-only values are caught here via
-    # split_command, which handles the ValueError from shlex.split.  This
-    # honours the exit-1 = pre-execution contract.
-    split_command(runner_cmd, kind="runner")
-    for declaration in decls:
-        cmd = per_agent_cmds.get(AgentId(declaration.name, declaration.scope_path))
-        if cmd is not None:
-            split_command(cmd, kind="runner")
-
-    factory = runner_backed_agent_factory(
-        default_runner_cmd=runner_cmd,
-        per_agent_cmds=per_agent_cmds,
-        idle_timeout=resolved_timeout,
+    # Resolve the CLI > config logging decision ONCE: it both drives the trace
+    # file prepared below and seeds the readable ``log`` register.
+    log_decision = resolve_log_decision(
+        cli_no_log=args.no_log,
+        cli_log=args.log,
+        cli_log_file=args.log_file,
+        config_log=config.log,
+        config_log_file=config.log_file,
     )
 
-    # ``prepare_program`` was already called above; the same ``PreparedProgram`` is
-    # reused for discovery and the run, so the source is loaded and scoped only
-    # once.  On a source with load/scope errors ``declared_agents`` is ``()`` and
-    # ``run_prepared`` resurfaces the captured diagnostic (exit 1).
+    # Seed only settings explicitly controlled by CLI/config. Runtime fallbacks
+    # are not seeds: passing them here would suppress a declared
+    # ``builtin var`` initializer.  The shared decoder preserves explicit
+    # ``None`` values for Option settings such as --no-timeout.  An AgL agent
+    # literal (``--agent``/``[exec] default-agent``) becomes an override
+    # spliced into the program's own compilation below rather than a seed
+    # value; a bad literal exits 1 here, before the module graph is loaded.
+    cli_values: dict[str, object | None] = {}
+    if args.strict_json is not None:
+        cli_values["strict-json"] = args.strict_json
+    if args.max_iters is not None:
+        cli_values["max-iters"] = args.max_iters
+    if args.timeout is not None:
+        cli_values["timeout"] = args.timeout
+    elif args.no_timeout:
+        cli_values["timeout"] = None
+    if args.no_log:
+        cli_values["log"] = False
+    elif args.log:
+        cli_values["log"] = True
+    if args.log_file is not None:
+        cli_values["log-file"] = args.log_file
+    elif args.no_log_file:
+        cli_values["log-file"] = None
+
+    engine_seeds = build_host_engine_seeds(
+        config=config,
+        primary_table=program_table,
+        fallback_table=toml_dict(merged_config.get("exec")),
+        cli_values=cli_values,
+        agent=args.agent,
+    )
+
+    # ----------------------------------------------------------------
+    # Assemble module roots and load + scope the graph ONCE, splicing any
+    # engine-setting overrides in as part of that same pass.  A source
+    # ``std/config::KEY := VALUE`` write takes effect at its program point and
+    # overrides the CLI flag, which overrides the config-file layer.
+    # ----------------------------------------------------------------
+    try:
+        mr_config = load_module_roots(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
+    except ValueError as exc:
+        print(f"Error: invalid module roots configuration: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+    # Resolve the lib_root path.
+    try:
+        stdlib_root = resolve_stdlib_root(home=ctx.home)
+    except StaleStdlibError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+    resolved_lib_root = resolve_lib_root(mr_config, home=ctx.home)
+
+    # The invocation root is the entry file's directory (for file exec) or
+    # the cwd (for -c inline exec).
+    if entry_path is not None:
+        invocation_root = entry_path.parent
+    else:
+        invocation_root = ctx.cwd
+
+    roots = assemble_roots(
+        invocation_root=invocation_root,
+        stdlib_root=stdlib_root,
+        lib_root=resolved_lib_root,
+        configured=mr_config.extra,
+        cli=args.module_paths,
+        cwd=ctx.cwd,
+    )
+
+    prepared = PipelineDriver.prepare_parsed_entry(
+        parsed,
+        roots=roots,
+        default_stdlib=not args.no_stdlib,
+        setting_overrides=engine_seeds.overrides,
+    )
+
+    # ``prepare_parsed_entry`` was already called above; the same ``PreparedProgram``
+    # is reused for discovery and the run, so the source is loaded and scoped only once.
     runtime = PipelineDriver(
         default_loop_limit=resolved_loop_limit,
         default_strict_json=resolved_strict_json,
-        default_agent=factory,
+        agent_dispatcher=factory,
         shell_exec_timeout=resolved_timeout,
         default_call_depth_limit=resolved_call_depth_limit,
     )
-    # Register every declared agent so the registered set equals the declared
-    # set: reconciliation always passes; config-only agents the source never
-    # declares stay inert (NOT registered).
-    for declaration in decls:
-        agent_id = AgentId(declaration.name, declaration.scope_path)
-        if agent_id in per_agent_cmds:
-            runtime.register_scoped_agent(declaration.scope_path, declaration.name, factory)
-
     discovery = runtime.discover_params(prepared)
     for diag in discovery.warnings:
         print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
@@ -375,16 +354,6 @@ def run(args: ExecArgs) -> None:
             print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
         raise SystemExit(1)
 
-    # Resolve the CLI > config logging decision ONCE: it both drives the trace
-    # file prepared here and seeds the readable ``log`` register below.
-    log_decision = resolve_log_decision(
-        cli_no_log=args.no_log,
-        cli_log=args.log,
-        cli_log_file=args.log_file,
-        config_log=config.log,
-        config_log_file=config.log_file,
-    )
-
     # Resolve + validate the trace log file up front.  --dry-run is
     # side-effect-free: no trace is written regardless of --log-file.  A source
     # ``std/config::log``/``log-file`` write takes effect at runtime via the host
@@ -394,55 +363,9 @@ def run(args: ExecArgs) -> None:
     else:
         log_file = prepare_trace_log_from_decision(log_decision, command_name="exec")
 
-    # Host policy for reflecting host-consumed ``builtin var`` writes
-    # (``runner``, ``log``, ``log-file``) into the live services during the run.
-    # A source ``std/config::runner := ...`` rebuilds the default agent from the
-    # new command (source-authoritative); ``log``/``log-file`` writes repoint the
-    # trace store.  The mid-run trace repoint must NOT truncate an existing file
-    # and must reuse the trace path already prepared for this run rather than
-    # minting a second timestamped one, so it goes through
-    # ``LiveTracePathResolver`` rather than ``prepare_trace_log``.
-    def _build_runner(command: str) -> AgentFn:
-        parse_command(command, kind="runner")
-        return runner_backed_agent_factory(
-            default_runner_cmd=command,
-            per_agent_cmds=per_agent_cmds,
-            idle_timeout=resolved_timeout,
-        )
-
     policy = HostSettingsPolicy(
-        build_runner=_build_runner,
         resolve_trace_path=LiveTracePathResolver(command_name="exec", auto_path=log_file),
     )
-
-    # Seed the host-consumed registers from the resolved host layers so a program
-    # reading these settings before any write observes the effective start value.
-    # A later source ``:=`` overrides the seed from its program point onward.
-    # ``log`` reuses the decision that drove the trace file, so the register and
-    # the trace can never disagree.  ``log-file`` keeps its own projection: only
-    # the register honours ``--no-log-file``.
-    seed_log_file = _project_option_text(
-        args.log_file, no_flag=args.no_log_file, key_name="log-file", key_type=_log_file_type
-    )
-    if seed_log_file is None:
-        seed_log_file = convert_config_value("log-file", config.log_file, _log_file_type)
-    _timeout_type = get_engine_key_type("timeout")
-    assert _timeout_type is not None
-    exec_raw_table = toml_dict(merged_config.get("exec"))
-    if args.timeout is not None:
-        timeout_seed_raw: object = args.timeout
-    elif args.no_timeout:
-        timeout_seed_raw = None
-    else:
-        timeout_seed_raw = raw_option_str(program_table, exec_raw_table, "timeout")
-        if timeout_seed_raw is None and resolved_timeout is not None:
-            timeout_seed_raw = format_timeout(resolved_timeout)
-    builtin_host_settings: dict[str, Value] = {
-        "runner": TextValue(runner_cmd),
-        "log": BoolValue(log_decision.enabled),
-        "log-file": seed_log_file,
-        "timeout": convert_config_value("timeout", timeout_seed_raw, _timeout_type),
-    }
 
     # Reuse the ``PreparedProgram`` from above — no second parse/scope of the source.
     # Pass the already-computed compiled from discovery and the program the
@@ -456,7 +379,7 @@ def run(args: ExecArgs) -> None:
         compiled=discovery.compiled,
         executable=param_preflight.executable,
         host_settings_policy=policy,
-        builtin_host_settings=builtin_host_settings,
+        builtin_host_settings=engine_seeds.values,
     )
 
     # Warnings live on their own channel and never affect the exit code;
@@ -512,5 +435,5 @@ def run(args: ExecArgs) -> None:
         raise SystemExit(1)
 
     # Uncaught AgL exception: print and exit 2.
-    print(result.error.to_message(include_trace_id=True), file=sys.stderr)
+    print(result.error.to_message(), file=sys.stderr)
     raise SystemExit(2)

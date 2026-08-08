@@ -30,7 +30,6 @@ from agm.agl.ir.contracts import (
     VariantDecode,
 )
 from agm.agl.ir.ids import NominalId
-from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.runtime.convert import (
     StrictJsonParseError,
     _clean_validation_message,
@@ -323,7 +322,7 @@ class TestDecodeValueHappy:
         assert result == DictValue(entries={"a": IntValue(1), "b": IntValue(2)})
 
     def test_record(self) -> None:
-        nominal = NominalId(ENTRY_ID, "Point")
+        nominal = NominalId(1)
         schema = RecordDecode(
             nominal=nominal,
             display_name="Point",
@@ -340,7 +339,7 @@ class TestDecodeValueHappy:
         )
 
     def test_enum_nullary(self) -> None:
-        nominal = NominalId(ENTRY_ID, "Color")
+        nominal = NominalId(1)
         schema = EnumDecode(
             nominal=nominal,
             display_name="Color",
@@ -353,7 +352,7 @@ class TestDecodeValueHappy:
         assert result == EnumValue(nominal=nominal, display_name="Color", variant="Red", fields={})
 
     def test_enum_with_payload(self) -> None:
-        nominal = NominalId(ENTRY_ID, "Result")
+        nominal = NominalId(1)
         schema = EnumDecode(
             nominal=nominal,
             display_name="Result",
@@ -421,7 +420,7 @@ class TestDecodeValueErrors:
 
     def test_record_type_got_non_dict(self) -> None:
         schema = RecordDecode(
-            nominal=NominalId(ENTRY_ID, "R"),
+            nominal=NominalId(1),
             display_name="R",
             fields=(("x", ScalarDecode(kind=ScalarKind.INT)),),
         )
@@ -430,7 +429,7 @@ class TestDecodeValueErrors:
 
     def test_record_missing_field(self) -> None:
         schema = RecordDecode(
-            nominal=NominalId(ENTRY_ID, "R"),
+            nominal=NominalId(1),
             display_name="R",
             fields=(("x", ScalarDecode(kind=ScalarKind.INT)),),
         )
@@ -439,7 +438,7 @@ class TestDecodeValueErrors:
 
     def test_enum_type_got_non_dict(self) -> None:
         schema = EnumDecode(
-            nominal=NominalId(ENTRY_ID, "E"),
+            nominal=NominalId(1),
             display_name="E",
             variants=(VariantDecode(name="A", fields=()),),
         )
@@ -448,7 +447,7 @@ class TestDecodeValueErrors:
 
     def test_enum_missing_case_tag(self) -> None:
         schema = EnumDecode(
-            nominal=NominalId(ENTRY_ID, "E"),
+            nominal=NominalId(1),
             display_name="E",
             variants=(VariantDecode(name="A", fields=()),),
         )
@@ -457,7 +456,7 @@ class TestDecodeValueErrors:
 
     def test_enum_case_tag_not_string(self) -> None:
         schema = EnumDecode(
-            nominal=NominalId(ENTRY_ID, "E"),
+            nominal=NominalId(1),
             display_name="E",
             variants=(VariantDecode(name="A", fields=()),),
         )
@@ -466,7 +465,7 @@ class TestDecodeValueErrors:
 
     def test_enum_unknown_variant(self) -> None:
         schema = EnumDecode(
-            nominal=NominalId(ENTRY_ID, "E"),
+            nominal=NominalId(1),
             display_name="E",
             variants=(VariantDecode(name="A", fields=()),),
         )
@@ -475,7 +474,7 @@ class TestDecodeValueErrors:
 
     def test_enum_missing_payload_field(self) -> None:
         schema = EnumDecode(
-            nominal=NominalId(ENTRY_ID, "E"),
+            nominal=NominalId(1),
             display_name="E",
             variants=(
                 VariantDecode(
@@ -499,7 +498,7 @@ class TestDecodeValueRefDecode:
     @staticmethod
     def _tree_defs() -> dict[str, "object"]:
         """A self-recursive `Tree` decode schema: Leaf | Node(value, left, right)."""
-        nominal = NominalId(ENTRY_ID, "Tree")
+        nominal = NominalId(1)
         tree_decode = EnumDecode(
             nominal=nominal,
             display_name="Tree",
@@ -532,7 +531,7 @@ class TestDecodeValueRefDecode:
             }
         result = decode_value(schema, payload, defs)
         assert isinstance(result, EnumValue)
-        assert result.nominal == NominalId(ENTRY_ID, "Tree")
+        assert result.nominal == NominalId(1)
         assert result.variant == "Node"
         assert result.fields["value"] == IntValue(4)
         # Walk down the "right" spine to confirm every level decoded.
@@ -549,7 +548,7 @@ class TestDecodeValueRefDecode:
     def test_ref_nested_inside_array_and_record(self) -> None:
         """A RefDecode reachable through ArrayDecode/RecordDecode fields resolves the same way."""
         defs = self._tree_defs()
-        category_nominal = NominalId(ENTRY_ID, "Wrapper")
+        category_nominal = NominalId(2)
         schema = RecordDecode(
             nominal=category_nominal,
             display_name="Wrapper",

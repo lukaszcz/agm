@@ -2,13 +2,30 @@
   "scenarios": [
     {
       "name": "all_return_paths",
-      "params": {"mode": "full"},
-      "agents": {"helper": ["ok"]},
+      "params": {
+        "mode": "full"
+      },
+      "agents": {
+        "helper": [
+          "ok"
+        ]
+      },
       "expect": {
         "stdout": "mode full\nguard -1 10\nbefore stop\nloop 3\ntry from try from catch\nlambda 12\nrecursive 7\nwiden 1\nagent ok\n",
-        "calls": {"helper": 1},
+        "calls": {
+          "helper": 1
+        },
         "prompts": [
-          {"agent": "helper", "call": 0, "contains": ["give a short value"]}
+          {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "helper"
+            },
+            "call": 0,
+            "contains": [
+              "give a short value"
+            ]
+          }
         ]
       }
     }

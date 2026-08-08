@@ -2,48 +2,87 @@
   "scenarios": [
     {
       "name": "no_exception_skips_catches",
-      "params": {"mode": "calm"},
-      "agents": {"reviewer": []},
+      "params": {
+        "mode": "calm"
+      },
+      "agents": {
+        "reviewer": []
+      },
       "expect": {
         "stdout": "calm\nbody end\nafter try\n",
-        "calls": {"reviewer": 0}
+        "calls": {
+          "reviewer": 0
+        }
       }
     },
     {
       "name": "valid_parse_no_exception",
-      "params": {"mode": "parse"},
-      "agents": {"reviewer": ["{\"$case\": \"Pass\"}"]},
+      "params": {
+        "mode": "parse"
+      },
+      "agents": {
+        "reviewer": [
+          "{\"$case\": \"Pass\"}"
+        ]
+      },
       "expect": {
         "stdout": "parsed true\nbody end\nafter try\n",
-        "calls": {"reviewer": 1}
+        "calls": {
+          "reviewer": 1
+        }
       }
     },
     {
       "name": "parse_error_routes_to_first_clause",
-      "params": {"mode": "parse"},
-      "agents": {"reviewer": ["garbage"]},
+      "params": {
+        "mode": "parse"
+      },
+      "agents": {
+        "reviewer": [
+          "garbage"
+        ]
+      },
       "expect": {
-        "stdout": "parse error from reviewer after 1\nafter try\n",
-        "calls": {"reviewer": 1}
+        "stdout": "parse error from Agent::AgentCommand(command = \"reviewer\") after 1\nafter try\n",
+        "calls": {
+          "reviewer": 1
+        }
       }
     },
     {
       "name": "abort_routes_past_parse_clause",
-      "params": {"mode": "abort"},
-      "agents": {"reviewer": []},
+      "params": {
+        "mode": "abort"
+      },
+      "agents": {
+        "reviewer": []
+      },
       "expect": {
         "stdout": "abort: stop now\nafter try\n",
-        "calls": {"reviewer": 0}
+        "calls": {
+          "reviewer": 0
+        }
       }
     },
     {
       "name": "match_error_falls_to_wildcard",
-      "params": {"mode": "match"},
-      "agents": {"reviewer": []},
+      "params": {
+        "mode": "match"
+      },
+      "agents": {
+        "reviewer": []
+      },
       "expect": {
-        "stdout_contains": ["other: ", "after try\n"],
-        "stdout_not_contains": ["body end"],
-        "calls": {"reviewer": 0}
+        "stdout_contains": [
+          "other: ",
+          "after try\n"
+        ],
+        "stdout_not_contains": [
+          "body end"
+        ],
+        "calls": {
+          "reviewer": 0
+        }
       }
     }
   ]

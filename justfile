@@ -4,6 +4,11 @@ default_prefix := env_var_or_default("HOME", "") + "/.local"
 prefix := default_prefix
 prompts_dir := justfile_directory() + "/prompts"
 
+# Display the available recipes when no recipe is specified
+[private]
+default:
+    @just --list
+
 # Create the virtualenv and install the project with dev dependencies
 setup:
     uv venv .venv --python 3.12
@@ -19,12 +24,16 @@ lint:
     uv run ruff check src/ tests/
     uv run ruff format --check src/ tests/
 
+# Check for dead code in the application package
+vulture:
+    uv run vulture src/agm/ --min-confidence 80
+
 # Type-check with mypy
 typecheck:
     MYPYPATH=src:stubs uv run mypy src/agm/ --strict --python-version 3.12
 
-# Run linting, tests, and type-checking
-check: lint test typecheck
+# Run type-checking, linting, dead-code checks, tests
+check: typecheck lint vulture test
 
 # Install the agm CLI into an isolated environment
 install-agm:

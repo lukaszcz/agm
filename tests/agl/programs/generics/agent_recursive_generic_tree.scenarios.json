@@ -9,18 +9,30 @@
       },
       "expect": {
         "stdout": "3\n",
-        "calls": {"builder": 1},
+        "calls": {
+          "builder": 1
+        },
         "prompts": [
           {
-            "agent": "builder", "call": 0,
-            "schema_contains": ["Tree_int", "$ref", "$defs"]
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "builder"
+            },
+            "call": 0,
+            "schema_contains": [
+              "Tree_int",
+              "$ref",
+              "$defs"
+            ]
           }
         ]
       }
     },
     {
       "name": "strict_json_mode",
-      "runtime": {"default_strict_json": true},
+      "runtime": {
+        "default_strict_json": true
+      },
       "agents": {
         "builder": [
           "{\"$case\": \"Node\", \"value\": 7, \"left\": {\"$case\": \"Leaf\"}, \"right\": {\"$case\": \"Leaf\"}}"
@@ -28,7 +40,9 @@
       },
       "expect": {
         "stdout": "7\n",
-        "calls": {"builder": 1}
+        "calls": {
+          "builder": 1
+        }
       }
     },
     {
@@ -41,7 +55,9 @@
       },
       "expect": {
         "stdout": "4\n",
-        "calls": {"builder": 2}
+        "calls": {
+          "builder": 2
+        }
       }
     }
   ]

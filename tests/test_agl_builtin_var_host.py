@@ -1,9 +1,9 @@
 """Host-service reconfiguration for host-consumed ``builtin var`` settings.
 
-Writing the ``runner``, ``log``, or ``log-file`` engine settings (via
-``std/config::NAME := ...``) reflects into the live host services: ``runner``
-rebuilds the default agent that unnamed ``ask`` calls dispatch through, and
-``log``/``log-file`` repoint the trace store.  These tests drive the ``agm exec``
+Writing the ``default-agent``, ``log``, or ``log-file`` engine settings (via
+``std/config::NAME := ...``) updates the host-visible state: ``default-agent``
+changes what unnamed ``ask`` calls dispatch through, and ``log``/``log-file``
+repoint the trace store. These tests drive the ``agm exec``
 command with the agent runner subprocess mocked, plus a direct pipeline test with
 a recording policy for the reconfiguration hooks.
 """
@@ -11,21 +11,17 @@ a recording policy for the reconfiguration hooks.
 from __future__ import annotations
 
 import json
-import shlex
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from agm.agent.defaults import DEFAULT_AGENT_RUNNER
-from agm.agl.modules.roots import RootSet
-from agm.agl.pipeline import PipelineDriver, RunResult
-from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.host_settings import HostSettingsPolicy
-from agm.agl.semantics.values import TextValue, Value
 from agm.cli_support.args import ExecArgs
 from agm.commands import exec as exec_command
+from agm.config.context import ConfigContext
+from tests.conftest import FakeAgentTransport
 
 _STDLIB = Path(__file__).resolve().parent.parent / "stdlib"
 
@@ -39,7 +35,6 @@ def _exec_args(
         param_tokens=[],
         strict_json=None,
         max_iters=None,
-        runner=None,
         no_log=no_log,
         log=log,
         log_file=log_file,
@@ -72,86 +67,117 @@ def _trace_kinds_and_prints(path: Path) -> tuple[list[str], list[str]]:
     return kinds, rendered
 
 
-def _patch_runner(received_cmds: list[list[str]]) -> object:
-    """Context manager stack that records the runner command of every dispatch."""
-    from agm.agent.runner import PreparedPromptRun
-
-    def fake_prepare(
-        rendered_prompt: str, *, runner: str, temp_files: object, env: object
-    ) -> object:
-        received_cmds.append(shlex.split(runner))
-        return PreparedPromptRun(
-            command=shlex.split(runner),
-            effective_file=Path("/tmp/p.md"),
-            env={},
-            temp_files=[],
-        )
-
-    return patch("agm.agent.runner.prepare_rendered_prompt_run", side_effect=fake_prepare)
-
-
-def _ok_run_result() -> MagicMock:
-    return MagicMock(
-        returncode=0, stdout="ok", stderr="", elapsed=0.1, timed_out=False, spawn_error=None
+def _write_command_stdlib(root: Path, config: str) -> Path:
+    """Create the minimal stdlib needed to exercise the real exec command."""
+    stdlib_root = root / "stdlib"
+    config_path = stdlib_root / "std" / "config.agl"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        "import std/core using Agent\n"
+        'builtin var default-agent: Agent = AgentCommand("echo")\n' + config,
+        encoding="utf-8",
     )
+    (config_path.parent / "core.agl").write_text(
+        (_STDLIB / "std" / "core.agl").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    return stdlib_root
 
 
-class TestRunnerReconfiguration:
-    def test_runner_write_reconfigures_default_agent(self, tmp_path: Path) -> None:
-        """A ``runner :=`` before an ``ask`` dispatches through the new command."""
+class TestCommandEngineSeeding:
+    """The command passes only explicit host controls into builtin registers."""
+
+    def test_invalid_config_timeout_does_not_create_a_seed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        stdlib_root = _write_command_stdlib(
+            tmp_path,
+            'builtin var timeout: Option[text] = Option[text]::Some("2s")\n',
+        )
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            'open import std/config\nstd/config::runner := "codex-runner"\nask("hi")\n'
+        agl_file.write_text("import std/config\nprint std/config::timeout\n", encoding="utf-8")
+        config_dir = tmp_path / ".agm"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text("[exec]\ntimeout = 0\n")
+        monkeypatch.setattr(exec_command, "resolve_stdlib_root", lambda *, home: stdlib_root)
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=tmp_path, proj_dir=None, cwd=tmp_path),
         )
 
-        received: list[list[str]] = []
-        with (
-            _patch_runner(received),
-            patch("agm.agent.runner.run_prepared_prompt_result", return_value=_ok_run_result()),
-            patch("agm.agent.runner.cleanup_temp_files"),
-        ):
+        exec_command.run(_exec_args(agl_file))
+
+        assert capsys.readouterr().out == 'Option::Some(value = "2s")\n'
+
+    def test_declared_invalid_timeout_returns_agl_run_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        stdlib_root = _write_command_stdlib(
+            tmp_path,
+            'builtin var timeout: Option[text] = Option[text]::Some("bogus")\n',
+        )
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("import std/config\n()\n", encoding="utf-8")
+        monkeypatch.setattr(exec_command, "resolve_stdlib_root", lambda *, home: stdlib_root)
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=tmp_path, proj_dir=None, cwd=tmp_path),
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args(agl_file))
 
-        # The runner write precedes the ask, so only the new command dispatches.
-        assert received == [["codex-runner"]]
+        assert exc_info.value.code == 2
 
-    def test_no_runner_write_uses_default_runner(self, tmp_path: Path) -> None:
-        """Without a ``runner :=`` the default runner floor still dispatches (regression)."""
+
+class TestDefaultAgentReconfiguration:
+    def test_default_agent_write_reconfigures_ask(
+        self, tmp_path: Path, fake_agent_transport: FakeAgentTransport
+    ) -> None:
+        """A ``default-agent :=`` selects the following ``ask`` dispatch."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "open import std/config\n"
+            'std/config::default-agent := AgentCommand("codex-runner")\n'
+            'ask("hi")\n'
+        )
+
+        exec_command.run(_exec_args(agl_file))
+
+        assert [argv for _, argv in fake_agent_transport.calls] == [["codex-runner"]]
+
+    def test_no_default_agent_write_uses_the_stdlib_default_agent(
+        self, tmp_path: Path, fake_agent_transport: FakeAgentTransport
+    ) -> None:
+        """The stdlib initializer supplies the default AgentClaude value."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text('ask("hi")\n')
 
-        received: list[list[str]] = []
-        with (
-            _patch_runner(received),
-            patch("agm.agent.runner.run_prepared_prompt_result", return_value=_ok_run_result()),
-            patch("agm.agent.runner.cleanup_temp_files"),
-        ):
-            exec_command.run(_exec_args(agl_file))
+        exec_command.run(_exec_args(agl_file))
 
-        assert received == [["claude", "-p"]]
+        assert [argv for _, argv in fake_agent_transport.calls] == [
+            ["claude", "-p", "--model", "sonnet", "--effort", "medium"]
+        ]
 
-    def test_runner_write_updates_bare_agents_but_not_dedicated_agents(
-        self, tmp_path: Path
+    def test_default_agent_write_does_not_change_explicit_agent_values(
+        self, tmp_path: Path, fake_agent_transport: FakeAgentTransport
     ) -> None:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
             "open import std/config\n"
-            'agent fixed = "fixed-runner"\n'
-            "agent inherited\n"
-            'std/config::runner := "new-runner"\n'
+            'let fixed = AgentCommand("fixed-runner")\n'
+            'std/config::default-agent := AgentCommand("new-runner")\n'
             'ask("one", agent = fixed)\n'
-            'ask("two", agent = inherited)\n'
+            'ask("two")\n'
         )
 
-        received: list[list[str]] = []
-        with (
-            _patch_runner(received),
-            patch("agm.agent.runner.run_prepared_prompt_result", return_value=_ok_run_result()),
-            patch("agm.agent.runner.cleanup_temp_files"),
-        ):
-            exec_command.run(_exec_args(agl_file))
+        exec_command.run(_exec_args(agl_file))
 
-        assert received == [["fixed-runner"], ["new-runner"]]
+        assert [argv for _, argv in fake_agent_transport.calls] == [
+            ["fixed-runner"],
+            ["new-runner"],
+        ]
 
 
 class TestTraceReconfiguration:
@@ -197,7 +223,7 @@ class TestTraceReconfiguration:
 
         exec_command.run(_exec_args(agl_file))
 
-        logs = list(tmp_path.glob("exec-*.log"))
+        logs = list(tmp_path.glob("exec-*.jsonl"))
         assert len(logs) == 1, f"expected exactly one auto-named log, got {logs}"
         text = logs[0].read_text(encoding="utf-8")
         import json
@@ -253,7 +279,7 @@ class TestTraceReconfiguration:
         with patch("agm.core.log.datetime", _StepClock()):
             exec_command.run(_exec_args(agl_file, no_log=False, log=True))
 
-        logs = list(tmp_path.glob("exec-*.log"))
+        logs = list(tmp_path.glob("exec-*.jsonl"))
         assert len(logs) == 1, f"the run split its trace across {logs}"
         kinds, rendered = _trace_kinds_and_prints(logs[0])
         assert "run_start" in kinds
@@ -279,7 +305,7 @@ class TestTraceReconfiguration:
         with patch("agm.core.log.datetime", _StepClock()):
             exec_command.run(_exec_args(agl_file))
 
-        logs = list(tmp_path.glob("exec-*.log"))
+        logs = list(tmp_path.glob("exec-*.jsonl"))
         assert len(logs) == 1, f"re-enabling logging minted a second file: {logs}"
         _, rendered = _trace_kinds_and_prints(logs[0])
         assert rendered == ["first", "third"]
@@ -300,126 +326,25 @@ class TestTraceReconfiguration:
         with patch("agm.core.log.datetime", _StepClock()):
             exec_command.run(_exec_args(agl_file, no_log=False, log_file=str(trace_path)))
 
-        assert list(auto_dir.glob("exec-*.log")) == []
+        assert list(auto_dir.glob("exec-*.jsonl")) == []
         kinds, rendered = _trace_kinds_and_prints(trace_path)
         assert "run_start" in kinds
         assert "run_end" in kinds
         assert rendered == ["before", "after"]
 
 
-class _RecordingPolicy:
-    """A host policy whose hooks record every reconfiguration request."""
+def test_trace_reconfiguration_disables_logging_after_a_path_failure(tmp_path: Path) -> None:
+    """A trace path failure is best-effort and leaves the trace disabled."""
+    from agm.agl.runtime.host_settings import HostSettingsReconfigurer
+    from agm.agl.runtime.trace import TraceStore
 
-    def __init__(self) -> None:
-        self.runner_commands: list[str] = []
-        self.trace_calls: list[tuple[bool, str | None]] = []
-
-    def build_runner(self, command: str) -> AgentFn:
-        self.runner_commands.append(command)
-        return lambda req: "ok"
-
-    def resolve_trace_path(self, enabled: bool, log_file: str | None) -> Path | None:
-        self.trace_calls.append((enabled, log_file))
-        return None
-
-
-def _run_program_with_policy(
-    source: str, *, policy: HostSettingsPolicy, seed: dict[str, Value] | None = None
-) -> RunResult:
-    rt = PipelineDriver()
-    prepared = rt.prepare_program(
-        source, entry_path=None, roots=RootSet(roots=frozenset({_STDLIB}))
+    trace = TraceStore(path=tmp_path / "trace.jsonl")
+    policy = HostSettingsPolicy(
+        resolve_trace_path=lambda enabled, log_file: (_ for _ in ()).throw(OSError("unwritable"))
     )
-    result = rt.run_prepared(prepared, host_settings_policy=policy, builtin_host_settings=seed)
-    assert isinstance(result, RunResult)
-    return result
 
+    HostSettingsReconfigurer(trace=trace, policy=policy).reconfigure_trace(
+        enabled=True, log_file=None
+    )
 
-class TestReconfigureHooks:
-    def test_hooks_fire_on_host_consumed_writes(self) -> None:
-        recorder = _RecordingPolicy()
-        policy = HostSettingsPolicy(
-            build_runner=recorder.build_runner, resolve_trace_path=recorder.resolve_trace_path
-        )
-        source = (
-            "open import std/config\n"
-            'std/config::runner := "codex"\n'
-            "std/config::log := true\n"
-            'std/config::log-file := Some("out.jsonl")\n'
-            "print 1\n"
-        )
-        result = _run_program_with_policy(source, policy=policy)
-
-        assert result.ok, f"expected success but got: {result.error!r}"
-        assert recorder.runner_commands == ["codex"]
-        # Both the ``log`` and ``log-file`` writes recompute the trace destination.
-        assert (True, None) in recorder.trace_calls
-        assert (True, "out.jsonl") in recorder.trace_calls
-
-    def test_runner_build_value_error_becomes_agl_value_error(self) -> None:
-        def failing_build(command: str) -> AgentFn:
-            raise ValueError("bad runner command")
-
-        policy = HostSettingsPolicy(
-            build_runner=failing_build, resolve_trace_path=lambda enabled, log_file: None
-        )
-        source = 'open import std/config\nstd/config::runner := "boom"\nprint 1\n'
-        result = _run_program_with_policy(source, policy=policy)
-
-        assert not result.ok
-        assert result.error is not None
-        assert result.error.type_name == "ValueError"
-
-    def test_failed_runner_reconfigure_rolls_back_register(self) -> None:
-        def failing_build(command: str) -> AgentFn:
-            raise ValueError(f"cannot build {command}")
-
-        policy = HostSettingsPolicy(
-            build_runner=failing_build, resolve_trace_path=lambda enabled, log_file: None
-        )
-        source = (
-            "open import std/config\n"
-            "try\n"
-            '  std/config::runner := "boom"\n'
-            "catch Exception as error => ()\n"
-            "let retained = std/config::runner\n"
-            "retained\n"
-        )
-        result = _run_program_with_policy(source, policy=policy)
-
-        assert result.ok
-        assert result.bindings["retained"] == TextValue(DEFAULT_AGENT_RUNNER)
-
-    def test_source_trace_directory_failure_is_best_effort(
-        self,
-        tmp_path: Path,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        recorder = _RecordingPolicy()
-        recovered_path = tmp_path / "recovered.jsonl"
-        calls = 0
-
-        def fail_then_recover(enabled: bool, log_file: str | None) -> Path | None:
-            nonlocal calls
-            calls += 1
-            if calls != 2:
-                raise OSError("read-only filesystem")
-            return recovered_path
-
-        policy = HostSettingsPolicy(
-            build_runner=recorder.build_runner,
-            resolve_trace_path=fail_then_recover,
-        )
-        result = _run_program_with_policy(
-            "open import std/config\n"
-            'std/config::log-file := Some("nested/one.jsonl")\n'
-            'std/config::log-file := Some("nested/two.jsonl")\n'
-            'std/config::log-file := Some("nested/three.jsonl")\n'
-            "print 1\n",
-            policy=policy,
-        )
-
-        assert result.ok
-        assert result.trace_path is None
-        assert not recovered_path.exists()
-        assert capsys.readouterr().err.count("trace logging disabled") == 1
+    assert trace.path is None

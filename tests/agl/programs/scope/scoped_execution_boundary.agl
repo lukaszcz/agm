@@ -7,7 +7,7 @@ scope Workflow
 record Task
   name: text
   children: array[Task]
-agent reviewer = "reviewer"
+let reviewer = AgentCommand("reviewer")
 end Workflow
 
 enum Workflow::Status

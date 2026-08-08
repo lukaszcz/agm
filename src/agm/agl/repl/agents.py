@@ -11,7 +11,7 @@ an injected *confirm* callback so the wrapper stays UI-free and unit-testable wi
 a fake callback.
 
 Cancellation — a declined confirmation or a Ctrl-C during a live call — raises
-:class:`AgentCancelled`.  The registry (``AgentRegistry.dispatch``) only catches
+:class:`AgentCancelled`. The value dispatcher only catches
 ``AgentCallHostError``, so :class:`AgentCancelled` propagates out of the wrapped
 callable into the session, which stops the current entry while preserving effects
 completed before cancellation.
@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
+from agm.agl.runtime.render import render_value
 from agm.agl.runtime.request import AgentCancelled
 
 if TYPE_CHECKING:
@@ -75,9 +76,10 @@ class ConfirmingAgent:
 
     def __call__(self, request: "AgentRequest") -> "AgentResponse | str":
         if self._mode.mode == "confirm":
-            decision = self._confirm(request.agent, request.prompt)
+            agent_label = render_value(request.agent)
+            decision = self._confirm(agent_label, request.prompt)
             if decision == "no":
-                raise AgentCancelled(request.agent, "declined")
+                raise AgentCancelled(agent_label, "declined")
             if decision == "always":
                 self._mode.mode = "auto"
             # ``"yes"`` and ``"always"`` both fall through to dispatch.
@@ -88,4 +90,4 @@ class ConfirmingAgent:
         try:
             return self._underlying(request)
         except KeyboardInterrupt as exc:
-            raise AgentCancelled(request.agent, "interrupted") from exc
+            raise AgentCancelled(render_value(request.agent), "interrupted") from exc

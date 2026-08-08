@@ -2,8 +2,12 @@
   "scenarios": [
     {
       "name": "open_and_qualified_imports",
-      "module_roots": ["program_modules/generics/imported_types"],
-      "params": {"seed": 4},
+      "module_roots": [
+        "program_modules/generics/imported_types"
+      ],
+      "params": {
+        "seed": 4
+      },
       "expect": {
         "stdout": "4\n7\n4\nsome 9\nnone\n",
         "calls": {}
@@ -11,8 +15,12 @@
     },
     {
       "name": "different_imported_instantiation_value",
-      "module_roots": ["program_modules/generics/imported_types"],
-      "params": {"seed": 12},
+      "module_roots": [
+        "program_modules/generics/imported_types"
+      ],
+      "params": {
+        "seed": 12
+      },
       "expect": {
         "stdout": "12\n7\n12\nsome 17\nnone\n",
         "calls": {}

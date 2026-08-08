@@ -2,7 +2,9 @@
   "scenarios": [
     {
       "name": "recursion_updates",
-      "params": {"n": 3},
+      "params": {
+        "n": 3
+      },
       "expect": {
         "stdout": "3\n30\n",
         "calls": {}
@@ -10,7 +12,9 @@
     },
     {
       "name": "base_case_only",
-      "params": {"n": 0},
+      "params": {
+        "n": 0
+      },
       "expect": {
         "stdout": "0\n0\n",
         "calls": {}

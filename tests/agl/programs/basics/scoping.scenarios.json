@@ -2,18 +2,30 @@
   "scenarios": [
     {
       "name": "inner_shadow_does_not_escape",
-      "params": {"mode": "shadow"},
-      "expect": {"stdout": "branch 2\nafter 1\n3\n"}
+      "params": {
+        "mode": "shadow"
+      },
+      "expect": {
+        "stdout": "branch 2\nafter 1\n3\n"
+      }
     },
     {
       "name": "branch_reads_outer_binding",
-      "params": {"mode": "plain"},
-      "expect": {"stdout": "branch kept 1\nafter 1\n3\n"}
+      "params": {
+        "mode": "plain"
+      },
+      "expect": {
+        "stdout": "branch kept 1\nafter 1\n3\n"
+      }
     },
     {
       "name": "else_leaves_var_untouched",
-      "params": {"mode": "other"},
-      "expect": {"stdout": "\nafter 1\n3\n"}
+      "params": {
+        "mode": "other"
+      },
+      "expect": {
+        "stdout": "\nafter 1\n3\n"
+      }
     }
   ]
 }

@@ -7,8 +7,7 @@ enum Outcome
 
 param fallback
 
-agent worker
-
+let worker = AgentCommand("worker")
 let first: Outcome = ask("Attempt the task.", agent = worker)
 
 if

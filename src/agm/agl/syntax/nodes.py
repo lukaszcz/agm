@@ -103,7 +103,12 @@ class ImportItem:
 
 @dataclass(frozen=True, slots=True)
 class ImportDecl:
-    """``[open] import MODPATH[/*] [as ALIAS] [using…|hiding…]`` declaration."""
+    """``[open] import MODPATH[/*] [as ALIAS] [using…|hiding…]`` declaration.
+
+    ``scope_path`` is non-empty when the declaration is a region item: the
+    region's own path, not to be confused with an ``ImportItem``'s
+    ``scope_path``, which selects a member inside the *imported* module.
+    """
 
     module_path: tuple[str, ...]
     wildcard: bool
@@ -113,6 +118,7 @@ class ImportDecl:
     items: tuple[ImportItem, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    scope_path: tuple[ScopeSegment, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,7 +134,13 @@ class ExportItem:
 
 @dataclass(frozen=True, slots=True)
 class ExportDecl:
-    """``export MODPATH[/*] [using…|hiding…]`` declaration."""
+    """``export MODPATH[/*] [using…|hiding…]`` declaration.
+
+    ``scope_path`` is non-empty when the declaration is a region item: the
+    forwarded atoms are re-rooted under it. Not to be confused with an
+    ``ExportItem``'s ``scope_path``, which selects a member inside the
+    *forwarded* module.
+    """
 
     module_path: tuple[str, ...]
     wildcard: bool
@@ -136,6 +148,7 @@ class ExportDecl:
     items: tuple[ExportItem, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    scope_path: tuple[ScopeSegment, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -400,7 +413,7 @@ class Call:
     (which desugars to ``Call(callee=f, args=(x,), named_args=())``.
 
     ``type_args`` is set by the typed-call syntax ``callee::[T](args)``
-    (e.g. ``ask-request::[Review](...)``); it is ``()`` for ordinary calls.
+    (e.g. ``ask::[Review](...)``); it is ``()`` for ordinary calls.
     The type arguments are static ``TypeExpr`` values resolved by the type checker —
     they are never evaluated at runtime.
     """
@@ -1035,6 +1048,10 @@ class LetDecl:
     the AST itself makes no claim about later-stage execution support. ``node_id``
     identifies the let match site, not any individual binder; binder identities
     come from the pattern nodes.
+
+    ``scope_path`` is non-empty only for the ``let A::x = expr`` shorthand, which
+    the parser reinterprets from a root-position bare qualifier chain pattern;
+    ``pattern`` is then a plain ``VarPattern`` for the chain's member name.
     """
 
     pattern: Pattern
@@ -1042,6 +1059,7 @@ class LetDecl:
     value: Expr
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    scope_path: tuple[ScopeSegment, ...] = ()
 
 
 def simple_let_pattern_name(pattern: Pattern) -> str | None:
@@ -1055,13 +1073,17 @@ def simple_let_pattern_name(pattern: Pattern) -> str | None:
 
 @dataclass(frozen=True, slots=True)
 class VarDecl:
-    """``var name [: type] = expr`` — mutable binding (scopes over continuation)."""
+    """``var [scope_path::]name [: type] = expr`` — mutable binding (scopes over continuation).
+
+    ``scope_path`` is non-empty for the ``var A::count = expr`` shorthand.
+    """
 
     name: str
     type_ann: TypeExpr | None
     value: Expr
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    scope_path: tuple[ScopeSegment, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1182,6 +1204,11 @@ class ParamDecl:
     source omits it.
 
     The ``default`` expression is optional; ``None`` when omitted.
+
+    ``scope_path`` is non-empty for a ``param`` declared as a member of a named
+    scope region; there is no declaration-path shorthand for ``param``, so this
+    is always the enclosing region's path, never a prefix parsed from the
+    declaration head itself.
     """
 
     name: str
@@ -1189,6 +1216,34 @@ class ParamDecl:
     default: Expr | None
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    scope_path: tuple[ScopeSegment, ...] = ()
+
+
+def scoped_public_name(scope_path: tuple[ScopeSegment, ...], name: str) -> str:
+    """Return the full path spelling of a scoped binding's or param's public name.
+
+    A root declaration's public name is its bare name; a scoped one's is its
+    full path spelling (``"Deploy::region"``), matching how the language
+    itself addresses the member from outside its scope. This is display
+    text, not an identity key — callers that need the scope path keep it
+    structured rather than recovering it by splitting this spelling.
+
+    Takes the syntactic scope path (``ScopeSegment`` nodes); see
+    ``resolved_public_name`` for the same spelling from an already-resolved
+    string path.
+    """
+    return resolved_public_name(tuple(segment.name for segment in scope_path), name)
+
+
+def resolved_public_name(scope_path: tuple[str, ...], name: str) -> str:
+    """Return the full path spelling of a scoped binding's or param's public name.
+
+    Takes an already-resolved scope path (plain names, as scope-node maps key
+    on); spells the same public name as ``scoped_public_name``.
+    """
+    from agm.agl.modules.ids import spell_scope_path
+
+    return spell_scope_path((*scope_path, name))
 
 
 @dataclass(frozen=True, slots=True)
@@ -1201,22 +1256,6 @@ class ProgramDecl:
 
 
 @dataclass(frozen=True, slots=True)
-class AgentDecl:
-    """``agent NAME [= "runner string"]`` declaration.
-
-    ``runner`` is the optional static runner-command hint (a literal string
-    with NO interpolation); ``None`` for a bare declaration.
-    In AgL, agent names are ordinary value bindings of type ``agent``.
-    """
-
-    name: str
-    runner: str | None
-    span: SourceSpan = dc_field(compare=False)
-    node_id: int = dc_field(compare=False)
-    scope_path: tuple[ScopeSegment, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
 class BuiltinVarDecl:
     """``builtin var NAME : Type`` declaration — a body-less, runtime-backed,
     MUTABLE binding.
@@ -1224,17 +1263,24 @@ class BuiltinVarDecl:
     Mirrors ``builtin def`` / ``builtin record`` (a host-provided declaration with
     a signature but no body).  A ``builtin var`` names an engine setting whose
     value lives in an interpreter register: programs read it as an ordinary value
-    and assign it with ``:=``.  The declaration itself introduces no initializer
-    and lowers to nothing.
+    and assign it with ``:=``.  An optional constant initializer supplies the
+    engine default when the host has not seeded the key; the declaration itself
+    still introduces no program initializer.
 
     ``name``      — the declared engine key (kebab-case, e.g. ``"max-iters"``).
-    ``type_ann``  — the mandatory declared type (no value expression).
+    ``type_ann``  — the mandatory declared type.
+    ``default``   — an optional constant expression of that type.
+
+    ``scope_path`` is non-empty when the declaration sits inside a named scope
+    region; it has no declaration-path shorthand of its own.
     """
 
     name: str
     type_ann: TypeExpr
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    default: Expr | None = None
+    scope_path: tuple[ScopeSegment, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1264,18 +1310,35 @@ class ScopeRegion:
     node_id: int = dc_field(compare=False)
 
 
-ScopedDeclaration = FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias | AgentDecl
+ScopedDeclaration = FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias
 
 
 def is_scoped_declaration(node: object) -> TypeGuard[ScopedDeclaration]:
     """Whether *node* is a declaration owned by a non-root named scope."""
-    return isinstance(
-        node, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias, AgentDecl)
-    ) and bool(node.scope_path)
+    return isinstance(node, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias)) and bool(
+        node.scope_path
+    )
+
+
+def static_items(items: tuple[Item, ...]) -> Iterator[Item]:
+    """Yield block items, descending into named scope regions.
+
+    Named scope regions are transparent to whole-module item collection: a
+    region's own items are spliced into its parent's stream, in textual
+    order, so a caller that needs every item regardless of nesting depth —
+    e.g. discovering every ``param`` declaration for its external key — walks
+    one flat sequence. ``static_type_items`` and ``static_function_items``
+    are this walk narrowed to one item kind.
+    """
+    for item in items:
+        if isinstance(item, ScopeRegion):
+            yield from static_items(item.items)
+        else:
+            yield item
 
 
 def static_type_items(
-    items: tuple[object, ...],
+    items: tuple[Item, ...],
 ) -> Iterator[RecordDef | EnumDef | ExceptionDef | TypeAlias]:
     """Yield type declarations, descending into named scope regions.
 
@@ -1283,19 +1346,15 @@ def static_type_items(
     declaration carries its own structured scope path, so passes that walk
     static declarations see a region's members as siblings of its own items.
     """
-    for item in items:
-        if isinstance(item, ScopeRegion):
-            yield from static_type_items(item.items)
-        elif isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
+    for item in static_items(items):
+        if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
             yield item
 
 
-def static_function_items(items: tuple[object, ...]) -> Iterator[FuncDef]:
+def static_function_items(items: tuple[Item, ...]) -> Iterator[FuncDef]:
     """Yield function declarations, descending into named scope regions."""
-    for item in items:
-        if isinstance(item, ScopeRegion):
-            yield from static_function_items(item.items)
-        elif isinstance(item, FuncDef):
+    for item in static_items(items):
+        if isinstance(item, FuncDef):
             yield item
 
 
@@ -1309,7 +1368,6 @@ Declaration = (
     | TypeAlias
     | ParamDecl
     | ProgramDecl
-    | AgentDecl
     | BuiltinVarDecl
     | InfixDecl
     | ImportDecl
@@ -1322,10 +1380,23 @@ Declaration = (
 # Item unions
 # ---------------------------------------------------------------------------
 
-# Scope-region items are static declarations or nested regions. The parser
-# enforces this restricted subset before it crosses the AST firewall.
+# Scope-region items are static declarations, value bindings, module-system
+# declarations, or nested regions. The parser enforces this restricted subset
+# before it crosses the AST firewall.
 ScopeItem = (
-    ScopeRegion | OpenDecl | FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias | AgentDecl
+    ScopeRegion
+    | OpenDecl
+    | ImportDecl
+    | ExportDecl
+    | FuncDef
+    | RecordDef
+    | EnumDef
+    | ExceptionDef
+    | TypeAlias
+    | LetDecl
+    | VarDecl
+    | ParamDecl
+    | BuiltinVarDecl
 )
 
 # An item is anything that can appear in a block sequence:

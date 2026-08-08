@@ -2,8 +2,8 @@
 
 [← Index](index.md)
 
-AgL has two value binders (`let` and `var`), destructive assignment, a param declaration, an
-agent declaration, and a function declaration (`def`). There is no bare
+AgL has two value binders (`let` and `var`), destructive assignment, a param declaration, and a
+function declaration (`def`). There is no bare
 assignment: `x = e` as an item is a syntax error — use `let`/`var` to bind or
 `:=` to reassign. The equality operator is `==`
 ([Expressions](expressions.md)).
@@ -71,10 +71,23 @@ not a synthetic binder name. If a later initializer fails, previously completed
 pattern initializers (and completed function closures) remain available; the
 failing initializer contributes no binders.
 
+### Binder scope paths
+
+`let` and `var` also accept an optional scope-path prefix on a single-name
+binder at the module root (`let A::x = 1`, `var A::count = 0`), declaring a
+binding at that path rather than in the module root namespace. For `let`,
+the prefix is written as an ordinary qualifier chain at the pattern root: a
+plain chain spellable as a declaration path (no argument list, no `as`
+binder, no module route or type-argument-applied segment, not anchored at
+the module root) is read as a scoped binding path, while any other pattern
+shape keeps its constructor-pattern meaning. See
+[Named scopes](scopes.md#binder-paths) for the complete disambiguation and
+for declaring a binder inside a `scope` region.
+
 ## `var` — mutable binding
 
 ```ebnf
-var_decl ::= "var" name (":" type_expr)? "=" expr
+var_decl ::= "var" decl_head (":" type_expr)? "=" expr
 ```
 
 Identical to `let` except the binding is **mutable** — it may later be
@@ -98,7 +111,10 @@ assign_target ::= qualifier_chain? name
 A bare `:=` (no index) rebinds the nearest visible **mutable** binding, has
 type `unit`, and returns `void`. It never creates a binding. The expected
 type of the right-hand side is the declared type of the binding being
-updated:
+updated. `qualifier_chain? name` is the same qualifier syntax a read uses, so
+a scoped `var`'s path (`A::count := 1`) is a valid target exactly as a scoped
+read is; see [Named scopes](scopes.md#names-and-visibility) for a scoped
+`var`'s bare-name and path assignment forms and its immutability rule:
 
 <!-- agl-check: fragment -->
 ```agl
@@ -224,9 +240,11 @@ A `def` inside a nested block is a static error. See
 param_decl ::= "param" name (":" type_expr)? ("=" expr)?
 ```
 
-`param` declarations are root-only. Each enters the root scope as an
-immutable binding. A param may declare a type, a default expression, both, or
-neither. Without an explicit type or default, the param defaults to `text`.
+`param` declarations are entry-module only, at the program root or as a member
+of a named scope region ([Named scopes](scopes.md#parameters) — no
+declaration-path shorthand). Each enters its scope as an immutable binding. A
+param may declare a type, a default expression, both, or neither. Without an
+explicit type or default, the param defaults to `text`.
 
 ```agl
 param spec                 # same as: param spec: text
@@ -244,81 +262,59 @@ the runtime after CLI/config resolution.
 Every program param must have a JSON-wire-serializable type, even when it has a
 default and the host does not supply a value. Supported param types are `text`,
 `int`, `decimal`, `bool`, `json`, arrays, dictionaries, records, and enums.
-Runtime-only types such as `unit`, `agent`, and function types cannot be used as
-program param types.
+Runtime-only types such as `unit` and function types cannot be used as program
+param types. `Agent` is ordinary enum data and is valid wherever an enum is.
 
 ## `builtin var` — engine-setting bindings
 
 ```ebnf
-builtin_var_def ::= "builtin" NEWLINE? "var" name ":" type_expr
+builtin_var_def ::= "builtin" NEWLINE? "var" name ":" type_expr ["=" expr]
 ```
 
 A `builtin var` declares a body-less, host-backed, **mutable** binding with a
-mandatory type and no initializer. The `builtin` marker may be on the same line
-as `var` or on the line directly above it. It may appear only at the root of the
-canonical standard-library module `std/config`; declarations in entry programs
-or other library modules are static errors. `std/config` uses it to expose the
+mandatory type and an optional declared default. Its initializer must be a
+constant expression of the declared type: literals, literal containers, and
+constructor applications are allowed; reads, calls other than constructors, and
+operators are not. The `builtin` marker may be on the same line as `var` or on
+the line directly above it. A declaration may appear only at the root, or in a
+named scope region, of the canonical standard-library module
+`std/config`; declarations in entry programs or other library modules are
+static errors regardless of scoping. `std/config` uses it to expose the
 program's engine settings:
 
 ```agl
 open import std/config
 
 std/config::max-iters := 10           # write a setting (qualified target)
-runner := "claude -p"                 # the open import also allows a bare target
+default-agent := AgentClaude("sonnet", "medium") # open import allows a bare target
 let cap = std/config::max-iters       # read a setting
 ```
 
 An engine setting is an ordinary mutable binding in another module, so an
 assignment target names it exactly as a read does: a qualifier always works, and
 a bare name works whenever the import is open, so the name is in scope
-unqualified. A write takes effect from its
-program point onward, exactly like any `var` mutation. The `Option[text]` settings
+unqualified. When the host supplies no initial value, the declared default is
+used; a host seed wins over it. A write takes effect from its program point
+onward, exactly like any `var` mutation. The `Option[text]` settings
 are set with `Some("…")` or `None`.
 
 See [Host environment](host-environment.md) for the settings table, their types
 and defaults, and how a source write combines with the host's CLI and config-file
 layers.
 
-## `agent` — declared agents
+## Agent values
 
-```ebnf
-agent_decl ::= "agent" decl_head ("=" STRING)?
-```
-
-`agent` declarations are **entry-module only** — they are a static error
-inside an imported library module (see [Modules](modules.md)). They are valid
-at the module root and in named scope regions. Each declaration enters its
-declaration layer as an **immutable binding of type `agent`**. A qualified
-head declares that member in its exact scope path. Agent values may be stored in bindings, passed to `def` parameters,
-and held in `array[agent]`:
+`Agent` is a standard-library enum. Construct an agent with an enum constructor
+and store it in ordinary bindings, arrays, or function parameters. The word
+`agent` is an ordinary identifier and may also be used as a record field name.
 
 ```agl
-agent reviewer
-agent impl = "claude -p \%{PROMPT_FILE}"
+let reviewer = AgentClaude("sonnet", "medium")
+let impl = AgentCommand("claude -p")
+let agents: array[Agent] = [reviewer, impl]
 
-let agents: array[agent] = [reviewer, impl]
+let r: text = ask("Review the artifact", agent = reviewer)
 ```
-
-A declared agent is a first-class value. It is passed to `ask` via the
-`agent` parameter:
-
-<!-- agl-check: fragment -->
-```agl
-let r: Review = ask("Review %{artifact}", agent = reviewer)
-```
-
-Rules:
-
-1. `agent` declarations are valid at the entry module root and in its named
-   scope regions, never in an ordinary block.
-2. Agent names and variable names share the same value namespace — both are
-   looked up by the same name resolution. An `agent impl` declaration and a
-   `let impl` declaration cannot coexist in the same declaration layer.
-3. Declaring the same agent name twice in one declaration layer is a static
-   error; agents in different scope paths are distinct.
-4. `ask` and `exec` cannot be declared as agents.
-5. An unused declared agent produces a non-fatal **warning**.
-6. The runner hint must be a static string literal with no interpolation.
 
 ## Names, namespaces, and constructors
 

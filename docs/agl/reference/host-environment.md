@@ -29,39 +29,11 @@ prevent execution.
 
 ## Agents
 
-**The program owns the set of named agents.** Every named agent a program
-calls must be declared with an `agent` declaration at the entry-module root
-or in a named scope region ([Bindings and scope](bindings-and-scope.md)); a
-call to an undeclared name
-is a static binding error. The host does *not* contribute names and there is
-**no implicit fallback** that makes arbitrary names resolve. Two names need
-no declaration:
-
-- **The default agent** backs the contextual keyword `ask`.
-- **`exec`** denotes the shell executor ([Shell execution](shell-execution.md)).
-
-The host's role is to **supply a backing** — the actual agent that runs — for
-each root declaration and each referenced scoped agent path. An unreferenced
-scoped declaration remains a static member and may warn, but a runtime handle
-for it is materialized only when referenced. A declaration may also carry an
-optional *runner hint*, an
-opaque static string the host may use to launch the agent; the host ignores
-it if it has its own backing, and host configuration for a given name always
-takes precedence over the source hint. The hint is never interpreted by the
-language (no interpolation; see [Bindings and scope](bindings-and-scope.md)).
-
-Because the program owns the names and the host owns the backings, two
-mismatches are **host configuration errors**, reported before anything
-executes:
-
-- a backing supplied for an agent path the program never declares
-  (*registered but undeclared*), and
-- a root declaration or referenced scoped agent for which the host provides
-  neither a dedicated backing nor a default agent to fall back on (*declared
-  but unbacked*).
-
-An `ask` call requires a default agent to be configured, or it is a static
-error. The names `ask` and `exec` can never be declared as agents.
+Each `ask` evaluates an `Agent` enum value that selects the backend command.
+The value may be passed explicitly or supplied by the
+`std/config::default-agent` setting. `AgentCommand` carries a command string;
+the provider variants carry their provider-specific fields. The host dispatches
+the selected value and does not contribute agent names or reconcile a registry.
 
 Per dispatch, an agent receives the rendered prompt, the output contract
 (format instructions plus derived JSON Schema, so schema-capable backends
@@ -81,17 +53,27 @@ The built-in codecs are `text` and `json`. Hosts may register additional
 codecs (selectable per call with `format`). Built-in names are reserved;
 duplicate registrations are host configuration errors.
 
-Each registration declares which type kinds it supports, and the
-type-checker validates every `format` option against this **capability
-catalog** before execution — an unsupported codec/type combination is a
-static error, not a runtime surprise.
+Each registration declares which type kinds it supports, and every
+`format` option is validated against this **capability catalog** before
+execution — an unsupported codec/type combination is a static error, not a
+runtime surprise.
 
 ## Params
 
 Program parameters are declared with `param`
 ([Bindings and scope](bindings-and-scope.md)) and may be supplied by the
-host as named external values at run start. Validation happens after type
-checking and **before any statement executes**:
+host as named external values at run start. A param declared as a member of a
+named scope region ([Named scopes](scopes.md#parameters)) is supplied under
+its full path spelling — `param Deploy::region` is named `Deploy::region` by
+the host, e.g. `--Deploy::region` on the CLI. In a config file the same key
+must be quoted, since `::` is not a legal bare TOML key:
+
+```toml
+[demo]
+"Deploy::region" = "prod"
+```
+
+Validation happens after type checking and **before any statement executes**:
 
 - a required param (no default) for which no external value is provided,
 - an external value supplied for a name that is not a declared param, and
@@ -108,8 +90,8 @@ values are not chatty agent output, so no lenient recovery applies) and
 validated against the declared type.
 
 The declared type must be JSON-wire-serializable, including for a param whose
-default is always used. Runtime-only values such as `unit`, agents, and
-functions are not valid program param types because the executable always
+default is always used. Runtime-only values such as `unit` and functions are not valid program param
+types because the executable always
 includes external-decoder metadata for every declared param. A
 [recursive](types.md#recursive-types) record or enum param decodes normally,
 subject to the same finite-schema restriction as an agent output type or cast
@@ -120,27 +102,32 @@ target — see [Generics](generics.md#the-finite-schema-boundary).
 ### Engine settings
 
 The standard-library module `std/config` exposes the following fixed engine
-settings as mutable bindings ([Bindings and scope](bindings-and-scope.md)):
+settings as mutable bindings ([Bindings and scope](bindings-and-scope.md)). Each
+`builtin var` declaration may supply its portable default with a constant
+initializer; the host uses that declared value only when it has no seed for the
+key:
 
 | Setting | AgL type | Portable default |
 | --- | -------- | ---------------- |
 | `log` | `bool` | `false` |
 | `strict-json` | `bool` | `false` (lenient recovery) |
 | `max-iters` | `int` | `0` (off) |
-| `runner` | `text` | host floor runner |
+| `default-agent` | `Agent` | `AgentClaude("sonnet", "medium")` |
 | `log-file` | `Option[text]` | `None` |
 | `timeout` | `Option[text]` | `None` |
 
 Import `std/config` and read or write a setting through a qualified target
-(`std/config::max-iters`); writing zero disables that safety valve. The
-`Option[text]` settings (`log-file`, `timeout`) take a `Some("…")` or `None` value.
+(`std/config::max-iters`); writing zero disables that safety valve.
+`default-agent` is a typed `Agent` value used by `ask` when its `agent` option
+is omitted. The `Option[text]` settings (`log-file`, `timeout`) take a
+`Some("…")` or `None` value.
 
 ### Precedence
 
 `agm exec` resolves initial values as:
 
 ```
-setting X:  source (std/config::X := e)  >  CLI --X  >  [<program>].X  >  [exec].X  >  engine default
+setting X:  source (std/config::X := e)  >  CLI --X  >  [<program>].X  >  [exec].X  >  declared default
 param   Y:  CLI --Y                       >  [<program>].Y  >  source default (param Y = e) >  required error
 ```
 
@@ -149,7 +136,7 @@ source write to `std/config::X` overrides them from its program point onward.
 A program that never writes a setting keeps the value chosen by the CLI/config
 layers.
 
-`agm repl` resolves engine settings as source writes > CLI > `[exec]` > engine
+`agm repl` resolves engine settings as source writes > CLI > `[exec]` > declared
 default. It has no per-param CLI options. Its params resolve as `[<program>].Y`
 > source default > required error, but only after `program NAME` selects the
 config table. That name applies to params declared after it in the same entry
@@ -171,24 +158,30 @@ file stem. It supplies param values, not REPL engine-setting overrides.
 
 ### Positional effect
 
-Every setting takes effect **positionally**: a write to `std/config::X` governs
-the statements that follow it, in program order, and does not affect statements
-before it. A completed write remains effective if a later expression fails.
-Writing `runner`, `log`, or `log-file` repoints the default agent and the trace
-destination used by subsequent calls. Assigning `Some(path)` to `log-file`
+The host applies each effective initial setting before execution. Thus a declared `log` or `log-file` default configures the trace service when
+no CLI/config seed is supplied. Every setting takes effect
+**positionally** thereafter: a write to `std/config::X` governs the statements
+that follow it, in program order, and does not affect statements before it. A
+completed write remains effective if a later expression fails. Writing `log` or
+`log-file` updates the trace destination used by subsequent calls. Assigning
+`Some(path)` to `log-file`
 enables logging; a later `log := false` disables it while retaining the path.
 Writing `strict-json`, `max-iters`, or `timeout` changes subsequent agent-output
-parsing, unbounded loops, or `exec` calls, respectively.
-A host that rejects a `runner` reconfiguration leaves the setting's prior value
-in place. Trace output is best-effort: a filesystem failure disables tracing for
-the rest of the run without rolling back the assigned `log` or `log-file` value.
+parsing, unbounded loops, or `exec` calls, respectively. A write the engine
+cannot accept — a negative `max-iters`, or a `timeout` whose text is not a
+duration — raises the catchable `TypeError`
+([Exceptions](exceptions.md#typeerror)) and leaves the setting unchanged.
+Trace output is best-effort: a filesystem failure disables tracing for the rest
+of the run without rolling back the assigned `log` or `log-file` value.
 
 ### Error surface for `timeout`
 
 - A bad `--timeout`, `[<program>].timeout`, or `[exec].timeout` value is caught
   before execution (exit 1 pre-execution error).
 - A bad duration in `std/config::timeout := Some("…")` is evaluated at runtime;
-  a bad value raises a runtime error (exit 2).
+  a bad value raises the catchable `TypeError`
+  ([Exceptions](exceptions.md#typeerror)), terminating the run (exit 2) when
+  uncaught.
 - A CLI, `[<program>]`, or `[exec]` timeout initially seeds both shell execution
   and agent idle timeout. A source write to the `timeout` setting changes only
   the **shell-exec** timeout; agent idle timeout cannot be changed mid-program.
@@ -215,29 +208,34 @@ host default.
 
 ## Tracing
 
-While tracing is active, a conforming host records execution so runs can be
-audited and debugged. Positional source writes may enable or disable tracing,
-so records outside the active interval (including run start or end) can be
-absent. The trace can contain:
+While tracing is active, a conforming host writes one JSON object per line.
+Every record has the envelope `ts`, `run_id`, and `kind`: `ts` is an
+ISO-8601 local timestamp with an offset, and `run_id` distinguishes runs that
+append to the same file. Positional source writes may enable or disable
+tracing, so records outside the active interval (including run start or end)
+can be absent.
+
+Tracing records only observable boundaries:
 
 - run start and end (with success/failure);
-- every agent call attempt (agent, attempt number, rendered prompt) and
-  every parse result (raw output, normalized output, error summary);
-- every `exec` invocation (command, exit code, duration, stdout, stderr,
+- stdout emitted by `print`;
+- each agent request and response. A request records the fully composed prompt,
+  selected agent and payload, attempt information, and output contract; a
+  response records its full content or transport/cancellation outcome;
+- every `exec` invocation (command, exit code, duration, stdout, stderr, and
   timeout flag);
-- every `print`;
-- every raised exception.
+- an exception only when it escapes the program uncaught.
 
-Every exception value carries a `trace_id` field linking it to the
-corresponding trace record. The normalized (recovered) JSON of a lenient
-parse is traced alongside the raw output.
+Ordinary expression evaluation is not traced. Trace records and exception
+values have no host-generated `trace_id`; a user-declared exception may still
+have a field with that name.
 
 ## Results and termination
 
 A run ends in one of three ways:
 
 1. **Success** — all statements executed; the host can observe the final
-   root-scope bindings.
+   bindings, each scoped one under its full path spelling.
 2. **Pre-execution failure** — a static error, param-validation error, or
    host configuration error; nothing was executed.
 3. **Uncaught exception** — the program started and an exception reached the

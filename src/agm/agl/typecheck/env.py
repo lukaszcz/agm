@@ -20,7 +20,8 @@ from typing import Literal, cast
 
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.ir.ids import NominalId
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId, spell_declaration
+from agm.agl.ir.reserved_nominals import NO_DECL_ID, require_reserved_nominal_id
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId, spell_declaration
 from agm.agl.scope.imports import (
     ImportEnv,
     NameAtom,
@@ -34,7 +35,14 @@ from agm.agl.scope.imports import (
     resolve_qualified_member,
     try_resolve_qualified_member,
 )
-from agm.agl.scope.symbols import BindingRef, ConstructorRef, ModuleResolution, ScopeNode, ScopePath
+from agm.agl.scope.symbols import (
+    BindingRef,
+    ConstructorRef,
+    ModuleResolution,
+    ScopeNode,
+    ScopePath,
+    resolve_bare_contribution,
+)
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.persistent import PersistentDict
 from agm.agl.semantics.type_table import (
@@ -48,7 +56,6 @@ from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPE_NAMES,
     BUILTIN_PRELUDE_TYPES,
-    AgentType,
     ArrayType,
     BoolType,
     CastSpec,
@@ -79,6 +86,29 @@ def _split_scoped_type_name(name: str) -> tuple[ScopePath, str]:
     """Split a source spelling only at the environment's UI boundary."""
     *scope_path, declared_name = name.split("::")
     return tuple(scope_path), declared_name
+
+
+def _is_own_builtin_declaration(name: str, typ: Type) -> bool:
+    """Return whether *typ* is a program's own ``builtin`` declaration of reserved *name*.
+
+    A canonical binding for a built-in exception or prelude type name carries
+    that name's fixed reserved identity (``ir.reserved_nominals``); a
+    program's own ``builtin`` declaration of the same name -- root or scoped,
+    anywhere other than ``std/core``'s own root -- instead carries its own
+    declaration identity, which never equals the reserved one (see
+    ``typecheck.builder._decl_identity``). *name* is always one of the
+    reserved names, so it always has a reserved identity to compare against.
+
+    ``NO_DECL_ID`` is excluded too: it is the identity a handle carries when
+    none is attached at all, never a real declaration's, so a binding
+    carrying it is neither the canonical one nor a program's own and must not
+    displace the canonical default.
+    """
+    if not isinstance(typ, (RecordType, EnumType, ExceptionType)):
+        return False
+    if typ.decl_id == NO_DECL_ID:
+        return False
+    return typ.decl_id != require_reserved_nominal_id(name)
 
 
 def _type_path_atom(path: ScopePath) -> NameAtom:
@@ -197,8 +227,8 @@ class ConstructorSignature:
 class AglTypeError(AglError):
     """A fatal static type error.
 
-    Raised by the type checker on the first type violation (Q4: first-error
-    abort).  Carries an optional ``SourceSpan`` for source location.
+    Raised by the type checker on the first type violation.  Carries an
+    optional ``SourceSpan`` for source location.
     """
 
 
@@ -543,7 +573,7 @@ def assert_checked_output_closed(
 
 
 def assert_checked_module_closed(checked: CheckedModule) -> None:
-    """Assert that a single-module checked program is safe to lower."""
+    """Assert that one module's checked output is safe to lower."""
     assert_checked_output_closed(
         node_types=checked.node_types,
         contract_specs=checked.contract_specs,
@@ -597,10 +627,12 @@ class TypeEnvironment:
     - ``module_id`` is the owning module of the current env.  ``::Name``
       (empty-segment qualifier) resolves against this module's own types.
 
-    These fields are ``None`` in the module path; the resolution logic
-    in ``resolve_type_expr`` and ``_resolve_name_type`` checks for ``None``
-    before entering the module-aware branches, so the existing path is
-    unchanged when these are absent.
+    Every environment the checker or match compiler actually queries carries
+    these fields. They are absent only on the transient, shell-collection-only
+    environments the whole-program type pre-pass builds in Step A
+    (``typecheck/program.py::_build_program_type_table``) to register every
+    module's declaration headers before any body is resolved; those
+    environments are never queried beyond that registration.
     """
 
     def __init__(
@@ -655,10 +687,10 @@ class TypeEnvironment:
         self._function_signatures_by_node_id: dict[int, FunctionSignature] = {}
         # Declaration node_ids of ``extern def``s, keyed by the same globally-unique
         # decl_node_id as ``_function_signatures_by_node_id``.  Populated by
-        # ``_preregister_funcdef`` (module mode) and by the program
-        # function-signature pre-pass seeding (program context, including imported
-        # externs).  Consulted by ``_check_declared_name_call`` to decide whether a
-        # declared-name call site is an extern call site to record.
+        # ``_preregister_funcdef`` (this module's own externs) and by the program
+        # function-signature pre-pass seeding (imported externs).  Consulted by
+        # ``_check_declared_name_call`` to decide whether a declared-name call
+        # site is an extern call site to record.
         self._extern_node_ids: set[int] = set()
         # Constructor field-kinds registry — ((module, scope path, owner), variant)
         # → ordered (field_name, ParamKind) pairs. Populated by _TypeBuilder
@@ -746,12 +778,12 @@ class TypeEnvironment:
             self._types[prelude_name] = prelude_type
             typedef = BUILTIN_PRELUDE_TYPE_DEFS[prelude_name]
             if typedef.kind == "record":
-                self._constructor_field_kinds[((PRELUDE_ID, (), prelude_name), None)] = tuple(
+                self._constructor_field_kinds[((STD_CORE_ID, (), prelude_name), None)] = tuple(
                     (fname, ParamKind.STANDARD) for fname, _ in typedef.fields
                 )
                 continue
             for variant, vfields in typedef.variants:
-                self._constructor_field_kinds[((PRELUDE_ID, (), prelude_name), variant)] = tuple(
+                self._constructor_field_kinds[((STD_CORE_ID, (), prelude_name), variant)] = tuple(
                     (fname, ParamKind.STANDARD) for fname, _ in vfields
                 )
         # Exception constructor field kinds are NOT pre-registered here: each
@@ -840,20 +872,43 @@ class TypeEnvironment:
         self._types[name] = typ
 
     def unregister_name(self, name: str) -> None:
-        """Remove a user *name* from the type, alias, and type-table namespaces.
+        """Remove a user *name* from the tables that only ever expose ONE definition.
 
-        Used by the type-builder when an incremental-session entry redeclares a
-        *seeded* name — either with a different kind (e.g. a seeded ``record R``
-        redefined as ``type R = int``) or a different shape (e.g. ``record R``
-        redefined with different fields).  Type handles, aliases, generic
-        templates, constructor metadata, and alias parameter metadata live in
-        separate tables, so a cross-kind redefinition would otherwise leave a
-        stale entry in another table and make ``get_type`` disagree with
-        annotation/constructor resolution.  Dropping the name from all
-        namespaces before the new declaration is registered keeps them mutually
-        consistent, and lets the type table's dual-write ``register`` calls
-        treat every registration as a fresh one rather than a conflicting
-        re-registration of the same key.
+        Used by the type-builder before registering a redeclared name —
+        whether it redeclares under a different kind (e.g. a seeded
+        ``record R`` redefined as ``type R = int``) or a different shape
+        (e.g. ``record R`` redefined with different fields). ``_types``,
+        alias targets/params, and generic templates are each keyed by NAME
+        alone with exactly one slot per name path, and each answers a "what
+        does this name mean right now" question — the newest declaration's
+        answer, and nothing else, must ever be reachable through them. A
+        redeclaration that does not itself repopulate a slot (e.g. a
+        previously generic ``Box`` redeclared as a plain record never writes
+        ``_generic_types["Box"]`` again) would otherwise leave the superseded
+        declaration's answer live in a table the new one never touches, and
+        make ``get_type`` disagree with annotation/constructor resolution.
+        Dropping the name from these namespaces before the new declaration is
+        registered keeps them consistent with that single-newest-answer rule.
+
+        Constructor signatures and field-kind metadata (``_constructor_sigs``/
+        ``_constructor_field_kinds``) are deliberately NOT cleared here even
+        though they are also name-keyed: unlike the tables above, a caller
+        that queries them by owner name and variant is always resolving a
+        SPECIFIC declaration's own field/variant it already holds a handle or
+        pattern binder for (a record's fields, one enum variant), not asking
+        "what does this bare name mean now" — so a variant the newest
+        declaration does not redeclare (an enum's dropped variant, a
+        redeclared-non-generic record's stale constructor signature that no
+        code path reaches once ``_generic_types`` no longer names it generic)
+        must stay reachable for an OLDER-typed retained value, while every key
+        the newest declaration DOES define is naturally overwritten by its own
+        registration regardless.
+
+        The shared ``type_table`` is likewise NOT touched here: it is keyed
+        by declaration identity, not name, and its own ``register`` call
+        retains a superseded declaration under its own identity while
+        repointing the name index at the newest one — exactly the behavior
+        this method's callers rely on for the identity-keyed table.
 
         Built-in exception names and built-in prelude type names are never
         removed: they are non-shadowable (rejected earlier by
@@ -867,15 +922,6 @@ class TypeEnvironment:
         self._alias_targets.pop(name, None)
         self._generic_types.pop(name, None)
         self._alias_type_params.pop(name, None)
-        scope_path, declared_name = _split_scoped_type_name(name)
-        nominal_key = (self._module_id, scope_path, declared_name)
-        for key in tuple(self._constructor_sigs):
-            if key[0] == nominal_key:
-                self._constructor_sigs.pop(key, None)
-        for key in tuple(self._constructor_field_kinds):
-            if key[0] == nominal_key:
-                self._constructor_field_kinds.pop(key, None)
-        self._type_table.unregister(self._module_id, declared_name, scope_path)
 
     def register_alias(
         self, name: str, target_expr: object, *, type_params: tuple[str, ...] = ()
@@ -948,7 +994,9 @@ class TypeEnvironment:
         # No field/variant substitution: the result is a bare handle with the
         # supplied type_args; field/variant shapes are looked up by handle in
         # the shared TypeTable (which substitutes type_args into the
-        # registered TypeDef's templates on demand).
+        # registered TypeDef's templates on demand). decl_id carries over
+        # unchanged: instantiating at different type arguments still names
+        # the same declaration.
         template = gdef.template
         if isinstance(template, RecordType):
             return RecordType(
@@ -956,12 +1004,14 @@ class TypeEnvironment:
                 type_args=args,
                 module_id=template.module_id,
                 scope_path=template.scope_path,
+                decl_id=template.decl_id,
             )
         return EnumType(
             name=template.name,
             type_args=args,
             module_id=template.module_id,
             scope_path=template.scope_path,
+            decl_id=template.decl_id,
         )
 
     def instantiate_alias(
@@ -988,10 +1038,11 @@ class TypeEnvironment:
     def _constructor_key(
         module_id: ModuleId, owner_name: str, scope_path: ScopePath, variant: str | None
     ) -> tuple[DeclKey, str | None]:
-        """Build a constructor key without using display spellings as identity."""
-        if "::" in owner_name:
-            *segments, owner_name = owner_name.split("::")
-            scope_path = tuple(segments)
+        """Build a constructor key from structured owner identity.
+
+        Every caller supplies the owner's bare name and its scope path
+        separately, so no display spelling is ever parsed back into identity.
+        """
         return ((module_id, scope_path, owner_name), variant)
 
     def register_constructor_signature(self, sig: ConstructorSignature) -> None:
@@ -1056,17 +1107,19 @@ class TypeEnvironment:
         opened = self._resolve_opened_type(name, None)
         if opened is not None:
             return opened
-        # Program context: look up via open imports.
-        if self._import_env is not None and self._program_type_table is not None:
-            candidates = self._import_env.unqualified.get(name, frozenset())
-            type_candidates = [qn for qn in candidates if self._is_program_type_candidate(qn)]
-            if len(type_candidates) == 1:
-                try:
-                    return self._resolve_program_qname_as_bare_type(
-                        type_candidates[0], name, span=None
-                    )
-                except AglTypeError:
-                    return None
+        # Program context: look up via open imports. A bare ``TypeEnvironment``
+        # (no import environment / program type table -- e.g. one constructed
+        # directly by a unit test, independent of any module graph) has
+        # nothing further to search here.
+        if self._import_env is None or self._program_type_table is None:
+            return None
+        candidates = self._import_env.unqualified.get(name, frozenset())
+        type_candidates = [qn for qn in candidates if self._is_program_type_candidate(qn)]
+        if len(type_candidates) == 1:
+            try:
+                return self._resolve_program_qname_as_bare_type(type_candidates[0], name, span=None)
+            except AglTypeError:
+                return None
         return None
 
     @staticmethod
@@ -1321,7 +1374,9 @@ class TypeEnvironment:
     def _opened_type_key(self, name: NameAtom, span: SourceSpan | None) -> DeclKey | None:
         """Return the unique type declaration contributed to this type region."""
         scope = self._scope_nodes.get(self._type_scope)
-        candidates = () if scope is None else scope.bare_candidates(name) or ()
+        candidates = (
+            () if scope is None else resolve_bare_contribution(scope, name, self._scope_nodes) or ()
+        )
         keys = {
             (ref.module_id, ref.scope_path, ref.name)
             for ref in candidates
@@ -1360,32 +1415,38 @@ class TypeEnvironment:
         )
 
     def _resolve_opened_type(self, name: NameAtom, span: SourceSpan | None) -> Type | None:
-        """Resolve an opened relative type path through shared contributions."""
+        """Resolve an opened relative type path through shared contributions.
+
+        Only ever called against a fully-seeded program environment (never
+        the transient shell-collection env the type pre-pass uses), so the
+        program type table is always present once *key* resolves.
+        """
         key = self._opened_type_key(name, span)
         if key is None:
             return None
         module, path, source_name = key
-        if self._program_type_table is not None:
-            qname: QName = (module, source_name if not path else (*path, source_name))
-            generic = (self._program_generic_table or {}).get(key)
-            if generic is not None:
-                raise AglTypeError(
-                    f"Generic type '{_render_type_atom(name)}' requires "
-                    f"{len(generic.type_params)} type argument(s); "
-                    f"use '{_render_type_atom(name)}[...]' to apply it.",
-                    span=span,
-                )
-            return self._resolve_program_qname_as_bare_type(
-                qname, _render_type_atom(name), span=span
+        assert self._program_type_table is not None
+        qname: QName = (module, source_name if not path else (*path, source_name))
+        generic = (self._program_generic_table or {}).get(key)
+        if generic is not None:
+            raise AglTypeError(
+                f"Generic type '{_render_type_atom(name)}' requires "
+                f"{len(generic.type_params)} type argument(s); "
+                f"use '{_render_type_atom(name)}[...]' to apply it.",
+                span=span,
             )
-        return self._resolve_name_type(
-            "::".join((*path, source_name)), span=span, _resolving=frozenset(), lexical=False
-        )
+        return self._resolve_program_qname_as_bare_type(qname, _render_type_atom(name), span=span)
 
     def _resolve_opened_applied_type(
         self, name: NameAtom, args: tuple[Type, ...], span: SourceSpan | None
     ) -> Type | None:
-        """Resolve an opened relative generic path through shared contributions."""
+        """Resolve an opened relative generic path through shared contributions.
+
+        A same-module opened generic is always reachable through
+        ``program_generic_table`` (the whole-program type pre-pass registers
+        every module's own generics there before any module's body is
+        checked), so no separate local-table fallback is needed.
+        """
         key = self._opened_type_key(name, span)
         if key is None:
             return None
@@ -1396,11 +1457,6 @@ class TypeEnvironment:
         alias = self._program_alias_table.get(key)
         if alias is not None:
             return self.instantiate_alias(key[2], alias, args, span=span)
-        if key[0] == self._module_id:
-            local_name = "::".join((*key[1], key[2]))
-            generic = self._generic_types.get(local_name)
-            if generic is not None:
-                return self.instantiate_from_gdef(key[2], generic, args, span=span)
         raise AglTypeError(
             f"Type '{_render_type_atom(name)}' does not take type arguments.", span=span
         )
@@ -1528,7 +1584,6 @@ class TypeEnvironment:
             instead of being looked up in the type namespace.
         """
         from agm.agl.syntax.types import (
-            AgentT,
             AppliedT,
             ArrayT,
             BoolT,
@@ -1557,8 +1612,6 @@ class TypeEnvironment:
             return DecimalType()
         if isinstance(type_expr, UnitT):
             return UnitType()
-        if isinstance(type_expr, AgentT):
-            return AgentType()
         if isinstance(type_expr, FuncT):
             params = tuple(
                 self.resolve_type_expr(p, _resolving=_resolving, type_vars=type_vars)
@@ -1857,9 +1910,9 @@ class TypeEnvironment:
     ) -> Type:
         """Resolve a module-qualified type reference ``QUALIFIER::Name``.
 
-        Called only in program context.  Falls back to the local type namespace
-        (prelude / built-ins) when the qualifier is empty (``::Name``
-        self-reference to the current module) and no program context exists.
+        Falls back to the local type namespace (prelude / built-ins) when the
+        qualifier is empty (``::Name`` self-reference to the current module)
+        and no program context exists.
         """
         rendered = qualifier.render()
         local_name = self._local_qualified_type_name(qualifier, name)
@@ -2051,12 +2104,12 @@ class TypeEnvironment:
             source_module_id, source_scope_path, source_name = self._qname_decl_key(qname)
             expected_qualifier = None
         else:
-            if (
-                self._import_env is None
-                or module_qualifier is None
-                or not module_qualifier.route_segments
-            ):
-                return None
+            # kind is EnumOwnerFormKind.QUALIFIED_IMPORT here (the only
+            # remaining kind): its one caller (_check_module_qualified_variant)
+            # chooses it exactly when module_qualifier has route segments, and
+            # only ever calls with a real import environment present.
+            assert self._import_env is not None
+            assert module_qualifier is not None and module_qualifier.route_segments
             # A qualified enum spelling must preserve the shared resolver's
             # verdict.  In particular, an unknown route or ambiguity is not a
             # statement that the subject is "not an enum".
@@ -2325,10 +2378,20 @@ class TypeEnvironment:
         fields: tuple[tuple[str, ParamKind], ...],
         *,
         scope_path: ScopePath = (),
+        module_id: ModuleId | None = None,
     ) -> None:
-        """Register ordered field kinds under structured owner identity."""
+        """Register ordered field kinds under structured owner identity.
+
+        *module_id* defaults to this environment's own module; a caller
+        registering a ``builtin`` declaration passes its own declaring module
+        explicitly too, matching the owner every other piece of that
+        declaration's state (its ``TypeDef``, its handle) already uses — a
+        ``builtin`` declaration belongs to the module that declares it, like
+        every other declaration.
+        """
         self._assert_mutable()
-        key = self._constructor_key(self._module_id, owner_name, scope_path, variant)
+        owner_module_id = self._module_id if module_id is None else module_id
+        key = self._constructor_key(owner_module_id, owner_name, scope_path, variant)
         self._constructor_field_kinds[key] = fields
 
     def get_constructor_field_kinds(
@@ -2369,10 +2432,9 @@ class TypeEnvironment:
         derived directly from ``type_table.exception_field_kinds``, which
         flattens the ``extends`` base chain (base kinds first, then own kinds,
         each honoring its declaration's ``@pos``/``@std``/``@named`` marker —
-        exactly like a record's fields) and excludes ``trace_id`` (auto-filled
-        at construction time, never supplied by the caller), rather than
-        through the registered-kinds table records/enums use, since an
-        exception's kinds are never pre-registered (see ``TypeEnvironment.
+        exactly like a record's fields), rather than through the registered-kinds
+        table records/enums use, since an exception's kinds are never pre-registered
+        (see ``TypeEnvironment.
         __init__``).  ``exception_field_kinds`` returns ``ParamKind.value``
         strings rather than the enum (``semantics`` may not import
         ``syntax.nodes``), so each is converted back with ``ParamKind(...)``
@@ -2408,21 +2470,39 @@ class TypeEnvironment:
 
     # --- Seeding support ---
 
-    def seed_from(self, other: TypeEnvironment) -> None:
+    def seed_from(self, other: TypeEnvironment, *, merge_type_table: bool = True) -> None:
         """Copy *other*'s user-declared types, aliases, and binding types in.
 
         Used to pre-populate a fresh environment with a session's accumulated
         state before checking a new entry.  Built-in exception types and
         built-in prelude types are already present in every fresh environment
-        and are not copied from the source.  Binding types are keyed by
-        globally-unique ``decl_node_id`` so they never collide across entries.
+        and are not copied from the source -- UNLESS *other*'s own binding for
+        one is a program's own ``builtin`` declaration rather than the
+        canonical one (:func:`_is_own_builtin_declaration`), which must carry
+        forward exactly like any other declared name so a later entry's
+        ``catch``/host-call resolution keeps agreeing with the identity the
+        host has been minting since the declaring entry.  Binding types are
+        keyed by globally-unique ``decl_node_id`` so they never collide across
+        entries.
 
-        Also merges *other*'s ``type_table`` entries in: *other* is treated as
-        authoritative, so an entry under a key already present in this
-        environment's table is overwritten (last-write-wins). For names present
-        in *other*'s type namespace, stale metadata in this environment is
-        cleared before copying so cross-kind REPL redefinitions do not leave old
+        Also merges *other*'s ``type_table`` entries in, unless
+        *merge_type_table* is ``False``: *other* is treated as authoritative,
+        so an entry under a key already present in this environment's table
+        is overwritten (last-write-wins). For names present in *other*'s type
+        namespace, stale metadata in this environment is cleared before
+        copying so cross-kind REPL redefinitions do not leave old
         generic/constructor/alias tables behind. See :meth:`TypeTable.merge_from`.
+
+        *merge_type_table* is ``False`` for a caller whose ``_type_table`` IS
+        *other*'s prior seeding target (the SAME shared instance, not a
+        separate table merged from it) — a program check that seeds its
+        entry module's environment more than once within one ``check_program``
+        run. By the second seeding, this table has already registered the
+        current entry's own fresh declarations on top of what *other* (a
+        snapshot from BEFORE this entry ran) knows, so re-merging *other*'s
+        name index would regress a name this entry just redeclared back onto
+        its superseded owner; every other table this method copies is
+        per-environment state that a second seeding still needs.
         """
         self._assert_mutable()
         if not other.is_sealed:
@@ -2446,9 +2526,10 @@ class TypeEnvironment:
         }
         for name in incoming_type_names:
             self.unregister_name(name)
-        self._type_table.merge_from(other._type_table)
+        if merge_type_table:
+            self._type_table.merge_from(other._type_table)
         for name, typ in other._types.items():
-            if name not in builtin:
+            if name not in builtin or _is_own_builtin_declaration(name, typ):
                 self._types[name] = typ
         self._alias_targets.update(other._alias_targets)
         self._binding_types = other._binding_types.fork()
@@ -2469,20 +2550,44 @@ class TypeEnvironment:
         the failure are promoted. For each unpromoted type name, remove the
         checked-entry metadata and restore the previous session definition when
         one existed.
+
+        *names* comes from this entry's OWN declarations (see the REPL's
+        promotion bookkeeping), so a reserved built-in exception/prelude name
+        can appear in it only when this entry itself wrote a ``builtin``
+        declaration of that name — the reserved names are non-shadowable
+        other than by one. That declaration is rolled back exactly like any
+        other unpromoted one below: no special-casing is needed, and none is
+        applied, unlike :meth:`seed_from`, which instead has to tell a
+        program's own carried-forward declaration apart from the canonical
+        default it must not clobber.
+
+        The shared ``type_table`` is keyed by declaration identity, not name,
+        so the unpromoted declaration stays registered under its own identity
+        exactly as a superseded one does — the link image derives its nominal
+        descriptors from this table on every lowering and needs the entry to
+        correct the descriptor the failed entry already linked. What does
+        need saying is that the declaration never took effect
+        (:meth:`TypeTable.orphan`): unlike a superseded declaration, whose
+        surviving values keep its members meaningful, an unpromoted one must
+        answer no whole-table query about what the session declares. The
+        previous declaration's own identity, methods, and base chain were
+        never touched by the redeclaration, so restoring it is just
+        ``register`` below reclaiming its name.
         """
         self._assert_mutable()
-        builtin = frozenset(BUILTIN_EXCEPTIONS) | BUILTIN_PRELUDE_TYPE_NAMES
         for name in names:
-            if name in builtin:
-                continue
             self.unregister_name(name)
             scope_path, declared_name = _split_scoped_type_name(name)
+            # Read the unpromoted declaration before ``register`` repoints the
+            # name index at the survivor; the seeded table resolves this name
+            # to the checked entry's own declaration, which is the one being
+            # rolled back.
+            unpromoted = self._type_table.get(self._module_id, declared_name, scope_path)
             typedef = other._type_table.get(other._module_id, declared_name, scope_path)
             if typedef is not None:
                 self._type_table.register(typedef)
-                self._type_table.restore_methods_from(
-                    other._type_table, other._module_id, declared_name, scope_path
-                )
+            if unpromoted is not None:
+                self._type_table.orphan(unpromoted.decl_node_id)
             if name in other._types:
                 self._types[name] = other._types[name]
             if name in other._alias_targets:

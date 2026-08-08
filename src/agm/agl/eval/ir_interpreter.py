@@ -43,8 +43,6 @@ from agm.agl.eval.indexing import AglIndexOutOfRange, AglMissingKey, index_get, 
 from agm.agl.ir.contracts import ContractRequest, ConversionFailureMode
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SymbolId
 from agm.agl.ir.nodes import (
-    AutoTraceField,
-    IrAgentHandle,
     IrAnd,
     IrArith,
     IrAsk,
@@ -128,12 +126,12 @@ from agm.agl.ir.program import (
 )
 from agm.agl.ir.validate import InvalidIrError
 from agm.agl.modules.ids import ModuleId
-from agm.agl.runtime.agents import AgentRegistry
+from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.codec import ParseResult, _parse_contract_output
 from agm.agl.runtime.convert import StrictJsonParseError, parse_json_strict
 from agm.agl.runtime.externs import ExternRegistry
-from agm.agl.runtime.option import none_value, some_value
-from agm.agl.runtime.params import build_engine_config_base
+from agm.agl.runtime.option import none_value, option_text, some_value
+from agm.agl.runtime.params import engine_default_settings
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.serialize import value_to_json_obj
 from agm.agl.runtime.trace import TraceStore, noop_trace
@@ -144,7 +142,6 @@ from agm.agl.semantics.exceptions import make_builtin_exception as _make_exc_val
 from agm.agl.semantics.values import (
     UNIT_VALUE,
     VOID_VALUE,
-    AgentValue,
     ArrayValue,
     BoolValue,
     Cell,
@@ -162,7 +159,12 @@ from agm.agl.semantics.values import (
     TextValue,
     Value,
 )
-from agm.config.engine_keys import HOST_CONSUMED_ENGINE_KEYS, RUNTIME_LIVE_ENGINE_KEYS
+from agm.config.engine_keys import (
+    HOST_CONSUMED_ENGINE_KEYS,
+    RUNTIME_LIVE_ENGINE_KEYS,
+    TRACE_ENGINE_KEYS,
+    trace_write_implies_enabled,
+)
 from agm.core.parse import format_timeout as _format_timeout
 from agm.core.parse import parse_timeout as _parse_timeout
 
@@ -170,7 +172,25 @@ if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract
     from agm.agl.runtime.host_settings import HostSettingsReconfigurer
 
-__all__ = ["IrInterpreter", "_apply_coercion", "_make_exc_value"]
+__all__ = ["HostConfigurationError", "IrInterpreter", "_apply_coercion", "_make_exc_value"]
+
+
+class HostConfigurationError(Exception):
+    """The materialized ``default-agent`` value cannot be dispatched.
+
+    Raised by :class:`IrInterpreter`'s constructor when the winning
+    ``default-agent`` value — a host seed (``[exec] runner``, already
+    validated before this point) or a declared/spliced ``builtin var``
+    default (``--agent``, ``[exec]``/``[<program>] default-agent``, or
+    ``std/config``'s own default) — is an ``AgentCommand`` whose command text
+    does not shell-split (see :func:`agm.agent.runner.parse_command`).
+
+    This only covers the value materialized at construction time, before any
+    statement of the entry runs: a later ``std/config::default-agent := ...``
+    source write is never checked here, so a malformed command written at
+    runtime stays an ordinary AgL runtime error raised from the ``ask`` call
+    site that actually dispatches it, not a host-configuration failure.
+    """
 
 
 class _FlexibleParse(Protocol):
@@ -217,16 +237,16 @@ def _call_custom_codec_parse(
 
 
 # Engine-key defaults, built on first use.  The evaluator owns no default of its
-# own for the host-consumed engine settings — the host runtime does — so it seeds
-# its registers from the host and falls back to these.  They are fixed data, so
-# they are built once and shared.
+# own: a register falls back to the ``builtin var`` declaration's initializer and
+# then to these host-runtime values.  They are fixed data, so they are built once
+# and shared.
 _ENGINE_DEFAULT_SETTINGS: dict[str, Value] = {}
 
 
 def _engine_default_settings() -> Mapping[str, Value]:
     """Return the host runtime's engine-key defaults."""
     if not _ENGINE_DEFAULT_SETTINGS:
-        _ENGINE_DEFAULT_SETTINGS.update(build_engine_config_base({}))
+        _ENGINE_DEFAULT_SETTINGS.update(engine_default_settings())
     return _ENGINE_DEFAULT_SETTINGS
 
 
@@ -400,7 +420,7 @@ class IrInterpreter:
         trace: TraceStore | None = None,
         max_call_depth: int = DEFAULT_MAX_CALL_DEPTH,
         param_values: Mapping[SymbolId, Value] | None = None,
-        registry: AgentRegistry | None = None,
+        agent_dispatcher: AgentFn | None = None,
         strict_json: bool = False,
         loop_limit: int | None = None,
         shell_exec_timeout: float | None = None,
@@ -421,42 +441,74 @@ class IrInterpreter:
         self._param_values: Mapping[SymbolId, Value] = (
             param_values if param_values is not None else {}
         )
-        self._registry: AgentRegistry = (
-            registry if registry is not None else AgentRegistry(named={}, default_agent=None)
-        )
-        self._strict_json: bool = strict_json
-        # Global max-iters safety valve. ``None`` means the valve is off; a
-        # positive limit caps unguarded loops. The valve applies ONLY to unguarded loops
-        # (``IrLoop.guarded is False``) — ``for`` and ``do[n]`` loops carry
-        # their own bound and are never cut short by this safety net.
-        self._loop_limit = loop_limit
-        self._shell_exec_timeout: float | None = shell_exec_timeout
-        seeded_timeout = (
-            builtin_host_settings.get("timeout") if builtin_host_settings is not None else None
-        )
-        if seeded_timeout is not None:
-            assert isinstance(seeded_timeout, EnumValue)
-            self._timeout_setting = seeded_timeout
-        elif shell_exec_timeout is None:
-            self._timeout_setting = none_value()
-        else:
-            self._timeout_setting = some_value(TextValue(_format_timeout(shell_exec_timeout)))
-        # Registers for the HOST-CONSUMED ``builtin var`` engine settings
-        # (``runner``, ``log``, ``log-file``).  Unlike the three runtime-live
-        # keys (which reuse ``_strict_json`` / ``_loop_limit`` /
-        # ``_shell_exec_timeout``), these have no direct interpreter field; their
-        # values live here as AgL ``Value``s.  The registers start from the
-        # engine defaults — owned by the host runtime, not by the evaluator —
-        # and are overlaid with the host-supplied seed (resolved from the
-        # default → config-file → CLI layers) for the keys it provides.
-        # A ``host_reconfigurer`` (when present) reflects a write into the live
-        # host services — the agent registry's default agent and the trace store.
+        self._agent_dispatcher = agent_dispatcher
+        # Bootstrap the setting fields so declared defaults can be evaluated by
+        # the ordinary, typeless evaluator. Constant defaults cannot read a
+        # setting or invoke a host operation, so this temporary state is never
+        # observable by their evaluation.
+        self._strict_json = False
+        self._loop_limit: int | None = None
+        self._shell_exec_timeout: float | None = None
+        self._timeout_setting = none_value()
+        self._builtin_host_settings: dict[str, Value] = {}
         self._host_reconfigurer = host_reconfigurer
+
+        defaults = dict(_engine_default_settings())
+        defaults.update(
+            {
+                key: self._eval(value)
+                for key, value in self._program.builtin_setting_defaults.items()
+            }
+        )
         seed = builtin_host_settings if builtin_host_settings is not None else {}
-        defaults = _engine_default_settings()
-        self._builtin_host_settings: dict[str, Value] = {
-            key: seed.get(key, defaults[key]) for key in HOST_CONSUMED_ENGINE_KEYS
+
+        # Runtime-live settings use an explicit host seed when present.  Their
+        # driver arguments remain compatibility fallbacks: an absent false/None
+        # must not suppress a declaration default.  Bootstrap through the same
+        # effect path as a source write so host-invalid declared values become
+        # normal AgL runtime errors.
+        strict_setting = seed.get("strict-json")
+        if strict_setting is None:
+            strict_default = defaults["strict-json"]
+            assert isinstance(strict_default, BoolValue)
+            strict_setting = BoolValue(strict_json or strict_default.value)
+        assert isinstance(strict_setting, BoolValue)
+        self._apply_config_effect("strict-json", strict_setting)
+
+        max_iters_setting = seed.get("max-iters")
+        if max_iters_setting is None:
+            max_iters_default = defaults["max-iters"]
+            assert isinstance(max_iters_default, IntValue)
+            max_iters_setting = IntValue(
+                loop_limit if loop_limit is not None else max_iters_default.value
+            )
+        assert isinstance(max_iters_setting, IntValue)
+        self._apply_config_effect("max-iters", max_iters_setting)
+
+        timeout_setting = seed.get("timeout")
+        if timeout_setting is None:
+            timeout_setting = (
+                some_value(TextValue(_format_timeout(shell_exec_timeout)))
+                if shell_exec_timeout is not None
+                else defaults["timeout"]
+            )
+        assert isinstance(timeout_setting, EnumValue)
+        self._timeout_setting = timeout_setting
+        self._apply_config_effect("timeout", timeout_setting)
+
+        # Host-consumed registers use the host seed when one is provided and
+        # otherwise the ``builtin var`` declaration's default. A key with
+        # neither gets no register at all rather than a fabricated value;
+        # reading it is then a hard error (see ``_load_builtin_setting``).
+        effective = {**defaults, **seed}
+        self._builtin_host_settings = {
+            key: effective[key] for key in HOST_CONSUMED_ENGINE_KEYS if key in effective
         }
+        default_agent = self._builtin_host_settings.get("default-agent")
+        if isinstance(default_agent, EnumValue):
+            self._check_default_agent_dispatchable(default_agent)
+        if self._host_reconfigurer is not None:
+            self._reconfigure_host_service()
         self._host_contracts: Mapping[ContractId, OutputContract] = (
             host_contracts if host_contracts is not None else {}
         )
@@ -512,12 +564,13 @@ class IrInterpreter:
 
     @property
     def builtin_host_settings(self) -> dict[str, Value]:
-        """Current host-consumed register values (``runner``/``log``/``log-file``).
+        """Current host-consumed register values.
 
-        A snapshot copy of the register that backs the host-consumed ``builtin
-        var`` engine settings, reflecting any writes made during the run.  Hosts
-        that persist settings across runs (the REPL) read this back after a
-        successful run to seed the next run.
+        A snapshot copy of the registers backing the host-consumed ``builtin
+        var`` engine settings, reflecting any writes made during the run.  A key
+        with neither a host seed nor a declared default is absent.  Hosts that
+        persist settings across runs (the REPL) read this back after a run to
+        seed the next one.
         """
         return dict(self._builtin_host_settings)
 
@@ -548,7 +601,7 @@ class IrInterpreter:
                     _make_exc_value(
                         "IndexError",
                         f"Array index {err.index} out of range for length {err.length}",
-                        trace_id=self._trace.new_event_id(),
+                        nominals=self._program.builtin_nominals,
                         index=IntValue(err.index),
                         length=IntValue(err.length),
                     ),
@@ -558,7 +611,7 @@ class IrInterpreter:
                     _make_exc_value(
                         "KeyError",
                         f"Dict key {err.key!r} is missing",
-                        trace_id=self._trace.new_event_id(),
+                        nominals=self._program.builtin_nominals,
                         key=TextValue(err.key),
                     ),
                 )
@@ -572,7 +625,7 @@ class IrInterpreter:
         conversion so every ``render``/``as json``/coercion site that can
         reach a cyclic array or dict raises identical exception fields.
         """
-        return cyclic_value_raise(self._trace.new_event_id())
+        return cyclic_value_raise(nominals=self._program.builtin_nominals)
 
     def _render_or_raise(
         self, value: Value, *, pretty: bool = False, quote_strings: bool = False
@@ -597,7 +650,7 @@ class IrInterpreter:
                     _make_exc_value(
                         "CastError",
                         exc.message,
-                        trace_id=self._trace.new_event_id(),
+                        nominals=self._program.builtin_nominals,
                         source_type=TextValue(exc.source_label),
                         target_type=TextValue(exc.target_label),
                         raw=TextValue(exc.raw),
@@ -689,7 +742,7 @@ class IrInterpreter:
             _make_exc_value(
                 "RecursionError",
                 f"Maximum call depth ({self._max_call_depth}) exceeded",
-                trace_id=self._trace.new_event_id(),
+                nominals=self._program.builtin_nominals,
                 limit=IntValue(self._max_call_depth),
             )
         )
@@ -1082,7 +1135,7 @@ class IrInterpreter:
                         _make_exc_value(
                             "ArithmeticError",
                             "Division by zero",
-                            trace_id=self._trace.new_event_id(),
+                            nominals=self._program.builtin_nominals,
                             operation=TextValue("/"),
                         )
                     )
@@ -1189,13 +1242,15 @@ class IrInterpreter:
                     raise self._index_failure(e)
 
             case IrRenderTemplate(segments=segs):
+                # The lexer has already applied the shared ``%{...}`` surface
+                # rules, so splicing here is plain concatenation.
                 parts: list[str] = []
                 for seg in segs:
                     match seg:
-                        case IrTemplateText(text=t):
-                            parts.append(t)
-                        case IrTemplateValue(value=v_expr):
-                            parts.append(self._render_or_raise(self._eval(v_expr)))
+                        case IrTemplateText(text=text):
+                            parts.append(text)
+                        case IrTemplateValue(value=value_expr):
+                            parts.append(self._render_or_raise(self._eval(value_expr)))
                         case _ as unreachable_seg:  # pragma: no cover
                             assert_never(unreachable_seg)
                 return TextValue("".join(parts))
@@ -1224,14 +1279,9 @@ class IrInterpreter:
                 )
 
             case IrMakeException(nominal=nominal, display_name=display_name, fields=fields):
-                # Allocate ONE trace id per construction; reuse for all AutoTraceField slots.
-                tid: TextValue = TextValue(self._trace.new_event_id())
-                exc_fields: dict[str, Value] = {}
-                for fname, field_slot in fields:
-                    if isinstance(field_slot, AutoTraceField):
-                        exc_fields[fname] = tid
-                    else:
-                        exc_fields[fname] = self._eval(field_slot)
+                exc_fields: dict[str, Value] = {
+                    fname: self._eval(field_expr) for fname, field_expr in fields
+                }
                 return ExceptionValue(
                     nominal=nominal,
                     display_name=display_name,
@@ -1374,7 +1424,7 @@ class IrInterpreter:
                             _make_exc_value(
                                 "MaxIterationsExceeded",
                                 f"Loop exhausted after {self._loop_limit} iterations",
-                                trace_id=self._trace.new_event_id(),
+                                nominals=self._program.builtin_nominals,
                                 limit=IntValue(self._loop_limit),
                                 condition=TextValue("loop limit"),
                                 last_condition_value=BoolValue(False),
@@ -1514,7 +1564,7 @@ class IrInterpreter:
                         _make_exc_value(
                             "JsonParseError",
                             exc.message,
-                            trace_id=self._trace.new_event_id(),
+                            nominals=self._program.builtin_nominals,
                             raw=TextValue(val.value),
                         ),
                         span=node.location,
@@ -1526,9 +1576,6 @@ class IrInterpreter:
                 return (
                     deep_copy_value(value) if kind is CopyKind.DEEP else shallow_copy_value(value)
                 )
-
-            case IrAgentHandle(agent_id=agent_id):
-                return AgentValue(name=agent_id.display_name, agent_id=agent_id)
 
             case IrAsk(
                 agent=agent_expr,
@@ -1545,8 +1592,8 @@ class IrInterpreter:
                         exc.span = node.location
                     raise
 
-            case IrAskRequest(agent=agent_expr, prompt=prompt_expr, contract_id=contract_id):
-                return self._effects.eval_ir_ask_request(node, agent_expr, prompt_expr, contract_id)
+            case IrAskRequest(agent=agent_expr, prompt=prompt_expr):
+                return self._effects.eval_ir_ask_request(node, agent_expr, prompt_expr)
 
             case IrExec(
                 command=command_expr,
@@ -1575,6 +1622,25 @@ class IrInterpreter:
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
 
+    def _check_default_agent_dispatchable(self, value: EnumValue) -> None:
+        """Eagerly validate a materialized ``default-agent`` value's command shape.
+
+        Only the ``AgentCommand`` variant needs this: its command text is
+        host-supplied and must shell-split, exactly like a configured runner
+        command.  The other ``Agent`` variants build their argv from typed
+        fields with no parsing step, so decoding and building argv for them
+        here is cheap and can never fail — reusing
+        :func:`~agm.agl.runtime.agents.decode_agent_value` keeps this in sync
+        with the variant shapes dispatch itself relies on, rather than
+        duplicating them.
+        """
+        from agm.agl.runtime.agents import decode_agent_value
+
+        try:
+            decode_agent_value(value).argv()
+        except ValueError as exc:
+            raise HostConfigurationError(str(exc)) from exc
+
     # ------------------------------------------------------------------
     # Builtin-var register access
     # ------------------------------------------------------------------
@@ -1582,8 +1648,12 @@ class IrInterpreter:
     def _load_builtin_setting(self, key: str) -> Value:
         """Return the current value of the ``builtin var`` engine setting *key*.
 
-        The three runtime-live keys read the live interpreter fields; the three
+        The runtime-live keys read the live interpreter fields; the
         host-consumed keys read their register in ``_builtin_host_settings``.
+        A host-consumed key with neither a host seed nor a declared default has
+        no register, and no value to produce.
+
+        :raises InvalidIrError: if *key* has no host-consumed register.
         """
         if key == "strict-json":
             return BoolValue(self._strict_json)
@@ -1591,6 +1661,11 @@ class IrInterpreter:
             return IntValue(0 if self._loop_limit is None else self._loop_limit)
         if key == "timeout":
             return self._timeout_setting
+        if key not in self._builtin_host_settings:
+            raise InvalidIrError(
+                f"builtin var {key!r} has no host-consumed register value: it was neither "
+                "seeded by the host nor given a declaration default"
+            )
         return self._builtin_host_settings[key]
 
     def _store_builtin_setting(self, key: str, value: Value) -> None:
@@ -1598,8 +1673,10 @@ class IrInterpreter:
 
         The three runtime-live keys route through ``_apply_config_effect`` so the
         live effect (loop cap, strict-json mode, shell timeout) takes hold from
-        the write onward; the host-consumed keys update their register and, when
-        a host reconfigurer is present, reconfigure the live host service.
+        the write onward; the host-consumed keys update their register.
+        Writes to the ``log``/``log-file`` trace-register pair additionally
+        reconfigure the live trace service when a host reconfigurer is present;
+        ``default-agent`` remains a register-only value.
         """
         if key in RUNTIME_LIVE_ENGINE_KEYS:
             self._apply_config_effect(key, value)
@@ -1610,50 +1687,32 @@ class IrInterpreter:
 
         previous = dict(self._builtin_host_settings)
         self._builtin_host_settings[key] = value
-        if key == "log-file":
-            assert isinstance(value, EnumValue)
-            if value.variant == "Some":
-                self._builtin_host_settings["log"] = BoolValue(True)
-        if self._host_reconfigurer is None:
+        if trace_write_implies_enabled(
+            key, isinstance(value, EnumValue) and value.variant == "Some"
+        ):
+            self._builtin_host_settings["log"] = BoolValue(True)
+        if self._host_reconfigurer is None or key not in TRACE_ENGINE_KEYS:
             return
         try:
-            self._reconfigure_host_service(key)
+            self._reconfigure_host_service()
         except Exception:
             self._builtin_host_settings = previous
             raise
 
-    def _reconfigure_host_service(self, key: str) -> None:
+    def _reconfigure_host_service(self) -> None:
         """Reflect a host-consumed register write into the live host service.
 
-        ``runner`` rebuilds the default agent; ``log``/``log-file`` recompute the
-        trace destination from the current register pair (either write repoints
-        the same trace store).  Requires ``self._host_reconfigurer`` to be set.
+        ``log``/``log-file`` recompute the trace destination from the current
+        register pair (either write repoints the same trace store).
         """
         assert self._host_reconfigurer is not None
-        if key == "runner":
-            runner = self._builtin_host_settings["runner"]
-            assert isinstance(runner, TextValue)
-            try:
-                self._host_reconfigurer.reconfigure_runner(runner.value)
-            except ValueError as exc:
-                raise AglRaise(
-                    _make_exc_value(
-                        "ValueError",
-                        f"invalid runner: {exc}",
-                        trace_id=self._trace.new_event_id(),
-                    )
-                ) from exc
-        else:
-            log = self._builtin_host_settings["log"]
-            assert isinstance(log, BoolValue)
-            log_file_reg = self._builtin_host_settings["log-file"]
-            assert isinstance(log_file_reg, EnumValue)
-            log_file: str | None = None
-            if log_file_reg.variant == "Some":
-                payload = log_file_reg.fields["value"]
-                assert isinstance(payload, TextValue)
-                log_file = payload.value
-            self._host_reconfigurer.reconfigure_trace(enabled=log.value, log_file=log_file)
+        log = self._builtin_host_settings["log"]
+        assert isinstance(log, BoolValue)
+        log_file_reg = self._builtin_host_settings["log-file"]
+        assert isinstance(log_file_reg, EnumValue)
+        self._host_reconfigurer.reconfigure_trace(
+            enabled=log.value, log_file=option_text(log_file_reg)
+        )
 
     # ------------------------------------------------------------------
     # Engine-setting effect
@@ -1673,29 +1732,27 @@ class IrInterpreter:
             if config_value.value < 0:
                 raise AglRaise(
                     _make_exc_value(
-                        "ValueError",
+                        "TypeError",
                         "invalid max-iters: expected a non-negative integer",
-                        trace_id=self._trace.new_event_id(),
+                        nominals=self._program.builtin_nominals,
                     )
                 )
             self._loop_limit = config_value.value or None
         else:
             assert public_name == "timeout"
             assert isinstance(config_value, EnumValue)
-            if config_value.variant == "None":
+            raw = option_text(config_value)
+            if raw is None:
                 self._shell_exec_timeout = None
             else:
-                assert config_value.variant == "Some"
-                raw = config_value.fields.get("value")
-                assert isinstance(raw, TextValue)
                 try:
-                    self._shell_exec_timeout = _parse_timeout(raw.value)
+                    self._shell_exec_timeout = _parse_timeout(raw)
                 except ValueError as exc:
                     raise AglRaise(
                         _make_exc_value(
-                            "ValueError",
+                            "TypeError",
                             f"invalid timeout: {exc}",
-                            trace_id=self._trace.new_event_id(),
+                            nominals=self._program.builtin_nominals,
                         )
                     ) from exc
 

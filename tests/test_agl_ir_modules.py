@@ -6,11 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.ir.ids import FunctionId, NominalId
+from agm.agl.ir.ids import FunctionId
 from agm.agl.ir.nodes import IrDirectCall, IrPrint
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.program import lower_program
-from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, RecordValue, TextValue
 from agm.agl.typecheck import AglTypeError
 from tests.agl.ir_harness import (
@@ -19,6 +18,8 @@ from tests.agl.ir_harness import (
     evaluate_ir,
     evaluate_ir_graph,
     evaluate_ir_graph_raises,
+    lower_ir,
+    nominal_id_for,
 )
 
 
@@ -40,33 +41,35 @@ let x = 10
 
 
 def test_local_alias_constructor_lowers() -> None:
-    result = evaluate_ir(
-        """
+    source = """
 record Box[T]
   value: T
 type Alias[T] = Box[T]
 let box = Alias(value = 1)
 box
 """
-    )
+    result = evaluate_ir(source)
+    program = lower_ir(source)
 
-    assert result["box"] == RecordValue(NominalId(ENTRY_ID, "Box"), "Box", {"value": IntValue(1)})
+    assert result["box"] == RecordValue(
+        nominal_id_for(program, "Box"), "Box", {"value": IntValue(1)}
+    )
 
 
 def test_imported_alias_constructor_value_lowers(tmp_path: Path) -> None:
-    result = evaluate_ir_graph(
-        """
+    entry_source = """
 import lib
 let factory: (int) -> lib::Box[int] = lib::Alias
 let box = factory(1)
 box
-""",
-        {"lib": "record Box[T]\n  value: T\ntype Alias[T] = Box[T]"},
-        tmp_path,
-    )
+"""
+    modules = {"lib": "record Box[T]\n  value: T\ntype Alias[T] = Box[T]"}
+    result = evaluate_ir_graph(entry_source, modules, tmp_path)
+    checked = _checked(entry_source, modules, tmp_path)
+    program = lower_program(_compiled_checked(checked))
 
     assert result["box"] == RecordValue(
-        NominalId(ModuleId.from_path("lib"), "Box"), "Box", {"value": IntValue(1)}
+        nominal_id_for(program, "Box"), "Box", {"value": IntValue(1)}
     )
 
 

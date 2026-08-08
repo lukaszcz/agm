@@ -3,21 +3,26 @@
 Reference semantics makes cyclic ``array``/``dict`` values constructible: an
 array or dict can hold a reference back to a container that (transitively)
 contains it. Every walker that recurses through a value's containers —
-rendering, JSON serialization, and the Python FFI encoder — must detect that
-re-entry rather than recursing forever. A cycle can only ever be closed
-through an array or a dict: records, enums, and exceptions are immutable, so
-none of them can hold a reference to itself. Tracking container identity is
-therefore enough; no other value kind ever needs to join the active set.
+rendering and JSON serialization — must detect that re-entry rather than
+recursing forever. A cycle can only ever be closed through an array or a
+dict: records, enums, and exceptions are immutable, so none of them can hold
+a reference to itself. Tracking container identity is therefore enough; no
+other value kind ever needs to join the active set.
 
-This module is the single shared implementation of that active-set walk, so
-``render_value``, ``value_to_json_obj``, and the FFI boundary encoder do not
-each reimplement it. Equality is unrelated — it is co-inductive
-(``semantics/values.py``) rather than error-raising, and does not use this
-module.
+The FFI encoder does not walk array or dict payloads: it produces lazy views,
+so cyclic arguments cross the boundary. A companion that ``repr``s such a
+view renders its value and reaches this guard. This module is the single
+shared implementation for ``render_value`` and ``value_to_json_obj``.
+Cyclic *Python* payloads are a separate concern with a separate walk in
+``runtime/boundary.py``: they are unrepresentable rather than
+cycle-guarded, and are rejected alongside the rest of the JSON-shape check.
+Equality is unrelated — it is co-inductive (``semantics/values.py``) rather
+than error-raising, and does not use this module.
 """
 
 from __future__ import annotations
 
+from agm.agl.ir.builtin_nominals import BuiltinNominals
 from agm.agl.semantics.exceptions import AglRaise, make_builtin_exception
 
 __all__ = [
@@ -42,10 +47,10 @@ CYCLIC_VALUE_MARKER = "<cyclic value>"
 class AglCyclicValue(Exception):
     """Sentinel: a container walk re-entered a container already on its own path.
 
-    Raised by :func:`enter_container` when a walker (rendering, JSON
-    serialization, the FFI encoder) revisits a container it has not yet
-    finished visiting. A caller that can reach a cyclic value converts this
-    into a catchable ``CyclicValueError`` via :func:`cyclic_value_raise`.
+    Raised by :func:`enter_container` when rendering or JSON serialization
+    revisits a container it has not yet finished visiting. A caller that can
+    reach a cyclic value converts this into a catchable ``CyclicValueError``
+    via :func:`cyclic_value_raise`.
     """
 
 
@@ -70,17 +75,17 @@ def enter_container(container_id: int, active: "set[int] | None") -> "set[int]":
     return active
 
 
-def cyclic_value_raise(trace_id: str) -> AglRaise:
+def cyclic_value_raise(*, nominals: BuiltinNominals) -> AglRaise:
     """Build the catchable ``AglRaise(CyclicValueError)`` for a detected cycle.
 
     Single shared constructor so every caller that converts an
     :class:`AglCyclicValue` sentinel produces byte-identical exception
-    fields.
+    fields. *nominals* is forwarded to :func:`make_builtin_exception`.
     """
     return AglRaise(
         make_builtin_exception(
             "CyclicValueError",
             CYCLE_MESSAGE,
-            trace_id=trace_id,
+            nominals=nominals,
         )
     )

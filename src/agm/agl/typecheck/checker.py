@@ -1,8 +1,9 @@
 """Type-checking pass for AgL.
 
-``check_module(resolved, capabilities)`` performs a bidirectional type pass over the
+``_Checker`` performs a bidirectional type pass over one module's
 ``ModuleResolution``, using the ``HostCapabilities`` to validate codec and
-renderer names, and returns a ``CheckedModule``.
+renderer names, and produces a ``CheckedModule``; ``check_program`` drives one
+``_Checker`` per module of a whole program (see ``typecheck/program.py``).
 
 Rules implemented
 -----------------
@@ -78,7 +79,7 @@ from agm.agl.semantics.type_table import (
     json_cast_hint,
 )
 from agm.agl.semantics.types import (
-    AgentType,
+    BUILTIN_PRELUDE_TYPES,
     ArrayType,
     BoolType,
     BottomType,
@@ -102,10 +103,11 @@ from agm.agl.semantics.types import (
     contains_inference_var,
     free_type_vars,
     is_assignable,
+    reroot_type,
     substitute,
 )
+from agm.agl.syntax.constants import is_constant_expression
 from agm.agl.syntax.nodes import (
-    AgentDecl,
     ArrayLit,
     AsPattern,
     AssignStmt,
@@ -174,6 +176,7 @@ from agm.agl.syntax.nodes import (
     WildcardPattern,
     pattern_binder_candidates,
     simple_let_pattern_name,
+    static_items,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TypeExpr
@@ -186,7 +189,6 @@ from agm.agl.typecheck.builtins import (
     PendingBuiltinObligation,
 )
 from agm.agl.typecheck.constructors import ConstructorChecker
-from agm.agl.typecheck.declaration_validation import validate_method_declaration_collisions
 from agm.agl.typecheck.env import (
     AglTypeError,
     ArgumentBindings,
@@ -217,20 +219,6 @@ from agm.agl.typecheck.inference import (
 )
 
 # ---------------------------------------------------------------------------
-# Static declaration traversal
-# ---------------------------------------------------------------------------
-
-
-def _static_items(items: tuple[Item, ...]) -> Iterator[Item]:
-    """Yield static declarations nested in named scope regions."""
-    for item in items:
-        if isinstance(item, ScopeRegion):
-            yield from _static_items(cast(tuple[Item, ...], item.items))
-        else:
-            yield item
-
-
-# ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
@@ -258,6 +246,28 @@ class _ExternTarget:
 
 
 _ExternTargets = tuple[_ExternTarget, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _SelectedBuiltinMethod:
+    """A call-only host method (``ask``/``ask-request``) selected by member access.
+
+    Such a method has no first-class function value: only the member-call path
+    can consume the selection, and its own builtin rule owns the call's type
+    arguments and result. Deliberately not a ``Type``, so that member access
+    returns ``Type | _SelectedBuiltinMethod`` and the type checker itself makes
+    every consumer say which of the two it accepts. Non-call positions route
+    through :meth:`_Checker._require_field_access_type`, which rejects the
+    selection; nothing publishes it as a node type.
+
+    ``receiver_type`` is the checked type of the object the method was
+    selected from. The receiver IS the agent a receiver-form ``ask``/
+    ``ask-request`` dispatches to, so the built-in rule needs it to hold the
+    receiver to the same requirement as an explicit ``agent`` argument.
+    """
+
+    name: str
+    receiver_type: Type
 
 
 @dataclass(frozen=True, slots=True)
@@ -320,12 +330,44 @@ _IndexLike = IndexAccess | IndexTarget
 
 
 def _std_param(name: str, typ: Type, has_default: bool = False) -> ParamSpec:
-    """Create a ``ParamSpec`` with ``STANDARD`` kind (used for all built-in params)."""
+    """Create a standard ``ParamSpec`` for an ordinary built-in parameter."""
     return ParamSpec(name=name, type=typ, kind=ParamKind.STANDARD, has_default=has_default)
 
 
-def _builtin_function_signature(name: str) -> FunctionSignature | None:
+def _self_param() -> ParamSpec:
+    """Create the positional-only receiver shared by builtin Agent methods."""
+    return ParamSpec(
+        name="self",
+        type=BUILTIN_PRELUDE_TYPES["Agent"],
+        kind=ParamKind.POSITIONAL_ONLY,
+        has_default=False,
+    )
+
+
+def _as_agent_method(signature: FunctionSignature) -> FunctionSignature:
+    """Rebind a root builtin signature as an ``Agent`` method.
+
+    The receiver supplies the agent, so its ``agent`` parameter is replaced by
+    the positional-only ``self``.  Deriving the method form keeps it in step
+    with the root form, whose parameters the stdlib method headers must match.
+    """
+    return replace(
+        signature,
+        params=(
+            _self_param(),
+            *(param for param in signature.params if param.name != "agent"),
+        ),
+    )
+
+
+def _builtin_function_signature(name: str, *, is_method: bool = False) -> FunctionSignature | None:
     t = TypeVarType("T")
+    if is_method:
+        if name not in ("ask", "ask-request"):
+            return None
+        root = _builtin_function_signature(name)
+        assert root is not None
+        return _as_agent_method(root)
     match name:
         case "print":
             return FunctionSignature(
@@ -345,12 +387,12 @@ def _builtin_function_signature(name: str) -> FunctionSignature | None:
             return FunctionSignature(
                 params=(
                     _std_param("prompt", TextType()),
-                    _std_param("agent", AgentType(), has_default=True),
+                    _std_param("agent", BUILTIN_PRELUDE_TYPES["Agent"], has_default=True),
                     _std_param("format", TextType(), has_default=True),
                     _std_param("strict_json", BoolType(), has_default=True),
                     _std_param(
                         "on_parse_error",
-                        EnumType(name="ParsePolicy"),
+                        BUILTIN_PRELUDE_TYPES["ParsePolicy"],
                         has_default=True,
                     ),
                 ),
@@ -359,20 +401,25 @@ def _builtin_function_signature(name: str) -> FunctionSignature | None:
             )
         case "ask-request":
             return FunctionSignature(
-                params=(_std_param("prompt", TextType()),),
-                result=RecordType(name="AgentRequest"),
+                params=(
+                    _std_param("prompt", TextType()),
+                    _std_param("agent", BUILTIN_PRELUDE_TYPES["Agent"], has_default=True),
+                ),
+                result=BUILTIN_PRELUDE_TYPES["AgentRequest"],
             )
         case "exec":
             return FunctionSignature(
                 params=(_std_param("command", TextType()),),
-                result=RecordType(name="ExecResult"),
+                result=BUILTIN_PRELUDE_TYPES["ExecResult"],
             )
         case _:
             return None
 
 
-def _builtin_function_signature_alternates(name: str) -> tuple[FunctionSignature, ...]:
-    expected = _builtin_function_signature(name)
+def _builtin_function_signature_alternates(
+    name: str, *, is_method: bool = False
+) -> tuple[FunctionSignature, ...]:
+    expected = _builtin_function_signature(name, is_method=is_method)
     if expected is None:
         return ()
     if name == "ask":
@@ -383,25 +430,68 @@ def _builtin_function_signature_alternates(name: str) -> tuple[FunctionSignature
     return (expected,)
 
 
+def _rerooted_signature(sig: FunctionSignature, prefix: tuple[str, ...]) -> FunctionSignature:
+    """Return *sig* with *prefix* stripped from every embedded nominal's scope path.
+
+    A scoped ``builtin def``'s own parameter/result types that name a
+    same-scoped builtin type resolve under this declaration's own scope
+    path, while the canonical signature (:func:`_builtin_function_signature`)
+    is always written at scope path ``()``. Re-rooting *sig* onto that same
+    frame before :func:`_signature_matches` compares it lets a scoped
+    ``builtin def`` validate against, and dispatch with, the canonical
+    nominal — mirroring ``_TypeBuilder._reroot_typedef``.
+    """
+    if not prefix:
+        return sig
+    return FunctionSignature(
+        params=tuple(replace(p, type=reroot_type(p.type, prefix)) for p in sig.params),
+        result=reroot_type(sig.result, prefix),
+        type_params=sig.type_params,
+    )
+
+
+def _builtin_nominal_matches(actual: Type, expected: Type) -> bool:
+    """Compare one builtin signature type by nominal name and scope path.
+
+    ``module_id`` is deliberately excluded: the canonical *expected* type
+    literals (:func:`_builtin_function_signature`) are written without an
+    explicit ``module_id`` (defaulting to ``ENTRY_ID``) while a resolved
+    *actual* builtin nominal now carries its declaring module — the shipped
+    standard library's own module for a name the program declares nothing
+    for, or the program's own module for a ``builtin def`` it declares
+    itself — a pre-existing asymmetry this comparison already tolerated by
+    ignoring ``module_id`` outright. ``scope_path`` is compared, though: the
+    caller re-roots *actual* onto the declaring ``builtin def``'s own scope
+    path first (see :func:`_rerooted_signature`), so a scoped nominal that
+    resolves to a sibling of the same region compares equal to the canonical
+    (path ``()``) shape, while a mismatched one is correctly rejected.
+    """
+    if isinstance(expected, RecordType):
+        return (
+            isinstance(actual, RecordType)
+            and actual.name == expected.name
+            and actual.scope_path == expected.scope_path
+        )
+    if isinstance(expected, EnumType):
+        return (
+            isinstance(actual, EnumType)
+            and actual.name == expected.name
+            and actual.scope_path == expected.scope_path
+        )
+    return actual == expected
+
+
 def _signature_matches(actual: FunctionSignature, expected: FunctionSignature) -> bool:
     if actual.type_params != expected.type_params:
         return False
     if len(actual.params) != len(expected.params):
         return False
     for ap, ep in zip(actual.params, expected.params):
-        if ap.name != ep.name or ap.has_default != ep.has_default:
+        if ap.name != ep.name or ap.kind != ep.kind or ap.has_default != ep.has_default:
             return False
-        if isinstance(ep.type, RecordType):
-            if not isinstance(ap.type, RecordType) or ap.type.name != ep.type.name:
-                return False
-        elif isinstance(ep.type, EnumType):
-            if not isinstance(ap.type, EnumType) or ap.type.name != ep.type.name:
-                return False
-        elif ap.type != ep.type:
+        if not _builtin_nominal_matches(ap.type, ep.type):
             return False
-    if isinstance(expected.result, RecordType):
-        return isinstance(actual.result, RecordType) and actual.result.name == expected.result.name
-    return actual.result == expected.result
+    return _builtin_nominal_matches(actual.result, expected.result)
 
 
 def _is_index_like(node: object) -> TypeGuard[_IndexLike]:
@@ -426,12 +516,12 @@ def _validate_extern_name(name: str, span: SourceSpan) -> None:
         )
 
 
-def _contains_banned_extern_type(
+def _contains_function_type(
     t: Type, type_table: TypeTable, _seen: frozenset[Type] = frozenset()
 ) -> bool:
-    """Return ``True`` if *t* contains a function or agent type anywhere.
+    """Return ``True`` if *t* contains a function type anywhere.
 
-    The FFI is a pure data boundary: function and agent values can never cross
+    The FFI is a pure data boundary: function values can never cross
     it, so they are static errors anywhere in an extern's parameter or return
     types, including nested inside ``array``/``dict``/record/enum
     instantiations.  Type variables are permitted at any depth — dynamic
@@ -441,30 +531,26 @@ def _contains_banned_extern_type(
     (e.g. a self-referential record) is examined once rather than forever.
     """
     match t:
-        case FunctionType() | AgentType():
+        case FunctionType():
             return True
         case ArrayType():
-            return _contains_banned_extern_type(t.elem, type_table, _seen)
+            return _contains_function_type(t.elem, type_table, _seen)
         case DictType():
-            return _contains_banned_extern_type(t.value, type_table, _seen)
+            return _contains_function_type(t.value, type_table, _seen)
         case RecordType():
             if t in _seen:
                 return False
             seen = _seen | {t}
-            return any(
-                _contains_banned_extern_type(ta, type_table, seen) for ta in t.type_args
-            ) or any(
-                _contains_banned_extern_type(ft, type_table, seen)
+            return any(_contains_function_type(ta, type_table, seen) for ta in t.type_args) or any(
+                _contains_function_type(ft, type_table, seen)
                 for ft in type_table.record_fields(t).values()
             )
         case EnumType():
             if t in _seen:
                 return False
             seen = _seen | {t}
-            return any(
-                _contains_banned_extern_type(ta, type_table, seen) for ta in t.type_args
-            ) or any(
-                _contains_banned_extern_type(ft, type_table, seen)
+            return any(_contains_function_type(ta, type_table, seen) for ta in t.type_args) or any(
+                _contains_function_type(ft, type_table, seen)
                 for vfields in type_table.enum_variants(t).values()
                 for ft in vfields.values()
             )
@@ -473,7 +559,7 @@ def _contains_banned_extern_type(
                 return False
             seen = _seen | {t}
             return any(
-                _contains_banned_extern_type(ft, type_table, seen)
+                _contains_function_type(ft, type_table, seen)
                 for ft in type_table.exception_fields(t).values()
             )
         case (
@@ -632,8 +718,6 @@ class _Checker:
         declarations; builtin methods are rejected because they have no host
         dispatch contract.
         """
-        if is_method and node.is_builtin:
-            raise AglTypeError("Builtin methods are not supported.", span=node.span)
         if not is_method and node.name in _BUILTIN_TYPE_NAMES:
             raise AglTypeError(
                 f"'{node.name}' is a built-in type name and cannot be used as a function name.",
@@ -665,11 +749,11 @@ class _Checker:
     def _validate_extern_signature(self, node: FuncDef, sig: FunctionSignature) -> None:
         """Reject types that cannot cross the Python boundary in an extern's signature.
 
-        Two kinds are rejected: a function or agent type anywhere (opaque values
-        that can never marshal across the FFI), and a type with no finite schema
-        (its recursive instantiations never close, so its boundary schema — like
-        its JSON schema — cannot be built). A finite recursive type is allowed:
-        it crosses as a ``BoundaryRef`` structure.
+        Two kinds are rejected: a function type anywhere (a value that cannot
+        marshal across the FFI), and a type with no finite schema (its
+        recursive instantiations never close, so it cannot be represented by
+        the language's finite type machinery). Finite recursive types cross as
+        ordinary recursive Python object graphs.
         """
         for p, spec in zip(node.params, sig.params):
             self._reject_uncrossable_extern_type(
@@ -678,7 +762,7 @@ class _Checker:
                 use="an extern parameter type",
                 banned_message=(
                     f"extern function '{node.name}' parameter '{p.name}' has a "
-                    "function or agent type, which cannot cross the Python boundary."
+                    "function type, which cannot cross the Python boundary."
                 ),
             )
         self._reject_uncrossable_extern_type(
@@ -687,7 +771,7 @@ class _Checker:
             use="an extern return type",
             banned_message=(
                 f"extern function '{node.name}' has a return type containing a "
-                "function or agent type, which cannot cross the Python boundary."
+                "function type, which cannot cross the Python boundary."
             ),
         )
 
@@ -698,7 +782,7 @@ class _Checker:
 
         Finite-schema is checked BEFORE the banned-type walk: a type whose
         instantiations never close (growing polymorphic recursion) has an
-        infinite structure, and ``_contains_banned_extern_type`` walks that
+        infinite structure, and ``_contains_function_type`` walks that
         structure — its cycle guard only catches repeated instantiations, not
         ever-growing ones. ``no_finite_schema_message`` works at the
         declaration level and always terminates, so it rejects such a type
@@ -708,16 +792,24 @@ class _Checker:
         message = type_table.no_finite_schema_message(typ, use=use)
         if message is not None:
             raise AglTypeError(message, span=span)
-        if _contains_banned_extern_type(typ, type_table):
+        if _contains_function_type(typ, type_table):
             raise AglTypeError(banned_message, span=span)
 
     def _register_funcdef_signature(
         self, node: FuncDef, sig: FunctionSignature, func_type: FunctionType, *, is_method: bool
     ) -> None:
         """Register a resolved ``def`` signature in every function side table."""
-        if node.is_builtin and not is_method:
-            expected_sigs = _builtin_function_signature_alternates(node.name)
-            if not any(_signature_matches(sig, expected_sig) for expected_sig in expected_sigs):
+        if node.is_builtin:
+            own_path = tuple(segment.name for segment in node.scope_path)
+            # A method's final scope segment names its receiver. Its receiver
+            # and sibling types live in the enclosing scope, so remove that
+            # shared prefix before comparing with the root canonical contract.
+            reroot_prefix = own_path[:-1] if is_method else own_path
+            rerooted_sig = _rerooted_signature(sig, reroot_prefix)
+            expected_sigs = _builtin_function_signature_alternates(node.name, is_method=is_method)
+            if not any(
+                _signature_matches(rerooted_sig, expected_sig) for expected_sig in expected_sigs
+            ):
                 raise AglTypeError(
                     f"Builtin function '{node.name}' has an invalid signature.",
                     span=node.span,
@@ -738,11 +830,11 @@ class _Checker:
             item.node_id, tuple(segment.name for segment in item.scope_path)
         )
 
-    def check_module(self, program: Program) -> None:
-        """Type-check the entire program."""
+    def check_body(self, program: Program) -> None:
+        """Type-check one module's declarations and top-level items."""
         # Pre-pass: register static function signatures before any body is
         # checked, including members collected from named scope regions.
-        for item in _static_items(program.body.items):
+        for item in static_items(program.body.items):
             if isinstance(item, FuncDef):
                 with self._env.type_scope(self._declaration_scope_path(item)):
                     self._preregister_funcdef(item)
@@ -794,13 +886,12 @@ class _Checker:
         if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
             return UnitType()
         if isinstance(item, BuiltinVarDecl):
-            self._check_builtin_var(item)
-            return UnitType()
-        if isinstance(item, AgentDecl):
-            self._env.set_binding_type(item.node_id, AgentType())
+            with self._own_type_scope(item):
+                self._check_builtin_var(item)
             return UnitType()
         if isinstance(item, ParamDecl):
-            self._check_param(item)
+            with self._own_type_scope(item):
+                self._check_param(item)
             return UnitType()
         if isinstance(item, ProgramDecl):
             return UnitType()
@@ -808,11 +899,31 @@ class _Checker:
             return UnitType()  # The program module-system pass processes imports/exports.
         # --- Binders ---
         if isinstance(item, (LetDecl, VarDecl)):
-            return self._check_binding(item)
+            with self._own_type_scope(item):
+                return self._check_binding(item)
         if isinstance(item, AssignStmt):
             return self._check_assign_stmt(item)
         # --- Expr ---
         return self._check_expr(item, expected=expected)
+
+    @contextmanager
+    def _own_type_scope(
+        self, item: LetDecl | VarDecl | ParamDecl | BuiltinVarDecl
+    ) -> Iterator[None]:
+        """Resolve *item*'s own type expressions in its declared scope path.
+
+        A scope-region member (either spelling — the region form or the
+        declaration-path shorthand) carries its full path on ``item.scope_path``
+        and resolves its type expressions there. A binder with no path of its
+        own — an ordinary ``let``/``var`` local to a block — keeps whatever
+        scope is already ambient (the enclosing ``def``'s, or the root's),
+        since it is not itself a scope member.
+        """
+        if not item.scope_path:
+            yield
+            return
+        with self._env.type_scope(tuple(segment.name for segment in item.scope_path)):
+            yield
 
     # ------------------------------------------------------------------
     # Declaration checkers
@@ -955,7 +1066,7 @@ class _Checker:
         # decode) at lowering time (see ``type_schema.build_param_decoder``).
         # Reject both kinds of non-decodable type here rather than crashing at
         # lowering: infinite instantiation closures have no finite schema, and
-        # opaque/non-data values (unit, agent, functions, exceptions, …) have no
+        # non-data values (unit, functions, exceptions, …) have no
         # JSON wire representation at all. Text params are taken verbatim.
         if not isinstance(declared_type, TextType):
             message = self._env.type_table.no_finite_schema_message(
@@ -1005,7 +1116,6 @@ class _Checker:
             (
                 ExceptionType,
                 UnitType,
-                AgentType,
                 FunctionType,
                 BottomType,
                 TypeVarType,
@@ -1038,6 +1148,18 @@ class _Checker:
                 span=node.span,
             )
         self._env.set_binding_type(node.node_id, key_type)
+        if node.default is not None:
+            default_type = self._check_boundary_expr(node.default, expected=key_type)
+            self._assert_assignable_from(default_type, key_type, node.default.span, node.default)
+            if not is_constant_expression(
+                node.default,
+                is_constructor=lambda node_id: self._constructor_ref_for(node_id) is not None,
+            ):
+                raise AglTypeError(
+                    "builtin var initializer must be a constant expression "
+                    "(constructors and literals only).",
+                    span=node.default.span,
+                )
 
     @staticmethod
     def _binder_result(value_type: Type) -> Type:
@@ -1429,7 +1551,9 @@ class _Checker:
         if isinstance(expr, IsTest):
             return self._check_is_test(expr)
         if isinstance(expr, FieldAccess):
-            return self._check_field_access(expr, expected=expected)
+            return self._require_field_access_type(
+                expr, self._check_field_access(expr, expected=expected)
+            )
         if isinstance(expr, RecordUpdate):
             return self._check_record_update(expr, expected=expected)
         if _is_index_like(expr):
@@ -1759,7 +1883,10 @@ class _Checker:
                 return typ
 
         if isinstance(node.expr, FieldAccess):
-            return self._check_specialized_field_access(node.expr, type_args=node.type_args)
+            return self._require_field_access_type(
+                node.expr,
+                self._check_specialized_field_access(node.expr, type_args=node.type_args),
+            )
 
         if not isinstance(node.expr, VarRef):
             raise AglTypeError(
@@ -2005,9 +2132,7 @@ class _Checker:
             self._record_side_table_addition(
                 "pattern_constructor_owners", self._pattern_constructor_owners, node_id
             )
-            self._pattern_constructor_owners[node_id] = NominalId(
-                owner_type.module_id, owner_type.name
-            )
+            self._pattern_constructor_owners[node_id] = NominalId(owner_type.decl_id)
 
     def _record_constructor_call_binding(self, node_id: int, binding: dict[str, Expr]) -> None:
         """Store a region-owned constructor-call argument binding."""
@@ -2471,7 +2596,7 @@ class _Checker:
         hole_indices: Mapping[int, int],
     ) -> Type:
         # Built-in?
-        if node.node_id in self._resolved.builtin_calls:
+        if isinstance(node.callee, VarRef) and node.node_id in self._resolved.builtin_calls:
             kind = self._resolved.builtin_calls[node.node_id]
             if hole_indices:
                 builtin_name = next(
@@ -2737,9 +2862,10 @@ class _Checker:
         callee_ref: BindingRef,
         hole_indices: Mapping[int, int],
     ) -> Type:
-        # Use the node-id-keyed lookup populated by the function-signature pre-pass
-        # (program context) and by _preregister_funcdef (module mode).  Keying
-        # by the callee's globally-unique decl_node_id avoids the same-name collision
+        # Use the node-id-keyed lookup populated by the whole-program
+        # function-signature pre-pass and by this module's own
+        # _preregister_funcdef.  Keying by the callee's globally-unique
+        # decl_node_id avoids the same-name collision
         # where two modules define functions with identical names but different
         # signatures, which would cause the name-keyed table to return the wrong
         # signature for a qualified cross-module call.
@@ -2842,7 +2968,22 @@ class _Checker:
                 field_access, type_args=node.type_args
             )
         else:
-            callee_type = self._check_expr(field_access, expected=None)
+            callee_type = self._check_field_access(field_access, expected=None)
+            if not isinstance(callee_type, _SelectedBuiltinMethod):
+                self._record_node_type(field_access.node_id, callee_type)
+        if isinstance(callee_type, _SelectedBuiltinMethod):
+            # The record is always present: ``_resolve_call`` classifies every
+            # member call whose field spells a built-in name, speculatively,
+            # because scope cannot yet know which method the name selects. And
+            # it is always one of these two kinds, because header validation
+            # (``_register_funcdef_signature``) admits no other builtin method.
+            kind = self._resolved.builtin_calls[node.node_id]
+            if kind == BuiltinKind.ASK:
+                return self._builtins.check_ask(
+                    node, expected=expected, receiver_type=callee_type.receiver_type
+                )
+            # ASK_REQUEST
+            return self._builtins.check_ask_request(node, receiver_type=callee_type.receiver_type)
         method = self._method_selections.get(field_access.node_id)
         if method is None:
             return self._check_value_call(
@@ -2927,8 +3068,12 @@ class _Checker:
             # ``_check_specialized_field_access`` (see its docstring for why the
             # specialization must be published on the inner node here too).
             if isinstance(node.callee, FieldAccess) and node.type_args:
-                callee_type = self._check_specialized_field_access(
-                    node.callee, type_args=node.type_args
+                # A partial member call (``p.f::[T](?)``) allocates a bound
+                # closure value, so a selected built-in method is rejected
+                # here exactly as any other non-call use of it would be.
+                callee_type = self._require_field_access_type(
+                    node.callee,
+                    self._check_specialized_field_access(node.callee, type_args=node.type_args),
                 )
             else:
                 callee_type = self._check_expr(node.callee, expected=None)
@@ -3260,6 +3405,7 @@ class _Checker:
                     span=clause.span,
                 )
             exc_type = resolved
+            self._builtins.check_caught_exception_contract(exc_type, span=clause.span)
         if clause.binding is not None:
             self._env.set_binding_type(clause.node_id, exc_type)
         return self._check_expr(clause.body, expected=expected)
@@ -3791,11 +3937,14 @@ class _Checker:
                     )
                 if not isinstance(local_enum, EnumType):
                     raise AglTypeError(f"'{local_owner}' is not a known enum type.", span=span)
-                same_generic_owner = (
-                    local_enum.module_id == enum_type.module_id
-                    and local_enum.scope_path == enum_type.scope_path
-                    and local_enum.name == enum_type.name
-                    and all(isinstance(arg, TypeVarType) for arg in local_enum.type_args)
+                # A generic enum's bare name denotes its uninstantiated
+                # template, which legitimately qualifies any instantiation of
+                # the SAME declaration. Identity is the declaration, never the
+                # name: two declarations sharing one name path (a REPL
+                # redeclaration) are unrelated enums, so the qualifier must
+                # not reach across them.
+                same_generic_owner = local_enum.decl_id == enum_type.decl_id and all(
+                    isinstance(arg, TypeVarType) for arg in local_enum.type_args
                 )
                 if local_enum != enum_type and not same_generic_owner:
                     raise AglTypeError(
@@ -3984,7 +4133,7 @@ class _Checker:
 
     def _check_specialized_field_access(
         self, field_access: FieldAccess, *, type_args: tuple[TypeExpr, ...]
-    ) -> Type:
+    ) -> Type | _SelectedBuiltinMethod:
         """Check a member access carrying explicit type arguments and publish its type.
 
         This is reached both from value-position ``expr::[T]`` (``TypeApply``) and from
@@ -3994,10 +4143,31 @@ class _Checker:
         specialized member's type must be recorded on the inner ``FieldAccess`` node
         itself, not only returned to the immediate caller: partial lowering and
         direct-call argument coercion both read the callee's type straight off that
-        node rather than off the outer node wrapping it.
+        node rather than off the outer node wrapping it. A selected built-in method
+        publishes nothing here, because neither consumer can observe it: a partial
+        application of one is rejected outright, and its member call lowers through
+        the builtin route (receiver operand plus arguments), never through the
+        value-call route that reads the callee node's type.
         """
         typ = self._check_field_access(field_access, type_args=type_args)
-        self._record_node_type(field_access.node_id, typ)
+        if not isinstance(typ, _SelectedBuiltinMethod):
+            self._record_node_type(field_access.node_id, typ)
+        return typ
+
+    def _require_field_access_type(
+        self, node: FieldAccess, typ: Type | _SelectedBuiltinMethod
+    ) -> Type:
+        """Narrow a checked field access to a plain ``Type``.
+
+        Every non-call position routes its ``_check_field_access``/
+        ``_check_specialized_field_access`` result through here: a selected
+        built-in method (``ask``/``ask-request``) is call-only, so reaching
+        this helper with one is always an error.
+        """
+        if isinstance(typ, _SelectedBuiltinMethod):
+            raise AglTypeError(
+                f"Built-in function '{typ.name}' cannot be used as a value.", span=node.span
+            )
         return typ
 
     def _check_field_access(
@@ -4006,7 +4176,7 @@ class _Checker:
         expected: Type | None = None,
         *,
         type_args: tuple[TypeExpr, ...] | None = None,
-    ) -> Type:
+    ) -> Type | _SelectedBuiltinMethod:
         obj_type = self._check_expr(node.obj, expected=None)
         if self._candidate_session is not None and contains_inference_var(obj_type):
             return self._active_inference_engine().fresh("member result")
@@ -4045,6 +4215,13 @@ class _Checker:
                 method = self._env.type_table.lookup_method(obj_type, node.field)
                 if method is not None:
                     self._record_method_selection(node.node_id, method)
+                    if method.is_builtin:
+                        # Host methods are call-only and their dispatch-specific
+                        # checker owns explicit type arguments and result typing.
+                        # Do not freshen the declared generic result merely to
+                        # discover the selected method; return the selection
+                        # itself rather than a fabricated function type.
+                        return _SelectedBuiltinMethod(name=method.name, receiver_type=obj_type)
                     bound = self._bound_method_type(
                         method, obj_type, type_args=type_args, expected=expected, span=node.span
                     )
@@ -4964,23 +5141,16 @@ def prepare_module_headers(
     *,
     env: TypeEnvironment,
     module_id: ModuleId,
-    check_inhabitation: bool,
 ) -> None:
-    """Build a module's type table and pre-register its function headers.
-
-    The standalone boundary and the program driver share this step so header
-    pre-registration stays identical across single-module and program checking.
-    """
-    _TypeBuilder(env, module_id=module_id).collect(
-        resolved.program, check_inhabitation=check_inhabitation
-    )
+    """Build a module's type table and pre-register its function headers."""
+    _TypeBuilder(env, module_id=module_id).collect(resolved.program)
     header_checker = _Checker(
         env=env,
         resolved=resolved,
         capabilities=capabilities,
         module_id=module_id,
     )
-    for item in _static_items(resolved.program.body.items):
+    for item in static_items(resolved.program.body.items):
         if isinstance(item, FuncDef):
             with env.type_scope(header_checker._declaration_scope_path(item)):
                 header_checker._preregister_funcdef(item)
@@ -4992,24 +5162,22 @@ def _check_prepared_module(
     *,
     env: TypeEnvironment,
     module_id: ModuleId = ENTRY_ID,
-    check_inhabitation: bool = True,
     prepare_headers: bool = True,
-    validate_declaration_collisions: bool = False,
     infer_candidates: bool = True,
     candidate_records: Mapping[int, FunctionSignatureRecord] | None = None,
 ) -> CheckedModule:
     """Check using a prepared environment and return only finalized annotations.
 
-    Both single-module and program callers enter here after preparing the
-    namespace appropriate to their mode.  ``_Checker`` owns expression-region
+    ``check_program``'s Phase 4 enters here after preparing each module's
+    environment; this is also the sanctioned white-box seam for a test that
+    drives ``_Checker`` against a hand-built or mutated ``ModuleResolution``
+    with no real module graph behind it. ``_Checker`` owns expression-region
     close/finalize validation, so this boundary never returns provisional
     inference state.
 
     ``prepare_headers`` runs the type-table build and function-header
     pre-registration; the program driver disables it because Phase 3 already
-    seeded this environment before candidate inference. The standalone boundary
-    additionally requests declaration-collision validation once its shapes are
-    available.
+    seeded this environment before candidate inference.
     """
     if prepare_headers:
         prepare_module_headers(
@@ -5017,10 +5185,7 @@ def _check_prepared_module(
             capabilities,
             env=env,
             module_id=module_id,
-            check_inhabitation=check_inhabitation,
         )
-    if validate_declaration_collisions:
-        validate_method_declaration_collisions({module_id: resolved}, env.type_table)
     if infer_candidates:
         inferred_records = infer_module_component_candidates(
             ModuleCandidateComponent.singleton(resolved, env, capabilities, module_id)
@@ -5034,55 +5199,9 @@ def _check_prepared_module(
         module_id=module_id,
         candidate_records=candidate_records,
     )
-    checker.check_module(resolved.program)
+    checker.check_body(resolved.program)
     checked = checker.result()
     checked.type_env.seal()
     if self_validation_enabled():
         assert_checked_module_closed(checked)
     return checked
-
-
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
-
-
-def check_module(
-    resolved: ModuleResolution,
-    capabilities: HostCapabilities,
-    *,
-    seed_env: TypeEnvironment | None = None,
-) -> CheckedModule:
-    """Run the full type-checking pass.
-
-    Parameters
-    ----------
-    resolved:
-        Output of the scope resolution pass.
-    capabilities:
-        Immutable host capability catalog (agents, codecs, renderers).
-    seed_env:
-        When given, the working ``TypeEnvironment`` starts pre-populated with
-        the seed's user-declared types and prior binding types.
-
-    Returns
-    -------
-    CheckedModule
-        The annotated program with type side tables and contract specs.
-
-    Raises
-    ------
-    AglTypeError
-        On the first static type violation (first-error abort).
-    """
-    env = TypeEnvironment(
-        local_scope_paths=frozenset(resolved.scope_nodes), scope_nodes=resolved.scope_nodes
-    )
-    if seed_env is not None:
-        env.seed_from(seed_env)
-    return _check_prepared_module(
-        resolved,
-        capabilities,
-        env=env,
-        validate_declaration_collisions=True,
-    )

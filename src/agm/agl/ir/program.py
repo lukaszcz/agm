@@ -19,10 +19,11 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass, field
 
-from agm.agl.ir.contracts import ContractRequest, ExternContract, ParamDecoder
+from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
+from agm.agl.ir.contracts import ContractRequest, ParamDecoder
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import IrExpr, IrFunctionParam
-from agm.agl.modules.ids import ModuleId
+from agm.agl.modules.ids import ModuleId, spell_scope_path
 
 __all__ = [
     "ContractId",
@@ -97,8 +98,17 @@ class VariantDescriptor:
 class NominalDescriptor:
     """Descriptor for a named nominal type (record, enum, or exception).
 
-    ``nominal``      — the ``NominalId`` key for this descriptor.
-    ``display_name`` — user-facing type name.
+    ``nominal``      — the ``NominalId`` key for this descriptor: an opaque
+                       handle carrying no spelling or module of its own (see
+                       ``ir.ids.NominalId``).
+    ``module_id``    — the module that declares this nominal.
+    ``scope_path``   — the declaration's scope path within its module.
+    ``declared_name``— the bare name the declaration was written under (no
+                       scope prefix).
+    ``display_name`` — the scoped source spelling, DERIVED from ``scope_path``
+                       and ``declared_name`` rather than stored, so a
+                       descriptor can never contradict its own path; used for
+                       diagnostics and rendering.
     ``kind``         — RECORD, ENUM, or EXCEPTION.
     ``fields``       — declared field names in declaration order (names only;
                        used for RECORD and EXCEPTION; ``()`` for ENUM which
@@ -106,16 +116,38 @@ class NominalDescriptor:
     ``variants``     — for ENUM: ordered tuple of ``VariantDescriptor`` objects
                        (one per variant, in declaration order).  ``()`` for
                        RECORD and EXCEPTION.
+    ``bears_name_path`` — whether this identity is the one its
+                       ``(module_id, scope_path, declared_name)`` path
+                       currently resolves to, per the type table's name
+                       index. A superseded declaration, and a declaration
+                       from an unpromoted REPL entry, both remain in
+                       ``ExecutableProgram.nominals`` (it is derived from
+                       every declaration the type table retains, not just
+                       the live ones) with this ``False`` — metadata about
+                       the identity's current standing, not part of its
+                       shape, so it is excluded from equality/hashing
+                       (``compare=False``) the same way ``TypeDef.is_builtin``
+                       is: two snapshots of the same identity taken before
+                       and after a later redeclaration must still compare
+                       equal.
 
     Safe defaults for ``fields`` and ``variants`` are ``()`` so construction sites
     can omit them when the descriptor does not need nominal details.
     """
 
     nominal: NominalId
-    display_name: str
+    module_id: ModuleId
+    scope_path: tuple[str, ...]
+    declared_name: str
     kind: NominalKind
     fields: tuple[str, ...] = ()
     variants: tuple[VariantDescriptor, ...] = ()
+    bears_name_path: bool = field(default=True, compare=False)
+
+    @property
+    def display_name(self) -> str:
+        """The scoped source spelling this declaration was written under."""
+        return spell_scope_path((*self.scope_path, self.declared_name))
 
 
 # ---------------------------------------------------------------------------
@@ -146,15 +178,14 @@ class IrFunctionBody:
 class ExternFunctionBody:
     """``extern def`` implementation: crosses into a companion Python module.
 
-    ``name``     — the extern's declared name (identical in AgL and Python;
-                   ``runtime.externs.ExternRegistry`` resolves it positionally).
-    ``contract`` — the compiled boundary contract (per-parameter encode recipe +
-                   strict return decode), built from the checked signature at
-                   lowering.
+    ``name``     — the extern's final declared member name; ``runtime.externs.ExternRegistry``
+                   resolves it in the owning module's companion, then the boundary walkers
+                   pass encoded arguments positionally.
+    The boundary dispatches on runtime values, so an extern retains no type
+    schema after lowering.
     """
 
     name: str
-    contract: ExternContract
 
 
 FunctionImpl = IrFunctionBody | ExternFunctionBody
@@ -276,6 +307,16 @@ class ExecutableProgram:
       ``nominals``     — map from ``NominalId`` to ``NominalDescriptor``.
       ``sources``      — map from ``SourceId`` to ``SourceFile``.
       ``functions``    — ordinary functions and externs, keyed by ``FunctionId``.
+      ``builtin_nominals`` — bare built-in type name -> the ``NominalId`` a
+        host mints for it (see ``agm.agl.ir.builtin_nominals``), built during
+        lowering from the program's ``builtin`` declarations. Defaults to
+        ``NO_BUILTIN_DECLARATIONS`` (every name resolves to the shipped
+        standard library's own identity), which keeps the many direct
+        ``ExecutableProgram`` constructions in ``tests/`` working without
+        threading this table through every one of them.
+      ``builtin_setting_defaults`` — engine key -> a checked, constant IR
+        expression declared by ``builtin var``. The evaluator uses it only
+        when the host did not seed that key.
 
     """
 
@@ -288,3 +329,5 @@ class ExecutableProgram:
     params: tuple[IrParam, ...] = ()
     contracts: dict["ContractId", "ContractRequest"] = field(default_factory=dict)
     dry_run_inventory: "tuple[DryRunEntry, ...]" = ()
+    builtin_nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS
+    builtin_setting_defaults: dict[str, IrExpr] = field(default_factory=dict)

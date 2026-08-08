@@ -22,12 +22,12 @@ import pytest
 
 from agm.agl import AglError, PipelineDriver, SourceSpan
 from agm.agl.diagnostics import Diagnostic, format_diagnostic, format_diagnostic_location
-from agm.agl.ir.ids import AgentId, NominalId
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
+from agm.agl.ir.ids import NominalId
 from agm.agl.pipeline import RunResult
 from agm.agl.runtime import AgentRequest
 from agm.agl.runtime.contract import OutputContract
 from agm.agl.semantics.types import Type
+from agm.agl.semantics.values import TextValue
 from agm.agl.typecheck import AglTypeError
 from tests._agl_helpers import type_table_for
 
@@ -37,36 +37,8 @@ if TYPE_CHECKING:
 _STDLIB_ROOT = pathlib.Path(__file__).resolve().parents[1] / "stdlib"
 
 
-class TestPipelineDriverConstructor:
-    def test_default_constructor_uses_documented_defaults(self) -> None:
-        rt = PipelineDriver()
-        # Documented constructor defaults.
-        # The max-iters valve defaults to OFF (None): unbounded loops run until
-        # they self-terminate; an explicit max-iters turns the valve on.
-        assert rt.default_loop_limit is None
-        assert rt.default_strict_json is False
-
-    def test_default_loop_limit_kwarg_is_observable(self) -> None:
-        rt = PipelineDriver(default_loop_limit=10)
-        assert rt.default_loop_limit == 10
-
-    def test_default_strict_json_kwarg_is_observable(self) -> None:
-        rt = PipelineDriver(default_strict_json=True)
-        assert rt.default_strict_json is True
-
-    def test_default_agent_constructed_runtime_runs(self) -> None:
-        # A default_agent does not reserve the agent-name namespace: a runtime
-        # built with one still accepts named registrations and still runs.
-        def my_agent(request: object) -> str:
-            return "response"
-
-        rt = PipelineDriver(default_agent=my_agent)
-        rt.register_agent("reviewer", my_agent)  # should not raise
-        # The source declares the registered agent so the source↔host contract
-        # holds; a valid program then returns ok=True.
-        result = rt.run("agent reviewer\nlet x = 1\nx")
-        assert result.ok is True
-        assert result.error is None
+class TestOperatorProgramsRunEndToEnd:
+    """Operator declaration, application, and `is`-test dispatch through a full run."""
 
     def test_operator_name_bindings_run_end_to_end(
         self, capsys: pytest.CaptureFixture[str]
@@ -124,67 +96,20 @@ class TestPipelineDriverConstructor:
 
 class TestRegisterAgent:
     def test_register_agent_accepted(self) -> None:
-        rt = PipelineDriver()
         prompts: list[str] = []
 
         def my_agent(request: AgentRequest) -> str:
             prompts.append(request.prompt)
             return "response"
 
-        rt.register_agent("my_agent", my_agent)
+        rt = PipelineDriver(agent_dispatcher=my_agent)
         result = rt.run(
-            'agent my_agent\nlet answer = ask("meaningful prompt", agent = my_agent)\nprint answer'
+            'let my_agent = AgentCommand("my_agent")\n'
+            'let answer = ask("meaningful prompt", agent = my_agent)\nprint answer'
         )
 
         assert result.ok
         assert prompts == ["meaningful prompt"]
-
-    def test_register_duplicate_raises(self) -> None:
-        rt = PipelineDriver()
-
-        def my_agent(request: object) -> str:
-            return "response"
-
-        rt.register_agent("my_agent", my_agent)
-        with pytest.raises(ValueError, match="my_agent"):
-            rt.register_agent("my_agent", my_agent)
-
-    def test_register_reserved_name_ask_raises(self) -> None:
-        rt = PipelineDriver()
-
-        def my_agent(request: object) -> str:
-            return "response"
-
-        with pytest.raises(ValueError, match="ask"):
-            rt.register_agent("ask", my_agent)
-
-    def test_register_reserved_name_exec_raises(self) -> None:
-        rt = PipelineDriver()
-
-        def my_agent(request: object) -> str:
-            return "response"
-
-        with pytest.raises(ValueError, match="exec"):
-            rt.register_agent("exec", my_agent)
-
-    def test_register_reserved_name_ask_request_raises(self) -> None:
-        rt = PipelineDriver()
-
-        def my_agent(request: object) -> str:
-            return "response"
-
-        with pytest.raises(ValueError, match="ask-request"):
-            rt.register_agent("ask-request", my_agent)
-
-    @pytest.mark.parametrize("name", ("exec!", "ask!"))
-    def test_register_raw_tail_name_raises(self, name: str) -> None:
-        rt = PipelineDriver()
-
-        def my_agent(request: object) -> str:
-            return "response"
-
-        with pytest.raises(ValueError, match=name):
-            rt.register_agent(name, my_agent)
 
 
 class TestRunBehavior:
@@ -254,21 +179,20 @@ class TestRunBehavior:
 class TestFallbackAgent:
     """Default-agent backing behavior for capability checking."""
 
-    def test_no_default_agent_ask_call_static_error(self) -> None:
-        rt = PipelineDriver()  # no default_agent
+    def test_ask_without_a_dispatcher_raises_at_runtime(self) -> None:
+        rt = PipelineDriver()
         result = rt.run('let x = ask "hi"')
         assert result.ok is False
-        assert result.error is None  # static, not runtime
+        assert result.error is not None
 
     def test_with_default_agent_ask_call_succeeds(self) -> None:
-        rt = PipelineDriver(default_agent=lambda req: "ok")
+        rt = PipelineDriver(agent_dispatcher=lambda req: "ok")
         result = rt.run('let x = ask "hi"\nx')
         assert result.ok is True
 
     def test_named_agent_registered_accepted(self) -> None:
-        rt = PipelineDriver()
-        rt.register_agent("impl", lambda req: "output")
-        result = rt.run('agent impl\nask("do it", agent = impl)')
+        rt = PipelineDriver(agent_dispatcher=lambda req: "output")
+        result = rt.run('let impl = AgentCommand("impl")\nask("do it", agent = impl)')
         assert result.ok is True
 
     def test_undeclared_named_agent_is_static_error(self) -> None:
@@ -279,22 +203,12 @@ class TestFallbackAgent:
         assert result.ok is False
         assert result.error is None
 
-    def test_default_agent_backs_declared_name(self) -> None:
-        rt = PipelineDriver(default_agent=lambda req: "ok")
-        # A default_agent backs any declared name without a dedicated registration.
-        result = rt.run('agent any_agent_name\nask("hi", agent = any_agent_name)')
+    def test_default_agent_dispatches_an_agent_value(self) -> None:
+        rt = PipelineDriver(agent_dispatcher=lambda req: "ok")
+        result = rt.run(
+            'let any_agent_name = AgentCommand("any-agent-name")\nask("hi", agent = any_agent_name)'
+        )
         assert result.ok is True
-
-    def test_declared_but_uncalled_agent_surfaces_warning(self) -> None:
-        # A default agent backs the declared (but uncalled) agent so the
-        # source↔host contract holds (decision 11): a declared+backed agent
-        # that is never called is a non-fatal scope WARNING, surfaced on
-        # result.warnings without affecting result.ok.
-        rt = PipelineDriver(default_agent=lambda req: "ok")
-        result = rt.run('agent unused_helper\nprint "hi"')
-        assert result.ok is True
-        joined = " ".join(d.message for d in result.warnings)
-        assert "unused_helper" in joined
 
 
 class TestInputValidationRuntime:
@@ -330,7 +244,7 @@ class TestInputValidationRuntime:
             calls.append(req.prompt)
             return "ok"
 
-        rt = PipelineDriver(default_agent=agent)
+        rt = PipelineDriver(agent_dispatcher=agent)
         rt.run('param x\nask("Hi")', param_values={})
         assert calls == []
 
@@ -373,7 +287,7 @@ class TestEmptyResponse:
     """Exit 0 with empty stdout is a valid empty response."""
 
     def test_empty_string_response_is_valid_text(self) -> None:
-        rt = PipelineDriver(default_agent=lambda req: "")
+        rt = PipelineDriver(agent_dispatcher=lambda req: "")
         result = rt.run('let x = ask "Say nothing."\nx')
         assert result.ok is True
         from agm.agl.semantics.values import TextValue
@@ -391,32 +305,32 @@ class TestAgentRequest:
             received.append(req)
             return "ok"
 
-        rt = PipelineDriver(default_agent=agent)
+        rt = PipelineDriver(agent_dispatcher=agent)
         rt.run('ask "Hello world"')
         assert received[0].prompt == "Hello world"
 
-    def test_request_agent_name_for_default(self) -> None:
+    def test_request_agent_value_for_default(self) -> None:
         received: list[AgentRequest] = []
 
         def agent(req: AgentRequest) -> str:
             received.append(req)
             return "ok"
 
-        rt = PipelineDriver(default_agent=agent)
+        rt = PipelineDriver(agent_dispatcher=agent)
         rt.run('ask "Hi"')
-        assert received[0].agent == "ask"
+        assert received[0].agent.variant == "AgentClaude"
 
-    def test_request_agent_name_for_named(self) -> None:
+    def test_request_agent_value_for_named(self) -> None:
         received: list[AgentRequest] = []
 
         def reviewer(req: AgentRequest) -> str:
             received.append(req)
             return "ok"
 
-        rt = PipelineDriver()
-        rt.register_agent("reviewer", reviewer)
-        rt.run('agent reviewer\nask("Review this", agent = reviewer)')
-        assert received[0].agent == "reviewer"
+        rt = PipelineDriver(agent_dispatcher=reviewer)
+        rt.run('let reviewer = AgentCommand("reviewer")\nask("Review this", agent = reviewer)')
+        assert received[0].agent.variant == "AgentCommand"
+        assert received[0].agent.fields["command"] == TextValue("reviewer")
 
 
 class TestUncaughtAgentCallErrorSpan:
@@ -438,7 +352,7 @@ class TestUncaughtAgentCallErrorSpan:
                 elapsed=0.0,
             )
 
-        return PipelineDriver(default_agent=failing_agent)
+        return PipelineDriver(agent_dispatcher=failing_agent)
 
     def test_dispatch_preserves_existing_span(self) -> None:
         """A span the raise site already supplied is never overwritten."""
@@ -456,13 +370,13 @@ class TestUncaughtAgentCallErrorSpan:
 
         def agent(req: AgentRequest) -> str:
             exc_val = ExceptionValue(
-                nominal=NominalId(ENTRY_ID, "CustomError"),
+                nominal=NominalId(1),
                 display_name="CustomError",
                 fields={"message": TextValue("boom")},
             )
             raise AglRaise(exc_val, span=existing)
 
-        rt = PipelineDriver(default_agent=agent)
+        rt = PipelineDriver(agent_dispatcher=agent)
         result = rt.run('let a = 1\nask("hi")')
         assert result.ok is False
         assert result.error is not None
@@ -498,13 +412,12 @@ class TestUncaughtAgentCallErrorSpan:
                 cause="spawn_failure", exit_code=None, stderr_tail="boom", elapsed=0.0
             )
 
-        monkeypatch.setattr(exec_mod, "runner_backed_agent_factory", lambda **_: failing_agent)
+        monkeypatch.setattr(exec_mod, "value_driven_agent_factory", lambda **_: failing_agent)
         args = ExecArgs(
             file=str(agl_file),
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=True,
             log_file=None,
         )
@@ -772,20 +685,6 @@ class TestTokenConstants:
         assert tokens.KW_NULL == "null"
 
 
-class TestPipelineDriverProperties:
-    def test_default_loop_limit_property(self) -> None:
-        rt = PipelineDriver(default_loop_limit=7)
-        assert rt.default_loop_limit == 7
-
-    def test_default_strict_json_property(self) -> None:
-        rt = PipelineDriver(default_strict_json=True)
-        assert rt.default_strict_json is True
-
-    def test_default_strict_json_property_false(self) -> None:
-        rt = PipelineDriver(default_strict_json=False)
-        assert rt.default_strict_json is False
-
-
 class TestResetExternRegistry:
     """``PipelineDriver.reset_extern_registry`` — the ``ReplSession.reset()`` seam."""
 
@@ -803,35 +702,22 @@ class TestResetExternRegistry:
         after = rt.host_environment().extern_registry
         assert after is not before
 
-    def test_preserves_the_rest_of_the_assembled_environment(self) -> None:
-        def agent(request: object) -> str:
-            return "answer"
-
-        rt = PipelineDriver()
-        rt.register_agent("helper", agent)
-        env_before = rt.host_environment()
-        rt.reset_extern_registry()
-        env_after = rt.host_environment()
-        assert env_after.registry is env_before.registry
-        assert env_after.capabilities is env_before.capabilities
-        assert env_after.codecs is env_before.codecs
-
 
 class TestNoDefaultAgent:
     """an ``ask`` call needs a default (or fallback) agent."""
 
-    def test_ask_without_default_agent_is_static_error(self) -> None:
-        rt = PipelineDriver()  # no default agent configured
+    def test_ask_without_a_dispatcher_is_a_runtime_error(self) -> None:
+        rt = PipelineDriver()
         result = rt.run('ask "hi"')
         assert result.ok is False
-        assert result.error is None  # static (pre-execution), not an AgL exception
-        assert any("default agent" in d.message.lower() for d in result.diagnostics)
+        assert result.error is not None
+        assert result.error.type_name == "AgentCallError"
 
     def test_ask_with_default_agent_runs(self) -> None:
         def agent(request: object) -> str:
             return "answer"
 
-        rt = PipelineDriver(default_agent=agent)
+        rt = PipelineDriver(agent_dispatcher=agent)
         result = rt.run('ask "hi"')
         assert result.ok is True
         assert result.error is None
@@ -843,7 +729,7 @@ class TestNoDefaultAgent:
             requests.append(request)
             return "7"
 
-        result = PipelineDriver(default_agent=agent).run(
+        result = PipelineDriver(agent_dispatcher=agent).run(
             "def select[T](first: T, second: T) -> T = first\n"
             'let value = select(ask("number"), 1)\n'
             "value"
@@ -881,14 +767,14 @@ class TestDryRunCheckOnly:
             calls.append(request)
             return "should not be called"
 
-        rt = PipelineDriver(default_agent=agent)
+        rt = PipelineDriver(agent_dispatcher=agent)
         result = rt.run('let x = ask "hi"\nx', check_only=True)
         assert result.ok is True
         # The agent must never be invoked during a dry run.
         assert calls == []
 
     def test_check_only_unit_ask_reports_no_codec(self) -> None:
-        rt = PipelineDriver(default_agent=lambda request: "ignored")
+        rt = PipelineDriver(agent_dispatcher=lambda request: "ignored")
         result = rt.run('let result: unit = ask "hi"\nresult', check_only=True)
         assert result.ok is True
         assert len(result.call_sites) == 1
@@ -933,7 +819,7 @@ class TestDecimalSerialization:
         from agm.agl.semantics.values import DecimalValue, ExceptionValue, TextValue
 
         exc = ExceptionValue(
-            nominal=NominalId(ENTRY_ID, "ValidationError"),
+            nominal=NominalId(1),
             display_name="ValidationError",
             fields={
                 "message": TextValue("bad"),
@@ -982,105 +868,9 @@ class TestWarningsThreadedOnFailurePaths:
 class TestAgentRegistryDispatch:
     """dispatch resolves named agents, ask, and the default fallback."""
 
-    def test_dispatch_named_agent(self) -> None:
-        from agm.agl.runtime import AgentRequest
-        from agm.agl.runtime.agents import AgentRegistry
-
-        def named(req: AgentRequest) -> str:
-            return f"named:{req.prompt}"
-
-        registry = AgentRegistry(named={AgentId("reviewer"): named}, default_agent=None)
-        resp = registry.dispatch("reviewer", AgentRequest(agent="reviewer", prompt="hi"))
-        assert resp.content == "named:hi"
-
-    def test_dispatch_ask_and_unknown_fall_back_to_default(self) -> None:
-        from agm.agl.runtime import AgentRequest
-        from agm.agl.runtime.agents import AgentRegistry
-
-        def default(req: AgentRequest) -> str:
-            return f"default:{req.agent}"
-
-        registry = AgentRegistry(named={}, default_agent=default)
-        # Both ``ask`` and an unregistered named agent route to the default.
-        assert registry.dispatch("ask", AgentRequest(agent="ask", prompt="q")).content == (
-            "default:ask"
-        )
-        assert registry.dispatch("other", AgentRequest(agent="other", prompt="q")).content == (
-            "default:other"
-        )
-
-    def test_dispatch_unknown_without_default_raises(self) -> None:
-        from agm.agl.runtime import AgentRequest
-        from agm.agl.runtime.agents import AgentRegistry
-
-        registry = AgentRegistry(named={}, default_agent=None)
-        with pytest.raises(KeyError, match="No agent registered"):
-            registry.dispatch("ghost", AgentRequest(agent="ghost", prompt="q"))
-
-    def test_root_registration_does_not_back_a_scoped_agent(self) -> None:
-        from agm.agl.ir.ids import AgentId
-        from agm.agl.runtime import AgentRequest
-        from agm.agl.runtime.agents import AgentRegistry
-
-        registry = AgentRegistry(
-            named={AgentId("bot"): lambda _request: "root"}, default_agent=None
-        )
-        scoped = AgentId("bot", ("Tools",))
-
-        assert not registry.backs(scoped)
-        with pytest.raises(KeyError, match="No agent registered"):
-            registry.dispatch(scoped, AgentRequest(agent="Tools::bot", prompt="q"))
-
-    def test_root_name_registration_keys_dispatch_and_names(self) -> None:
-        from agm.agl.runtime import AgentRequest
-        from agm.agl.runtime.agents import AgentRegistry
-
-        def named(req: AgentRequest) -> str:
-            return f"named:{req.prompt}"
-
-        registry = AgentRegistry(named={"reviewer": named}, default_agent=None)
-
-        assert registry.agent_names == frozenset({"reviewer"})
-        assert registry.backs(AgentId("reviewer"))
-        assert registry.dispatch(
-            "reviewer", AgentRequest(agent="reviewer", prompt="hi")
-        ).content == ("named:hi")
-
-    def test_root_name_and_scoped_registrations_stay_distinct(self) -> None:
-        from agm.agl.runtime import AgentRequest
-        from agm.agl.runtime.agents import AgentRegistry
-
-        scoped = AgentId("bot", ("Tools",))
-        registry = AgentRegistry(
-            named={"bot": lambda _request: "root", scoped: lambda _request: "scoped"},
-            default_agent=None,
-        )
-
-        assert registry.agent_names == frozenset({"bot"})
-        assert registry.agent_ids == frozenset({AgentId("bot"), scoped})
-        assert registry.dispatch("bot", AgentRequest(agent="bot", prompt="q")).content == "root"
-        assert (
-            registry.dispatch(scoped, AgentRequest(agent="Tools::bot", prompt="q")).content
-            == "scoped"
-        )
-
 
 class TestAgentRequestFieldOrder:
     """The request dataclass keeps its documented positional field order."""
-
-    def test_third_positional_argument_is_the_attempt_counter(self) -> None:
-        request = AgentRequest("bot", "prompt", 2)
-
-        assert request.attempt == 2
-        assert request.agent_id is None
-
-    def test_agent_id_is_supplied_by_keyword(self) -> None:
-        identity = AgentId("bot", ("Tools",))
-
-        request = AgentRequest("bot", "prompt", agent_id=identity)
-
-        assert request.agent_id == identity
-        assert request.attempt == 0
 
 
 class TestParamBindingInvariant:
@@ -1098,18 +888,18 @@ class TestParamBindingInvariant:
 
 
 # ---------------------------------------------------------------------------
-# CARRY-IN 1 — capabilities built from registrations
+# Capabilities built from registrations
 # ---------------------------------------------------------------------------
 
 
 class TestCapabilitiesBuiltFromRegistrations:
-    """CARRY-IN 1: PipelineDriver.run builds HostCapabilities from codec/renderer registries."""
+    """PipelineDriver.run builds HostCapabilities from codec/renderer registries."""
 
     def test_default_runtime_has_text_and_json_codecs(self) -> None:
         """Built-in text + json codecs are always present."""
         from agm.agl.runtime.codec import JsonCodec, TextCodec
 
-        rt = PipelineDriver(default_agent=lambda req: "ok")
+        rt = PipelineDriver(agent_dispatcher=lambda req: "ok")
         # A json-typed call passes typecheck → json codec is registered.
         tc, jc = TextCodec(), JsonCodec()
         assert tc.name == "text"
@@ -1193,7 +983,7 @@ class TestCapabilitiesBuiltFromRegistrations:
             requests.append(request)
             return "decoded"
 
-        rt = PipelineDriver(default_agent=agent)
+        rt = PipelineDriver(agent_dispatcher=agent)
         rt.register_codec(NoneCodec())
         result = rt.run('let answer: text = ask("prompt", format = "none")\nanswer')
 
@@ -1205,7 +995,7 @@ class TestCapabilitiesBuiltFromRegistrations:
 
     def test_as_renderer_syntax_is_parse_error(self) -> None:
         """``%{x as name}`` is a syntax error (renderer syntax removed)."""
-        rt = PipelineDriver(default_agent=lambda req: "ok")
+        rt = PipelineDriver(agent_dispatcher=lambda req: "ok")
         result = rt.run('param x\nlet y = ask "see %{x as fancy}"', param_values={"x": "hi"})
         assert result.ok is False
 
@@ -1324,13 +1114,6 @@ class TestRenderValue:
 
         assert render_value(UnitValue()) == "()"
         assert render_value(VOID_VALUE) == "void"
-
-    def test_agent_value_renders_as_angle_bracket_form(self) -> None:
-        """AgentValue renders as ``<agent NAME>``."""
-        from agm.agl.runtime.render import render_value
-        from agm.agl.semantics.values import AgentValue
-
-        assert render_value(AgentValue(name="reviewer")) == "<agent reviewer>"
 
     def test_closure_renders_as_function_surface_form(self) -> None:
         """Closure renders as ``<function: (A, B) -> T>``."""
@@ -1491,7 +1274,7 @@ class TestRenderValue:
         from agm.agl.semantics.values import IntValue, RecordValue, TextValue
 
         v = RecordValue(
-            nominal=NominalId(ENTRY_ID, "Issue"),
+            nominal=NominalId(1),
             display_name="Issue",
             fields={"title": TextValue("Missing tests"), "severity": IntValue(3)},
         )
@@ -1502,7 +1285,7 @@ class TestRenderValue:
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import RecordValue
 
-        v = RecordValue(nominal=NominalId(ENTRY_ID, "Empty"), display_name="Empty", fields={})
+        v = RecordValue(nominal=NominalId(1), display_name="Empty", fields={})
         assert render_value(v) == "Empty()"
 
     def test_record_nested_record(self) -> None:
@@ -1511,12 +1294,12 @@ class TestRenderValue:
         from agm.agl.semantics.values import BoolValue, RecordValue, TextValue
 
         author = RecordValue(
-            nominal=NominalId(ENTRY_ID, "Author"),
+            nominal=NominalId(1),
             display_name="Author",
             fields={"name": TextValue("Ada"), "active": BoolValue(True)},
         )
         issue = RecordValue(
-            nominal=NominalId(ENTRY_ID, "Issue"),
+            nominal=NominalId(2),
             display_name="Issue",
             fields={"title": TextValue("Missing tests"), "author": author},
         )
@@ -1529,7 +1312,7 @@ class TestRenderValue:
         from agm.agl.semantics.values import ArrayValue, IntValue, RecordValue, TextValue
 
         v = RecordValue(
-            nominal=NominalId(ENTRY_ID, "Issue"),
+            nominal=NominalId(1),
             display_name="Issue",
             fields={
                 "title": TextValue("Missing tests"),
@@ -1550,7 +1333,7 @@ class TestRenderValue:
         from agm.agl.semantics.values import EnumValue, IntValue
 
         v = EnumValue(
-            nominal=NominalId(ENTRY_ID, "Outcome"),
+            nominal=NominalId(1),
             display_name="Outcome",
             variant="Partial",
             fields={"left": IntValue(2)},
@@ -1563,7 +1346,7 @@ class TestRenderValue:
         from agm.agl.semantics.values import EnumValue
 
         v = EnumValue(
-            nominal=NominalId(ENTRY_ID, "Outcome"),
+            nominal=NominalId(1),
             display_name="Outcome",
             variant="Done",
             fields={},
@@ -1576,7 +1359,7 @@ class TestRenderValue:
         from agm.agl.semantics.values import EnumValue, IntValue
 
         v = EnumValue(
-            nominal=NominalId(ENTRY_ID, "E"),
+            nominal=NominalId(1),
             display_name="E",
             variant="V",
             fields={"a": IntValue(1), "b": IntValue(2), "c": IntValue(3)},
@@ -1584,20 +1367,19 @@ class TestRenderValue:
         assert render_value(v) == "E::V(a = 1, b = 2, c = 3)"
 
     # ------------------------------------------------------------------
-    # exception: record-style with all fields incl. trace_id
+    # exception: record-style with declared fields
     # ------------------------------------------------------------------
 
-    def test_exception_renders_record_style_with_trace_id(self) -> None:
+    def test_exception_renders_record_style(self) -> None:
         """Exception renders like a record with all fields in declaration order."""
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import ExceptionValue, TextValue
 
         v = ExceptionValue(
-            nominal=NominalId(PRELUDE_ID, "CastError"),
+            nominal=NominalId(1),
             display_name="CastError",
             fields={
                 "message": TextValue('cannot parse "x" as int'),
-                "trace_id": TextValue("evt-7"),
                 "source_type": TextValue("text"),
                 "target_type": TextValue("int"),
                 "raw": TextValue("x"),
@@ -1605,26 +1387,23 @@ class TestRenderValue:
         )
         out = render_value(v)
         expected = (
-            'CastError(message = "cannot parse \\"x\\" as int", trace_id = "evt-7", '
+            'CastError(message = "cannot parse \\"x\\" as int", '
             'source_type = "text", target_type = "int", raw = "x")'
         )
         assert out == expected
 
-    def test_exception_abort_renders_with_trace_id(self) -> None:
-        """Abort exception includes both message and trace_id."""
+    def test_exception_abort_renders_with_message(self) -> None:
+        """Abort exception renders its sole message field."""
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import ExceptionValue, TextValue
 
         v = ExceptionValue(
-            nominal=NominalId(ENTRY_ID, "Abort"),
+            nominal=NominalId(1),
             display_name="Abort",
-            fields={
-                "message": TextValue("fatal"),
-                "trace_id": TextValue("abc123"),
-            },
+            fields={"message": TextValue("fatal")},
         )
         out = render_value(v)
-        assert out == 'Abort(message = "fatal", trace_id = "abc123")'
+        assert out == 'Abort(message = "fatal")'
         assert "<dsl-value" not in out
 
     # ------------------------------------------------------------------
@@ -1690,7 +1469,7 @@ class TestRenderValue:
         from agm.agl.semantics.values import JsonValue, RecordValue
 
         v = RecordValue(
-            nominal=NominalId(ENTRY_ID, "R"),
+            nominal=NominalId(1),
             display_name="R",
             fields={"data": JsonValue({"a": 1, "b": 2})},
         )
@@ -1721,7 +1500,7 @@ class TestRenderValue:
         from agm.agl.semantics.values import IntValue, RecordValue, TextValue
 
         v = RecordValue(
-            nominal=NominalId(ENTRY_ID, "Issue"),
+            nominal=NominalId(1),
             display_name="Issue",
             fields={"title": TextValue("Missing tests"), "severity": IntValue(3)},
         )
@@ -1735,7 +1514,7 @@ class TestRenderValue:
         from agm.agl.semantics.values import ArrayValue, IntValue, RecordValue, TextValue
 
         v = RecordValue(
-            nominal=NominalId(ENTRY_ID, "Issue"),
+            nominal=NominalId(1),
             display_name="Issue",
             fields={
                 "title": TextValue("Missing tests"),
@@ -1824,9 +1603,7 @@ class TestSerialize:
         from agm.agl.semantics.values import IntValue, RecordValue
 
         result = value_to_json_obj(
-            RecordValue(
-                nominal=NominalId(ENTRY_ID, "R"), display_name="R", fields={"x": IntValue(5)}
-            )
+            RecordValue(nominal=NominalId(1), display_name="R", fields={"x": IntValue(5)})
         )
         assert result == {"x": 5}
 
@@ -1836,7 +1613,7 @@ class TestSerialize:
 
         result = value_to_json_obj(
             EnumValue(
-                nominal=NominalId(ENTRY_ID, "E"),
+                nominal=NominalId(1),
                 display_name="E",
                 variant="A",
                 fields={"msg": TextValue("hi")},
@@ -1854,7 +1631,7 @@ class TestSerialize:
         from agm.agl.semantics.values import EnumValue
 
         result = value_to_json_obj(
-            EnumValue(nominal=NominalId(ENTRY_ID, "E"), display_name="E", variant="Done", fields={})
+            EnumValue(nominal=NominalId(1), display_name="E", variant="Done", fields={})
         )
         assert result == {"$case": "Done"}
 
@@ -1864,7 +1641,7 @@ class TestSerialize:
 
         result = value_to_json_obj(
             ExceptionValue(
-                nominal=NominalId(ENTRY_ID, "Err"),
+                nominal=NominalId(1),
                 display_name="Err",
                 fields={"message": TextValue("oops")},
             )
@@ -1914,18 +1691,6 @@ class TestSerialize:
 class TestAgentResponseDirectReturn:
     """Cover the branch in AgentRegistry.dispatch that returns AgentResponse directly."""
 
-    def test_agent_returns_agent_response_directly(self) -> None:
-        from agm.agl.runtime import AgentRequest, AgentResponse
-        from agm.agl.runtime.agents import AgentRegistry
-
-        def agent_fn(req: AgentRequest) -> AgentResponse:
-            return AgentResponse(content="direct", metadata={"k": "v"})
-
-        registry = AgentRegistry(named={AgentId("myagent"): agent_fn}, default_agent=None)
-        result = registry.dispatch("myagent", AgentRequest(agent="myagent", prompt="q"))
-        assert result.content == "direct"
-        assert result.metadata == {"k": "v"}
-
 
 # ---------------------------------------------------------------------------
 # Coverage: contract.py — ValueError when codec not found
@@ -1951,34 +1716,24 @@ class TestMaterializeContractMissingCodec:
 
 
 # ---------------------------------------------------------------------------
-# The engine runner default tracks the shared agent floor
+# params.py — host engine seeds and engine-key defaults
 # ---------------------------------------------------------------------------
 
 
-class TestEngineRunnerDefault:
-    """AgL's engine default must stay the runner AGM would actually invoke."""
+class TestEngineSettingDefaults:
+    """The host side owns defaults only for the keys it can actually decode."""
 
-    def test_engine_runner_default_is_the_shared_agent_floor(self) -> None:
-        """A host that seeds no runner must still get the real floor.
+    def test_unknown_engine_seed_is_rejected(self) -> None:
+        from agm.agl.runtime.params import build_engine_config_seeds
 
-        The engine default backstops ``std/config::runner`` when a host supplies
-        no resolved runner.  It has to agree with ``default_agent_runner``: a
-        divergent value here is invisible while every host seeds the key, and
-        wrong the moment one does not.
-        """
-        from agm.agent.defaults import DEFAULT_AGENT_RUNNER
-        from agm.agl.runtime.params import build_engine_config_base
-        from agm.agl.semantics.values import TextValue
+        with pytest.raises(ValueError, match="unknown engine key"):
+            build_engine_config_seeds({"unknown": True})
 
-        assert build_engine_config_base({})["runner"] == TextValue(DEFAULT_AGENT_RUNNER)
+    def test_engine_default_settings_has_no_default_agent_floor(self) -> None:
+        """``default-agent`` is declared by ``std/config``, not fabricated by the host."""
+        from agm.agl.runtime.params import engine_default_settings
 
-    def test_agent_floor_is_non_interactive(self) -> None:
-        """The floor must not block on a terminal that is not there."""
-        from agm.agent.config import default_agent_runner
-        from agm.agent.defaults import DEFAULT_AGENT_RUNNER
-
-        assert default_agent_runner(merged={}) == DEFAULT_AGENT_RUNNER
-        assert "-p" in DEFAULT_AGENT_RUNNER.split()
+        assert "default-agent" not in engine_default_settings()
 
 
 # ---------------------------------------------------------------------------
@@ -2052,7 +1807,7 @@ class TestRuntimeErrorPaths:
                 [Diagnostic(message="Contract error: bad contract", line=1)],
             ),
         )
-        rt = PipelineDriver(default_agent=lambda req: "ok")
+        rt = PipelineDriver(agent_dispatcher=lambda req: "ok")
         result = rt.run('ask "hi"')
         assert result.ok is False
         assert any("Contract error" in d.message for d in result.diagnostics)
@@ -2065,13 +1820,13 @@ class TestRuntimeErrorPaths:
         def bad_agent(req: object) -> str:
             raise AglRaise(
                 ExceptionValue(
-                    nominal=NominalId(ENTRY_ID, "Abort"),
+                    nominal=NominalId(1),
                     display_name="Abort",
-                    fields={"message": TextValue("stopped"), "trace_id": TextValue("")},
+                    fields={"message": TextValue("stopped")},
                 )
             )
 
-        rt = PipelineDriver(default_agent=bad_agent)
+        rt = PipelineDriver(agent_dispatcher=bad_agent)
         result = rt.run('ask "hi"')
         assert result.ok is False
         assert result.error is not None
@@ -2183,11 +1938,10 @@ class TestRuntimeErrorPaths:
         )
 
         exc_val = ExceptionValue(
-            nominal=NominalId(PRELUDE_ID, "AgentParseError"),
+            nominal=NominalId(1),
             display_name="AgentParseError",
             fields={
                 "message": TextValue("failed"),
-                "trace_id": TextValue(""),
                 "raw": TextValue("abc"),
                 "agent": TextValue("ask"),
                 "attempts": IntValue(1),
@@ -2198,16 +1952,14 @@ class TestRuntimeErrorPaths:
                 "list_val": ArrayValue(elements=[IntValue(1)]),
                 "dict_val": DictValue(entries={"x": IntValue(2)}),
                 "rec_val": RecordValue(
-                    nominal=NominalId(ENTRY_ID, "R"),
+                    nominal=NominalId(2),
                     display_name="R",
                     fields={"f": TextValue("v")},
                 ),
                 "enum_val": EnumValue(
-                    nominal=NominalId(ENTRY_ID, "E"), display_name="E", variant="V", fields={}
+                    nominal=NominalId(3), display_name="E", variant="V", fields={}
                 ),
-                "exc_val": ExceptionValue(
-                    nominal=NominalId(ENTRY_ID, "Inner"), display_name="Inner", fields={}
-                ),
+                "exc_val": ExceptionValue(nominal=NominalId(4), display_name="Inner", fields={}),
                 "none_val": JsonValue(None),
             },
         )
@@ -2266,9 +2018,9 @@ class TestRuntimeErrorPaths:
 
         def bad_execute(self: IrInterpreter) -> dict[str, object]:
             exc_val = ExceptionValue(
-                nominal=NominalId(ENTRY_ID, "Abort"),
+                nominal=NominalId(1),
                 display_name="Abort",
-                fields={"message": TextValue("fatal"), "trace_id": TextValue("")},
+                fields={"message": TextValue("fatal")},
             )
             raise AglRaise(exc_val)
 
@@ -2395,7 +2147,7 @@ class TestUniformRenderingInPrompts:
             received.append(req)
             return "ok"
 
-        rt = PipelineDriver(default_agent=agent)
+        rt = PipelineDriver(agent_dispatcher=agent)
         result = rt.run(
             'param x\nask("see: %{x}")',
             param_values={"x": "hello"},
@@ -2413,7 +2165,7 @@ class TestUniformRenderingInPrompts:
             received.append(req)
             return "ok"
 
-        rt = PipelineDriver(default_agent=agent)
+        rt = PipelineDriver(agent_dispatcher=agent)
         result = rt.run(
             'let items: array[text] = ["a", "b"]\nask("items: %{items}")',
         )
@@ -2510,18 +2262,6 @@ class TestExhaustivenessErrorSurfaces:
         assert "Fail" in result.diagnostics[0].message
         assert result.warnings == []
         assert capsys.readouterr().out == ""
-
-
-class TestShellExecTimeoutProperty:
-    """shell_exec_timeout is a readable constructor parameter."""
-
-    def test_default_shell_exec_timeout_is_none(self) -> None:
-        rt = PipelineDriver()
-        assert rt.shell_exec_timeout is None
-
-    def test_shell_exec_timeout_kwarg_is_observable(self) -> None:
-        rt = PipelineDriver(shell_exec_timeout=30.0)
-        assert rt.shell_exec_timeout == 30.0
 
 
 # Permission-based tests: chmod 0o444 has no effect for root, who can write
@@ -2642,146 +2382,31 @@ class TestTabWarningsInRunResult:
 class TestDeclaredAgentsApi:
     """PipelineDriver.declared_agents(): parse + scope only, non-raising."""
 
-    def test_returns_agent_decl_info_with_names_runners_and_positions(self) -> None:
-        from agm.agl import AgentDeclInfo
-
-        rt = PipelineDriver()
-        source = 'agent impl = "claude -p \\%{PROMPT_FILE}"\nagent reviewer'
-        decls = rt.declared_agents(source)
-        assert all(isinstance(d, AgentDeclInfo) for d in decls)
-        # Sorted deterministically by source line/col.
-        assert [d.name for d in decls] == ["impl", "reviewer"]
-        impl, reviewer = decls
-        assert impl.runner == "claude -p %{PROMPT_FILE}"
-        assert reviewer.runner is None
-        # Positions come from the declaration span (1-based).
-        assert impl.line == 1
-        assert impl.col == 1
-        assert reviewer.line == 2
-
-    def test_agent_decl_info_preserves_legacy_positional_fields(self) -> None:
-        from agm.agl import AgentDeclInfo
-
-        info = AgentDeclInfo("reviewer", None, 3, 5)
-
-        assert (info.name, info.runner, info.line, info.col, info.scope_path) == (
-            "reviewer",
-            None,
-            3,
-            5,
-            (),
-        )
-
-    def test_no_declarations_returns_empty(self) -> None:
-        rt = PipelineDriver()
-        assert rt.declared_agents("let x = 1") == ()
-
-    def test_parse_error_returns_empty_tuple(self) -> None:
-        rt = PipelineDriver()
-        # Syntax garbage: declared_agents stays non-raising and returns ().
-        assert rt.declared_agents("@@@@@") == ()
-
-    def test_scope_error_returns_empty_tuple(self) -> None:
-        rt = PipelineDriver()
-        # Duplicate agent declaration is a scope error → ().
-        assert rt.declared_agents("agent dup\nagent dup") == ()
-
-    def test_undeclared_call_scope_error_returns_empty_tuple(self) -> None:
-        rt = PipelineDriver()
-        # Calling an undeclared agent is a scope error → ().
-        assert rt.declared_agents('let x = ghost "hi"') == ()
-
 
 # ---------------------------------------------------------------------------
 # Source↔host reconciliation in run()
 # ---------------------------------------------------------------------------
 
 
-class TestAgentReconciliation:
-    """run() enforces the source↔host agent contract before execution."""
+class TestLegacyAgentRegistry:
+    """Legacy registrations are optional bridges for command-valued agents."""
 
-    def test_registered_but_undeclared_is_host_error(self) -> None:
-        calls: list[str] = []
-
-        def agent(req: AgentRequest) -> str:
-            calls.append(req.prompt)
-            return "ok"
-
-        rt = PipelineDriver()
-        rt.register_agent("ghost", agent)
-        # 'ghost' is registered but the source never declares it.
-        result = rt.run("let x = 1")
-        assert result.ok is False
-        assert result.error is None
-        msgs = " ".join(d.message for d in result.diagnostics)
-        assert "ghost" in msgs
-        assert "registered" in msgs.lower()
-        # Nothing executed.
-        assert calls == []
-
-    def test_registered_but_undeclared_diagnostic_line_is_one(self) -> None:
-        rt = PipelineDriver()
-        rt.register_agent("ghost", lambda req: "ok")
-        result = rt.run("let x = 1")
-        assert result.diagnostics[0].line == 1
-
-    def test_declared_but_unbacked_is_host_error(self) -> None:
-        rt = PipelineDriver()  # no registration, no default agent
-        result = rt.run('agent orphan\nlet x = orphan "hi"')
-        assert result.ok is False
-        assert result.error is None
-        msgs = " ".join(d.message for d in result.diagnostics)
-        assert "orphan" in msgs
-        assert "backing" in msgs.lower()
-
-    def test_declared_but_unbacked_diagnostic_reports_declaration_line(self) -> None:
-        rt = PipelineDriver()
-        result = rt.run('let y = 1\nagent orphan\nlet x = orphan "hi"')
-        assert result.ok is False
-        # The declaration is on line 2.
-        assert result.diagnostics[0].line == 2
-
-    def test_declared_and_registered_runs(self) -> None:
+    def test_command_value_dispatches_through_a_matching_registration(self) -> None:
         calls: list[str] = []
 
         def agent(req: AgentRequest) -> str:
             calls.append(req.prompt)
             return "output"
 
-        rt = PipelineDriver()
-        rt.register_agent("impl", agent)
-        result = rt.run('agent impl\nask("do it", agent = impl)')
-        assert result.ok is True
+        rt = PipelineDriver(agent_dispatcher=agent)
+        result = rt.run('let impl = AgentCommand("impl")\nask("do it", agent = impl)')
+        assert result.ok
         assert calls == ["do it"]
 
-    def test_declared_with_default_agent_runs(self) -> None:
-        # No dedicated registration, but a default agent backs the declared name.
-        rt = PipelineDriver(default_agent=lambda req: "ok")
-        result = rt.run('agent any_name\nask("hi", agent = any_name)')
-        assert result.ok is True
-
-    def test_both_error_categories_reported_together(self) -> None:
-        rt = PipelineDriver()  # no default agent
-        rt.register_agent("ghost", lambda req: "ok")
-        # 'orphan' is declared but unbacked; 'ghost' is registered but undeclared.
-        result = rt.run('agent orphan\nlet x = orphan "hi"')
-        assert result.ok is False
-        msgs = " ".join(d.message for d in result.diagnostics)
-        assert "ghost" in msgs
-        assert "orphan" in msgs
-        assert len(result.diagnostics) == 2
-
-    def test_reconciliation_failure_skips_execution(self) -> None:
-        calls: list[str] = []
-
-        def agent(req: AgentRequest) -> str:
-            calls.append(req.prompt)
-            return "ok"
-
-        rt = PipelineDriver()
-        rt.register_agent("ghost", agent)
-        rt.run('print "side effect?"')
-        assert calls == []
+    def test_command_value_uses_the_default_dispatcher(self) -> None:
+        rt = PipelineDriver(agent_dispatcher=lambda req: "ok")
+        result = rt.run('let any_name = AgentCommand("any-name")\nask("hi", agent = any_name)')
+        assert result.ok
 
 
 # ---------------------------------------------------------------------------
@@ -2845,13 +2470,6 @@ class TestDeriveSchema:
 
         with pytest.raises(TypeError, match="UnitType"):
             derive_schema(UnitType(), type_table_for())
-
-    def test_agent_type_raises(self) -> None:
-        from agm.agl.semantics.types import AgentType
-        from agm.agl.type_schema import derive_schema
-
-        with pytest.raises(TypeError, match="AgentType"):
-            derive_schema(AgentType(), type_table_for())
 
     def test_function_type_raises(self) -> None:
         from agm.agl.semantics.types import FunctionType, TextType
@@ -2951,13 +2569,6 @@ class TestBuildParamDecoder:
         with pytest.raises(TypeError):
             build_param_decoder(UnitType(), type_table_for())
 
-    def test_agent_type_raises_type_error(self) -> None:
-        from agm.agl.semantics.types import AgentType
-        from agm.agl.type_schema import build_param_decoder
-
-        with pytest.raises(TypeError):
-            build_param_decoder(AgentType(), type_table_for())
-
     def test_exception_type_raises_type_error(self) -> None:
         from agm.agl.semantics.types import ExceptionType
         from agm.agl.type_schema import build_param_decoder
@@ -3028,23 +2639,11 @@ class TestSerializeV2OpaqueValues:
             value_to_json_obj(UnitValue())
         assert exc_info.value.kind == "unit"
 
-    def test_agent_value_raises(self) -> None:
-        from agm.agl.runtime.serialize import AglNonDataValue, value_to_json_obj
-        from agm.agl.semantics.values import AgentValue
-
-        with pytest.raises(AglNonDataValue) as exc_info:
-            value_to_json_obj(AgentValue(name="myagent"))
-        assert exc_info.value.kind == "agent"
-
     def test_constructor_value_raises(self) -> None:
-        from agm.agl.ir.ids import NominalId
-        from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.runtime.serialize import AglNonDataValue, value_to_json_obj
         from agm.agl.semantics.values import ConstructorValue
 
-        ctor = ConstructorValue(
-            nominal=NominalId(ENTRY_ID, "Box"), display_name="Box", variant=None
-        )
+        ctor = ConstructorValue(nominal=NominalId(1), display_name="Box", variant=None)
         with pytest.raises(AglNonDataValue) as exc_info:
             value_to_json_obj(ctor)
         assert exc_info.value.kind == "constructor"
@@ -3134,22 +2733,20 @@ class TestIrHostMetadataCoverage:
 
 
 class TestRunErrorToMessage:
-    """RunError.to_message with include_trace_id=True/False."""
-
-    def test_to_message_with_trace_id(self) -> None:
+    def test_to_message_includes_message_and_location(self) -> None:
         from agm.agl.pipeline import RunError
 
         err = RunError(
             type_name="AgentParseError",
-            fields={"message": "bad output", "trace_id": "abc123"},
+            fields={"message": "bad output"},
             line=5,
             col=3,
         )
-        msg = err.to_message(include_trace_id=True)
-        assert "trace_id=abc123" in msg
+        msg = err.to_message()
+        assert "bad output" in msg
         assert "at line 5, col 3" in msg
 
-    def test_to_message_without_trace_id(self) -> None:
+    def test_to_message_includes_line_without_column(self) -> None:
         from agm.agl.pipeline import RunError
 
         err = RunError(
@@ -3157,8 +2754,7 @@ class TestRunErrorToMessage:
             fields={"message": "oops"},
             line=2,
         )
-        msg = err.to_message(include_trace_id=False)
-        assert "trace_id" not in msg
+        msg = err.to_message()
         assert "at line 2" in msg
 
 
@@ -3170,13 +2766,6 @@ class TestHostEnvironmentCache:
         env1 = rt.host_environment()
         env2 = rt.host_environment()
         assert env1 is env2
-
-    def test_register_agent_invalidates_cache(self) -> None:
-        rt = PipelineDriver()
-        env1 = rt.host_environment()
-        rt.register_agent("impl", lambda req: "ok")
-        env2 = rt.host_environment()
-        assert env1 is not env2
 
 
 class TestRegisterCodecErrors:
@@ -3255,13 +2844,6 @@ class TestDefaultCallDepthLimit:
 class TestConvertInputUnsupportedType:
     """convert_param_value raises ValueError for unsupported types (e.g. ArrayType of records)."""
 
-    def test_unsupported_type_raises(self) -> None:
-        from agm.agl.runtime.params import convert_param_value
-        from agm.agl.semantics.types import AgentType
-
-        with pytest.raises(ValueError, match="unsupported type"):
-            convert_param_value("x", "agent_val", AgentType(), type_table_for())
-
 
 # ---------------------------------------------------------------------------
 # New Feature tests: user-defined functions, ExecResult, ask with AgentValue
@@ -3323,9 +2905,8 @@ class TestV2AskWithAgentValue:
             received.append(req.prompt)
             return "answer"
 
-        rt = PipelineDriver()
-        rt.register_agent("helper", agent)
-        result = rt.run('agent helper\nask("question", agent = helper)\n')
+        rt = PipelineDriver(agent_dispatcher=agent)
+        result = rt.run('let helper = AgentCommand("helper")\nask("question", agent = helper)\n')
         assert result.ok is True
         assert received == ["question"]
 
@@ -3387,33 +2968,6 @@ class TestPrepareProgram:
         prepared = PipelineDriver.prepare_program(entry, entry_path=None, roots=roots)
         assert prepared.resolved is not None
         assert prepared.diagnostics == ()
-
-    def test_prepare_program_declared_agents_from_entry(self, tmp_path: pathlib.Path) -> None:
-        """declared_agents reads from the entry module only."""
-        from agm.agl.modules.roots import RootSet
-
-        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program(
-            'agent reviewer\nask("q", agent = reviewer)',
-            entry_path=None,
-            roots=roots,
-        )
-        assert prepared.resolved is not None
-        assert any(d.name == "reviewer" for d in prepared.declared_agents)
-
-    def test_prepare_program_failure_returns_empty_declared_agents(
-        self, tmp_path: pathlib.Path
-    ) -> None:
-        """When scope fails, declared_agents returns ()."""
-        from agm.agl.modules.roots import RootSet
-
-        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program(
-            "let x = undefined_name", entry_path=None, roots=roots
-        )
-        # scope error → resolved is None
-        assert prepared.resolved is None
-        assert prepared.declared_agents == ()
 
     def test_prepare_program_captures_syntax_error(self) -> None:
         """A parse failure is captured as a diagnostic, not raised."""
@@ -3482,18 +3036,6 @@ class TestRunPreparedProgram:
         assert result.ok is False
         assert "missing/module" in result.diagnostics[0].message
 
-    def test_graph_agents_are_entry_owned(self, tmp_path: pathlib.Path) -> None:
-        """Agents are entry-program-owned; a registered undeclared agent is an error."""
-        from agm.agl.modules.roots import RootSet
-
-        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program("let x = 1\nx", entry_path=None, roots=roots)
-        rt = PipelineDriver()
-        rt.register_agent("reviewer", lambda req: "resp")  # type: ignore[arg-type]
-        result = rt.run_prepared(prepared)
-        assert result.ok is False
-        assert any("reviewer" in d.message for d in result.diagnostics)
-
     def test_graph_check_only_returns_call_inventory(self, tmp_path: pathlib.Path) -> None:
         """check_only=True produces call_sites from the entry module."""
         from agm.agl.modules.roots import RootSet
@@ -3502,7 +3044,7 @@ class TestRunPreparedProgram:
         prepared = PipelineDriver.prepare_program(
             'let r = ask("hello")\nprint r', entry_path=None, roots=roots
         )
-        rt = PipelineDriver(default_agent=lambda req: "x")  # type: ignore[arg-type]
+        rt = PipelineDriver(agent_dispatcher=lambda req: "x")  # type: ignore[arg-type]
         result = rt.run_prepared(prepared, check_only=True)
         assert result.ok is True
         assert len(result.call_sites) >= 1
@@ -3645,7 +3187,7 @@ class TestPreparedProgramDefensivePaths:
         roots = RootSet(roots=frozenset({tmp_path.resolve(), _STDLIB_ROOT}))
         related = SourceSpan(2, 1, 2, 2, 2, 3)
         error = AglError("load failed", related=(("constraint", related),))
-        with patch("agm.agl.modules.loader.load_graph", side_effect=error):
+        with patch("agm.agl.modules.loader.build_repl_graph", side_effect=error):
             prepared = PipelineDriver.prepare_program("let x = 1", entry_path=None, roots=roots)
 
         assert prepared.diagnostics[0].related[0].message == "constraint"
@@ -3667,13 +3209,13 @@ class TestPreparedProgramDefensivePaths:
         assert prepared.diagnostics[0].related[0].message == "constraint"
 
     def test_prepare_program_generic_exception_during_load(self, tmp_path: pathlib.Path) -> None:
-        """A non-AglError exception during load_graph is captured as a diagnostic."""
+        """A non-AglError exception during graph loading is captured as a diagnostic."""
         from unittest.mock import patch
 
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({tmp_path.resolve(), _STDLIB_ROOT}))
-        with patch("agm.agl.modules.loader.load_graph", side_effect=RuntimeError("boom")):
+        with patch("agm.agl.modules.loader.build_repl_graph", side_effect=RuntimeError("boom")):
             prepared = PipelineDriver.prepare_program("let x = 1\nx", entry_path=None, roots=roots)
         assert len(prepared.diagnostics) >= 1
         assert "boom" in prepared.diagnostics[0].message
@@ -3848,7 +3390,7 @@ class TestRunPreparedDefensivePaths:
         prepared = PipelineDriver.prepare_program(
             'let r = ask("hi", format = "bad")\nr', entry_path=None, roots=roots
         )
-        rt = PipelineDriver(default_agent=lambda req: "ok")
+        rt = PipelineDriver(agent_dispatcher=lambda req: "ok")
         rt.register_codec(BadCodec())
         with patch("agm.agl.runtime.contract.materialize_contract", side_effect=ValueError("bad")):
             result = rt.run_prepared(prepared)
@@ -3877,26 +3419,126 @@ class TestRunPreparedDefensivePaths:
         assert result.ok
 
 
-class TestScopedAgentIdentity:
-    def test_same_named_scoped_agents_keep_distinct_backings(
+class TestScopedAgentValues:
+    def test_scoped_agent_values_keep_distinct_dispatches(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Scoped agent paths distinguish registrations, reconciliation, and dispatch."""
         source = """\
 scope A
-agent bot
+let bot = AgentCommand("a-bot")
 end A
 scope B
-agent bot
+let bot = AgentCommand("b-bot")
 end B
 print(ask("first", agent = A::bot))
 print(ask("second", agent = B::bot))
 """
-        runtime = PipelineDriver()
-        runtime.register_scoped_agent(("A",), "bot", lambda _request: "from A")
-        runtime.register_scoped_agent(("B",), "bot", lambda _request: "from B")
+
+        def dispatch(request: AgentRequest) -> str:
+            command = request.agent.fields["command"]
+            assert isinstance(command, TextValue)
+            return {"a-bot": "from A", "b-bot": "from B"}[command.value]
+
+        runtime = PipelineDriver(agent_dispatcher=dispatch)
 
         result = runtime.run(source)
 
         assert result.ok
         assert capsys.readouterr().out == "from A\nfrom B\n"
+
+    def test_scoped_agent_values_publish_distinct_full_path_names(self) -> None:
+        from agm.agl.semantics.values import EnumValue
+
+        source = """\
+scope A
+let bot = AgentCommand("a-bot")
+end A
+scope B
+let bot = AgentCommand("b-bot")
+end B
+"""
+        result = PipelineDriver().run(source)
+
+        assert result.ok, result.diagnostics
+        assert isinstance(result.bindings["A::bot"], EnumValue)
+        assert isinstance(result.bindings["B::bot"], EnumValue)
+        assert result.bindings["A::bot"] != result.bindings["B::bot"]
+
+    def test_scoped_agent_value_does_not_mask_a_same_named_root_binding(self) -> None:
+        from agm.agl.semantics.values import EnumValue, IntValue
+
+        source = """\
+let bot = 42
+scope A
+let bot = AgentCommand("a-bot")
+end A
+print(ask("hi", agent = A::bot))
+"""
+        runtime = PipelineDriver(agent_dispatcher=lambda _request: "hi there")
+
+        result = runtime.run(source)
+
+        assert result.ok, result.diagnostics
+        assert result.bindings["bot"] == IntValue(42)
+        assert isinstance(result.bindings["A::bot"], EnumValue)
+
+
+class TestScopedBindingPublicName:
+    """A scoped ``let``/``var``'s public name is its full path spelling.
+
+    ``RunResult.bindings`` is keyed by ``SymbolDescriptor.public_name``, so a
+    root and a scoped binding sharing a bare name must not collide there.
+    """
+
+    def test_scoped_let_and_var_publish_full_path_names(self) -> None:
+        from agm.agl.semantics.values import IntValue
+
+        source = """\
+let x = 1
+var y = 2
+scope A
+let x = 10
+var y = 20
+end A
+"""
+        result = PipelineDriver().run(source)
+
+        assert result.ok, result.diagnostics
+        assert result.bindings["x"] == IntValue(1)
+        assert result.bindings["y"] == IntValue(2)
+        assert result.bindings["A::x"] == IntValue(10)
+        assert result.bindings["A::y"] == IntValue(20)
+
+    def test_shorthand_and_region_spellings_publish_the_same_name(self) -> None:
+        from agm.agl.semantics.values import IntValue
+
+        region_source = """\
+scope A
+let x = 1
+end A
+"""
+        shorthand_source = "let A::x = 1"
+
+        region_result = PipelineDriver().run(region_source)
+        shorthand_result = PipelineDriver().run(shorthand_source)
+
+        assert region_result.ok and shorthand_result.ok
+        assert region_result.bindings["A::x"] == IntValue(1)
+        assert shorthand_result.bindings["A::x"] == IntValue(1)
+
+    def test_destructured_binder_in_a_region_publishes_its_full_path_name(self) -> None:
+        from agm.agl.semantics.values import IntValue
+
+        source = """\
+record Point
+  x: int
+  y: int
+scope A
+let Point(x, y) = Point(x = 1, y = 2)
+end A
+"""
+        result = PipelineDriver().run(source)
+
+        assert result.ok, result.diagnostics
+        assert result.bindings["A::x"] == IntValue(1)
+        assert result.bindings["A::y"] == IntValue(2)

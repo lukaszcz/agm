@@ -13,34 +13,34 @@ is raised; it propagates up the Python call stack and is caught by:
     ``RunResult.error``).
 
 ``make_builtin_exception`` is the single shared factory for built-in exception
-values. The IR interpreter supplies the trace id.
+values.
 """
 
 from __future__ import annotations
 
-from agm.agl.ir.ids import Location, NominalId
-from agm.agl.modules.ids import PRELUDE_ID
+from agm.agl.ir.builtin_nominals import BuiltinNominals
+from agm.agl.ir.ids import Location
 from agm.agl.semantics.values import ExceptionValue, TextValue, Value
 
 
 def make_builtin_exception(
-    type_name: str, message: str, *, trace_id: str = "", **extra: Value
+    type_name: str, message: str, *, nominals: BuiltinNominals, **extra: Value
 ) -> ExceptionValue:
     """Create an ``ExceptionValue`` for a built-in exception type.
 
-    Built-in exceptions use ``NominalId(PRELUDE_ID, type_name)``.
-    ``trace_id`` is minted by the *caller's* evaluator (per-evaluator identity).
-    Extra keyword arguments become additional fields beyond ``message`` and
-    ``trace_id``.
+    The exception's identity and spelling both come from
+    ``nominals.resolve(type_name)`` — the caller's built-in nominal table —
+    so the value carries the identity and the declared spelling that table
+    resolves for *type_name* rather than hardcoded ones, and a scoped
+    declaration reports its own spelling instead of the bare name.
+    Extra keyword arguments become additional fields beyond ``message``.
     """
-    fields: dict[str, Value] = {
-        "message": TextValue(message),
-        "trace_id": TextValue(trace_id),
-    }
+    fields: dict[str, Value] = {"message": TextValue(message)}
     fields.update(extra)
+    declared = nominals.resolve(type_name)
     return ExceptionValue(
-        nominal=NominalId(PRELUDE_ID, type_name),
-        display_name=type_name,
+        nominal=declared.nominal,
+        display_name=declared.display_name,
         fields=fields,
     )
 

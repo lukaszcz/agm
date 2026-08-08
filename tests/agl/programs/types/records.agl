@@ -14,8 +14,7 @@ record Issue
 
 param min_severity: int
 
-agent tracker
-
+let tracker = AgentCommand("tracker")
 let issue = Issue(
   title = "Missing tests",
   severity = 3,

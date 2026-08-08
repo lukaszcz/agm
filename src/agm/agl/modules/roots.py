@@ -56,9 +56,10 @@ def assemble_roots(
         The global library root (e.g. ``~/.agm/lib``), or ``None`` if not
         configured.  Applied as-is; caller supplies the default if desired.
     configured:
-        ``(raw_path, origin_dir)`` pairs from AGM config.  Relative *raw_path*
-        values are resolved against *origin_dir* (the directory of the config
-        file that declared them).
+        ``(raw_path, origin_dir)`` pairs from AGM config, already interpolated
+        by :func:`agm.config.module_roots.load_module_roots`.  Relative
+        *raw_path* values are resolved against *origin_dir* (the directory of
+        the config file that declared them).
     cli:
         Raw path strings from the ``-I``/``--module-path`` CLI flag.  Relative
         paths are resolved against *cwd*.

@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from typing import TypeAlias
 
 from agm.agl.ir.contracts import ConversionFailureMode, ConversionRecipe
-from agm.agl.ir.ids import AgentId, ContractId, FunctionId, Location, NominalId, SymbolId
+from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SymbolId
 from agm.agl.ir.operations import (
     ArithKind,
     ArithOp,
@@ -44,8 +44,6 @@ from agm.agl.ir.operations import (
 )
 
 __all__ = [
-    "AutoTraceField",
-    "IrAgentHandle",
     "IrAnd",
     "IrArith",
     "IrAsk",
@@ -522,19 +520,6 @@ class IrRenderTemplate:
 
 
 @dataclass(frozen=True, slots=True)
-class AutoTraceField:
-    """Sentinel marker for an auto-injected trace_id field in IrMakeException.
-
-    Each slot in ``IrMakeException.fields`` that was NOT provided by the caller
-    carries this sentinel rather than an ``IrExpr``.  The evaluator allocates
-    ONE ``TextValue(trace.new_event_id())`` per construction and substitutes it
-    for every ``AutoTraceField`` slot in that construction.
-
-    This is NOT an ``IrExpr`` member — it cannot appear in any other IR position.
-    """
-
-
-@dataclass(frozen=True, slots=True)
 class IrMakeRecord:
     """IR record construction: ``RecordName(field: expr, ...)``.
 
@@ -573,20 +558,20 @@ class IrMakeEnum:
 class IrMakeException:
     """IR exception construction: ``ExcName(field: expr, ...)``.
 
-    ``nominal`` — the ``NominalId`` of the exception type (``module_id`` is
-        ``PRELUDE_ID`` for a built-in exception; a user-declared exception is
-        stamped with its declaring module's id).
+    ``nominal`` — the ``NominalId`` of the exception type: the shipped
+        standard library's own reserved identity for a built-in exception a
+        program declares nothing of its own for, or the declaring
+        declaration's own identity otherwise — a program-declared
+        ``builtin exception`` included.
     ``display_name`` — user-facing exception type name.
-    ``fields`` — declaration-order tuple of ``(field_name, slot)`` where
-        ``slot`` is either a coerced ``IrExpr`` (explicitly provided by the
-        caller) or an ``AutoTraceField`` sentinel (declared but not provided —
-        will receive the construction's freshly allocated trace id).
+    ``fields`` — declaration-order tuple of ``(field_name, expr)`` pairs;
+        each expression is coerced to the declared field type by the lowerer.
     """
 
     location: Location
     nominal: NominalId
     display_name: str
-    fields: "tuple[tuple[str, IrExpr | AutoTraceField], ...]"
+    fields: "tuple[tuple[str, IrExpr], ...]"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1060,29 +1045,12 @@ class IrCopyValue:
 
 
 @dataclass(frozen=True, slots=True)
-class IrAgentHandle:
-    """IR host-op: evaluate to an AgentValue for one declared agent.
-
-    Emitted for ``AgentDecl`` lowering.  The structured identity keeps same-
-    named scoped declarations distinct; its display name is used only at the
-    host-facing boundary.
-    """
-
-    location: Location
-    agent_id: "AgentId"
-
-    @property
-    def agent_name(self) -> str:
-        """Return the agent's source-facing display name."""
-        return self.agent_id.display_name
-
-
-@dataclass(frozen=True, slots=True)
 class IrAsk:
     """IR host-op: ask(prompt, agent:, on_parse_error:) builtin call.
 
-    Evaluates ``agent`` (an AgentValue), ``prompt`` (text), dispatches to the
-    registry, parses the response via the contract, and returns the typed Value.
+    Evaluates ``agent`` (an ``Agent`` enum value), ``prompt`` (text), dispatches
+    through the value-driven agent runtime, parses the response via the contract,
+    and returns the typed Value.
 
     ``max_attempts``  — 1 for Abort/absent, 1+n for Retry(n).
     """
@@ -1098,15 +1066,16 @@ class IrAsk:
 class IrAskRequest:
     """IR host-op: ask-request(prompt, agent:) builtin call.
 
-    Builds the AgentRequest record value WITHOUT dispatching the agent.
-    Side-effect-free.
+    Builds the AgentRequest record value WITHOUT dispatching the agent. Only
+    ``agent`` and ``prompt`` are evaluated; the record's contract fields are
+    fixed constants describing a text request. So, unlike ``IrAsk`` and
+    ``IrExec``, this node carries no contract id and no retry count — there is
+    nothing to dispatch and no output to parse.
     """
 
     location: Location
     agent: "IrExpr"
     prompt: "IrExpr"
-    contract_id: "ContractId"
-    max_attempts: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -1212,7 +1181,6 @@ IrExpr = (
     | IrRenderValue
     | IrParseJson
     | IrCopyValue
-    | IrAgentHandle
     | IrAsk
     | IrAskRequest
     | IrExec

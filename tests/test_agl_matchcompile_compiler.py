@@ -71,9 +71,7 @@ from agm.agl.matchcompile.normalize import (
     normalize_let,
     signature_for_type,
 )
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
-from agm.agl.parser import parse_program
-from agm.agl.scope import resolve_module
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID
 from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import EnumType, IntType, Type, TypeTemplate
@@ -84,15 +82,13 @@ from agm.agl.typecheck import (
     CheckedModule,
     EnumOwnerForm,
     EnumOwnerFormKind,
-    check_module,
     check_program,
 )
 from tests.agl.ir_harness import make_graph_from_files
 from tests.agl.match_reference import reference_action
+from tests.agl.module_graph import resolve_and_check_entry
 
 _CAPS = HostCapabilities(
-    agent_names=frozenset(),
-    has_default_agent=True,
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
@@ -102,7 +98,7 @@ _CAPS = HostCapabilities(
 
 
 def _compile(source: str) -> tuple[CheckedModule, Case, CompiledMatchSite]:
-    checked = check_module(resolve_module(parse_program(source)), _CAPS)
+    checked = resolve_and_check_entry(source, _CAPS)
     cases: list[Case] = []
 
     def collect(node: object) -> None:
@@ -116,7 +112,7 @@ def _compile(source: str) -> tuple[CheckedModule, Case, CompiledMatchSite]:
 
 
 def test_compiler_marks_a_refutable_let_with_its_decision_witness() -> None:
-    checked = check_module(resolve_module(parse_program("let true = false")), _CAPS)
+    checked = resolve_and_check_entry("let true = false", _CAPS)
     lets: list[LetDecl] = []
 
     def collect(node: object) -> None:
@@ -157,7 +153,7 @@ def test_issue_kind_is_selected_by_the_sealed_source_payload() -> None:
     assert isinstance(case_compiled.normalized.source, CaseSite)
     assert isinstance(case_compiled.issues[0], NonExhaustiveIssue)
 
-    checked = check_module(resolve_module(parse_program("let true = false")), _CAPS)
+    checked = resolve_and_check_entry("let true = false", _CAPS)
     lets: list[LetDecl] = []
 
     def collect(node: object) -> None:
@@ -212,8 +208,7 @@ def _branch_matches(constructor: object, value: Value) -> bool:
     if isinstance(constructor, EnumConstructor):
         return (
             isinstance(value, EnumValue)
-            and value.nominal.module_id == constructor.enum_type.module_id
-            and value.nominal.declared_name == constructor.enum_type.name
+            and value.nominal.value == constructor.enum_type.decl_id
             and value.variant == constructor.variant
         )
     raise AssertionError("finite generated tests only use boolean and enum constructors")
@@ -389,9 +384,9 @@ def _nested_pair_value(
     left: str,
     right: str,
 ) -> EnumValue:
-    bit_nominal = NominalId(bit_type.module_id, bit_type.name)
+    bit_nominal = NominalId(bit_type.decl_id)
     return EnumValue(
-        NominalId(pair_type.module_id, pair_type.name),
+        NominalId(pair_type.decl_id),
         pair_type.name,
         "pair",
         {
@@ -736,7 +731,7 @@ def test_qba_reordering_preserves_source_priority_for_every_pair_value() -> None
     )
     root = cast(DecisionDecompose, compiled.root)
     pair = cast(EnumConstructor, root.constructor)
-    nominal = NominalId(pair.enum_type.module_id, pair.enum_type.name)
+    nominal = NominalId(pair.enum_type.decl_id)
 
     for left, right in itertools.product((False, True), repeat=2):
         value = EnumValue(
@@ -765,7 +760,7 @@ def test_generated_finite_matrices_match_reference_reachability_and_failure() ->
         )
         checked, case, compiled = _compile(source)
         pair_type = cast(EnumType, compiled.normalized.root.type)
-        nominal = NominalId(pair_type.module_id, pair_type.name)
+        nominal = NominalId(pair_type.decl_id)
         expected_actions: set[int] = set()
         unmatched = False
         for left, right in itertools.product((False, True), repeat=2):
@@ -831,7 +826,7 @@ def test_generated_nested_multi_column_matrices_match_the_reference() -> None:
                 for left, right in itertools.product(("zero", "one"), repeat=2)
             ),
             EnumValue(
-                NominalId(pair_type.module_id, pair_type.name),
+                NominalId(pair_type.decl_id),
                 pair_type.name,
                 "missing",
                 {},
@@ -1820,7 +1815,7 @@ def test_witness_renderer_covers_atomic_and_empty_complement_forms() -> None:
     empty_enum = EnumWitness(EnumType("Empty"), "empty", ())
     assert render_witness(empty_enum) == "empty"
     synthetic_qualified = EnumWitness(
-        EnumType("Empty", module_id=PRELUDE_ID),
+        EnumType("Empty", module_id=STD_CORE_ID),
         "empty",
         (),
         EnumWitnessQualification("Empty", None),
@@ -2219,7 +2214,7 @@ def test_strong_compiled_case_validator_rejects_internal_corruption() -> None:
             pair_compiled,
             expected_normalized=replace(
                 normalized,
-                case_context=replace(normalized.case_context, module_id=PRELUDE_ID),
+                case_context=replace(normalized.case_context, module_id=STD_CORE_ID),
             ),
         )
 

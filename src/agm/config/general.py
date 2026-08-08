@@ -21,6 +21,7 @@ from agm.core.toml import (
     toml_dict,
 )
 from agm.project.layout import project_config_dir
+from agm.util.interp import interp_preserving
 
 
 class ConfigCommandNotFound(ValueError):
@@ -32,8 +33,8 @@ class ConfigCommandNotFound(ValueError):
         super().__init__(f"{section_name} subcommand {command_name!r} is not defined in config")
 
 
-# Known path-like fields per config section.  Values for these fields are
-# expanded (env vars, ~) and resolved against the config file's directory
+# Known path-like fields per config section. Values interpolate ``%{name}``
+# environment variables, expand ``~``, and resolve against the config file's directory
 # before merging, so that relative paths are always interpreted relative to
 # the config file that defines them.  When the config-dir-resolved path does
 # not exist, cwd is used as a fallback.
@@ -47,21 +48,25 @@ _CONFIG_PATH_FIELDS: dict[str, list[str]] = {
         "selector_prompt_file",
         "extra_prompt_file",
         "extra_selector_prompt_file",
+        "log-file",
     ],
     "review": [
         "prompt_file",
         "extra_prompt_file",
         "review_file",
+        "log-file",
     ],
     "revise": [
         "prompt_file",
         "extra_prompt_file",
+        "log-file",
     ],
     "refine": [
         "review_prompt_file",
         "extra_review_prompt_file",
         "revise_prompt_file",
         "extra_revise_prompt_file",
+        "log-file",
     ],
 }
 
@@ -241,6 +246,52 @@ class RefineConfig:
     save_review: bool
 
 
+def _interpolate_and_expand_section_paths(
+    section: TomlDict,
+    fields: list[str],
+) -> tuple[TomlDict, set[str]]:
+    resolved = dict(section)
+    unresolved_fields: set[str] = set()
+    for field in fields:
+        value = resolved.get(field)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        interpolated, unresolved = interp_preserving(value, os.environ)
+        resolved[field] = os.path.expanduser(interpolated)
+        if unresolved:
+            unresolved_fields.add(field)
+    return resolved, unresolved_fields
+
+
+def _anchor_section_paths(
+    section: TomlDict,
+    fields: list[str],
+    config_dir: Path,
+    cwd: Path,
+    *,
+    sentinels: dict[str, set[str]],
+    unresolved_fields: set[str],
+) -> TomlDict:
+    resolved = dict(section)
+    for field in fields:
+        value = resolved.get(field)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        # Values with unresolved holes are not usable paths, so leave them
+        # unanchored. Interpolation has already run exactly once above.
+        if field in unresolved_fields or value in sentinels.get(field, set()):
+            continue
+        path = Path(value)
+        if path.is_absolute():
+            continue
+        config_resolved = (config_dir / path).resolve()
+        if config_resolved.exists():
+            resolved[field] = str(config_resolved)
+        else:
+            resolved[field] = str((cwd / path).resolve())
+    return resolved
+
+
 def _resolve_section_paths(
     section: TomlDict,
     fields: list[str],
@@ -249,57 +300,37 @@ def _resolve_section_paths(
     *,
     sentinels: dict[str, set[str]],
 ) -> TomlDict:
-    resolved = dict(section)
-    for field in fields:
-        value = resolved.get(field)
-        if not isinstance(value, str) or not value.strip():
-            continue
-        expanded = os.path.expanduser(os.path.expandvars(value))
-        if expanded in sentinels.get(field, set()):
-            resolved[field] = expanded
-            continue
-        path = Path(expanded)
-        if path.is_absolute():
-            resolved[field] = expanded
-            continue
-        config_resolved = (config_dir / path).resolve()
-        if config_resolved.exists():
-            resolved[field] = str(config_resolved)
-        else:
-            resolved[field] = str((cwd / path).resolve())
+    expanded, unresolved_fields = _interpolate_and_expand_section_paths(section, fields)
+    resolved = _anchor_section_paths(
+        expanded,
+        fields,
+        config_dir,
+        cwd,
+        sentinels=sentinels,
+        unresolved_fields=unresolved_fields,
+    )
     for key, value in resolved.items():
         if isinstance(value, dict) and key not in fields:
             resolved[key] = _resolve_section_paths(
-                toml_dict(value),
-                fields,
-                config_dir,
-                cwd,
-                sentinels=sentinels,
+                toml_dict(value), fields, config_dir, cwd, sentinels=sentinels
             )
     return resolved
 
 
 def _resolve_config_file_paths(config: TomlDict, config_dir: Path, cwd: Path) -> TomlDict:
     resolved = dict(config)
-    for section_name, fields in _CONFIG_PATH_FIELDS.items():
-        section = resolved.get(section_name)
+    for section_name, section in resolved.items():
         if isinstance(section, dict):
+            # Every known section lists "log-file" explicitly; unknown/program
+            # sections fall back to just "log-file" since that's the only
+            # path-like field they carry.
+            fields = _CONFIG_PATH_FIELDS.get(section_name, ["log-file"])
             resolved[section_name] = _resolve_section_paths(
                 toml_dict(section),
                 fields,
                 config_dir,
                 cwd,
                 sentinels=_CONFIG_PATH_SENTINELS.get(section_name, {}),
-            )
-    # Resolve log-file in any top-level section that contains that key.
-    # AGM's own sections don't carry a top-level log-file key (exec's is already
-    # handled above and is idempotent on the now-absolute value), so they are
-    # naturally skipped.  For program sections the path is anchored to the
-    # config-file directory, matching [exec].log-file behaviour.
-    for section_name, section in resolved.items():
-        if isinstance(section, dict) and "log-file" in section:
-            resolved[section_name] = _resolve_section_paths(
-                toml_dict(section), ["log-file"], config_dir, cwd, sentinels={}
             )
     return resolved
 
@@ -555,12 +586,16 @@ def load_revise_config(
 class ExecConfig:
     """Resolved exec-command configuration."""
 
-    runner: str | None
     strict_json: bool
     timeout: float | None
-    agents: dict[str, str]
     log: bool
     log_file: str | None
+    # Raw TOML value: only exec/repl may parse it as an AgL Agent literal.
+    default_agent: object | None = None
+    # Bare host agent command (e.g. "claude"), the pre-Agent-value spelling of
+    # a default agent. Lower precedence than default_agent; decoded into an
+    # AgentCommand value rather than parsed as AgL source (see engine_seeds.py).
+    runner: str | None = None
     default_loop_limit: int | None = None
     # Optional recursion call-depth override (None = use the canonical default).
     max_call_depth: int | None = None
@@ -581,9 +616,7 @@ def load_exec_config(
     - cwd/.agm/config.toml
 
     When ``command_name`` is provided, the ``[exec.<command_name>]`` sub-table
-    is merged over the base ``[exec]`` table.  The name ``agents`` is reserved
-    for the structural ``[exec.agents]`` map and is never treated as a
-    per-command override sub-table.
+    is merged over the base ``[exec]`` table.
     """
     merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
     return exec_config_from_merged(merged, command_name=command_name)
@@ -606,13 +639,10 @@ def exec_config_from_merged(
     ``[exec]`` value.  Engine keys use kebab-case names: ``strict-json``,
     ``max-iters``, ``log-file``.
     """
-    # ``agents`` is a reserved structural sub-table, not a workflow override:
-    # selecting it as a command would merge the agent map in as scalar config.
-    selected_command = None if command_name == "agents" else command_name
     exec_table = _select_command_table(
         toml_dict(merged.get("exec")),
         section_name="exec",
-        command_name=selected_command,
+        command_name=command_name,
         require_command=False,
     )
 
@@ -624,32 +654,31 @@ def exec_config_from_merged(
             if key in program_table:
                 effective[key] = program_table[key]
 
-    resolved_runner = _optional_str(effective, "runner")
     resolved_strict_json = _optional_bool(effective, "strict-json")
     resolved_loop_limit = _optional_positive_int(effective, "max-iters")
     resolved_max_call_depth = _optional_positive_int(exec_table, "max-call-depth")
 
     resolved_timeout = _optional_timeout(effective, "timeout")
 
-    agents_raw = exec_table.get("agents")
-    resolved_agents: dict[str, str] = {}
-    if isinstance(agents_raw, dict):
-        for k, v in agents_raw.items():
-            if isinstance(k, str) and isinstance(v, str) and v.strip():
-                resolved_agents[k] = v
-
     resolved_log = _optional_bool(effective, "log")
     resolved_log_file = _optional_str(effective, "log-file")
+    # Agent values use AgL literal syntax. Keep every explicitly supplied TOML
+    # value raw so exec/repl can diagnose an empty or non-string value at their
+    # AgL host boundary; other commands stay free of AgL imports.
+    resolved_default_agent = effective.get("default-agent")
+    # A bare host agent command, not an engine key: read straight from the
+    # command's own [exec] table (never overridden per-program).
+    resolved_runner = _optional_str(exec_table, "runner")
 
     return ExecConfig(
-        runner=resolved_runner,
         strict_json=resolved_strict_json,
         default_loop_limit=resolved_loop_limit,
         max_call_depth=resolved_max_call_depth,
         timeout=resolved_timeout,
-        agents=resolved_agents,
         log=resolved_log,
         log_file=resolved_log_file,
+        default_agent=resolved_default_agent,
+        runner=resolved_runner,
     )
 
 

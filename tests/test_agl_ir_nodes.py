@@ -20,7 +20,9 @@ import decimal
 import pytest
 
 from agm.agl.ir import (
+    NO_BUILTIN_DECLARATIONS,
     ArithOp,
+    BuiltinNominals,
     CmpOp,
     Coercion,
     CompareKind,
@@ -63,6 +65,8 @@ from agm.agl.ir import (
     SymbolId,
     ToJson,
 )
+from agm.agl.ir.builtin_nominals import DeclaredNominal
+from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
 from agm.agl.modules.ids import ModuleId
 
 # ---------------------------------------------------------------------------
@@ -77,7 +81,7 @@ SYM0 = SymbolId(value=0)
 SYM1 = SymbolId(value=1)
 FN0 = FunctionId(value=0)
 CT0 = ContractId(value=0)
-NOM0 = NominalId(module_id=MOD_A, declared_name="Foo")
+NOM0 = NominalId(value=100)
 
 
 def loc(source_id: SourceId = SID0) -> Location:
@@ -152,28 +156,54 @@ class TestIds:
 
 class TestNominalId:
     def test_fields(self) -> None:
-        n = NominalId(module_id=MOD_A, declared_name="Bar")
-        assert n.module_id == MOD_A
-        assert n.declared_name == "Bar"
+        n = NominalId(value=1)
+        assert n.value == 1
 
     def test_frozen(self) -> None:
-        n = NominalId(module_id=MOD_A, declared_name="X")
+        n = NominalId(value=1)
         with pytest.raises(dataclasses.FrozenInstanceError):
-            setattr(n, "declared_name", "Y")
+            setattr(n, "value", 2)
 
     def test_equality_same(self) -> None:
-        assert NominalId(MOD_A, "Foo") == NominalId(MOD_A, "Foo")
+        assert NominalId(1) == NominalId(1)
 
-    def test_inequality_different_module(self) -> None:
-        assert NominalId(MOD_A, "Foo") != NominalId(MOD_B, "Foo")
-
-    def test_inequality_different_name(self) -> None:
-        assert NominalId(MOD_A, "Foo") != NominalId(MOD_A, "Bar")
+    def test_inequality_different_value(self) -> None:
+        assert NominalId(1) != NominalId(2)
 
     def test_hashable(self) -> None:
-        d = {NominalId(MOD_A, "Foo"): 1, NominalId(MOD_B, "Foo"): 2}
-        assert d[NominalId(MOD_A, "Foo")] == 1
-        assert d[NominalId(MOD_B, "Foo")] == 2
+        d = {NominalId(1): 1, NominalId(2): 2}
+        assert d[NominalId(1)] == 1
+        assert d[NominalId(2)] == 2
+
+
+# ---------------------------------------------------------------------------
+# builtin_nominals.py — BuiltinNominals
+# ---------------------------------------------------------------------------
+
+
+class TestBuiltinNominals:
+    def test_declared_name_answers_with_its_own_nominal(self) -> None:
+        declared_nominal = NominalId(1)
+        table = BuiltinNominals(
+            declared={"Foo": DeclaredNominal(nominal=declared_nominal, display_name="Foo")}
+        )
+        assert table.nominal("Foo") == declared_nominal
+        assert table.resolve("Foo").display_name == "Foo"
+
+    def test_undeclared_name_answers_with_the_shipped_standard_library_identity(self) -> None:
+        table = BuiltinNominals(declared={})
+        assert table.nominal("RangeError") == NominalId(require_reserved_nominal_id("RangeError"))
+        assert table.resolve("RangeError").display_name == "RangeError"
+
+    def test_no_builtin_declarations_answers_every_name_with_the_shipped_identity(self) -> None:
+        assert NO_BUILTIN_DECLARATIONS.nominal("ExecResult") == NominalId(
+            require_reserved_nominal_id("ExecResult")
+        )
+
+    def test_frozen(self) -> None:
+        table = BuiltinNominals(declared={})
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            setattr(table, "declared", {})
 
 
 # ---------------------------------------------------------------------------
@@ -670,21 +700,28 @@ class TestNominalDescriptor:
     def test_construct(self) -> None:
         desc = NominalDescriptor(
             nominal=NOM0,
-            display_name="Foo",
+            module_id=MOD_A,
+            scope_path=(),
+            declared_name="Foo",
             kind=NominalKind.RECORD,
         )
         assert desc.nominal == NOM0
+        assert desc.module_id == MOD_A
+        assert desc.scope_path == ()
+        assert desc.declared_name == "Foo"
         assert desc.display_name == "Foo"
         assert desc.kind == NominalKind.RECORD
 
     def test_frozen(self) -> None:
         desc = NominalDescriptor(
             nominal=NOM0,
-            display_name="Foo",
+            module_id=MOD_A,
+            scope_path=(),
+            declared_name="Foo",
             kind=NominalKind.ENUM,
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
-            setattr(desc, "display_name", "Bar")
+            setattr(desc, "declared_name", "Bar")
 
 
 # ---------------------------------------------------------------------------
@@ -730,7 +767,13 @@ class TestExecutableModule:
 class TestExecutableProgram:
     def _make_program(self) -> ExecutableProgram:
         sym_desc = SymbolDescriptor(symbol_id=SYM0, mutable=False, public_name="y", owner=MOD_A)
-        nom_desc = NominalDescriptor(nominal=NOM0, display_name="Foo", kind=NominalKind.RECORD)
+        nom_desc = NominalDescriptor(
+            nominal=NOM0,
+            module_id=MOD_A,
+            scope_path=(),
+            declared_name="Foo",
+            kind=NominalKind.RECORD,
+        )
         sf = SourceFile(display_name="main.agl", normalized_text="")
         em = ExecutableModule(module_id=MOD_A, initializers=())
 

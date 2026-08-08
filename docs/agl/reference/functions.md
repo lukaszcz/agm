@@ -128,6 +128,20 @@ match a recognized built-in exactly. This form is used by `std/core`; ordinary
 programs normally call those declarations through the default standard-library
 import instead of redeclaring them.
 
+A call to a built-in name resolves exactly like a call to any other name: the
+callee must reach a `builtin def` declaration — bare through the standard
+library's default import or a program's own declaration, or qualified through
+its declaring path — and a name with no such declaration in scope is an
+ordinary undefined-name error, not a host dispatch.
+
+A built-in's complete scoped name — whether it names a `builtin def` or a
+`builtin record`/`enum`/`exception` — is its host identity. It may be declared
+only once at that path across the program. This lets a root `ask` coexist with
+`Agent::ask`, while still preventing a second declaration at either exact path.
+A program loading the default standard library, as it does unless started with
+`--no-stdlib` (see [Modules](modules.md#prelude)), therefore cannot redeclare
+a `std/core` builtin at the same scoped name.
+
 `builtin` is a declaration modifier: it may precede `def` on the same line or
 on the line directly above it (the newline after the modifier is
 insignificant).
@@ -255,8 +269,10 @@ print(plus(5))
 
 The `self` spelling is special only in this receiver position. An annotated
 `self` elsewhere is an ordinary parameter. `def` and `extern def` may declare
-methods; `builtin def` is reserved for root host functions and cannot declare a
-method.
+methods. A `builtin def` may also declare a host method when its signature is a
+recognized host contract: the standard core declares `Agent::ask` and
+`Agent::ask-request`. These methods use the same selection and receiver rules,
+but are call-only rather than bound function values; see [Agent calls](agent-calls.md).
 
 ### Scope and forward references
 
@@ -796,7 +812,7 @@ enum Review
   | Pass
   | Fail(issues: array[text])
 
-agent reviewer
+let reviewer = AgentCommand("reviewer")
 
 def summarize_issues(issues: array[text]) -> text =
   "Issues found:\n%{issues}"

@@ -268,6 +268,79 @@ class TestAssembleRoots:
         assert lib_a.resolve() in rs.roots
         assert lib_b.resolve() in rs.roots
 
+    def test_configured_escaped_percent_hole_survives_single_interpolation_pass(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: a ``\\%{...}`` escape in ``[modules] roots`` is resolved to a
+        literal ``%{...}`` by :func:`load_module_roots` alone.  ``assemble_roots``
+        must not interpolate the already-resolved value a second time, or the
+        escape is defeated and the wrong directory is searched.
+        """
+        from agm.config.module_roots import load_module_roots
+
+        monkeypatch.setenv("TEAM", "alpha")
+        home = tmp_path / "home"
+        config_dir = home / ".agm"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.toml").write_text('[modules]\nroots = ["\\\\%{TEAM}/lib"]\n')
+
+        # The literally-named directory the escape is meant to preserve, and the
+        # directory a wrongful second interpolation pass would resolve to instead.
+        literal_root = config_dir / "%{TEAM}" / "lib"
+        literal_root.mkdir(parents=True)
+        wrongly_expanded_root = config_dir / "alpha" / "lib"
+        wrongly_expanded_root.mkdir(parents=True)
+
+        mr_config = load_module_roots(home=home, proj_dir=None, cwd=tmp_path)
+        inv_root = tmp_path / "inv"
+        inv_root.mkdir()
+        rs = assemble_roots(
+            invocation_root=inv_root,
+            lib_root=None,
+            configured=mr_config.extra,
+            cli=[],
+            cwd=tmp_path,
+        )
+
+        assert literal_root.resolve() in rs.roots
+        assert wrongly_expanded_root.resolve() not in rs.roots
+
+    def test_configured_env_value_containing_percent_hole_not_expanded_twice(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: when an env value substituted into ``[modules] roots`` by
+        :func:`load_module_roots` itself contains ``%{...}`` syntax, that syntax
+        must remain literal — ``assemble_roots`` must not scan and expand it
+        again against the environment.
+        """
+        from agm.config.module_roots import load_module_roots
+
+        monkeypatch.setenv("LIB_BASE", str(tmp_path / "srv" / "%{TEAM}"))
+        monkeypatch.setenv("TEAM", "core")
+        home = tmp_path / "home"
+        config_dir = home / ".agm"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.toml").write_text('[modules]\nroots = ["%{LIB_BASE}/agl"]\n')
+
+        literal_root = tmp_path / "srv" / "%{TEAM}" / "agl"
+        literal_root.mkdir(parents=True)
+        wrongly_expanded_root = tmp_path / "srv" / "core" / "agl"
+        wrongly_expanded_root.mkdir(parents=True)
+
+        mr_config = load_module_roots(home=home, proj_dir=None, cwd=tmp_path)
+        inv_root = tmp_path / "inv"
+        inv_root.mkdir()
+        rs = assemble_roots(
+            invocation_root=inv_root,
+            lib_root=None,
+            configured=mr_config.extra,
+            cli=[],
+            cwd=tmp_path,
+        )
+
+        assert literal_root.resolve() in rs.roots
+        assert wrongly_expanded_root.resolve() not in rs.roots
+
     def test_all_roots_are_absolute(self, tmp_path: Path) -> None:
         inv_root = tmp_path / "inv"
         inv_root.mkdir()

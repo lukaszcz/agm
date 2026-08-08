@@ -13,11 +13,8 @@ Public contract exercised here (AgL implementation requirements , the AgL DSL de
 
     runtime = PipelineDriver(
         default_strict_json=False,  # lenient JSON recovery is the default
-        default_agent=fn,           # the built-in `ask` agent (a host callable;
-                                    # `ask` cannot be registered by name)
+        agent_dispatcher=fn,        # fn(request) -> str
     )
-    runtime.register_agent(name, fn)   # fn(request) -> str; request.prompt is the
-                                       # rendered user prompt
     result = runtime.run(source, param_values={...})
 
 RunResult surface asserted:
@@ -111,27 +108,24 @@ def _run_program(
         name: _agent_from_spec(name, spec) for name, spec in scenario.get("agents", {}).items()
     }
     shell = FakeShell(scenario.get("shell", []))
-    kwargs: dict[str, Any] = {}
-    runtime_cfg = scenario.get("runtime", {})
-    if "default_call_depth_limit" in runtime_cfg:
-        kwargs["default_call_depth_limit"] = runtime_cfg["default_call_depth_limit"]
-    if "default_strict_json" in runtime_cfg:
-        kwargs["default_strict_json"] = runtime_cfg["default_strict_json"]
-    if "ask" in agents:
-        kwargs["default_agent"] = agents["ask"]
-    runtime = PipelineDriver(**kwargs)
+    runtime_options: dict[str, Any] = {}
+    runtime_config = scenario.get("runtime", {})
+    if "default_call_depth_limit" in runtime_config:
+        runtime_options["default_call_depth_limit"] = runtime_config["default_call_depth_limit"]
+    if "default_strict_json" in runtime_config:
+        runtime_options["default_strict_json"] = runtime_config["default_strict_json"]
 
-    def register_agents(declarations: tuple[Any, ...]) -> None:
-        for name, agent in agents.items():
-            if name == "ask":
-                continue
-            matches = [declaration for declaration in declarations if declaration.name == name]
-            if len(matches) == 1:
-                runtime.register_scoped_agent(matches[0].scope_path, name, agent)
-            else:
-                runtime.register_agent(name, agent)
+    def dispatch_agent(request: Any) -> str:
+        agent_value = request.agent
+        command = agent_value.fields.get("command")
+        name = command.value if command is not None else "ask"
+        return agents[name](request)
 
+    if agents:
+        runtime_options["agent_dispatcher"] = dispatch_agent
+    runtime = PipelineDriver(**runtime_options)
     module_roots = scenario.get("module_roots", [])
+    default_stdlib = not scenario.get("no_stdlib", False)
     with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
         if module_roots:
             from agm.agl.modules.roots import RootSet
@@ -144,25 +138,22 @@ def _run_program(
                     }
                 )
             )
-            prepared = PipelineDriver.prepare_program(source, entry_path=None, roots=roots)
-            register_agents(prepared.declared_agents)
+            prepared = PipelineDriver.prepare_program(
+                source, entry_path=None, roots=roots, default_stdlib=default_stdlib
+            )
             result = runtime.run_prepared(prepared, param_values=scenario.get("params", {}))
         elif program.is_relative_to(EXTERNS_PROGRAMS_DIR):
-            # Three branches, in order: `module_roots` above builds a graph from
-            # explicit roots (multi-module fixtures); this branch also runs
-            # through the graph, via `entry_path`, because `extern def` requires
-            # a real file-backed origin so companion resolution can find the
-            # sibling `.py`; every other fixture falls through to the plain,
-            # non-graph `runtime.run` path in the `else` branch below.
             from agm.agl.modules.roots import RootSet
 
             roots = RootSet(roots=frozenset({program.parent.resolve(), REPO_STDLIB_ROOT}))
-            prepared = PipelineDriver.prepare_program(source, entry_path=program, roots=roots)
-            register_agents(prepared.declared_agents)
+            prepared = PipelineDriver.prepare_program(
+                source, entry_path=program, roots=roots, default_stdlib=default_stdlib
+            )
             result = runtime.run_prepared(prepared, param_values=scenario.get("params", {}))
         else:
-            register_agents(runtime.declared_agents(source))
-            result = runtime.run(source, param_values=scenario.get("params", {}))
+            result = runtime.run(
+                source, param_values=scenario.get("params", {}), default_stdlib=default_stdlib
+            )
     return result, agents, shell
 
 
@@ -277,7 +268,13 @@ def _assert_calls(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -> N
         actual = len(agent.prompts)
         assert actual == count, f"agent {name!r}: expected {count} calls, got {actual}"
     for spec in expect.get("prompts", []):
-        prompts = agents[spec["agent"]].prompts
+        agent_spec = spec["agent"]
+        if isinstance(agent_spec, dict):
+            name = agent_spec.get("command", "ask")
+        else:
+            name = agent_spec
+        assert isinstance(name, str)
+        prompts = agents[name].prompts
         call = spec["call"]
         assert call < len(prompts), (
             f"agent {spec['agent']!r} made only {len(prompts)} calls, no call {call}"
@@ -285,11 +282,13 @@ def _assert_calls(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -> N
         prompt = prompts[call]
         if "equals" in spec:
             assert prompt == spec["equals"]
+        if "starts_with" in spec:
+            assert prompt.startswith(spec["starts_with"])
         for needle in spec.get("contains", []):
             assert needle in prompt, f"{needle!r} not in prompt {prompt!r}"
         for needle in spec.get("not_contains", []):
             assert needle not in prompt, f"{needle!r} unexpectedly in prompt {prompt!r}"
-        schema = agents[spec["agent"]].schemas[call]
+        schema = agents[name].schemas[call]
         for needle in spec.get("schema_contains", []):
             assert _schema_contains(schema, needle), f"{needle!r} not in schema {schema!r}"
         _assert_schema_paths(schema, spec.get("schema_paths", []))
@@ -347,3 +346,239 @@ def test_static_rejection(program: Path) -> None:
         assert needle.lower() in joined.lower(), (
             f"no diagnostic mentions {needle!r}; diagnostics: {joined!r}"
         )
+
+
+def test_qualified_std_core_print_still_works(capsys: pytest.CaptureFixture[str]) -> None:
+    """A fully qualified ``std/core::print(...)`` call still runs, exactly as
+    the bare form does — a built-in call is classified once its callee
+    resolves to a ``builtin def``, and ``std/core::print`` reaches the same
+    declaration a bare ``print`` does, just by a qualified route."""
+    from agm.agl import PipelineDriver
+
+    result = PipelineDriver().run('std/core::print("hi")\n')
+
+    assert list(result.diagnostics) == [], (
+        f"unexpected static diagnostics: {' | '.join(d.message for d in result.diagnostics)}"
+    )
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert capsys.readouterr().out == "hi\n"
+
+
+def _scoped_stdlib_root(tmp_path: Path) -> Path:
+    """Build a throwaway module root with ``std/core.agl`` wrapped in ``scope Std``.
+
+    Never the installed/repo stdlib root — the standard ``module_roots``
+    scenario mechanism always adds ``REPO_STDLIB_ROOT`` too, which would
+    collide with this substitute ``std/core``, so callers build their own
+    ``RootSet`` from the returned root instead.
+    """
+    core_source = (
+        (REPO_STDLIB_ROOT / "std" / "core.agl")
+        .read_text(encoding="utf-8")
+        .replace("import std/config\n\n", "")
+        .replace("std/config::default-agent", 'AgentClaude("sonnet", "medium")')
+    )
+    scoped_stdlib_root = tmp_path / "scoped_stdlib"
+    (scoped_stdlib_root / "std").mkdir(parents=True)
+    (scoped_stdlib_root / "std" / "core.agl").write_text(
+        f"scope Std\n{core_source}end Std\n", encoding="utf-8"
+    )
+    return scoped_stdlib_root
+
+
+def test_scoped_stdlib_arrangement_runs_end_to_end(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A whole stdlib module wrapped in a named scope region works end to end.
+
+    Wraps the real ``stdlib/std/core.agl`` verbatim in a ``scope Std ... end
+    Std`` region under a throwaway module root (never the installed/repo
+    stdlib — the standard ``module_roots`` scenario mechanism always adds
+    ``REPO_STDLIB_ROOT`` too, which would collide with this substitute
+    ``std/core``, so this test builds its own ``RootSet`` instead), then runs
+    a program against it through parsing, scope resolution, typechecking,
+    lowering, and evaluation. Exercises a scoped ``builtin def`` (``exec``)
+    dispatching to a scoped ``builtin record`` (``ExecResult``) at a real host
+    boundary, and a fully scoped exception hierarchy (``Exception``/
+    ``RangeError`` both declared inside the region) raised and left uncaught.
+    """
+    from agm.agl import PipelineDriver
+    from agm.agl.modules.roots import RootSet
+
+    scoped_stdlib_root = _scoped_stdlib_root(tmp_path)
+
+    program = (
+        'let r = Std::exec("echo hi")\nStd::print(r.stdout)\n'
+        'raise Std::RangeError(message = "boom")\n'
+    )
+
+    shell = FakeShell([{"command": "echo hi", "stdout": "hi\n"}])
+    runtime = PipelineDriver()
+    with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
+        result = runtime.run(program, roots=RootSet(roots=frozenset({scoped_stdlib_root})))
+    shell.assert_complete()
+
+    assert list(result.diagnostics) == [], (
+        f"unexpected static diagnostics: {' | '.join(d.message for d in result.diagnostics)}"
+    )
+    assert capsys.readouterr().out == "hi\n"
+    assert result.error is not None, "expected the uncaught scoped RangeError"
+    assert result.error.type_name == "Std::RangeError"
+    assert result.error.fields["message"] == "boom"
+
+
+def test_scoped_stdlib_arrangement_structured_exec_result_is_the_scoped_nominal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A structured ``exec`` result is tagged with its own scoped nominal.
+
+    The result is annotated ``Std::ExecResult`` explicitly, so the static
+    target type is the scoped nominal by the annotation rather than by
+    ``exec``'s own default. The field access below then only succeeds if the
+    host-minted value carries that very same scoped nominal — an exact
+    nominal projection rejects any other identity.
+    """
+    from agm.agl import PipelineDriver
+    from agm.agl.modules.roots import RootSet
+
+    scoped_stdlib_root = _scoped_stdlib_root(tmp_path)
+
+    program = 'let r: Std::ExecResult = Std::exec("echo hi")\nStd::print(r.stdout)\n'
+
+    shell = FakeShell([{"command": "echo hi", "stdout": "hi\n"}])
+    runtime = PipelineDriver()
+    with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
+        result = runtime.run(program, roots=RootSet(roots=frozenset({scoped_stdlib_root})))
+    shell.assert_complete()
+
+    assert list(result.diagnostics) == [], (
+        f"unexpected static diagnostics: {' | '.join(d.message for d in result.diagnostics)}"
+    )
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert capsys.readouterr().out == "hi\n"
+
+
+def test_scoped_stdlib_arrangement_uncaught_host_raised_exec_error_reports_scoped_spelling(
+    tmp_path: Path,
+) -> None:
+    """An uncaught host-raised exception reports its declared, scoped spelling.
+
+    A failed (non-structured, ``text``-typed) ``Std::exec`` call raises
+    ``ExecError`` at the host boundary; left uncaught, it now reports
+    ``Std::ExecError`` — the outside-the-region half of the catchability fix
+    observable without a qualified ``catch`` (the grammar admits none)."""
+    from agm.agl import PipelineDriver
+    from agm.agl.modules.roots import RootSet
+
+    scoped_stdlib_root = _scoped_stdlib_root(tmp_path)
+
+    program = 'let out: text = Std::exec("false")\nStd::print(out)\n'
+
+    shell = FakeShell([{"command": "false", "returncode": 1}])
+    runtime = PipelineDriver()
+    with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
+        result = runtime.run(program, roots=RootSet(roots=frozenset({scoped_stdlib_root})))
+    shell.assert_complete()
+
+    assert list(result.diagnostics) == [], (
+        f"unexpected static diagnostics: {' | '.join(d.message for d in result.diagnostics)}"
+    )
+    assert result.error is not None, "expected the uncaught scoped ExecError"
+    assert result.error.type_name == "Std::ExecError"
+
+
+def test_scoped_stdlib_arrangement_bare_print_is_undefined_but_qualified_works(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With the whole standard library wrapped in ``scope Std``, a bare
+    ``print`` call has no reachable declaration — only ``Std::print`` does.
+
+    A built-in call is classified only once its callee resolves to a
+    ``builtin def`` declaration, the same as any other reference; wrapping
+    the whole standard library in a named region takes the bare route away
+    from every name it declares, ``print`` included, leaving only the
+    region's own qualified path."""
+    from agm.agl import PipelineDriver
+    from agm.agl.modules.roots import RootSet
+
+    scoped_stdlib_root = _scoped_stdlib_root(tmp_path)
+    roots = RootSet(roots=frozenset({scoped_stdlib_root}))
+    runtime = PipelineDriver()
+
+    bare_result = runtime.run('print("hi")\n', roots=roots)
+    assert not bare_result.ok, "expected the bare 'print' call to be statically rejected"
+    assert bare_result.diagnostics, "expected at least one diagnostic"
+
+    qualified_result = runtime.run('Std::print("hi")\n', roots=roots)
+    assert list(qualified_result.diagnostics) == [], (
+        f"unexpected static diagnostics: "
+        f"{' | '.join(d.message for d in qualified_result.diagnostics)}"
+    )
+    assert qualified_result.error is None, f"unexpected error: {qualified_result.error}"
+    assert capsys.readouterr().out == "hi\n"
+
+
+def test_scoped_builtin_hierarchy_declared_in_the_entry_module_catches_a_host_raise(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A host-raised exception is catchable by its declared, scoped spelling.
+
+    ``catch`` accepts only an unqualified NAME (the grammar admits no
+    qualified ``A::B`` there), so the catching code lives inside the same
+    ``scope Host`` region that declares the hierarchy, where the bare name
+    resolves to the region's own declaration — the same arrangement
+    ``scoped_builtin_stdlib_arrangement.agl``'s own ``report``/``RangeError``
+    catch already uses. This program declares the whole exec/exception
+    surface itself and loads without the standard library (``default_stdlib
+    =False``), so its own ``scope Host`` module lowers normally (unlike the
+    real ``std/core`` module, which is excluded from per-module function
+    lowering). A failed (``text``-typed, non-structured) ``exec`` call
+    raises ``ExecError`` at the host boundary; before per-path identity was
+    restored the host would have minted a path-free nominal while the type
+    kept its declared path, so this bare ``catch`` could never match. Now
+    both sides agree, and the program handles it.
+    """
+    from agm.agl import PipelineDriver
+
+    program = (
+        "scope Host\n"
+        "builtin\n"
+        "exception Exception\n"
+        "  *\n"
+        "  message: text\n"
+        "builtin\n"
+        "exception ExecError extends Exception\n"
+        "  *\n"
+        "  command: text\n"
+        "  exit_code: int\n"
+        "  stdout: text\n"
+        "  stderr: text\n"
+        "  timed_out: bool\n"
+        "builtin record ExecResult\n"
+        "  stdout: text\n"
+        "  exit_code: int\n"
+        "  stderr: text\n"
+        "  timed_out: bool\n"
+        "builtin def exec(command: text) -> ExecResult\n"
+        "def run(cmd: text) -> text =\n"
+        "  try\n"
+        "    let out: text = exec(cmd)\n"
+        "    out\n"
+        "  catch ExecError as e =>\n"
+        '    "caught"\n'
+        "end Host\n"
+        "builtin def print[T](value: T) -> unit\n"
+        'print(Host::run("false"))\n'
+    )
+
+    shell = FakeShell([{"command": "false", "returncode": 1}])
+    runtime = PipelineDriver()
+    with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
+        result = runtime.run(program, default_stdlib=False)
+    shell.assert_complete()
+
+    assert list(result.diagnostics) == [], (
+        f"unexpected static diagnostics: {' | '.join(d.message for d in result.diagnostics)}"
+    )
+    assert result.error is None, f"expected the raised ExecError to be caught: {result.error}"
+    assert capsys.readouterr().out == "caught\n"

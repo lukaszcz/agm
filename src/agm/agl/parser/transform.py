@@ -38,7 +38,6 @@ from agm.agl.parser.errors import AglSyntaxError
 from agm.agl.syntax.nodes import ELSE
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceId, SourceSpan
 from agm.agl.syntax.types import (
-    AgentT,
     AppliedT,
     ArrayT,
     BoolT,
@@ -69,6 +68,13 @@ class _RawPlaceholder:
 
 
 @dataclass(frozen=True, slots=True)
+class _DottedRawCallee:
+    """A member callee built before its raw-tail type arguments and payload."""
+
+    callee: syntax.FieldAccess
+
+
+@dataclass(frozen=True, slots=True)
 class _ScopePath:
     """Transformer-internal path retaining each segment's span."""
 
@@ -85,8 +91,19 @@ _SCOPED_DECLARATIONS = (
     syntax.EnumDef,
     syntax.ExceptionDef,
     syntax.TypeAlias,
-    syntax.AgentDecl,
+    syntax.LetDecl,
+    syntax.VarDecl,
+    syntax.ParamDecl,
+    syntax.ImportDecl,
+    syntax.ExportDecl,
+    syntax.BuiltinVarDecl,
 )
+
+# Message for the decl_head module-route rejection. Also used for a `var`
+# binder path, which reuses `decl_head`; a `let` binder path never raises
+# this — a chain that fails the spellable-as-a-declaration-head test simply
+# keeps its constructor-pattern meaning instead.
+_MODULE_ROUTE_MESSAGE = "scope paths use '::' between name segments."
 
 
 def _prefix_scope_path(
@@ -104,7 +121,7 @@ def _prefix_scope_path(
 
 
 # ---------------------------------------------------------------------------
-# Transformer-internal marker sentinel (never leaks into the AST)
+# Transformer-internal markers and provenance (never leaks into the AST)
 # ---------------------------------------------------------------------------
 
 
@@ -172,8 +189,35 @@ _RawNamed: TypeAlias = syntax.NamedArg | _RawNamedArg
 _RawArgLists: TypeAlias = tuple[list[_RawPosArg], list[_RawNamed]]
 _ArgLists: TypeAlias = tuple[list[syntax.Expr], list[syntax.NamedArg]]
 _JuxtCall: TypeAlias = tuple[tuple[TypeExpr, ...], _ArgLists]
-_JuxtSuffix: TypeAlias = tuple[str, str] | tuple[str, syntax.Expr] | tuple[str, _JuxtCall]
 _RawItem: TypeAlias = syntax.Item | _RawInfixChain
+
+
+@dataclass(frozen=True, slots=True)
+class _JuxtSuffix:
+    """A deferred juxtaposition postfix operation allocated in source order."""
+
+    kind: str
+    value: str | syntax.Expr | _JuxtCall
+    span: SourceSpan
+    node_id: int
+
+
+@dataclass(frozen=True, slots=True)
+class _JuxtField:
+    """A juxtaposition field token and its already allocated node id."""
+
+    name: str
+    span: SourceSpan
+    node_id: int
+
+
+@dataclass(frozen=True, slots=True)
+class _RawJuxtMember:
+    """The suffixes and final raw-tail name of a juxtaposed member receiver."""
+
+    suffixes: tuple[_JuxtSuffix, ...]
+    raw_name: Token
+    node_id: int
 
 
 # Zone ordering for marker validation (strictly increasing).
@@ -232,7 +276,6 @@ _ALL_TYPE_EXPRS = (
     ArrayT,
     DictT,
     UnitT,
-    AgentT,
     FuncT,
     AppliedT,
 )
@@ -287,35 +330,35 @@ def _is_stray_scope_end(item: syntax.Item) -> bool:
     )
 
 
-def _is_builtin_scope_declaration(item: object) -> bool:
-    """Whether *item* is a root-only builtin declaration."""
-    return (
-        isinstance(item, (syntax.FuncDef, syntax.RecordDef, syntax.EnumDef, syntax.ExceptionDef))
-        and item.is_builtin
-    )
+# Names for region items that remain disallowed, keyed by node type. A
+# single, obvious table so admitting a form later is a table edit rather
+# than hunting down a scattered isinstance branch.
+_REJECTED_SCOPE_ITEM_NAMES: tuple[tuple[type, str], ...] = (
+    (syntax.AssignStmt, "an assignment"),
+    (syntax.InfixDecl, "an 'infix' declaration"),
+    (syntax.ProgramDecl, "a 'program' declaration"),
+)
 
 
-def _scope_item_error_span(item: object, fallback: SourceSpan) -> SourceSpan:
-    """Return the offending scope item's span, or the region span as fallback."""
-    if isinstance(item, _RawInfixChain):
-        return item.span
-    if isinstance(
-        item,
-        (
-            syntax.ParamDecl,
-            syntax.ProgramDecl,
-            syntax.BuiltinVarDecl,
-            syntax.InfixDecl,
-            syntax.ImportDecl,
-            syntax.ExportDecl,
-            syntax.LetDecl,
-            syntax.VarDecl,
-            syntax.AssignStmt,
-            syntax.Expr,
-        ),
-    ):
-        return item.span
-    return fallback
+# ``scope_item ::= scope_region | declaration | binder | expr``; once the
+# admitted shapes are filtered out, only these remain.
+_RejectedScopeItem: TypeAlias = (
+    _RawInfixChain | syntax.ProgramDecl | syntax.InfixDecl | syntax.AssignStmt | syntax.Expr
+)
+
+
+def _rejected_scope_item(item: _RejectedScopeItem) -> tuple[str, SourceSpan]:
+    """Name and locate a disallowed scope-region item, for the diagnostic.
+
+    ``scope_item ::= scope_region | declaration | binder | expr``, and the
+    caller has already filtered out every admitted shape (``allowed_items``),
+    so a disallowed item is always one of the forms in this signature — each
+    of which carries its own span.
+    """
+    for node_type, form in _REJECTED_SCOPE_ITEM_NAMES:
+        if isinstance(item, node_type):
+            return form, item.span
+    return "a bare expression", item.span
 
 
 def _span_from_meta(meta: Meta) -> SourceSpan:
@@ -369,6 +412,12 @@ class AstBuilder(Transformer):
         # in an earlier entry can be used in a later one. ``None`` for a standalone
         # whole-program parse.
         self._ambient_infix = ambient_infix
+        # Node ids of qualified patterns built by ``pat_qual_bare`` (no argument
+        # list in the source). Provenance for ``let_decl``'s scoped-binding
+        # reinterpretation only -- ``A::x`` and ``A::x()`` build structurally
+        # identical ConstructorPattern nodes, so this distinction never leaks
+        # into the AST itself.
+        self._bare_qualified_pattern_ids: set[int] = set()
 
     def _span_from_meta(self, meta: Meta) -> SourceSpan:
         """Build a SourceSpan from Lark tree Meta, stamped with self._source."""
@@ -448,13 +497,26 @@ class AstBuilder(Transformer):
         return block
 
     def _validate_open_placement(self, items: tuple[syntax.Item, ...]) -> None:
-        """Require scope opens to remain in the header portion of a region."""
+        """Require scope opens to remain in the header portion of a block.
+
+        ``import``/``open import`` and ``export`` placement is not this
+        check's concern -- the scope pass owns that rule uniformly, for
+        every module root and every region. This check only enforces that
+        ``open`` declarations precede a block's other items, and it treats
+        ``import``/``export`` items as header items for that purpose (they
+        never themselves trip ``seen_non_header``), so an ``open`` may still
+        follow them. Each block is validated by its own call -- built
+        bottom-up, a region's own items are checked by the call the
+        region's own transform makes, independently of the call the module
+        root (or an enclosing region) makes for its own items.
+        """
         seen_non_header = False
         for item in items:
             if isinstance(item, syntax.OpenDecl):
                 if seen_non_header:
                     raise AglSyntaxError(
-                        "open declarations must precede non-header items.", span=item.span
+                        "open declarations must precede non-header items.",
+                        span=item.span,
                     )
             elif not isinstance(item, (syntax.ImportDecl, syntax.ExportDecl)):
                 seen_non_header = True
@@ -484,7 +546,7 @@ class AstBuilder(Transformer):
             if arg.type == "MODQUAL":
                 if reject_module_routes and "/" in name:
                     raise AglSyntaxError(
-                        "scope paths use '::' between name segments.",
+                        _MODULE_ROUTE_MESSAGE,
                         span=self._span_from_token(arg),
                     )
                 token_span = self._span_from_token(arg)
@@ -530,6 +592,28 @@ class AstBuilder(Transformer):
         name, _span = path.segments[-1]
         return name, self._scope_segments(_ScopePath(path.segments[:-1]))
 
+    def _binder_scope_path(
+        self, qualifier: syntax.QualifierChain
+    ) -> tuple[syntax.ScopeSegment, ...] | None:
+        """Build a binder scope path from a bare qualifier chain, or decline.
+
+        A binder path is exactly what `decl_head` can spell: one or more
+        plain name segments, with the chain not anchored at the module root.
+        Returns ``None`` — rather than raising — for a chain that is
+        `::`-anchored, carries a module route, or applies type arguments to a
+        segment; the caller then keeps the pattern's constructor meaning.
+        """
+        if qualifier.anchor is syntax.QualifierAnchor.CURRENT_MODULE:
+            return None
+        segments: list[syntax.ScopeSegment] = []
+        for segment in qualifier.segments:
+            if segment.type_args is not None or segment.anchored or "/" in segment.name:
+                return None
+            segments.append(
+                syntax.ScopeSegment(name=segment.name, span=segment.span, node_id=self._next_id())
+            )
+        return tuple(segments)
+
     def scope_region(self, meta: Meta, args: _Args) -> syntax.ScopeRegion:
         """Build and normalize a scope region with a matching closer."""
         paths = [arg for arg in args if isinstance(arg, _ScopePath)]
@@ -543,34 +627,21 @@ class AstBuilder(Transformer):
                 span=closer_span,
             )
 
-        allowed_items = (
-            syntax.ScopeRegion,
-            syntax.OpenDecl,
-            syntax.FuncDef,
-            syntax.RecordDef,
-            syntax.EnumDef,
-            syntax.ExceptionDef,
-            syntax.TypeAlias,
-            syntax.AgentDecl,
-        )
+        allowed_items = (syntax.ScopeRegion, syntax.OpenDecl, *_SCOPED_DECLARATIONS)
         items = tuple(arg for arg in args if isinstance(arg, allowed_items))
         self._validate_open_placement(cast(tuple[syntax.Item, ...], items))
         disallowed = next(
             (
                 arg
                 for arg in args
-                if arg is not None
-                and (
-                    not isinstance(arg, (Token, _ScopePath, allowed_items))
-                    or _is_builtin_scope_declaration(arg)
-                )
+                if arg is not None and not isinstance(arg, (Token, _ScopePath, allowed_items))
             ),
             None,
         )
         if disallowed is not None:
-            span = _scope_item_error_span(disallowed, self._span_from_meta(meta))
+            form, span = _rejected_scope_item(cast(_RejectedScopeItem, disallowed))
             raise AglSyntaxError(
-                "scope regions may contain only functions, externs, types, and agents.",
+                f"scope regions cannot contain {form}.",
                 span=span,
             )
 
@@ -613,39 +684,20 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
-    def agent_decl(self, meta: Meta, args: _Args) -> syntax.AgentDecl:
-        # Grammar: AGENT name (EQ template)?
-        name, scope_path = self._declaration_head(args)
-        runner_node = next(
-            (a for a in args if isinstance(a, (syntax.StringLit, syntax.Template))),
-            None,
-        )
-        runner: str | None = (
-            None
-            if runner_node is None
-            else _require_literal_string(
-                runner_node,
-                "agent runner string must be a literal string with no interpolation.",
-            ).value
-        )
-        span = self._span_from_meta(meta)
-        return syntax.AgentDecl(
-            name=name,
-            runner=runner,
-            scope_path=scope_path,
-            span=span,
-            node_id=self._next_id(),
-        )
-
     def builtin_var_def(self, meta: Meta, args: _Args) -> syntax.BuiltinVarDecl:
-        """builtin_var_def: "builtin" _NEWLINE? "var" name type_ann"""
+        """builtin_var_def: "builtin" _NEWLINE? "var" name type_ann (EQ expr)?"""
         name_tok = _find_name_token(args)
         type_expr = _find_type_expr(args[1:])
+        default = cast(
+            syntax.Expr,
+            next((arg for arg in args if _is_expr_node(arg)), None),
+        )
         return syntax.BuiltinVarDecl(
             name=str(name_tok),
             type_ann=type_expr,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
+            default=default,
         )
 
     def _make_infix_decl(
@@ -1030,29 +1082,53 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
 
     def let_decl(self, meta: Meta, args: _Args) -> syntax.LetDecl:
-        # Grammar: "let" pattern type_ann? EQ expr
+        """let_decl: "let" pattern type_ann? EQ expr
+
+        A pattern that is exactly a bare qualifier chain (``A::x``, built by
+        ``pat_qual_bare``: no argument list, no enclosing ``as`` binder) and
+        spellable as a declaration head reinterprets as a scoped binding: the
+        chain's qualifier segments become the scope path and its member name
+        becomes a plain ``VarPattern``. Every other pattern shape — including
+        a bare chain that is `::`-anchored, module-routed, or carries a
+        type-argument-applied segment, or a chain written with an argument
+        list (``A::x()``) — keeps its match meaning.
+        """
         pattern = next(a for a in args if isinstance(a, _PATTERN_NODE_TYPES))
         ann, value = _extract_ann_and_value(args)
         span = self._span_from_meta(meta)
+        scope_path: tuple[syntax.ScopeSegment, ...] = ()
+        if (
+            isinstance(pattern, syntax.ConstructorPattern)
+            and pattern.qualifier is not None
+            and pattern.node_id in self._bare_qualified_pattern_ids
+        ):
+            binder_path = self._binder_scope_path(pattern.qualifier)
+            if binder_path is not None:
+                scope_path = binder_path
+                pattern = syntax.VarPattern(
+                    name=pattern.qualifier.member, span=pattern.span, node_id=self._next_id()
+                )
         return syntax.LetDecl(
             pattern=pattern,
             type_ann=ann,
             value=value,
             span=span,
             node_id=self._next_id(),
+            scope_path=scope_path,
         )
 
     def var_decl(self, meta: Meta, args: _Args) -> syntax.VarDecl:
-        # Grammar: "var" name type_ann? EQ expr
-        name_tok = _find_name_token(args)
+        """var_decl: "var" decl_head type_ann? EQ expr"""
+        name, scope_path = self._declaration_head(args)
         ann, value = _extract_ann_and_value(args[1:])
         span = self._span_from_meta(meta)
         return syntax.VarDecl(
-            name=str(name_tok),
+            name=name,
             type_ann=ann,
             value=value,
             span=span,
             node_id=self._next_id(),
+            scope_path=scope_path,
         )
 
     def assign_stmt(self, meta: Meta, args: _Args) -> syntax.AssignStmt:
@@ -1091,20 +1167,27 @@ class AstBuilder(Transformer):
         )
 
     def _assignment_qualifier(self, ref: syntax.VarRef) -> syntax.QualifierChain | None:
-        """Return a simple expression chain for a qualified assignment target."""
+        """Return a simple expression chain for a qualified assignment target.
+
+        A chain of any length is admitted here -- a module route (always one
+        segment) and a local scope path (any number of segments, for a
+        nested-region ``var``) are indistinguishable until resolution, which
+        owns the actual accept/reject decision. Only a type-argument-applied
+        segment is rejected on sight: no assignment target can carry one.
+        """
         chain = ref.qualifier
         if chain is None:
             return None
         if not chain.segments:
             assert chain.anchor is syntax.QualifierAnchor.CURRENT_MODULE
             return chain
-        if len(chain.segments) == 1 and chain.segments[0].type_args is None:
-            return chain
-        raise AglSyntaxError(
-            "a qualified assignment target must name a module member; type-qualified "
-            "constructor forms are not assignment targets.",
-            span=ref.span,
-        )
+        if any(segment.type_args is not None for segment in chain.segments):
+            raise AglSyntaxError(
+                "a qualified assignment target cannot apply type arguments to a qualifier "
+                "segment; type-qualified constructor forms are not assignment targets.",
+                span=ref.span,
+            )
+        return chain
 
     # ------------------------------------------------------------------
     # type_ann
@@ -1174,10 +1257,6 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
             qualifier=qualifier,
         )
-
-    def agent_type(self, meta: Meta, args: _Args) -> AgentT:
-        """AGENT terminal in type position → AgentT."""
-        return AgentT(span=self._span_from_meta(meta), node_id=self._next_id())
 
     def type_arg_list(self, meta: Meta, args: _Args) -> tuple[TypeExpr, ...]:
         """type_arg_list: type_expr (COMMA type_expr)*"""
@@ -1428,53 +1507,95 @@ class AstBuilder(Transformer):
         )
 
     def juxt_arg(self, meta: Meta, args: _Args) -> syntax.Expr:
-        """juxt_arg: juxt_atom juxt_suffix*
+        """juxt_arg: juxt_atom juxt_arg_tail
 
         Builds the restricted postfix chain allowed by single-arg call sugar,
         such as ``print res.stdout``, ``print xs[0]``, and
         ``f Opt::Some(x = 1)`` and ``f Opt[int]::None()``.
         """
         non_tokens = [a for a in args if a is not None and not isinstance(a, Token)]
-        assert non_tokens, "juxt_arg: no base atom"
-        result = cast(syntax.Expr, non_tokens[0])
-        for suffix_obj in non_tokens[1:]:
-            kind, value = cast(_JuxtSuffix, suffix_obj)
-            if kind == "field":
+        assert len(non_tokens) == 2, "juxt_arg: expected a base atom and suffixes"
+        return self._apply_juxt_suffixes(
+            cast(syntax.Expr, non_tokens[0]),
+            cast(tuple[_JuxtSuffix, ...], non_tokens[1]),
+            meta,
+        )
+
+    def juxt_suffixes_empty(self, meta: Meta, args: _Args) -> tuple[_JuxtSuffix, ...]:
+        """Represent the end of a juxtaposition postfix chain."""
+        del meta, args
+        return ()
+
+    def juxt_postfix_tail(self, meta: Meta, args: _Args) -> tuple[_JuxtSuffix, ...]:
+        """Prepend a non-member postfix suffix to a juxtaposition chain."""
+        del meta
+        suffix, tail = cast(tuple[_JuxtSuffix, tuple[_JuxtSuffix, ...]], tuple(args))
+        return (suffix, *tail)
+
+    def juxt_field_name(self, meta: Meta, args: _Args) -> _JuxtField:
+        """Allocate a juxtaposition field before later postfix payloads are read."""
+        del meta
+        field = _find_name_token(args)
+        return _JuxtField(
+            name=str(field), span=self._span_from_token(field), node_id=self._next_id()
+        )
+
+    def juxt_field_tail(self, meta: Meta, args: _Args) -> tuple[_JuxtSuffix, ...]:
+        """Prepend a member projection to a juxtaposition postfix chain."""
+        del meta
+        field = next(arg for arg in args if isinstance(arg, _JuxtField))
+        tail = next(arg for arg in args if isinstance(arg, tuple))
+        return (
+            _JuxtSuffix("field", field.name, field.span, field.node_id),
+            *cast(tuple[_JuxtSuffix, ...], tail),
+        )
+
+    def _apply_juxt_suffixes(
+        self, result: syntax.Expr, suffixes: Iterable[_JuxtSuffix], meta: Meta | None = None
+    ) -> syntax.Expr:
+        """Apply deferred juxtaposition postfix operations to ``result``.
+
+        A supplied *meta* spans the whole juxtaposition chain.  Omitting it
+        selects source-ordered spans covering only the receiver and the applied
+        suffix, which is what a raw-member receiver needs.
+        """
+        for suffix in suffixes:
+            span = (
+                self._span_from_meta(meta)
+                if meta is not None
+                else _span_covering(result.span, suffix.span)
+            )
+            if suffix.kind == "field":
                 result = syntax.FieldAccess(
                     obj=result,
-                    field=cast(str, value),
-                    span=self._span_from_meta(meta),
-                    node_id=self._next_id(),
+                    field=cast(str, suffix.value),
+                    span=span,
+                    node_id=suffix.node_id,
                 )
-            elif kind == "index":
+            elif suffix.kind == "index":
                 result = syntax.IndexAccess(
                     obj=result,
-                    index=cast(syntax.Expr, value),
-                    span=self._span_from_meta(meta),
-                    node_id=self._next_id(),
+                    index=cast(syntax.Expr, suffix.value),
+                    span=span,
+                    node_id=suffix.node_id,
                 )
             else:
-                type_args_val, arg_lists = cast(_JuxtCall, value)
+                type_args_val, arg_lists = cast(_JuxtCall, suffix.value)
                 pos_args, named_args = arg_lists
                 result = syntax.Call(
                     callee=result,
                     args=tuple(pos_args),
                     named_args=tuple(named_args),
                     type_args=type_args_val,
-                    span=self._span_from_meta(meta),
-                    node_id=self._next_id(),
+                    span=span,
+                    node_id=suffix.node_id,
                 )
         return result
 
-    def juxt_field_suffix(self, meta: Meta, args: _Args) -> _JuxtSuffix:
-        """juxt_suffix: DOT field_name -> juxt_field_suffix."""
-        field_tok = _find_name_token(args)
-        return ("field", str(field_tok))
-
     def juxt_index_suffix(self, meta: Meta, args: _Args) -> _JuxtSuffix:
-        """juxt_suffix: INDEX_LSQB expr RSQB -> juxt_index_suffix."""
+        """juxt_postfix_suffix: INDEX_LSQB expr RSQB -> juxt_index_suffix."""
         index_expr = cast(syntax.Expr, next(a for a in args if _is_expr_node(a)))
-        return ("index", index_expr)
+        return _JuxtSuffix("index", index_expr, self._span_from_meta(meta), self._next_id())
 
     def _juxt_finalized_arg_lists(self, meta: Meta, args: _Args) -> _ArgLists:
         """Validate and finalize the raw arg-list under a juxtaposition call suffix."""
@@ -1488,12 +1609,22 @@ class AstBuilder(Transformer):
         return ([], [])
 
     def juxt_call_suffix(self, meta: Meta, args: _Args) -> _JuxtSuffix:
-        """juxt_suffix: LPAR arg_list? RPAR -> juxt_call_suffix."""
-        return ("call", ((), self._juxt_finalized_arg_lists(meta, args)))
+        """juxt_postfix_suffix: LPAR arg_list? RPAR -> juxt_call_suffix."""
+        return _JuxtSuffix(
+            "call",
+            ((), self._juxt_finalized_arg_lists(meta, args)),
+            self._span_from_meta(meta),
+            self._next_id(),
+        )
 
     def juxt_typed_call_suffix(self, meta: Meta, args: _Args) -> _JuxtSuffix:
-        """juxt_suffix: DCOLON LSQB type_arg_list RSQB LPAR arg_list? RPAR."""
-        return ("typed_call", (_find_type_args(args), self._juxt_finalized_arg_lists(meta, args)))
+        """juxt_postfix_suffix: type_args LPAR arg_list? RPAR."""
+        return _JuxtSuffix(
+            "typed_call",
+            (_find_type_args(args), self._juxt_finalized_arg_lists(meta, args)),
+            self._span_from_meta(meta),
+            self._next_id(),
+        )
 
     def type_apply(self, meta: Meta, args: _Args) -> syntax.TypeApply:
         """Apply explicit type arguments to a value without calling it."""
@@ -2749,8 +2880,26 @@ class AstBuilder(Transformer):
             qualifier=qualifier,
         )
 
+    def pat_qual_bare(self, meta: Meta, args: _Args) -> syntax.ConstructorPattern:
+        """pat_qual_bare: qual_ref_chain — a qualified pattern written without parens.
+
+        Also the shape a root-position ``let`` pattern must have to be
+        reinterpreted as a scoped binding; see ``let_decl``.
+        """
+        qualifier = next(a for a in args if isinstance(a, syntax.QualifierChain))
+        node_id = self._next_id()
+        self._bare_qualified_pattern_ids.add(node_id)
+        return syntax.ConstructorPattern(
+            name=qualifier.member,
+            positional=(),
+            named=(),
+            span=self._span_from_meta(meta),
+            node_id=node_id,
+            qualifier=qualifier,
+        )
+
     def pat_qual_constructor(self, meta: Meta, args: _Args) -> syntax.ConstructorPattern:
-        """pat_qual_constructor: qual_ref_chain (LPAR pattern_fields? RPAR)?"""
+        """pat_qual_constructor: qual_ref_chain LPAR pattern_fields? RPAR"""
         qualifier = next(a for a in args if isinstance(a, syntax.QualifierChain))
         positional: tuple[syntax.Pattern, ...] = ()
         named: tuple[syntax.PatternField, ...] = ()
@@ -2829,6 +2978,96 @@ class AstBuilder(Transformer):
     def raw_call(self, meta: Meta, args: _Args) -> syntax.Call:
         """Desugar a raw-tail form to its registered builtin call."""
         callee = next(arg for arg in args if isinstance(arg, syntax.VarRef))
+        return self._build_raw_call(meta, args, callee)
+
+    def dotted_raw_head(self, meta: Meta, args: _Args) -> _DottedRawCallee:
+        """Build a direct dotted member callee, spanning through its raw name."""
+        del meta
+        receiver = cast(syntax.Expr, args[0])
+        raw_name = next(
+            arg for arg in args if isinstance(arg, Token) and arg.type == "RAW_TAIL_NAME"
+        )
+        raw_name_span = self._span_from_token(raw_name)
+        return _DottedRawCallee(
+            syntax.FieldAccess(
+                obj=receiver,
+                field=RAW_TAIL_BUILTINS[str(raw_name)],
+                span=_span_covering(receiver.span, raw_name_span),
+                node_id=self._next_id(),
+            )
+        )
+
+    def raw_juxt_terminal(self, meta: Meta, args: _Args) -> _RawJuxtMember:
+        """Capture the raw-tail name terminating a juxtaposed postfix chain."""
+        del meta
+        raw_name = next(
+            arg for arg in args if isinstance(arg, Token) and arg.type == "RAW_TAIL_NAME"
+        )
+        return _RawJuxtMember(suffixes=(), raw_name=raw_name, node_id=self._next_id())
+
+    def raw_juxt_postfix_tail(self, meta: Meta, args: _Args) -> _RawJuxtMember:
+        """Prepend a non-member postfix suffix to a raw-member receiver."""
+        del meta
+        suffix, member = cast(tuple[_JuxtSuffix, _RawJuxtMember], tuple(args))
+        return _RawJuxtMember(
+            suffixes=(suffix, *member.suffixes), raw_name=member.raw_name, node_id=member.node_id
+        )
+
+    def raw_juxt_final_tail(self, meta: Meta, args: _Args) -> _RawJuxtMember:
+        """Pass through the final raw-tail member after its separating dot."""
+        del meta
+        return next(arg for arg in args if isinstance(arg, _RawJuxtMember))
+
+    def raw_juxt_member_field(self, meta: Meta, args: _Args) -> _RawJuxtMember:
+        """Prepend a regular member before the final raw-tail member."""
+        del meta
+        field = next(arg for arg in args if isinstance(arg, _JuxtField))
+        member = next(arg for arg in args if isinstance(arg, _RawJuxtMember))
+        return _RawJuxtMember(
+            suffixes=(
+                _JuxtSuffix("field", field.name, field.span, field.node_id),
+                *member.suffixes,
+            ),
+            raw_name=member.raw_name,
+            node_id=member.node_id,
+        )
+
+    def raw_juxt_dotted_receiver(self, meta: Meta, args: _Args) -> _DottedRawCallee:
+        """Build a postfix receiver and its final raw-tail member projection."""
+        del meta
+        receiver = cast(syntax.Expr, args[0])
+        member = next(arg for arg in args if isinstance(arg, _RawJuxtMember))
+        receiver = self._apply_juxt_suffixes(receiver, member.suffixes)
+        raw_name_span = self._span_from_token(member.raw_name)
+        return _DottedRawCallee(
+            syntax.FieldAccess(
+                obj=receiver,
+                field=RAW_TAIL_BUILTINS[str(member.raw_name)],
+                span=_span_covering(receiver.span, raw_name_span),
+                node_id=member.node_id,
+            )
+        )
+
+    def dotted_raw_call(self, meta: Meta, args: _Args) -> syntax.Call:
+        """Desugar ``receiver.name! payload`` to a member call."""
+        callee = next(arg.callee for arg in args if isinstance(arg, _DottedRawCallee))
+        return self._build_raw_call(meta, args, callee)
+
+    def dotted_raw_juxt(self, meta: Meta, args: _Args) -> syntax.Call:
+        """Desugar ``callee receiver.name! payload`` at a line-final position."""
+        callee = next(cast(syntax.Expr, arg) for arg in args if _is_expr_node(arg))
+        dotted_callee = next(arg.callee for arg in args if isinstance(arg, _DottedRawCallee))
+        raw_call = self._build_raw_call(meta, args, dotted_callee)
+        return syntax.Call(
+            callee=callee,
+            args=(raw_call,),
+            named_args=(),
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def _build_raw_call(self, meta: Meta, args: _Args, callee: syntax.Expr) -> syntax.Call:
+        """Build a call from a raw-tail payload and its already-desugared callee."""
         payload = next(arg for arg in args if isinstance(arg, (syntax.StringLit, syntax.Template)))
         return syntax.Call(
             callee=callee,
@@ -2954,13 +3193,11 @@ def _find_name_token(args: _Args) -> Token:
     """Return the field/key name Token from a ``field_name``-bearing rule.
 
     ``name`` matches ``NAME`` or ``OP_NAME``. ``field_name`` also admits a few
-    keyword tokens: ``AGENT``, ``TO``, ``DOWNTO``, ``BY``. All arrive here as
+    keyword tokens: ``TO``, ``DOWNTO``, ``BY``. All arrive here as
     plain Tokens; callers treat ``str(token)`` as the name string.
     """
     for a in args:
-        if _is_name_token(a) or (
-            isinstance(a, Token) and a.type in ("AGENT", "TO", "DOWNTO", "BY")
-        ):
+        if _is_name_token(a) or (isinstance(a, Token) and a.type in ("TO", "DOWNTO", "BY")):
             return a
     raise AssertionError(f"_find_name_token: no name token found in {args!r}")  # pragma: no cover
 
@@ -3238,6 +3475,11 @@ def _rewrite_item(
         return replace(item, value=_rewrite_expr(item.value, table, builder))
     if isinstance(item, syntax.VarDecl):
         return replace(item, value=_rewrite_expr(item.value, table, builder))
+    if isinstance(item, syntax.BuiltinVarDecl):
+        return replace(
+            item,
+            default=(None if item.default is None else _rewrite_expr(item.default, table, builder)),
+        )
     if isinstance(item, syntax.AssignStmt):
         return replace(
             item,

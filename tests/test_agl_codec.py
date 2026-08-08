@@ -23,7 +23,7 @@ Covers (per the AgL DSL contract):
 from __future__ import annotations
 
 import itertools
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from decimal import Decimal
 from pathlib import Path
 
@@ -40,22 +40,22 @@ from agm.agl.ir.contracts import (
     ScalarKind,
 )
 from agm.agl.ir.ids import NominalId
+from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.roots import RootSet
-from agm.agl.runtime.agents import AgentFn, AgentRegistry
+from agm.agl.parser.parser import parse_program
 from agm.agl.runtime.codec import JsonCodec, ParseResult, TextCodec
 from agm.agl.runtime.contract import OutputContract, materialize_contract, materialize_ir_contract
 from agm.agl.runtime.request import AgentRequest
-from agm.agl.scope import resolve_module
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
-    AgentType,
     ArrayType,
     BoolType,
     DecimalType,
     DictType,
     EnumType,
+    ExceptionType,
     IntType,
     JsonType,
     RecordType,
@@ -83,9 +83,15 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import build_decode_schema, derive_schema
-from agm.agl.typecheck import check_module
 from agm.agl.typecheck.env import CheckedModule, OutputContractSpec
-from tests._agl_helpers import ambient_agents_for, enum_type, record_type, type_table_for
+from tests._agl_helpers import (
+    enum_type,
+    next_decl_id,
+    record_type,
+    strip_decl_ids,
+    type_table_for,
+)
+from tests.agl.module_graph import resolve_and_check_program_ast
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -100,6 +106,45 @@ def _nid() -> int:
 
 def _sp() -> SourceSpan:
     return SourceSpan(1, 1, 1, 5, 0, 4)
+
+
+def _ask_builtin_items() -> tuple[Item, ...]:
+    """Real ``ParsePolicy``/``ask`` declarations, parsed once, for a bare ``ask(...)``.
+
+    ``_check_program_with_json`` builds a hand-crafted single-module program
+    that never imports ``std/core`` (see ``resolve_and_check_program_ast``),
+    so a bare ``ask(...)`` call needs its own reachable declaration in the
+    same program: a bare built-in call is classified only once it resolves to
+    a ``builtin def``, exactly like any other reference. Parsing the real
+    signatures (rather than hand-building the AST) keeps them trivially in
+    sync with ``std/core.agl`` and their canonical shape, which a ``builtin``
+    declaration is checked against. Node ids are seeded well above this
+    module's own ``_nid()`` counter to stay disjoint from every hand-built
+    node id in this file.
+    """
+    program = parse_program(
+        "builtin\n"
+        "enum ParsePolicy =\n"
+        "  | Abort\n"
+        "  | Retry(n: int)\n"
+        "\n"
+        "builtin\n"
+        "enum Agent =\n"
+        "  | AgentCommand(command: text)\n"
+        "  | AgentClaude(model: text, thinking: text)\n"
+        "  | AgentCodex(model: text, thinking: text)\n"
+        "  | AgentPi(provider: text, model: text, thinking: text)\n"
+        "\n"
+        "builtin def ask[T](\n"
+        "  prompt: text,\n"
+        '  agent: Agent = AgentCommand(""),\n'
+        '  format: text = "",\n'
+        "  strict_json: bool = false,\n"
+        "  on_parse_error: ParsePolicy = ParsePolicy::Abort,\n"
+        ") -> T\n",
+        start_id=500_000,
+    )
+    return program.body.items
 
 
 _ISSUE_TYPE, _ISSUE_TYPEDEF = record_type(
@@ -204,16 +249,25 @@ def _ensure_expr_tail(body: tuple[Item, ...]) -> tuple[Item, ...]:
 
 
 def _check_program_with_json(body: tuple[Item, ...]) -> CheckedModule:
-    """Run *body* through real resolve + check with both text and json codecs."""
+    """Run *body* through real resolve + check with both text and json codecs.
+
+    Uses ``resolve_and_check_program_ast``'s hand-built single-module graph:
+    *body* is a hand-built tuple of AST ``Item`` nodes constructed directly
+    by this module's ``_let``/``_template``/... builders below, not parsed
+    from source text, so there is no source string to hand to
+    ``tests.agl.module_graph.resolve_and_check_entry`` (which only accepts
+    one). That graph never imports ``std/core``, so ``_ask_builtin_items()``
+    is prepended to give this suite's bare ``ask(...)`` calls (built by
+    ``_ask_call``) a reachable declaration.
+    """
     program = ast.Program(
-        body=ast.Block(items=_ensure_expr_tail(body), span=_sp(), node_id=_nid()),
+        body=ast.Block(
+            items=_ask_builtin_items() + _ensure_expr_tail(body), span=_sp(), node_id=_nid()
+        ),
         span=_sp(),
         node_id=_nid(),
     )
-    resolved = resolve_module(program, ambient_agents=ambient_agents_for(program))
     caps = HostCapabilities(
-        agent_names=frozenset(),
-        has_default_agent=True,
         codec_kinds={
             "text": frozenset({"text"}),
             "json": frozenset(
@@ -221,7 +275,7 @@ def _check_program_with_json(body: tuple[Item, ...]) -> CheckedModule:
             ),
         },
     )
-    return check_module(resolved, caps)
+    return resolve_and_check_program_ast(program, caps)
 
 
 class _Bindings(dict[str, object]):
@@ -229,47 +283,51 @@ class _Bindings(dict[str, object]):
         return self
 
 
+# The hand-built program in ``_check_program_with_json`` declares its own
+# ``Agent`` enum (scoped to the entry module, not ``std/core``) and never loads
+# ``std/config``, so the bare ``ask(...)`` calls built by ``_ask_call`` have no
+# declared ``default-agent`` to read. ``_run_with_json_codec`` seeds one — its
+# concrete variant is irrelevant, since every ``agent_dispatcher`` in this file
+# ignores ``request.agent`` and responds from the prompt alone. The command
+# text must still be non-empty and shell-splittable: ``IrInterpreter``
+# validates the materialized ``default-agent`` value eagerly at construction,
+# regardless of whether anything ever dispatches it.
+_TEST_DEFAULT_AGENT = EnumValue(
+    nominal=NominalId(require_reserved_nominal_id("Agent")),
+    display_name="Agent",
+    variant="AgentCommand",
+    fields={"command": TextValue("unused")},
+)
+
+
 def _run_with_json_codec(
     body: tuple[Item, ...],
     *,
-    named: dict[str, AgentFn] | None = None,
-    default_agent: AgentFn | None = None,
+    agent_dispatcher: Callable[[AgentRequest], str] | None = None,
     strict_json: bool = False,
 ) -> _Bindings:
-    """Build + resolve + check + execute *body* with JsonCodec registered."""
+    """Build, check, and execute *body* with JSON output decoding enabled."""
     from agm.agl.eval.ir_interpreter import IrInterpreter
-    from agm.agl.lower import lower_module
     from agm.agl.runtime.codec import JsonCodec, OutputCodec, TextCodec
     from agm.agl.runtime.params import _materialize_ir_contracts
-    from tests.agl.ir_harness import _compiled_checked
+    from tests.agl.ir_harness import compile_checked_module, lower_compiled_module
 
     checked = _check_program_with_json(body)
     text_codec = TextCodec()
     json_codec = JsonCodec()
-    codecs: dict[str, OutputCodec] = {
-        text_codec.name: text_codec,
-        json_codec.name: json_codec,
-    }
-    from agm.agl.ir.ids import AgentId
-
-    registry = AgentRegistry(
-        named={AgentId(name): agent for name, agent in (named or {}).items()},
-        default_agent=default_agent,
-    )
-    executable = lower_module(
-        _compiled_checked(checked),
-        source_text="<direct-ast>",
-        source_label="<test>",
-    )
+    codecs: dict[str, OutputCodec] = {text_codec.name: text_codec, json_codec.name: json_codec}
+    executable = lower_compiled_module(compile_checked_module(checked), source_text="<direct-ast>")
     contracts, errors = _materialize_ir_contracts(executable, codecs)
     assert errors == []
-    interp = IrInterpreter(
-        executable,
-        registry=registry,
-        strict_json=strict_json,
-        host_contracts=contracts,
+    return _Bindings(
+        IrInterpreter(
+            executable,
+            agent_dispatcher=agent_dispatcher,
+            strict_json=strict_json,
+            host_contracts=contracts,
+            builtin_host_settings={"default-agent": _TEST_DEFAULT_AGENT},
+        ).run()
     )
-    return _Bindings(interp.run())
 
 
 # AST statement / expression builders (subset needed for codec tests)
@@ -301,7 +359,8 @@ def _ask_call(
     """Build an ``ask(text)`` call expression using the default agent.
 
     ``strict_json=True`` adds ``strict_json = true`` as a named argument.
-    The caller supplies the agent function as ``default_agent`` when running.
+    The omitted agent argument reads the ``default-agent`` engine setting, which
+    ``_run_with_json_codec`` seeds with :data:`_TEST_DEFAULT_AGENT`.
     """
     named_args: list[ast.NamedArg] = []
     if strict_json is not None:
@@ -541,13 +600,15 @@ _TREE_DEFS_BODY: dict[str, object] = {
 
 def _tree_type_and_def() -> tuple[EnumType, TypeDef]:
     """``enum Tree | Leaf | Node(value: int, left: Tree, right: Tree)``."""
-    tree_ref = EnumType(name="Tree")
+    tree_id = next_decl_id()
+    tree_ref = EnumType(name="Tree", decl_id=tree_id)
     return enum_type(
         "Tree",
         {
             "Leaf": {},
             "Node": {"value": IntType(), "left": tree_ref, "right": tree_ref},
         },
+        decl_id=tree_id,
     )
 
 
@@ -562,9 +623,14 @@ class TestRecursiveSchemaDerivation:
         assert schema == {"$ref": "#/$defs/Tree", "$defs": {"Tree": _TREE_DEFS_BODY}}
 
     def test_array_guarded_recursive_record_is_ref_with_defs(self) -> None:
+        category_id = next_decl_id()
         category, category_def = record_type(
             "Category",
-            {"name": TextType(), "subcategories": ArrayType(RecordType(name="Category"))},
+            {
+                "name": TextType(),
+                "subcategories": ArrayType(RecordType(name="Category", decl_id=category_id)),
+            },
+            decl_id=category_id,
         )
         schema = derive_schema(category, type_table_for(category_def))
         assert schema == {
@@ -606,8 +672,12 @@ class TestRecursiveSchemaDerivation:
     def test_mutual_record_enum_pair_gets_two_defs_entries(self) -> None:
         # record A { b: B } / enum B { Nil, Cons(a: A) }: A and B form one
         # mutual cycle, so BOTH get their own `$defs` entry.
-        a, a_def = record_type("A", {"b": EnumType(name="B")})
-        b, b_def = enum_type("B", {"Nil": {}, "Cons": {"a": RecordType(name="A")}})
+        a_id = next_decl_id()
+        b_id = next_decl_id()
+        a, a_def = record_type("A", {"b": EnumType(name="B", decl_id=b_id)}, decl_id=a_id)
+        b, b_def = enum_type(
+            "B", {"Nil": {}, "Cons": {"a": RecordType(name="A", decl_id=a_id)}}, decl_id=b_id
+        )
         schema = derive_schema(a, type_table_for(a_def, b_def))
         assert schema == {
             "$ref": "#/$defs/A",
@@ -643,6 +713,7 @@ class TestRecursiveSchemaDerivation:
     def test_generic_instantiations_get_distinct_keys(self) -> None:
         # Tree[int] and Tree[text] — two distinct concrete instantiations of
         # the SAME generic declaration — get distinct, non-colliding keys.
+        tree_id = next_decl_id()
         tree_def = TypeDef(
             kind="enum",
             name="Tree",
@@ -654,14 +725,21 @@ class TestRecursiveSchemaDerivation:
                     "Node",
                     (
                         ("value", TypeVarType("T")),
-                        ("left", EnumType(name="Tree", type_args=(TypeVarType("T"),))),
-                        ("right", EnumType(name="Tree", type_args=(TypeVarType("T"),))),
+                        (
+                            "left",
+                            EnumType(name="Tree", type_args=(TypeVarType("T"),), decl_id=tree_id),
+                        ),
+                        (
+                            "right",
+                            EnumType(name="Tree", type_args=(TypeVarType("T"),), decl_id=tree_id),
+                        ),
                     ),
                 ),
             ),
+            decl_node_id=tree_id,
         )
-        tree_int = EnumType(name="Tree", type_args=(IntType(),))
-        tree_text = EnumType(name="Tree", type_args=(TextType(),))
+        tree_int = EnumType(name="Tree", type_args=(IntType(),), decl_id=tree_id)
+        tree_text = EnumType(name="Tree", type_args=(TextType(),), decl_id=tree_id)
         wrapper, wrapper_def = record_type("Holder", {"a": tree_int, "b": tree_text})
         schema = derive_schema(wrapper, type_table_for(wrapper_def, tree_def))
         defs = schema["$defs"]
@@ -675,15 +753,25 @@ class TestRecursiveSchemaDerivation:
     def test_cross_module_same_name_gets_qualified_keys(self) -> None:
         mod_a = ModuleId.from_path("mod_a")
         mod_b = ModuleId.from_path("mod_b")
+        tree_a_id = next_decl_id()
         tree_a, tree_a_def = enum_type(
             "Tree",
-            {"Leaf": {}, "Node": {"next": EnumType(name="Tree", module_id=mod_a)}},
+            {
+                "Leaf": {},
+                "Node": {"next": EnumType(name="Tree", module_id=mod_a, decl_id=tree_a_id)},
+            },
             module_id=mod_a,
+            decl_id=tree_a_id,
         )
+        tree_b_id = next_decl_id()
         tree_b, tree_b_def = enum_type(
             "Tree",
-            {"Leaf": {}, "Node": {"next": EnumType(name="Tree", module_id=mod_b)}},
+            {
+                "Leaf": {},
+                "Node": {"next": EnumType(name="Tree", module_id=mod_b, decl_id=tree_b_id)},
+            },
             module_id=mod_b,
+            decl_id=tree_b_id,
         )
         wrapper, wrapper_def = record_type("Holder", {"a": tree_a, "b": tree_b})
         schema = derive_schema(wrapper, type_table_for(wrapper_def, tree_a_def, tree_b_def))
@@ -704,14 +792,18 @@ class TestRecursiveSchemaDerivation:
         assert "$defs" not in schema
 
     def test_phantom_recursive_argument_growth_refs_same_defs_entry(self) -> None:
-        recursive = RecordType("R", type_args=(ArrayType(TypeVarType("T")),), module_id=ENTRY_ID)
-        root = RecordType("R", type_args=(IntType(),), module_id=ENTRY_ID)
+        r_id = next_decl_id()
+        recursive = RecordType(
+            "R", type_args=(ArrayType(TypeVarType("T")),), module_id=ENTRY_ID, decl_id=r_id
+        )
+        root = RecordType("R", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=r_id)
         r_def = TypeDef(
             kind="record",
             name="R",
             module_id=ENTRY_ID,
             type_params=("T",),
             fields=(("children", ArrayType(recursive)),),
+            decl_node_id=r_id,
         )
         schema = derive_schema(root, type_table_for(r_def))
         assert schema == {
@@ -727,12 +819,15 @@ class TestRecursiveSchemaDerivation:
         }
 
     def test_raises_for_infinite_closure_root(self) -> None:
+        pair_id = next_decl_id()
+        perfect_id = next_decl_id()
         pair_def = TypeDef(
             kind="record",
             name="Pair",
             module_id=ENTRY_ID,
             type_params=("A", "B"),
             fields=(("first", TypeVarType("A")), ("second", TypeVarType("B"))),
+            decl_node_id=pair_id,
         )
         perfect_def = TypeDef(
             kind="enum",
@@ -752,16 +847,19 @@ class TestRecursiveSchemaDerivation:
                                     RecordType(
                                         name="Pair",
                                         type_args=(TypeVarType("T"), TypeVarType("T")),
+                                        decl_id=pair_id,
                                     ),
                                 ),
+                                decl_id=perfect_id,
                             ),
                         ),
                     ),
                 ),
             ),
+            decl_node_id=perfect_id,
         )
         table = type_table_for(pair_def, perfect_def)
-        perfect_int = EnumType(name="Perfect", type_args=(IntType(),))
+        perfect_int = EnumType(name="Perfect", type_args=(IntType(),), decl_id=perfect_id)
         with pytest.raises(TypeError, match="no finite schema"):
             derive_schema(perfect_int, table)
 
@@ -786,6 +884,12 @@ class TestRecursiveSchemaDerivation:
         assert keys[h2] == "X_A_B_2"
         assert keys[h3] == "X_A_B_3"
 
+    def test_assign_defs_keys_displays_non_generic_exception_handles(self) -> None:
+        from agm.agl.type_schema import _assign_defs_keys
+
+        handle = ExceptionType("Problem", module_id=ENTRY_ID)
+        assert _assign_defs_keys((handle,), type_table_for()) == {handle: "Problem"}
+
     def test_defs_key_order_is_deterministic_for_mutually_recursive_hub(self) -> None:
         # Hub has three direct neighbours (Alpha, Mike, Zulu) discovered off
         # ONE frozenset — a Python-hash-ordered set, not a sequence — and each
@@ -796,16 +900,44 @@ class TestRecursiveSchemaDerivation:
         # PYTHONHASHSEED. Field order is deliberately NOT alphabetical, so a
         # test that only reproduced field order would not catch a
         # frozenset-iteration-order regression.
-        hub_handle = RecordType("Hub", module_id=ENTRY_ID)
+        hub_id = next_decl_id()
+        hub_handle = RecordType("Hub", module_id=ENTRY_ID, decl_id=hub_id)
         alpha, alpha_def = record_type("Alpha", {"back": hub_handle})
         mike, mike_def = record_type("Mike", {"back": hub_handle})
         zulu, zulu_def = record_type("Zulu", {"back": hub_handle})
-        hub, hub_def = record_type("Hub", {"a": zulu, "b": alpha, "c": mike})
+        hub, hub_def = record_type("Hub", {"a": zulu, "b": alpha, "c": mike}, decl_id=hub_id)
         table = type_table_for(hub_def, alpha_def, mike_def, zulu_def)
         schema = derive_schema(hub, table)
         defs = schema["$defs"]
         assert isinstance(defs, dict)
         assert list(defs.keys()) == ["Hub", "Alpha", "Mike", "Zulu"]
+
+    def test_recursive_declarations_sharing_a_name_get_distinct_correct_defs_entries(
+        self,
+    ) -> None:
+        # Two distinct declarations sharing one name path (a REPL
+        # redeclaration mints a fresh decl_id for the same name, so the two
+        # coexist) must never be conflated into one $defs entry, and each
+        # entry's body must reflect its OWN declaration, not the other's.
+        # ``_instantiation_sort_key`` disambiguates by decl_id specifically so
+        # this stays deterministic rather than depending on which of the two
+        # equally-keyed handles happens to sort first.
+        old_id = next_decl_id()
+        new_id = next_decl_id()
+        old_self = RecordType("R", module_id=ENTRY_ID, decl_id=old_id)
+        new_self = RecordType("R", module_id=ENTRY_ID, decl_id=new_id)
+        old_r, old_r_def = record_type("R", {"old_next": old_self}, decl_id=old_id)
+        new_r, new_r_def = record_type("R", {"new_next": new_self}, decl_id=new_id)
+        hub, hub_def = record_type("Hub", {"old": old_r, "new": new_r})
+        table = type_table_for(hub_def, old_r_def, new_r_def)
+
+        schema = derive_schema(hub, table)
+
+        defs = schema["$defs"]
+        assert isinstance(defs, dict)
+        assert set(defs) == {"R", "R_2"}
+        assert defs["R"]["required"] == ["old_next"]
+        assert defs["R_2"]["required"] == ["new_next"]
 
 
 # ---------------------------------------------------------------------------
@@ -831,7 +963,7 @@ class TestRecursiveDecodeDerivation:
         tree, tree_def = _tree_type_and_def()
         plan = build_decode_schema(tree, type_table_for(tree_def))
         tree_body = EnumDecode(
-            nominal=NominalId(ENTRY_ID, "Tree"),
+            nominal=NominalId(tree.decl_id),
             display_name="Tree",
             variants=(
                 VariantDecode(name="Leaf", fields=()),
@@ -858,13 +990,18 @@ class TestRecursiveDecodeDerivation:
         )
         from agm.agl.ir.ids import NominalId
 
+        category_id = next_decl_id()
         category, category_def = record_type(
             "Category",
-            {"name": TextType(), "subcategories": ArrayType(RecordType(name="Category"))},
+            {
+                "name": TextType(),
+                "subcategories": ArrayType(RecordType(name="Category", decl_id=category_id)),
+            },
+            decl_id=category_id,
         )
         plan = build_decode_schema(category, type_table_for(category_def))
         category_body = RecordDecode(
-            nominal=NominalId(ENTRY_ID, "Category"),
+            nominal=NominalId(category.decl_id),
             display_name="Category",
             fields=(
                 ("name", ScalarDecode(ScalarKind.TEXT)),
@@ -887,7 +1024,7 @@ class TestRecursiveDecodeDerivation:
         wrapper, wrapper_def = record_type("Wrapper", {"root": tree, "label": TextType()})
         plan = build_decode_schema(wrapper, type_table_for(wrapper_def, tree_def))
         assert plan.root == RecordDecode(
-            nominal=NominalId(ENTRY_ID, "Wrapper"),
+            nominal=NominalId(wrapper.decl_id),
             display_name="Wrapper",
             fields=(
                 ("root", RefDecode("Tree")),
@@ -908,14 +1045,18 @@ class TestRecursiveDecodeDerivation:
         )
         from agm.agl.ir.ids import NominalId
 
-        a, a_def = record_type("A", {"b": EnumType(name="B")})
-        b, b_def = enum_type("B", {"Nil": {}, "Cons": {"a": RecordType(name="A")}})
+        a_id = next_decl_id()
+        b_id = next_decl_id()
+        a, a_def = record_type("A", {"b": EnumType(name="B", decl_id=b_id)}, decl_id=a_id)
+        b, b_def = enum_type(
+            "B", {"Nil": {}, "Cons": {"a": RecordType(name="A", decl_id=a_id)}}, decl_id=b_id
+        )
         plan = build_decode_schema(a, type_table_for(a_def, b_def))
         a_body = RecordDecode(
-            nominal=NominalId(ENTRY_ID, "A"), display_name="A", fields=(("b", RefDecode("B")),)
+            nominal=NominalId(a.decl_id), display_name="A", fields=(("b", RefDecode("B")),)
         )
         b_body = EnumDecode(
-            nominal=NominalId(ENTRY_ID, "B"),
+            nominal=NominalId(b.decl_id),
             display_name="B",
             variants=(
                 VariantDecode(name="Nil", fields=()),
@@ -925,6 +1066,7 @@ class TestRecursiveDecodeDerivation:
         assert plan == DecodePlan(root=RefDecode("A"), defs=(("A", a_body), ("B", b_body)))
 
     def test_generic_instantiations_get_distinct_keys_matching_schema(self) -> None:
+        tree_id = next_decl_id()
         tree_def = TypeDef(
             kind="enum",
             name="Tree",
@@ -936,14 +1078,21 @@ class TestRecursiveDecodeDerivation:
                     "Node",
                     (
                         ("value", TypeVarType("T")),
-                        ("left", EnumType(name="Tree", type_args=(TypeVarType("T"),))),
-                        ("right", EnumType(name="Tree", type_args=(TypeVarType("T"),))),
+                        (
+                            "left",
+                            EnumType(name="Tree", type_args=(TypeVarType("T"),), decl_id=tree_id),
+                        ),
+                        (
+                            "right",
+                            EnumType(name="Tree", type_args=(TypeVarType("T"),), decl_id=tree_id),
+                        ),
                     ),
                 ),
             ),
+            decl_node_id=tree_id,
         )
-        tree_int = EnumType(name="Tree", type_args=(IntType(),))
-        tree_text = EnumType(name="Tree", type_args=(TextType(),))
+        tree_int = EnumType(name="Tree", type_args=(IntType(),), decl_id=tree_id)
+        tree_text = EnumType(name="Tree", type_args=(TextType(),), decl_id=tree_id)
         wrapper, wrapper_def = record_type("Holder", {"a": tree_int, "b": tree_text})
         table = type_table_for(wrapper_def, tree_def)
         schema = derive_schema(wrapper, table)
@@ -964,13 +1113,13 @@ class TestRecursiveDecodeDerivation:
         plan = build_decode_schema(outer, type_table_for(outer_def, inner_def))
         assert plan == DecodePlan(
             root=RecordDecode(
-                nominal=NominalId(ENTRY_ID, "Outer"),
+                nominal=NominalId(outer.decl_id),
                 display_name="Outer",
                 fields=(
                     (
                         "inner",
                         RecordDecode(
-                            nominal=NominalId(ENTRY_ID, "Inner"),
+                            nominal=NominalId(inner.decl_id),
                             display_name="Inner",
                             fields=(("x", ScalarDecode(ScalarKind.INT)),),
                         ),
@@ -981,12 +1130,15 @@ class TestRecursiveDecodeDerivation:
         )
 
     def test_raises_for_infinite_closure_root(self) -> None:
+        pair_id = next_decl_id()
+        perfect_id = next_decl_id()
         pair_def = TypeDef(
             kind="record",
             name="Pair",
             module_id=ENTRY_ID,
             type_params=("A", "B"),
             fields=(("first", TypeVarType("A")), ("second", TypeVarType("B"))),
+            decl_node_id=pair_id,
         )
         perfect_def = TypeDef(
             kind="enum",
@@ -1006,16 +1158,19 @@ class TestRecursiveDecodeDerivation:
                                     RecordType(
                                         name="Pair",
                                         type_args=(TypeVarType("T"), TypeVarType("T")),
+                                        decl_id=pair_id,
                                     ),
                                 ),
+                                decl_id=perfect_id,
                             ),
                         ),
                     ),
                 ),
             ),
+            decl_node_id=perfect_id,
         )
         table = type_table_for(pair_def, perfect_def)
-        perfect_int = EnumType(name="Perfect", type_args=(IntType(),))
+        perfect_int = EnumType(name="Perfect", type_args=(IntType(),), decl_id=perfect_id)
         with pytest.raises(TypeError, match="no finite schema"):
             build_decode_schema(perfect_int, table)
 
@@ -1668,7 +1823,7 @@ class TestValidationErrorsThroughRuntime:
             _run_with_json_codec(
                 (record_def, let_x),
                 # Valid JSON, but missing the required "severity" field.
-                default_agent=lambda req: '{"title": "Bug"}',
+                agent_dispatcher=lambda req: '{"title": "Bug"}',
             )
         exc = exc_info.value.exc
         assert exc.display_name == "AgentParseError"
@@ -1691,7 +1846,7 @@ class TestValidationErrorsThroughRuntime:
         with pytest.raises(AglRaise) as exc_info:
             _run_with_json_codec(
                 (enum_def, let_r),
-                default_agent=lambda req: '{"$case": "Nope"}',
+                agent_dispatcher=lambda req: '{"$case": "Nope"}',
             )
         exc = exc_info.value.exc
         ve = exc.fields["validation_errors"]
@@ -1748,7 +1903,7 @@ class TestValidationErrorsThroughRuntime:
         )
         let_x = _let("x", retry_call, type_ann=_name_ty("Issue"))
         with pytest.raises(AglRaise):
-            _run_with_json_codec((record_def, let_x), default_agent=agent)
+            _run_with_json_codec((record_def, let_x), agent_dispatcher=agent)
         # Two attempts: first sees no prior errors, retry sees the missing_field.
         assert len(seen) == 2
         assert seen[0] == []
@@ -1925,23 +2080,23 @@ class TestPipelineDriverWireUp:
     def test_json_target_type_accepted_via_direct_ast(self) -> None:
         """A call targeting json type should pass type checking and execute."""
         let_x = _let("x", _ask_call("Get data."), type_ann=_json_ty())
-        scope = _run_with_json_codec((let_x,), default_agent=lambda req: '{"x": 1}')
+        scope = _run_with_json_codec((let_x,), agent_dispatcher=lambda req: '{"x": 1}')
         x = scope.snapshot()["x"]
         assert isinstance(x, JsonValue)
 
     def test_int_target_accepted_via_json_codec(self) -> None:
         let_n = _let("n", _ask_call("Get number."), type_ann=_int_ty())
-        scope = _run_with_json_codec((let_n,), default_agent=lambda req: "42")
+        scope = _run_with_json_codec((let_n,), agent_dispatcher=lambda req: "42")
         assert scope.snapshot()["n"] == IntValue(42)
 
     def test_bool_target_accepted(self) -> None:
         let_b = _let("b", _ask_call("Is it true?"), type_ann=_bool_ty())
-        scope = _run_with_json_codec((let_b,), default_agent=lambda req: "true")
+        scope = _run_with_json_codec((let_b,), agent_dispatcher=lambda req: "true")
         assert scope.snapshot()["b"] == BoolValue(True)
 
     def test_decimal_target_accepted(self) -> None:
         let_d = _let("d", _ask_call("Get ratio."), type_ann=_dec_ty())
-        scope = _run_with_json_codec((let_d,), default_agent=lambda req: "1.5")
+        scope = _run_with_json_codec((let_d,), agent_dispatcher=lambda req: "1.5")
         d = scope.snapshot()["d"]
         assert isinstance(d, DecimalValue)
         assert d.value == Decimal("1.5")
@@ -1961,7 +2116,7 @@ class TestPipelineDriverWireUp:
         )
         scope = _run_with_json_codec(
             (record_def, let_x),
-            default_agent=lambda req: '{"title": "Bug", "severity": 5}',
+            agent_dispatcher=lambda req: '{"title": "Bug", "severity": 5}',
         )
         x = scope.snapshot()["x"]
         assert isinstance(x, RecordValue)
@@ -1982,7 +2137,7 @@ class TestPipelineDriverWireUp:
         )
         scope = _run_with_json_codec(
             (enum_def, let_r),
-            default_agent=lambda req: '{"$case": "Pass"}',
+            agent_dispatcher=lambda req: '{"$case": "Pass"}',
         )
         r = scope.snapshot()["r"]
         assert isinstance(r, EnumValue)
@@ -1994,7 +2149,7 @@ class TestPipelineDriverWireUp:
             _ask_call("List items."),
             type_ann=_array_ty(_text_ty()),
         )
-        scope = _run_with_json_codec((let_xs,), default_agent=lambda req: '["a", "b"]')
+        scope = _run_with_json_codec((let_xs,), agent_dispatcher=lambda req: '["a", "b"]')
         xs = scope.snapshot()["xs"]
         assert isinstance(xs, ArrayValue)
         assert xs.elements == [TextValue("a"), TextValue("b")]
@@ -2005,7 +2160,7 @@ class TestPipelineDriverWireUp:
             _ask_call("Dict."),
             type_ann=_dict_ty(_text_ty()),
         )
-        scope = _run_with_json_codec((let_d,), default_agent=lambda req: '{"k": "v"}')
+        scope = _run_with_json_codec((let_d,), agent_dispatcher=lambda req: '{"k": "v"}')
         d = scope.snapshot()["d"]
         assert isinstance(d, DictValue)
         assert d.entries == {"k": TextValue("v")}
@@ -2025,7 +2180,7 @@ class TestPipelineDriverWireUp:
             _field_def("severity", _int_ty()),
         )
         let_x = _let("x", _ask_call("Fetch."), type_ann=_name_ty("Issue"))
-        _run_with_json_codec((record_def, let_x), default_agent=agent)
+        _run_with_json_codec((record_def, let_x), agent_dispatcher=agent)
         assert received, "agent was not called"
         req = received[0]
         assert req.output_contract is not None
@@ -2044,7 +2199,7 @@ class TestPipelineDriverWireUp:
         let_x = _let("x", _ask_call("Get."), type_ann=_name_ty("Issue"))
         scope = _run_with_json_codec(
             (record_def, let_x),
-            default_agent=lambda req: '```json\n{"title": "Flaky", "severity": 2}\n```',
+            agent_dispatcher=lambda req: '```json\n{"title": "Flaky", "severity": 2}\n```',
         )
         x = scope.snapshot()["x"]
         assert isinstance(x, RecordValue)
@@ -2060,7 +2215,7 @@ class TestPipelineDriverWireUp:
         with pytest.raises(AglRaise) as exc_info:
             _run_with_json_codec(
                 (let_n,),
-                default_agent=lambda req: "```json\n6\n```",
+                agent_dispatcher=lambda req: "```json\n6\n```",
             )
         exc = exc_info.value.exc
         assert exc.display_name == "AgentParseError"
@@ -2071,7 +2226,7 @@ class TestPipelineDriverWireUp:
         with pytest.raises(AglRaise) as exc_info:
             _run_with_json_codec(
                 (let_n,),
-                default_agent=lambda req: "```json\n5\n```",
+                agent_dispatcher=lambda req: "```json\n5\n```",
                 strict_json=True,
             )
         exc = exc_info.value.exc
@@ -2082,17 +2237,18 @@ class TestPipelineDriverWireUp:
         with pytest.raises(AglRaise) as exc_info:
             _run_with_json_codec(
                 (let_n,),
-                default_agent=lambda req: "not json at all",
+                agent_dispatcher=lambda req: "not json at all",
             )
         exc = exc_info.value.exc
         assert exc.display_name == "AgentParseError"
-        # In AgL the agent field reflects the built-in "ask" call site (default agent path).
-        assert exc.fields.get("agent") == TextValue("ask")
+        # AgentParseError preserves the (seeded) default Agent enum value.
+        agent = exc.fields.get("agent")
+        assert agent == _TEST_DEFAULT_AGENT
 
     def test_agent_parse_error_has_target_type_field(self) -> None:
         let_n = _let("n", _ask_call("Num."), type_ann=_int_ty())
         with pytest.raises(AglRaise) as exc_info:
-            _run_with_json_codec((let_n,), default_agent=lambda req: "bad")
+            _run_with_json_codec((let_n,), agent_dispatcher=lambda req: "bad")
         exc = exc_info.value.exc
         assert exc.display_name == "AgentParseError"
         assert "target_type" in exc.fields
@@ -2100,7 +2256,7 @@ class TestPipelineDriverWireUp:
     def test_decimal_exactness_end_to_end(self) -> None:
         """Decimal stays exact through the full runtime pipeline."""
         let_d = _let("d", _ask_call("Get ratio."), type_ann=_dec_ty())
-        scope = _run_with_json_codec((let_d,), default_agent=lambda req: "1.5")
+        scope = _run_with_json_codec((let_d,), agent_dispatcher=lambda req: "1.5")
         d = scope.snapshot()["d"]
         assert isinstance(d, DecimalValue)
         assert d.value == Decimal("1.5")
@@ -2416,11 +2572,10 @@ class TestDecodeValueErrorBranches:
     def test_record_type_got_non_dict(self) -> None:
         from agm.agl.ir.contracts import RecordDecode, ScalarDecode, ScalarKind
         from agm.agl.ir.ids import NominalId
-        from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.runtime.convert import decode_value
 
         schema = RecordDecode(
-            nominal=NominalId(ENTRY_ID, "R"),
+            nominal=NominalId(1),
             display_name="R",
             fields=(("x", ScalarDecode(kind=ScalarKind.INT)),),
         )
@@ -2430,11 +2585,10 @@ class TestDecodeValueErrorBranches:
     def test_record_missing_field(self) -> None:
         from agm.agl.ir.contracts import RecordDecode, ScalarDecode, ScalarKind
         from agm.agl.ir.ids import NominalId
-        from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.runtime.convert import decode_value
 
         schema = RecordDecode(
-            nominal=NominalId(ENTRY_ID, "R"),
+            nominal=NominalId(1),
             display_name="R",
             fields=(("x", ScalarDecode(kind=ScalarKind.INT)),),
         )
@@ -2444,11 +2598,10 @@ class TestDecodeValueErrorBranches:
     def test_enum_type_got_non_dict(self) -> None:
         from agm.agl.ir.contracts import EnumDecode, VariantDecode
         from agm.agl.ir.ids import NominalId
-        from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.runtime.convert import decode_value
 
         schema = EnumDecode(
-            nominal=NominalId(ENTRY_ID, "E"),
+            nominal=NominalId(1),
             display_name="E",
             variants=(VariantDecode(name="A", fields=()),),
         )
@@ -2458,11 +2611,10 @@ class TestDecodeValueErrorBranches:
     def test_enum_missing_case_tag(self) -> None:
         from agm.agl.ir.contracts import EnumDecode, VariantDecode
         from agm.agl.ir.ids import NominalId
-        from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.runtime.convert import decode_value
 
         schema = EnumDecode(
-            nominal=NominalId(ENTRY_ID, "E"),
+            nominal=NominalId(1),
             display_name="E",
             variants=(VariantDecode(name="A", fields=()),),
         )
@@ -2472,11 +2624,10 @@ class TestDecodeValueErrorBranches:
     def test_enum_unknown_variant(self) -> None:
         from agm.agl.ir.contracts import EnumDecode, VariantDecode
         from agm.agl.ir.ids import NominalId
-        from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.runtime.convert import decode_value
 
         schema = EnumDecode(
-            nominal=NominalId(ENTRY_ID, "E"),
+            nominal=NominalId(1),
             display_name="E",
             variants=(VariantDecode(name="A", fields=()),),
         )
@@ -2486,11 +2637,10 @@ class TestDecodeValueErrorBranches:
     def test_enum_missing_payload_field(self) -> None:
         from agm.agl.ir.contracts import EnumDecode, ScalarDecode, ScalarKind, VariantDecode
         from agm.agl.ir.ids import NominalId
-        from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.runtime.convert import decode_value
 
         schema = EnumDecode(
-            nominal=NominalId(ENTRY_ID, "E"),
+            nominal=NominalId(1),
             display_name="E",
             variants=(
                 VariantDecode(
@@ -2562,12 +2712,14 @@ class TestSchemaExceptionType:
     def test_record_containing_exception_type_raises_type_error(self) -> None:
         from agm.agl.semantics.types import EXCEPTION_BASE, ExceptionType
 
-        boom = ExceptionType(name="Boom")
+        boom_id = next_decl_id()
+        boom = ExceptionType(name="Boom", decl_id=boom_id)
         boom_def = TypeDef(
             kind="exception",
             name="Boom",
             module_id=ENTRY_ID,
-            base=(EXCEPTION_BASE.module_id, EXCEPTION_BASE.name),
+            base=EXCEPTION_BASE.decl_id,
+            decl_node_id=boom_id,
         )
         box, box_def = record_type("Box", {"boom": boom})
         with pytest.raises(TypeError, match="ExceptionType"):
@@ -2835,16 +2987,16 @@ class TestValidationMappingCoverage:
 
 
 # ---------------------------------------------------------------------------
-# 18. CARRY-IN 2 — schema reuse: make_contract no longer takes TypeEnvironment
+# 18. Schema reuse: make_contract takes no TypeEnvironment
 # ---------------------------------------------------------------------------
 
 
 class TestMakeContractNoTypeEnv:
-    """CARRY-IN 2: make_contract signature drops the unused TypeEnvironment param."""
+    """make_contract's signature carries no TypeEnvironment parameter."""
 
     def test_text_codec_make_contract_no_env(self) -> None:
         codec = TextCodec()
-        # make_contract now takes only type_ref — no env argument.
+        # make_contract takes only type_ref — no env argument.
         contract = codec.make_contract(TextType())
         assert contract.codec is codec
 
@@ -3000,12 +3152,12 @@ class TestSchemaPrecomputedInParse:
 
 
 # ---------------------------------------------------------------------------
-# 19. CARRY-IN 1 — supported_kinds property on codecs
+# 19. supported_kinds property on codecs
 # ---------------------------------------------------------------------------
 
 
 class TestCodecSupportedKinds:
-    """CARRY-IN 1: codecs expose supported_kinds; runtime builds caps from them."""
+    """Codecs expose supported_kinds; the runtime builds capabilities from them."""
 
     def test_text_codec_supported_kinds(self) -> None:
         codec = TextCodec()
@@ -3051,12 +3203,12 @@ class TestCodecSupportedKinds:
 
 
 # ---------------------------------------------------------------------------
-# 20. CARRY-IN 1 — register_codec public API
+# 20. register_codec public API
 # ---------------------------------------------------------------------------
 
 
 class TestRegisterCodec:
-    """CARRY-IN 1: register_codec adds a custom codec to the runtime."""
+    """register_codec adds a custom codec to the runtime."""
 
     def _make_custom_codec(self) -> TextCodec:
         """A minimal custom codec (reuses TextCodec but with a different name for testing)."""
@@ -3068,7 +3220,7 @@ class TestRegisterCodec:
     def test_register_codec_accepted(self, capsys: pytest.CaptureFixture[str]) -> None:
         from agm.agl.runtime.codec import TextCodec as TC
 
-        rt = PipelineDriver(default_agent=lambda request: "response")
+        rt = PipelineDriver(agent_dispatcher=lambda request: "response")
 
         class AltTextCodec(TC):
             @property
@@ -3190,7 +3342,7 @@ class TestRegisterCodec:
             received.append(req)
             return "hello"
 
-        rt = PipelineDriver(default_agent=agent)
+        rt = PipelineDriver(agent_dispatcher=agent)
         rt.register_codec(TagCodec())
         #  format: arg takes the codec name as a string; let needs a continuation.
         result = rt.run('let y: text = ask("Q", format = "tagcodec")\ny')
@@ -3240,7 +3392,7 @@ class TestRegisterCodec:
             ) -> ParseResult:
                 return ParseResult.success(IntValue(int(raw)))
 
-        rt = PipelineDriver(default_agent=lambda req: "7")
+        rt = PipelineDriver(agent_dispatcher=lambda req: "7")
         rt.register_codec(IntCodec())
         result = rt.run('let y: int = ask("Q", format = "intcodec")\ny')
         assert result.ok is True
@@ -3287,7 +3439,7 @@ class TestRegisterCodec:
                 seen_parse_targets.append(repr(target_type))
                 return ParseResult.success(IntValue(int(raw)))
 
-        rt = PipelineDriver(default_agent=lambda req: "11")
+        rt = PipelineDriver(agent_dispatcher=lambda req: "11")
         rt.register_codec(LegacyCodec())
         result = rt.run('let y: int = ask("Q", format = "legacy-int")\ny')
 
@@ -3332,28 +3484,29 @@ class TestRegisterCodec:
 
             def parse(self, raw: str, target_type: Type) -> ParseResult:
                 seen_parse_targets.append(target_type)
+                assert isinstance(target_type, RecordType)
                 return ParseResult.success(
                     RecordValue(
-                        nominal=NominalId(ENTRY_ID, "Box"),
+                        nominal=NominalId(target_type.decl_id),
                         display_name="Box",
                         fields={"value": IntValue(int(raw))},
                     )
                 )
 
-        rt = PipelineDriver(default_agent=lambda req: "12")
+        rt = PipelineDriver(agent_dispatcher=lambda req: "12")
         rt.register_codec(LegacyBoxCodec())
         result = rt.run(
             'record Box[T]\n  value: T\nlet y: Box[int] = ask("Q", format = "legacy-box")\ny.value'
         )
 
         assert result.ok is True
+        assert isinstance(seen_parse_targets[0], RecordType)
         assert result.bindings["y"] == RecordValue(
-            nominal=NominalId(ENTRY_ID, "Box"),
+            nominal=NominalId(seen_parse_targets[0].decl_id),
             display_name="Box",
             fields={"value": IntValue(12)},
         )
         assert len(seen_parse_targets) == 1
-        assert isinstance(seen_parse_targets[0], RecordType)
         assert seen_parse_targets[0].name == "Box"
         assert seen_parse_targets[0].type_args == (IntType(),)
 
@@ -3384,7 +3537,7 @@ class TestRegisterCodec:
             def parse(self, raw: str) -> ParseResult:
                 return ParseResult.success(TextValue(raw))
 
-        rt = PipelineDriver(default_agent=lambda req: "unused")
+        rt = PipelineDriver(agent_dispatcher=lambda req: "unused")
         rt.register_codec(SchemaTextCodec())
 
         result = rt.run('let y: text = ask("Q", format = "schema-text")\ny', check_only=True)
@@ -3426,7 +3579,7 @@ class TestRegisterCodec:
             entry_path=None,
             roots=roots,
         )
-        rt = PipelineDriver(default_agent=lambda req: "unused")
+        rt = PipelineDriver(agent_dispatcher=lambda req: "unused")
         rt.register_codec(SchemaTextCodec())
 
         result = rt.run_prepared(prepared, check_only=True)
@@ -3630,7 +3783,7 @@ class TestRegisterCodec:
             received.append(req)
             return "3"
 
-        rt = PipelineDriver(default_agent=agent)
+        rt = PipelineDriver(agent_dispatcher=agent)
         rt.register_codec(ArrayIntCodec())
         result = rt.run('let xs: array[int] = ask("Q", format = "array-int-codec")\nxs')
 
@@ -3692,29 +3845,30 @@ class TestRegisterCodec:
                 seen_parse_type_tables.append(type_table)
                 return ParseResult.success(
                     RecordValue(
-                        nominal=NominalId(ENTRY_ID, target_type.name),
+                        nominal=NominalId(target_type.decl_id),
                         display_name=target_type.name,
                         fields={"value": IntValue(int(raw))},
                     )
                 )
 
-        rt = PipelineDriver(default_agent=lambda req: "5")
+        rt = PipelineDriver(agent_dispatcher=lambda req: "5")
         rt.register_codec(ShapeCodec())
         result = rt.run('record Box\n  value: int\nlet box: Box = ask("Q", format = "shape")\nbox')
 
         assert result.ok is True
+        assert isinstance(seen_parse_type[0], RecordType)
         assert result.bindings["box"] == RecordValue(
-            nominal=NominalId(ENTRY_ID, "Box"),
+            nominal=NominalId(seen_parse_type[0].decl_id),
             display_name="Box",
             fields={"value": IntValue(5)},
         )
-        assert seen_contract_type == [RecordType("Box")]
-        assert seen_parse_type == [RecordType("Box")]
+        assert [strip_decl_ids(t) for t in seen_contract_type] == [RecordType("Box")]
+        assert [strip_decl_ids(t) for t in seen_parse_type] == [RecordType("Box")]
         assert seen_contract_fields == [{"value": IntType()}]
         assert seen_parse_type_tables == [None]
 
     def test_custom_codec_ir_placeholder_targets_are_kind_correct(self) -> None:
-        """Legacy custom parse target placeholders are reconstructed from typeless IR."""
+        """Legacy custom-codec placeholders reconstruct their public data types."""
         from agm.agl.runtime.contract import _target_type_for_request
 
         cases = [
@@ -3723,7 +3877,6 @@ class TestRegisterCodec:
             ("decimal", "decimal", DecimalType),
             ("bool", "bool", BoolType),
             ("json", "json", JsonType),
-            ("agent", "agent", AgentType),
             ("array", "array[int]", ArrayType),
             ("dict", "dict[text, int]", DictType),
             ("record", "Issue", RecordType),
@@ -4149,12 +4302,12 @@ class TestRuntimeBuildsCodecKinds:
         #  format: arg takes the codec name as a string; let needs a continuation.
         src = 'let x: text = ask("Q", format = "altcodec")\nx'
 
-        rt_unreg = PipelineDriver(default_agent=lambda req: "ok")
+        rt_unreg = PipelineDriver(agent_dispatcher=lambda req: "ok")
         unreg = rt_unreg.run(src)
         assert unreg.ok is False  # altcodec unknown without registration
         assert any("altcodec" in d.message for d in unreg.diagnostics)
 
-        rt = PipelineDriver(default_agent=lambda req: "ok")
+        rt = PipelineDriver(agent_dispatcher=lambda req: "ok")
         rt.register_codec(AltCodec())
         reg = rt.run(src)
         assert reg.ok is True

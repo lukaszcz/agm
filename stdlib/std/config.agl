@@ -1,8 +1,8 @@
-import std/core using Option
+import std/core using Option, Agent
 
-builtin var runner: text
-builtin var log: bool
-builtin var log-file: Option[text]
-builtin var strict-json: bool
-builtin var max-iters: int
-builtin var timeout: Option[text]
+builtin var default-agent: Agent = AgentClaude("sonnet", "medium")
+builtin var log: bool = false
+builtin var log-file: Option[text] = Option[text]::None
+builtin var strict-json: bool = false
+builtin var max-iters: int = 0
+builtin var timeout: Option[text] = Option[text]::None

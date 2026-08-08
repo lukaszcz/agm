@@ -8,11 +8,34 @@ import pytest
 
 import agm.config.module_roots as module_roots
 from agm.config.module_roots import (
+    STDLIB_CONTRACT_ID,
+    STDLIB_CONTRACT_MARKER_NAME,
     ModuleRootsConfig,
+    StaleStdlibError,
     load_module_roots,
     resolve_lib_root,
     resolve_stdlib_root,
 )
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _write_stdlib_marker(stdlib_dir: Path, content: str) -> None:
+    """Create *stdlib_dir* (if needed) with a ``STDLIB_CONTRACT`` marker file."""
+    stdlib_dir.mkdir(parents=True, exist_ok=True)
+    (stdlib_dir / STDLIB_CONTRACT_MARKER_NAME).write_text(content, encoding="utf-8")
+
+
+def _break_repo_stdlib_lookup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Make ``resolve_stdlib_root``'s repo-checkout candidate resolve to a missing path.
+
+    Mirrors how the module derives ``repo_stdlib`` from ``__file__`` so tests can
+    exercise search-chain behaviour without a real repository checkout involved.
+    """
+    fake_module = tmp_path / "pkg" / "src" / "agm" / "config" / "module_roots.py"
+    fake_module.parent.mkdir(parents=True, exist_ok=True)
+    fake_module.write_text("")
+    monkeypatch.setattr(module_roots, "__file__", str(fake_module))
 
 
 class TestModuleRootsConfigConstruction:
@@ -229,6 +252,26 @@ class TestResolveLibRoot:
         # Must NOT be treated as a path relative to the origin directory.
         assert result != origin / "~/mylib"
 
+    def test_interpolates_lib_root_and_extra_roots_leniently(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        config_dir = home / ".agm"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.toml").write_text(
+            '[modules]\nlib_root = "%{PROJ}/lib"\nroots = ["%{PROJ}/a", "plain/b", "%{MISSING}"]\n'
+        )
+        monkeypatch.setenv("PROJ", str(tmp_path / "project"))
+
+        config = load_module_roots(home=home, proj_dir=None, cwd=tmp_path)
+
+        assert resolve_lib_root(config) == tmp_path / "project" / "lib"
+        assert [raw for raw, _ in config.extra] == [
+            str(tmp_path / "project" / "a"),
+            "plain/b",
+            "%{MISSING}",
+        ]
+
     def test_absolute_lib_root_returned_as_is(self, tmp_path: Path) -> None:
         abs_path = tmp_path / "absolute" / "lib"
         cfg = ModuleRootsConfig(lib_root=(str(abs_path), tmp_path / "config"), extra=())
@@ -252,26 +295,83 @@ class TestResolveLibRoot:
 
 
 class TestResolveStdlibRoot:
-    def test_home_stdlib_is_selected_when_present(self, tmp_path: Path) -> None:
+    def test_home_stdlib_with_matching_marker_is_selected(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
         stdlib = home / ".agm" / "stdlib"
-        stdlib.mkdir(parents=True)
+        _write_stdlib_marker(stdlib, STDLIB_CONTRACT_ID)
 
         assert resolve_stdlib_root(home=home, env={}) == stdlib
 
-    def test_legacy_home_stdlib_uses_source_tree_fallback(self, tmp_path: Path) -> None:
+    def test_home_stdlib_with_missing_marker_falls_back_to_compatible_candidate(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: a stale home tree must not shadow a compatible one, with no repo checkout."""
+        _break_repo_stdlib_lookup(monkeypatch, tmp_path)
         home = tmp_path / "home"
-        stdlib = home / ".agm" / "stdlib" / "std"
-        stdlib.mkdir(parents=True)
-        (stdlib / "core.agl").write_text("ParsePolicy.Abort", encoding="utf-8")
+        stale_home_stdlib = home / ".agm" / "stdlib"
+        stale_home_stdlib.mkdir(parents=True)  # no marker file at all
 
-        result = resolve_stdlib_root(home=home)
+        install_prefix = tmp_path / "prefix"
+        compatible_install_stdlib = install_prefix / ".agm" / "stdlib"
+        _write_stdlib_marker(compatible_install_stdlib, STDLIB_CONTRACT_ID)
+        monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: install_prefix)
 
-        assert result.name == "stdlib"
-        assert result.is_dir()
-        assert result != stdlib.parent
+        result = resolve_stdlib_root(home=home, env={})
 
-    def test_missing_home_stdlib_returns_source_tree_fallback(self, tmp_path: Path) -> None:
+        assert result == compatible_install_stdlib
+
+    def test_home_stdlib_with_mismatched_marker_falls_back_to_compatible_candidate(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _break_repo_stdlib_lookup(monkeypatch, tmp_path)
+        home = tmp_path / "home"
+        stale_home_stdlib = home / ".agm" / "stdlib"
+        _write_stdlib_marker(stale_home_stdlib, "0")
+
+        install_prefix = tmp_path / "prefix"
+        compatible_install_stdlib = install_prefix / ".agm" / "stdlib"
+        _write_stdlib_marker(compatible_install_stdlib, STDLIB_CONTRACT_ID)
+        monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: install_prefix)
+
+        result = resolve_stdlib_root(home=home, env={})
+
+        assert result == compatible_install_stdlib
+
+    def test_all_candidates_incompatible_raises_stale_stdlib_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _break_repo_stdlib_lookup(monkeypatch, tmp_path)
+        home = tmp_path / "home"
+        stale_home_stdlib = home / ".agm" / "stdlib"
+        _write_stdlib_marker(stale_home_stdlib, "0")
+        install_prefix = tmp_path / "prefix"
+        stale_install_stdlib = install_prefix / ".agm" / "stdlib"
+        _write_stdlib_marker(stale_install_stdlib, "0")
+        monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: install_prefix)
+
+        with pytest.raises(StaleStdlibError) as exc_info:
+            resolve_stdlib_root(home=home, env={})
+
+        # The highest-precedence stale candidate (home) names the error, even
+        # though the lower-precedence install-prefix candidate is also stale.
+        message = str(exc_info.value)
+        assert str(stale_home_stdlib) in message
+        assert str(stale_install_stdlib) not in message
+        assert "just install" in message
+
+    def test_agm_stdlib_override_is_returned_unchanged_without_marker_check(
+        self, tmp_path: Path
+    ) -> None:
+        synthetic_stdlib = tmp_path / "synthetic_stdlib"
+        synthetic_stdlib.mkdir()  # deliberately no STDLIB_CONTRACT marker
+
+        result = resolve_stdlib_root(
+            home=tmp_path / "home", env={"AGM_STDLIB": str(synthetic_stdlib)}
+        )
+
+        assert result == synthetic_stdlib
+
+    def test_missing_home_stdlib_falls_back_to_repo_checkout(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
         home.mkdir()
 
@@ -280,15 +380,24 @@ class TestResolveStdlibRoot:
         assert result.name == "stdlib"
         assert result.is_dir()
 
+    def test_shipped_repo_stdlib_passes_the_contract_check(self, tmp_path: Path) -> None:
+        """Guards against forgetting to bump/ship the marker alongside stdlib changes."""
+        home = tmp_path / "home"
+        home.mkdir()
+
+        result = resolve_stdlib_root(home=home, env={})
+
+        assert result == _REPO_ROOT / "stdlib"
+        assert (result / STDLIB_CONTRACT_MARKER_NAME).read_text(encoding="utf-8").strip() == (
+            STDLIB_CONTRACT_ID
+        )
+
     def test_missing_all_stdlib_roots_returns_home_destination(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        fake_module = tmp_path / "pkg" / "src" / "agm" / "config" / "module_roots.py"
-        fake_module.parent.mkdir(parents=True)
-        fake_module.write_text("")
+        _break_repo_stdlib_lookup(monkeypatch, tmp_path)
         home = tmp_path / "home"
         home.mkdir()
-        monkeypatch.setattr(module_roots, "__file__", str(fake_module))
 
         result = resolve_stdlib_root(home=home, env={})
 

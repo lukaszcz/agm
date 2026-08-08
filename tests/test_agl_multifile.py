@@ -33,7 +33,7 @@ def _make_runtime(
     from agm.agl import PipelineDriver
 
     return PipelineDriver(
-        default_agent=default_agent,
+        agent_dispatcher=default_agent,
     )
 
 
@@ -54,14 +54,17 @@ def _run_program(
         roots=frozenset({*(d.resolve() for d in roots_dirs if d.exists()), REPO_STDLIB_ROOT})
     )
     prepared = PipelineDriver.prepare_program(entry_source, entry_path=entry_path, roots=roots)
-    rt = _make_runtime(default_agent=default_agent)
     if agents:
-        for name, fn in agents.items():
-            declarations = [item for item in prepared.declared_agents if item.name == name]
-            if len(declarations) == 1:
-                rt.register_scoped_agent(declarations[0].scope_path, name, fn)
-            else:
-                rt.register_agent(name, fn)
+        from agm.agl.semantics.values import TextValue
+
+        def dispatch(request: Any) -> str:
+            command = request.agent.fields["command"]
+            assert isinstance(command, TextValue)
+            return agents[command.value](request)
+
+        rt = PipelineDriver(agent_dispatcher=dispatch)
+    else:
+        rt = _make_runtime(default_agent=default_agent)
     return rt.run_prepared(prepared, param_values=param_values)
 
 
@@ -347,16 +350,16 @@ class TestAgentValueCrossModule:
     def test_agent_passed_to_imported_function(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Agent declared in entry is passed as a value to an imported function."""
+        """An Agent value in entry is passed to an imported function."""
         lib_dir = tmp_path / "lib"
         lib_dir.mkdir()
         (lib_dir / "helper.agl").write_text(
-            "def ask_with_agent(prompt: text, a: agent) -> text = ask(prompt, agent = a)\n"
+            "def ask_with_agent(prompt: text, a: Agent) -> text = ask(prompt, agent = a)\n"
         )
 
         source = (
-            "agent mybot\n"
             "open import helper\n"
+            'let mybot = AgentCommand("mybot")\n'
             'let result = ask_with_agent("test question", mybot)\n'
             "print result\n"
         )
@@ -370,7 +373,6 @@ class TestAgentValueCrossModule:
             source,
             roots_dirs=[lib_dir],
             default_agent=scripted_agent,
-            agents={"mybot": scripted_agent},
         )
         assert result.ok is True
         captured = capsys.readouterr()
@@ -383,8 +385,8 @@ class TestAgentValueCrossModule:
         lib_dir = MULTI_FILE_DIR
 
         source = (
-            "agent mybot\n"
             "open import utils/agent_helper\n"
+            'let mybot = AgentCommand("mybot")\n'
             'let r = ask_with_agent("ping", mybot)\n'
             "print r\n"
         )
@@ -396,7 +398,6 @@ class TestAgentValueCrossModule:
             source,
             roots_dirs=[lib_dir],
             default_agent=scripted_agent,
-            agents={"mybot": scripted_agent},
         )
         assert result.ok is True
         captured = capsys.readouterr()

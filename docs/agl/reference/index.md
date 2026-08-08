@@ -46,8 +46,8 @@ enum Review
   | Pass
   | Fail(issues: array[text])
 
-agent reviewer
-agent impl
+let reviewer = AgentCommand("reviewer")
+let impl = AgentCommand("impl")
 
 def review_and_fix(artifact: text) -> text =
   let r: Review = ask(
@@ -78,8 +78,8 @@ until final is Pass
 | [Program structure](program-structure.md) | Programs, blocks, items, binders, inline forms |
 | [Modules](modules.md) | File-based module system: module identity, import forms, qualified access, visibility, cyclic imports, REPL imports |
 | [Named scopes](scopes.md) | Nestable declaration namespaces, qualifier paths, visibility, and `open` |
-| [Types](types.md) | Built-in types (`unit`, `text`, `int`, `decimal`, `bool`, `json`, `agent`, function types), `record`/`enum`/`type` declarations, standard core types (`Option`, `ExecResult`, `ParsePolicy`), assignability, casts and convertibility (`as`/`as?`), reference semantics, cycles, and copying (`copy`/`shallow_copy`) |
-| [Bindings and scope](bindings-and-scope.md) | `let`, `var`, `:=`, `param`, `builtin var`, `agent`, `def`, lexical scoping, shadowing |
+| [Types](types.md) | Built-in types (`unit`, `text`, `int`, `decimal`, `bool`, `json`, function types), `record`/`enum`/`type` declarations, standard core types (`Option`, `ExecResult`, `ParsePolicy`, `Agent`), assignability, casts and convertibility (`as`/`as?`), reference semantics, cycles, and copying (`copy`/`shallow_copy`) |
+| [Bindings and scope](bindings-and-scope.md) | `let`, `var`, `:=`, `param`, `builtin var`, `def`, lexical scoping, shadowing |
 | [Expressions](expressions.md) | Literals, constructors, calls, operators, `as`/`as?` cast operators, `render`, `parse_json`, `case`/`if` expressions, `unit`-typed forms, expected-type propagation |
 | [Functions](functions.md) | `def` declarations, `fn` lambdas, optional/named arguments, function types, first-class values, recursion and depth limit |
 | [Pattern matching](pattern-matching.md) | Patterns, source priority, exhaustiveness, redundancy |
@@ -88,7 +88,7 @@ until final is Pass
 | [Strings and interpolation](strings-and-interpolation.md) | Templates, escapes, `%{…}` interpolation, uniform rendering rules |
 | [Agent calls](agent-calls.md) | `ask`, agents as values, call options, output contracts, the JSON wire format, parse policies and retries |
 | [Shell execution](shell-execution.md) | `exec`, the `ExecResult` structured form vs the parsed form, `ExecError` |
-| [Python FFI](ffi.md) | `extern def`, the companion Python file, the type mapping across the boundary, sealed handles, `ExternError` |
+| [Python FFI](ffi.md) | `extern def`, the companion Python file, value mapping across the boundary, `ExternError` |
 | [Exceptions](exceptions.md) | The exception model, `try`/`catch`/`raise`, the built-in exception catalog |
 | [Host environment](host-environment.md) | Agents, params, host defaults, capability checking, tracing |
 | [Grammar](grammar.md) | The collected grammar |
@@ -102,7 +102,7 @@ strings are literal tokens. Token names in `UPPER_CASE` refer to the lexical
 tokens defined in [Lexical structure](lexical-structure.md).
 
 Throughout the reference, "the host" refers to the runtime environment that
-embeds AgL: it backs the program's declared agents, supplies program params,
+embeds AgL: it dispatches selected `Agent` values, supplies program params,
 executes shell commands, and records traces. Behavior marked *host-configurable*
 has a documented portable default that hosts may override; everything else is
 fixed by the language.

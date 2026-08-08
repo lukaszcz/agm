@@ -2,7 +2,9 @@
   "scenarios": [
     {
       "name": "loud_transform",
-      "params": {"shout": true},
+      "params": {
+        "shout": true
+      },
       "expect": {
         "stdout": "0\nfresh\n6\nn=7\n5\n11\n16\na!!\n99\nkept\nwrapped hi\nraw!!!\n",
         "calls": {}
@@ -10,7 +12,9 @@
     },
     {
       "name": "quiet_transform",
-      "params": {"shout": false},
+      "params": {
+        "shout": false
+      },
       "expect": {
         "stdout": "0\nfresh\n6\nn=7\n5\n11\n16\na!!\n99\nkept\nwrapped hi\nraw\n",
         "calls": {}

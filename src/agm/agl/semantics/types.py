@@ -13,16 +13,15 @@ Type hierarchy
 - ``DecimalType`` — the ``decimal`` primitive (exact fixed-point).
 - ``ArrayType(elem)`` — ``array[T]``.
 - ``DictType(value)`` — ``dict[text, V]`` (keys are always ``text`` in AgL).
-- ``RecordType(name, type_args, module_id)`` — a ``record`` nominal type
-  handle; field shapes live in the shared ``TypeTable``
-  (``semantics.type_table``), keyed by ``(module_id, scope_path, name)``.
-- ``EnumType(name, type_args, module_id)`` — an ``enum`` nominal type handle;
-  variant shapes live in the shared ``TypeTable``.
-- ``ExceptionType(name, module_id)`` — an exception nominal type handle
-  (never generic); field shapes and hierarchy (``abstract``, ``base``) live
-  in the shared ``TypeTable``.
+- ``RecordType(name, type_args, module_id, decl_id)`` — a ``record`` nominal
+  type handle whose identity is ``decl_id``; field shapes live in the shared
+  ``TypeTable`` (``semantics.type_table``), keyed by declaration identity.
+- ``EnumType(name, type_args, module_id, decl_id)`` — an ``enum`` nominal type
+  handle; variant shapes live in the shared ``TypeTable``.
+- ``ExceptionType(name, module_id, decl_id)`` — an exception nominal type
+  handle (never generic); field shapes and hierarchy (``abstract``, ``base``)
+  live in the shared ``TypeTable``.
 - ``UnitType`` — the ``unit`` type (AgL; single value ``()``).
-- ``AgentType`` — the opaque ``agent`` type (AgL).
 - ``FunctionType(params, result)`` — a first-class function type (AgL),
   positional only; named/optional arguments are erased from the value type.
 - ``TypeVarType(name)`` — a rigid type variable bound by an enclosing generic
@@ -50,11 +49,13 @@ from __future__ import annotations
 
 import enum as _enum
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import count
 from typing import assert_never
 
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CORE_ID, ModuleId
+from agm.agl.ir.reserved_nominals import NO_DECL_ID, reserved_nominal_id
+from agm.agl.ir.reserved_nominals import require_reserved_nominal_id as _reserved_id
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 
 # ---------------------------------------------------------------------------
 # Primitive types (singletons-by-construction; frozen dataclasses)
@@ -164,25 +165,34 @@ class RecordType:
     """A ``record`` nominal type handle.
 
     A ``RecordType`` carries no field data — it is a lightweight handle whose
-    identity is ``(module_id, scope_path, name, type_args)``. Field types are looked up
-    by handle in the shared ``TypeTable`` (``semantics.type_table.TypeTable
-    .record_fields``).  ``type_args`` holds the resolved type arguments for a
-    generic instantiation (empty tuple for non-generic records).
-    ``module_id`` is the owning module (defaults to ``ENTRY_ID`` so existing
-    module paths and built-in/prelude types are unaffected).
+    identity is the declaration it names (``decl_id``), plus ``type_args`` for
+    a generic instantiation. Field types are looked up by handle in the
+    shared ``TypeTable`` (``semantics.type_table.TypeTable.record_fields``).
+    ``type_args`` holds the resolved type arguments for a generic
+    instantiation (empty tuple for non-generic records). ``module_id`` is the
+    owning module (defaults to ``ENTRY_ID`` so existing module paths and
+    built-in/prelude types are unaffected).
+
+    ``decl_id`` is the identity of the declaration this handle names, or
+    ``NO_DECL_ID`` when no declaration identity is attached. It participates
+    in equality/hashing alongside ``type_args``, so two declarations sharing
+    one name path are distinct types; ``name``/``module_id``/``scope_path``
+    remain in equality too — they are consistent with ``decl_id`` for every
+    real declaration — and are what resolution and display use.
     """
 
     name: str
     type_args: tuple[Type, ...] = ()
     module_id: ModuleId = field(default_factory=lambda: ENTRY_ID)
     scope_path: tuple[str, ...] = ()
+    decl_id: int = NO_DECL_ID
 
     @property
     def kind(self) -> str:
         return "record"
 
     def __repr__(self) -> str:
-        prefix = "" if self.module_id.is_entry else f"{self.module_id.path_str()}::"
+        prefix = "" if spells_bare(self.module_id, self.name) else f"{self.module_id.path_str()}::"
         scoped_name = "::".join((*self.scope_path, self.name))
         if self.type_args:
             args_str = ", ".join(repr(a) for a in self.type_args)
@@ -195,25 +205,34 @@ class EnumType:
     """An ``enum`` nominal type handle.
 
     An ``EnumType`` carries no variant data — it is a lightweight handle
-    whose identity is ``(module_id, scope_path, name, type_args)``. Variant shapes are
-    looked up by handle in the shared ``TypeTable``
+    whose identity is the declaration it names (``decl_id``), plus
+    ``type_args`` for a generic instantiation. Variant shapes are looked up
+    by handle in the shared ``TypeTable``
     (``semantics.type_table.TypeTable.enum_variants``).  ``type_args`` holds
     the resolved type arguments for a generic instantiation (empty tuple for
     non-generic enums).  ``module_id`` is the owning module (defaults to
     ``ENTRY_ID``).
+
+    ``decl_id`` is the identity of the declaration this handle names, or
+    ``NO_DECL_ID`` when no declaration identity is attached. It participates
+    in equality/hashing alongside ``type_args``, so two declarations sharing
+    one name path are distinct types; ``name``/``module_id``/``scope_path``
+    remain in equality too — they are consistent with ``decl_id`` for every
+    real declaration — and are what resolution and display use.
     """
 
     name: str
     type_args: tuple[Type, ...] = ()
     module_id: ModuleId = field(default_factory=lambda: ENTRY_ID)
     scope_path: tuple[str, ...] = ()
+    decl_id: int = NO_DECL_ID
 
     @property
     def kind(self) -> str:
         return "enum"
 
     def __repr__(self) -> str:
-        prefix = "" if self.module_id.is_entry else f"{self.module_id.path_str()}::"
+        prefix = "" if spells_bare(self.module_id, self.name) else f"{self.module_id.path_str()}::"
         scoped_name = "::".join((*self.scope_path, self.name))
         if self.type_args:
             args_str = ", ".join(repr(a) for a in self.type_args)
@@ -226,33 +245,42 @@ class ExceptionType:
     """An exception nominal type handle.
 
     An ``ExceptionType`` carries no field data — it is a lightweight handle
-    whose identity is ``(module_id, scope_path, name)``; exceptions are never generic, so
-    there is no ``type_args`` component (unlike ``RecordType``/``EnumType``).
-    Field shapes and hierarchy metadata (``abstract``, ``base``) are looked
-    up by handle in the shared ``TypeTable``
-    (``semantics.type_table.TypeTable.exception_fields``/``exception_def``).
-    ``module_id`` is the owning module (defaults to ``ENTRY_ID``, like
-    ``RecordType``/``EnumType``); built-in exceptions carry ``PRELUDE_ID``.
+    whose identity is the declaration it names (``decl_id``); exceptions are
+    never generic, so there is no ``type_args`` component (unlike
+    ``RecordType``/``EnumType``). Field shapes and hierarchy metadata
+    (``abstract``, ``base``) are looked up by handle in the shared
+    ``TypeTable`` (``semantics.type_table.TypeTable.exception_fields``/
+    ``exception_def``). ``module_id`` is the owning module (defaults to
+    ``ENTRY_ID``, like ``RecordType``/``EnumType``); a built-in exception's
+    declaring module is the shipped standard library's own module
+    (``STD_CORE_ID``) unless a program declares its own ``builtin exception``
+    of that name, in which case it carries that program's module instead.
 
     The abstract ``Exception`` root is the ``TypeDef`` registered under name
-    ``"Exception"`` with ``abstract=True`` and only ``message``/``trace_id``
-    fields — it is catchable as the hierarchy root but not constructible.
+    ``"Exception"`` with ``abstract=True`` and only a ``message`` field. It is
+    not constructible; the source catch spelling ``Exception`` is the catch-all form.
+
+    ``decl_id`` is the identity of the declaration this handle names, or
+    ``NO_DECL_ID`` when no declaration identity is attached. It participates
+    in equality/hashing; ``name``/``module_id``/``scope_path`` remain in
+    equality too — they are consistent with ``decl_id`` for every real
+    declaration — and are what resolution and display use.
     """
 
     name: str
     module_id: ModuleId = field(default_factory=lambda: ENTRY_ID)
     scope_path: tuple[str, ...] = ()
+    decl_id: int = NO_DECL_ID
 
     @property
     def kind(self) -> str:
         return "exception"
 
     def __repr__(self) -> str:
-        # Built-in/prelude exceptions always render as the bare name (matching
-        # today's user-visible diagnostics); a module-owned user exception
-        # matches the record/enum qualification style.
+        # Built-in exceptions and entry-module exceptions render as bare
+        # names; other exceptions follow the record/enum qualification style.
         scoped_name = "::".join((*self.scope_path, self.name))
-        if self.module_id.is_entry or self.module_id == PRELUDE_ID:
+        if spells_bare(self.module_id, self.name):
             return scoped_name
         return f"{self.module_id.path_str()}::{scoped_name}"
 
@@ -279,28 +307,13 @@ class UnitType:
 
 
 @dataclass(frozen=True, slots=True)
-class AgentType:
-    """The opaque ``agent`` type.
-
-    Agent values are first-class capability handles.  They are not
-    JSON-shaped, not renderable, and have no equality operator.
-    """
-
-    @property
-    def kind(self) -> str:
-        return "agent"
-
-    def __repr__(self) -> str:
-        return "agent"
-
-
-@dataclass(frozen=True, slots=True)
 class FunctionType:
     """A first-class function value type.
 
     Positional only — named and optional argument information is erased from
-    the value type. Structural equality is derived from the
-    frozen ``params`` tuple and ``result`` field.
+    the value type. The semantic type descriptor compares structurally by its
+    frozen ``params`` tuple and ``result`` field; AgL function values cannot
+    be compared with ``==`` or ``!=``.
 
     ``params``  — positional parameter types, in declaration order.
     ``result``  — the function's return type.
@@ -399,7 +412,6 @@ Type = (
     | EnumType
     | ExceptionType
     | UnitType
-    | AgentType
     | FunctionType
     | BottomType
     | TypeVarType
@@ -602,7 +614,6 @@ def type_children(t: Type) -> tuple[Type, ...]:
             | DecimalType()
             | ExceptionType()
             | UnitType()
-            | AgentType()
             | BottomType()
             | TypeVarType()
             | InferenceVarType()
@@ -635,13 +646,21 @@ def replace_type_children(t: Type, children: tuple[Type, ...]) -> Type:
             return DictType(children[0])
         case FunctionType(params=params):
             return FunctionType(params=children[: len(params)], result=children[-1])
-        case RecordType(name=name, module_id=module_id, scope_path=scope_path):
+        case RecordType(name=name, module_id=module_id, scope_path=scope_path, decl_id=decl_id):
             return RecordType(
-                name=name, type_args=children, module_id=module_id, scope_path=scope_path
+                name=name,
+                type_args=children,
+                module_id=module_id,
+                scope_path=scope_path,
+                decl_id=decl_id,
             )
-        case EnumType(name=name, module_id=module_id, scope_path=scope_path):
+        case EnumType(name=name, module_id=module_id, scope_path=scope_path, decl_id=decl_id):
             return EnumType(
-                name=name, type_args=children, module_id=module_id, scope_path=scope_path
+                name=name,
+                type_args=children,
+                module_id=module_id,
+                scope_path=scope_path,
+                decl_id=decl_id,
             )
         case (
             TextType()
@@ -651,7 +670,6 @@ def replace_type_children(t: Type, children: tuple[Type, ...]) -> Type:
             | DecimalType()
             | ExceptionType()
             | UnitType()
-            | AgentType()
             | BottomType()
             | TypeVarType()
             | InferenceVarType()
@@ -665,6 +683,73 @@ def transform_type(t: Type, transform: Callable[[Type], Type]) -> Type:
     """Recursively rebuild *t*, applying ``transform`` bottom-up to every node."""
     children = tuple(transform_type(child, transform) for child in type_children(t))
     return transform(replace_type_children(t, children))
+
+
+def _reserved_or_absent(name: str) -> int:
+    """Return *name*'s reserved declaration identity, or ``NO_DECL_ID``."""
+    reserved = reserved_nominal_id(name)
+    return NO_DECL_ID if reserved is None else reserved
+
+
+def reroot_type(
+    t: Type,
+    prefix: tuple[str, ...],
+    remap_module: tuple[ModuleId, ModuleId] | None = None,
+) -> Type:
+    """Return *t* re-rooted onto a canonical frame, for shape comparison.
+
+    A declaration inside a named scope region resolves its own nominal
+    references (a record/enum field, an exception's base) under that same
+    region path. Comparing such a reference against a canonical shape defined
+    at scope path ``()`` therefore needs the two re-rooted onto the same
+    frame first: this strips *prefix* from a ``RecordType``/``EnumType``/
+    ``ExceptionType`` node's ``scope_path`` wherever it starts with *prefix*,
+    leaving every other node (including a nominal reference declared
+    elsewhere, whose ``scope_path`` does not start with *prefix*) unchanged.
+
+    *remap_module*, when given as ``(from_module, to_module)``, additionally
+    rewrites a nominal handle's ``module_id`` from *from_module* to
+    *to_module* wherever it matches — a reference naming a sibling declared
+    in the same module as the declaration being re-rooted names *that*
+    declaration's own module, which must map onto the canonical shape's
+    module the same way; a reference to a type from any other module is left
+    alone, so a genuine cross-module mismatch is still rejected. The two
+    adjustments are independent: a handle already at scope path ``()`` still
+    needs its module remapped, and a handle outside *prefix* still needs
+    nothing stripped. Callers that only need the scope-path adjustment (an
+    empty *prefix* has nothing to strip) omit *remap_module*.
+
+    A reference's ``decl_id`` denotes the *specific* declaration it names,
+    which necessarily differs between an arbitrary declaration and the
+    canonical ``std/core`` one being compared against, even when the two
+    denote the same host type. So whenever a reference's ``module_id`` is
+    remapped onto the canonical module, its ``decl_id`` is normalized too: to
+    the reserved identity for its name when that name is a host-known
+    reserved nominal (the canonical shape's own handles carry exactly that
+    identity), or to ``NO_DECL_ID`` otherwise. A reference whose module is
+    left alone keeps its ``decl_id`` unchanged.
+    """
+
+    def strip(node: Type) -> Type:
+        if not isinstance(node, (RecordType, EnumType, ExceptionType)):
+            return node
+        scope_path = node.scope_path
+        module_id = node.module_id
+        decl_id = node.decl_id
+        if scope_path[: len(prefix)] == prefix:
+            scope_path = scope_path[len(prefix) :]
+        if remap_module is not None and module_id == remap_module[0]:
+            module_id = remap_module[1]
+            decl_id = _reserved_or_absent(node.name)
+        if (
+            scope_path == node.scope_path
+            and module_id == node.module_id
+            and decl_id == node.decl_id
+        ):
+            return node
+        return replace(node, scope_path=scope_path, module_id=module_id, decl_id=decl_id)
+
+    return transform_type(t, strip)
 
 
 def _format_type(typ: Type, *, parenthesize_function: bool = False) -> str:
@@ -687,7 +772,7 @@ def _format_function_type(typ: FunctionType) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Assignability helper (single coercion: int → decimal)
+# Assignability helpers
 # ---------------------------------------------------------------------------
 
 
@@ -719,11 +804,11 @@ def is_json_shaped(value_type: Type) -> bool:
     JSON-shaped types are the values that may inhabit a ``json`` slot:
     ``null``/``json``, ``bool``, ``int``, ``decimal``, ``text``, and
     ``array``/``dict`` whose element/value types are themselves JSON-shaped.
-    Records, enums, and exceptions are **not** JSON-shaped — to embed one in a
-    ``json`` value they must first be rendered to text (e.g. via a ``let`` binding).
+    Records, enums, and exceptions are **not** JSON-shaped — explicitly cast
+    one with ``as json`` to convert it to its structural JSON representation.
 
-    AgL: ``UnitType``, ``AgentType``, and ``FunctionType`` are also NOT
-    JSON-shaped; function and agent values render only as opaque handles.
+    AgL: ``UnitType`` and ``FunctionType`` are also NOT
+    JSON-shaped; function values render only as opaque handles.
 
     Three predicates answer three different questions and must not be
     conflated: this one decides ``json``-slot *inhabitation*,
@@ -741,7 +826,7 @@ def is_json_shaped(value_type: Type) -> bool:
         return is_json_shaped(value_type.value)
     if isinstance(value_type, InferenceVarType):
         return False
-    # RecordType, EnumType, ExceptionType, UnitType, AgentType, FunctionType,
+    # RecordType, EnumType, ExceptionType, UnitType, FunctionType,
     # BottomType, and TypeVarType are not JSON-shaped.
     return False
 
@@ -751,7 +836,7 @@ def is_assignable(value_type: Type, target_type: Type) -> bool:
 
     Implicit coercions:
 
-    1. ``int → decimal`` widening is the only scalar coercion.
+    1. ``int → decimal`` widening.
     2. ``json`` accepts any *scalar* JSON-shaped value (rule 3): ``null``/
        ``json``, ``bool``, ``int``, ``decimal``, ``text``. An ``array`` or
        ``dict`` source — even one that is JSON-shaped — is rejected here: an
@@ -761,11 +846,10 @@ def is_assignable(value_type: Type, target_type: Type) -> bool:
 
     All other assignments require exact structural equality.
 
-    AgL: ``UnitType``, ``AgentType``, and ``FunctionType`` assignability is
+    AgL: ``UnitType`` and ``FunctionType`` assignability is
     exact-only — no widening and no variance.  The
-    ``value_type == target_type`` check below handles them: ``UnitType`` and
-    ``AgentType`` are parameter-free singletons so equality is trivial;
-    ``FunctionType`` uses structural tuple equality on ``params`` + ``result``.
+    ``value_type == target_type`` check below handles them; ``FunctionType``
+    uses structural tuple equality on ``params`` + ``result``.
 
     AgL: ``BottomType`` (the type of ``raise``) is assignable to any target.
     """
@@ -818,45 +902,62 @@ def contains_inference_var(t: Type) -> bool:
 # ---------------------------------------------------------------------------
 # Built-in exception types
 #
-# These are pure handles — ``module_id=PRELUDE_ID`` — carrying no field data
-# of their own; the shapes are the single source of truth defined once as
-# ``TypeDef`` literals in ``semantics.type_table.BUILTIN_EXCEPTION_TYPE_DEFS``
-# (registered into every fresh ``TypeTable`` by ``create_seeded_type_table``).
+# These are pure handles — ``module_id=STD_CORE_ID``, the shipped standard
+# library's own declaring module — carrying no field data of their own; the
+# shapes are the single source of truth defined once as ``TypeDef`` literals
+# in ``semantics.type_table.BUILTIN_EXCEPTION_TYPE_DEFS`` (registered into
+# every fresh ``TypeTable`` by ``create_seeded_type_table``). A program that
+# declares its own ``builtin exception`` of one of these names gets its own
+# distinct handle instead, carrying that program's module.
 # ---------------------------------------------------------------------------
 
+
+def _builtin_exception(name: str) -> ExceptionType:
+    """Build the built-in exception handle for *name*, carrying its reserved identity.
+
+    Each name is spelled once, here, and stamped with its own reserved
+    identity, so a handle can never be paired with another name's identity.
+    """
+    return ExceptionType(name=name, module_id=STD_CORE_ID, decl_id=_reserved_id(name))
+
+
 # Abstract base: the hierarchy root, catchable but not constructible.
-EXCEPTION_BASE = ExceptionType(name="Exception", module_id=PRELUDE_ID)
+EXCEPTION_BASE = _builtin_exception("Exception")
 
 BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
-    "Exception": EXCEPTION_BASE,
-    "AgentCallError": ExceptionType(name="AgentCallError", module_id=PRELUDE_ID),
-    "AgentParseError": ExceptionType(name="AgentParseError", module_id=PRELUDE_ID),
-    "ExecError": ExceptionType(name="ExecError", module_id=PRELUDE_ID),
-    # Raised for every runtime failure crossing an extern (Python FFI) call:
-    # the Python callable raising, a return-contract violation (including a
-    # seal violation), or an argument-conversion failure.
-    "ExternError": ExceptionType(name="ExternError", module_id=PRELUDE_ID),
-    "MaxIterationsExceeded": ExceptionType(name="MaxIterationsExceeded", module_id=PRELUDE_ID),
-    "MatchError": ExceptionType(name="MatchError", module_id=PRELUDE_ID),
-    "IndexError": ExceptionType(name="IndexError", module_id=PRELUDE_ID),
-    "KeyError": ExceptionType(name="KeyError", module_id=PRELUDE_ID),
-    "TypeError": ExceptionType(name="TypeError", module_id=PRELUDE_ID),
-    "ArithmeticError": ExceptionType(name="ArithmeticError", module_id=PRELUDE_ID),
-    # Statically prevented by scope/typecheck (assignment to immutable bindings
-    # and undeclared names), but still listed as catchable runtime
-    # exceptions for any runtime paths that bypass the static passes.
-    "UndefinedVariableError": ExceptionType(name="UndefinedVariableError", module_id=PRELUDE_ID),
-    "ImmutableBindingError": ExceptionType(name="ImmutableBindingError", module_id=PRELUDE_ID),
-    "Abort": ExceptionType(name="Abort", module_id=PRELUDE_ID),
-    # AgL: RecursionError raised when the call-depth limit is exceeded.
-    "RecursionError": ExceptionType(name="RecursionError", module_id=PRELUDE_ID),
-    "CastError": ExceptionType(name="CastError", module_id=PRELUDE_ID),
-    "JsonParseError": ExceptionType(name="JsonParseError", module_id=PRELUDE_ID),
-    "RangeError": ExceptionType(name="RangeError", module_id=PRELUDE_ID),
-    # Reference semantics makes cyclic array/dict values constructible; raised
-    # by any walk that would otherwise recurse forever (print, render, `as
-    # json`, extern encode) when it re-enters a container already on its path.
-    "CyclicValueError": ExceptionType(name="CyclicValueError", module_id=PRELUDE_ID),
+    name: _builtin_exception(name)
+    for name in (
+        "Exception",
+        "AgentCallError",
+        "AgentParseError",
+        "ExecError",
+        # Raised for every runtime failure crossing an extern (Python FFI) call:
+        # the Python callable raising, a return-contract violation (including a
+        # seal violation), or an argument-conversion failure.
+        "ExternError",
+        "MaxIterationsExceeded",
+        "MatchError",
+        "IndexError",
+        "KeyError",
+        "TypeError",
+        "ArithmeticError",
+        # Statically prevented by scope/typecheck (assignment to immutable bindings
+        # and undeclared names), but still listed as catchable runtime
+        # exceptions for any runtime paths that bypass the static passes.
+        "UndefinedVariableError",
+        "ImmutableBindingError",
+        "Abort",
+        # AgL: RecursionError raised when the call-depth limit is exceeded.
+        "RecursionError",
+        "CastError",
+        "JsonParseError",
+        "RangeError",
+        # Reference semantics makes cyclic array/dict values constructible; raised
+        # when rendering or JSON conversion re-enters a container already on its
+        # path. Extern array/dict arguments cross as lazy views; repr of a view or
+        # FFI view rendering that reaches a cycle raises this exception instead.
+        "CyclicValueError",
+    )
 }
 
 # Names of built-in exception types (cannot be redeclared as records/enums/aliases).
@@ -876,35 +977,61 @@ BUILTIN_EXCEPTION_NAMES: frozenset[str] = frozenset(BUILTIN_EXCEPTIONS)
 # These prelude constants are pure handles — their field/variant shapes are
 # defined once as explicit ``TypeDef`` literals in
 # ``semantics.type_table.BUILTIN_PRELUDE_TYPE_DEFS``.
-_EXEC_RESULT_TYPE = RecordType(name="ExecResult", module_id=PRELUDE_ID)
+_EXEC_RESULT_TYPE = RecordType(
+    name="ExecResult", module_id=STD_CORE_ID, decl_id=_reserved_id("ExecResult")
+)
 
 # ``ParsePolicy`` — controls ``ask``/``exec`` error handling.
 # ``Abort`` — abort on parse error (no fields).
 # ``Retry(n: int)`` — retry up to ``n`` times.
-_PARSE_POLICY_TYPE = EnumType(name="ParsePolicy", module_id=PRELUDE_ID)
+_PARSE_POLICY_TYPE = EnumType(
+    name="ParsePolicy", module_id=STD_CORE_ID, decl_id=_reserved_id("ParsePolicy")
+)
 
-_OPTION_TEXT_TYPE = EnumType(name="Option", type_args=(TextType(),), module_id=STD_CORE_ID)
+# ``Agent`` — a plain enum data value that specifies an agent backend.
+_AGENT_TYPE = EnumType(name="Agent", module_id=STD_CORE_ID, decl_id=_reserved_id("Agent"))
+
+_OPTION_TEXT_TYPE = EnumType(
+    name="Option",
+    type_args=(TextType(),),
+    module_id=STD_CORE_ID,
+    decl_id=_reserved_id("Option"),
+)
 
 # Public alias for the ``Option[text]`` type — the single source of truth
 # shared with engine_keys and any other module that needs this type.
 OPTION_TEXT_TYPE: EnumType = _OPTION_TEXT_TYPE
 
-_OPTION_JSON_TYPE = EnumType(name="Option", type_args=(JsonType(),), module_id=STD_CORE_ID)
+_OPTION_JSON_TYPE = EnumType(
+    name="Option",
+    type_args=(JsonType(),),
+    module_id=STD_CORE_ID,
+    decl_id=_reserved_id("Option"),
+)
 
-_OUTPUT_CONTRACT_TYPE = RecordType(name="OutputContract", module_id=PRELUDE_ID)
+_OUTPUT_CONTRACT_TYPE = RecordType(
+    name="OutputContract", module_id=STD_CORE_ID, decl_id=_reserved_id("OutputContract")
+)
 
-_OUTPUT_CONTRACT_OPTION_TYPE = EnumType(name="OutputContractOption", module_id=PRELUDE_ID)
+_OUTPUT_CONTRACT_OPTION_TYPE = EnumType(
+    name="OutputContractOption",
+    module_id=STD_CORE_ID,
+    decl_id=_reserved_id("OutputContractOption"),
+)
 
 # ``AgentRequest`` — the request that the corresponding ``ask`` call would
 # dispatch to its agent, surfaced as an AgL value by ``ask-request``.  This is
 # the first-attempt request: ``attempt`` is always ``0`` and there is no
 # retry context (no ``previous_invalid_output`` / ``validation_errors``),
 # because ``ask-request`` never invokes the agent.
-_AGENT_REQUEST_TYPE = RecordType(name="AgentRequest", module_id=PRELUDE_ID)
+_AGENT_REQUEST_TYPE = RecordType(
+    name="AgentRequest", module_id=STD_CORE_ID, decl_id=_reserved_id("AgentRequest")
+)
 
 BUILTIN_PRELUDE_TYPES: dict[str, Type] = {
     "ExecResult": _EXEC_RESULT_TYPE,
     "ParsePolicy": _PARSE_POLICY_TYPE,
+    "Agent": _AGENT_TYPE,
     "OutputContract": _OUTPUT_CONTRACT_TYPE,
     "OutputContractOption": _OUTPUT_CONTRACT_OPTION_TYPE,
     "AgentRequest": _AGENT_REQUEST_TYPE,
@@ -912,6 +1039,30 @@ BUILTIN_PRELUDE_TYPES: dict[str, Type] = {
 
 # Names of built-in prelude types (non-shadowable, like built-in exceptions).
 BUILTIN_PRELUDE_TYPE_NAMES: frozenset[str] = frozenset(BUILTIN_PRELUDE_TYPES)
+
+# Every bare name the host recognizes as a built-in exception or prelude
+# record/enum — used by ``spells_bare`` to recognize the shipped standard
+# library's own declaration of one of them, as opposed to an ordinary,
+# non-builtin declaration in the same module (e.g. ``Option``).
+_BUILTIN_HOST_NAMES: frozenset[str] = BUILTIN_EXCEPTION_NAMES | BUILTIN_PRELUDE_TYPE_NAMES
+
+
+def spells_bare(module_id: ModuleId, name: str) -> bool:
+    """Return whether a nominal owned by *module_id* named *name* spells bare.
+
+    True for the entry module — a program's own declarations never need a
+    qualifier — and for the shipped standard library's own declaration of one
+    of its built-in names, so a built-in exception or prelude record/enum
+    reads the same in diagnostics whether or not a program declares its own
+    ``builtin`` alias for it. Any other module — including an ordinary,
+    non-builtin declaration in the standard library itself, such as
+    ``Option`` — still qualifies, matching how a reader would write it.
+
+    Shared by ``RecordType``/``EnumType``/``ExceptionType.__repr__`` and
+    ``semantics.type_table.qualified_decl_name``.
+    """
+    return module_id.is_entry or (module_id == STD_CORE_ID and name in _BUILTIN_HOST_NAMES)
+
 
 # Legacy built-in types kept for compatibility with already-compiled tests and
 # internal APIs.  They remain available as nominal types, but their constructors
@@ -935,8 +1086,8 @@ class CastKind(_enum.Enum):
     """
 
     TOTAL_NOOP = "TOTAL_NOOP"  # source already assignable to target (no-op/widen)
-    TOTAL_RENDER = "TOTAL_RENDER"  # render data value to text
-    TOTAL_JSON = "TOTAL_JSON"  # canonicalize JSON-shaped value to json
+    TOTAL_RENDER = "TOTAL_RENDER"  # render data value to text; a cyclic walk can fail
+    TOTAL_JSON = "TOTAL_JSON"  # convert to json; a cyclic walk can fail
     FALLIBLE = "FALLIBLE"  # runtime-fallible conversion
     STATIC_ERROR = "STATIC_ERROR"  # statically impossible — raise AglTypeError
 

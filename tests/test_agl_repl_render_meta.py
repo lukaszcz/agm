@@ -125,11 +125,10 @@ class TestRenderEntryResult:
 
     def test_expression_echo_pretty_prints_structured_values(self) -> None:
         from agm.agl.ir.ids import NominalId
-        from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.semantics.values import ArrayValue, IntValue, RecordValue
 
         value = RecordValue(
-            nominal=NominalId(ENTRY_ID, "Box"),
+            nominal=NominalId(1),
             display_name="Box",
             fields={"items": ArrayValue([IntValue(1), IntValue(2)])},
         )
@@ -494,25 +493,6 @@ def _session_ctx(
     )
 
 
-class TestHelpFullSet:
-    def test_help_lists_full_command_set(self) -> None:
-        out = meta_mod.dispatch_meta(":help", _session_ctx()).text
-        assert out is not None
-        for cmd in (
-            ":reset",
-            ":type",
-            ":bindings",
-            ":env",
-            ":agents",
-            ":params",
-            ":set",
-            ":agent",
-            ":load",
-            ":save",
-        ):
-            assert cmd in out
-
-
 class TestReset:
     def test_reset_clears_bindings(self) -> None:
         s = ReplSession()
@@ -544,8 +524,8 @@ class TestType:
         from agm.agl.semantics.types import RecordType
 
         table = TypeTable()
-        table.register(TypeDef(kind="record", name="Empty", module_id=ENTRY_ID))
-        assert format_type_for_repl(RecordType(name="Empty"), table) == "record Empty()"
+        table.register(TypeDef(kind="record", name="Empty", module_id=ENTRY_ID, decl_node_id=1))
+        assert format_type_for_repl(RecordType(name="Empty", decl_id=1), table) == "record Empty()"
 
     def test_type_empty_arg_gives_usage(self) -> None:
         outcome = meta_mod.dispatch_meta(":type", _session_ctx())
@@ -596,27 +576,6 @@ class TestBindings:
         out_b = meta_mod.dispatch_meta(":bindings", _session_ctx(s)).text
         out_e = meta_mod.dispatch_meta(":env", _session_ctx(s)).text
         assert out_b == out_e
-
-
-class TestAgents:
-    def test_agents_empty_notes_default(self) -> None:
-        outcome = meta_mod.dispatch_meta(":agents", _session_ctx())
-        assert outcome.text is not None
-        assert "mode: confirm" in outcome.text
-
-    def test_agents_lists_registered_and_default_ask(self) -> None:
-        s = ReplSession(default_agent=_CountingAgent("x"))
-        s.register_agent("reviewer", _CountingAgent("r"))
-        outcome = meta_mod.dispatch_meta(":agents", _session_ctx(s))
-        assert outcome.text is not None
-        assert "reviewer" in outcome.text
-        assert "ask" in outcome.text
-
-    def test_agents_reports_current_mode(self) -> None:
-        mode = AgentMode(mode="auto")
-        outcome = meta_mod.dispatch_meta(":agents", _session_ctx(agent_mode=mode))
-        assert outcome.text is not None
-        assert "mode: auto" in outcome.text
 
 
 class TestInputs:
@@ -712,7 +671,7 @@ class TestLoad:
         src = tmp_path / "agent.agl"
         src.write_text('let r = ask """do it"""\n')
         agent = _CountingAgent("done")
-        s = ReplSession(default_agent=agent)
+        s = ReplSession(agent_dispatcher=agent)
         meta_mod.dispatch_meta(f":load {src}", _session_ctx(s))
         assert agent.calls == 1
 

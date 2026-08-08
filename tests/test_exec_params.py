@@ -37,6 +37,35 @@ class TestSourceDiscovery:
 
         assert [param.name for param in params] == ["selected"]
 
+    def test_scoped_param_discovers_under_its_full_path_spelling(self) -> None:
+        """A scoped param's external key is its full path, e.g. 'Deploy::region'."""
+        from agm.cli_support.exec_params import discover_params_from_source
+
+        params = discover_params_from_source(
+            'scope Deploy\nparam region: text = "eu"\nend Deploy\nDeploy::region'
+        )
+
+        assert [param.name for param in params] == ["Deploy::region"]
+
+    def test_nested_scoped_param_discovers_under_its_full_path_spelling(self) -> None:
+        from agm.cli_support.exec_params import discover_params_from_source
+
+        params = discover_params_from_source(
+            "scope A\nscope B\nparam x: int\nend B\nend A\nA::B::x"
+        )
+
+        assert [param.name for param in params] == ["A::B::x"]
+
+    def test_root_and_scoped_params_are_both_discovered(self) -> None:
+        from agm.cli_support.exec_params import discover_params_from_source
+
+        params = discover_params_from_source(
+            'param increment: int\nscope Deploy\nparam region: text = "eu"\nend Deploy\n'
+            "print(Deploy::region)\nincrement"
+        )
+
+        assert {param.name for param in params} == {"increment", "Deploy::region"}
+
 
 # ---------------------------------------------------------------------------
 # param_flag
@@ -130,14 +159,6 @@ class TestCheckParamCollisions:
         params = (_make_param("verbose", BoolType()),)
         assert check_param_collisions(params) == []
 
-    def test_runner_collision(self) -> None:
-        from agm.cli_support.exec_params import check_param_collisions
-
-        params = (_make_param("runner"),)
-        errors = check_param_collisions(params)
-        assert len(errors) == 1
-        assert "runner" in errors[0]
-
     def test_verbatim_collision_dry_run(self) -> None:
         from agm.cli_support.exec_params import check_param_collisions
 
@@ -159,14 +180,14 @@ class TestCheckParamCollisions:
         from agm.cli_support.exec_params import check_param_collisions
 
         # Both use kebab engine key names (verbatim match).
-        params = (_make_param("runner"), _make_param("max-iters"))
+        params = (_make_param("max-iters"), _make_param("strict-json"))
         errors = check_param_collisions(params)
         assert len(errors) == 2
 
     def test_line_number_in_error(self) -> None:
         from agm.cli_support.exec_params import check_param_collisions
 
-        params = (_make_param("runner", line=7),)
+        params = (_make_param("max-iters", line=7),)
         errors = check_param_collisions(params)
         assert "7" in errors[0]
 

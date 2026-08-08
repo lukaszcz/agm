@@ -1,0 +1,1 @@
+extern def interp(template: text, vars: dict[text, text]) -> text

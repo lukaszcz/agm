@@ -11,9 +11,13 @@ from agm.core.toml import TomlDict
 def default_agent_runner(*, merged: TomlDict | None = None) -> str:
     """Resolve the shared default agent runner from the ``[loop]`` config.
 
-    When *merged* is supplied, the ``[loop]`` section is derived from it,
-    avoiding a redundant config-file load for callers that already hold a
-    merged config.
+    ``agm loop``, ``agm review``, and ``agm revise`` all fall back to this
+    runner when their own CLI flag and config section leave the runner
+    unset, so a single ``[loop] runner`` setting drives every agent-invoking
+    command unless a command overrides it explicitly. When *merged* is
+    supplied, the ``[loop]`` section is derived from it, avoiding a
+    redundant config-file load for callers that already hold a merged
+    config.
     """
     if merged is not None:
         loop_config = loop_config_from_merged(merged)

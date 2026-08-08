@@ -6,7 +6,6 @@ from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import (
     UNIT_VALUE,
     VOID_VALUE,
-    AgentValue,
     ArrayValue,
     BoolValue,
     DecimalValue,
@@ -22,7 +21,6 @@ from agm.agl.semantics.values import (
 )
 
 __all__ = [
-    "AgentValue",
     "AglRaise",
     "ArrayValue",
     "BoolValue",

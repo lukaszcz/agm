@@ -1,3 +1,0 @@
-let agents: array[agent] = []
-let j = agents as json
-j

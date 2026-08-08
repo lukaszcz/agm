@@ -88,26 +88,18 @@ def _matches(
                 classification is not None
                 and isinstance(subject_type, EnumType)
                 and isinstance(value, EnumValue)
-                and value.nominal.module_id == subject_type.module_id
-                and value.nominal.declared_name == subject_type.name
+                and value.nominal.value == subject_type.decl_id
                 and value.variant == variant
             )
         case LiteralPattern():
             return value_eq(value, _literal_value(pattern))
         case ConstructorPattern(node_id=node_id, name=variant):
             if isinstance(subject_type, EnumType) and isinstance(value, EnumValue):
-                if (
-                    value.nominal.module_id != subject_type.module_id
-                    or value.nominal.declared_name != subject_type.name
-                    or value.variant != variant
-                ):
+                if value.nominal.value != subject_type.decl_id or value.variant != variant:
                     return False
                 fields = checked.type_env.type_table.enum_variants(subject_type)[variant]
             elif isinstance(subject_type, RecordType) and isinstance(value, RecordValue):
-                if (
-                    value.nominal.module_id != subject_type.module_id
-                    or value.nominal.declared_name != subject_type.name
-                ):
+                if value.nominal.value != subject_type.decl_id:
                     return False
                 fields = checked.type_env.type_table.record_fields(subject_type)
             else:
@@ -151,16 +143,12 @@ def canonical_cell_matches(cell: PatternCell, value: Value) -> bool:
         return value_eq(value, _constructor_literal_value(constructor))
     if isinstance(constructor, EnumConstructor) and isinstance(value, EnumValue):
         if (
-            value.nominal.module_id != constructor.enum_type.module_id
-            or value.nominal.declared_name != constructor.enum_type.name
+            value.nominal.value != constructor.enum_type.decl_id
             or value.variant != constructor.variant
         ):
             return False
     elif isinstance(constructor, RecordConstructor) and isinstance(value, RecordValue):
-        if (
-            value.nominal.module_id != constructor.record_type.module_id
-            or value.nominal.declared_name != constructor.record_type.name
-        ):
+        if value.nominal.value != constructor.record_type.decl_id:
             return False
     else:
         return False

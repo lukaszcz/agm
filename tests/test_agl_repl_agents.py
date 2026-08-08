@@ -13,6 +13,7 @@ import pytest
 from agm.agl.repl.agentmode import AgentMode
 from agm.agl.repl.agents import AgentCancelled, ConfirmingAgent
 from agm.agl.runtime.request import AgentRequest, AgentResponse
+from tests._agl_helpers import agent_value
 
 
 class RecordingAgent:
@@ -39,7 +40,7 @@ class InterruptingAgent:
 
 
 def _request(agent: str = "ask", prompt: str = "hi") -> AgentRequest:
-    return AgentRequest(agent=agent, prompt=prompt)
+    return AgentRequest(agent=agent_value("AgentCommand", command=agent), prompt=prompt)
 
 
 class ScriptedConfirm:
@@ -69,7 +70,7 @@ class TestConfirmMode:
         assert result.content == "reply"
         assert len(underlying.requests) == 1
         # The callback was shown the callee and rendered prompt.
-        assert confirm.seen == [("writer", "draft it")]
+        assert confirm.seen == [('Agent::AgentCommand(command = "writer")', "draft it")]
 
     def test_no_raises_cancelled_and_does_not_dispatch(self) -> None:
         underlying = RecordingAgent()
@@ -80,7 +81,7 @@ class TestConfirmMode:
         with pytest.raises(AgentCancelled) as excinfo:
             wrapper(_request(agent="writer"))
 
-        assert excinfo.value.callee == "writer"
+        assert excinfo.value.callee == 'Agent::AgentCommand(command = "writer")'
         assert excinfo.value.reason == "declined"
         assert underlying.requests == []
 
@@ -123,7 +124,7 @@ class TestInterrupt:
         with pytest.raises(AgentCancelled) as excinfo:
             wrapper(_request(agent="slow"))
 
-        assert excinfo.value.callee == "slow"
+        assert excinfo.value.callee == 'Agent::AgentCommand(command = "slow")'
         assert excinfo.value.reason == "interrupted"
         assert underlying.calls == 1
 

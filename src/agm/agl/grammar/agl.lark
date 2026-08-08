@@ -54,11 +54,6 @@
 //     if lambda is an atom, its body creates a FOLLOW-set conflict.
 //   - Consequence: a lambda as a function argument must be parenthesized.
 //
-// (E) `agent` as a type: `agent` arrives as AGENT (declared terminal, not string
-//   literal), so a type_expr alternative `AGENT -> agent_type` is safe. It cannot
-//   conflict with `agent_decl` because declarations appear at item level, not in
-//   type_expr position.
-//
 // (F) Suite bodies for func_def, catch, branch:
 //   - `suite_expr: _INDENT block _DEDENT` starts with _INDENT.
 //   - The production custom lexer emits _INDENT directly (without a preceding
@@ -84,14 +79,8 @@
 %declare OPEN IMPORT USING HIDING EXPORT SCOPE END MODQUAL MODPATH WILDCARD
 %declare PLACEHOLDER PLACEHOLDER_NUM
 %declare AS_QUESTION
-// AGENT: the reserved word `agent`.  Declared (rather than written as the
-// string literal "agent") so it can be referenced by name in `field_name`,
-// where `agent` is admitted as a field/key name, and in `type_expr` where
-// `agent` is the opaque agent type.  The custom lexer emits this token type
-// for the `agent` keyword.
-%declare AGENT
 // TO, DOWNTO, BY: declared so they can appear in `field_name` (a keyword
-// admitted as a record/key identifier) exactly as AGENT is.  Using declared
+// admitted as a record/key identifier). Using declared
 // terminals (rather than string literals) is the mechanism that makes them
 // referenceable by name in field_name without grammar conflicts.
 %declare TO DOWNTO BY
@@ -132,7 +121,7 @@ _sep: _NEWLINE | SEMICOLON
 // The single criterion for where a raw-tail form may appear: a line-final
 // expression position, where a raw payload cannot swallow a grammar-visible
 // continuation marker.  Every such position spells it as ``line_final_expr``.
-?raw_tail_form: raw_call | raw_juxt
+?raw_tail_form: raw_call | dotted_raw_call | raw_juxt
 ?line_final_expr: raw_tail_form | expr
 
 // ---------------------------------------------------------------------------
@@ -145,7 +134,6 @@ _sep: _NEWLINE | SEMICOLON
             | type_alias
             | param_decl
             | program_decl
-            | agent_decl
             | infix_decl
             | func_def
             | builtin_var_def
@@ -194,13 +182,10 @@ record_body: param_marker? _INDENT block_entry (_NEWLINE block_entry)* _NEWLINE?
 
 field_def: field_name COLON type_expr
 
-// field_name: a record/struct field or named-key reference.  The reserved word
-// `agent` (which leads an agent_decl and is also a type) is also a legitimate
-// field name on built-in exception records (AgentCallError.agent), so it is
-// admitted here alongside ordinary identifiers.  `to`, `downto`, and `by` are
-// also admitted so that existing field uses like `tagged(by: T)` continue to
-// work after those words became reserved keywords.
-?field_name: NAME | AGENT | TO | DOWNTO | BY
+// field_name: a record/struct field or named-key reference. `to`, `downto`,
+// and `by` are admitted so existing field uses like `tagged(by: T)` remain
+// valid after those words became reserved keywords.
+?field_name: NAME | TO | DOWNTO | BY
 ?name: NAME | OP_NAME
 
 // enum_def: flat variant list using the |-continuation layout rule.
@@ -248,10 +233,6 @@ param_decl: "param" name type_ann? (EQ expr)?
 // program declaration: "program" name
 program_decl: "program" name
 
-// agent_decl: "agent" name [= template]
-// The optional runner string must be a static literal (checked in transformer).
-agent_decl: AGENT decl_head (EQ template)?
-
 // infix declaration: user-defined symbolic binary operator associativity and priority.
 // Priority may be a literal integer or relative to an existing operator priority.
 infix_decl: "infixl" infix_op infix_priority? -> infixl_decl
@@ -284,10 +265,10 @@ builtin_func_def: "builtin" _NEWLINE? "def" decl_head type_params? LPAR param_li
 // the modifier sit on its own line above the declaration.
 extern_func_def: "extern" _NEWLINE? "def" decl_head type_params? LPAR param_list? RPAR THIN_ARROW type_expr
 
-// Host-implemented builtin mutable-setting declaration. Body-less: a name and a
-// mandatory type annotation, no `= expr`. `builtin` is a decorator-style
+// Host-implemented builtin mutable-setting declaration. Its optional constant
+// initializer supplies the engine default. `builtin` is a decorator-style
 // modifier (the `_NEWLINE?` lets it sit on its own line above the declaration).
-builtin_var_def: "builtin" _NEWLINE? "var" name type_ann
+builtin_var_def: "builtin" _NEWLINE? "var" name type_ann (EQ expr)?
 
 builtin_record_def: "builtin" _NEWLINE? record_def
 builtin_enum_def: "builtin" _NEWLINE? enum_def
@@ -306,8 +287,6 @@ param_marker: SLASH    -> marker_slash
             | AT NAME  -> marker_at
 
 // param_def default value uses or_expr (inside LPAR…RPAR, COMMA terminates).
-// `agent` is accepted as a parameter name so builtin signatures can expose
-// named arguments such as ask(..., agent: worker).
 param_def: field_name (COLON type_expr)? (EQ or_expr)?
 
 // func_body: indented suite OR a single inline expr (full expr, including
@@ -328,7 +307,7 @@ func_body: suite_expr | raw_return_expr | line_final_expr
 ?binder: let_decl | var_decl | assign_stmt
 
 let_decl: "let" pattern type_ann? EQ line_final_expr
-var_decl: "var" name type_ann? EQ line_final_expr
+var_decl: "var" decl_head type_ann? EQ line_final_expr
 assign_stmt: postfix ASSIGN line_final_expr
 
 // Type annotation: COLON followed by a type_expr.
@@ -340,9 +319,6 @@ type_ann: COLON type_expr
 // Type keywords (text, json, bool, int, decimal, array, dict, unit) are NOT
 // reserved by the scanner; they arrive as NAME tokens.
 // The AstBuilder maps NAME values to the right TypeExpr.
-//
-// `agent` type: AGENT terminal (declared, not string literal) so `agent` is
-// also admissible as field_name without conflict.
 //
 // func_type: A -> B or (A, B) -> C — right-associative.  The unit func type
 // () -> C uses empty type_list; multiple parameters still require parentheses.
@@ -359,7 +335,6 @@ type_ann: COLON type_expr
           | name type_lsqb type_arg_list RSQB               -> applied_type
           | qual_ref_chain                                  -> qual_named_type
           | name                                            -> prim_or_name
-          | AGENT                                           -> agent_type
 
 type_arg_list: type_expr (COMMA type_expr)*
 
@@ -510,7 +485,7 @@ try_body: suite_expr | (marked_item SEMICOLON)* try_tail
          | if_expr | case_expr | loop_expr
 
 ?try_letvar_decl: "let" pattern type_ann? EQ try_value -> let_decl
-                 | "var" name type_ann? EQ try_value -> var_decl
+                 | "var" decl_head type_ann? EQ try_value -> var_decl
 
 ?try_value: or_expr | raise_expr | return_expr | if_expr | case_expr | loop_expr
 
@@ -648,12 +623,15 @@ juxt: postfix juxt_arg -> juxt_call
     | postfix
 
 // juxt_arg: a restricted atom optionally followed by field/index suffixes.
-juxt_arg: juxt_atom juxt_suffix*
+juxt_arg: juxt_atom juxt_arg_tail
+juxt_arg_tail:                                          -> juxt_suffixes_empty
+             | juxt_postfix_suffix juxt_arg_tail      -> juxt_postfix_tail
+             | DOT juxt_field_name juxt_arg_tail      -> juxt_field_tail
+juxt_field_name: field_name
 
-juxt_suffix: DOT field_name       -> juxt_field_suffix
-           | INDEX_LSQB expr RSQB -> juxt_index_suffix
-           | LPAR arg_list? RPAR -> juxt_call_suffix
-           | type_args LPAR arg_list? RPAR -> juxt_typed_call_suffix
+juxt_postfix_suffix: INDEX_LSQB expr RSQB -> juxt_index_suffix
+                   | LPAR arg_list? RPAR -> juxt_call_suffix
+                   | type_args LPAR arg_list? RPAR -> juxt_typed_call_suffix
 
 // juxt_atom: the simple (no-paren, no-unary-minus) primaries allowed as juxt arg.
 // Qualified refs are valid juxt arguments; the lexer pre-merges qualifiers
@@ -796,8 +774,16 @@ template: TEMPLATE_START template_segment* TEMPLATE_END
 template_segment: STRING_FRAGMENT    -> tmpl_text
                 | interp             -> tmpl_interp
 
-raw_juxt: postfix raw_call -> juxt_call
+raw_juxt: postfix raw_call                                      -> juxt_call
+        | postfix raw_juxt_dotted_receiver type_args? raw_tail -> dotted_raw_juxt
 raw_call: raw_callee type_args? raw_tail
+dotted_raw_call: dotted_raw_head type_args? raw_tail
+dotted_raw_head: postfix DOT RAW_TAIL_NAME
+raw_juxt_dotted_receiver: juxt_atom raw_juxt_tail
+raw_juxt_tail: juxt_postfix_suffix raw_juxt_tail -> raw_juxt_postfix_tail
+             | DOT raw_juxt_member               -> raw_juxt_final_tail
+raw_juxt_member: RAW_TAIL_NAME                -> raw_juxt_terminal
+               | juxt_field_name raw_juxt_tail -> raw_juxt_member_field
 raw_callee: RAW_TAIL_NAME
 raw_tail: RAW_TAIL_START (raw_text | interp)+ RAW_TAIL_END
 raw_text: RAW_FRAGMENT
@@ -828,12 +814,14 @@ dict_entry: template COLON arg_expr     -> dict_entry_str
 // Pattern `as` binders wrap the complete preceding pattern and associate left.
 // Disambiguation of pattern_atom:
 //   name with value "_" → wildcard (handled in AstBuilder.pat_var_or_wild)
-//   qualifier chain + optional fields → qualified constructor pattern
+//   qualifier chain, no parens → bare qualified pattern (or a scoped `let` binder path)
+//   qualifier chain + parens → qualified constructor pattern
 //   name LPAR ... RPAR → unqualified constructor pattern with payload
 //   name (other) → a bare top-level constructor or field-directed nested pattern
 //   literal → literal pattern
 pattern: pattern_atom ("as" name)* -> pat_as
-pattern_atom: qual_ref_chain (LPAR pattern_fields? RPAR)? -> pat_qual_constructor
+pattern_atom: qual_ref_chain                            -> pat_qual_bare
+            | qual_ref_chain LPAR pattern_fields? RPAR  -> pat_qual_constructor
             | name LPAR pattern_fields? RPAR                     -> pat_constructor
             | name                                               -> pat_var_or_wild
             | INT                                                -> pat_lit_int

@@ -6,8 +6,7 @@
 # imported `parse_point` raises across the module boundary.
 import parsing as p
 import parsing using to_int_or
-agent source
-
+let source = AgentCommand("source")
 param amount
 param point_json
 

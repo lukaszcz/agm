@@ -41,8 +41,7 @@ __all__ = [
 class AglDivisionByZero(Exception):
     """Sentinel raised by div() on a zero divisor.
 
-    Each evaluator catches this and wraps it into its own AglRaise with its
-    own trace_id (preserving legacy behavior).
+    Each evaluator catches this and wraps it into an ``AglRaise``.
     """
 
 

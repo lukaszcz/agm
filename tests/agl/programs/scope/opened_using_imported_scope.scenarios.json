@@ -2,7 +2,9 @@
   "scenarios": [
     {
       "name": "opens_a_scope_contributed_bare_by_using_import",
-      "module_roots": ["program_modules/scoped_open"],
+      "module_roots": [
+        "program_modules/scoped_open"
+      ],
       "expect": {
         "stdout": "3\n5\n"
       }

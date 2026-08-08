@@ -5,8 +5,7 @@ record Task
   title: text
   effort: int
 
-agent planner
-
+let planner = AgentCommand("planner")
 # A helper that converts a text to int, returning 0 on failure
 def parse_int_or_zero(s: text) -> int =
   if s as? int =>

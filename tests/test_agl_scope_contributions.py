@@ -18,7 +18,7 @@ from agm.agl.scope.imports import (
     resolve_qualified,
 )
 from agm.agl.scope.symbols import AglScopeError
-from agm.agl.syntax.nodes import ImportDecl, ImportItem
+from agm.agl.syntax.nodes import ImportDecl, ImportItem, ScopeSegment
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
 from agm.agl.syntax.types import ImportMode
 
@@ -44,6 +44,7 @@ def _decl(
     is_open: bool = False,
     mode: ImportMode = ImportMode.ALL,
     items: tuple[ImportItem, ...] = (),
+    scope_path: tuple[ScopeSegment, ...] = (),
 ) -> ImportDecl:
     return ImportDecl(
         module_path=tuple(path.split("/")),
@@ -54,7 +55,12 @@ def _decl(
         items=items,
         span=_span(),
         node_id=_node_id(),
+        scope_path=scope_path,
     )
+
+
+def _region(*names: str) -> tuple[ScopeSegment, ...]:
+    return tuple(ScopeSegment(name=name, span=_span(), node_id=_node_id()) for name in names)
 
 
 def _item(name: str, rename: str | None = None) -> ImportItem:
@@ -115,6 +121,81 @@ class TestContributionSets:
         assert set(env.unqualified) == {"public"}
         assert env.unqualified["public"] == frozenset({(module, "public")})
 
+    def test_region_scoped_open_import_keeps_bare_names_out_of_unqualified(self) -> None:
+        """A region-scoped ``open import`` snapshots into ``decl_bare``, not module-wide."""
+        decl = _decl("lib/api", is_open=True, scope_path=_region("A"))
+        module = _module("lib/api")
+        env = _build(
+            [decl],
+            {decl.node_id: SingleTarget(module)},
+            {module: _exports("lib/api", "one", "two")},
+        )
+
+        assert set(env.unqualified) == set()
+        assert dict(env.decl_bare[decl.node_id]) == {
+            "one": frozenset({(module, "one")}),
+            "two": frozenset({(module, "two")}),
+        }
+        # The qualifier route stays module-wide regardless of the scope path.
+        assert env.contributions[module].path_enabled is True
+        assert set(env.contributions[module].members) == {"one", "two"}
+
+    def test_region_scoped_wildcard_keeps_every_origin_of_a_duplicate_bare_name(self) -> None:
+        """A wildcard expanding to several modules doesn't hard-error on a shared bare name.
+
+        Two sibling modules exporting the same name is only an ambiguity at
+        the name's first use (mirrors the module-wide ``unqualified`` table's
+        own policy), never a build-time error.
+        """
+        decl = _decl("pkg", wildcard=True, is_open=True, scope_path=_region("A"))
+        one = _module("pkg/one")
+        two = _module("pkg/two")
+        env = _build(
+            [decl],
+            {decl.node_id: WildcardTarget(frozenset({one, two}))},
+            {one: _exports("pkg/one", "alpha"), two: _exports("pkg/two", "alpha")},
+        )
+
+        assert dict(env.decl_bare[decl.node_id]) == {
+            "alpha": frozenset({(one, "alpha"), (two, "alpha")}),
+        }
+
+    def test_region_scoped_plain_import_contributes_no_bare_names(self) -> None:
+        """A scoped plain ``import`` (no ``open``/``using``) never populates ``decl_bare``."""
+        decl = _decl("lib/api", scope_path=_region("A"))
+        module = _module("lib/api")
+        env = _build(
+            [decl],
+            {decl.node_id: SingleTarget(module)},
+            {module: _exports("lib/api", "one")},
+        )
+
+        assert env.decl_bare.get(decl.node_id, {}) == {}
+        assert env.contributions[module].path_enabled is True
+
+    def test_two_region_scoped_decls_keep_independent_bare_sets(self) -> None:
+        """Each region-scoped declaration's bare selection is kept separate by node id."""
+        first = _decl("lib/api", is_open=True, mode=ImportMode.HIDING, scope_path=_region("A"))
+        second = _decl(
+            "lib/api",
+            mode=ImportMode.USING,
+            items=(_item("two"),),
+            scope_path=_region("B"),
+        )
+        module = _module("lib/api")
+        env = _build(
+            [first, second],
+            {first.node_id: SingleTarget(module), second.node_id: SingleTarget(module)},
+            {module: _exports("lib/api", "one", "two")},
+        )
+
+        assert set(env.unqualified) == set()
+        assert dict(env.decl_bare[first.node_id]) == {
+            "one": frozenset({(module, "one")}),
+            "two": frozenset({(module, "two")}),
+        }
+        assert dict(env.decl_bare[second.node_id]) == {"two": frozenset({(module, "two")})}
+
 
 class TestContributionImmutability:
     def test_public_mappings_are_immutable_snapshots(self) -> None:
@@ -145,6 +226,22 @@ class TestContributionImmutability:
             env.contributions[module] = contribution
         with pytest.raises(TypeError):
             env.unqualified["later"] = frozenset({(module, "later")})
+
+    def test_decl_bare_is_an_immutable_snapshot(self) -> None:
+        module = _module("lib/api")
+        bare = {"one": frozenset({(module, "one")})}
+        decl_bare = {1: bare}
+        env = ImportEnv(contributions={}, unqualified={}, decl_bare=decl_bare)
+
+        bare["two"] = frozenset({(module, "two")})
+        decl_bare[2] = {"three": frozenset({(module, "three")})}
+
+        assert dict(env.decl_bare[1]) == {"one": frozenset({(module, "one")})}
+        assert set(env.decl_bare) == {1}
+        with pytest.raises(TypeError):
+            env.decl_bare[1]["two"] = frozenset({(module, "two")})
+        with pytest.raises(TypeError):
+            env.decl_bare[3] = {}
 
 
 class TestContributionMerging:

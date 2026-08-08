@@ -15,7 +15,7 @@ let completed: unit = exec "make build" # unit form; raises ExecError on nonzero
 Like `ask`, `exec` is a **contextual keyword**
 ([Lexical structure](lexical-structure.md)): in call position it denotes the
 built-in shell executor; it cannot be declared with `let`/`var`/`param` or
-as an agent name; it cannot be bound as a function value; it remains legal
+as a function; it cannot be bound as a function value; it remains legal
 as a field name. A host may statically disallow shell execution altogether,
 in which case every `exec` call is a static error.
 
@@ -35,9 +35,11 @@ With named arguments, parentheses are required.
 `exec!` writes the command directly after the keyword rather than inside a
 string template. The inline form takes the rest of its line; the block form
 collects one dedented, newline-joined shell script. Both produce the same call
-as `exec(<template>)` and accept explicit type arguments. Type arguments must
-touch the name (`exec!::[T]`); in `exec! ::[T]`, the spaced `::[T]` is command
-payload:
+as `exec(<template>)` and accept explicit type arguments. Like every raw-tail
+name, `exec!` may follow a projection: `target.exec! command` is
+`target.exec(command)` and uses ordinary member resolution. Type arguments
+must touch the name (`exec!::[T]`); in `exec! ::[T]`, the spaced `::[T]` is
+command payload:
 
 ```agl
 let directory = "."
@@ -144,8 +146,7 @@ let data: dict[text, int] = exec(           # JSON parsed; raises on nonzero
 )
 ```
 
-A nonzero exit raises `ExecError`, and unparseable output raises
-`AgentParseError` (with agent name `"exec"`).
+A nonzero exit and unparseable output both raise `ExecError`.
 
 ### Unit form — target is `unit`
 
@@ -189,21 +190,18 @@ invalid for a `unit` target.
 **Retries re-run the command.** Unlike an `ask` retry — which sends
 corrective feedback to the same conversation — an `exec` retry executes the
 command again; each invocation is traced separately. If every attempt fails
-to parse, `AgentParseError` is raised with agent name `"exec"`.
+to parse, `ExecError` is raised.
 
 ## Exceptions
 
-`ExecError` (a failing or timed-out command in parsed or unit form) and
-`AgentParseError` (unparseable output from a succeeding command) are distinct
-and independently catchable:
+`ExecError` covers a failing, timed-out, or unparseable shell command in the
+parsed or unit form:
 
 ```agl
 try
   let data: dict[text, int] = exec "compute-stats --json"
 catch ExecError as e =>
   print "command failed (%{e.exit_code}): %{e.stderr}"
-catch AgentParseError as e =>
-  print "not valid JSON: %{e.raw}"
 ```
 
 In the structured form, `ExecError` is raised for a spawn failure (the shell

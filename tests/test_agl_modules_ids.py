@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CONFIG_ID, STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_CONFIG_ID, STD_CORE_ID, ModuleId
 
 
 class TestModuleIdConstruction:
@@ -143,34 +143,26 @@ class TestStandardLibraryIds:
 
 
 class TestSentinelIds:
-    @pytest.mark.parametrize("sentinel", [ENTRY_ID, PRELUDE_ID])
-    def test_sentinel_is_module_id(self, sentinel: ModuleId) -> None:
-        assert isinstance(sentinel, ModuleId)
+    def test_sentinel_is_module_id(self) -> None:
+        assert isinstance(ENTRY_ID, ModuleId)
 
     def test_entry_id_is_entry(self) -> None:
         assert ENTRY_ID.is_entry
 
-    def test_prelude_id_is_not_entry(self) -> None:
-        assert not PRELUDE_ID.is_entry
-        assert PRELUDE_ID.is_prelude
-
     def test_non_entry_is_not_entry(self) -> None:
         mid = ModuleId.from_path("foo")
         assert not mid.is_entry
-        assert not mid.is_prelude
 
-    @pytest.mark.parametrize("sentinel", [ENTRY_ID, PRELUDE_ID])
-    def test_sentinel_display_hides_its_reserved_segment(self, sentinel: ModuleId) -> None:
-        assert "\x00" not in sentinel.display()
+    def test_sentinel_display_hides_its_reserved_segment(self) -> None:
+        assert "\x00" not in ENTRY_ID.display()
 
     def test_entry_id_not_equal_to_user_module(self) -> None:
         mid = ModuleId.from_path("main")
         assert ENTRY_ID != mid
 
-    @pytest.mark.parametrize("sentinel", [ENTRY_ID, PRELUDE_ID])
-    def test_sentinel_path_is_not_round_trippable(self, sentinel: ModuleId) -> None:
+    def test_sentinel_path_is_not_round_trippable(self) -> None:
         with pytest.raises(ValueError):
-            ModuleId.from_path(sentinel.path_str())
+            ModuleId.from_path(ENTRY_ID.path_str())
 
     def test_entry_id_is_sentinel(self) -> None:
         """ENTRY_ID should be a stable singleton-like object."""

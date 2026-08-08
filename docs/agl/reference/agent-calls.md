@@ -3,14 +3,16 @@
 [← Index](index.md)
 
 An agent call is the heart of AgL: an expression that sends a rendered
-prompt to a host-provided agent and yields a **typed** result. All
-agent invocations use the built-in `ask` function:
+prompt to a host-provided agent and yields a **typed** result. Invoke the
+built-in `ask` function directly, or select it as a method on the `Agent`
+value that should receive the request:
 
 <!-- agl-check: fragment -->
 ```agl
 ask "Summarize %{topic}"
 ask("Review this artifact:\n%{artifact}", agent = reviewer)
 ask("Review %{artifact}", agent = reviewer, on_parse_error = Retry(n = 2))
+reviewer.ask::[Review]("Review %{artifact}", on_parse_error = Retry(n = 2))
 ```
 
 ## `ask` — the agent call function
@@ -18,17 +20,30 @@ ask("Review %{artifact}", agent = reviewer, on_parse_error = Retry(n = 2))
 `ask` is a built-in function with the following declared-name signature:
 
 ```text
-ask(prompt: text, agent: agent = «default»,
-    format: text = «auto», strict_json: bool = «host default»,
-    on_parse_error: ParsePolicy = Abort) -> T
+ask(prompt: text, agent: Agent = std/config::default-agent,
+    format: text = "", strict_json: bool = false,
+    on_parse_error: ParsePolicy = ParsePolicy::Abort) -> T
 ```
 
 where `T` is the **target type** — determined from the calling context (see
 below). All parameters after `prompt` are optional and passed by name.
 
+An `Agent` value also provides the call-only method form:
+
+```text
+Agent::ask(self, prompt: text, format: text = "",
+           strict_json: bool = false,
+           on_parse_error: ParsePolicy = ParsePolicy::Abort) -> T
+```
+
+`reviewer.ask(...)` is equivalent to `ask(..., agent = reviewer)`: its receiver
+supplies the agent, so the method form has no `agent` named argument. It supports
+contextual and explicit `::[T]` target types, named parse options, and defaults
+just like the direct form. Built-in methods are call-only; `let f = reviewer.ask`
+and `let f = reviewer.ask::[text]` are static errors.
+
 `ask` is a **contextual keyword**: it cannot be declared with `let`, `var`,
-or `param`; it cannot be declared as an agent name; it may not be bound as a
-function value (`let f = ask` is a static error, because `ask`'s type is
+or `param`; it may not be bound as a function value (`let f = ask` is a static error, because `ask`'s type is
 not a fully expressible monomorphic type). It remains legal as a
 record/enum **field name**.
 
@@ -53,8 +68,10 @@ let r: Review = ask("Review %{artifact}", agent = reviewer)
 `ask!` writes a prompt directly after the keyword. Inline form consumes the
 rest of its line; block form consumes one dedented, newline-joined prompt.
 It desugars to the same call as `ask(<template>)`, so explicit type arguments
-and target-type inference work exactly as for `ask`. Type arguments must touch
-the name (`ask!::[T]`); in `ask! ::[T]`, the spaced `::[T]` is prompt payload:
+and target-type inference work exactly as for `ask`. It may also follow an
+`Agent` projection: `reviewer.ask!` desugars to `reviewer.ask(<template>)`.
+Type arguments must touch the raw name (`ask!::[T]` or
+`reviewer.ask!::[T]`); in `ask! ::[T]`, the spaced `::[T]` is prompt payload:
 
 ```agl
 record Review
@@ -69,64 +86,59 @@ let review: Review = ask!::[Review]
 Raw-tail prompt text is verbatim except for `%{expr}` interpolation and
 trailing spaces and tabs in an inline prompt; `\%{` writes a literal `%{`.
 A raw call needs a nonempty inline prompt or a block with at least one nonblank
-line. `ask!` always uses the configured default agent and default parsing
-options. Use `ask(...)` when selecting an agent with `agent =` or when setting
-`format`, `strict_json`, or `on_parse_error`; it is also the form to use
-outside a raw-tail line-final position.
+line. A bare `ask!` uses `std/config::default-agent` and the ordinary
+call defaults; `reviewer.ask!` uses its receiver. Use `ask(...)` or
+`reviewer.ask(...)` when setting `format`, `strict_json`, or `on_parse_error`;
+the parenthesized forms are also available outside a raw-tail line-final
+position.
 
 ## Agents as values
 
-Declared agents are **values** of the opaque type `agent`. An `agent`
-declaration introduces a name binding of type `agent` in its declaring scope:
+`Agent` is a built-in enum whose values describe the backend to invoke:
 
 ```agl
-agent reviewer
-agent planner = "claude -p \%{PROMPT_FILE}"
+let command = AgentCommand("claude -p")
+let reviewer = AgentClaude("sonnet", "medium")
+let local = AgentCodex("o3", "high")
+let pi = AgentPi("openai", "gpt", "low")
+
+let review: text = ask("Review this artifact", agent = reviewer)
+let same_review: text = reviewer.ask("Review this artifact")
 ```
 
-A runner hint may include the host prompt-file placeholder; write it as
-`\%{PROMPT_FILE}` so it is literal text in the template.
+Each variant builds its own argv at dispatch. `AgentCommand` accepts a shell-like
+command string; the provider variants carry their model and thinking settings:
 
-Agent values may be stored, passed to functions, and held in arrays — they
-are ordinary value bindings:
+| Variant | Invocation |
+| --- | --- |
+| `AgentCommand(command)` | the supplied command, with the normal prompt-file handling |
+| `AgentClaude(model, thinking)` | `claude -p --model <model> --effort <thinking>` |
+| `AgentCodex(model, thinking)` | `codex exec --model <model> -c model_reasoning_effort=<thinking> -` (prompt on stdin) |
+| `AgentPi(provider, model, thinking)` | `pi -p --provider <provider> --model <model> --thinking <thinking>` |
 
-<!-- agl-check: fragment -->
-```agl
-let agents: array[agent] = [reviewer, planner]
+An empty provider, model, or thinking field omits its flag. `Agent` values are
+ordinary enum data: they can be stored, passed to functions, rendered,
+inspected, and JSON-encoded like other enum values.
 
-def call_first(agents: array[agent], prompt: text) -> text =
-  ask(prompt, agent = reviewer)
-```
-
-The `agent` type is **opaque**: no field access, no equality, no JSON encoding.
-Agent values can be rendered as opaque handles such as `<agent reviewer>`, but
-cannot be passed to `ask` except via the `agent` parameter.
-
-### Agent declarations
-
-```ebnf
-agent_decl ::= "agent" decl_head ("=" STRING)?
-```
-
-`agent` declarations are valid at the program root and in named scope
-regions of an entry module. Each declaration enters its declaring scope as
-an immutable binding of type `agent`; a qualified head declares its exact
-scope member, and a scoped agent is selected with its full
-scope path, such as `Tools::reviewer`. The optional `= "…"` string attaches a
-*runner hint* consumed by the host and has no language effect. The runner string must be a static literal — no
-`%{…}` interpolation.
-
-Declaring the same agent name twice in one declaration layer, or declaring
-`ask`, `exec`, `ask!`, or `exec!` as an agent name, is a static error. Agents
-at different scope paths remain distinct even when their final names match.
+Because `Agent` is ordinary enum data, it is also decodable: an `ask` whose
+target type is `Agent`, or a cast of foreign JSON to `Agent`, produces a value
+whose `AgentCommand` variant carries the command the host will spawn on the
+next call through it. Data reaching such a decode therefore chooses a
+subprocess. Construct `Agent` values in source, or from data you trust, when
+that matters.
 
 ### The default agent
 
-When `agent` is omitted, `ask` uses the host's configured default agent.
-There is no surface name for the default agent — it is implicit. A call
-that omits `agent` requires the host to have a default agent configured; if
-none is configured, this is a static error (see
-[Host environment](host-environment.md)).
+When `agent` is omitted, `ask` evaluates the defaulted
+`std/config::default-agent` parameter. The standard library supplies a default;
+CLI `--agent` and `[exec] default-agent` seeds override it, and a source
+write takes effect from its program point onward:
+
+```agl
+import std/config
+std/config::default-agent := AgentClaude("sonnet", "medium")
+let answer: text = ask("Summarize")
+```
 
 ## Target types: types as contracts
 
@@ -184,9 +196,9 @@ let count = select(ask("Choose a count."), 1)  # target: int
 
 ### Target types may not be type variables
 
-The target type of `ask`, of `exec`, and of the `ask-request` builder must be
-a **concrete** type. It may not be — and may not contain — a type variable of
-an enclosing generic `def` ([Generics](generics.md)). The contract for an
+The target type of `ask` and `exec` must be a **concrete** type. It may not
+be — and may not contain — a type variable of an enclosing generic `def`
+([Generics](generics.md)). The contract for an
 agent call (codec, derived JSON Schema, format instructions, validation) is
 built from the type that is statically known at the call site, and a type
 variable is opaque at that point: there is nothing to derive a schema from.
@@ -244,8 +256,8 @@ other position, only its JSON Schema is unbounded. See
 
 ### `agent`
 
-Selects the agent. The value must have type `agent`. When omitted, the host
-default applies:
+Selects the agent. The value must have type `Agent`. When omitted, the
+defaulted `std/config::default-agent` value applies:
 
 <!-- agl-check: fragment -->
 ```agl
@@ -456,8 +468,7 @@ validation. `on_parse_error` on such a call draws a static warning.
 
 Each dispatch delivers to the host agent:
 
-- the agent name (the name declared in source, or `"ask"` for the default
-  agent);
+- the selected encoded `Agent` value;
 - the fully rendered prompt;
 - the output contract: target type, format instructions, and derived JSON
   Schema;
@@ -469,74 +480,26 @@ See [Host environment](host-environment.md).
 ## `ask-request` — the request builder
 
 `ask-request` is the side-effect-free twin of `ask`: it builds the
-`AgentRequest` that the corresponding `ask` call would dispatch to its agent
-on its first attempt, **without invoking the agent**. It never dispatches,
-never retries, never parses, and emits no trace events — it only assembles the
-request value.
+`AgentRequest` that a text-target `ask` call would dispatch on its first
+attempt, **without invoking an agent**. Its direct and method forms are:
+
+```text
+ask-request(prompt: text, agent: Agent = std/config::default-agent) -> AgentRequest
+Agent::ask-request(self, prompt: text) -> AgentRequest
+```
+
+The direct form accepts an explicit `agent`; the method receiver supplies it.
+Neither form accepts output-parsing options or type arguments. Both only
+assemble the selected `Agent` value and its text-output contract: they never
+dispatch, retry, parse, or emit trace events.
 
 <!-- agl-check: fragment -->
 ```agl
 let r = ask-request("Summarize %{topic}")
-let r = ask-request::[Review]("Review %{artifact}", agent = reviewer)
+let review_request = ask-request("Review %{artifact}", agent = reviewer)
+let same_request = reviewer.ask-request("Review %{artifact}")
 ```
-
-### Target type
-
-Unlike `ask`, `ask-request` cannot infer its target type from context (its
-result type is fixed to `AgentRequest`), so the target type is given
-**explicitly** with the typed-call syntax `::[Type]`:
-
-<!-- agl-check: fragment -->
-```agl
-let r = ask-request::[Review]("Review %{artifact}")
-let n = ask-request::[int]("How many?")
-```
-
-Omitting the type argument defaults the target to `text`:
-
-```agl
-let r = ask-request("Anything goes")   # target type is text
-```
-
-The target type drives the output contract exactly as it would for `ask`:
-a `Review` target selects the JSON codec, derives a JSON Schema, and produces
-format instructions; a `text` target selects the text codec. Contract choices
-are made from the resolved concrete target, including when the request builder
-is nested in a larger expression. The returned
-`AgentRequest.target_type` is `Some(value = "...")` for parsed response types
-and `None` for `unit`, because a `unit` response is ignored:
-
-```agl
-let r = ask-request::[unit]("Perform this task")
-```
-
-`format`, `strict_json`, and `on_parse_error` are invalid for a `unit` target
-because there is no response to parse.
-
-### Typed-call syntax
-
-`callee::[Type](args)` is a general typed-call form for generic calls and bare
-constructor references. Qualified generic constructors put the type argument on
-the owning type instead, as in `Option[int]::Some(value = 1)`. In that explicit
-applied-type-qualified form, the applied type name must be immediately followed
-by `[` (`NAME[`): `Option[int]::Some(value = 1)` is valid, but
-`Option [int]::Some(value = 1)` is invalid. This restriction applies only to
-this constructor form; ordinary applied type expressions may have whitespace,
-so both `Option[int]` and `Option [int]` are valid type expressions. Both names
-in this constructor form must be `NAME`, not `OP_NAME`. Type arguments are
-delimited by square brackets because AgL identifiers may contain `<` and `>`,
-so `Review>` would otherwise scan as one token.
-
-### Arguments
-
-`ask-request` accepts the same named arguments as `ask` (`agent`, `format`,
-`strict_json`, `on_parse_error`). `agent` labels the request's `agent` field
-but never dispatches; `on_parse_error` is accepted (it shapes the contract's
-parse policy) but has no runtime effect since no call is made.
-
-### Result
 
 The result is an `AgentRequest` record (see [Types](types.md)) with `attempt`
-set to `0`, `previous_error` set to `None`, and optional contract details
-represented with `Option[T]`. Because no call is made, `ask-request` works even
-when no default agent is configured.
+set to `0`, `previous_error` set to `None`, and its selected `Agent` value and
+text-output contract recorded for inspection.

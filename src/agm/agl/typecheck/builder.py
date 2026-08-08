@@ -1,4 +1,4 @@
-"""Standalone per-module type-table builder for the AgL type-checking pass.
+"""Per-module type-table builder for the AgL type-checking pass.
 
 ``_TypeBuilder`` collects ``record``/``enum``/``exception``/alias declarations
 and registers them into a ``TypeEnvironment``.  It was extracted from
@@ -29,13 +29,15 @@ Phase 2 (the loop in ``collect``)
 Recursive nominal types (records, enums, exceptions, including mutual and
 generic recursion) are legal. Because handles make forward references
 trivially resolve, nothing in phase 2 itself needs to reject a declaration
-that structurally contains itself; instead, once every body is resolved, an
-inhabitation check (:func:`~agm.agl.semantics.analyses.compute_uninhabited`)
-runs over the whole table and rejects any declaration that has no finite
-value (e.g. a record whose only field is itself, with no ``array``/``dict``
-or enum base-case escape). Recursive type ALIASES remain banned — an alias
-is transparent and has no nominal identity to anchor a cycle — by the
-existing alias-cycle check in ``typecheck/env.py``.
+that structurally contains itself; instead, an inhabitation check
+(:func:`~agm.agl.semantics.analyses.compute_uninhabited`) runs once,
+whole-program, over the shared table ahead of every module's body resolution
+(``typecheck/program.py::_build_program_type_table``), rejecting any
+declaration that has no finite value (e.g. a record whose only field is
+itself, with no ``array``/``dict`` or enum base-case escape). Recursive type
+ALIASES remain banned — an alias is transparent and has no nominal identity
+to anchor a cycle — by the existing alias-cycle check in
+``typecheck/env.py``.
 """
 
 from __future__ import annotations
@@ -43,11 +45,12 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from dataclasses import replace
 
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
-from agm.agl.semantics.analyses import compute_uninhabited, uninhabitable_message
+from agm.agl.ir.reserved_nominals import NO_DECL_ID, reserved_nominal_id
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 from agm.agl.semantics.type_table import (
     BUILTIN_EXCEPTION_TYPE_DEFS,
     BUILTIN_PRELUDE_TYPE_DEFS,
+    OPTION_TYPE_DEF,
     TypeDef,
 )
 from agm.agl.semantics.types import (
@@ -58,15 +61,18 @@ from agm.agl.semantics.types import (
     RecordType,
     Type,
     TypeVarType,
+    reroot_type,
 )
 from agm.agl.syntax.nodes import (
     EnumDef,
     ExceptionDef,
+    Item,
     Param,
     Program,
     RecordDef,
-    ScopeRegion,
     TypeAlias,
+    scoped_public_name,
+    static_type_items,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.env import (
@@ -82,11 +88,54 @@ from agm.agl.typecheck.env import (
 
 # Built-in type names that the user may not shadow with a record/enum/alias.
 _BUILTIN_TYPE_NAMES: frozenset[str] = (
-    frozenset({"text", "json", "bool", "int", "decimal", "unit", "agent"})
+    frozenset({"text", "json", "bool", "int", "decimal", "unit"})
     | BUILTIN_EXCEPTION_NAMES
     | BUILTIN_PRELUDE_TYPE_NAMES
 )
-_BUILTIN_NOMINAL_NAMES: frozenset[str] = BUILTIN_EXCEPTION_NAMES | BUILTIN_PRELUDE_TYPE_NAMES
+
+# Expected-shape lookup for a ``builtin`` enum declaration. ``Option`` is
+# generic and seeded separately from ``BUILTIN_PRELUDE_TYPE_DEFS`` (see
+# ``semantics.type_table.create_seeded_type_table``), so its canonical shape
+# (``OPTION_TYPE_DEF``) is folded in here rather than into that table — a
+# record can never be named ``Option``, so ``BUILTIN_PRELUDE_TYPE_DEFS`` alone
+# remains correct for record sites.
+_BUILTIN_ENUM_TYPE_DEFS: Mapping[str, TypeDef] = {
+    **BUILTIN_PRELUDE_TYPE_DEFS,
+    "Option": OPTION_TYPE_DEF,
+}
+
+
+def _decl_identity(
+    module_id: ModuleId, scope_path: tuple[str, ...], bare_name: str, node_id: int
+) -> int:
+    """Return the declaration identity for a record/enum/exception declaration.
+
+    The shipped standard library's own declaration of a reserved host-known
+    name (``ExecResult``, ``Option``, ``CastError``, ...), written at
+    ``std/core``'s top scope, denotes the same type the host mints directly
+    (see ``ir.reserved_nominals``), so it adopts that reserved identity
+    instead of its own AST node id — that is how the shipped standard
+    library's declaration comes to denote the same type as a program that
+    declares nothing of its own. Every other declaration — including a
+    ``builtin`` declaration anywhere other than ``std/core``'s root, and any
+    non-reserved name declared at ``std/core``'s root — is identified by its
+    own AST node id instead, which the loader keeps disjoint across a
+    program's modules, so declaration identities stay distinct program-wide.
+    """
+    names_canonical_key = module_id == STD_CORE_ID and scope_path == ()
+    reserved = reserved_nominal_id(bare_name) if names_canonical_key else None
+    return node_id if reserved is None else reserved
+
+
+def _bare_name(name: str) -> str:
+    """Strip the scope prefix off a joined declaration name.
+
+    A scoped declaration is keyed in the name tables under its full
+    ``A::B::name`` spelling (see ``_TypeBuilder._static_type_items``), while
+    a nominal handle's own ``name`` is always the last segment, with the path
+    carried separately. This is the one place that separator is undone.
+    """
+    return name.rsplit("::", maxsplit=1)[-1]
 
 
 # ---------------------------------------------------------------------------
@@ -102,9 +151,10 @@ class _TypeBuilder:
     - Duplicate type names (user vs user, or user shadowing a built-in).
     - Duplicate record and enum-variant fields.
     - Unknown type references inside field/variant definitions.
-    - An uninhabited record, enum, or exception declaration (see
-      :meth:`_check_inhabitation`).
     - Alias cycles.
+
+    Inhabitation (rejecting a record/enum/exception with no finite value) is
+    checked whole-program, not here — see :meth:`collect`.
 
     See the module docstring for the two-phase, order-free build strategy.
     """
@@ -120,44 +170,32 @@ class _TypeBuilder:
         self._enum_defs: dict[str, EnumDef] = {}
         self._exception_defs: dict[str, ExceptionDef] = {}
 
-    def _owning_module_id(self, is_builtin: bool) -> ModuleId:
-        """Module a declaration belongs to: the prelude if built-in, else this module."""
-        return PRELUDE_ID if is_builtin else self._module_id
-
+    @staticmethod
     def _static_type_items(
-        self, items: tuple[object, ...]
+        items: tuple[Item, ...],
     ) -> Iterator[RecordDef | EnumDef | ExceptionDef | TypeAlias]:
         """Yield type declarations with their scope path included in their identity."""
-        for item in items:
-            if isinstance(item, ScopeRegion):
-                yield from self._static_type_items(item.items)
-            elif isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
-                if item.scope_path:
-                    path = tuple(segment.name for segment in item.scope_path)
-                    name = "::".join((*path, item.name))
-                    yield replace(item, name=name)
-                else:
-                    yield item
+        for item in static_type_items(items):
+            if item.scope_path:
+                yield replace(item, name=scoped_public_name(item.scope_path, item.name))
+            else:
+                yield item
 
-    def collect(self, program: Program, *, check_inhabitation: bool = True) -> None:
+    def collect(self, program: Program) -> None:
         """Scan *program* and populate ``self._env``.
 
         Phase 1 registers every declaration's name and handle
         (:meth:`collect_shells_only`); phase 2 resolves each declaration's
         body, in source order, with no dependency ordering (see the module
-        docstring); an inhabitation pass (:meth:`_check_inhabitation`) then
-        rejects the first uninhabited declaration, in source order, unless
-        *check_inhabitation* is ``False``; a final post-pass
-        (:meth:`_finalize_exceptions`) validates own-vs-inherited exception
-        field duplication now that every exception's flattened field set is
-        buildable (an uninhabited ``extends`` cycle is always caught by the
-        inhabitation pass first).
+        docstring); a final post-pass (:meth:`_finalize_exceptions`)
+        validates own-vs-inherited exception field duplication, which needs
+        every exception's flattened field set to be buildable.
 
-        *check_inhabitation* is ``False`` only for the program per-module
-        re-check (``typecheck/program.py``), whose whole-program pre-pass has
-        already run inhabitation over every module's declarations before any
-        module's body is individually re-checked; re-running it per module
-        would be redundant.
+        Inhabitation is checked once, whole-program, ahead of every module's
+        body resolution (:func:`~agm.agl.semantics.analyses.compute_uninhabited`
+        over the shared type table in
+        ``typecheck/program.py::_build_program_type_table``), so this pass
+        does not repeat it per module.
         """
         self.collect_shells_only(program)
 
@@ -173,8 +211,6 @@ class _TypeBuilder:
                 else:
                     self._validate_alias(item)
 
-        if check_inhabitation:
-            self._check_inhabitation(program)
         self._finalize_exceptions()
 
     def collect_shells_only(self, program: Program) -> None:
@@ -191,25 +227,43 @@ class _TypeBuilder:
         """
         for item in self._static_type_items(program.body.items):
             if isinstance(item, RecordDef):
-                self._register_name(item.name, item.span, is_builtin=item.is_builtin)
+                self._register_name(
+                    item.name,
+                    item.span,
+                    is_builtin=item.is_builtin,
+                    expected_defs=BUILTIN_PRELUDE_TYPE_DEFS,
+                )
                 self._env.unregister_name(item.name)
                 self._register_record_or_enum_handle(item, is_enum=False)
                 self._record_defs[item.name] = item
             elif isinstance(item, EnumDef):
-                self._register_name(item.name, item.span, is_builtin=item.is_builtin)
+                self._register_name(
+                    item.name,
+                    item.span,
+                    is_builtin=item.is_builtin,
+                    expected_defs=_BUILTIN_ENUM_TYPE_DEFS,
+                )
                 self._env.unregister_name(item.name)
                 self._register_record_or_enum_handle(item, is_enum=True)
                 self._enum_defs[item.name] = item
             elif isinstance(item, ExceptionDef):
-                self._register_name(item.name, item.span, is_builtin=item.is_builtin)
+                self._register_name(
+                    item.name,
+                    item.span,
+                    is_builtin=item.is_builtin,
+                    expected_defs=BUILTIN_EXCEPTION_TYPE_DEFS,
+                )
                 self._env.unregister_name(item.name)
-                module_id = self._owning_module_id(item.is_builtin)
+                module_id = self._module_id
+                bare_name = _bare_name(item.name)
+                scope_path = tuple(segment.name for segment in item.scope_path)
                 self._env.register_type(
                     item.name,
                     ExceptionType(
-                        name=item.name.rsplit("::", maxsplit=1)[-1],
+                        name=bare_name,
                         module_id=module_id,
-                        scope_path=tuple(segment.name for segment in item.scope_path),
+                        scope_path=scope_path,
+                        decl_id=_decl_identity(module_id, scope_path, bare_name, item.node_id),
                     ),
                 )
                 self._exception_defs[item.name] = item
@@ -219,9 +273,10 @@ class _TypeBuilder:
                 self._env.register_alias(item.name, item.type_expr, type_params=item.type_params)
 
     def _register_record_or_enum_handle(self, item: RecordDef | EnumDef, *, is_enum: bool) -> None:
-        module_id = self._owning_module_id(item.is_builtin)
-        declared_name = item.name.rsplit("::", maxsplit=1)[-1]
+        module_id = self._module_id
+        declared_name = _bare_name(item.name)
         scope_path = tuple(segment.name for segment in item.scope_path)
+        decl_id = _decl_identity(module_id, scope_path, declared_name, item.node_id)
         type_params = item.type_params
         if type_params:
             type_args = tuple(TypeVarType(p) for p in type_params)
@@ -231,6 +286,7 @@ class _TypeBuilder:
                     type_args=type_args,
                     module_id=module_id,
                     scope_path=scope_path,
+                    decl_id=decl_id,
                 )
                 if is_enum
                 else RecordType(
@@ -238,6 +294,7 @@ class _TypeBuilder:
                     type_args=type_args,
                     module_id=module_id,
                     scope_path=scope_path,
+                    decl_id=decl_id,
                 )
             )
             gdef = GenericTypeDef(
@@ -248,9 +305,13 @@ class _TypeBuilder:
             self._env.register_generic_type(item.name, gdef)
         else:
             handle: RecordType | EnumType = (
-                EnumType(name=declared_name, module_id=module_id, scope_path=scope_path)
+                EnumType(
+                    name=declared_name, module_id=module_id, scope_path=scope_path, decl_id=decl_id
+                )
                 if is_enum
-                else RecordType(name=declared_name, module_id=module_id, scope_path=scope_path)
+                else RecordType(
+                    name=declared_name, module_id=module_id, scope_path=scope_path, decl_id=decl_id
+                )
             )
             self._env.register_type(item.name, handle)
 
@@ -275,8 +336,29 @@ class _TypeBuilder:
         """Resolve and register the named exception's body. See :meth:`build_record`."""
         self._build_exception(self._exception_defs[name])
 
-    def _register_name(self, name: str, span: SourceSpan, *, is_builtin: bool = False) -> None:
-        if is_builtin and name not in _BUILTIN_NOMINAL_NAMES:
+    def _register_name(
+        self,
+        name: str,
+        span: SourceSpan,
+        *,
+        is_builtin: bool = False,
+        expected_defs: Mapping[str, TypeDef] | None = None,
+    ) -> None:
+        # `name` carries its scope path joined with "::" (see
+        # `_static_type_items`) when the declaration is scoped, so the check
+        # strips it back to the bare canonical name a scoped `builtin`
+        # declaration still has to spell — the host-known tables name
+        # canonical types, never a scope path.
+        #
+        # Every caller that can pass `is_builtin=True` passes the table for
+        # its own kind (records against BUILTIN_PRELUDE_TYPE_DEFS, enums
+        # against `_BUILTIN_ENUM_TYPE_DEFS` — the same table plus the generic
+        # `Option` template — exceptions against BUILTIN_EXCEPTION_TYPE_DEFS),
+        # so this one check rejects both an entirely unknown name and a name
+        # declared under the wrong kind — the latter being exactly what
+        # `_validate_builtin_shape` would otherwise assume was present.
+        bare_name = _bare_name(name)
+        if is_builtin and expected_defs is not None and bare_name not in expected_defs:
             raise AglTypeError(
                 f"Unknown builtin type '{name}'.",
                 span=span,
@@ -307,19 +389,27 @@ class _TypeBuilder:
                 )
             seen_fields[fd.name] = fd.span
             fields[fd.name] = self._resolve_field_type(fd)
-        module_id = self._owning_module_id(stmt.is_builtin)
+        module_id = self._module_id
+        scope_path = tuple(segment.name for segment in stmt.scope_path)
+        bare_name = _bare_name(stmt.name)
         typedef = TypeDef(
             kind="record",
-            name=stmt.name.rsplit("::", maxsplit=1)[-1],
+            name=bare_name,
             module_id=module_id,
-            scope_path=tuple(segment.name for segment in stmt.scope_path),
+            scope_path=scope_path,
             fields=tuple(fields.items()),
+            is_builtin=stmt.is_builtin,
+            decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
         )
         self._validate_builtin_shape(stmt, typedef, BUILTIN_PRELUDE_TYPE_DEFS)
         self._env.type_table.register(typedef)
-        # Register field kinds for this record constructor.
+        # Register field kinds for this record constructor, under the same
+        # owning identity as the TypeDef just above (its declaring module,
+        # like every other declaration — including a builtin one).
         field_kinds = tuple((fd.name, fd.kind) for fd in stmt.fields)
-        self._env.register_constructor_field_kinds(stmt.name, None, field_kinds)
+        self._env.register_constructor_field_kinds(
+            bare_name, None, field_kinds, scope_path=scope_path, module_id=module_id
+        )
 
     def _build_enum(self, stmt: EnumDef) -> None:
         if stmt.type_params:
@@ -338,48 +428,54 @@ class _TypeBuilder:
                 seen_vfields[fd.name] = fd.span
                 vfields[fd.name] = self._resolve_field_type(fd)
             variants[vd.name] = vfields
-        module_id = self._owning_module_id(stmt.is_builtin)
+        module_id = self._module_id
+        scope_path = tuple(segment.name for segment in stmt.scope_path)
+        bare_name = _bare_name(stmt.name)
         typedef = TypeDef(
             kind="enum",
-            name=stmt.name.rsplit("::", maxsplit=1)[-1],
+            name=bare_name,
             module_id=module_id,
-            scope_path=tuple(segment.name for segment in stmt.scope_path),
+            scope_path=scope_path,
             variants=tuple((vname, tuple(vfields.items())) for vname, vfields in variants.items()),
+            is_builtin=stmt.is_builtin,
+            decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
         )
-        self._validate_builtin_shape(stmt, typedef, BUILTIN_PRELUDE_TYPE_DEFS)
+        self._validate_builtin_shape(stmt, typedef, _BUILTIN_ENUM_TYPE_DEFS)
         self._env.type_table.register(typedef)
-        # Register field kinds for each variant constructor.
+        # Register field kinds for each variant constructor, under the same
+        # owning identity as the TypeDef just above.
         for vd in stmt.variants:
             vfield_kinds = tuple((fd.name, fd.kind) for fd in vd.fields)
-            self._env.register_constructor_field_kinds(stmt.name, vd.name, vfield_kinds)
+            self._env.register_constructor_field_kinds(
+                bare_name,
+                vd.name,
+                vfield_kinds,
+                scope_path=scope_path,
+                module_id=module_id,
+            )
 
     def _build_exception(self, stmt: ExceptionDef) -> None:
         """Resolve and register an exception's own ``TypeDef`` (no ordering).
 
         Reuses the record-path field resolution and duplicate-own-field
-        check.  ``base`` is resolved to a ``(module_id, scope_path, name)`` key — no
-        ordering is required to do so, since only the base's *identity* (not
-        its shape) is needed here.  Own-vs-inherited field duplication and
-        constructor-callability are checked later, once every exception's
-        shape is buildable (see :meth:`_finalize_exceptions`).
+        check.  ``base`` is resolved to the base declaration's own identity —
+        no ordering is required to do so, since only the base's *identity*
+        (not its shape) is needed here.  Own-vs-inherited field duplication
+        and constructor-callability are checked later, once every
+        exception's shape is buildable (see :meth:`_finalize_exceptions`).
         """
-        base_key: tuple[ModuleId, tuple[str, ...], str] | None = None
+        base_type: ExceptionType | None = None
         if stmt.base is not None:
-            base_type = self._env.resolve_named_type(stmt.base)
-            if not isinstance(base_type, ExceptionType):
+            resolved_base = self._env.resolve_named_type(stmt.base)
+            if not isinstance(resolved_base, ExceptionType):
                 raise AglTypeError(
                     f"Exception '{stmt.name}' extends unknown exception '{stmt.base}'.",
                     span=stmt.span,
                 )
-            base_key = (base_type.module_id, base_type.scope_path, base_type.name)
+            base_type = resolved_base
         fields: dict[str, Type] = {}
         seen_fields: dict[str, SourceSpan] = {}
         for fd in stmt.fields:
-            if not stmt.is_builtin and fd.name == "trace_id":
-                raise AglTypeError(
-                    "Exception field name 'trace_id' is reserved for the built-in trace id.",
-                    span=fd.span,
-                )
             if fd.name in seen_fields:
                 raise AglTypeError(
                     f"Duplicate field '{fd.name}' in exception '{stmt.name}'.",
@@ -387,7 +483,9 @@ class _TypeBuilder:
                 )
             seen_fields[fd.name] = fd.span
             fields[fd.name] = self._resolve_field_type(fd)
-        module_id = self._owning_module_id(stmt.is_builtin)
+        module_id = self._module_id
+        scope_path = tuple(segment.name for segment in stmt.scope_path)
+        bare_name = _bare_name(stmt.name)
         # Own field kinds honor each field's declared @pos/@std/@named marker —
         # exactly like a record's fields — in declaration order, parallel to
         # ``fields`` above.  Stored as ``ParamKind.value`` strings (see
@@ -397,15 +495,19 @@ class _TypeBuilder:
         # ``TypeDef.base``, no build-ordering step needed).
         typedef = TypeDef(
             kind="exception",
-            name=stmt.name.rsplit("::", maxsplit=1)[-1],
+            name=bare_name,
             module_id=module_id,
-            scope_path=tuple(segment.name for segment in stmt.scope_path),
+            scope_path=scope_path,
             fields=tuple(fields.items()),
             abstract=stmt.base is None,
-            base=base_key,
+            base=None if base_type is None else base_type.decl_id,
             field_kinds=tuple(fd.kind.value for fd in stmt.fields),
+            is_builtin=stmt.is_builtin,
+            decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
         )
-        self._validate_builtin_shape(stmt, typedef, BUILTIN_EXCEPTION_TYPE_DEFS)
+        self._validate_builtin_shape(
+            stmt, typedef, BUILTIN_EXCEPTION_TYPE_DEFS, base_type=base_type
+        )
         self._env.type_table.register(typedef)
 
     def _finalize_exceptions(self) -> None:
@@ -415,28 +517,26 @@ class _TypeBuilder:
         base's, however deep the ``extends`` chain) is registered — there is
         no build-ordering step in :meth:`_build_exception` (see the module
         docstring).  A cyclic ``extends`` chain has no independent evidence to
-        ever become inhabited (see :meth:`_check_inhabitation`), so it is
-        always rejected before this post-pass runs — either here (single-
-        module) or by the program pre-pass (``typecheck/program.py``) before
-        Phase 3 re-checks this module at all — and
+        ever become inhabited, so it is always rejected by the whole-program
+        inhabitation pre-pass (``typecheck/program.py``) before Phase 3
+        re-checks this module at all, and
         :meth:`~agm.agl.semantics.type_table.TypeTable.exception_fields` never
         hits its internal cycle guard here.
         """
         for item in self._exception_defs.values():
             if item.base is None:
                 continue
-            module_id = self._owning_module_id(item.is_builtin)
-            typedef = self._env.type_table.exception_def(
-                ExceptionType(
-                    name=item.name.rsplit("::", maxsplit=1)[-1],
-                    module_id=module_id,
-                    scope_path=tuple(segment.name for segment in item.scope_path),
-                )
-            )
+            module_id = self._module_id
+            scope_path = tuple(segment.name for segment in item.scope_path)
+            typedef = self._env.type_table.get(module_id, _bare_name(item.name), scope_path)
+            assert typedef is not None, "compiler bug: exception is not registered"
             assert typedef.base is not None
-            base_handle = ExceptionType(
-                name=typedef.base[2], module_id=typedef.base[0], scope_path=typedef.base[1]
+            base_typedef = self._env.type_table.get_by_id(typedef.base)
+            assert base_typedef is not None, (
+                f"compiler bug: exception base {typedef.base!r} has no registered TypeDef"
             )
+            base_handle = base_typedef.handle()
+            assert isinstance(base_handle, ExceptionType)
             base_fields = self._env.type_table.exception_fields(base_handle)
             for fd in item.fields:
                 if fd.name in base_fields:
@@ -450,16 +550,108 @@ class _TypeBuilder:
         stmt: RecordDef | EnumDef | ExceptionDef,
         typedef: TypeDef,
         expected_defs: Mapping[str, TypeDef],
+        *,
+        base_type: ExceptionType | None = None,
     ) -> None:
+        """Check a ``builtin`` declaration's shape against its canonical definition.
+
+        The canonical definitions in *expected_defs* are host-known shapes
+        keyed by bare name and written on the shipped standard library's own
+        module (``STD_CORE_ID``), indifferent to where or in which module the
+        declaration sits: a scoped ``builtin`` declaration in any module names
+        the same host type as ``std/core``'s own root one and must match the
+        same shape, just at a different nominal path and (unless it IS
+        ``std/core``) a different declaring module. The comparison therefore
+        re-roots *typedef* onto that canonical frame (:meth:`_reroot_typedef`)
+        before comparing — not just its own top-level ``scope_path``/
+        ``module_id`` (the two fields *expected* to differ), but also every
+        nominal reference embedded in its fields/variants/base that resolves
+        under that same path or module, so a scoped exception hierarchy or a
+        scoped record naming a sibling scoped builtin — or a program without
+        the standard library declaring its own ``builtin exception
+        Exception`` root — still compares equal to the canonical shape.
+        *bare_name* is always present in *expected_defs* here:
+        ``_register_name`` already validated it against this same
+        kind-appropriate table during phase 1. *base_type* is the already
+        resolved ``extends`` target handle (an exception's own; ``None``
+        for a record/enum or a hierarchy root), passed through to
+        :meth:`_reroot_typedef` so it can normalize ``typedef.base`` — a bare
+        declaration identity, which carries no module/path of its own to
+        re-root.
+        """
         if not stmt.is_builtin:
             return
-        expected = expected_defs.get(stmt.name)
-        assert expected is not None
-        if typedef != expected:
+        bare_name = _bare_name(stmt.name)
+        expected = expected_defs[bare_name]
+        if self._reroot_typedef(typedef, base_type) != expected:
             raise AglTypeError(
                 f"Builtin type '{stmt.name}' has an invalid definition.",
                 span=stmt.span,
             )
+
+    @staticmethod
+    def _reroot_typedef(typedef: TypeDef, base_type: ExceptionType | None) -> TypeDef:
+        """Re-root *typedef* onto the canonical (``std/core``) frame, for comparison.
+
+        *typedef.scope_path* is dropped and *typedef.module_id* is mapped onto
+        ``STD_CORE_ID`` (the two fields a ``builtin`` declaration is always
+        expected to differ in from the canonical shape) — always, even when
+        the declared scope path is already empty, since a root-level
+        declaration outside ``std/core`` (e.g. one in the entry module, used
+        when a program loads without the standard library) still needs its
+        module mapped. The same scope-path stripping and module mapping is
+        also applied, via :func:`~agm.agl.semantics.types.reroot_type`, to
+        every nominal reference embedded in its fields and variant fields:
+        each of those resolves under the declaration's own scope path and
+        module exactly when it names a sibling member of the same region,
+        matching how the canonical shape names its own siblings; a reference
+        naming a type from another module is left alone, so a genuine
+        mismatch is still rejected.
+
+        ``base`` (for an exception) is a bare declaration identity, not a
+        handle, so it cannot be re-rooted the same way directly — *base_type*
+        is the ORIGINAL resolved ``ExceptionType`` handle *typedef.base* was
+        minted from (``None`` exactly when *typedef.base* is ``None``), which
+        carries the module/scope path/name :func:`reroot_type` needs. Every
+        canonical shape spells its base at ``std/core``'s root, so only a
+        handle that re-roots onto that exact frame can name one: its
+        ``decl_id`` is then read back off (the reserved identity for a
+        reserved name), while a handle left at another module or another
+        scope path names a different declaration and is normalized to
+        ``NO_DECL_ID``, which no canonical base identity ever equals. Reading
+        the identity off the re-rooted handle rather than looking the base up
+        also keeps this independent of whether the base's own ``TypeDef`` is
+        registered yet — the whole-program pre-pass resolves bodies in name
+        order, not source order.
+        """
+        prefix = typedef.scope_path
+        declaring_module = typedef.module_id
+        remap = (declaring_module, STD_CORE_ID)
+
+        def _reroot(t: Type) -> Type:
+            return reroot_type(t, prefix, remap_module=remap)
+
+        fields = tuple((name, _reroot(t)) for name, t in typedef.fields)
+        variants = tuple(
+            (vname, tuple((fname, _reroot(ft)) for fname, ft in vfields))
+            for vname, vfields in typedef.variants
+        )
+        base = typedef.base
+        if base_type is not None:
+            rerooted_base = _reroot(base_type)
+            assert isinstance(rerooted_base, ExceptionType)
+            names_canonical_frame = (
+                rerooted_base.module_id == STD_CORE_ID and rerooted_base.scope_path == ()
+            )
+            base = rerooted_base.decl_id if names_canonical_frame else NO_DECL_ID
+        return replace(
+            typedef,
+            scope_path=(),
+            module_id=STD_CORE_ID,
+            fields=fields,
+            variants=variants,
+            base=base,
+        )
 
     def _resolve_field_type(self, fd: Param, type_vars: frozenset[str] = frozenset()) -> Type:
         """Resolve a field's TypeExpr to a semantic Type.
@@ -495,16 +687,24 @@ class _TypeBuilder:
         assert gdef is not None, f"compiler bug: generic record {stmt.name!r} not pre-registered"
         template = gdef.template
         assert isinstance(template, RecordType)
-        self._env.type_table.register(
-            TypeDef(
-                kind="record",
-                name=stmt.name.rsplit("::", maxsplit=1)[-1],
-                module_id=self._module_id,
-                scope_path=tuple(segment.name for segment in stmt.scope_path),
-                type_params=type_params,
-                fields=tuple(fields.items()),
-            )
+        module_id = self._module_id
+        scope_path = tuple(segment.name for segment in stmt.scope_path)
+        bare_name = _bare_name(stmt.name)
+        typedef = TypeDef(
+            kind="record",
+            name=bare_name,
+            module_id=module_id,
+            scope_path=scope_path,
+            type_params=type_params,
+            fields=tuple(fields.items()),
+            is_builtin=stmt.is_builtin,
+            # Same identity as the handle template registered in phase 1
+            # (:meth:`_register_record_or_enum_handle`), so the TypeDef and
+            # every instantiated handle agree on which declaration they name.
+            decl_node_id=template.decl_id,
         )
+        self._validate_builtin_shape(stmt, typedef, BUILTIN_PRELUDE_TYPE_DEFS)
+        self._env.type_table.register(typedef)
         field_names = tuple(fields.keys())
         field_templates = tuple(fields.values())
         sig = ConstructorSignature(
@@ -516,9 +716,16 @@ class _TypeBuilder:
             type_params=type_params,
         )
         self._env.register_constructor_signature(sig)
-        # Register field kinds for the generic record constructor.
+        # Register field kinds for the generic record constructor, under the
+        # same owning identity as the TypeDef just above.
         generic_record_field_kinds = tuple((fd.name, fd.kind) for fd in stmt.fields)
-        self._env.register_constructor_field_kinds(stmt.name, None, generic_record_field_kinds)
+        self._env.register_constructor_field_kinds(
+            bare_name,
+            None,
+            generic_record_field_kinds,
+            scope_path=scope_path,
+            module_id=module_id,
+        )
 
     def _build_generic_enum(self, stmt: EnumDef) -> None:
         """Resolve a generic enum's variants and register its TypeDef + constructors.
@@ -545,19 +752,26 @@ class _TypeBuilder:
         assert gdef is not None, f"compiler bug: generic enum {stmt.name!r} not pre-registered"
         template = gdef.template
         assert isinstance(template, EnumType)
-        self._env.type_table.register(
-            TypeDef(
-                kind="enum",
-                name=stmt.name.rsplit("::", maxsplit=1)[-1],
-                module_id=self._module_id,
-                scope_path=tuple(segment.name for segment in stmt.scope_path),
-                type_params=type_params,
-                variants=tuple(
-                    (vname, tuple(vfields.items())) for vname, vfields in variants.items()
-                ),
-            )
+        module_id = self._module_id
+        scope_path = tuple(segment.name for segment in stmt.scope_path)
+        bare_name = _bare_name(stmt.name)
+        typedef = TypeDef(
+            kind="enum",
+            name=bare_name,
+            module_id=module_id,
+            scope_path=scope_path,
+            type_params=type_params,
+            variants=tuple((vname, tuple(vfields.items())) for vname, vfields in variants.items()),
+            is_builtin=stmt.is_builtin,
+            # Same identity as the handle template registered in phase 1
+            # (:meth:`_register_record_or_enum_handle`), so the TypeDef and
+            # every instantiated handle agree on which declaration they name.
+            decl_node_id=template.decl_id,
         )
-        # Register one ConstructorSignature and field kinds per variant.
+        self._validate_builtin_shape(stmt, typedef, _BUILTIN_ENUM_TYPE_DEFS)
+        self._env.type_table.register(typedef)
+        # Register one ConstructorSignature and field kinds per variant, under
+        # the same owning identity as the TypeDef just above.
         for vd in stmt.variants:
             vfields = variants[vd.name]
             field_names = tuple(vfields.keys())
@@ -573,7 +787,13 @@ class _TypeBuilder:
             self._env.register_constructor_signature(sig)
             # Register field kinds for this generic enum variant constructor.
             vfield_kinds = tuple((fd.name, fd.kind) for fd in vd.fields)
-            self._env.register_constructor_field_kinds(stmt.name, vd.name, vfield_kinds)
+            self._env.register_constructor_field_kinds(
+                bare_name,
+                vd.name,
+                vfield_kinds,
+                scope_path=scope_path,
+                module_id=module_id,
+            )
 
     def _validate_alias(self, stmt: TypeAlias) -> None:
         """Validate that the alias target resolves without cycles.
@@ -585,42 +805,4 @@ class _TypeBuilder:
             stmt.type_expr,
             span=stmt.span,
             type_vars=frozenset(stmt.type_params),
-        )
-
-    # ------------------------------------------------------------------
-    # Inhabitation check
-    # ------------------------------------------------------------------
-
-    def _check_inhabitation(self, program: Program) -> None:
-        """Reject the first uninhabited record/enum/exception, in source order.
-
-        Runs :func:`~agm.agl.semantics.analyses.compute_uninhabited` over the
-        WHOLE shared table (this module's declarations plus anything already
-        seeded from a prior REPL entry or the builtin/prelude defs — all
-        trivially inhabited), then walks *program*'s own declarations in
-        source order reporting the first one whose key came back
-        uninhabited, at its declaration span. Reporting only THIS program's
-        own declarations (rather than any uninhabited key at all) keeps
-        error attribution local: a key from another module's table entry has
-        no span available here anyway.
-        """
-        uninhabited = compute_uninhabited(self._env.type_table)
-        if not uninhabited:
-            return
-        for item in self._static_type_items(program.body.items):
-            if not isinstance(item, (RecordDef, EnumDef, ExceptionDef)):
-                continue
-            module_id = self._owning_module_id(item.is_builtin)
-            scope_path = tuple(segment.name for segment in item.scope_path)
-            declared_name = item.name.rsplit("::", maxsplit=1)[-1]
-            key = (module_id, scope_path, declared_name)
-            if key not in uninhabited:
-                continue
-            typedef = self._env.type_table.get(module_id, declared_name, scope_path)
-            assert typedef is not None
-            raise AglTypeError(uninhabitable_message(typedef.kind, item.name), span=item.span)
-        raise AssertionError(  # pragma: no cover
-            "compute_uninhabited reported a key not owned by this program's own "
-            "declarations — every uninhabited key in a single-module table is "
-            "expected to trace back to a declaration in the program being checked"
         )

@@ -11,9 +11,9 @@ import pytest
 from agm.core.process import ProcessCaptureResult
 from tests._agl_helpers import let_root_capture
 from tests.agl.ir_harness import (
-    _compiled_checked,
     evaluate_ir_raises_with_shell,
     evaluate_ir_with_shell,
+    lower_ir,
     shell_caps,
 )
 
@@ -119,11 +119,13 @@ def test_t3_structured_exec() -> None:
     source = 'let r: ExecResult = exec("exit 1")\nr'
     commands = {"exit 1": _fail(1, stdout="", stderr="error msg")}
     ir = evaluate_ir_with_shell(source, commands)
+    from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
     from agm.agl.semantics.values import IntValue, RecordValue
 
     assert isinstance(ir["r"], RecordValue)
     assert ir["r"].display_name == "ExecResult"
     assert ir["r"].fields["exit_code"] == IntValue(1)
+    assert ir["r"].nominal == NO_BUILTIN_DECLARATIONS.nominal("ExecResult")
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +139,10 @@ def test_t4_nonzero_exit_text() -> None:
     commands = {"false": _fail(1)}
     ir_exc = evaluate_ir_raises_with_shell(source, commands)
     assert ir_exc.display_name == "ExecError"
+
+    from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
+
+    assert ir_exc.nominal == NO_BUILTIN_DECLARATIONS.nominal("ExecError")
 
 
 def test_t4a_full_pipeline_unit_exec_discards_successful_output() -> None:
@@ -236,15 +242,15 @@ def test_t7_retry_success() -> None:
 
 
 def test_t8_retry_exhaustion() -> None:
-    """exec() with Retry(n:2): all 3 attempts return bad JSON → AgentParseError.
+    """exec() with Retry(n:2): all 3 attempts return bad JSON → ExecError.
 
-    Routes through evaluate_ir_raises_with_shell; asserts the IR pipeline raises
-    AgentParseError.
+    Routes through evaluate_ir_raises_with_shell and keeps shell failures in
+    the ExecError family.
     """
     source = 'let n: int = exec("cmd", on_parse_error = Retry(n = 2))\nn'
     commands = {"cmd": _ok("not_a_number\n")}
     ir_exc = evaluate_ir_raises_with_shell(source, commands)
-    assert ir_exc.display_name == "AgentParseError"
+    assert ir_exc.display_name == "ExecError"
 
 
 # ---------------------------------------------------------------------------
@@ -270,21 +276,9 @@ def test_t9_exec_inside_function() -> None:
 def test_t10_golden_lowering() -> None:
     """Lowering exec() produces an IrExec node and populates dry_run_inventory."""
     from agm.agl.ir.nodes import IrBind, IrExec, IrSequence
-    from agm.agl.lower import lower_module
-    from agm.agl.parser import parse_program
-    from agm.agl.scope import resolve_module
-    from agm.agl.typecheck import check_module
 
     source = 'let result = exec("echo hi")\nresult'
-    caps = shell_caps()
-    program = parse_program(source)
-    resolved = resolve_module(program)
-    checked = check_module(resolved, caps)
-    executable = lower_module(
-        _compiled_checked(checked),
-        source_text=source,
-        source_label="<test>",
-    )
+    executable = lower_ir(source, caps=shell_caps())
 
     # Check that the entry module initializers contain an IrExec node
     entry_mod = executable.modules[executable.entry_module]
@@ -311,8 +305,7 @@ def test_t10_golden_lowering() -> None:
 
 
 def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
-    """IrInterpreter defensive fallback: if parse_agent_output returns ok=False
-    with neither errors nor error_msg, AgentParseError still raises."""
+    """IrInterpreter defensive fallback produces ExecError for empty parse failures."""
     import unittest.mock
 
     from agm.agl.eval.ir_interpreter import IrInterpreter
@@ -385,7 +378,7 @@ def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
         ):
             with pytest.raises(AglRaise) as exc_info:
                 IrInterpreter(prog).run()
-    assert exc_info.value.exc.display_name == "AgentParseError"
+    assert exc_info.value.exc.display_name == "ExecError"
 
 
 # ---------------------------------------------------------------------------

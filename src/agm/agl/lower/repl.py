@@ -8,16 +8,13 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, cast
 
 from agm.agl.ir.contracts import ContractPayload
-from agm.agl.ir.ids import NominalId, SourceId, SymbolId
-from agm.agl.ir.program import ExecutableProgram, NominalDescriptor, SourceFile
-from agm.agl.ir.validate import validate_ir
-from agm.agl.lower.lowerer import InitializerOrigin, _LinkState, _Lowerer, _static_items
-from agm.agl.matchcompile import MatchCompiledModule, MatchCompiledProgram
-from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.self_validation import self_validation_enabled
+from agm.agl.ir.ids import SymbolId
+from agm.agl.ir.program import ExecutableProgram
+from agm.agl.lower.lowerer import InitializerOrigin, _LinkState
+from agm.agl.matchcompile import MatchCompiledProgram
+from agm.agl.modules.ids import ModuleId
 from agm.agl.semantics.types import iter_nominal_types
 from agm.agl.syntax.nodes import (
-    AgentDecl,
     Binder,
     Declaration,
     EnumDef,
@@ -34,8 +31,8 @@ from agm.agl.syntax.nodes import (
     VarDecl,
     pattern_binder_candidates,
     simple_let_pattern_name,
+    static_items,
 )
-from agm.util.text import normalize_newlines
 
 if TYPE_CHECKING:
     from agm.agl.semantics.types import Type
@@ -46,7 +43,6 @@ __all__ = [
     "LoweredReplEntry",
     "ParamOrigin",
     "ReplPromotionPlan",
-    "lower_repl_entry",
     "lower_repl_program",
 ]
 
@@ -72,29 +68,30 @@ class LinkImage:
         """
         self._linked_modules.update(module_ids)
 
-    def snapshot_nominals(self) -> dict[NominalId, NominalDescriptor]:
-        """Return a rollback snapshot of persistent nominal descriptors."""
-        return dict(self._state.nominals)
+    def snapshot_state(self) -> _LinkState:
+        """Return an independent rollback snapshot of incremental linker state."""
+        state = self._state
+        return _LinkState(
+            next_sym=state.next_sym,
+            next_fn=state.next_fn,
+            next_source=state.next_source,
+            next_contract=state.next_contract,
+            decl_to_sym=dict(state.decl_to_sym),
+            fn_node_to_sym=dict(state.fn_node_to_sym),
+            fn_node_to_id=dict(state.fn_node_to_id),
+            symbols=dict(state.symbols),
+            functions=dict(state.functions),
+            nominals=dict(state.nominals),
+            builtin_nominals=state.builtin_nominals,
+            sources=dict(state.sources),
+            contracts=dict(state.contracts),
+            let_value_symbols=dict(state.let_value_symbols),
+            initializer_origins=dict(state.initializer_origins),
+        )
 
-    def restore_nominals(
-        self,
-        snapshot: Mapping[NominalId, NominalDescriptor],
-        nominal_ids: Iterable[NominalId],
-    ) -> None:
-        """Restore selected nominal descriptors from *snapshot*.
-
-        Runtime-failed REPL entries may have linked type declarations that were
-        not promoted statically. Nominals are keyed by stable module/scope-path/name rather
-        than declaration node id, so unpromoted redeclarations must be restored
-        explicitly to keep constructor values in later entries consistent with
-        the restored type environment.
-        """
-        for nominal in nominal_ids:
-            previous = snapshot.get(nominal)
-            if previous is None:
-                self._state.nominals.pop(nominal, None)
-            else:
-                self._state.nominals[nominal] = previous
+    def restore_state(self, snapshot: _LinkState) -> None:
+        """Restore a previously snapshotted incremental linker state."""
+        self._state = snapshot
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,17 +180,13 @@ class LoweredReplEntry:
 
 
 def _item_declaration_ids(item: Item, checked: "CheckedModule") -> frozenset[int]:
-    """Return session-promotable declaration ids introduced by one source item.
+    """Return session-promotable declaration ids introduced by one leaf source item.
 
-    A scope region reports the declarations of its members, matching lowering's
-    decision to emit them under their region's source index.
+    Called only on the flattened, region-transparent sequence ``static_items``
+    produces — the same one lowering assigns source indices over — so a
+    region's own declaration ids come from its members individually, never
+    from the region node itself.
     """
-    if isinstance(item, ScopeRegion):
-        return frozenset(
-            declaration_id
-            for member in item.items
-            for declaration_id in _item_declaration_ids(cast(Item, member), checked)
-        )
     if isinstance(item, LetDecl):
         return frozenset(
             candidate.node_id
@@ -203,7 +196,6 @@ def _item_declaration_ids(item: Item, checked: "CheckedModule") -> frozenset[int
     if isinstance(
         item,
         (
-            AgentDecl,
             EnumDef,
             ExceptionDef,
             FuncDef,
@@ -237,21 +229,14 @@ def _declaration_dependencies(
     entry_declaration_ids: frozenset[int],
     type_declaration_ids: Mapping[str, frozenset[int]],
 ) -> frozenset[int]:
-    """Return current-entry runtime and nominal dependencies of one source item."""
+    """Return current-entry runtime and nominal dependencies of one leaf source item.
+
+    Called only on the flattened, region-transparent sequence ``static_items``
+    produces, so *item* is never a ``ScopeRegion`` itself.
+    """
     from agm.agl.syntax.nodes import ElseSentinel, FuncDef
     from agm.agl.syntax.types import AppliedT, NameT
     from agm.agl.syntax.visitor import walk
-
-    if isinstance(item, ScopeRegion):
-        return frozenset().union(
-            *(
-                _declaration_dependencies(
-                    cast(Item, member), checked, entry_declaration_ids, type_declaration_ids
-                )
-                for member in item.items
-            ),
-            frozenset(),
-        )
 
     type_parameters = (
         frozenset(item.type_params)
@@ -303,9 +288,9 @@ def _declaration_dependencies(
             for _, field_type in fields:
                 dependencies.update(_nominal_dependencies(field_type, type_declaration_ids))
         if typedef.base is not None:
-            base_module, _base_path, base_name = typedef.base
-            if base_module.is_entry:
-                dependencies.update(type_declaration_ids.get(base_name, frozenset()))
+            base_typedef = checked.type_env.type_table.get_by_id(typedef.base)
+            if base_typedef is not None and base_typedef.module_id.is_entry:
+                dependencies.update(type_declaration_ids.get(base_typedef.name, frozenset()))
     return frozenset(dependencies)
 
 
@@ -314,25 +299,31 @@ def _promotion_plan(
     initializer_origins: tuple[InitializerOrigin, ...],
     decl_to_sym: Mapping[int, SymbolId],
 ) -> ReplPromotionPlan:
-    """Consume lowering's origins and add dependency-safe promotion metadata."""
-    items = checked.resolved.program.body.items
-    source_declaration_ids = tuple(_item_declaration_ids(item, checked) for item in items)
+    """Consume lowering's origins and add dependency-safe promotion metadata.
+
+    Walks the same flattened, region-transparent sequence lowering assigns
+    source indices over (``static_items``), so ``source_declaration_ids`` lines
+    up with ``InitializerOrigin.source_index`` member for member rather than
+    region for region.
+    """
+    leaf_items = tuple(static_items(checked.resolved.program.body.items))
+    source_declaration_ids = tuple(_item_declaration_ids(item, checked) for item in leaf_items)
     params = tuple(
         ParamOrigin(declaration_id=item.node_id, symbol=decl_to_sym[item.node_id])
-        for item in items
+        for item in leaf_items
         if isinstance(item, ParamDecl)
     )
     entry_declaration_ids = frozenset().union(*source_declaration_ids, frozenset())
     # Same-named declarations at different scope paths share one entry here, so a
     # nominal reference depends on every declaration that could have produced it.
     type_declaration_ids: dict[str, frozenset[int]] = {}
-    for item in _static_items(items):
+    for item in leaf_items:
         if isinstance(item, (EnumDef, ExceptionDef, RecordDef, TypeAlias)):
             type_declaration_ids[item.name] = type_declaration_ids.get(
                 item.name, frozenset()
             ) | frozenset({item.node_id})
     declaration_dependencies: dict[int, frozenset[int]] = {}
-    for item, declaration_ids in zip(items, source_declaration_ids, strict=True):
+    for item, declaration_ids in zip(leaf_items, source_declaration_ids, strict=True):
         if not declaration_ids:
             continue
         item_dependencies = _declaration_dependencies(
@@ -359,57 +350,6 @@ def _trailing_let_value_symbol(last: Item, link: _LinkState) -> SymbolId | None:
     return link.let_value_symbols.get(last.node_id)
 
 
-def lower_repl_entry(
-    compiled_entry: MatchCompiledModule,
-    *,
-    image: LinkImage,
-    source_text: str,
-    source_label: str,
-    contract_payloads: Mapping[int, ContractPayload] | None = None,
-) -> LoweredReplEntry:
-    """Link one match-compiled REPL entry into ``image`` without resetting any IDs."""
-    # ``compiled_entry`` validated itself when it was constructed; lowering adds
-    # the IR self-check over its own output below.
-    checked_entry = compiled_entry.checked
-    link = image._state
-    source_id = SourceId(link.next_source)
-    link.next_source += 1
-    link.sources[source_id] = SourceFile(
-        display_name=source_label,
-        normalized_text=normalize_newlines(source_text),
-    )
-    lowerer = _Lowerer(
-        checked_entry,
-        link,
-        ENTRY_ID,
-        source_id,
-        source_text,
-        compiled_entry.sites,
-        contract_payloads=contract_payloads,
-    )
-    program = lowerer.lower()
-    items = checked_entry.resolved.program.body.items
-    last = items[-1]
-    trailing_expression = (
-        len(program.modules[ENTRY_ID].initializers) - 1
-        if not isinstance(last, (Binder, Declaration, ScopeRegion))
-        else None
-    )
-    trailing_let_value_symbol = _trailing_let_value_symbol(last, link)
-    if self_validation_enabled():
-        validate_ir(program)
-    return LoweredReplEntry(
-        program=program,
-        trailing_expression=trailing_expression,
-        trailing_let_value_symbol=trailing_let_value_symbol,
-        promotion_plan=_promotion_plan(
-            checked_entry,
-            link.initializer_origins[ENTRY_ID],
-            link.decl_to_sym,
-        ),
-    )
-
-
 def lower_repl_program(
     compiled: MatchCompiledProgram,
     *,
@@ -431,7 +371,6 @@ def lower_repl_program(
         _already_linked=frozenset(image._linked_modules),
         _entry_source_text=source_text,
         contract_payloads=contract_payloads,
-        _eager_scoped_agents=True,
     )
     checked = compiled.checked
     entry = checked.modules[checked.entry_id].resolved.program

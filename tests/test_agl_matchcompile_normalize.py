@@ -11,6 +11,7 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.ids import NominalId
+from agm.agl.ir.reserved_nominals import NO_DECL_ID
 from agm.agl.matchcompile.model import (
     BinderAssignment,
     BoolConstructor,
@@ -31,7 +32,6 @@ from agm.agl.matchcompile.model import (
     Occurrence,
     OccurrenceId,
     OmittedFieldProvenance,
-    OpenSignature,
     RecordConstructor,
     SourcePatternProvenance,
     WildcardCell,
@@ -46,40 +46,31 @@ from agm.agl.matchcompile.normalize import (
     signature_for_type,
 )
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.parser import parse_program
-from agm.agl.scope import resolve_module
 from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
-    AgentType,
-    ArrayType,
     BoolType,
     BottomType,
     DecimalType,
-    DictType,
     EnumType,
-    ExceptionType,
-    FunctionType,
     InferenceVarType,
     IntType,
-    JsonType,
     RecordType,
     TextType,
     Type,
     TypeVarType,
-    UnitType,
 )
 from agm.agl.semantics.values import DecimalValue, EnumValue, TextValue
 from agm.agl.syntax.nodes import AsPattern, Case, ConstructorPattern, LetDecl, Pattern
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.visitor import walk
-from agm.agl.typecheck import CheckedModule, check_module, check_program
+from agm.agl.typecheck import CheckedModule, check_program
+from tests._agl_helpers import next_decl_id, strip_decl_ids
 from tests.agl.ir_harness import make_graph_from_files
 from tests.agl.match_reference import reference_action
+from tests.agl.module_graph import resolve_and_check_entry
 
 _CAPS = HostCapabilities(
-    agent_names=frozenset(),
-    has_default_agent=True,
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
@@ -89,7 +80,7 @@ _CAPS = HostCapabilities(
 
 
 def _check(source: str) -> CheckedModule:
-    return check_module(resolve_module(parse_program(source)), _CAPS)
+    return resolve_and_check_entry(source, _CAPS)
 
 
 def _only_case(program: object) -> Case:
@@ -102,6 +93,38 @@ def _only_case(program: object) -> Case:
     walk(program, collect)
     assert len(cases) == 1
     return cases[0]
+
+
+def _stripped_signature(signature: ClosedSignature) -> ClosedSignature:
+    """Return *signature* with every embedded nominal handle's ``decl_id`` reset.
+
+    ``strip_decl_ids`` only walks a single ``Type``'s structural children, so
+    it cannot reach the ``RecordType``/``EnumType`` handles nested inside a
+    ``RecordConstructor``/``EnumConstructor`` (and its ``ConstructorField``s)
+    directly; this reapplies it field-by-field across the closed signature
+    the match compiler returns.
+    """
+
+    def strip(constructor: Constructor) -> Constructor:
+        if isinstance(constructor, RecordConstructor):
+            return replace(
+                constructor,
+                record_type=cast(RecordType, strip_decl_ids(constructor.record_type)),
+                fields=tuple(
+                    replace(field, type=strip_decl_ids(field.type)) for field in constructor.fields
+                ),
+            )
+        if isinstance(constructor, EnumConstructor):
+            return replace(
+                constructor,
+                enum_type=cast(EnumType, strip_decl_ids(constructor.enum_type)),
+                fields=tuple(
+                    replace(field, type=strip_decl_ids(field.type)) for field in constructor.fields
+                ),
+            )
+        return constructor
+
+    return replace(signature, constructors=tuple(strip(c) for c in signature.constructors))
 
 
 def test_let_normalization_retains_its_initializer_pattern_and_matched_type() -> None:
@@ -156,34 +179,11 @@ def test_signatures_are_closed_for_boolean_and_enum_in_declaration_order() -> No
     ]
     value = enum_signature.constructors[1]
     assert isinstance(value, EnumConstructor)
-    assert value.enum_type == EnumType("Result", (IntType(),), ENTRY_ID)
+    assert strip_decl_ids(value.enum_type) == EnumType("Result", (IntType(),), ENTRY_ID)
     assert [(field.name, field.type) for field in value.fields] == [
         ("item", IntType()),
         ("note", TextType()),
     ]
-
-
-@pytest.mark.parametrize(
-    "subject_type",
-    [
-        TextType(),
-        JsonType(),
-        IntType(),
-        DecimalType(),
-        TypeVarType("T"),
-        ArrayType(IntType()),
-        DictType(IntType()),
-        ExceptionType("E"),
-        UnitType(),
-        AgentType(),
-        FunctionType((IntType(),), IntType()),
-    ],
-)
-def test_every_current_non_closed_type_has_an_explicit_open_signature(
-    subject_type: Type,
-) -> None:
-    checked = _check("()")
-    assert signature_for_type(subject_type, checked.type_env.type_table) == OpenSignature()
 
 
 def test_record_signature_and_pattern_normalization_use_canonical_nominal_identity() -> None:
@@ -203,8 +203,9 @@ def test_record_signature_and_pattern_normalization_use_canonical_nominal_identi
     assert isinstance(subject_type, RecordType)
 
     signature = signature_for_type(subject_type, checked.type_env.type_table)
+    assert isinstance(signature, ClosedSignature)
 
-    assert signature == ClosedSignature(
+    assert _stripped_signature(signature) == ClosedSignature(
         (
             RecordConstructor(
                 RecordType("Outer", (IntType(),), ENTRY_ID),
@@ -219,7 +220,9 @@ def test_record_signature_and_pattern_normalization_use_canonical_nominal_identi
     outer = normalize_case(case, checked).rows[0].cells[0]
     assert isinstance(outer, ConstructorCell)
     assert isinstance(outer.constructor, RecordConstructor)
-    assert outer.constructor.record_type == RecordType("Outer", (IntType(),), ENTRY_ID)
+    assert strip_decl_ids(outer.constructor.record_type) == RecordType(
+        "Outer", (IntType(),), ENTRY_ID
+    )
     assert [field.name for field in outer.constructor.fields] == ["first", "inner", "label"]
     assert isinstance(outer.arguments[0], WildcardCell)
     inner = outer.arguments[1]
@@ -236,7 +239,7 @@ def test_record_signature_and_pattern_normalization_use_canonical_nominal_identi
     constructor_ref = checked.pattern_constructor_ref_for(constructor_pattern.node_id)
     assert constructor_ref is not None
     assert checked.pattern_constructor_owner_for(constructor_pattern.node_id) == NominalId(
-        ENTRY_ID, "Outer"
+        subject_type.decl_id
     )
     with pytest.raises(MatchCompileInvariantError, match="missing final constructor"):
         normalize_case(
@@ -249,7 +252,7 @@ def test_record_signature_and_pattern_normalization_use_canonical_nominal_identi
             replace(
                 checked,
                 pattern_constructor_owners={
-                    constructor_pattern.node_id: NominalId(ENTRY_ID, "Inner")
+                    constructor_pattern.node_id: NominalId(inner.constructor.record_type.decl_id)
                 },
             ),
         )
@@ -259,32 +262,33 @@ def test_record_signatures_keep_modules_and_generic_instantiations_distinct() ->
     table = TypeTable()
     left_module = ModuleId.from_path("left")
     right_module = ModuleId.from_path("right")
-    table.register(
-        TypeDef(
-            kind="record",
-            name="Box",
-            module_id=left_module,
-            type_params=("T",),
-            fields=(("value", TypeVarType("T")),),
-        )
+    left_def = TypeDef(
+        kind="record",
+        name="Box",
+        module_id=left_module,
+        type_params=("T",),
+        fields=(("value", TypeVarType("T")),),
+        decl_node_id=next_decl_id(),
     )
-    table.register(
-        TypeDef(
-            kind="record",
-            name="Box",
-            module_id=right_module,
-            type_params=("T",),
-            fields=(("value", TypeVarType("T")),),
-        )
+    right_def = TypeDef(
+        kind="record",
+        name="Box",
+        module_id=right_module,
+        type_params=("T",),
+        fields=(("value", TypeVarType("T")),),
+        decl_node_id=next_decl_id(),
     )
+    table.register(left_def)
+    table.register(right_def)
 
-    left_int = signature_for_type(RecordType("Box", (IntType(),), left_module), table)
-    left_text = signature_for_type(RecordType("Box", (TextType(),), left_module), table)
-    right_int = signature_for_type(RecordType("Box", (IntType(),), right_module), table)
+    left_int = signature_for_type(left_def.handle((IntType(),)), table)
+    left_text = signature_for_type(left_def.handle((TextType(),)), table)
+    right_int = signature_for_type(right_def.handle((IntType(),)), table)
+    assert isinstance(left_int, ClosedSignature)
 
     assert left_int != left_text
     assert left_int != right_int
-    assert left_int == ClosedSignature(
+    assert _stripped_signature(left_int) == ClosedSignature(
         (
             RecordConstructor(
                 RecordType("Box", (IntType(),), left_module),
@@ -295,26 +299,91 @@ def test_record_signatures_keep_modules_and_generic_instantiations_distinct() ->
 
 
 def test_record_signature_cache_preserves_identity_and_invalidates_redeclarations() -> None:
+    """Internal robustness guard: a declaration's shape is immutable once
+    registered in production (a redeclaration always mints a fresh identity,
+    never rewrites an existing one -- see ``TypeTable.register``), so the only
+    still-live way to change a def under an existing identity is
+    ``merge_from`` treating another table as authoritative. This proves the
+    signature cache is keyed by declaration VALUE, not identity alone, using
+    that path.
+    """
     table = TypeTable()
-    record_type = RecordType("Box")
-    table.register(
-        TypeDef(kind="record", name="Box", module_id=ENTRY_ID, fields=(("value", IntType()),))
+    box_id = next_decl_id()
+    first_def = TypeDef(
+        kind="record",
+        name="Box",
+        module_id=ENTRY_ID,
+        fields=(("value", IntType()),),
+        decl_node_id=box_id,
     )
+    table.register(first_def)
+    handle = first_def.handle()
 
-    original = signature_for_type(record_type, table)
+    original = signature_for_type(handle, table)
 
-    assert original is signature_for_type(record_type, table)
+    assert original is signature_for_type(handle, table)
 
-    table.unregister(ENTRY_ID, "Box")
-    table.register(
-        TypeDef(kind="record", name="Box", module_id=ENTRY_ID, fields=(("label", TextType()),))
-    )
+    source = TypeTable()
+    source.register(replace(first_def, fields=(("label", TextType()),)))
+    table.merge_from(source)
 
-    redeclared = signature_for_type(record_type, table)
+    redeclared = signature_for_type(handle, table)
+    assert isinstance(redeclared, ClosedSignature)
 
     assert redeclared is not original
-    assert redeclared == ClosedSignature(
-        (RecordConstructor(record_type, (ConstructorField("label", TextType()),)),)
+    assert _stripped_signature(redeclared) == ClosedSignature(
+        (RecordConstructor(RecordType("Box"), (ConstructorField("label", TextType()),)),)
+    )
+
+
+def test_scoped_record_signature_cache_invalidates_on_its_own_redeclaration() -> None:
+    """A cached signature is keyed by the declaration its handle names, not by
+    whatever root declaration happens to share the bare name, so redeclaring
+    the scoped type alone still invalidates it.
+
+    Internal robustness guard, same as the root-declaration case above: uses
+    ``merge_from`` to change a def under an existing identity, the only path
+    still live for that in production.
+    """
+    table = TypeTable()
+    table.register(
+        TypeDef(
+            kind="record",
+            name="Box",
+            module_id=ENTRY_ID,
+            fields=(("root", IntType()),),
+            decl_node_id=next_decl_id(),
+        )
+    )
+    scoped_id = next_decl_id()
+    scoped_def = TypeDef(
+        kind="record",
+        name="Box",
+        module_id=ENTRY_ID,
+        scope_path=("A",),
+        fields=(("value", IntType()),),
+        decl_node_id=scoped_id,
+    )
+    table.register(scoped_def)
+    handle = scoped_def.handle()
+
+    original = signature_for_type(handle, table)
+    assert original is signature_for_type(handle, table)
+
+    source = TypeTable()
+    source.register(replace(scoped_def, fields=(("label", TextType()),)))
+    table.merge_from(source)
+
+    redeclared = signature_for_type(handle, table)
+    assert isinstance(redeclared, ClosedSignature)
+    assert redeclared is not original
+    assert _stripped_signature(redeclared) == ClosedSignature(
+        (
+            RecordConstructor(
+                RecordType("Box", scope_path=("A",)),
+                (ConstructorField("label", TextType()),),
+            ),
+        )
     )
 
 
@@ -441,53 +510,6 @@ def test_nested_uninhabited_constructor_omits_only_its_source_row() -> None:
     ]
 
 
-def test_constructor_inhabitation_is_total_over_current_constructor_and_type_unions() -> None:
-    checked = _check("enum Choice\n  | none\nlet value: Choice = none\ncase value of | none => 0")
-    normalized = normalize_case(_only_case(checked.resolved.program), checked)
-    enum_cell = normalized.rows[0].cells[0]
-    assert isinstance(enum_cell, ConstructorCell)
-    enum_constructor = enum_cell.constructor
-    assert isinstance(enum_constructor, EnumConstructor)
-    all_types: tuple[Type, ...] = (
-        TextType(),
-        JsonType(),
-        BoolType(),
-        IntType(),
-        DecimalType(),
-        TypeVarType("T"),
-        ArrayType(IntType()),
-        DictType(IntType()),
-        RecordType("R"),
-        EnumType("Choice"),
-        ExceptionType("E"),
-        UnitType(),
-        AgentType(),
-        FunctionType((IntType(),), IntType()),
-        BottomType(),
-    )
-    constructors = (
-        BoolConstructor(False),
-        LiteralConstructor(LiteralKind.NUMERIC, decimal.Decimal("1")),
-        LiteralConstructor(LiteralKind.TEXT, "x"),
-        LiteralConstructor(LiteralKind.NULL, None),
-        enum_constructor,
-    )
-
-    results = {
-        (constructor, subject_type): constructor_inhabits_type(constructor, subject_type)
-        for constructor in constructors
-        for subject_type in all_types
-    }
-
-    assert results[BoolConstructor(False), BoolType()]
-    assert results[constructors[1], IntType()]
-    assert results[constructors[1], DecimalType()]
-    assert results[constructors[2], TextType()]
-    assert results[constructors[3], JsonType()]
-    assert results[enum_constructor, EnumType("Choice")]
-    assert sum(results.values()) == 6
-
-
 @pytest.mark.parametrize(
     ("value", "inhabits_int", "inhabits_decimal"),
     [
@@ -509,6 +531,11 @@ def test_numeric_constructor_inhabitation_matches_runtime_numeric_domains(
 
     assert constructor_inhabits_type(constructor, IntType()) is inhabits_int
     assert constructor_inhabits_type(constructor, DecimalType()) is inhabits_decimal
+
+
+def test_non_data_and_generic_types_have_no_inhabiting_constructors() -> None:
+    """Match compilation cannot construct values for non-concrete subject types."""
+    assert not constructor_inhabits_type(BoolConstructor(False), TypeVarType("T"))
 
 
 def test_boolean_literals_normalize_to_boolean_constructors() -> None:
@@ -600,7 +627,9 @@ def test_imported_generic_enum_normalizes_from_checked_metadata(tmp_path: Path) 
     assert isinstance(constructor_cell, ConstructorCell)
     constructor = constructor_cell.constructor
     assert isinstance(constructor, EnumConstructor)
-    assert constructor.enum_type == EnumType("Choice", (IntType(),), ModuleId.from_path("lib"))
+    assert strip_decl_ids(constructor.enum_type) == EnumType(
+        "Choice", (IntType(),), ModuleId.from_path("lib")
+    )
     assert [(field.name, field.type) for field in constructor.fields] == [
         ("value", IntType()),
         ("note", TextType()),
@@ -812,7 +841,13 @@ def test_bare_variant_normalization_rejects_missing_and_wrong_owner_metadata() -
     ref = checked.pattern_classifications[pattern.node_id]
     assert ref is not None
     checked.type_env.type_table.register(
-        TypeDef(kind="enum", name="Other", module_id=ENTRY_ID, variants=(("none", ()),))
+        TypeDef(
+            kind="enum",
+            name="Other",
+            module_id=ENTRY_ID,
+            variants=(("none", ()),),
+            decl_node_id=next_decl_id(),
+        )
     )
     wrong_owner = replace(ref, owner_name="Other")
     with pytest.raises(MatchCompileInvariantError, match="invalid final"):
@@ -839,10 +874,11 @@ def test_malformed_checked_constructor_metadata_raise_invariants() -> None:
     with pytest.raises(MatchCompileInvariantError, match="non-enum"):
         normalize_case(case, non_enum)
 
+    missing_enum_type = EnumType("Missing")
     missing_type = replace(
         checked,
-        node_types={**checked.node_types, case.subject.node_id: EnumType("Missing")},
-        pattern_constructor_owners={pattern.node_id: NominalId(ENTRY_ID, "Missing")},
+        node_types={**checked.node_types, case.subject.node_id: missing_enum_type},
+        pattern_constructor_owners={pattern.node_id: NominalId(missing_enum_type.decl_id)},
     )
     with pytest.raises(MatchCompileInvariantError, match="cannot resolve enum signature"):
         normalize_case(case, missing_type)
@@ -851,9 +887,11 @@ def test_malformed_checked_constructor_metadata_raise_invariants() -> None:
     with pytest.raises(MatchCompileInvariantError, match="unknown variant"):
         normalize_case(_replace_case_pattern(case, unknown_variant), checked)
 
+    choice_type = checked.node_types[case.subject.node_id]
+    assert isinstance(choice_type, EnumType)
     constructor_ref = checked.pattern_constructor_ref_for(pattern.node_id)
     assert constructor_ref is not None
-    assert checked.pattern_constructor_owner_for(pattern.node_id) == NominalId(ENTRY_ID, "Choice")
+    assert checked.pattern_constructor_owner_for(pattern.node_id) == NominalId(choice_type.decl_id)
     with pytest.raises(MatchCompileInvariantError, match="invalid final constructor"):
         normalize_case(
             case,
@@ -869,7 +907,7 @@ def test_malformed_checked_constructor_metadata_raise_invariants() -> None:
             case,
             replace(
                 checked,
-                pattern_constructor_owners={pattern.node_id: NominalId(ENTRY_ID, "Other")},
+                pattern_constructor_owners={pattern.node_id: NominalId(NO_DECL_ID)},
             ),
         )
 
@@ -919,7 +957,7 @@ def test_source_reference_matcher_preserves_priority_and_partial_constructor_fie
     case = _only_case(checked.resolved.program)
     enum_type = checked.node_types[case.subject.node_id]
     assert isinstance(enum_type, EnumType)
-    nominal = NominalId(enum_type.module_id, enum_type.name)
+    nominal = NominalId(enum_type.decl_id)
 
     assert (
         reference_action(

@@ -2,15 +2,28 @@
   "scenarios": [
     {
       "name": "converges_below_captured_bound",
-      "params": {"bound": 5, "target": 3},
-      "expect": {"stdout": "3\n"}
+      "params": {
+        "bound": 5,
+        "target": 3
+      },
+      "expect": {
+        "stdout": "3\n"
+      }
     },
     {
       "name": "exhausts_captured_bound",
-      "params": {"bound": 2, "target": 5},
+      "params": {
+        "bound": 2,
+        "target": 5
+      },
       "expect": {
         "stdout": "",
-        "raises": {"type": "MaxIterationsExceeded", "fields": {"limit": 2}}
+        "raises": {
+          "type": "MaxIterationsExceeded",
+          "fields": {
+            "limit": 2
+          }
+        }
       }
     }
   ]

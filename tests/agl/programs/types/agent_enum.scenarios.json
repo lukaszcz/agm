@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "name": "plain_enum_data",
+      "expect": {
+        "stdout": "Agent::AgentCommand(command = \"echo hello\")\ntrue\nAgent::AgentCodex(\n  model = \"o3\",\n  thinking = \"high\"\n)\nopenai/gpt/low\ntrue\ntrue\n"
+      }
+    }
+  ]
+}

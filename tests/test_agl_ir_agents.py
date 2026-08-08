@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from agm.agl.ir.ids import AgentId
 from agm.agl.semantics.values import (
     ArrayValue,
     BoolValue,
@@ -22,6 +21,7 @@ from agm.agl.semantics.values import (
     TextValue,
 )
 from tests.agl.ir_harness import (
+    evaluate_ir,
     evaluate_ir_raises_with_agents,
     evaluate_ir_with_agents,
 )
@@ -32,6 +32,91 @@ if TYPE_CHECKING:
 
 
 # ---------------------------------------------------------------------------
+# builtin Agent methods
+# ---------------------------------------------------------------------------
+
+
+def test_agent_ask_method_accepts_type_args_and_named_defaults() -> None:
+    """Agent::ask is a normal selected builtin method with the receiver as agent."""
+    source = """\
+let worker = AgentCommand("worker")
+let answer: int = worker.ask::[int]("How many?", strict_json = true)
+answer
+"""
+    ir = evaluate_ir_with_agents(source, scripts={"worker": ["42"]})
+
+    assert ir["answer"] == IntValue(42)
+
+
+def test_agent_ask_request_method_uses_its_receiver() -> None:
+    """Agent::ask-request constructs a request without dispatching."""
+    source = """\
+let worker = AgentCommand("worker")
+let request = worker.ask-request("Draft it.")
+request
+"""
+    ir = evaluate_ir_with_agents(source, scripts={"worker": []})
+
+    request = ir["request"]
+    assert isinstance(request, RecordValue)
+    assert request.fields["agent"] == EnumValue(
+        nominal=request.fields["agent"].nominal,
+        display_name="Agent",
+        variant="AgentCommand",
+        fields={"command": TextValue("worker")},
+    )
+
+
+def test_user_declared_method_named_ask_dispatches_as_an_ordinary_method() -> None:
+    """A field access naming ``ask`` is only a *speculative* builtin route.
+
+    The receiver here is a user record, not ``Agent``, so the selected method
+    is the ordinary one declared below; it must run as a plain method call
+    rather than dispatching through agent machinery (which would need a
+    scripted agent response to avoid erroring).
+    """
+    source = """\
+record Greeter
+  name: text
+
+def Greeter::ask(self, prompt: text) -> text = "%{self.name}: %{prompt}"
+
+let g = Greeter(name = "g")
+let reply = g.ask("hi")
+reply
+"""
+    ir = evaluate_ir(source)
+
+    assert ir["reply"] == TextValue("g: hi")
+
+
+def test_user_declared_method_named_ask_works_as_a_value_and_partially_applied() -> None:
+    """An ordinary ``ask``/``ask-request`` method keeps its first-class forms.
+
+    Both allocate a bound closure over the receiver, the shape a builtin method
+    never has, so the speculative builtin route must not capture either one.
+    """
+    source = """\
+record Greeter
+  name: text
+
+def Greeter::ask[T](self, prompt: T) -> T = prompt
+def Greeter::ask-request(self, prompt: text) -> text = "%{self.name}: %{prompt}"
+
+let g = Greeter(name = "g")
+let bound = g.ask-request
+let partial = g.ask::[text](?)
+let greeting = bound("hi")
+let echoed = partial("there")
+()
+"""
+    ir = evaluate_ir(source)
+
+    assert ir["greeting"] == TextValue("g: hi")
+    assert ir["echoed"] == TextValue("there")
+
+
+# ---------------------------------------------------------------------------
 # simple text ask
 # ---------------------------------------------------------------------------
 
@@ -39,7 +124,7 @@ if TYPE_CHECKING:
 def test_text_ask_basic() -> None:
     """Text-codec ask: passthrough, no JSON involved."""
     source = """\
-agent summarizer
+let summarizer = AgentCommand("summarizer")
 let summary: text = ask("Summarise it.", agent = summarizer)
 summary
 """
@@ -58,7 +143,7 @@ summary
 def test_json_int_ask() -> None:
     """JSON-int ask: agent returns a bare integer."""
     source = """\
-agent counter
+let counter = AgentCommand("counter")
 let n: int = ask("How many?", agent = counter)
 n
 """
@@ -81,7 +166,7 @@ record Point
   x: int
   y: int
 
-agent locator
+let locator = AgentCommand("locator")
 let pt: Point = ask("Find the point.", agent = locator)
 pt
 """
@@ -102,7 +187,7 @@ pt
 def test_json_array_ask() -> None:
     """JSON-array ask: agent returns a JSON array."""
     source = """\
-agent lister
+let lister = AgentCommand("lister")
 let items: array[text] = ask("List items.", agent = lister)
 items
 """
@@ -128,7 +213,7 @@ enum Status
   | Ok
   | Err(msg: text)
 
-agent checker
+let checker = AgentCommand("checker")
 let status: Status = ask("Check it.", agent = checker)
 status
 """
@@ -148,7 +233,7 @@ status
 def test_lenient_json_fence_stripping() -> None:
     """Lenient mode: agent wraps JSON in a markdown fence — still parsed."""
     source = """\
-agent answerer
+let answerer = AgentCommand("answerer")
 let n: int = ask("Give me a number.", agent = answerer)
 n
 """
@@ -168,7 +253,7 @@ n
 def test_retry_success_second_attempt() -> None:
     """Retry policy: first response is invalid JSON, second is valid."""
     source = """\
-agent parser
+let parser = AgentCommand("parser")
 let n: int = ask("Parse this.", agent = parser, on_parse_error = Retry(n = 1))
 n
 """
@@ -187,7 +272,7 @@ n
 def test_retry_exhausted_raises() -> None:
     """Retry policy: all attempts fail → AgentParseError raised."""
     source = """\
-agent parser
+let parser = AgentCommand("parser")
 let n: int = ask("Parse this.", agent = parser, on_parse_error = Retry(n = 1))
 n
 """
@@ -207,7 +292,7 @@ n
 def test_strict_json_mode() -> None:
     """strict_json: true — bare JSON without fences, no repair."""
     source = """\
-agent strict_agent
+let strict_agent = AgentCommand("strict_agent")
 let b: bool = ask("True or false?", agent = strict_agent, strict_json = true)
 b
 """
@@ -233,7 +318,7 @@ def test_unit_typed_ask() -> None:
         calls.append(request)
         return "acknowledged"
 
-    result = PipelineDriver(default_agent=notify).run('ask("Notify!")\n()')
+    result = PipelineDriver(agent_dispatcher=notify).run('ask("Notify!")\n()')
     assert result.ok
     assert len(calls) == 1
 
@@ -246,7 +331,7 @@ def test_unit_typed_ask() -> None:
 def test_ask_inside_function() -> None:
     """ask call site inside a function body — agent is captured in closure."""
     source = """\
-agent namer
+let namer = AgentCommand("namer")
 def get_name(prompt: text) -> text = ask(prompt, agent = namer)
 let name: text = get_name("What is the name?")
 name
@@ -266,8 +351,8 @@ name
 def test_multiple_agents() -> None:
     """Multiple named agents: each call is routed to the correct agent."""
     source = """\
-agent first
-agent second
+let first = AgentCommand("first")
+let second = AgentCommand("second")
 let a: text = ask("First.", agent = first)
 let b: text = ask("Second.", agent = second)
 b
@@ -291,7 +376,7 @@ b
 def test_schema_validation_failure_wrong_type() -> None:
     """Agent returns invalid JSON (fails schema validation) → AgentParseError."""
     source = """\
-agent validator
+let validator = AgentCommand("validator")
 let n: int = ask("Give int.", agent = validator)
 n
 """
@@ -312,7 +397,7 @@ n
 def test_strict_json_invalid_raises() -> None:
     """strict_json=true with fenced JSON: strict mode does not strip fences."""
     source = """\
-agent strict_agent
+let strict_agent = AgentCommand("strict_agent")
 let n: int = ask("Give int.", agent = strict_agent, strict_json = true)
 n
 """
@@ -340,8 +425,6 @@ result
         source,
         scripts={},
         default_responses=["default response"],
-        agent_names=frozenset(),
-        has_default=True,
     )
     assert ir["result"] == TextValue("default response")
 
@@ -354,9 +437,8 @@ result
 def test_ask_request_builds_record() -> None:
     """ask-request: no agent dispatch, returns an AgentRequest-shaped record."""
     source = """\
-agent dummy
+let dummy = AgentCommand("dummy")
 let req = ask-request("My prompt.", agent = dummy)
-let agent_name: text = req.agent
 let prompt_text: text = req.prompt
 prompt_text
 """
@@ -365,8 +447,22 @@ prompt_text
         source,
         scripts={"dummy": []},
     )
-    assert ir["agent_name"] == TextValue("dummy")
     assert ir["prompt_text"] == TextValue("My prompt.")
+
+    from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
+
+    req = ir["req"]
+    assert isinstance(req, RecordValue)
+    assert req.nominal == NO_BUILTIN_DECLARATIONS.nominal("AgentRequest")
+    assert isinstance(req.fields["agent"], EnumValue)
+    assert req.fields["agent"].variant == "AgentCommand"
+    assert isinstance(req.fields["target_type"], EnumValue)
+    assert req.fields["target_type"].variant == "Some"
+    assert req.fields["target_type"].fields["value"] == TextValue("text")
+    assert isinstance(req.fields["format_instructions"], EnumValue)
+    assert req.fields["format_instructions"].variant == "None"
+    assert isinstance(req.fields["json_schema"], EnumValue)
+    assert req.fields["json_schema"].variant == "None"
 
 
 # ---------------------------------------------------------------------------
@@ -377,7 +473,7 @@ prompt_text
 def test_retry_with_schema_validation_error_then_success() -> None:
     """Retry: first response fails schema, second is valid."""
     source = """\
-agent fixer
+let fixer = AgentCommand("fixer")
 let n: int = ask("Give int.", agent = fixer, on_parse_error = Retry(n = 1))
 n
 """
@@ -406,10 +502,9 @@ def test_enum_bad_case_raises_agent_parse_error() -> None:
         VariantDecode,
     )
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
     from agm.agl.runtime.codec import _parse_contract_output
 
-    nominal = NominalId(PRELUDE_ID, "Status")
+    nominal = NominalId(1)
     decode = EnumDecode(
         nominal=nominal,
         display_name="Status",
@@ -475,7 +570,7 @@ enum Status
   | Ok
   | Err(msg: text)
 
-agent checker
+let checker = AgentCommand("checker")
 let s: Status = ask("Status?", agent = checker, on_parse_error = Retry(n = 1))
 s
 """
@@ -610,11 +705,11 @@ def test_validate_contract_request_json_missing_schema() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_ask_request_typed_builds_record() -> None:
-    """ask-request with explicit type argument builds AgentRequest record."""
+def test_ask_request_builds_a_text_request_record() -> None:
+    """ask-request builds its fixed text-contract AgentRequest record."""
     source = """\
-agent worker
-let req = ask-request::[int]("Give me a number.", agent = worker)
+let worker = AgentCommand("worker")
+let req = ask-request("Give me a number.", agent = worker)
 let prompt_text: text = req.prompt
 prompt_text
 """
@@ -759,10 +854,9 @@ def test_parse_agent_output_required_field_error() -> None:
         ScalarKind,
     )
     from agm.agl.ir.ids import NominalId as IrNominalId
-    from agm.agl.modules.ids import PRELUDE_ID
     from agm.agl.runtime.codec import _parse_contract_output
 
-    nom = IrNominalId(PRELUDE_ID, "Point")
+    nom = IrNominalId(1)
     schema = _json.dumps(
         {
             "type": "object",
@@ -797,10 +891,9 @@ def test_parse_agent_output_additional_properties_error() -> None:
     """parse_agent_output: extra field on record → unknown_field error."""
     from agm.agl.ir.contracts import ContractRequest, RecordDecode, ScalarDecode, ScalarKind
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
     from agm.agl.runtime.codec import _parse_contract_output
 
-    nom = NominalId(PRELUDE_ID, "Point")
+    nom = NominalId(1)
     schema = _json.dumps(
         {
             "type": "object",
@@ -891,10 +984,9 @@ def test_enum_instance_not_dict_bad_case() -> None:
         VariantDecode,
     )
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
     from agm.agl.runtime.codec import _parse_contract_output
 
-    nominal = NominalId(PRELUDE_ID, "Flag")
+    nominal = NominalId(1)
     decode = EnumDecode(
         nominal=nominal,
         display_name="Flag",
@@ -942,9 +1034,8 @@ def test_enum_no_case_tag_bad_case() -> None:
         VariantDecode,
     )
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
 
-    nominal = NominalId(PRELUDE_ID, "Flag")
+    nominal = NominalId(1)
     decode = EnumDecode(
         nominal=nominal,
         display_name="Flag",
@@ -1027,10 +1118,9 @@ def test_find_enum_decode_at_path_through_array() -> None:
         VariantDecode,
     )
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
     from agm.agl.runtime.codec import _find_enum_decode_at_path
 
-    nominal = NominalId(PRELUDE_ID, "Status")
+    nominal = NominalId(1)
     enum_dec = EnumDecode(
         nominal=nominal,
         display_name="Status",
@@ -1062,10 +1152,9 @@ def test_find_enum_decode_at_path_through_dict() -> None:
         VariantDecode,
     )
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
     from agm.agl.runtime.codec import _find_enum_decode_at_path
 
-    nominal = NominalId(PRELUDE_ID, "Status")
+    nominal = NominalId(1)
     enum_dec = EnumDecode(
         nominal=nominal,
         display_name="Status",
@@ -1097,16 +1186,15 @@ def test_find_enum_decode_at_path_through_record() -> None:
         VariantDecode,
     )
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
     from agm.agl.runtime.codec import _find_enum_decode_at_path
 
-    nominal = NominalId(PRELUDE_ID, "Status")
+    nominal = NominalId(1)
     enum_dec = EnumDecode(
         nominal=nominal,
         display_name="Status",
         variants=(VariantDecode(name="Ok", fields=()),),
     )
-    rec_nominal = NominalId(PRELUDE_ID, "Wrapper")
+    rec_nominal = NominalId(2)
     rec_dec = RecordDecode(
         nominal=rec_nominal,
         display_name="Wrapper",
@@ -1143,10 +1231,9 @@ def test_find_enum_decode_at_path_enum_at_top_navigated_into() -> None:
         VariantDecode,
     )
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
     from agm.agl.runtime.codec import _find_enum_decode_at_path
 
-    nominal = NominalId(PRELUDE_ID, "Status")
+    nominal = NominalId(1)
     enum_dec = EnumDecode(
         nominal=nominal,
         display_name="Status",
@@ -1200,10 +1287,9 @@ def test_find_enum_decode_at_path_end_at_scalar() -> None:
         ScalarKind,
     )
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
     from agm.agl.runtime.codec import _find_enum_decode_at_path
 
-    nom = NominalId(PRELUDE_ID, "Point")
+    nom = NominalId(1)
     rec_dec = RecordDecode(
         nominal=nom,
         display_name="Point",
@@ -1234,9 +1320,8 @@ def test_enum_known_case_with_additional_props_error() -> None:
         VariantDecode,
     )
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
 
-    nominal = NominalId(PRELUDE_ID, "Status")
+    nominal = NominalId(1)
     decode = EnumDecode(
         nominal=nominal,
         display_name="Status",
@@ -1279,84 +1364,6 @@ def test_enum_known_case_with_additional_props_error() -> None:
     result = _parse_contract_output('{"$case": "Ok", "extra": 1}', contract, effective_strict=False)
     assert not result.ok
     assert any(e.category == "unknown_field" for e in result.errors)
-
-
-# ---------------------------------------------------------------------------
-# validate.py IrAskRequest deep validation
-# ---------------------------------------------------------------------------
-
-
-def test_validate_ir_ask_request_missing_contract() -> None:
-    """validate_ir: IrAskRequest referencing missing contract_id → InvalidIrError."""
-
-    from agm.agl.ir.ids import ContractId, Location, SourceId
-    from agm.agl.ir.nodes import IrAskRequest, IrConstText
-    from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
-    from agm.agl.ir.validate import InvalidIrError, validate_ir
-    from agm.agl.modules.ids import ENTRY_ID
-
-    src_id = SourceId(0)
-    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    bad_cid = ContractId(999)
-    node = IrAskRequest(
-        location=dummy_loc,
-        agent=IrConstText(location=dummy_loc, value="ask"),
-        prompt=IrConstText(location=dummy_loc, value="test"),
-        contract_id=bad_cid,
-        max_attempts=1,
-    )
-    prog = ExecutableProgram(
-        entry_module=ENTRY_ID,
-        modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(node,))},
-        symbols={},
-        nominals={},
-        sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
-        contracts={},  # No contracts!
-    )
-    with pytest.raises(InvalidIrError, match="contract_id"):
-        validate_ir(prog, deep=True)
-
-
-def test_validate_ir_ask_request_max_attempts_zero() -> None:
-    """validate_ir: IrAskRequest with max_attempts=0 → InvalidIrError."""
-
-    from agm.agl.ir.contracts import ContractRequest
-    from agm.agl.ir.ids import ContractId, Location, SourceId
-    from agm.agl.ir.nodes import IrAskRequest, IrConstText
-    from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
-    from agm.agl.ir.validate import InvalidIrError, validate_ir
-    from agm.agl.modules.ids import ENTRY_ID
-
-    src_id = SourceId(0)
-    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    cid = ContractId(0)
-    req = ContractRequest(
-        codec_name="text",
-        strict_json=None,
-        json_schema=None,
-        decode=None,
-        target_type_label="text",
-        structured_exec=False,
-        format_instructions="",
-        is_unit=False,
-    )
-    node = IrAskRequest(
-        location=dummy_loc,
-        agent=IrConstText(location=dummy_loc, value="ask"),
-        prompt=IrConstText(location=dummy_loc, value="test"),
-        contract_id=cid,
-        max_attempts=0,  # invalid!
-    )
-    prog = ExecutableProgram(
-        entry_module=ENTRY_ID,
-        modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(node,))},
-        symbols={},
-        nominals={},
-        sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
-        contracts={cid: req},
-    )
-    with pytest.raises(InvalidIrError, match="max_attempts"):
-        validate_ir(prog, deep=True)
 
 
 def test_validate_contract_request_json_missing_decode() -> None:
@@ -1463,7 +1470,7 @@ def test_validate_contract_request_recursive_decode_defs() -> None:
 
     src_id = SourceId(0)
     dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    tree_nominal = NominalId(ENTRY_ID, "Tree")
+    tree_nominal = NominalId(1)
     tree_body = EnumDecode(
         nominal=tree_nominal,
         display_name="Tree",
@@ -1503,7 +1510,9 @@ def test_validate_contract_request_recursive_decode_defs() -> None:
         nominals={
             tree_nominal: NominalDescriptor(
                 nominal=tree_nominal,
-                display_name="Tree",
+                module_id=ENTRY_ID,
+                scope_path=(),
+                declared_name="Tree",
                 kind=NominalKind.ENUM,
                 variants=(
                     VariantDescriptor("Leaf", ()),
@@ -1562,154 +1571,10 @@ def test_validate_contract_request_recursive_decode_unknown_defs_key() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_ir_ask_non_text_prompt_renders_to_string() -> None:
-    """IrAsk: int-valued prompt is render_value'd to text (hand-built IR)."""
-    from agm.agl.eval.ir_interpreter import IrInterpreter
-    from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
-    from agm.agl.ir.ids import ContractId, Location, SourceId, SymbolId
-    from agm.agl.ir.nodes import IrAsk, IrBind, IrConstInt
-    from agm.agl.ir.program import (
-        ExecutableModule,
-        ExecutableProgram,
-        SourceFile,
-        SymbolDescriptor,
-    )
-    from agm.agl.modules.ids import ENTRY_ID
-    from agm.agl.runtime.agents import AgentRegistry
-    from agm.agl.runtime.request import AgentRequest, AgentResponse
-
-    src_id = SourceId(0)
-    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    cid = ContractId(0)
-    sym = SymbolId(0)
-    req = ContractRequest(
-        codec_name="json",
-        strict_json=None,
-        json_schema=_json.dumps({"type": "integer"}),
-        decode=ScalarDecode(ScalarKind.INT),
-        target_type_label="int",
-        structured_exec=False,
-        format_instructions="",
-        is_unit=False,
-    )
-    # IrAsk with an int constant as the prompt (bypasses typechecker).
-    ask_node = IrAsk(
-        location=dummy_loc,
-        # agent expr returns IntValue (not AgentValue) → falls back to "ask" name
-        agent=IrConstInt(location=dummy_loc, value=0),
-        prompt=IrConstInt(location=dummy_loc, value=42),  # int prompt
-        contract_id=cid,
-        max_attempts=1,
-    )
-    bind_node = IrBind(location=dummy_loc, symbol=sym, value=ask_node)
-    sym_desc = SymbolDescriptor(symbol_id=sym, mutable=False, public_name="result", owner=ENTRY_ID)
-    prog = ExecutableProgram(
-        entry_module=ENTRY_ID,
-        modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(bind_node,))},
-        symbols={sym: sym_desc},
-        nominals={},
-        sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
-        contracts={cid: req},
-    )
-
-    captured_prompts: list[str] = []
-
-    def _agent_fn(r: AgentRequest) -> AgentResponse:
-        captured_prompts.append(r.prompt)
-        return AgentResponse(content="99")
-
-    registry = AgentRegistry(named={AgentId("ask"): _agent_fn}, default_agent=None)
-    interp = IrInterpreter(prog, registry=registry)
-    bindings = interp.run()
-    # The prompt "42" (rendered IntValue) was sent.
-    assert captured_prompts == ["42"]
-    assert bindings["result"] == IntValue(99)
-
-
-def test_ir_ask_cyclic_prompt_raises_cyclic_value_error() -> None:
-    """IrAsk: a cyclic-array prompt raises the catchable CyclicValueError.
-
-    Reference semantics makes a self-referential array constructible; a
-    non-text prompt is rendered via ``render_value`` (see
-    ``test_ir_ask_non_text_prompt_renders_to_string`` above), and rendering a
-    cyclic value must raise rather than recurse forever, converted to
-    ``AglRaise(CyclicValueError)`` before any agent dispatch happens.
-    """
-    from agm.agl.eval.ir_interpreter import IrInterpreter
-    from agm.agl.ir.contracts import ContractRequest
-    from agm.agl.ir.ids import ContractId, Location, SourceId, SymbolId
-    from agm.agl.ir.nodes import IrAsk, IrBind, IrConstInt, IrIndexSet, IrLoad, IrMakeArray
-    from agm.agl.ir.operations import IndexKind
-    from agm.agl.ir.program import (
-        ExecutableModule,
-        ExecutableProgram,
-        SourceFile,
-        SymbolDescriptor,
-    )
-    from agm.agl.modules.ids import ENTRY_ID
-    from agm.agl.runtime.agents import AgentRegistry
-    from agm.agl.semantics.exceptions import AglRaise
-
-    src_id = SourceId(0)
-    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    cid = ContractId(0)
-    sym_xs = SymbolId(0)
-    req = ContractRequest(
-        codec_name="text",
-        strict_json=None,
-        json_schema=None,
-        decode=None,
-        target_type_label="unit",
-        structured_exec=False,
-        format_instructions="",
-        is_unit=True,
-    )
-    # Build a self-referential array `xs` directly at the IR level: bind
-    # xs = [0], then xs[0] := xs (bypasses the checker, which would never
-    # allow a cycle to be observed this directly).
-    bind_xs = IrBind(
-        location=dummy_loc,
-        symbol=sym_xs,
-        value=IrMakeArray(location=dummy_loc, items=(IrConstInt(location=dummy_loc, value=0),)),
-    )
-    set_node = IrIndexSet(
-        location=dummy_loc,
-        container=IrLoad(location=dummy_loc, symbol=sym_xs),
-        index=IrConstInt(location=dummy_loc, value=0),
-        kind=IndexKind.ARRAY,
-        value=IrLoad(location=dummy_loc, symbol=sym_xs),
-    )
-    ask_node = IrAsk(
-        location=dummy_loc,
-        agent=IrConstInt(location=dummy_loc, value=0),
-        prompt=IrLoad(location=dummy_loc, symbol=sym_xs),
-        contract_id=cid,
-        max_attempts=1,
-    )
-    sym_desc = SymbolDescriptor(symbol_id=sym_xs, mutable=False, public_name=None, owner=ENTRY_ID)
-    prog = ExecutableProgram(
-        entry_module=ENTRY_ID,
-        modules={
-            ENTRY_ID: ExecutableModule(
-                module_id=ENTRY_ID, initializers=(bind_xs, set_node, ask_node)
-            )
-        },
-        symbols={sym_xs: sym_desc},
-        nominals={},
-        sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
-        contracts={cid: req},
-    )
-    registry = AgentRegistry(named={}, default_agent=None)
-    interp = IrInterpreter(prog, registry=registry)
-    with pytest.raises(AglRaise) as exc_info:
-        interp.run()
-    assert exc_info.value.exc.display_name == "CyclicValueError"
-
-
-def test_ir_ask_request_unit_contract() -> None:
-    """IrAskRequest with is_unit contract -> AgentRequest.target_type is None."""
+def test_ir_ask_request_text_contract() -> None:
+    """IrAskRequest builds an AgentRequest with its fixed text contract."""
     source = """\
-agent a
+let a = AgentCommand("a")
 let req = ask-request("Do it.", agent = a)
 let prompt_text: text = req.prompt
 prompt_text
@@ -1723,145 +1588,10 @@ prompt_text
     assert ir["prompt_text"] == TextValue("Do it.")
 
 
-def test_ir_ask_request_non_text_prompt() -> None:
-    """IrAskRequest: int prompt expression is rendered to text (hand-built IR)."""
-    from agm.agl.eval.ir_interpreter import IrInterpreter
-    from agm.agl.ir.contracts import ContractRequest
-    from agm.agl.ir.ids import ContractId, Location, SourceId, SymbolId
-    from agm.agl.ir.nodes import IrAskRequest, IrBind, IrConstInt
-    from agm.agl.ir.program import (
-        ExecutableModule,
-        ExecutableProgram,
-        SourceFile,
-        SymbolDescriptor,
-    )
-    from agm.agl.modules.ids import ENTRY_ID
-    from agm.agl.runtime.agents import AgentRegistry
-
-    src_id = SourceId(0)
-    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    cid = ContractId(0)
-    sym = SymbolId(0)
-    req = ContractRequest(
-        codec_name="text",
-        strict_json=None,
-        json_schema=None,
-        decode=None,
-        target_type_label="text",
-        structured_exec=False,
-        format_instructions="",
-        is_unit=False,
-    )
-    # IrAskRequest with int prompt (bypasses typechecker).
-    ask_req_node = IrAskRequest(
-        location=dummy_loc,
-        agent=IrConstInt(location=dummy_loc, value=0),
-        prompt=IrConstInt(location=dummy_loc, value=7),  # int prompt
-        contract_id=cid,
-        max_attempts=1,
-    )
-    bind_node = IrBind(location=dummy_loc, symbol=sym, value=ask_req_node)
-    sym_desc = SymbolDescriptor(symbol_id=sym, mutable=False, public_name="req", owner=ENTRY_ID)
-    prog = ExecutableProgram(
-        entry_module=ENTRY_ID,
-        modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(bind_node,))},
-        symbols={sym: sym_desc},
-        nominals={},
-        sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
-        contracts={cid: req},
-    )
-    registry = AgentRegistry(named={}, default_agent=None)
-    interp = IrInterpreter(prog, registry=registry)
-    bindings = interp.run()
-    val = bindings["req"]
-    assert isinstance(val, RecordValue)
-    assert val.fields["prompt"] == TextValue("7")
-
-
-def test_ir_ask_request_cyclic_prompt_raises_cyclic_value_error() -> None:
-    """IrAskRequest: a cyclic-array prompt raises the catchable CyclicValueError.
-
-    Mirrors ``test_ir_ask_cyclic_prompt_raises_cyclic_value_error`` for the
-    ``ask-request`` builtin, which renders a non-text prompt the same way but
-    never dispatches to an agent.
-    """
-    from agm.agl.eval.ir_interpreter import IrInterpreter
-    from agm.agl.ir.contracts import ContractRequest
-    from agm.agl.ir.ids import ContractId, Location, SourceId, SymbolId
-    from agm.agl.ir.nodes import IrAskRequest, IrBind, IrConstInt, IrIndexSet, IrLoad, IrMakeArray
-    from agm.agl.ir.operations import IndexKind
-    from agm.agl.ir.program import (
-        ExecutableModule,
-        ExecutableProgram,
-        SourceFile,
-        SymbolDescriptor,
-    )
-    from agm.agl.modules.ids import ENTRY_ID
-    from agm.agl.runtime.agents import AgentRegistry
-    from agm.agl.semantics.exceptions import AglRaise
-
-    src_id = SourceId(0)
-    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    cid = ContractId(0)
-    sym_xs = SymbolId(0)
-    req = ContractRequest(
-        codec_name="text",
-        strict_json=None,
-        json_schema=None,
-        decode=None,
-        target_type_label="text",
-        structured_exec=False,
-        format_instructions="",
-        is_unit=False,
-    )
-    bind_xs = IrBind(
-        location=dummy_loc,
-        symbol=sym_xs,
-        value=IrMakeArray(location=dummy_loc, items=(IrConstInt(location=dummy_loc, value=0),)),
-    )
-    set_node = IrIndexSet(
-        location=dummy_loc,
-        container=IrLoad(location=dummy_loc, symbol=sym_xs),
-        index=IrConstInt(location=dummy_loc, value=0),
-        kind=IndexKind.ARRAY,
-        value=IrLoad(location=dummy_loc, symbol=sym_xs),
-    )
-    ask_req_node = IrAskRequest(
-        location=dummy_loc,
-        agent=IrConstInt(location=dummy_loc, value=0),
-        prompt=IrLoad(location=dummy_loc, symbol=sym_xs),
-        contract_id=cid,
-        max_attempts=1,
-    )
-    sym_desc = SymbolDescriptor(symbol_id=sym_xs, mutable=False, public_name=None, owner=ENTRY_ID)
-    prog = ExecutableProgram(
-        entry_module=ENTRY_ID,
-        modules={
-            ENTRY_ID: ExecutableModule(
-                module_id=ENTRY_ID, initializers=(bind_xs, set_node, ask_req_node)
-            )
-        },
-        symbols={sym_xs: sym_desc},
-        nominals={},
-        sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
-        contracts={cid: req},
-    )
-    registry = AgentRegistry(named={}, default_agent=None)
-    interp = IrInterpreter(prog, registry=registry)
-    with pytest.raises(AglRaise) as exc_info:
-        interp.run()
-    assert exc_info.value.exc.display_name == "CyclicValueError"
-
-
-# ---------------------------------------------------------------------------
-# lowerer.py uncovered branches in _extract_max_attempts
-# ---------------------------------------------------------------------------
-
-
 def test_lower_on_parse_error_abort_gives_one_attempt() -> None:
     """_extract_max_attempts: Abort policy → 1 attempt."""
     source = """\
-agent a
+let a = AgentCommand("a")
 let n: int = ask("?", agent = a, on_parse_error = Abort)
 n
 """
@@ -1962,10 +1692,9 @@ def test_validate_ir_ask_deep_valid_contract() -> None:
     validate_ir(prog, deep=True)
 
 
-def test_validate_ir_ask_request_deep_valid_contract() -> None:
-    """validate_ir: IrAskRequest with valid contract passes deep validation (671->exit)."""
-    from agm.agl.ir.contracts import ContractRequest
-    from agm.agl.ir.ids import ContractId, Location, SourceId
+def test_validate_ir_ask_request_deep_valid_without_a_contract() -> None:
+    """validate_ir: a well-formed IrAskRequest passes deep validation without a contract."""
+    from agm.agl.ir.ids import Location, SourceId
     from agm.agl.ir.nodes import IrAskRequest, IrConstText
     from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
     from agm.agl.ir.validate import validate_ir
@@ -1973,23 +1702,10 @@ def test_validate_ir_ask_request_deep_valid_contract() -> None:
 
     src_id = SourceId(0)
     dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    cid = ContractId(0)
-    req = ContractRequest(
-        codec_name="text",
-        strict_json=None,
-        json_schema=None,
-        decode=None,
-        target_type_label="text",
-        structured_exec=False,
-        format_instructions="",
-        is_unit=False,
-    )
     node = IrAskRequest(
         location=dummy_loc,
         agent=IrConstText(location=dummy_loc, value="ask"),
         prompt=IrConstText(location=dummy_loc, value="test"),
-        contract_id=cid,
-        max_attempts=1,
     )
     prog = ExecutableProgram(
         entry_module=ENTRY_ID,
@@ -1997,17 +1713,16 @@ def test_validate_ir_ask_request_deep_valid_contract() -> None:
         symbols={},
         nominals={},
         sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
-        contracts={cid: req},
+        contracts={},  # ask-request allocates no contract, and deep validation needs none.
     )
-    # Should pass without error (covers the deep valid path 671->exit).
     validate_ir(prog, deep=True)
 
 
-def test_ir_ask_request_unit_typed() -> None:
-    """IrAskRequest with is_unit=True contract -> target_type=None in record."""
+def test_ir_ask_request_has_a_text_target() -> None:
+    """ask-request always reports the fixed text target on its request record."""
     source = """\
-agent a
-let req = ask-request::[unit]("Do it.", agent = a)
+let a = AgentCommand("a")
+let req = ask-request("Do it.", agent = a)
 let target = req.target_type
 target
 """
@@ -2018,79 +1733,14 @@ target
         scripts={"a": []},
     )
     assert isinstance(ir["target"], EnumValue)
-    assert ir["target"].variant == "None"
-
-
-def test_ir_ask_no_errors_when_failed_covers_else_branch() -> None:
-    """IrAsk retry loop: parse fails with no errors/error_msg → last_errors=()."""
-    # Build a contract with text codec — but trick it: use json schema so parse
-    # can fail with neither errors nor error_msg. The simplest: use a valid
-    # json schema but make parse_agent_output return ok=False with empty errors and msg.
-    # The easiest way: use a text codec (always succeeds), so we need the json codec.
-    # We can create a contract where the schema is valid but the text doesn't
-    # extract as ambiguous / no-json (empty errors, no error_msg).
-    # Actually the only path where result.ok=False AND errors=() AND error_msg="" is
-    # when AgentParseResult.failure("") is called. Let's mock parse_agent_output:
-    from unittest.mock import patch
-
-    from agm.agl.eval.ir_interpreter import IrInterpreter
-    from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
-    from agm.agl.ir.ids import ContractId, Location, SourceId
-    from agm.agl.ir.nodes import IrAsk, IrConstText
-    from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
-    from agm.agl.modules.ids import ENTRY_ID
-    from agm.agl.runtime.agents import AgentRegistry
-    from agm.agl.runtime.codec import ParseResult
-    from agm.agl.runtime.request import AgentRequest, AgentResponse
-
-    src_id = SourceId(0)
-    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    cid = ContractId(0)
-    req = ContractRequest(
-        codec_name="json",
-        strict_json=None,
-        json_schema=_json.dumps({"type": "integer"}),
-        decode=ScalarDecode(ScalarKind.INT),
-        target_type_label="int",
-        structured_exec=False,
-        format_instructions="",
-        is_unit=False,
-    )
-    node = IrAsk(
-        location=dummy_loc,
-        agent=IrConstText(location=dummy_loc, value="ask"),
-        prompt=IrConstText(location=dummy_loc, value="test"),
-        contract_id=cid,
-        max_attempts=1,
-    )
-    prog = ExecutableProgram(
-        entry_module=ENTRY_ID,
-        modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(node,))},
-        symbols={},
-        nominals={},
-        sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
-        contracts={cid: req},
-    )
-
-    def _agent_fn(r: AgentRequest) -> AgentResponse:
-        return AgentResponse(content="invalid")
-
-    registry = AgentRegistry(named={AgentId("ask"): _agent_fn}, default_agent=None)
-    interp = IrInterpreter(prog, registry=registry)
-
-    # Patch _parse_contract_output to return failure with EMPTY errors AND EMPTY error_msg.
-    empty_failure = ParseResult(ok=False, value=None, error_msg="", errors=())
-    with patch("agm.agl.eval.ir_interpreter._parse_contract_output", return_value=empty_failure):
-        from agm.agl.semantics.exceptions import AglRaise
-
-        with pytest.raises(AglRaise):
-            interp.run()
+    assert ir["target"].variant == "Some"
+    assert ir["target"].fields["value"] == TextValue("text")
 
 
 def test_lower_on_parse_error_self_qualified_retry() -> None:
     """Self-qualified Retry parse policy produces the correct attempt count."""
     source = """\
-agent a
+let a = AgentCommand("a")
 let n: int = ask("?", agent = a, on_parse_error = ::Retry(n = 2))
 n
 """
@@ -2131,36 +1781,6 @@ def test_validate_ir_ask_shallow_does_not_check_contracts() -> None:
         contracts={},  # Missing contract, but deep=False skips checks.
     )
     # deep=False → skips contract_id check (covers 656->exit branch).
-    validate_ir(prog, deep=False)
-
-
-def test_validate_ir_ask_request_shallow_does_not_check_contracts() -> None:
-    """validate_ir: IrAskRequest in shallow validation skips contract checks (671->exit)."""
-    from agm.agl.ir.ids import ContractId, Location, SourceId
-    from agm.agl.ir.nodes import IrAskRequest, IrConstText
-    from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
-    from agm.agl.ir.validate import validate_ir
-    from agm.agl.modules.ids import ENTRY_ID
-
-    src_id = SourceId(0)
-    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    bad_cid = ContractId(999)
-    node = IrAskRequest(
-        location=dummy_loc,
-        agent=IrConstText(location=dummy_loc, value="ask"),
-        prompt=IrConstText(location=dummy_loc, value="test"),
-        contract_id=bad_cid,
-        max_attempts=1,
-    )
-    prog = ExecutableProgram(
-        entry_module=ENTRY_ID,
-        modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(node,))},
-        symbols={},
-        nominals={},
-        sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
-        contracts={},  # Missing contract, but deep=False skips checks.
-    )
-    # deep=False → skips contract_id check (covers 671->exit branch).
     validate_ir(prog, deep=False)
 
 
@@ -2326,9 +1946,8 @@ def test_enum_required_field_loop_partial_coverage() -> None:
         VariantDecode,
     )
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
 
-    nominal = NominalId(PRELUDE_ID, "Pair")
+    nominal = NominalId(1)
     decode = EnumDecode(
         nominal=nominal,
         display_name="Pair",
@@ -2454,9 +2073,8 @@ def test_classify_enum_sub_error_type_only_fallback() -> None:
         VariantDecode,
     )
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
 
-    nominal = NominalId(PRELUDE_ID, "Status")
+    nominal = NominalId(1)
     decode = EnumDecode(
         nominal=nominal,
         display_name="Status",
@@ -2506,10 +2124,9 @@ def test_classify_enum_failure_nullary_case_all_fields_present() -> None:
 
     from agm.agl.ir.contracts import EnumDecode, VariantDecode
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
     from agm.agl.runtime.codec import _classify_enum_failure
 
-    nominal = NominalId(PRELUDE_ID, "Status")
+    nominal = NominalId(1)
     decode = EnumDecode(
         nominal=nominal,
         display_name="Status",
@@ -2535,10 +2152,9 @@ def test_classify_enum_failure_known_case_all_payload_present() -> None:
 
     from agm.agl.ir.contracts import EnumDecode, ScalarDecode, ScalarKind, VariantDecode
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
     from agm.agl.runtime.codec import _classify_enum_failure
 
-    nominal = NominalId(PRELUDE_ID, "Status")
+    nominal = NominalId(1)
     decode = EnumDecode(
         nominal=nominal,
         display_name="Status",
@@ -2577,7 +2193,7 @@ enum Status
   | Ok
   | Err(msg: text)
 
-agent checker
+let checker = AgentCommand("checker")
 let status: Status = ask("Check.", agent = checker)
 status
 """
@@ -2614,7 +2230,7 @@ enum Status
   | Ok
   | Err(msg: text)
 
-agent checker
+let checker = AgentCommand("checker")
 let status: Status = ask("Check.", agent = checker)
 status
 """
@@ -2662,7 +2278,7 @@ enum Status
   | Ok
   | Err(msg: text)
 
-agent checker
+let checker = AgentCommand("checker")
 let status: Status = ask("Check.", agent = checker)
 status
 """
@@ -2697,3 +2313,65 @@ status
         f"Message mismatch:\n  reference: {ir_first.get('message')!r}\n  actual: {msg!r}"
     )
     assert ir_first.get("field") == first_err.get("field")
+
+
+@pytest.mark.parametrize("request_only", (False, True))
+def test_ir_ask_request_rejects_a_non_agent_value(request_only: bool) -> None:
+    """Malformed IR cannot expose an AgentRequest whose agent is not an Agent value."""
+    from agm.agl.eval.ir_interpreter import IrInterpreter
+    from agm.agl.ir.contracts import ContractRequest
+    from agm.agl.ir.ids import ContractId, Location, SourceId
+    from agm.agl.ir.nodes import IrAsk, IrAskRequest, IrConstInt, IrConstText
+    from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
+    from agm.agl.modules.ids import ENTRY_ID
+
+    source_id = SourceId(0)
+    location = Location(
+        source_id=source_id,
+        start_offset=0,
+        end_offset=1,
+        start_line=1,
+        start_col=0,
+    )
+    node: IrAsk | IrAskRequest
+    if request_only:
+        node = IrAskRequest(
+            location=location,
+            agent=IrConstInt(location=location, value=1),
+            prompt=IrConstText(location=location, value="prompt"),
+        )
+        contracts: dict[ContractId, ContractRequest] = {}
+    else:
+        contract_id = ContractId(0)
+        node = IrAsk(
+            location=location,
+            agent=IrConstInt(location=location, value=1),
+            prompt=IrConstText(location=location, value="prompt"),
+            contract_id=contract_id,
+            max_attempts=1,
+        )
+        contracts = {
+            contract_id: ContractRequest(
+                codec_name="text",
+                strict_json=None,
+                json_schema=None,
+                decode=None,
+                target_type_label="text",
+                structured_exec=False,
+                format_instructions="",
+                is_unit=False,
+            )
+        }
+    program = ExecutableProgram(
+        entry_module=ENTRY_ID,
+        modules={
+            ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(node,)),
+        },
+        symbols={},
+        nominals={},
+        sources={source_id: SourceFile(display_name="<test>", normalized_text="test")},
+        contracts=contracts,
+    )
+
+    with pytest.raises(TypeError, match="Agent enum value"):
+        IrInterpreter(program).run()

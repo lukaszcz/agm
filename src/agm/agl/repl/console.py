@@ -6,7 +6,7 @@ in :mod:`agm.agl.repl` is UI-free.  It provides:
 - :class:`AglPromptLexer` — syntax highlighting that drives the *real* AgL lexer
   (:func:`agm.agl.lexer.tokenize`) so colours track the grammar exactly;
 - :class:`AglCompleter` — completion fed from live session state (keywords,
-  bindings, agents, meta-command names);
+  bindings, meta-command names);
 - :func:`is_incomplete` — the multiline continuation predicate (delegates to the
   parser's structured incompleteness signal);
 - :func:`build_prompt_session` — a configured ``PromptSession`` with history,
@@ -541,10 +541,7 @@ class AglCompleter(Completer):
         # completer offers them.
         names.extend(BUILTIN_CALL_NAMES)
         names.extend(name for name, _type, _value in self._session.bindings())
-        names.extend(self._session.agents())
-        # De-duplicate while preserving the stable keyword-first ordering.  A
-        # default agent makes ``ask`` appear in both the built-in names and the
-        # agents pool; offering it twice is redundant.
+        # De-duplicate while preserving stable keyword-first ordering.
         seen: set[str] = set()
         unique: list[str] = []
         for name in names:
@@ -697,7 +694,7 @@ def make_console_confirm(
     read: PromptReader = reader if reader is not None else input
     write: Callable[[str], None] = printer if printer is not None else print
 
-    def confirm(callee: str, prompt: str) -> "ConfirmDecision":
+    def confirm(callee: str, prompt: str) -> ConfirmDecision:
         write(f"Agent call to {callee!r}:")
         write(_preview_prompt(prompt))
         while True:

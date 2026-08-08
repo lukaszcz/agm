@@ -44,11 +44,147 @@ def Text::display(value: text) -> text = "[%{normalize(value)}]"
 print(Text::display("ready"))
 ```
 
-A region contains only nested regions, `open` declarations, and static
-declarations: `def`, `extern def`, `record`, `enum`, `exception`, `type`, and,
-in an entry module, `agent`. Bindings, expressions, imports, exports,
-parameters, program declarations, infix declarations, and `builtin`
-declarations are not allowed there.
+A region contains nested regions, header `open` and `import` declarations,
+`export` declarations, static declarations (`def`, `extern def`, `record`,
+`enum`, `exception`, `type`, every `builtin` form), `param` declarations, and
+`let`/`var` bindings. Bare expressions,
+`:=` assignments, program declarations, and infix declarations are not
+allowed there.
+
+## Binder paths
+
+A region admits `let` and `var` bindings alongside its static declarations. A
+binding's type is inferred from its initializer, exactly as at the module
+root, and an explicit annotation is checked against it on either spelling:
+
+```agl
+scope Config
+let retries = 3
+var attempts: int = 0
+end Config
+```
+
+`let` and `var` also accept a scope-path prefix on a single-name binder at the
+module root, declaring a binding at that path directly — the same
+declaration-path shorthand available for `def` and the type forms:
+
+```agl
+let Config::retries = 3
+var Config::attempts = 0
+```
+
+A `let` pattern written as a plain qualifier chain — one or more `::`-separated
+name segments, not anchored at the module root — declares a scoped binding
+rather than matching a pattern: it is exactly the chain a declaration path
+could spell. Writing an argument list, even an empty one, an `as` binder, a
+module route, a type-argument-applied segment, or a `::` anchor keeps the
+pattern's ordinary match meaning:
+
+| Spelling | Meaning |
+|---|---|
+| `let A::x = e` | scoped binding `A::x` |
+| `let A::x() = e` | nullary constructor pattern, qualified |
+| `let A::x(a, b) = e` | constructor pattern with fields |
+| `let A::x as y = e` | constructor pattern bound to `y` |
+| `let x = e` | root binding |
+| `let ::x = e` | constructor pattern, anchored at the module root |
+
+The path prefix names a single binder, so it has no destructuring spelling.
+Written inside a region instead, a destructuring `let` binds every name its
+pattern selects as a member of that scope:
+
+```agl
+record Bounds(low: int, high: int)
+
+scope Config
+let Bounds(low, high) = Bounds(low = 0, high = 10)
+end Config
+
+print(Config::low)
+print(Config::high)
+```
+
+A binding's initializer runs at its region's position in the module body: in
+item order, together with the rest of the module's initializers, wherever the
+region falls in the source text. A scope split across separate blocks resumes
+exactly where the earlier block left off; a region never defers, reorders, or
+repeats initialization.
+
+## Parameters
+
+A region also admits `param` declarations, with no declaration-path
+shorthand — only the region form:
+
+```agl
+scope Deploy
+param region: text = "eu"
+param replicas: int
+end Deploy
+
+print("%{Deploy::region} x %{Deploy::replicas}")
+```
+
+A scoped parameter follows the same member and duplicate rules as every other
+member: visible bare inside its region, by its exact path from outside, and
+through `open`. Its **external key** — the name the CLI flag and the config
+table entry use to supply a value — is its full path spelling
+(`Deploy::region`), which is what makes grouping related parameters under one
+scope useful. See [Host environment](host-environment.md#params) for how the
+host resolves an external param value.
+
+## Import and export
+
+A region also admits `import` and `export` declarations. Both are header
+items, like `open`: they must precede the region's other items. A scoped
+import's bare contribution —
+`open import` or `import … using` — narrows to its own region; its qualifier
+route stays available module-wide, like any other import. A scoped export
+re-roots every atom it forwards under the region's own path. See
+[Modules](modules.md#import-and-export-inside-a-scope-region) for the
+complete semantics.
+
+Scoped bindings are never exported: library modules reject top-level `let`
+and `var` entirely, so a region's `let`/`var` members have no cross-module
+story.
+
+## Builtin declarations
+
+A region admits every `builtin` form — `builtin record`, `builtin enum`,
+`builtin exception`, `builtin def`, and `builtin var` — as a member of the
+region, following the same visibility rules as every other member. A
+`builtin` declaration's complete scoped name is different from an ordinary
+member's, though: it is one host identity shared across the whole program at
+that exact path, so it must be declared only once there — see [Built-in
+functions](functions.md#built-in-functions). This allows a receiver method
+such as `Agent::ask` to coexist with root `ask`. The example below therefore
+presumes a program started with `--no-stdlib` ([Modules](modules.md#prelude)),
+since `ExecResult` and `print` are otherwise already declared at those paths
+by the automatically-opened `std/core`:
+
+```agl
+scope Host
+builtin record ExecResult
+  stdout: text
+  exit_code: int
+  stderr: text
+  timed_out: bool
+
+builtin def print[T](value: T) -> unit
+end Host
+
+let result = Host::ExecResult(stdout = "x", exit_code = 0, stderr = "", timed_out = false)
+Host::print(result.stdout)
+```
+
+A scoped `builtin record`/`enum`/`exception` carries its declared scope path
+as part of its nominal identity, exactly like an ordinary scoped type; a
+scoped `builtin def` dispatches to the same host implementation as a root
+one, reached bare inside its region or after `open`, and by its exact path
+outside. A `builtin def` with first parameter `self` in a type scope is a
+builtin method: `Agent::ask` and `Agent::ask-request` use ordinary method
+selection and their receiver supplies the agent. `builtin var` keeps its separate restriction to the canonical
+`std/config` module regardless of scoping — see
+[Program structure](program-structure.md#declarations).
 
 ## Names and visibility
 
@@ -56,6 +192,27 @@ A declaration belongs to its complete scope path. Members of the same scope are
 visible by their bare names within that scope; enclosing scopes are considered
 outward, then the module root and imported bare names. `::name` starts at the
 module root, so it bypasses a nearer scoped member.
+
+A static declaration (`def` or a type) is visible throughout its
+scope regardless of textual order, matching the module root, where a `def` may
+call another declared later in the same file. A `let`, `var`, or `param`
+binding is different: it is visible only to references that follow it
+textually, in its own region or elsewhere in the module — exactly like a
+root-level `let` or `param`. This holds across separate blocks of the same
+scope: a member declared in an earlier `scope A` block cannot see a binding a
+later `scope A` block introduces, while the reverse order works. The same
+textual rule governs a binding reached through `open` — plain, `using`, or
+`hiding` alike: a reference sees the binding once the reference itself
+follows the binding's own declaration, regardless of where the `open`
+appears — an `open` written before the scope that declares the binding still
+exposes it to a later reference, just not to an earlier one.
+
+A scoped `var` is assigned through its path (`A::count := 1`) or, inside its
+region or after an `open`, through its bare name. A scoped `let` is not
+assignable: `:=` on it is the same immutable-binder error a root-level `let`
+raises. Assigning to a path that names a `def` or a type is
+likewise rejected as immutable, and a path with no such member is a focused
+error.
 
 Outside a scope, qualify a member with its exact path. Scope paths never use
 suffix matching: `Outer::Inner::work` does not make `Inner::work` available at
@@ -149,3 +306,12 @@ An open neither exports its contributions nor makes another module's opens
 transitive. If several contributions provide the same bare name, the ambiguity
 is reported when that name is used. Import selection and cross-module reach
 are described in [Modules](modules.md).
+
+## REPL
+
+A scoped `let`/`var`/`param` persists across REPL entries by its full path,
+exactly like a scoped `def` or type: a later entry may extend an existing
+scope with a new member, and a same-path binding declared later replaces the
+earlier one rather than colliding with it. A duplicate at the same path
+within one entry is still an error. `:reset` clears every scoped binding
+along with the rest of the session.

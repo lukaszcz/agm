@@ -1,8 +1,7 @@
-"""Single-module lowerer for the AgL typeless execution IR.
+"""Per-module lowerer for the AgL typeless execution IR.
 
-Transforms a successful match-compiled program artifact into an
-``ExecutableProgram`` for the supported node subset. Every implicit coercion is
-inserted explicitly at compile time via
+Lowers one checked module as a worker of whole-program linking. Every implicit
+coercion is inserted explicitly at compile time via
 ``compile_coercion``; the evaluator switches only on pre-resolved ``Coercion``
 descriptors and never inspects value types at runtime.
 
@@ -17,7 +16,7 @@ Supported AST nodes
   Items (top-level and block-level)
     LetDecl, VarDecl, AssignStmt (name target and indexed target)
     Declarations that have no runtime action:
-      RecordDef, EnumDef, TypeAlias, FuncDef, AgentDecl, ParamDecl,
+      RecordDef, EnumDef, TypeAlias, FuncDef, ParamDecl,
       ProgramDecl, ImportDecl, ExportDecl
 
 Any AST node outside this set raises ``NotImplementedError`` with a clear
@@ -36,16 +35,15 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import assert_never, cast
 
+from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals, DeclaredNominal
 from agm.agl.ir.contracts import (
     ContractPayload,
     ContractRequest,
     ConversionFailureMode,
     DecodeSchema,
 )
-from agm.agl.ir.ids import AgentId, ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
+from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
-    AutoTraceField,
-    IrAgentHandle,
     IrAnd,
     IrArith,
     IrAsk,
@@ -130,9 +128,6 @@ from agm.agl.ir.operations import (
     UnaryOp,
 )
 from agm.agl.ir.program import (
-    DryRunEntry,
-    ExecutableModule,
-    ExecutableProgram,
     ExternFunctionBody,
     FunctionDescriptor,
     IrFunctionBody,
@@ -143,7 +138,7 @@ from agm.agl.ir.program import (
     SymbolDescriptor,
     VariantDescriptor,
 )
-from agm.agl.ir.validate import validate_ir
+from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
 from agm.agl.lower.coercions import compile_coercion
 from agm.agl.lower.conversions import compile_recipe
 from agm.agl.matchcompile import (
@@ -159,14 +154,12 @@ from agm.agl.matchcompile import (
     FieldOccurrenceProvenance,
     LetSite,
     LiteralKind,
-    MatchCompiledModule,
     Occurrence,
     OccurrenceId,
     RecordConstructor,
 )
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
+from agm.agl.modules.ids import STD_CORE_ID, ModuleId, spell_scope_path
 from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
-from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import MethodDef, TypeTable
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
@@ -188,7 +181,6 @@ from agm.agl.semantics.types import (
     UnitType,
 )
 from agm.agl.syntax.nodes import (
-    AgentDecl,
     ArrayLit,
     AssignStmt,
     AssignTarget,
@@ -252,11 +244,12 @@ from agm.agl.syntax.nodes import (
     VarDecl,
     VarRef,
     pattern_binder_candidates,
+    scoped_public_name,
     simple_let_pattern_name,
+    static_items,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import (
-    build_extern_contract,
     build_format_instructions,
     build_param_decoder,
     derive_schema_and_decode,
@@ -269,7 +262,7 @@ from agm.agl.typecheck.env import (
 )
 from agm.util.text import normalize_newlines
 
-__all__ = ["InitializerOrigin", "_LinkState", "lower_module"]
+__all__ = ["InitializerOrigin", "_LinkState", "builtin_nominals_from_declarations"]
 
 
 def _contract_has_schema(
@@ -292,11 +285,13 @@ def _add_builtin_nominals(
     is seeded into every table by ``create_seeded_type_table``).
     """
     for name, typ in BUILTIN_PRELUDE_TYPES.items():
-        nominal = NominalId(PRELUDE_ID, name)
+        nominal = NominalId(require_reserved_nominal_id(name))
         if isinstance(typ, RecordType):
             nominals[nominal] = NominalDescriptor(
                 nominal=nominal,
-                display_name=name,
+                module_id=STD_CORE_ID,
+                scope_path=(),
+                declared_name=name,
                 kind=NominalKind.RECORD,
                 fields=tuple(type_table.record_fields(typ).keys()),
                 variants=(),
@@ -305,7 +300,9 @@ def _add_builtin_nominals(
         enum_type = cast(EnumType, typ)
         nominals[nominal] = NominalDescriptor(
             nominal=nominal,
-            display_name=name,
+            module_id=STD_CORE_ID,
+            scope_path=(),
+            declared_name=name,
             kind=NominalKind.ENUM,
             fields=(),
             variants=tuple(
@@ -315,18 +312,47 @@ def _add_builtin_nominals(
         )
 
     for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
-        nominal = NominalId(PRELUDE_ID, exc_name)
+        nominal = NominalId(require_reserved_nominal_id(exc_name))
         nominals[nominal] = NominalDescriptor(
             nominal=nominal,
-            display_name=exc_name,
+            module_id=STD_CORE_ID,
+            scope_path=(),
+            declared_name=exc_name,
             kind=NominalKind.EXCEPTION,
             fields=tuple(type_table.exception_fields(exc_type).keys()),
             variants=(),
         )
 
 
+def builtin_nominals_from_declarations(type_table: TypeTable) -> BuiltinNominals:
+    """Return the built-in nominal table for every currently-resolved ``builtin`` declaration.
+
+    Maps each bare name with a live ``builtin`` declaration to a
+    ``DeclaredNominal`` pairing its own identity with its declared source
+    spelling, read straight off :meth:`~agm.agl.semantics.type_table.TypeTable.builtin_declarations`
+    -- the SAME resolution (same forward-scan, last-match-wins tie-break,
+    same orphan skip) the checker itself queries
+    (:meth:`~agm.agl.semantics.type_table.TypeTable.builtin_declaration`) to
+    type a host call (e.g. ``exec``'s default result type) against a
+    program's own declaration, rather than an independent walk of the
+    modules' ASTs with its own separate tie-break -- so the two can never
+    disagree about which declaration a built-in name denotes. A name no
+    declaration claims is simply absent -- the resulting table then answers
+    it with the shipped standard library's own identity (see
+    :meth:`~agm.agl.ir.builtin_nominals.BuiltinNominals.resolve`).
+    """
+    declared = {
+        name: DeclaredNominal(
+            nominal=NominalId(typedef.decl_node_id),
+            display_name=spell_scope_path((*typedef.scope_path, typedef.name)),
+        )
+        for name, typedef in type_table.builtin_declarations().items()
+    }
+    return BuiltinNominals(declared=declared)
+
+
 # ---------------------------------------------------------------------------
-# Internal lowerer state (one instance per lower_module call)
+# Internal lowerer state (one instance per module lowered)
 # ---------------------------------------------------------------------------
 
 
@@ -355,6 +381,7 @@ class _LinkState:
     symbols: dict[SymbolId, SymbolDescriptor] = field(default_factory=dict)
     functions: dict[FunctionId, FunctionDescriptor] = field(default_factory=dict)
     nominals: dict[NominalId, NominalDescriptor] = field(default_factory=dict)
+    builtin_nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS
     sources: dict[SourceId, SourceFile] = field(default_factory=dict)
     contracts: dict[ContractId, ContractRequest] = field(default_factory=dict)
     let_value_symbols: dict[int, SymbolId] = field(default_factory=dict)
@@ -377,15 +404,6 @@ _CMP_OP_MAP: dict[BinOp, CmpOp] = {
     BinOp.GT: CmpOp.GT,
     BinOp.GE: CmpOp.GE,
 }
-
-
-def _static_items(items: tuple[Item, ...]) -> Iterator[Item]:
-    """Yield static declarations nested in named scope regions."""
-    for item in items:
-        if isinstance(item, ScopeRegion):
-            yield from _static_items(cast(tuple[Item, ...], item.items))
-        else:
-            yield item
 
 
 class _Lowerer:
@@ -550,7 +568,7 @@ class _Lowerer:
     # Binder kinds whose values live in evaluation frames and can therefore be
     # captured by a closure.  function_binding is resolved through the function
     # table (via the base frame, which always contains all module-level bindings);
-    # agent_binding/constructor_binding are not frame values in the IR
+    # Constructor bindings are not frame values in the IR.
     # (host prep / constructors are handled elsewhere) so they are not captures here.
     _CAPTURABLE_KINDS = frozenset(
         {
@@ -559,7 +577,6 @@ class _Lowerer:
             BinderKind.param_binding,
             BinderKind.catch_binder,
             BinderKind.pattern_binding,
-            BinderKind.agent_binding,
             BinderKind.loop_var_binding,
         }
     )
@@ -616,7 +633,6 @@ class _Lowerer:
                 | TypeAlias()
                 | ParamDecl()
                 | ProgramDecl()
-                | AgentDecl()
                 | ScopeRegion()
                 | BuiltinVarDecl()
                 | ImportDecl()
@@ -877,7 +893,7 @@ class _Lowerer:
         fn_id = self._link.fn_node_to_id[funcdef.node_id]
         fn_sym = self._link.fn_node_to_sym[funcdef.node_id]
 
-        ir_params, sig, _param_decl_ids, param_labels, result_label = self._lower_declared_params(
+        ir_params, _sig, _param_decl_ids, param_labels, result_label = self._lower_declared_params(
             funcdef, fn_id
         )
 
@@ -888,7 +904,6 @@ class _Lowerer:
             params=ir_params,
             impl=ExternFunctionBody(
                 name=funcdef.name,
-                contract=build_extern_contract(sig, self._type_table),
             ),
             param_labels=param_labels,
             result_label=result_label,
@@ -1142,11 +1157,7 @@ class _Lowerer:
                     assert isinstance(node_typ.result, RecordType)
                     return IrMakeConstructor(
                         location=self._loc(span),
-                        nominal=NominalId(
-                            node_typ.result.module_id,
-                            node_typ.result.name,
-                            node_typ.result.scope_path,
-                        ),
+                        nominal=NominalId(node_typ.result.decl_id),
                         display_name="::".join((*node_typ.result.scope_path, node_typ.result.name)),
                         variant=None,
                     )
@@ -1291,9 +1302,7 @@ class _Lowerer:
                 )
                 return IrVariantIs(
                     location=self._loc(span),
-                    nominal=NominalId(
-                        operand_type.module_id, operand_type.name, operand_type.scope_path
-                    ),
+                    nominal=NominalId(operand_type.decl_id),
                     variant=variant,
                     value=self.lower_expr(operand),
                     negated=negated,
@@ -1474,6 +1483,9 @@ class _Lowerer:
                 step_value = IrConstInt(location=loc, value=1)
             pre_items.append(IrBind(location=loc, symbol=step_sym, value=step_value))
             # Step guard: if __step <= 0 => raise RangeError(...)
+            range_error = self._link.builtin_nominals.resolve("RangeError")
+            range_error_nominal = range_error.nominal
+            range_error_display_name = range_error.display_name
             pre_items.append(
                 IrIf(
                     location=loc,
@@ -1490,8 +1502,8 @@ class _Lowerer:
                                 location=loc,
                                 exc=IrMakeException(
                                     location=loc,
-                                    nominal=NominalId(PRELUDE_ID, "RangeError"),
-                                    display_name="RangeError",
+                                    nominal=range_error_nominal,
+                                    display_name=range_error_display_name,
                                     fields=(
                                         (
                                             "message",
@@ -1500,7 +1512,6 @@ class _Lowerer:
                                                 value="loop step must be positive",
                                             ),
                                         ),
-                                        ("trace_id", AutoTraceField()),
                                     ),
                                 ),
                             ),
@@ -1671,6 +1682,9 @@ class _Lowerer:
                 self._source_slice(until_cond_expr.span) if until_cond_expr is not None else "false"
             )
             # Inner if: if __count == 0 => IrBreak else => IrRaise(MaxIterationsExceeded)
+            max_iterations_exceeded = self._link.builtin_nominals.resolve("MaxIterationsExceeded")
+            max_iterations_exceeded_nominal = max_iterations_exceeded.nominal
+            max_iterations_exceeded_display_name = max_iterations_exceeded.display_name
             inner_if = IrIf(
                 location=loc,
                 branches=(
@@ -1690,8 +1704,8 @@ class _Lowerer:
                             location=loc,
                             exc=IrMakeException(
                                 location=loc,
-                                nominal=NominalId(PRELUDE_ID, "MaxIterationsExceeded"),
-                                display_name="MaxIterationsExceeded",
+                                nominal=max_iterations_exceeded_nominal,
+                                display_name=max_iterations_exceeded_display_name,
                                 fields=(
                                     (
                                         "message",
@@ -1704,7 +1718,6 @@ class _Lowerer:
                                             ),
                                         ),
                                     ),
-                                    ("trace_id", AutoTraceField()),
                                     ("limit", IrLoad(location=loc, symbol=n_sym)),
                                     (
                                         "condition",
@@ -1970,17 +1983,14 @@ class _Lowerer:
     def _nominal_for_constructor_result(self, typ: Type) -> tuple[NominalId, str]:
         """Return the runtime nominal represented by a constructor function result."""
         if isinstance(typ, (RecordType, EnumType, ExceptionType)):
-            return NominalId(typ.module_id, typ.name, typ.scope_path), "::".join(
-                (*typ.scope_path, typ.name)
-            )
+            return NominalId(typ.decl_id), "::".join((*typ.scope_path, typ.name))
         raise AssertionError(f"constructor function has non-nominal result {typ!r}")
 
     def _nominal_for_field_projection(self, typ: Type) -> tuple[NominalId, str, IrFieldMode]:
         """Return a nominal and mode from declaration metadata, never a name test."""
         nominal, display_name = self._nominal_for_constructor_result(typ)
-        typedef = self._checked.type_env.type_table.get(
-            nominal.module_id, nominal.declared_name, nominal.scope_path
-        )
+        assert isinstance(typ, (RecordType, EnumType, ExceptionType))
+        typedef = self._checked.type_env.type_table.get_by_id(typ.decl_id)
         assert typedef is not None, (
             f"compiler bug: no nominal declaration for field projection {nominal!r}"
         )
@@ -2022,6 +2032,8 @@ class _Lowerer:
         kind: BuiltinKind,
         call_node: "Call",
         span: "SourceSpan",
+        *,
+        agent: IrExpr | None = None,
     ) -> IrExpr:
         """Lower a builtin call node by dispatching on ``BuiltinKind``.
 
@@ -2085,10 +2097,12 @@ class _Lowerer:
                 return IrCopyValue(location=loc, kind=copy_kind, value=arg_ir)
 
             case BuiltinKind.ASK:
-                return self._lower_ask_call(call_node, span, structured_exec=False)
+                return self._lower_ask_call(call_node, span, structured_exec=False, agent=agent)
 
             case BuiltinKind.ASK_REQUEST:
-                return self._lower_ask_call(call_node, span, structured_exec=False, is_request=True)
+                return self._lower_ask_call(
+                    call_node, span, structured_exec=False, is_request=True, agent=agent
+                )
 
             case BuiltinKind.EXEC:
                 return self._lower_exec_call(call_node, span)
@@ -2115,7 +2129,17 @@ class _Lowerer:
         # Check for builtin calls first
         builtin_kind = self._checked.resolved.builtin_calls.get(nid)
         if builtin_kind is not None:
-            return self._lower_builtin_call(builtin_kind, call_node, span)
+            if isinstance(callee, FieldAccess):
+                method = self._checked.method_selection_for(callee.node_id)
+                if method is not None and method.is_builtin:
+                    return self._lower_builtin_call(
+                        builtin_kind,
+                        call_node,
+                        span,
+                        agent=self.lower_expr(callee.obj),
+                    )
+            else:
+                return self._lower_builtin_call(builtin_kind, call_node, span)
 
         # A call whose callee selected a method: call the method directly with a
         # receiver-first argument list instead of allocating the bound closure
@@ -2351,7 +2375,7 @@ class _Lowerer:
         loc = self._loc(span)
 
         if isinstance(typ, RecordType):
-            nominal = NominalId(typ.module_id, typ.name, typ.scope_path)
+            nominal = NominalId(typ.decl_id)
             # Build fields in declaration order via the shared TypeTable (its
             # TypeDef stores fields as a declaration-ordered tuple).
             ir_fields = tuple(
@@ -2365,25 +2389,20 @@ class _Lowerer:
             )
 
         if isinstance(typ, ExceptionType):
-            nominal = NominalId(typ.module_id, typ.name, typ.scope_path)
-            # ONE trace id allocation sentinel per construction (auto-fill any
-            # declared field not present in arg_slots).
-            exc_fields: list[tuple[str, IrExpr | AutoTraceField]] = []
-            for fname in self._type_table.exception_fields(typ):
-                if fname in arg_slots:
-                    exc_fields.append((fname, arg_slots[fname]))
-                else:
-                    exc_fields.append((fname, AutoTraceField()))
+            nominal = NominalId(typ.decl_id)
+            exc_fields = tuple(
+                (fname, arg_slots[fname]) for fname in self._type_table.exception_fields(typ)
+            )
             return IrMakeException(
                 location=loc,
                 nominal=nominal,
                 display_name="::".join((*typ.scope_path, typ.name)),
-                fields=tuple(exc_fields),
+                fields=exc_fields,
             )
 
         if isinstance(typ, EnumType):
             assert variant is not None, "compiler bug: enum constructor must have variant"
-            nominal = NominalId(typ.module_id, typ.name, typ.scope_path)
+            nominal = NominalId(typ.decl_id)
             variant_fields = self._type_table.enum_variants(typ).get(variant, {})
             enum_fields = tuple((fname, arg_slots[fname]) for fname in variant_fields)
             return IrMakeEnum(
@@ -2730,10 +2749,11 @@ class _Lowerer:
 
     def _lower_catch_clause(self, clause: "CatchClause") -> IrCatchHandler:
         """Lower a ``CatchClause`` to an ``IrCatchHandler``."""
-        # Determine nominal + display_name.  ``nominal`` must name the resolved
-        # exception's *real* module-qualified identity (built-in, entry, or a
-        # library module for a cross-module exception) because specific catches
-        # match exactly by ``ExceptionValue.nominal`` at runtime.
+        # Determine nominal + display_name.  ``nominal`` must carry the resolved
+        # exception's own declaration identity (``decl_id`` — the reserved
+        # identity for a built-in, or the declaring AST node for an entry or
+        # library exception) because specific catches match exactly by
+        # ``ExceptionValue.nominal`` at runtime.
         exc_type = clause.exc_type
         if exc_type is None or exc_type == "_" or exc_type == "Exception":
             nominal: NominalId | None = None
@@ -2743,7 +2763,7 @@ class _Lowerer:
             assert isinstance(resolved, ExceptionType), (
                 f"compiler bug: catch clause type {exc_type!r} did not resolve to an ExceptionType"
             )
-            nominal = NominalId(resolved.module_id, resolved.name, resolved.scope_path)
+            nominal = NominalId(resolved.decl_id)
             display_name = resolved.name
 
         # Allocate a SymbolId for the binding variable when present.
@@ -2845,7 +2865,7 @@ class _Lowerer:
             )
             binder_symbols[node_id] = self._alloc_sym(
                 binding.decl_node_id,
-                name=name,
+                name=scoped_public_name(let.scope_path, name),
                 mutable=False,
                 public=top_level,
             )
@@ -2913,11 +2933,7 @@ class _Lowerer:
         def case_key(constructor: Constructor) -> IrCaseKey:
             if isinstance(constructor, EnumConstructor):
                 return IrEnumCaseKey(
-                    NominalId(
-                        constructor.enum_type.module_id,
-                        constructor.enum_type.name,
-                        constructor.enum_type.scope_path,
-                    ),
+                    NominalId(constructor.enum_type.decl_id),
                     constructor.variant,
                 )
             if isinstance(constructor, BoolConstructor):
@@ -2959,9 +2975,9 @@ class _Lowerer:
         ) -> tuple[IrBind, ...]:
             """Project demanded nominal fields into their occurrence symbols."""
             nominal = (
-                NominalId(constructor.enum_type.module_id, constructor.enum_type.name)
+                NominalId(constructor.enum_type.decl_id)
                 if isinstance(constructor, EnumConstructor)
-                else NominalId(constructor.record_type.module_id, constructor.record_type.name)
+                else NominalId(constructor.record_type.decl_id)
             )
             return tuple(
                 IrBind(
@@ -3068,6 +3084,7 @@ class _Lowerer:
         *,
         structured_exec: bool,
         is_request: bool = False,
+        agent: IrExpr | None = None,
     ) -> IrExpr:
         """Lower an ask() or ask-request() builtin call to IrAsk/IrAskRequest."""
         loc = self._loc(span)
@@ -3076,13 +3093,20 @@ class _Lowerer:
         # 1. Evaluate the prompt (first positional arg).
         prompt_ir = self.lower_expr(call_node.args[0])
 
-        # 2. Evaluate the agent expression (named arg 'agent:', or default "ask").
-        if "agent" in named_map:
-            agent_ir: IrExpr = self.lower_expr(named_map["agent"].value)
+        # 2. Evaluate the explicit Agent value or load the ordinary defaulted parameter.
+        if agent is not None:
+            agent_ir = agent
+        elif "agent" in named_map:
+            agent_ir = self.lower_expr(named_map["agent"].value)
         else:
-            # No agent: named arg → the default agent name "ask" as a text constant.
-            # The evaluator will use this TextValue as the agent name.
-            agent_ir = IrConstText(location=loc, value="ask")
+            agent_ir = IrBuiltinLoad(location=loc, key="default-agent")
+
+        # ask-request neither dispatches nor parses output — it builds an
+        # AgentRequest whose contract fields are fixed constants — so it needs
+        # neither a retry count nor an output contract, and steps 3 and 4 below
+        # apply to ``ask`` alone.
+        if is_request:
+            return IrAskRequest(location=loc, agent=agent_ir, prompt=prompt_ir)
 
         # 3. Determine max_attempts from the on_parse_error named arg.
         max_attempts = self._extract_max_attempts(call_node)
@@ -3125,14 +3149,6 @@ class _Lowerer:
 
         contract_id = self._alloc_contract(contract_req)
 
-        if is_request:
-            return IrAskRequest(
-                location=loc,
-                agent=agent_ir,
-                prompt=prompt_ir,
-                contract_id=contract_id,
-                max_attempts=max_attempts,
-            )
         return IrAsk(
             location=loc,
             agent=agent_ir,
@@ -3271,7 +3287,7 @@ class _Lowerer:
                     # surrounding sequence nodes on the evaluator's hot path.
                     return self._lower_named_binding(
                         decl_node_id=binding.decl_node_id,
-                        name=simple_name,
+                        name=scoped_public_name(let.scope_path, simple_name),
                         rhs=let.value,
                         span=let.span,
                         binding_type=matched_type,
@@ -3280,10 +3296,10 @@ class _Lowerer:
                     )
                 return self._lower_pattern_let(let, top_level=top_level)
 
-            case VarDecl(name=name, value=rhs, span=span, node_id=nid):
+            case VarDecl(name=name, value=rhs, span=span, node_id=nid, scope_path=scope_path):
                 return self._lower_named_binding(
                     decl_node_id=nid,
-                    name=name,
+                    name=scoped_public_name(scope_path, name),
                     rhs=rhs,
                     span=span,
                     binding_type=self._binding_type(nid),
@@ -3310,21 +3326,6 @@ class _Lowerer:
                 # so _lower_param_decl is always applicable here.
                 self._lower_param_decl(param_decl)
                 return None
-
-            case AgentDecl() as agent_decl:
-                sym = self._sym_for_decl(agent_decl.node_id)
-                loc = self._loc(agent_decl.span)
-                return IrBind(
-                    location=loc,
-                    symbol=sym,
-                    value=IrAgentHandle(
-                        location=loc,
-                        agent_id=AgentId(
-                            agent_decl.name,
-                            tuple(segment.name for segment in agent_decl.scope_path),
-                        ),
-                    ),
-                )
 
             case (
                 RecordDef()
@@ -3357,10 +3358,16 @@ class _Lowerer:
         appends an ``IrParam`` to ``self._params``.  Does NOT emit an initializer
         into ``ir_items`` — params are installed by the evaluator's ``run()``
         from ``program.params + param_values`` BEFORE any module initializer runs.
+
+        A scoped param's public name — both the symbol's and the ``IrParam``'s —
+        is its full path spelling (``"Deploy::region"``), matching the external
+        key the CLI/config layer uses; a root param's path is empty, leaving its
+        bare name.
         """
+        public_name = scoped_public_name(param.scope_path, param.name)
         sym = self._alloc_sym(
             param.node_id,
-            name=param.name,
+            name=public_name,
             mutable=False,
             public=True,
             owner=self._module_id,
@@ -3372,7 +3379,7 @@ class _Lowerer:
             default_ir = None
         ir_param = IrParam(
             symbol=sym,
-            public_name=param.name,
+            public_name=public_name,
             required=(param.default is None),
             default=default_ir,
             location=self._loc(param.span),
@@ -3443,104 +3450,11 @@ class _Lowerer:
     # Top-level entry point
     # ------------------------------------------------------------------
 
-    def _build_nominals(self) -> None:
-        """Populate ``self._link.nominals`` with all user-declared and built-in nominals.
-
-        Adds:
-        - All user-declared record/enum/exception nominals from the entry
-          module's type env.
-        - All built-in prelude record/enum and exception descriptors keyed by
-          NominalId(PRELUDE_ID, name).
-
-        Field, variant, and exception-field names are resolved through the
-        shared ``TypeTable`` rather than any embedded map on the handle.
-        """
-        table = self._type_table
-        # User-declared nominals for this lowering unit.
-        for name, typ in self._checked.type_env.non_builtin_type_items():
-            if isinstance(typ, RecordType):
-                nominal = NominalId(typ.module_id, typ.name, typ.scope_path)
-                self._link.nominals[nominal] = NominalDescriptor(
-                    nominal=nominal,
-                    display_name="::".join((*typ.scope_path, typ.name)),
-                    kind=NominalKind.RECORD,
-                    fields=tuple(table.record_fields(typ).keys()),
-                    variants=(),
-                )
-            elif isinstance(typ, EnumType):
-                nominal = NominalId(typ.module_id, typ.name, typ.scope_path)
-                variants = tuple(
-                    VariantDescriptor(name=vname, fields=tuple(vfields.keys()))
-                    for vname, vfields in table.enum_variants(typ).items()
-                )
-                self._link.nominals[nominal] = NominalDescriptor(
-                    nominal=nominal,
-                    display_name="::".join((*typ.scope_path, typ.name)),
-                    kind=NominalKind.ENUM,
-                    fields=(),
-                    variants=variants,
-                )
-            elif isinstance(typ, ExceptionType):
-                nominal = NominalId(typ.module_id, typ.name, typ.scope_path)
-                self._link.nominals[nominal] = NominalDescriptor(
-                    nominal=nominal,
-                    display_name="::".join((*typ.scope_path, typ.name)),
-                    kind=NominalKind.EXCEPTION,
-                    fields=tuple(table.exception_fields(typ).keys()),
-                    variants=(),
-                )
-            else:  # pragma: no cover
-                # non_builtin_type_items() only ever yields Record/Enum/Exception
-                # handles for a non-generic user declaration (generics live in a
-                # separate table, aliases are never registered into _types).
-                raise AssertionError(
-                    f"compiler bug: non-nominal type {typ!r} for {name!r} in "
-                    "non_builtin_type_items()"
-                )
-
-        # Generic definitions are stored separately from the ordinary type
-        # namespace. Runtime nominal identity erases type arguments, so one
-        # descriptor per generic declaration is sufficient for every instance.
-        # Field/variant NAMES are read directly off the registered TypeDef
-        # template (never instantiated — a generic template has no concrete
-        # type_args to substitute).
-        for name, generic in self._checked.type_env.all_generic_types().items():
-            typ = generic.template
-            nominal = NominalId(typ.module_id, typ.name, typ.scope_path)
-            typedef = table.get(typ.module_id, typ.name, typ.scope_path)
-            assert typedef is not None, (
-                f"compiler bug: generic type {name!r} has no TypeDef registered"
-            )
-            if isinstance(typ, RecordType):
-                self._link.nominals[nominal] = NominalDescriptor(
-                    nominal=nominal,
-                    display_name="::".join((*typ.scope_path, typ.name)),
-                    kind=NominalKind.RECORD,
-                    fields=tuple(fname for fname, _ in typedef.fields),
-                )
-            else:
-                self._link.nominals[nominal] = NominalDescriptor(
-                    nominal=nominal,
-                    display_name="::".join((*typ.scope_path, typ.name)),
-                    kind=NominalKind.ENUM,
-                    variants=tuple(
-                        VariantDescriptor(vname, tuple(fname for fname, _ in vfields))
-                        for vname, vfields in typedef.variants
-                    ),
-                )
-
-        _add_builtin_nominals(self._link.nominals, table)
-
-    def _scoped_agent_is_referenced(self, agent: AgentDecl) -> bool:
-        """Whether a scoped agent needs a runtime handle in this module.
-
-        Whole-program lowering emits scoped handles lazily after agent
-        reconciliation has validated every declaration. REPL lowering opts
-        into eager handles so a promoted scope member remains usable later.
-        """
-        return any(
-            ref.decl_node_id == agent.node_id for ref in self._checked.resolved.resolution.values()
-        )
+    def prealloc_static_symbols(self, body: Block, *, public: bool) -> None:
+        """Pre-allocate static function symbols before lowering module bodies."""
+        for item in static_items(body.items):
+            if isinstance(item, FuncDef) and not item.is_builtin:
+                self._prealloc_funcdef(item)
 
     def lower_initializers(
         self,
@@ -3548,147 +3462,38 @@ class _Lowerer:
         *,
         top_level: bool,
         handles_only: bool = False,
-        eager_scoped_agents: bool = False,
     ) -> tuple[IrExpr, ...]:
         """Lower one module body and publish its initializer origins.
 
         This is the single walk that decides which items become initializers
-        and in what order. Both single-module and multi-module entry points use
-        it; it publishes the source item behind every emitted initializer for
-        REPL promotion. A scope region contributes its nested declarations under
-        the region's own source index, so promotion treats a region as one
-        declaration group. ``handles_only`` keeps a library module to the items
-        it must expose as runtime handles: functions and needed agents.
+        and in what order, shared by every module of a program; it publishes
+        the source item behind every emitted initializer for REPL promotion.
+        A scope region is transparent here exactly as it is to
+        ``static_items``: each of its members gets its own source index, the
+        same as a root item, so a region is not one promotable declaration
+        group — a binder inside a region completes and promotes independently
+        of its siblings. ``handles_only`` keeps a library module to function
+        initializers, which are the only declarations requiring runtime handles.
         """
         function_initializers: list[IrExpr] = []
         function_origins: list[InitializerOrigin] = []
         other_initializers: list[IrExpr] = []
         other_origins: list[InitializerOrigin] = []
-        for source_index, item in enumerate(body.items):
-            members = _static_items((item,)) if isinstance(item, ScopeRegion) else (item,)
-            for member in members:
-                is_function = isinstance(member, FuncDef) and not member.is_builtin
-                if handles_only and not is_function and not isinstance(member, AgentDecl):
-                    continue
-                if (
-                    isinstance(member, AgentDecl)
-                    and member.scope_path
-                    and not eager_scoped_agents
-                    and not self._scoped_agent_is_referenced(member)
-                ):
-                    continue
-                ir = self.lower_item(member, top_level=top_level)
-                if ir is None:
-                    continue
-                origin = InitializerOrigin(source_index=source_index, is_function=is_function)
-                if is_function:
-                    function_initializers.append(ir)
-                    function_origins.append(origin)
-                else:
-                    other_initializers.append(ir)
-                    other_origins.append(origin)
+        for source_index, member in enumerate(static_items(body.items)):
+            is_function = isinstance(member, FuncDef) and not member.is_builtin
+            if handles_only and not is_function:
+                continue
+            ir = self.lower_item(member, top_level=top_level)
+            if ir is None:
+                continue
+            origin = InitializerOrigin(source_index=source_index, is_function=is_function)
+            if is_function:
+                function_initializers.append(ir)
+                function_origins.append(origin)
+            else:
+                other_initializers.append(ir)
+                other_origins.append(origin)
 
         initializers = tuple((*function_initializers, *other_initializers))
         self._link.initializer_origins[self._module_id] = tuple((*function_origins, *other_origins))
         return initializers
-
-    def lower(self) -> ExecutableProgram:
-        """Lower this validated program payload to an ``ExecutableProgram``."""
-        self._build_nominals()
-
-        body = self._checked.resolved.program.body
-
-        # Phase 1: pre-allocate static function symbols and IDs for mutual
-        # recursion, plus every needed agent handle before bodies are lowered.
-        for item in _static_items(body.items):
-            if isinstance(item, FuncDef) and not item.is_builtin:
-                self._prealloc_funcdef(item)
-            elif isinstance(item, AgentDecl) and (
-                not item.scope_path or self._scoped_agent_is_referenced(item)
-            ):
-                self._alloc_sym(
-                    item.node_id,
-                    name=item.name,
-                    mutable=False,
-                    public=True,
-                    owner=self._module_id,
-                )
-
-        # Phase 2: lower all items
-        initializers = self.lower_initializers(body, top_level=True)
-
-        entry_mod = ExecutableModule(
-            module_id=self._module_id,
-            initializers=initializers,
-        )
-
-        dry_run_inventory = tuple(
-            DryRunEntry(
-                callee=csr.callee,
-                codec_name=csr.codec_name,
-                target_type_label=repr(csr.target_type),
-                has_schema=_contract_has_schema(
-                    self._checked.contract_specs.get(csr.node_id),
-                    self._contract_payloads.get(csr.node_id),
-                ),
-                parse_policy=csr.parse_policy,
-                line=csr.line,
-                col=csr.col,
-            )
-            for csr in self._checked.call_sites
-        )
-        return ExecutableProgram(
-            entry_module=self._module_id,
-            modules={self._module_id: entry_mod},
-            symbols=dict(self._link.symbols),
-            nominals=dict(self._link.nominals),
-            sources=dict(self._link.sources),
-            functions=dict(self._link.functions),
-            params=tuple(self._params),
-            contracts=dict(self._link.contracts),
-            dry_run_inventory=dry_run_inventory,
-        )
-
-
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
-
-
-def lower_module(
-    compiled: MatchCompiledModule,
-    *,
-    source_text: str,
-    source_label: str,
-    contract_payloads: Mapping[int, ContractPayload] | None = None,
-) -> ExecutableProgram:
-    """Lower a single-module match-compiled artifact to an ``ExecutableProgram``.
-
-    :param compiled: the statically match-compiled program to lower.
-    :param source_text: the normalised source text (used in the sources table).
-    :param source_label: human-readable label for the source (display_name).
-    :returns: the linked ``ExecutableProgram`` ready for evaluation.
-    :raises NotImplementedError: for unsupported AST nodes.
-    :raises AssertionError: for missing checker side-table entries (compiler bugs).
-    """
-    # ``compiled`` validated itself when it was constructed; lowering adds the IR
-    # self-check over its own output below.
-    checked = compiled.checked
-    link = _LinkState()
-    source_id = SourceId(link.next_source)
-    link.next_source += 1
-    normalized = normalize_newlines(source_text)
-    link.sources[source_id] = SourceFile(display_name=source_label, normalized_text=normalized)
-    lowerer = _Lowerer(
-        checked,
-        link,
-        ENTRY_ID,
-        source_id,
-        source_text,
-        compiled.sites,
-        contract_payloads=contract_payloads,
-    )
-    program = lowerer.lower()
-    if self_validation_enabled():
-        validate_ir(program)
-    return program

@@ -10,7 +10,6 @@ from typing import Never, NoReturn, assert_never
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
-    AgentType,
     ArrayType,
     BoolType,
     BottomType,
@@ -201,7 +200,6 @@ def constructor_inhabits_type(constructor: Constructor, subject_type: Type) -> b
             | DictType()
             | ExceptionType()
             | UnitType()
-            | AgentType()
             | FunctionType()
             | BottomType()
         ):
@@ -248,14 +246,22 @@ def _build_record_signature(record_type: RecordType, table: TypeTable) -> Closed
 
 
 def _nominal_signature(nominal_type: EnumType | RecordType, table: TypeTable) -> ClosedSignature:
-    """Return a declaration-sensitive closed signature for a nominal type."""
+    """Return a declaration-sensitive closed signature for a nominal type.
+
+    Memoized per ``(handle, its declaration)``: pairing the handle with the
+    ``TypeDef`` it NAMES — looked up by the handle's own declaration identity,
+    never by its bare name — is what makes a redeclaration of exactly that
+    declaration invalidate the entry, without an unrelated declaration
+    sharing the name affecting it either way. A handle naming no registered
+    declaration has nothing to key an entry on, so it is built uncached.
+    """
 
     def build() -> ClosedSignature:
         if isinstance(nominal_type, EnumType):
             return _build_enum_signature(nominal_type, table)
         return _build_record_signature(nominal_type, table)
 
-    typedef = table.get(nominal_type.module_id, nominal_type.name)
+    typedef = table.get_by_id(nominal_type.decl_id)
     if typedef is None:
         return build()
     cache = _NOMINAL_SIGNATURES.get(table)
@@ -296,7 +302,6 @@ def signature_for_type(subject_type: Type, table: TypeTable) -> Signature:
             | DictType()
             | ExceptionType()
             | UnitType()
-            | AgentType()
             | FunctionType()
         ):
             return OpenSignature()
@@ -363,6 +368,8 @@ def normalize_pattern(
                     constructor_ref.owner_name,
                     subject_type.type_args,
                     constructor_ref.owner_module_id,
+                    constructor_ref.owner_path,
+                    decl_id=subject_type.decl_id,
                 ),
                 name,
                 checked.type_env.type_table,
@@ -389,11 +396,7 @@ def normalize_pattern(
             # Compare checker-published nominal identity; normalization does not
             # re-select the constructor from scope candidates.
             selected_owner = checked.pattern_constructor_owner_for(pattern.node_id)
-            if (
-                selected_owner is None
-                or selected_owner.module_id != subject_type.module_id
-                or selected_owner.declared_name != subject_type.name
-            ):
+            if selected_owner is None or selected_owner.value != subject_type.decl_id:
                 raise MatchCompileInvariantError(
                     "invalid final constructor classification: published nominal owner disagrees "
                     "with the checked occurrence type"

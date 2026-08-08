@@ -2,7 +2,7 @@
 
 Covers:
 - CLI wires FILE argument and params, --strict-json/--no-strict-json,
-  --max-iters, --runner, --log-file, --no-log flags into ExecArgs
+  --max-iters, --agent, --log-file, --no-log flags into ExecArgs
 - Missing file exits with code 1 and prints to stderr
 - Unreadable file exits with code 1 and prints error to stderr
 - Valid programs execute through the program pipeline; static failures and uncaught
@@ -16,6 +16,7 @@ import re
 import stat
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -135,17 +136,16 @@ class TestExecArgsParsing:
         args = recorded_runs[0]
         assert getattr(args, "max_iters") == 10
 
-    def test_exec_runner_flag(
+    def test_exec_agent_flag(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("let x = 1\n")
 
-        result = invoke(runner, ["exec", "--runner", "claude -p", str(agl_file)])
+        result = invoke(runner, ["exec", "--agent", 'AgentCommand("echo agent")', str(agl_file)])
         assert result.exit_code == 0
 
-        args = recorded_runs[0]
-        assert getattr(args, "runner") == "claude -p"
+        assert getattr(recorded_runs[0], "agent") == 'AgentCommand("echo agent")'
 
     def test_exec_log_file_flag(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
@@ -247,7 +247,6 @@ class TestExecCommandInline:
             param_tokens=param_tokens or [],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=True,
             log_file=None,
         )
@@ -275,7 +274,6 @@ class TestExecCommandInline:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=True,
             log_file=None,
         )
@@ -341,7 +339,6 @@ class TestExecCommandBehavior:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -359,7 +356,6 @@ class TestExecCommandBehavior:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -382,7 +378,6 @@ class TestExecCommandBehavior:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -407,7 +402,6 @@ class TestExecCommandBehavior:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -428,7 +422,6 @@ class TestExecCommandBehavior:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -449,7 +442,6 @@ class TestExecCommandBehavior:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=str(log_path),
         )
@@ -469,10 +461,15 @@ def _exec_args(
         param_tokens=param_tokens or [],
         strict_json=None,
         max_iters=None,
-        runner=None,
         no_log=False,
         log_file=log_file,
     )
+
+
+def _exec_args_no_log(agl_file: Path, **overrides: object) -> ExecArgs:
+    """Build ``ExecArgs`` with trace logging disabled."""
+    values = {"no_log": True, **overrides}
+    return replace(_exec_args(agl_file), **values)
 
 
 _skip_if_root = pytest.mark.skipif(
@@ -701,7 +698,6 @@ class TestExecCommandWarnings:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -781,54 +777,65 @@ class TestExecParsesSourceOnce:
     ) -> None:
         import agm.agl.modules.loader as loader_mod
         import agm.agl.scope.program as scope_graph_mod
-        from agm.agl.modules.loader import ModuleGraph
+        from agm.agl.modules.ids import ModuleId
+        from agm.agl.modules.loader import LoadedModule, ModuleGraph
         from agm.agl.modules.roots import RootSet
         from agm.agl.scope.program import ResolvedProgram
+        from agm.agl.syntax.advisories import SpacedQualifier
+        from agm.agl.syntax.nodes import Program
         from agm.core import dry_run
 
         agl_file = tmp_path / "prog.agl"
         # A declared+called agent: exec must read the inventory AND run the
         # static pipeline, the exact scenario that previously parsed twice.
-        agl_file.write_text('agent impl\nask("do it", agent = impl)\n')
+        agl_file.write_text('let impl = AgentCommand("impl")\nask("do it", agent = impl)\n')
 
-        real_load = loader_mod.load_graph
+        real_build_repl_graph = loader_mod.build_repl_graph
         real_resolve_program = scope_graph_mod.resolve_program
-        load_calls = 0
+        build_graph_calls = 0
         resolve_program_calls = 0
 
-        def counting_load(
-            entry_source: str,
+        def counting_build_repl_graph(
+            program: Program,
+            next_start_id: int,
             *,
-            entry_path: Path | None,
+            path: Path | None,
+            cached: dict[ModuleId, LoadedModule],
             roots: RootSet,
             default_stdlib: bool = True,
-        ) -> ModuleGraph:
-            nonlocal load_calls
-            load_calls += 1
-            return real_load(
-                entry_source,
-                entry_path=entry_path,
+            spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
+            default_label: str = "<repl>",
+            source_text: str = "",
+        ) -> tuple[ModuleGraph, int, dict[ModuleId, LoadedModule]]:
+            nonlocal build_graph_calls
+            build_graph_calls += 1
+            return real_build_repl_graph(
+                program,
+                next_start_id,
+                path=path,
+                cached=cached,
                 roots=roots,
                 default_stdlib=default_stdlib,
+                spaced_qualifiers=spaced_qualifiers,
+                default_label=default_label,
+                source_text=source_text,
             )
 
         def counting_resolve_program(
             graph: ModuleGraph,
-            *,
-            ambient_agents: frozenset[str] = frozenset(),
         ) -> ResolvedProgram:
             nonlocal resolve_program_calls
             resolve_program_calls += 1
-            return real_resolve_program(graph, ambient_agents=ambient_agents)
+            return real_resolve_program(graph)
 
-        monkeypatch.setattr(loader_mod, "load_graph", counting_load)
+        monkeypatch.setattr(loader_mod, "build_repl_graph", counting_build_repl_graph)
         monkeypatch.setattr(scope_graph_mod, "resolve_program", counting_resolve_program)
         # Dry-run drives the full static pipeline (parse → scope → typecheck →
         # reconcile) without executing any agent.
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         assert exec_command.run(_exec_args(agl_file)) is None
-        assert load_calls == 1
+        assert build_graph_calls == 1
         assert resolve_program_calls == 1
 
 
@@ -885,7 +892,9 @@ class TestExecLowersGraphOnce:
 
         lowerings = self._count_lowerings(monkeypatch)
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('agent impl\nparam task: text = "do it"\nask(task, agent = impl)\n')
+        agl_file.write_text(
+            'let impl = AgentCommand("impl")\nparam task: text = "do it"\nask(task, agent = impl)\n'
+        )
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         assert exec_command.run(_exec_args(agl_file)) is None
@@ -945,7 +954,6 @@ class TestExecCommandExitCodes:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -962,26 +970,16 @@ class TestExecCommandExitCodes:
             param_tokens=["--msg", "hello"],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
         result = exec_command.run(args)
         assert result is None
 
-    def test_param_value_flows_into_std_config_write(self, tmp_path: Path) -> None:
-        """A resolved parameter value can be written into a std/config engine setting."""
-        agl_file = tmp_path / "test.agl"
-        agl_file.write_text(
-            "import std/config\nparam chosen: text\nstd/config::runner := chosen\nprint chosen\n"
-        )
-
-        assert exec_command.run(_exec_args(agl_file, param_tokens=["--chosen", "echo"])) is None
-
     def test_declared_agents_with_std_config_preserve_params(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
         agl_file.write_text(
-            "import std/config\nagent worker\nstd/config::log := false\n"
+            'import std/config\nlet worker = AgentCommand("worker")\nstd/config::log := false\n'
             "param value: int\nprint value\n"
         )
         from agm.cli_support.args import ExecArgs
@@ -991,7 +989,6 @@ class TestExecCommandExitCodes:
             param_tokens=["--value", "7"],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -1008,13 +1005,54 @@ class TestExecCommandExitCodes:
             param_tokens=[],  # missing 'msg'
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(args)
         assert exc_info.value.code == 1
+
+    def test_scoped_param_cli_flag_uses_its_full_path_spelling(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A scoped `param Deploy::region` is supplied as `--Deploy::region`."""
+        agl_file = tmp_path / "test.agl"
+        agl_file.write_text(
+            'scope Deploy\nparam region: text = "eu"\nend Deploy\nprint(Deploy::region)\n'
+        )
+
+        assert (
+            exec_command.run(_exec_args(agl_file, param_tokens=["--Deploy::region", "prod"]))
+            is None
+        )
+
+        assert capsys.readouterr().out == "prod\n"
+
+    def test_scoped_param_config_key_uses_its_full_path_spelling(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A scoped `param Deploy::region` is supplied via `[demo]."Deploy::region"`."""
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[demo]\n"Deploy::region" = "prod"\n')
+        agl_file = tmp_path / "test.agl"
+        agl_file.write_text(
+            'program demo\nscope Deploy\nparam region: text = "eu"\nend Deploy\n'
+            "print(Deploy::region)\n"
+        )
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        assert exec_command.run(_exec_args(agl_file)) is None
+        assert capsys.readouterr().out == "prod\n"
 
     def test_param_flag_collision_exits_1(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -1053,12 +1091,10 @@ class TestExecCommandExitCodes:
         assert captured.out == "ok\n"
         assert "typo" in captured.err
 
-    def test_ask_program_dispatches_to_runner_backed_agent(
+    def test_ask_program_dispatches_through_the_value_dispatcher(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``agm exec`` always wires a runner-backed default agent; prompt
-        calls are dispatched at runtime (not rejected statically), producing an
-        AgentCallError (exit 2) when the runner subprocess fails."""
+        """``agm exec`` dispatches the default ``Agent`` value at runtime."""
         import agm.commands.exec as exec_mod
         from agm.agl.runtime.agents import AgentCallHostError
         from agm.cli_support.args import ExecArgs
@@ -1071,19 +1107,17 @@ class TestExecCommandExitCodes:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=True,
             log_file=None,
         )
 
-        # Patch the runner factory to return an agent that raises AgentCallHostError
-        # (simulating a subprocess that fails), which exec.py surfaces as exit 2.
+        # A host transport failure remains an in-language AgentCallError.
         def failing_agent(req: object) -> str:
             raise AgentCallHostError(
                 cause="spawn_failure", exit_code=None, stderr_tail="no runner", elapsed=0.0
             )
 
-        monkeypatch.setattr(exec_mod, "runner_backed_agent_factory", lambda **_: failing_agent)
+        monkeypatch.setattr(exec_mod, "value_driven_agent_factory", lambda **_: failing_agent)
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(args)
         assert exc_info.value.code == 2
@@ -1108,7 +1142,6 @@ class TestExecCommandExitCodes:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -1133,7 +1166,6 @@ class TestExecCommandExitCodes:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -1160,7 +1192,6 @@ class TestExecCommandExitCodes:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -1183,7 +1214,6 @@ class TestExecCommandExitCodes:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -1207,7 +1237,7 @@ def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
             *,
             default_loop_limit: int = 5,
             default_strict_json: bool = False,
-            default_agent: Any | None = None,
+            agent_dispatcher: Any | None = None,
             shell_exec_timeout: float | None = None,
             default_call_depth_limit: int | None = None,
         ) -> None:
@@ -1218,7 +1248,7 @@ def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
             super().__init__(
                 default_loop_limit=default_loop_limit,
                 default_strict_json=default_strict_json,
-                default_agent=default_agent,
+                agent_dispatcher=agent_dispatcher,
                 shell_exec_timeout=shell_exec_timeout,
                 default_call_depth_limit=default_call_depth_limit,
             )
@@ -1259,7 +1289,6 @@ class TestExecConfigWiring:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -1290,7 +1319,6 @@ class TestExecConfigWiring:
             param_tokens=[],
             strict_json=False,  # CLI --no-strict-json overrides config true
             max_iters=7,  # CLI --max-iters overrides config 9
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -1325,7 +1353,6 @@ class TestExecConfigWiring:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -1359,7 +1386,6 @@ class TestExecConfigWiring:
                     param_tokens=[],
                     strict_json=None,
                     max_iters=None,
-                    runner=None,
                     no_log=True,
                     log_file=None,
                 )
@@ -1390,15 +1416,15 @@ def _exec_args_with_fallback_runtime(
             *,
             default_loop_limit: int = 5,
             default_strict_json: bool = False,
-            default_agent: AgentFn | None = None,
+            agent_dispatcher: AgentFn | None = None,
             shell_exec_timeout: float | None = None,
             default_call_depth_limit: int | None = None,
         ) -> None:
-            del default_agent
+            del agent_dispatcher
             super().__init__(
                 default_loop_limit=default_loop_limit,
                 default_strict_json=default_strict_json,
-                default_agent=stub_agent,
+                agent_dispatcher=stub_agent,
                 shell_exec_timeout=shell_exec_timeout,
                 default_call_depth_limit=default_call_depth_limit,
             )
@@ -1448,7 +1474,9 @@ class TestDryRunInventory:
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('agent reviewer\nask("Review this", agent = reviewer)\n')
+        agl_file.write_text(
+            'let reviewer = AgentCommand("reviewer")\nask("Review this", agent = reviewer)\n'
+        )
 
         args = _exec_args_with_fallback_runtime(agl_file, monkeypatch)
         assert exec_command.run(args) is None
@@ -1540,15 +1568,15 @@ class TestDryRunInventory:
                 *,
                 default_loop_limit: int = 5,
                 default_strict_json: bool = False,
-                default_agent: AgentFn | None = None,
+                agent_dispatcher: AgentFn | None = None,
                 shell_exec_timeout: float | None = None,
                 default_call_depth_limit: int | None = None,
             ) -> None:
-                del default_agent
+                del agent_dispatcher
                 super().__init__(
                     default_loop_limit=default_loop_limit,
                     default_strict_json=default_strict_json,
-                    default_agent=spy_agent,
+                    agent_dispatcher=spy_agent,
                     shell_exec_timeout=shell_exec_timeout,
                     default_call_depth_limit=default_call_depth_limit,
                 )
@@ -1616,12 +1644,7 @@ class TestExecFFI:
 
         marker = tmp_path / "marker.txt"
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            "import std/config\n"
-            "extern def choose_runner() -> text\n"
-            "std/config::runner := choose_runner()\n"
-            "choose_runner()\n"
-        )
+        agl_file.write_text("extern def choose_runner() -> text\nchoose_runner()\n")
         (tmp_path / "prog.py").write_text(
             f"open({str(marker)!r}, 'a').write('imported')\n"
             "def choose_runner():\n"
@@ -1727,7 +1750,6 @@ class TestJsonParamsCLI:
             param_tokens=['--pt={"x": 1, "y": 2}'],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -1755,7 +1777,6 @@ class TestJsonParamsCLI:
             param_tokens=["--price", "1.5"],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -1783,7 +1804,6 @@ class TestJsonParamsCLI:
             param_tokens=['--tags=["a", "b"]'],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -1813,7 +1833,6 @@ class TestJsonParamsCLI:
             param_tokens=["--pt", "not_json"],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -1823,18 +1842,12 @@ class TestJsonParamsCLI:
 
 
 # ---------------------------------------------------------------------------
-# uncaught-exception output includes source line/col and trace_id
+# uncaught-exception output includes source line/col
 # ---------------------------------------------------------------------------
 
 
 class TestUncaughtExceptionOutputFormat:
-    """exec.py's exit-2 stderr must include source location and trace_id.
-
-    Design : every runtime error should include source location and
-    trace id.  The exec command's error-printing region should include the
-    line (and col if available) of the raise site, and the trace_id field
-    from the exception when present.
-    """
+    """exec.py's exit-2 stderr includes the source location of runtime errors."""
 
     def _exec_args_nolog(self, agl_file: Path) -> "ExecArgs":
         from agm.cli_support.args import ExecArgs
@@ -1844,7 +1857,6 @@ class TestUncaughtExceptionOutputFormat:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=True,
             log_file=None,
         )
@@ -1854,7 +1866,7 @@ class TestUncaughtExceptionOutputFormat:
     ) -> None:
         """Exit-2 stderr must include the source line number of the raise site."""
         agl_file = tmp_path / "prog.agl"
-        # Force an uncaught AgentParseError from an exec call on line 1.
+        # Force an uncaught ExecError from an exec call on line 1.
         agl_file.write_text('let x: int = exec "echo not-an-int"\nx\n')
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(self._exec_args_nolog(agl_file))
@@ -1865,79 +1877,6 @@ class TestUncaughtExceptionOutputFormat:
         assert "line 1" in err or "line:1" in err or ":1:" in err, (
             f"Expected line reference in stderr, got: {err!r}"
         )
-
-    def test_uncaught_exception_stderr_includes_trace_id(
-        self, tmp_path: Path, capsys: "pytest.CaptureFixture[str]"
-    ) -> None:
-        """Exit-2 stderr must include the trace_id when it is non-empty."""
-        log_file = tmp_path / "trace.jsonl"
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('let x: int = exec "echo not-an-int"\nx\n')
-        from agm.cli_support.args import ExecArgs
-
-        args = ExecArgs(
-            file=str(agl_file),
-            param_tokens=[],
-            strict_json=None,
-            max_iters=None,
-            runner=None,
-            no_log=False,
-            log_file=str(log_file),
-        )
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(args)
-        assert exc_info.value.code == 2
-        captured = capsys.readouterr()
-        err = captured.err
-        # The trace_id is a UUID hex string (32 chars); it should appear in stderr.
-        assert re.search(r"[0-9a-f]{32}", err), (
-            f"Expected trace_id (hex string) in stderr, got: {err!r}"
-        )
-
-    def test_uncaught_exception_line_only_no_col(
-        self, tmp_path: Path, capsys: "pytest.CaptureFixture[str]"
-    ) -> None:
-        """Exit-2 stderr includes 'line N' when only line is set (col is None)."""
-        from unittest.mock import MagicMock, patch
-
-        from agm.agl.pipeline import RunError, RunResult
-        from agm.commands import exec as exec_command
-
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("let x = 1\nx\n")
-        args = self._exec_args_nolog(agl_file)
-        # Synthesize a RunResult whose error has line set but col=None.
-        fake_result = RunResult(
-            ok=False,
-            diagnostics=[],
-            error=RunError(
-                type_name="SomeError",
-                fields={"message": "oops"},
-                line=5,
-                col=None,
-            ),
-        )
-        with patch("agm.commands.exec.PipelineDriver") as mock_rt:
-            # prepare_program() must return a fake PreparedProgram with no resolved
-            # graph so the static-config-resolution logic does not choke on
-            # MagicMock values.
-            fake_prepared = MagicMock()
-            fake_prepared.resolved = None
-            fake_prepared.declared_agents = ()
-            mock_rt.prepare_program.return_value = fake_prepared
-            mock_rt.return_value.discover_params.return_value = MagicMock(
-                diagnostics=(), warnings=(), params=(), checked=MagicMock(), program_name=None
-            )
-            mock_rt.return_value.preflight_params.return_value = MagicMock(
-                result=RunResult(ok=True, diagnostics=[], error=None), executable=MagicMock()
-            )
-            mock_rt.return_value.run_prepared.return_value = fake_result
-            with pytest.raises(SystemExit) as exc_info:
-                exec_command.run(args)
-        assert exc_info.value.code == 2
-        err = capsys.readouterr().err
-        assert "line 5" in err
-        assert "col" not in err
 
 
 # ---------------------------------------------------------------------------
@@ -1960,7 +1899,6 @@ class TestExecBinaryFileError:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=True,
             log_file=None,
         )
@@ -1985,7 +1923,6 @@ class TestExecBinaryFileError:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=True,
             log_file=None,
         )
@@ -1993,245 +1930,6 @@ class TestExecBinaryFileError:
             exec_command.run(args)
         captured = capsys.readouterr()
         assert captured.out == ""
-
-
-# ---------------------------------------------------------------------------
-# Whitespace-only --runner exits 1 with clean error BEFORE any run
-# ---------------------------------------------------------------------------
-
-
-class TestExecWhitespaceRunner:
-    """--runner '  ' (whitespace-only) must exit 1 with a clean error before execution."""
-
-    def test_whitespace_runner_exits_1(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """--runner '  ' exits 1 before any statement runs."""
-        agl_file = tmp_path / "prog.agl"
-        # If the program ran, stdout would contain "should-not-run".
-        agl_file.write_text('print "should-not-run"\n')
-
-        args = ExecArgs(
-            file=str(agl_file),
-            param_tokens=[],
-            strict_json=None,
-            max_iters=None,
-            runner="   ",  # whitespace-only
-            no_log=True,
-            log_file=None,
-        )
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(args)
-        assert exc_info.value.code == 1
-
-    def test_whitespace_runner_prints_clean_error(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """--runner '  ' prints a clean usage-style error."""
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('print "should-not-run"\n')
-
-        args = ExecArgs(
-            file=str(agl_file),
-            param_tokens=[],
-            strict_json=None,
-            max_iters=None,
-            runner="   ",
-            no_log=True,
-            log_file=None,
-        )
-        with pytest.raises(SystemExit):
-            exec_command.run(args)
-        captured = capsys.readouterr()
-        assert "Error:" in captured.err
-        assert "runner" in captured.err.lower()
-
-    def test_whitespace_runner_no_stdout_before_exit(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """With a whitespace-only runner, the program must NOT execute (stdout empty)."""
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('print "should-not-run"\n')
-
-        args = ExecArgs(
-            file=str(agl_file),
-            param_tokens=[],
-            strict_json=None,
-            max_iters=None,
-            runner="   ",
-            no_log=True,
-            log_file=None,
-        )
-        with pytest.raises(SystemExit):
-            exec_command.run(args)
-        captured = capsys.readouterr()
-        assert "should-not-run" not in captured.out
-
-
-class TestExecPerAgentRunnerValidation:
-    """A malformed/empty per-agent runner command (source hint or
-    [exec.agents] config) for a DECLARED agent exits 1 BEFORE any statement
-    runs — the same pre-execution contract as the default runner — instead of
-    failing lazily mid-execution at dispatch."""
-
-    def _args(self, file: str) -> ExecArgs:
-        return ExecArgs(
-            file=file,
-            param_tokens=[],
-            strict_json=None,
-            max_iters=None,
-            runner="claude -p",  # valid default; the per-agent hint is the offender
-            no_log=True,
-            log_file=None,
-        )
-
-    def test_empty_source_hint_exits_1_before_execution(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        agl_file = tmp_path / "prog.agl"
-        # 'BEFORE' would print if the empty hint were caught lazily at dispatch.
-        agl_file.write_text('agent x = ""\nprint "BEFORE"\nlet r = x "go"\n')
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(self._args(str(agl_file)))
-        assert exc_info.value.code == 1
-        captured = capsys.readouterr()
-        assert "Error:" in captured.err
-        assert "BEFORE" not in captured.out
-
-    def test_malformed_quote_source_hint_exits_1_no_traceback(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('agent x = "bad \'quote"\nlet r = x "go"\n')
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(self._args(str(agl_file)))
-        assert exc_info.value.code == 1
-        captured = capsys.readouterr()
-        assert "Error:" in captured.err
-        assert "Traceback" not in captured.err
-
-    def test_config_only_undeclared_bad_command_is_inert(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        # A malformed [exec.agents] entry for an agent the program never
-        # declares must NOT fail the run — it is inert (never dispatched).
-        from agm.config.general import ExecConfig
-
-        bad_config = ExecConfig(
-            runner="claude -p",
-            strict_json=False,
-            default_loop_limit=5,
-            timeout=None,
-            agents={"ghost": "bad 'quote"},  # malformed, but for an undeclared agent
-            log=False,
-            log_file=None,
-        )
-        monkeypatch.setattr(exec_command, "exec_config_from_merged", lambda *_, **__: bad_config)
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('print "ran"\n')
-        # Must not raise (the inert ghost command is never validated/dispatched).
-        exec_command.run(self._args(str(agl_file)))
-        captured = capsys.readouterr()
-        assert "ran" in captured.out
-
-
-# ---------------------------------------------------------------------------
-# Malformed-quoting --runner exits 1 with clean Error, no traceback
-# ---------------------------------------------------------------------------
-
-
-class TestExecMalformedQuotingRunner:
-    """--runner with malformed quoting must exit 1 with a clean Error: on stderr,
-    no traceback, and no program statement executed.
-
-    ``shlex.split('"foo')`` raises ``ValueError('No closing quotation')``.
-    The old code inlined shlex.split and let the ValueError propagate as a raw
-    traceback.  The fix adds a ValueError guard to ``split_command`` itself.
-    """
-
-    def test_malformed_quote_runner_exits_1(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """--runner '\"foo' exits 1 before any statement runs."""
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('print "should-not-run"\n')
-
-        args = ExecArgs(
-            file=str(agl_file),
-            param_tokens=[],
-            strict_json=None,
-            max_iters=None,
-            runner='"foo',  # unclosed quote
-            no_log=True,
-            log_file=None,
-        )
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(args)
-        assert exc_info.value.code == 1
-
-    def test_malformed_quote_runner_prints_clean_error(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """--runner '\"foo' prints a clean 'Error:' on stderr — no raw traceback."""
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('print "should-not-run"\n')
-
-        args = ExecArgs(
-            file=str(agl_file),
-            param_tokens=[],
-            strict_json=None,
-            max_iters=None,
-            runner='"foo',
-            no_log=True,
-            log_file=None,
-        )
-        with pytest.raises(SystemExit):
-            exec_command.run(args)
-        captured = capsys.readouterr()
-        assert "Error:" in captured.err
-        assert "Traceback" not in captured.err
-        assert "ValueError" not in captured.err
-
-    def test_malformed_quote_runner_no_stdout_before_exit(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """With a malformed-quoting runner, the program must NOT execute."""
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('print "should-not-run"\n')
-
-        args = ExecArgs(
-            file=str(agl_file),
-            param_tokens=[],
-            strict_json=None,
-            max_iters=None,
-            runner='"foo',
-            no_log=True,
-            log_file=None,
-        )
-        with pytest.raises(SystemExit):
-            exec_command.run(args)
-        captured = capsys.readouterr()
-        assert "should-not-run" not in captured.out
-
-    def test_valid_runner_still_works(self, tmp_path: Path) -> None:
-        """'claude -p' (valid quoting) continues to work after the fix."""
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('print "ok"\n')
-
-        # Use recorded_runs style: just validate split_command works for valid input
-        from agm.agent.runner import split_command
-
-        result = split_command("claude -p", kind="runner")
-        assert result == ["claude", "-p"]
-
-
-# ---------------------------------------------------------------------------
-# per-declared-agent registration + runner precedence
-# (config > source runner hint > default runner)
-# ---------------------------------------------------------------------------
 
 
 def _install_marker_runner(directory: Path, env: dict[str, str], *, name: str, marker: str) -> Path:
@@ -2284,13 +1982,8 @@ def _install_argv_echo_runner(
     return runner
 
 
-class TestExecAgentPrecedence:
-    """declared agents resolve via config > source hint > default runner.
-
-    Driven through real fake-runner binaries (CLI subprocess), asserting which
-    runner produced the agent response — a user-visible behavior, not an
-    internal call.
-    """
+class TestExecAgentValues:
+    """Encoded Agent values select their own builders, not legacy runner maps."""
 
     def _run_agm_exec(
         self, args: list[str], *, env: dict[str, str], cwd: Path
@@ -2304,241 +1997,34 @@ class TestExecAgentPrecedence:
             check=False,
         )
 
-    def _base_env(self) -> dict[str, str]:
+    def test_agent_command_selects_its_own_runner(self, tmp_path: Path) -> None:
         env = dict(os.environ)
         env.setdefault("HOME", str(Path.home()))
-        return env
-
-    def test_config_beats_source_hint(self, tmp_path: Path) -> None:
-        """A config [exec.agents] entry overrides the source runner hint."""
-        env = self._base_env()
-        _install_marker_runner(tmp_path / "bin", env, name="source-runner", marker="FROM-SOURCE")
-        _install_marker_runner(tmp_path / "bin", env, name="config-runner", marker="FROM-CONFIG")
-
+        _install_marker_runner(tmp_path / "bin", env, name="value-runner", marker="FROM-VALUE")
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            'agent impl = "source-runner \\%{PROMPT_FILE}"\n'
-            'let x = ask("do it", agent = impl)\n'
-            "print x\n"
+            'let impl = AgentCommand("value-runner")\nlet x = ask("do it", agent = impl)\nprint x\n'
         )
-
-        config_dir = tmp_path / ".agm"
-        config_dir.mkdir()
-        (config_dir / "config.toml").write_text(
-            '[exec]\nrunner = "default-runner"\n\n'
-            '[exec.agents]\nimpl = "config-runner %{PROMPT_FILE}"\n'
-        )
-
         result = self._run_agm_exec([str(agl_file), "--no-log"], env=env, cwd=tmp_path)
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-        assert "FROM-CONFIG" in result.stdout
-        assert "FROM-SOURCE" not in result.stdout
 
-    def test_config_beats_default_for_bare_declaration(self, tmp_path: Path) -> None:
-        """A config [exec.agents] entry overrides the default runner for a BARE
-        declaration (one with no source runner hint)."""
-        env = self._base_env()
-        _install_marker_runner(tmp_path / "bin", env, name="config-runner", marker="FROM-CONFIG")
-        _install_marker_runner(tmp_path / "bin", env, name="default-runner", marker="FROM-DEFAULT")
+        assert result.returncode == 0, result.stderr
+        assert "FROM-VALUE" in result.stdout
 
-        agl_file = tmp_path / "prog.agl"
-        # ``impl`` is declared BARE (no ``= "runner"`` hint).
-        agl_file.write_text('agent impl\nlet x = ask("do it", agent = impl)\nprint x\n')
-
-        config_dir = tmp_path / ".agm"
-        config_dir.mkdir()
-        (config_dir / "config.toml").write_text(
-            '[exec]\nrunner = "default-runner"\n\n'
-            '[exec.agents]\nimpl = "config-runner %{PROMPT_FILE}"\n'
-        )
-
-        result = self._run_agm_exec([str(agl_file), "--no-log"], env=env, cwd=tmp_path)
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-        assert "FROM-CONFIG" in result.stdout
-        assert "FROM-DEFAULT" not in result.stdout
-
-    def test_multiple_agents_mixed_precedence_in_one_run(self, tmp_path: Path) -> None:
-        """Three declared agents in ONE program route by name through the shared
-        factory: config override, source hint, and default runner respectively."""
-        env = self._base_env()
-        _install_marker_runner(tmp_path / "bin", env, name="config-a", marker="FROM-CONFIG-A")
-        _install_marker_runner(tmp_path / "bin", env, name="source-a", marker="FROM-SOURCE-A")
-        _install_marker_runner(tmp_path / "bin", env, name="source-b", marker="FROM-SOURCE-B")
-        _install_marker_runner(tmp_path / "bin", env, name="default-runner", marker="FROM-DEFAULT")
-
+    def test_agent_command_preserves_prompt_file_substitution(self, tmp_path: Path) -> None:
+        env = dict(os.environ)
+        env.setdefault("HOME", str(Path.home()))
+        _install_argv_echo_runner(tmp_path / "bin", env, name="value-runner", marker="FROM-VALUE")
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            'agent a = "source-a \\%{PROMPT_FILE}"\n'  # config override → CONFIG-A
-            'agent b = "source-b \\%{PROMPT_FILE}"\n'  # no config entry → SOURCE-B
-            "agent c\n"  # bare, no config entry → DEFAULT
-            'let ra = ask("first", agent = a)\n'
-            'let rb = ask("second", agent = b)\n'
-            'let rc = ask("third", agent = c)\n'
-            "print ra\n"
-            "print rb\n"
-            "print rc\n"
-        )
-
-        config_dir = tmp_path / ".agm"
-        config_dir.mkdir()
-        (config_dir / "config.toml").write_text(
-            '[exec]\nrunner = "default-runner"\n\n[exec.agents]\na = "config-a %{PROMPT_FILE}"\n'
+            'let impl = AgentCommand("value-runner --file=\\%{PROMPT_FILE}")\n'
+            'let x = ask("do it", agent = impl)\nprint x\n'
         )
 
         result = self._run_agm_exec([str(agl_file), "--no-log"], env=env, cwd=tmp_path)
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-        # Each agent routed to exactly the expected runner.
-        assert "FROM-CONFIG-A" in result.stdout
-        assert "FROM-SOURCE-A" not in result.stdout  # config beat the source hint
-        assert "FROM-SOURCE-B" in result.stdout
-        assert "FROM-DEFAULT" in result.stdout
 
-    def test_source_hint_beats_default_runner(self, tmp_path: Path) -> None:
-        """With no config entry, the source runner hint wins over the default runner."""
-        env = self._base_env()
-        _install_marker_runner(tmp_path / "bin", env, name="source-runner", marker="FROM-SOURCE")
-        _install_marker_runner(tmp_path / "bin", env, name="default-runner", marker="FROM-DEFAULT")
-
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            'agent impl = "source-runner \\%{PROMPT_FILE}"\n'
-            'let x = ask("do it", agent = impl)\n'
-            "print x\n"
-        )
-
-        config_dir = tmp_path / ".agm"
-        config_dir.mkdir()
-        (config_dir / "config.toml").write_text('[exec]\nrunner = "default-runner"\n')
-
-        result = self._run_agm_exec([str(agl_file), "--no-log"], env=env, cwd=tmp_path)
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-        assert "FROM-SOURCE" in result.stdout
-        assert "FROM-DEFAULT" not in result.stdout
-
-    def test_bare_declaration_uses_default_runner(self, tmp_path: Path) -> None:
-        """A bare ``agent NAME`` with no config entry uses the resolved default runner."""
-        env = self._base_env()
-        _install_marker_runner(tmp_path / "bin", env, name="default-runner", marker="FROM-DEFAULT")
-
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('agent impl\nlet x = ask("do it", agent = impl)\nprint x\n')
-
-        config_dir = tmp_path / ".agm"
-        config_dir.mkdir()
-        (config_dir / "config.toml").write_text('[exec]\nrunner = "default-runner"\n')
-
-        result = self._run_agm_exec([str(agl_file), "--no-log"], env=env, cwd=tmp_path)
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-        assert "FROM-DEFAULT" in result.stdout
-
-    def test_source_hint_prompt_file_substitution(self, tmp_path: Path) -> None:
-        """``%{PROMPT_FILE}`` in a source runner hint is substituted IN PLACE,
-        mid-argument — proving the placeholder branch ran (not the ``@file``
-        append fallback, which can only add a separate trailing argument)."""
-        env = self._base_env()
-        # An argv-echo runner reveals each raw argument verbatim, so a
-        # mid-argument substitution (``--file=/abs/path``) is distinguishable
-        # from the bare-``@file`` fallback (a separate ``@/abs/path`` argument).
-        _install_argv_echo_runner(tmp_path / "bin", env, name="source-runner", marker="FROM-SOURCE")
-
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            'agent impl = "source-runner --file=\\%{PROMPT_FILE}"\n'
-            'let x = ask("do it", agent = impl)\n'
-            "print x\n"
-        )
-
-        config_dir = tmp_path / ".agm"
-        config_dir.mkdir()
-        (config_dir / "config.toml").write_text('[exec]\nrunner = "default-runner"\n')
-
-        result = self._run_agm_exec([str(agl_file), "--no-log"], env=env, cwd=tmp_path)
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-        # The placeholder was substituted mid-argument: the runner saw
-        # ``--file=/<abs path>`` as a single argv entry.  The ``@file`` fallback
-        # could never produce this (it would append a separate ``@/...`` arg).
-        assert re.search(r"^arg=--file=/", result.stdout, re.MULTILINE), (
-            f"Expected mid-argument %{{PROMPT_FILE}} substitution, got: {result.stdout!r}"
-        )
-        # And the fallback form must NOT appear.
+        assert result.returncode == 0, result.stderr
+        assert re.search(r"^arg=--file=/", result.stdout, re.MULTILINE)
         assert "arg=@/" not in result.stdout
-
-    def test_bare_agent_and_ask_both_resolve_via_default(self, tmp_path: Path) -> None:
-        """A bare declared agent and built-in ``ask`` both resolve via the default runner."""
-        env = self._base_env()
-        _install_marker_runner(tmp_path / "bin", env, name="default-runner", marker="FROM-DEFAULT")
-
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            "agent impl\n"
-            'let a = ask "first"\n'
-            'let b = ask("second", agent = impl)\n'
-            "print a\n"
-            "print b\n"
-        )
-
-        config_dir = tmp_path / ".agm"
-        config_dir.mkdir()
-        (config_dir / "config.toml").write_text('[exec]\nrunner = "default-runner"\n')
-
-        result = self._run_agm_exec([str(agl_file), "--no-log"], env=env, cwd=tmp_path)
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-        # Both calls dispatched to the default runner.
-        assert result.stdout.count("FROM-DEFAULT") == 2
-
-    def test_undeclared_agent_call_exits_1_nothing_runs(self, tmp_path: Path) -> None:
-        """Calling an undeclared agent is a pre-execution scope error: exit 1, no run."""
-        env = self._base_env()
-        _install_marker_runner(tmp_path / "bin", env, name="default-runner", marker="FROM-DEFAULT")
-
-        agl_file = tmp_path / "prog.agl"
-        # ``ghost`` is never declared with ``agent ghost``.
-        agl_file.write_text('let x = ghost "do it"\nprint x\n')
-
-        config_dir = tmp_path / ".agm"
-        config_dir.mkdir()
-        (config_dir / "config.toml").write_text('[exec]\nrunner = "default-runner"\n')
-
-        result = self._run_agm_exec([str(agl_file), "--no-log"], env=env, cwd=tmp_path)
-        assert result.returncode == 1, f"stdout: {result.stdout} stderr: {result.stderr}"
-        # The runner never ran: no marker on stdout.
-        assert "FROM-DEFAULT" not in result.stdout
-
-
-# ---------------------------------------------------------------------------
-# source config declaration wiring — CLI > source > config precedence
-# ---------------------------------------------------------------------------
-
-
-def _exec_args_no_log(
-    agl_file: Path,
-    *,
-    strict_json: bool | None = None,
-    max_iters: int | None = None,
-    max_call_depth: int | None = None,
-    runner: str | None = None,
-    no_log: bool = True,
-    log_file: str | None = None,
-    log: bool = False,
-    timeout: str | None = None,
-    no_timeout: bool = False,
-    no_log_file: bool = False,
-) -> ExecArgs:
-    """Build a minimal ExecArgs for source-config-precedence tests."""
-    return ExecArgs(
-        file=str(agl_file),
-        param_tokens=[],
-        strict_json=strict_json,
-        max_iters=max_iters,
-        max_call_depth=max_call_depth,
-        runner=runner,
-        no_log=no_log,
-        log_file=log_file,
-        log=log,
-        timeout=timeout,
-        no_timeout=no_timeout,
-        no_log_file=no_log_file,
-    )
 
 
 class TestExecTimeoutAndLogFileFlags:
@@ -2796,11 +2282,9 @@ class TestExecSourceConfigPrecedence:
         from agm.config.general import ExecConfig
 
         low_limit_config = ExecConfig(
-            runner=None,
             strict_json=False,
             default_loop_limit=3,
             timeout=None,
-            agents={},
             log=False,
             log_file=None,
         )
@@ -2930,11 +2414,9 @@ class TestExecSourceConfigPrecedence:
         from agm.config.general import ExecConfig
 
         strict_config = ExecConfig(
-            runner=None,
             strict_json=True,
             default_loop_limit=5,
             timeout=None,
-            agents={},
             log=False,
             log_file=None,
         )
@@ -2990,11 +2472,9 @@ class TestExecSourceConfigPrecedence:
         from agm.config.general import ExecConfig
 
         config_with_timeout = ExecConfig(
-            runner=None,
             strict_json=False,
             default_loop_limit=5,
             timeout=999.0,
-            agents={},
             log=False,
             log_file=None,
         )
@@ -3050,7 +2530,6 @@ class TestExecSourceConfigPrecedence:
                     param_tokens=[],
                     strict_json=None,
                     max_iters=None,
-                    runner=None,
                     no_log=False,
                     log_file=None,
                 )
@@ -3059,7 +2538,7 @@ class TestExecSourceConfigPrecedence:
             os.chdir(old_cwd)
 
         agent_files = tmp_path / ".agent-files"
-        log_files = list(agent_files.glob("exec-*.log"))
+        log_files = list(agent_files.glob("exec-*.jsonl"))
         assert log_files, "Expected a trace log file from std/config::log := true"
 
     def test_source_log_file_write_writes_to_specified_path(self, tmp_path: Path) -> None:
@@ -3076,70 +2555,11 @@ class TestExecSourceConfigPrecedence:
                 param_tokens=[],
                 strict_json=None,
                 max_iters=None,
-                runner=None,
                 no_log=False,
                 log_file=None,
             )
         )
         assert log_path.exists(), "Expected trace log at source-specified path"
-
-    # ------------------------------------------------------------------
-    # runner source write
-    # ------------------------------------------------------------------
-
-    def test_source_runner_write_flows_into_agent_factory(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """``std/config::runner := "..."`` rebuilds the default runner command.
-
-        We capture the runner command passed to runner_backed_agent_factory
-        because it is the single user-observable boundary between exec.py and
-        the subprocess world.
-        """
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('import std/config\nstd/config::runner := "my-runner"\nlet x = 1\nx\n')
-
-        captured_runner: list[str] = []
-
-        import agm.agl.runtime.agents as agents_mod
-        from agm.agl.runtime.agents import AgentFn
-
-        real_factory = agents_mod.runner_backed_agent_factory
-
-        def spy_factory(
-            *,
-            default_runner_cmd: str,
-            per_agent_cmds: dict[str, str],
-            idle_timeout: float | None = None,
-        ) -> AgentFn:
-            captured_runner.append(default_runner_cmd)
-            return real_factory(
-                default_runner_cmd=default_runner_cmd,
-                per_agent_cmds=per_agent_cmds,
-                idle_timeout=idle_timeout,
-            )
-
-        monkeypatch.setattr(exec_command, "runner_backed_agent_factory", spy_factory)
-
-        exec_command.run(_exec_args_no_log(agl_file))
-        assert captured_runner[-1:] == ["my-runner"]
-
-    def test_malformed_source_runner_is_catchable_and_rolls_back(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            "import std/config\n"
-            "let previous = std/config::runner\n"
-            "try\n"
-            '  std/config::runner := "\'"\n'
-            "catch Exception as error => ()\n"
-            "print(std/config::runner == previous)\n"
-        )
-
-        exec_command.run(_exec_args_no_log(agl_file))
-
-        assert capsys.readouterr().out == "true\n"
 
 
 def _exec_args_inline_no_log(
@@ -3147,7 +2567,6 @@ def _exec_args_inline_no_log(
     *,
     strict_json: bool | None = None,
     max_iters: int | None = None,
-    runner: str | None = None,
 ) -> ExecArgs:
     """Build a minimal ExecArgs for -c inline exec tests."""
     return ExecArgs(
@@ -3156,7 +2575,6 @@ def _exec_args_inline_no_log(
         param_tokens=[],
         strict_json=strict_json,
         max_iters=max_iters,
-        runner=runner,
         no_log=True,
         log_file=None,
         log=False,
@@ -3280,6 +2698,29 @@ class TestExecModuleRoots:
         assert "Error:" in captured.err
         assert "module roots" in captured.err.lower()
 
+    def test_stale_stdlib_exits_1(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A StaleStdlibError from resolve_stdlib_root causes exit 1 with its message."""
+        from agm.config.module_roots import StaleStdlibError
+
+        entry = tmp_path / "prog.agl"
+        entry.write_text("let x = 1\nx\n")
+        stale_path = tmp_path / "stale" / "stdlib"
+
+        def fake_resolve_stdlib_root(*, home: Path) -> Path:
+            raise StaleStdlibError(stale_path)
+
+        monkeypatch.setattr(exec_command, "resolve_stdlib_root", fake_resolve_stdlib_root)
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(entry))
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+        assert str(stale_path) in captured.err
+        assert "just install" in captured.err
+
     def test_configured_lib_root_is_resolved(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -3361,12 +2802,12 @@ class TestExecModuleRoots:
         from agm.agl.runtime.request import AgentRequest, AgentResponse
 
         (tmp_path / "greeter.agl").write_text(
-            "def greet(prompt: text, bot: agent) -> text =\n  ask(prompt, agent = bot)\n"
+            "def greet(prompt: text, bot: Agent) -> text =\n  ask(prompt, agent = bot)\n"
         )
         entry = tmp_path / "entry.agl"
         entry.write_text(
             "open import greeter\n"
-            "agent mybot\n"
+            'let mybot = AgentCommand("mock")\n'
             'let result = greeter::greet("What is your name?", mybot)\n'
             "print result\n"
         )
@@ -3377,10 +2818,7 @@ class TestExecModuleRoots:
             def mock_agent(req: AgentRequest) -> AgentResponse:
                 return AgentResponse(content=response)
 
-            # Patch runner_backed_agent_factory so both the default agent and
-            # the registered 'mybot' agent use our mock (matching the pattern
-            # in test_ask_program_dispatches_to_runner_backed_agent above).
-            monkeypatch.setattr(exec_mod, "runner_backed_agent_factory", lambda **_: mock_agent)
+            monkeypatch.setattr(exec_mod, "value_driven_agent_factory", lambda **_: mock_agent)
             exec_command.run(_exec_args_no_log(entry))
             out, _ = capsys.readouterr()
             return out
@@ -3422,7 +2860,6 @@ class TestExecCliModulePaths:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=True,
             log_file=None,
             log=False,
@@ -3455,7 +2892,6 @@ class TestExecCliModulePaths:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=True,
             log_file=None,
             log=False,
@@ -3484,7 +2920,6 @@ class TestExecCliModulePaths:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=True,
             log_file=None,
             log=False,
@@ -3525,7 +2960,6 @@ class TestExecCliModulePaths:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=True,
             log_file=None,
             log=False,
@@ -3579,13 +3013,165 @@ class TestReservedFileStem:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=True,
             log_file=None,
             log=False,
         )
         result = exec_command.run(args)
         assert result is None
+
+
+class TestReservedDeclaredProgramName:
+    """regression: a reserved declared ``program NAME`` must be rejected up front.
+
+    Before the fix, ``parsed.program_name`` was adopted as ``program_key`` without
+    checking it against the reserved-name set, so a declaration like ``program
+    exec`` silently selected the ``[exec]`` config table and any bad engine-seed
+    literal there (e.g. ``default-agent = 42``) was reported as a config error
+    instead of the real problem: the declared name itself is reserved.
+    """
+
+    def test_reserved_declared_name_with_bad_config_reports_reserved_name(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """'program exec' + a bad [exec] literal must surface the reserved-name error,
+        not the unrelated config-literal error the [exec] table happens to trigger."""
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text("[exec]\ndefault-agent = 42\n")
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        agl_file = tmp_path / "r.agl"
+        agl_file.write_text("program exec\nlet x = 1\nx\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert "reserved" in err
+        assert "default-agent" not in err
+
+    def test_reserved_declared_name_without_config_reports_reserved_name(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """'program exec' with no config present still reports the reserved-name problem."""
+        agl_file = tmp_path / "r.agl"
+        agl_file.write_text("program exec\nlet x = 1\nx\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+
+        assert exc_info.value.code == 1
+        assert "reserved" in capsys.readouterr().err
+
+    def test_non_reserved_declared_name_still_selects_its_config_table(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-reserved declared name is not over-rejected and still picks up its
+        own [<name>] config table (guard against over-rejection)."""
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text("[myprog]\nmax-iters = 5\n")
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        agl_file = tmp_path / "r.agl"
+        agl_file.write_text("program myprog\nlet x = 1\nx\n")
+
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None
+
+    def test_reserved_file_stem_with_matching_config_still_reports_stem_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Unchanged: a reserved *file stem* (no program decl) with a bad literal in
+        its matching config table still reports the reserved-stem error, not the
+        config-literal error — the existing file-stem guard keeps working."""
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text("[exec]\ndefault-agent = 42\n")
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        agl_file = tmp_path / "exec.agl"
+        agl_file.write_text("let x = 1\nx\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert "reserved" in err
+        assert "default-agent" not in err
+
+
+class TestSettingOverrideProvenanceWithNoStdlib:
+    """``--no-stdlib`` interacts differently with a CLI flag vs. ambient config.
+
+    A ``default-agent`` override reaching the engine as AgL literal source
+    (``--agent`` or ``[exec]``/``[<program>] default-agent``) can only be
+    spliced into ``std/config``'s own declaration when that module is loaded.
+    ``--no-stdlib`` on a program that never explicitly imports ``std/config``
+    means it never is. An ambient config value is then simply inert (the key
+    does not apply to this run); an explicit ``--agent`` flag is a request the
+    host cannot silently drop, so it still fails the run.
+    """
+
+    def test_config_default_agent_is_inert_without_stdlib(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A project-configured ``[exec] default-agent`` must not break every
+        ``--no-stdlib`` program, including one that never mentions an agent."""
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            "[exec]\ndefault-agent = 'AgentCommand(\"echo cfg\")'\n"
+        )
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        agl_file = tmp_path / "plain.agl"
+        agl_file.write_text("let x = 1\n")
+
+        result = exec_command.run(_exec_args_no_log(agl_file, no_stdlib=True))
+        assert result is None
+
+    def test_agent_flag_still_fails_without_stdlib(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """An explicit ``--agent`` literal is a request, not ambient config: it
+        must still fail (rather than be silently dropped) when the program
+        never loads ``std/config``."""
+        agl_file = tmp_path / "plain.agl"
+        agl_file.write_text("let x = 1\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file, no_stdlib=True, agent="("))
+
+        assert exc_info.value.code == 1
+        assert "--agent" in capsys.readouterr().err
 
 
 class TestF1StemVsProgramNameBug:

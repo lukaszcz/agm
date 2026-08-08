@@ -18,20 +18,14 @@ from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.semantics.values import BoolValue
 from tests._agl_helpers import let_root_capture
-from tests.agl.ir_harness import _compiled_checked, evaluate_ir
+from tests.agl.ir_harness import evaluate_ir, lower_ir, nominal_id_for
 
 
 def _lower(source: str) -> ExecutableProgram:
     """Parse → check → lower the source; return ExecutableProgram."""
     from agm.agl.capabilities import HostCapabilities
-    from agm.agl.lower import lower_module
-    from agm.agl.parser import parse_program
-    from agm.agl.scope import resolve_module
-    from agm.agl.typecheck import check_module
 
     caps = HostCapabilities(
-        agent_names=frozenset(),
-        has_default_agent=False,
         supports_shell_exec=False,
         codec_kinds={
             "text": frozenset({"text"}),
@@ -40,14 +34,7 @@ def _lower(source: str) -> ExecutableProgram:
             ),
         },
     )
-    prog = parse_program(source)
-    resolved = resolve_module(prog)
-    checked = check_module(resolved, caps)
-    return lower_module(
-        _compiled_checked(checked),
-        source_text=source,
-        source_label="<test>",
-    )
+    return lower_ir(source, caps=caps)
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +127,7 @@ let r = c is not Blue
             let_root_capture(node).value, IrVariantIs
         ):
             vi = let_root_capture(node).value
-            assert vi.nominal == NominalId(ENTRY_ID, "Color")
+            assert vi.nominal == nominal_id_for(prog, "Color")
             assert vi.variant == "Blue"
             assert vi.negated is True
             found = True
@@ -170,7 +157,7 @@ def test_validate_cheap_tier_skips_nominal_checks_for_ir_variant_is() -> None:
     loc = Location(source_id=SourceId(0), start_offset=0, end_offset=1, start_line=1, start_col=0)
     node = IrVariantIs(
         location=loc,
-        nominal=NominalId(ENTRY_ID, "Ghost"),  # not registered — ignored when deep=False
+        nominal=NominalId(1),  # not registered — ignored when deep=False
         variant="Red",
         value=IrConstInt(loc, 1),
         negated=False,
@@ -183,7 +170,7 @@ def test_validate_rejects_ir_variant_is_with_unknown_nominal() -> None:
     loc = Location(source_id=SourceId(0), start_offset=0, end_offset=1, start_line=1, start_col=0)
     node = IrVariantIs(
         location=loc,
-        nominal=NominalId(ENTRY_ID, "Ghost"),
+        nominal=NominalId(2),
         variant="Red",
         value=IrConstInt(loc, 1),
         negated=False,
@@ -195,10 +182,12 @@ def test_validate_rejects_ir_variant_is_with_unknown_nominal() -> None:
 def test_validate_rejects_ir_variant_is_with_unknown_variant() -> None:
     """Validator rejects IrVariantIs whose variant is absent from the descriptor."""
     loc = Location(source_id=SourceId(0), start_offset=0, end_offset=1, start_line=1, start_col=0)
-    nominal_id = NominalId(ENTRY_ID, "Color")
+    nominal_id = NominalId(3)
     desc = NominalDescriptor(
         nominal=nominal_id,
-        display_name="Color",
+        module_id=ENTRY_ID,
+        scope_path=(),
+        declared_name="Color",
         kind=NominalKind.ENUM,
         fields=(),
         variants=(VariantDescriptor(name="Red", fields=()),),

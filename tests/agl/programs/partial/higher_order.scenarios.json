@@ -2,18 +2,33 @@
   "scenarios": [
     {
       "name": "direct_higher_order_args",
-      "params": {"mode": "direct", "base": 4},
-      "expect": {"stdout": "7\n7\n"}
+      "params": {
+        "mode": "direct",
+        "base": 4
+      },
+      "expect": {
+        "stdout": "7\n7\n"
+      }
     },
     {
       "name": "nested_inner_and_outer_holes",
-      "params": {"mode": "nested", "base": 6},
-      "expect": {"stdout": "13\n10\n"}
+      "params": {
+        "mode": "nested",
+        "base": 6
+      },
+      "expect": {
+        "stdout": "13\n10\n"
+      }
     },
     {
       "name": "branch_selected_higher_order",
-      "params": {"mode": "branch", "base": 8},
-      "expect": {"stdout": "18\n9\n"}
+      "params": {
+        "mode": "branch",
+        "base": 8
+      },
+      "expect": {
+        "stdout": "18\n9\n"
+      }
     }
   ]
 }

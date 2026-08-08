@@ -1,5 +1,5 @@
-# Exception rendering: exceptions render record-style (all fields including
-# trace_id) via print, template interpolation, and "as json".
+# Exception rendering: exceptions render record-style with their declared fields
+# via print, template interpolation, and "as json".
 # Combined with try/catch, casts, and conditional logic.
 param bad_input: text
 

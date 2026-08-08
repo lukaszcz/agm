@@ -11,8 +11,7 @@ enum Verdict
 exception Halt extends Exception
   code: int
 
-agent reviewer
-
+let reviewer = AgentCommand("reviewer")
 # `:=` as a whole inline branch body, and a parenthesized block as the inline
 # escape hatch for a binder sequence.
 var label: text = "unset"

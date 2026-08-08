@@ -8,8 +8,7 @@ enum Tree
   | Leaf
   | Node(value: int, left: Tree, right: Tree)
 
-agent builder
-
+let builder = AgentCommand("builder")
 def sum_tree(t: Tree) -> int =
   case t of
     | Leaf() => 0

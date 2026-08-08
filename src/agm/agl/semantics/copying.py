@@ -38,9 +38,9 @@ A ``json`` leaf is duplicated via ``copy.deepcopy`` (its payload is a plain,
 already-acyclic Python tree — see ``semantics/values.py``'s ``JsonValue``) and
 is entered in the same memo as every other kind, so two references to the
 same ``json`` leaf copy to the same new leaf. Every other value kind —
-scalars, ``unit``, agents, constructors, closures — is returned as-is:
-primitives are immutable so there is nothing to detach, and the opaque kinds
-are capability handles, not data.
+scalars, ``unit``, constructors, closures — is returned as-is:
+primitives are immutable so there is nothing to detach, and callable values
+are capability handles rather than data.
 """
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ def deep_copy_value(value: Value) -> Value:
 
 
 #: The value kinds :func:`_deep_copy` rebuilds. Everything else — scalars,
-#: ``unit``, agents, constructors, closures — is returned as-is and never
+#: ``unit``, constructors, closures — is returned as-is and never
 #: enters the memo, so copying an array of scalars costs no lookups.
 _SHELL_KINDS = (ArrayValue, DictValue, RecordValue, EnumValue, ExceptionValue)
 _COPIED_KINDS = (*_SHELL_KINDS, JsonValue)

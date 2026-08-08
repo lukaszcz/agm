@@ -17,10 +17,9 @@ enum FixResult
   | Changed(output: text)
   | Blocked(reason: text)
 
-agent impl
-agent reviewer
-agent critic
-
+let impl = AgentCommand("impl")
+let reviewer = AgentCommand("reviewer")
+let critic = AgentCommand("critic")
 var artifact: text = ask("Implement %{spec}", agent = impl)
 
 # review declared as var so the until condition can reference it.

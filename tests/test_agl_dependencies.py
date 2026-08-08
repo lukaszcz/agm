@@ -101,12 +101,34 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
             ),
         ),
         (
+            "typecheck",
+            (
+                "agm.agl.capabilities",
+                "agm.agl.diagnostics",
+                "agm.agl.ir.ids",
+                "agm.agl.ir.reserved_nominals",
+                "agm.agl.modules.ids",
+                "agm.agl.scope",
+                "agm.agl.self_validation",
+                "agm.agl.semantics",
+                "agm.agl.syntax",
+                "agm.agl.typecheck",
+            ),
+        ),
+        (
             "semantics",
             (
                 "agm.agl.ir",
                 "agm.agl.modules.ids",
                 "agm.agl.self_validation",
                 "agm.agl.semantics",
+            ),
+        ),
+        (
+            "syntax",
+            (
+                "agm.agl.modules.ids",
+                "agm.agl.syntax",
             ),
         ),
         (
@@ -127,6 +149,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
                 "agm.agl.ir",
                 "agm.agl.modules.ids",
                 "agm.agl.runtime",
+                "agm.agl.self_validation",
                 "agm.agl.semantics",
                 "agm.agl.syntax.spans",
                 "agm.agl.typecheck.env",

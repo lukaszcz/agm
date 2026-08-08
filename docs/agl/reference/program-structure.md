@@ -17,14 +17,13 @@ module_item   ::= scope_region | item
 block         ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 item          ::= import_decl                     (* header position only *)
              | open_decl                          (* header position only *)
-             | export_decl                        (* root only *)
+             | export_decl                        (* header position only *)
              | builtin_modifier? record_def        (* root only *)
              | builtin_modifier? enum_def          (* root only *)
              | type_alias                          (* root only *)
              | builtin_modifier? exception_def     (* root only *)
-             | param_decl                          (* root only *)
+             | param_decl                          (* entry module root only *)
              | program_decl                        (* root only *)
-             | agent_decl                          (* entry module root only *)
              | infix_decl                          (* root only *)
              | builtin_var_def                     (* root only; std/config only *)
              | func_def                            (* root only *)
@@ -38,15 +37,18 @@ builtin_modifier ::= "builtin" NEWLINE?
 
 ### Import declarations
 
-`import` and `open` declarations are **header-only**: they must appear before
-any other declaration or expression. See [Modules](modules.md) and
+`import`, `open`, and `export` declarations are **header-only**: they must
+appear before any other declaration or expression, at the module root or
+inside a named scope region. See [Modules](modules.md) and
 [Grammar](grammar.md#import-and-export-declarations) for their syntax.
 
 ### Named scope regions
 
 A named scope region is a module item containing nested regions, header `open`
-declarations, and static declarations. Its matching `scope`/`end` syntax,
-declaration paths, and visibility rules are described in [Named scopes](scopes.md).
+and `import` declarations, `export` declarations, static declarations,
+`param` declarations, and `let`/`var` bindings. Its matching `scope`/`end`
+syntax, declaration and binder paths, and visibility rules are described in
+[Named scopes](scopes.md).
 
 ### Declarations
 
@@ -60,27 +62,52 @@ region.
   `enum`, and `type` declarations may be **generic**, declaring type parameters
   in a bracketed list after the name (`record Box[T]`, `enum Option[T]`,
   `type Pair[A, B] = …`); see [Generics](generics.md). `builtin` may prefix
-  `record`, `enum`, or `exception` for a host-recognized declaration; a type
-  alias does not accept it.
+  `record`, `enum`, or `exception` for a host-recognized declaration, at the
+  module root or in a named scope region; a type alias does not accept it. A
+  scoped `builtin` type carries its declared scope path as part of its
+  nominal identity, exactly like an ordinary scoped type — but its complete
+  scoped name is shared with the host across the whole program and may be
+  declared only once at that path; see [Built-in functions](functions.md#built-in-functions).
 - **`param` declarations** — the program's host/config/CLI-supplied parameters.
-  Entry-module only.
+  Entry-module only; they may also be members of a named scope region in an
+  entry module, with no declaration-path shorthand. A scoped parameter's
+  external key is its full path spelling; see
+  [Named scopes](scopes.md#parameters).
+- **`import`/`export` declarations** — module-system declarations; root-only
+  or a member of a named scope region. A scoped import's bare contribution
+  narrows to its own region; its qualifier route stays module-wide. A scoped
+  export re-roots its forwarded atoms under the region's path. See
+  [Named scopes](scopes.md#import-and-export) and
+  [Modules](modules.md#import-and-export-inside-a-scope-region).
 - **`program` declaration** — the program name used for params config lookup.
   Entry-module only.
-- **`agent` declarations** — the names of the agents the program may call.
-  Entry-module only (see [Modules](modules.md)); they may also be members of a
-  named scope region in an entry module.
 - **`builtin var` declarations** — body-less engine-backed mutable bindings.
   They are reserved to the canonical standard-library `std/config` module;
-  entry programs and ordinary libraries cannot declare them.
-- **`builtin def`s and `infix` declarations** — root-only host and parser
-  declarations.
+  entry programs and ordinary libraries cannot declare them. A `builtin var`
+  may be a member of a named scope region inside `std/config`, read and
+  written through its full path, exactly like any other scoped member.
+- **`infix` declarations** — root-only operator-fixity declarations.
 - **Function declarations** — ordinary `def`s and body-less companion-backed
   `extern def`s. They may be declared at the root or in named scope regions.
   Root and same-scope `def`s may refer to declarations that appear later,
   enabling mutual recursion (see [Functions](functions.md)). An ordinary `def`
   may be **generic** (`def id[T](x: T) -> T = x`); see [Generics](generics.md).
-  `builtin` introduces only the body-less `builtin def` form. Extern functions
-  are file-backed-module only.
+  `builtin` introduces only the body-less `builtin def` form, legal at the
+  module root or in a named scope region; a scoped `builtin def` still
+  dispatches to the same host implementation as a root one. A `builtin def`
+  with first parameter `self` in a type scope is a builtin method when it
+  matches a supported host contract (`Agent::ask` and `Agent::ask-request` in
+  the standard core); it is selected by ordinary member syntax and is
+  call-only. Its complete scoped name is subject to the same whole-program
+  uniqueness as a `builtin` type (see [Built-in functions](functions.md#built-in-functions)).
+  Extern functions are file-backed-module only.
+- **Scoped `let`/`var` bindings** — a plain `let` or `var` is legal anywhere a
+  binder is. The scope-path-prefixed spelling (`let A::x = …`,
+  `var A::count = …`) declares a member of that scope instead, and the prefix
+  is legal only at the module root or inside a named scope region — the same
+  placement `def` and the type forms use. See
+  [Named scopes](scopes.md#binder-paths) for the complete spelling and
+  visibility rules.
 
 ### The block's value
 
@@ -102,7 +129,7 @@ return `void`, and are commonly followed by another expression.
 ## Engine settings
 
 The standard-library module `std/config` exposes the program's engine
-settings — the knobs that control the default agent runner, trace logging,
+settings — the knobs that control the default agent, trace logging,
 JSON strictness, the loop safety valve, and the shell-exec timeout. Each is a
 **mutable binding**; import the module and assign it through a qualified target
 to change a setting:
@@ -112,7 +139,7 @@ import std/config
 
 std/config::max-iters := 10
 std/config::timeout := Some("30s")
-std/config::runner := "claude -p"
+std/config::default-agent := AgentClaude("sonnet", "medium")
 let budget = std/config::max-iters      # settings are readable
 print budget
 ```
@@ -125,7 +152,7 @@ The settings and their types are:
 | `log-file` | `Option[text]` | Path to the trace log file. |
 | `strict-json` | `bool` | Parse agent JSON output strictly. |
 | `max-iters` | `int` | Safety-valve cap for unbounded loops. |
-| `runner` | `text` | Default agent runner command. |
+| `default-agent` | `Agent` | Default value for `ask` calls. |
 | `timeout` | `Option[text]` | Shell-exec timeout. |
 
 A write takes effect **positionally**, exactly like any `var` mutation: it

@@ -4,13 +4,14 @@ Covers ``agm.agl.semantics.types`` and ``agm.agl.typecheck.env`` —
 both import cleanly without depending on the rest of the checker.
 
 Coverage:
-- UnitType / AgentType / FunctionType: kind, repr, structural equality.
-- is_json_shaped: False for all three new types.
-- is_assignable: exact-only for the three new types (positive + negative).
-- comparable_types: False for agent/unit/function; unchanged for scalars.
+- UnitType / FunctionType: kind, repr, structural equality.
+- is_json_shaped: False for both types.
+- is_assignable: exact-only for both types (positive + negative).
+- comparable_types: False for unit/function; unchanged for scalars.
 - TypeEnvironment: prelude types (ExecResult, ParsePolicy) and RecursionError
   exception registered in every fresh env.
-- seed_from: does not duplicate/clobber prelude types.
+- seed_from: does not duplicate/clobber prelude types, but carries a
+  program's own ``builtin`` declaration of one forward across entries.
 - unregister_name: leaves prelude + exception names intact.
 """
 
@@ -20,11 +21,8 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ModuleId
-from agm.agl.parser import parse_program
-from agm.agl.scope import resolve_module
 from agm.agl.semantics.type_table import TypeTable, comparable_types
 from agm.agl.semantics.types import (
-    AgentType,
     ArrayType,
     BoolType,
     BottomType,
@@ -52,8 +50,8 @@ from agm.agl.semantics.types import (
     match_type_template,
     substitute,
 )
-from agm.agl.typecheck.checker import check_module
 from agm.agl.typecheck.env import TypeEnvironment
+from tests.agl.module_graph import resolve_and_check_entry
 
 # Comparability tests below only exercise scalar/agent/unit/function/typevar
 # operands, whose comparable_types arms never consult the TypeTable; an empty
@@ -79,27 +77,6 @@ class TestUnitType:
         u = UnitType()
         with pytest.raises(Exception):
             setattr(u, "kind", "x")
-
-
-# ---------------------------------------------------------------------------
-# AgentType
-# ---------------------------------------------------------------------------
-
-
-class TestAgentType:
-    def test_kind(self) -> None:
-        assert AgentType().kind == "agent"
-
-    def test_repr(self) -> None:
-        assert repr(AgentType()) == "agent"
-
-    def test_equality(self) -> None:
-        assert AgentType() == AgentType()
-
-    def test_frozen(self) -> None:
-        a = AgentType()
-        with pytest.raises(Exception):
-            setattr(a, "kind", "x")
 
 
 # ---------------------------------------------------------------------------
@@ -160,16 +137,12 @@ class TestFunctionType:
         assert f1 == f2
 
     def test_bound_method_removes_and_substitutes_its_receiver(self) -> None:
-        checked = check_module(
-            resolve_module(
-                parse_program(
-                    "record Box[T]\n"
-                    "  value: T\n"
-                    "def Box::get[T](self) -> T = self.value\n"
-                    "let box = Box(value = 1)\n"
-                    "box.get"
-                )
-            ),
+        checked = resolve_and_check_entry(
+            "record Box[T]\n"
+            "  value: T\n"
+            "def Box::get[T](self) -> T = self.value\n"
+            "let box = Box(value = 1)\n"
+            "box.get",
             HostCapabilities(),
         )
         member_access = checked.resolved.program.body.items[-1]
@@ -184,9 +157,6 @@ class TestFunctionType:
 class TestIsJsonShaped:
     def test_unit_not_json_shaped(self) -> None:
         assert is_json_shaped(UnitType()) is False
-
-    def test_agent_not_json_shaped(self) -> None:
-        assert is_json_shaped(AgentType()) is False
 
     def test_function_not_json_shaped(self) -> None:
         f = FunctionType(params=(IntType(),), result=TextType())
@@ -246,9 +216,6 @@ class TestIsAssignable:
     def test_unit_to_unit(self) -> None:
         assert is_assignable(UnitType(), UnitType()) is True
 
-    def test_agent_to_agent(self) -> None:
-        assert is_assignable(AgentType(), AgentType()) is True
-
     def test_function_to_same_function(self) -> None:
         f = FunctionType(params=(IntType(),), result=TextType())
         assert is_assignable(f, f) is True
@@ -259,20 +226,12 @@ class TestIsAssignable:
         assert is_assignable(f1, f2) is True
 
     # Negative cases — no widening, no variance.
-    def test_unit_not_assignable_to_agent(self) -> None:
-        assert is_assignable(UnitType(), AgentType()) is False
-
-    def test_agent_not_assignable_to_unit(self) -> None:
-        assert is_assignable(AgentType(), UnitType()) is False
 
     def test_unit_not_assignable_to_int(self) -> None:
         assert is_assignable(UnitType(), IntType()) is False
 
     def test_int_not_assignable_to_unit(self) -> None:
         assert is_assignable(IntType(), UnitType()) is False
-
-    def test_agent_not_assignable_to_int(self) -> None:
-        assert is_assignable(AgentType(), IntType()) is False
 
     def test_function_param_mismatch_not_assignable(self) -> None:
         f1 = FunctionType(params=(IntType(),), result=TextType())
@@ -310,8 +269,6 @@ class TestIsAssignable:
 
 class TestComparableTypes:
     # New types: never comparable (even with themselves).
-    def test_agent_vs_agent_not_comparable(self) -> None:
-        assert comparable_types(AgentType(), AgentType(), _EMPTY_TABLE) is False
 
     def test_unit_vs_unit_not_comparable(self) -> None:
         assert comparable_types(UnitType(), UnitType(), _EMPTY_TABLE) is False
@@ -324,12 +281,6 @@ class TestComparableTypes:
         f1 = FunctionType(params=(IntType(),), result=IntType())
         f2 = FunctionType(params=(IntType(),), result=IntType())
         assert comparable_types(f1, f2, _EMPTY_TABLE) is False
-
-    def test_agent_vs_int_not_comparable(self) -> None:
-        assert comparable_types(AgentType(), IntType(), _EMPTY_TABLE) is False
-
-    def test_int_vs_agent_not_comparable(self) -> None:
-        assert comparable_types(IntType(), AgentType(), _EMPTY_TABLE) is False
 
     def test_unit_vs_text_not_comparable(self) -> None:
         assert comparable_types(UnitType(), TextType(), _EMPTY_TABLE) is False
@@ -408,7 +359,6 @@ class TestTypeEnvironmentPrelude:
         assert isinstance(t, ExceptionType)
         fields = env.type_table.exception_fields(t)
         assert fields["message"] == TextType()
-        assert fields["trace_id"] == TextType()
         assert fields["limit"] == IntType()
 
     def test_resolve_named_type_exec_result(self) -> None:
@@ -459,12 +409,15 @@ class TestSeedFrom:
         assert isinstance(target.get_type("ExecResult"), RecordType)
         assert isinstance(target.get_type("ParsePolicy"), EnumType)
 
-    def test_seed_does_not_overwrite_prelude(self) -> None:
-        # If source somehow had a different ExecResult, seed_from must NOT
-        # copy it (prelude names are excluded from the copy loop).
+    def test_seed_does_not_overwrite_prelude_with_a_bare_no_identity_binding(self) -> None:
+        # A binding carrying NO_DECL_ID (never a real declaration's identity —
+        # see ir.reserved_nominals) is not a program's own ``builtin``
+        # declaration, so seed_from must not let it displace the canonical
+        # prelude binding target already carries.
         source = TypeEnvironment()
-        # Manually inject a different type under the prelude name in source._types.
-        # We reach inside _types to simulate a hypothetical collision.
+        # Manually inject a bare, identity-less type under the prelude name in
+        # source._types. We reach inside _types to simulate a hypothetical
+        # collision that carries no declaration identity of its own.
         getattr(source, "_types")["ExecResult"] = RecordType(name="ExecResult")
         source.seal()
         target = TypeEnvironment()
@@ -473,6 +426,36 @@ class TestSeedFrom:
         t = target.get_type("ExecResult")
         assert isinstance(t, RecordType)
         assert "stdout" in target.type_table.record_fields(t)  # original prelude has stdout
+
+    def test_seed_does_not_overwrite_prelude_with_a_non_nominal_binding(self) -> None:
+        # A non-nominal type (no ``decl_id`` at all) can never be a program's
+        # own ``builtin`` declaration either; seed_from must recognize that
+        # without crashing and keep the canonical prelude binding.
+        source = TypeEnvironment()
+        getattr(source, "_types")["ExecResult"] = TextType()
+        source.seal()
+        target = TypeEnvironment()
+        target.seed_from(source)
+        t = target.get_type("ExecResult")
+        assert isinstance(t, RecordType)
+        assert "stdout" in target.type_table.record_fields(t)
+
+    def test_seed_carries_forward_a_programs_own_prelude_declaration(self) -> None:
+        # A program's own ``builtin record ExecResult`` declaration carries
+        # its own (non-reserved) declaration identity, distinguishing it from
+        # the canonical prelude binding every fresh environment starts with.
+        # seed_from must carry it forward across entries exactly like any
+        # other declared name, so a later entry keeps typing host calls
+        # against the SAME declaration the earlier entry's own established —
+        # never silently falling back to the canonical one just because the
+        # name is normally non-shadowable.
+        source = TypeEnvironment()
+        own_declaration = RecordType(name="ExecResult", decl_id=999)
+        getattr(source, "_types")["ExecResult"] = own_declaration
+        source.seal()
+        target = TypeEnvironment()
+        target.seed_from(source)
+        assert target.get_type("ExecResult") == own_declaration
 
     def test_seed_copies_user_types(self) -> None:
         source = TypeEnvironment()
@@ -687,6 +670,7 @@ class TestInferenceVarType:
                 name="Value",
                 module_id=ENTRY_ID,
                 fields=(("value", InferenceVarType("T")),),
+                decl_node_id=1,
             )
         )
         assert compute_uninhabited(table) == frozenset()
@@ -700,24 +684,25 @@ class TestInferenceVarType:
                 type_params=("T",),
                 fields=(
                     ("direct", TypeVarType("T")),
-                    ("next", RecordType("Box", type_args=(InferenceVarType("T"),))),
+                    (
+                        "next",
+                        RecordType("Box", type_args=(InferenceVarType("T"),), decl_id=1),
+                    ),
                 ),
+                decl_node_id=1,
             )
         )
         assert compute_finite_closure(finite_table).infinite == frozenset()
 
-    def test_schema_and_extern_walkers_reject_flexible_variables(self) -> None:
+    def test_schema_walkers_reject_flexible_variables(self) -> None:
         from agm.agl.semantics.type_table import create_seeded_type_table
-        from agm.agl.type_schema import build_extern_contract, derive_schema
-        from agm.agl.typecheck.env import FunctionSignature
+        from agm.agl.type_schema import derive_schema
 
         variable = InferenceVarType("T")
         table = create_seeded_type_table()
 
         with pytest.raises(TypeError):
             derive_schema(variable, table)
-        with pytest.raises(TypeError):
-            build_extern_contract(FunctionSignature(params=(), result=variable), table)
 
 
 # ---------------------------------------------------------------------------
@@ -726,8 +711,13 @@ class TestInferenceVarType:
 
 
 class TestGenericNominalIdentity:
-    """RecordType/EnumType handles carry no field/variant data; identity is
-    purely ``(module_id, name, type_args)``."""
+    """RecordType/EnumType handles carry no field/variant data, so equality
+    compares only their resolution metadata (``decl_id``, ``module_id``,
+    ``scope_path``, ``name``) and their ``type_args``.
+
+    Every handle here is built without a ``decl_id``, so each case isolates
+    one of the other components; declaration identity itself is covered by
+    :class:`TestNominalEquality` and ``test_agl_type_table.py``."""
 
     def test_record_identity_by_name_and_type_args(self) -> None:
         r1 = RecordType("Box", type_args=(IntType(),))
@@ -742,7 +732,7 @@ class TestGenericNominalIdentity:
     def test_record_no_type_args_identity(self) -> None:
         r1 = RecordType("R")
         r2 = RecordType("R")
-        assert r1 == r2  # name-based, no type_args
+        assert r1 == r2  # every component matches, and neither has type_args
 
     def test_record_consistent_hash(self) -> None:
         r1 = RecordType("Box", type_args=(IntType(),))
@@ -1005,7 +995,10 @@ class TestNewExceptions:
 
 
 class TestNominalEquality:
-    """RecordType/EnumType are handles: identity is (module_id, name, type_args) only."""
+    """RecordType/EnumType are handles carrying no shape of their own, so
+    equality compares their declaration identity (``decl_id``) alongside the
+    ``(module_id, scope_path, name, type_args)`` that resolve and display
+    them."""
 
     def _mod(self, name: str) -> "ModuleId":
         from agm.agl.modules.ids import ModuleId
@@ -1025,6 +1018,34 @@ class TestNominalEquality:
         e1 = EnumType(name="Color")
         e2 = EnumType(name="Color")
         assert e1 == e2
+
+    def test_record_different_declaration_not_equal(self) -> None:
+        """Two declarations of one name in one module are distinct types."""
+        from agm.agl.semantics.types import RecordType
+
+        r1 = RecordType(name="Point", decl_id=11)
+        r2 = RecordType(name="Point", decl_id=12)
+        assert r1 != r2
+        assert len({r1, r2}) == 2
+
+    def test_enum_different_declaration_not_equal(self) -> None:
+        """Two declarations of one name in one module are distinct types."""
+        from agm.agl.semantics.types import EnumType
+
+        e1 = EnumType(name="Color", decl_id=11)
+        e2 = EnumType(name="Color", decl_id=12)
+        assert e1 != e2
+        assert len({e1, e2}) == 2
+
+    def test_exception_different_declaration_not_equal(self) -> None:
+        """Exceptions carry no type arguments, so identity is all that separates
+        two declarations sharing a name."""
+        from agm.agl.semantics.types import ExceptionType
+
+        x1 = ExceptionType(name="Boom", decl_id=11)
+        x2 = ExceptionType(name="Boom", decl_id=12)
+        assert x1 != x2
+        assert len({x1, x2}) == 2
 
     def test_record_different_module_not_equal(self) -> None:
         from agm.agl.semantics.types import RecordType

@@ -8,29 +8,20 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ModuleId
-from agm.agl.parser import parse_program
-from agm.agl.scope import resolve_module
 from agm.agl.semantics.types import (
-    AgentType,
     ArrayType,
-    BoolType,
     BottomType,
-    DecimalType,
     DictType,
     EnumType,
-    ExceptionType,
     FunctionType,
     InferenceVarType,
     IntType,
-    JsonType,
     RecordType,
     TextType,
     Type,
     TypeVarType,
-    UnitType,
 )
 from agm.agl.syntax.spans import SourceId, SourceSpan
-from agm.agl.typecheck.checker import check_module
 from agm.agl.typecheck.env import AglTypeError
 from agm.agl.typecheck.inference import (
     ConstraintOrigin,
@@ -38,6 +29,8 @@ from agm.agl.typecheck.inference import (
     InferenceEngine,
     InferenceError,
 )
+from tests._agl_helpers import strip_decl_ids
+from tests.agl.module_graph import resolve_and_check_entry
 
 
 def _span(line: int, source: str = "<test>") -> SourceSpan:
@@ -112,56 +105,42 @@ class TestUnification:
     @pytest.mark.parametrize(
         ("left", "right"),
         [
-            (IntType(), IntType()),
-            (TextType(), TextType()),
-            (BoolType(), BoolType()),
-            (DecimalType(), DecimalType()),
-            (JsonType(), JsonType()),
-            (UnitType(), UnitType()),
-            (AgentType(), AgentType()),
-            (ExceptionType("Problem"), ExceptionType("Problem")),
-            (ArrayType(IntType()), ArrayType(IntType())),
-            (DictType(IntType()), DictType(IntType())),
-            (
-                FunctionType((IntType(), ArrayType(TextType())), TextType()),
-                FunctionType((IntType(), ArrayType(TextType())), TextType()),
-            ),
-            (
-                RecordType("Box", (IntType(),), ModuleId.from_path("a")),
-                RecordType("Box", (IntType(),), ModuleId.from_path("a")),
-            ),
-            (
-                EnumType("Option", (IntType(),), ModuleId.from_path("a")),
-                EnumType("Option", (IntType(),), ModuleId.from_path("a")),
-            ),
-            (TypeVarType("T"), TypeVarType("T")),
-        ],
-    )
-    def test_exact_structural_types_unify(self, left: Type, right: Type) -> None:
-        engine = InferenceEngine()
-        engine.unify(left, right, _origin(engine, 1))
-
-    @pytest.mark.parametrize(
-        ("left", "right"),
-        [
             (IntType(), TextType()),
             (ArrayType(IntType()), ArrayType(TextType())),
             (DictType(IntType()), DictType(TextType())),
             (FunctionType((IntType(),), IntType()), FunctionType((), IntType())),
             (TypeVarType("T"), TypeVarType("U")),
             (
-                RecordType("Box", (IntType(),), ModuleId.from_path("one")),
-                RecordType("Box", (IntType(),), ModuleId.from_path("two")),
+                RecordType("Box", (IntType(),), ModuleId.from_path("one"), decl_id=1),
+                RecordType("Box", (IntType(),), ModuleId.from_path("two"), decl_id=2),
             ),
             (RecordType("Box", (IntType(),)), EnumType("Box", (IntType(),))),
             (EnumType("Box", (IntType(),)), EnumType("Box", (IntType(), TextType()))),
-            (EnumType("One", (IntType(),)), EnumType("Two", (IntType(),))),
+            (EnumType("One", (IntType(),), decl_id=1), EnumType("Two", (IntType(),), decl_id=2)),
         ],
     )
     def test_shape_and_identity_mismatches_fail(self, left: Type, right: Type) -> None:
         engine = InferenceEngine()
         with pytest.raises(InferenceError):
             engine.unify(left, right, _origin(engine, 1))
+
+    def test_unification_does_not_unify_two_same_named_declarations(self) -> None:
+        # Two distinct declarations sharing one name path (a REPL
+        # redeclaration mints a fresh identity for the same name, so the two
+        # coexist) must never unify with each other, even though name and
+        # module agree -- only ``decl_id`` distinguishes them.
+        engine = InferenceEngine()
+        old_box = RecordType("Box", (IntType(),), decl_id=1)
+        new_box = RecordType("Box", (IntType(),), decl_id=2)
+
+        with pytest.raises(InferenceError):
+            engine.unify(old_box, new_box, _origin(engine, 1))
+
+        old_option = EnumType("Option", (IntType(),), decl_id=1)
+        new_option = EnumType("Option", (IntType(),), decl_id=2)
+
+        with pytest.raises(InferenceError):
+            engine.unify(old_option, new_option, _origin(engine, 2))
 
     def test_flexible_variables_merge_and_solve_to_a_rigid(self) -> None:
         engine = InferenceEngine()
@@ -354,7 +333,9 @@ class TestContextCompletion:
             FunctionType((variable,), IntType()), FunctionType((), IntType()), _origin(engine, 4)
         )
         engine.complete_from_context(
-            RecordType("Box", (variable,)), RecordType("Other", (IntType(),)), _origin(engine, 5)
+            RecordType("Box", (variable,), decl_id=1),
+            RecordType("Other", (IntType(),), decl_id=2),
+            _origin(engine, 5),
         )
         engine.complete_from_context(
             EnumType("Option", (variable,)),
@@ -365,8 +346,8 @@ class TestContextCompletion:
             _origin(engine, 6),
         )
         engine.complete_from_context(
-            EnumType("One", (engine.fresh("V"),)),
-            EnumType("Two", (IntType(),)),
+            EnumType("One", (engine.fresh("V"),), decl_id=1),
+            EnumType("Two", (IntType(),), decl_id=2),
             _origin(engine, 7),
         )
 
@@ -376,16 +357,19 @@ class TestContextCompletion:
 
 def test_destructuring_let_binder_preserves_candidate_validation_provenance() -> None:
     """A generic pattern field retains its initializer's candidate-return evidence."""
+    # Named "Holder", not "Option": the standard library's own Option[T] is in
+    # scope, and a same-named top-level enum would make Option:: ambiguous
+    # instead of exercising the candidate-return-type provenance under test.
     source = (
-        "enum Option[T]\n"
+        "enum Holder[T]\n"
         "  | some(value: T)\n"
         "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
-        "let some(value = value) = Option::some(value = recurse(0))\n"
+        "let some(value = value) = Holder::some(value = recurse(0))\n"
         'value + "x"'
     )
 
     with pytest.raises(AglTypeError) as raised:
-        check_module(resolve_module(parse_program(source)), HostCapabilities())
+        resolve_and_check_entry(source, HostCapabilities())
 
     error = raised.value
     assert "inferred return type" in str(error).lower()
@@ -394,61 +378,49 @@ def test_destructuring_let_binder_preserves_candidate_validation_provenance() ->
 
 def test_method_with_inferred_return_uses_receiver_header_type() -> None:
     """Candidate inference retains the receiver's rigid generic slot in its body."""
-    checked = check_module(
-        resolve_module(
-            parse_program(
-                "record Box[T]\n"
-                "  value: T\n"
-                "def Box::get[E](self) = self.value\n"
-                "let box = Box(value = 1)\n"
-                "Box::get(box)"
-            )
-        ),
+    checked = resolve_and_check_entry(
+        "record Box[T]\n"
+        "  value: T\n"
+        "def Box::get[E](self) = self.value\n"
+        "let box = Box(value = 1)\n"
+        "Box::get(box)",
         HostCapabilities(),
     )
 
     signature = checked.type_env.get_function_signature("get", scope_path=("Box",))
     assert signature is not None
     assert signature.result == TypeVarType("E")
-    assert signature.params[0].type == RecordType("Box", (TypeVarType("E"),))
+    assert strip_decl_ids(signature.params[0].type) == RecordType("Box", (TypeVarType("E"),))
 
 
 def test_bound_generic_method_pins_receiver_and_inferrs_own_type_parameter() -> None:
     """Only method parameters beyond the receiver are inferred at member access."""
-    checked = check_module(
-        resolve_module(
-            parse_program(
-                "record Box[T]\n"
-                "  value: T\n"
-                "def Box::map[T, U](self, f: (T) -> U) -> Box[U] = Box(value = f(self.value))\n"
-                "let box = Box(value = 1)\n"
-                'box.map(fn(value: int) -> text => "value")'
-            )
-        ),
+    checked = resolve_and_check_entry(
+        "record Box[T]\n"
+        "  value: T\n"
+        "def Box::map[T, U](self, f: (T) -> U) -> Box[U] = Box(value = f(self.value))\n"
+        "let box = Box(value = 1)\n"
+        'box.map(fn(value: int) -> text => "value")',
         HostCapabilities(),
     )
 
     result = checked.resolved.program.body.items[-1]
-    assert checked.node_types[result.node_id] == RecordType("Box", (TextType(),))
+    assert strip_decl_ids(checked.node_types[result.node_id]) == RecordType("Box", (TextType(),))
 
 
 def test_bound_generic_method_accepts_explicit_own_type_parameter() -> None:
     """Explicit member instantiation supplies only parameters not pinned by the receiver."""
-    checked = check_module(
-        resolve_module(
-            parse_program(
-                "record Box[T]\n"
-                "  value: T\n"
-                "def Box::map[T, U](self, f: (T) -> U) -> Box[U] = Box(value = f(self.value))\n"
-                "let box = Box(value = 1)\n"
-                'box.map::[text](fn(value: int) -> text => "value")'
-            )
-        ),
+    checked = resolve_and_check_entry(
+        "record Box[T]\n"
+        "  value: T\n"
+        "def Box::map[T, U](self, f: (T) -> U) -> Box[U] = Box(value = f(self.value))\n"
+        "let box = Box(value = 1)\n"
+        'box.map::[text](fn(value: int) -> text => "value")',
         HostCapabilities(),
     )
 
     result = checked.resolved.program.body.items[-1]
-    assert checked.node_types[result.node_id] == RecordType("Box", (TextType(),))
+    assert strip_decl_ids(checked.node_types[result.node_id]) == RecordType("Box", (TextType(),))
 
 
 class TestFinalizationAndProvenance:

@@ -18,14 +18,10 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, TypeVar
 
-from agm.agl.diagnostics import AglError, Diagnostic
-from agm.agl.eval.ir_interpreter import IrInterpreter
-from agm.agl.ir.ids import AgentId
+from agm.agl.diagnostics import AglError, Diagnostic, diagnostic_from_span
+from agm.agl.eval.ir_interpreter import HostConfigurationError, IrInterpreter
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.params import _materialize_ir_contracts, _prepare_ir_params
-from agm.agl.runtime.types import (
-    AgentDeclInfo as AgentDeclInfo,
-)
 from agm.agl.runtime.types import (
     CallSiteInfo as CallSiteInfo,
 )
@@ -34,18 +30,18 @@ from agm.agl.runtime.types import (
     ParamDeclInfo,
 )
 from agm.agl.self_validation import self_validation_enabled
-from agm.raw_tail_catalog import RAW_TAIL_NAMES
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.ir.contracts import ContractPayload
-    from agm.agl.ir.program import ExecutableProgram
+    from agm.agl.ir.ids import NominalId
+    from agm.agl.ir.program import ExecutableProgram, NominalDescriptor
     from agm.agl.matchcompile import MatchCompiledProgram
     from agm.agl.modules.ids import ModuleId
+    from agm.agl.modules.loader import LoadedModule, ModuleGraph
     from agm.agl.modules.roots import RootSet
-    from agm.agl.runtime.agents import AgentRegistry
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.externs import ExternRegistry
     from agm.agl.runtime.host_settings import HostSettingsPolicy
@@ -53,14 +49,13 @@ if TYPE_CHECKING:
     from agm.agl.scope.symbols import ModuleResolution
     from agm.agl.semantics.type_table import TypeTable
     from agm.agl.semantics.values import ExceptionValue, Value
-    from agm.agl.syntax.nodes import AgentDecl as AgentDeclNode
+    from agm.agl.setting_overrides import SettingOverride
+    from agm.agl.syntax.advisories import SpacedQualifier
+    from agm.agl.syntax.nodes import Program
     from agm.agl.typecheck.env import OutputContractSpec
     from agm.agl.typecheck.program import CheckedProgram
 
 _ResultT = TypeVar("_ResultT")
-
-# Reserved agent names: cannot be registered by callers.
-_RESERVED_AGENT_NAMES: frozenset[str] = frozenset({"ask", "exec", "ask-request"}) | RAW_TAIL_NAMES
 
 
 class ArtifactProvenanceError(Exception):
@@ -104,6 +99,45 @@ class ParamPreflight:
 
 
 @dataclass(frozen=True, slots=True)
+class ParsedEntry:
+    """Result of :meth:`PipelineDriver.parse_entry`.
+
+    The entry source parsed once, ahead of module-graph loading and scope
+    resolution. Lets a caller read the declared program name and choose
+    engine-setting overrides before :meth:`PipelineDriver.prepare_parsed_entry`
+    loads imports and resolves the whole program.
+
+    ``program``
+        The parsed entry AST, or ``None`` when parsing failed (in which case
+        ``diagnostics`` holds the error).
+    ``next_id``
+        The first node id not yet consumed by this parse — the seed for
+        module-graph loading.
+    ``program_name``
+        The declared ``program NAME``, read directly from the parsed AST
+        without requiring scope resolution; ``None`` when the entry declares
+        none (or parsing failed).
+    ``spaced_qualifiers``
+        Lexical advisories collected while parsing the entry, threaded into
+        module-graph loading exactly as :func:`~agm.agl.modules.loader.load_graph`
+        does.
+    ``diagnostics``
+        A parse failure, or empty on success.
+    ``warnings``
+        TAB advisories collected while parsing the entry.
+    """
+
+    source: str
+    entry_path: "Path | None"
+    program: "Program | None"
+    next_id: int
+    program_name: str | None
+    spaced_qualifiers: "tuple[SpacedQualifier, ...]"
+    diagnostics: tuple[Diagnostic, ...]
+    warnings: tuple[Diagnostic, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class PreparedProgram:
     """Result of the load + scope phase of an AgL multi-module program.
 
@@ -135,27 +169,6 @@ class PreparedProgram:
     companion_paths: "dict[ModuleId, Path | None]" = field(default_factory=dict)
 
     @property
-    def declared_agents(self) -> tuple[AgentDeclInfo, ...]:
-        """Agent declarations from the entry module, sorted by line/col.
-
-        Empty when load or scope failed (``resolved is None``).
-        """
-        if self.resolved is None:
-            return ()
-        infos = [
-            AgentDeclInfo(
-                name=decl.name,
-                scope_path=scope_path,
-                runner=decl.runner,
-                line=decl.span.start_line,
-                col=decl.span.start_col,
-            )
-            for (scope_path, _name), decl in self.resolved.entry_agents.items()
-        ]
-        infos.sort(key=lambda info: (info.line, info.col))
-        return tuple(infos)
-
-    @property
     def program_name(self) -> str | None:
         """The declared program name from the entry module, or ``None``."""
         from agm.agl.modules.ids import ENTRY_ID
@@ -185,14 +198,8 @@ class RunError:
     line: int | None = None
     col: int | None = None
 
-    def to_message(self, *, include_trace_id: bool = False) -> str:
-        """Render the single-line ``AgL exception: ...`` report for this error.
-
-        Format: ``AgL exception: <Type>[: <message>][: at line L[, col C]]``,
-        with a trailing ``: trace_id=<id>`` when *include_trace_id* is set and a
-        trace id is present.  Shared by ``agm exec`` (with the trace id, design
-        ) and the REPL failure echo so the two never diverge.
-        """
+    def to_message(self) -> str:
+        """Render the single-line ``AgL exception: ...`` report for this error."""
         parts: list[str] = [f"AgL exception: {self.type_name}"]
         message = self.fields.get("message")
         if isinstance(message, str) and message:
@@ -202,10 +209,6 @@ class RunError:
                 parts.append(f"at line {self.line}, col {self.col}")
             else:
                 parts.append(f"at line {self.line}")
-        if include_trace_id:
-            trace_id = self.fields.get("trace_id")
-            if isinstance(trace_id, str) and trace_id:
-                parts.append(f"trace_id={trace_id}")
         return ": ".join(parts)
 
 
@@ -223,7 +226,7 @@ class RunResult:
         SEPARATE channel and NEVER appear here; on a successful run this list is
         empty.
     ``warnings``
-        Advisory warning-severity diagnostics (e.g. an unused declared agent)
+        Advisory warning-severity diagnostics (e.g. an unused binding)
         surfaced on EVERY path — success, static failure, param-validation
         failure, and uncaught exception.  Same ``Diagnostic`` type as
         ``diagnostics`` but with ``.severity == "warning"``.  Reported to the
@@ -234,8 +237,9 @@ class RunResult:
         per the CLI contract).  ``None`` for pre-execution failures and for
         successful runs.
     ``bindings``
-        Root-scope bindings after a successful run (name → Value).  Empty for
-        failed runs.
+        Entry-module public bindings after a successful run (name → Value); a
+        scoped binding or agent appears under its full path spelling
+        (``A::x``).  Empty for failed runs.
     ``call_sites``
         Static call-site inventory populated when ``check_only=True``
         (``agm exec --dry-run``).  One entry per agent-call/exec site in
@@ -271,10 +275,8 @@ class PipelineDriver:
         loops at that many iterations, raising ``MaxIterationsExceeded``. Self-bounded
         loops (``for``, ``do[n]``) are never affected by this valve.  Resolved
         by the caller as ``--max-iters`` > ``[exec] max-iters``.
-    default_agent : callable or None
-        The callable used for the built-in ``ask`` agent.  ``None`` means
-        no default agent is configured (only explicitly registered agents will
-        be available).
+    agent_dispatcher : callable or None
+        The callable used to dispatch a typed ``Agent`` value for ``ask``.
     shell_exec_timeout : float or None
         Idle timeout (in seconds) applied to every ``exec`` shell call. ``None``
         means no timeout (the shell command may run indefinitely). This is the
@@ -295,21 +297,20 @@ class PipelineDriver:
         *,
         default_strict_json: bool = False,
         default_loop_limit: int | None = None,
-        default_agent: AgentFn | None = None,
+        agent_dispatcher: AgentFn | None = None,
         shell_exec_timeout: float | None = None,
         default_call_depth_limit: int | None = None,
         extern_registry: "ExternRegistry | None" = None,
     ) -> None:
         self._default_strict_json = default_strict_json
         self._default_loop_limit = default_loop_limit
-        self._default_agent = default_agent
+        self._agent_dispatcher = agent_dispatcher
         self._shell_exec_timeout = shell_exec_timeout
         self._default_call_depth_limit = (
             default_call_depth_limit
             if default_call_depth_limit is not None
             else IrInterpreter.DEFAULT_MAX_CALL_DEPTH
         )
-        self._agents: dict[AgentId, AgentFn] = {}
         self._extern_registry = extern_registry
         # Extra codecs registered by the host (beyond the built-ins).
         self._extra_codecs: dict[str, "OutputCodec"] = {}
@@ -317,29 +318,6 @@ class PipelineDriver:
         # REPL's per-entry ``host_environment()`` calls reuse one bundle.  Any
         # ``register_*`` invalidates it.
         self._host_env_cache: HostEnvironment | None = None
-
-    def register_agent(self, name: str, fn: AgentFn) -> None:
-        """Register a root-level named agent callable.
-
-        Raises ``ValueError`` if ``name`` is reserved or already registered.
-        """
-        self.register_scoped_agent((), name, fn)
-
-    def register_scoped_agent(self, scope_path: tuple[str, ...], name: str, fn: AgentFn) -> None:
-        """Register a callable for the agent declared at *scope_path* and *name*."""
-        if name in _RESERVED_AGENT_NAMES:
-            raise ValueError(
-                f"Cannot register agent with reserved name {name!r}. "
-                f"Reserved names: {sorted(_RESERVED_AGENT_NAMES)}"
-            )
-        agent_id = AgentId(name, scope_path)
-        if agent_id in self._agents:
-            raise ValueError(
-                f"An agent named {agent_id.display_name!r} is already registered. "
-                "Duplicate registrations are not allowed."
-            )
-        self._agents[agent_id] = fn
-        self._host_env_cache = None
 
     def register_codec(self, codec: "OutputCodec") -> None:
         """Register a custom output codec.
@@ -374,20 +352,14 @@ class PipelineDriver:
     def host_environment(self) -> HostEnvironment:
         """Assemble the shared host environment from this runtime's registrations.
 
-        Returns the ``AgentRegistry``, derived ``HostCapabilities``, and merged
-        codec/renderer tables — the same bundle ``run`` builds internally.  An
-        embedding host (e.g. ``ReplSession``) calls this to wire identical
-        agent/codec/renderer backing without re-running the assembly itself.
-
-        The bundle is invariant between registrations, so it is assembled once
-        and cached; a ``register_*`` call invalidates the cache.  This spares the
-        REPL re-assembling the whole environment on every entry / introspection.
+        Returns the value dispatcher, derived ``HostCapabilities``, and merged
+        codec tables. The bundle is invariant between codec registrations, so it
+        is assembled once and cached.
         """
         if self._host_env_cache is not None:
             return self._host_env_cache
         self._host_env_cache = assemble_host_environment(
-            agents=self._agents,
-            default_agent=self._default_agent,
+            agent_dispatcher=self._agent_dispatcher,
             extra_codecs=self._extra_codecs,
             extern_registry=self._extern_registry,
         )
@@ -414,8 +386,6 @@ class PipelineDriver:
         ``AglRaise`` to a failing ``RunResult``.  All return paths carry
         *warnings*.
         """
-        registry = host_env.registry
-
         ir_param_values, param_errors = _prepare_ir_params(executable, param_values)
         if param_errors:
             return RunResult(ok=False, diagnostics=param_errors, error=None, warnings=warnings)
@@ -469,28 +439,27 @@ class PipelineDriver:
             from agm.agl.runtime.host_settings import HostSettingsReconfigurer
 
             reconfigurer: HostSettingsReconfigurer | None = HostSettingsReconfigurer(
-                registry=registry, trace=trace, policy=host_settings_policy
+                trace=trace, policy=host_settings_policy
             )
         else:
             reconfigurer = None
 
-        interp = IrInterpreter(
-            executable,
-            registry=registry,
-            strict_json=self._default_strict_json,
-            loop_limit=self._default_loop_limit,
-            shell_exec_timeout=self._shell_exec_timeout,
-            trace=trace,
-            max_call_depth=self._default_call_depth_limit,
-            param_values=ir_param_values,
-            host_contracts=host_contracts,
-            extern_registry=host_env.extern_registry,
-            host_reconfigurer=reconfigurer,
-            builtin_host_settings=builtin_host_settings,
-        )
-
         try:
-            root_bindings = interp.run()
+            interp = IrInterpreter(
+                executable,
+                agent_dispatcher=host_env.agent_dispatcher,
+                strict_json=self._default_strict_json,
+                loop_limit=self._default_loop_limit,
+                shell_exec_timeout=self._shell_exec_timeout,
+                trace=trace,
+                max_call_depth=self._default_call_depth_limit,
+                param_values=ir_param_values,
+                host_contracts=host_contracts,
+                extern_registry=host_env.extern_registry,
+                host_reconfigurer=reconfigurer,
+                builtin_host_settings=builtin_host_settings,
+            )
+            entry_bindings = interp.run()
         except AglRaise as exc:
             # Uncaught AgL exception (exit code 2 per the CLI contract).
             # ONLY the AgL exception carrier is caught here: an unexpected Python
@@ -498,11 +467,9 @@ class PipelineDriver:
             # rather than masquerade as a user-facing pre-execution diagnostic.
             error = exception_value_to_run_error(exc.exc, span=exc.span)
             # Record the uncaught exception in the trace.
-            trace_id = str(error.fields.get("trace_id", ""))
             trace.exception(
                 type_name=error.type_name,
                 message=str(error.fields.get("message", "")),
-                trace_id=trace_id,
                 span=exc.span,
             )
             trace.run_end(ok=False)
@@ -510,6 +477,21 @@ class PipelineDriver:
                 ok=False,
                 diagnostics=[],
                 error=error,
+                warnings=list(warnings),
+                bindings={},
+                trace_path=trace.path,
+            )
+        except HostConfigurationError as exc:
+            # The materialized ``default-agent`` value cannot be dispatched: a
+            # pre-execution host-configuration failure (exit 1 per the CLI
+            # contract), not an uncaught AgL exception — nothing has executed
+            # yet, so it is reported as an ordinary diagnostic rather than
+            # ``result.error``.
+            trace.run_end(ok=False)
+            return RunResult(
+                ok=False,
+                diagnostics=[Diagnostic(message=str(exc), line=1)],
+                error=None,
                 warnings=list(warnings),
                 bindings={},
                 trace_path=trace.path,
@@ -522,29 +504,120 @@ class PipelineDriver:
             diagnostics=[],
             error=None,
             warnings=list(warnings),
-            bindings=root_bindings,
+            bindings=entry_bindings,
             trace_path=trace.path,
         )
 
     @staticmethod
-    def prepare_program(
+    def parse_entry(
         entry_source: str,
         *,
         entry_path: "Path | None" = None,
+    ) -> ParsedEntry:
+        """Parse *entry_source* once, ahead of module-graph loading.
+
+        The first half of :meth:`prepare_program`, split out so a caller can
+        read :attr:`ParsedEntry.program_name` — and so a host driving a
+        second program-point step (e.g. choosing engine-setting overrides)
+        never re-parses the entry to get there.  Collects TAB and
+        spaced-qualifier advisories exactly as
+        :func:`~agm.agl.modules.loader.load_graph` does for its own entry
+        parse.  Non-raising: an ``AglSyntaxError`` is captured into
+        :attr:`ParsedEntry.diagnostics` with ``program`` left ``None``.
+        """
+        from agm.agl.lexer import tab_warning_collector
+        from agm.agl.modules.loader import EntryParseSyntaxError, parse_entry_module
+        from agm.agl.parser import AglSyntaxError
+        from agm.agl.syntax.nodes import ProgramDecl
+
+        with tab_warning_collector() as tab_sink:
+            try:
+                parsed_module = parse_entry_module(entry_source, entry_path=entry_path)
+            except AglSyntaxError as exc:
+                spaced_qualifiers = (
+                    exc.spaced_qualifiers if isinstance(exc, EntryParseSyntaxError) else ()
+                )
+                return ParsedEntry(
+                    source=entry_source,
+                    entry_path=entry_path,
+                    program=None,
+                    next_id=0,
+                    program_name=None,
+                    spaced_qualifiers=spaced_qualifiers,
+                    diagnostics=(exc.to_diagnostic(),),
+                    warnings=tuple(tab_sink),
+                )
+            except AglError as exc:
+                return ParsedEntry(
+                    source=entry_source,
+                    entry_path=entry_path,
+                    program=None,
+                    next_id=0,
+                    program_name=None,
+                    spaced_qualifiers=(),
+                    diagnostics=(exc.to_diagnostic(),),
+                    warnings=tuple(tab_sink),
+                )
+            except Exception as exc:
+                return ParsedEntry(
+                    source=entry_source,
+                    entry_path=entry_path,
+                    program=None,
+                    next_id=0,
+                    program_name=None,
+                    spaced_qualifiers=(),
+                    diagnostics=(Diagnostic(message=str(exc), line=1),),
+                    warnings=tuple(tab_sink),
+                )
+        program = parsed_module.program
+        next_id = parsed_module.next_id
+
+        program_name: str | None = None
+        for item in program.body.items:
+            if isinstance(item, ProgramDecl):
+                program_name = item.name
+                break
+
+        return ParsedEntry(
+            source=entry_source,
+            entry_path=entry_path,
+            program=program,
+            next_id=next_id,
+            program_name=program_name,
+            spaced_qualifiers=parsed_module.spaced_qualifiers,
+            diagnostics=(),
+            warnings=tuple(tab_sink),
+        )
+
+    @staticmethod
+    def prepare_parsed_entry(
+        parsed: ParsedEntry,
+        *,
         roots: "RootSet | None" = None,
         default_stdlib: bool = True,
+        setting_overrides: "Mapping[str, SettingOverride] | None" = None,
     ) -> PreparedProgram:
-        """Load and resolve the program rooted at *entry_source* once.
+        """Load imports and resolve scope for an already-parsed entry.
 
-        Drives ``parse → load imports → resolve_program`` for the entry module
-        and every reachable module.
+        The second half of :meth:`prepare_program`, taking
+        :meth:`parse_entry`'s result: drives
+        ``load imports → apply setting_overrides → resolve_program``.
 
-        Non-raising: any load (``ModuleNotFound``, ``AmbiguousModule``,
-        ``ModulePrefixNotFound``, ``ImportEntryError``), parse
-        (``AglSyntaxError``), or scope (``AglScopeError``) failure is
-        captured into :attr:`PreparedProgram.diagnostics` rather than raised,
-        with ``resolved`` left ``None``.  TAB advisories are captured
-        as warnings via the lex-pass context manager.
+        ``setting_overrides``, when given, splices each named engine key's
+        AgL source text in as its ``std/config`` ``builtin var`` declaration's
+        default *after* the module graph is loaded but *before* scope
+        resolution — so the override is resolved, type-checked, and
+        constant-checked by this same pass, never by a second compilation.  A
+        rejected override (unparseable source, not exactly one expression, an
+        unknown engine key, or a graph with no loaded ``std/config``) is
+        captured as a diagnostic naming the override's origin; a type or
+        constant-expression violation surfaces later, from the ordinary
+        ``builtin var`` checking in :meth:`run_prepared`/:meth:`discover_params`.
+
+        Non-raising in the same way as :meth:`prepare_program`: every load,
+        override, or scope failure is captured into
+        :attr:`PreparedProgram.diagnostics` rather than raised, with
+        ``resolved`` left ``None``.
         """
         from agm.agl.lexer import tab_warning_collector
         from agm.agl.modules.errors import (
@@ -554,25 +627,41 @@ class PipelineDriver:
             ModuleNotFound,
             ModulePrefixNotFound,
         )
-        from agm.agl.modules.loader import load_graph
+        from agm.agl.modules.loader import build_repl_graph
         from agm.agl.parser import AglSyntaxError
         from agm.agl.scope import AglScopeError
         from agm.agl.scope.program import resolve_program
+        from agm.util.text import normalize_newlines
+
+        entry_source = parsed.source
+        entry_path = parsed.entry_path
 
         if roots is None:
             from pathlib import Path
 
-            from agm.agl.modules.roots import assemble_roots
+            from agm.agl.modules.roots import RootSet, assemble_roots
             from agm.config.module_roots import (
                 ModuleRootsConfig,
+                StaleStdlibError,
                 resolve_lib_root,
                 resolve_stdlib_root,
             )
 
             cwd = Path.cwd()
+            try:
+                default_stdlib_root = resolve_stdlib_root(home=Path.home())
+            except StaleStdlibError as exc:
+                return PreparedProgram(
+                    entry_source,
+                    entry_path,
+                    RootSet(roots=frozenset()),
+                    None,
+                    (Diagnostic(message=str(exc), line=1),),
+                    parsed.warnings,
+                )
             roots = assemble_roots(
                 invocation_root=entry_path.resolve().parent if entry_path is not None else cwd,
-                stdlib_root=resolve_stdlib_root(home=Path.home()),
+                stdlib_root=default_stdlib_root,
                 lib_root=resolve_lib_root(
                     ModuleRootsConfig(lib_root=None, extra=()), home=Path.home()
                 ),
@@ -581,13 +670,23 @@ class PipelineDriver:
                 cwd=cwd,
             )
 
+        if parsed.program is None:
+            return PreparedProgram(
+                entry_source, entry_path, roots, None, parsed.diagnostics, parsed.warnings
+            )
+
         with tab_warning_collector() as tab_sink:
             try:
-                graph = load_graph(
-                    entry_source,
-                    entry_path=entry_path,
+                graph, next_id, newly_loaded_modules = build_repl_graph(
+                    parsed.program,
+                    parsed.next_id,
+                    path=entry_path,
+                    cached={},
                     roots=roots,
                     default_stdlib=default_stdlib,
+                    spaced_qualifiers=parsed.spaced_qualifiers,
+                    default_label="<command>",
+                    source_text=normalize_newlines(entry_source),
                 )
             except AglSyntaxError as exc:
                 return PreparedProgram(
@@ -596,7 +695,7 @@ class PipelineDriver:
                     roots,
                     None,
                     (exc.to_diagnostic(),),
-                    tuple(tab_sink),
+                    (*parsed.warnings, *tab_sink),
                 )
             except (
                 ModuleNotFound,
@@ -611,7 +710,7 @@ class PipelineDriver:
                     roots,
                     None,
                     (exc.to_diagnostic(),),
-                    tuple(tab_sink),
+                    (*parsed.warnings, *tab_sink),
                 )
             except AglError as exc:
                 return PreparedProgram(
@@ -620,7 +719,7 @@ class PipelineDriver:
                     roots,
                     None,
                     (exc.to_diagnostic(),),
-                    tuple(tab_sink),
+                    (*parsed.warnings, *tab_sink),
                 )
             except Exception as exc:
                 return PreparedProgram(
@@ -629,9 +728,26 @@ class PipelineDriver:
                     roots,
                     None,
                     (Diagnostic(message=str(exc), line=1),),
-                    tuple(tab_sink),
+                    (*parsed.warnings, *tab_sink),
                 )
-        warnings: tuple[Diagnostic, ...] = tuple(tab_sink)
+        warnings: tuple[Diagnostic, ...] = (*parsed.warnings, *tab_sink)
+
+        if setting_overrides:
+            # A one-shot compile: whether or not ``std/config`` is in this
+            # graph, this is the only chance to apply/validate the overrides,
+            # so a ``required`` override (e.g. ``--agent``) must be validated
+            # even when ``std/config`` never loads (``validate_when_absent=True``).
+            graph, next_id, override_diagnostics, _newly_loaded_modules = apply_setting_overrides(
+                graph,
+                next_id,
+                setting_overrides,
+                newly_loaded_modules=newly_loaded_modules,
+                validate_when_absent=True,
+            )
+            if override_diagnostics:
+                return PreparedProgram(
+                    entry_source, entry_path, roots, None, tuple(override_diagnostics), warnings
+                )
 
         try:
             resolved = resolve_program(graph)
@@ -653,25 +769,46 @@ class PipelineDriver:
                 warnings,
             )
 
-        # Collect scope warnings from the resolved program.
-        all_warnings = (*warnings, *resolved.warnings)
         companion_paths = {mid: lm.companion_path for mid, lm in graph.modules.items()}
         return PreparedProgram(
-            entry_source, entry_path, roots, resolved, (), all_warnings, companion_paths
+            entry_source, entry_path, roots, resolved, (), warnings, companion_paths
         )
 
     @staticmethod
-    def declared_agents(
-        source: str,
+    def prepare_program(
+        entry_source: str,
         *,
         entry_path: "Path | None" = None,
         roots: "RootSet | None" = None,
         default_stdlib: bool = True,
-    ) -> tuple[AgentDeclInfo, ...]:
-        """Return entry-module agent declarations without raising."""
-        return PipelineDriver.prepare_program(
-            source, entry_path=entry_path, roots=roots, default_stdlib=default_stdlib
-        ).declared_agents
+        setting_overrides: "Mapping[str, SettingOverride] | None" = None,
+    ) -> PreparedProgram:
+        """Load and resolve the program rooted at *entry_source* once.
+
+        Drives ``parse → load imports → resolve_program`` for the entry module
+        and every reachable module — a thin wrapper over :meth:`parse_entry`
+        followed by :meth:`prepare_parsed_entry`, kept for callers that have
+        no use for the split (most of them).
+
+        ``setting_overrides`` maps an engine key (e.g. ``"default-agent"``) to
+        a :class:`~agm.agl.setting_overrides.SettingOverride` supplying its
+        default as host-provided AgL source text; see
+        :meth:`prepare_parsed_entry` for how it is applied and diagnosed.
+
+        Non-raising: any load (``ModuleNotFound``, ``AmbiguousModule``,
+        ``ModulePrefixNotFound``, ``ImportEntryError``), parse
+        (``AglSyntaxError``), or scope (``AglScopeError``) failure is
+        captured into :attr:`PreparedProgram.diagnostics` rather than raised,
+        with ``resolved`` left ``None``.  TAB advisories are captured
+        as warnings via the lex-pass context manager.
+        """
+        parsed = PipelineDriver.parse_entry(entry_source, entry_path=entry_path)
+        return PipelineDriver.prepare_parsed_entry(
+            parsed,
+            roots=roots,
+            default_stdlib=default_stdlib,
+            setting_overrides=setting_overrides,
+        )
 
     def run(
         self,
@@ -707,7 +844,7 @@ class PipelineDriver:
         lowering by :meth:`run_prepared`.
         """
         from agm.agl.modules.ids import ENTRY_ID
-        from agm.agl.syntax.nodes import ParamDecl
+        from agm.agl.syntax.nodes import ParamDecl, scoped_public_name, static_items
 
         if prepared.resolved is None:
             return ParamDiscovery(
@@ -766,15 +903,16 @@ class PipelineDriver:
             )
 
         infos: list[ParamDeclInfo] = []
-        for item in entry_cm.resolved.program.body.items:
+        for item in static_items(entry_cm.resolved.program.body.items):
             if isinstance(item, ParamDecl):
                 param_type = entry_cm.type_env.get_binding_type(item.node_id)
                 assert param_type is not None, (
                     f"Param {item.name!r} has no recorded binding type; checker invariant violated."
                 )
+                external_name = scoped_public_name(item.scope_path, item.name)
                 infos.append(
                     ParamDeclInfo(
-                        name=item.name,
+                        name=external_name,
                         type=param_type,
                         has_default=item.default is not None,
                         line=item.span.start_line,
@@ -798,6 +936,7 @@ class PipelineDriver:
         capabilities: "HostCapabilities",
         host_env: HostEnvironment,
         prepared: PreparedProgram,
+        nominals: "Mapping[NominalId, NominalDescriptor]",
         on_failure: "Callable[[list[Diagnostic]], _ResultT]",
     ) -> "_ResultT | None":
         """Import and resolve every extern companion, or build a failure result.
@@ -811,6 +950,7 @@ class PipelineDriver:
             capabilities=capabilities,
             registry=host_env.extern_registry,
             companion_paths=prepared.companion_paths,
+            nominals=nominals,
         )
         if extern_diagnostics:
             return on_failure(extern_diagnostics)
@@ -832,8 +972,7 @@ class PipelineDriver:
         """Execute an already loaded and scoped program without reloading.
 
         Resumes the pipeline at type checking: ``check_program`` → match
-        compilation → ``lower_program`` → ``IrInterpreter``. Agents are
-        entry-program-owned.
+        compilation → ``lower_program`` → ``IrInterpreter``.
 
         When *prepared* carries a load/scope failure (``resolved is
         None``), its diagnostics are surfaced unchanged and nothing executes.
@@ -936,33 +1075,6 @@ class PipelineDriver:
             if checked.capabilities != capabilities:
                 checked = None
 
-        registry = host_env.registry
-
-        # Agent reconciliation against entry module's declared agents. Scoped
-        # declarations are retained for reporting, while lowering only needs a
-        # backing for those whose handle is referenced.
-        from agm.agl.scope.symbols import BinderKind
-
-        entry_resolution = resolved.modules[resolved.entry_id].resolved
-        referenced_agents = frozenset(
-            AgentId(ref.name, ref.scope_path)
-            for ref in entry_resolution.resolution.values()
-            if ref.kind is BinderKind.agent_binding
-        )
-        reconciliation_errors = _reconcile_agents(
-            registry, resolved.entry_agents, referenced_agents=referenced_agents
-        )
-        if reconciliation_errors:
-            return (
-                RunResult(
-                    ok=False,
-                    diagnostics=reconciliation_errors,
-                    error=None,
-                    warnings=list(warnings),
-                ),
-                None,
-            )
-
         # Reuse a supplied match-compiled program rather than repeating its
         # typecheck and match-compilation passes.
         tc_diagnostics: tuple[Diagnostic, ...]
@@ -1019,6 +1131,11 @@ class PipelineDriver:
                     None,
                 )
 
+        if executable is None:
+            from agm.agl.lower import lower_program
+
+            executable = lower_program(compiled, contract_payloads=contract_payloads)
+
         if not check_only:
             # Extern (Python FFI) companions: import and resolve every declared
             # extern up front, gated by capability — fail-fast, before evaluation,
@@ -1030,6 +1147,7 @@ class PipelineDriver:
                 capabilities=capabilities,
                 host_env=host_env,
                 prepared=prepared,
+                nominals=executable.nominals,
                 on_failure=lambda extern_diagnostics: RunResult(
                     ok=False,
                     diagnostics=extern_diagnostics,
@@ -1039,14 +1157,6 @@ class PipelineDriver:
             )
             if run_failure is not None:
                 return run_failure, None
-
-        if executable is None:
-            from agm.agl.lower import lower_program
-
-            executable = lower_program(
-                compiled,
-                contract_payloads=contract_payloads,
-            )
 
         return (
             self._execute_ir(
@@ -1063,43 +1173,9 @@ class PipelineDriver:
         )
 
     @property
-    def default_strict_json(self) -> bool:
-        """Whether strict JSON parsing is the default."""
-        return self._default_strict_json
-
-    @property
-    def default_loop_limit(self) -> int | None:
-        """Default max-iters valve (``None`` means off) for unguarded loops."""
-        return self._default_loop_limit
-
-    @property
-    def shell_exec_timeout(self) -> float | None:
-        """Idle timeout in seconds for ``exec`` shell calls (``None`` = no timeout)."""
-        return self._shell_exec_timeout
-
-    @property
     def default_call_depth_limit(self) -> int:
         """Maximum call depth for recursive functions."""
         return self._default_call_depth_limit
-
-    def update_defaults(
-        self,
-        *,
-        strict_json: bool,
-        loop_limit: int | None,
-        shell_exec_timeout: float | None,
-    ) -> None:
-        """Update the live engine defaults in place without losing registrations.
-
-        Called by ``ReplSession`` after a successful entry, to carry that entry's
-        engine settings — which a ``std/config`` write may have changed mid-entry
-        — into the entries that follow.  Agent/codec registrations and the
-        call-depth limit are preserved: only the three eval-consumed settings are
-        updated.
-        """
-        self._default_strict_json = strict_json
-        self._default_loop_limit = loop_limit
-        self._shell_exec_timeout = shell_exec_timeout
 
     def reset_extern_registry(self) -> None:
         """Replace the cached extern registry with a fresh, empty one.
@@ -1107,10 +1183,9 @@ class PipelineDriver:
         Called by ``ReplSession.reset()`` so a session's extern state is
         discarded like every other session-scoped binding: after a reset, a
         library module's companion resolves and imports again as though the
-        session were new. Agent/codec registrations and the rest of the
-        assembled host environment are left untouched — only the extern
-        registry is replaced. A no-op before the environment has ever been
-        assembled (nothing cached yet to replace).
+        session were new. The rest of the assembled host environment is left
+        untouched — only the extern registry is replaced. It is a no-op before
+        the environment has ever been assembled.
         """
         if self._host_env_cache is not None:
             from dataclasses import replace
@@ -1134,6 +1209,183 @@ def _append_checker_warnings(
 ) -> None:
     """Append one checked artifact's warnings at the typecheck phase boundary."""
     warnings.extend(checked.warnings)
+
+
+def apply_setting_overrides(
+    graph: "ModuleGraph",
+    next_id: int,
+    overrides: "Mapping[str, SettingOverride]",
+    *,
+    newly_loaded_modules: "Mapping[ModuleId, LoadedModule]",
+    validate_when_absent: bool,
+) -> "tuple[ModuleGraph, int, list[Diagnostic], dict[ModuleId, LoadedModule]]":
+    """Own the splice-once apply condition and module-cache reconciliation.
+
+    The public seam both one-shot hosts (``PipelineDriver.prepare_parsed_entry``)
+    and incremental ones (``EntryPipeline.load_and_check_program``, shared by
+    the REPL's ``open()`` and ``eval_entry``) call, so neither has to
+    rediscover *when* ``_apply_setting_overrides`` may run or how to keep a
+    caller's own module cache in sync with the spliced result.
+
+    *newly_loaded_modules* is the ``build_repl_graph``/``load_and_check_program``
+    "loaded during this call" dict (not the caller's whole cache): it decides
+    which of three states *graph* is in for ``std/config``, keyed off
+    :data:`~agm.agl.modules.ids.STD_CONFIG_ID`:
+
+    - Already spliced by an earlier call this session (present in
+      ``graph.modules`` but not freshly loaded this round) — a no-op, since
+      splicing a second time would both waste work and mint a new, unstable
+      declaration identity for the same ``builtin var``.
+    - Freshly loaded this round — splice via :func:`_apply_setting_overrides`,
+      then return *newly_loaded_modules* updated with the spliced module, so
+      whichever cache the caller promotes it into (the REPL's
+      ``_loaded_lib_modules``) holds the SPLICED module, not the pre-splice one.
+    - Never loaded at all — nothing to splice into. *validate_when_absent*
+      decides whether this is reported now: ``True`` (every one-shot host,
+      and the REPL's ``open()``, which validates a CLI-required override up
+      front even without ``std/config``) still runs
+      :func:`_apply_setting_overrides` so a ``required`` override's
+      diagnostic surfaces as early as the host can report it; ``False`` (an
+      ordinary REPL entry) defers entirely, leaving even a ``required``
+      override unvalidated until whichever later entry, if any, first loads
+      ``std/config``.
+
+    Returns *overrides* unchanged (empty diagnostics, *newly_loaded_modules*
+    as given) when *overrides* is empty, so every caller can call this
+    unconditionally.
+    """
+    from agm.agl.modules.ids import STD_CONFIG_ID
+
+    if not overrides:
+        return graph, next_id, [], dict(newly_loaded_modules)
+
+    freshly_loaded = STD_CONFIG_ID in newly_loaded_modules
+    already_loaded = STD_CONFIG_ID in graph.modules
+
+    if not freshly_loaded and already_loaded:
+        return graph, next_id, [], dict(newly_loaded_modules)
+    if not freshly_loaded and not already_loaded and not validate_when_absent:
+        return graph, next_id, [], dict(newly_loaded_modules)
+
+    graph, next_id, diagnostics = _apply_setting_overrides(graph, next_id, overrides)
+    if diagnostics or not freshly_loaded:
+        return graph, next_id, diagnostics, dict(newly_loaded_modules)
+    reconciled = {**newly_loaded_modules, STD_CONFIG_ID: graph.modules[STD_CONFIG_ID]}
+    return graph, next_id, [], reconciled
+
+
+def _apply_setting_overrides(
+    graph: "ModuleGraph",
+    next_id: int,
+    overrides: "Mapping[str, SettingOverride]",
+) -> "tuple[ModuleGraph, int, list[Diagnostic]]":
+    """Splice each override's parsed expression in as its engine key's default.
+
+    Runs after the module graph is loaded and before scope resolution, so
+    every spliced expression is resolved, type-checked, and constant-checked
+    by the ordinary ``std/config`` ``builtin var`` machinery
+    (``typecheck.checker._check_builtin_var``) exactly as if it had been
+    written in ``std/config.agl`` itself — no separate compilation. Node ids
+    for the parsed override expressions are seeded from *next_id*, the first
+    id not yet used anywhere in *graph*, so they stay disjoint from every
+    loaded module.  The returned ``int`` is the first id still unused after
+    every override's expression was parsed — a one-shot batch caller (e.g.
+    ``prepare_parsed_entry``) has no further use for it, but an incremental
+    host that keeps minting node ids afterward (the REPL, which caches and
+    reuses the spliced module across later entries) must continue from it
+    rather than from the pre-splice *next_id*, to keep every later entry's
+    ids disjoint from the ones spliced here.
+
+    Diagnostics — never exceptions — are returned for: unparseable override
+    source, an override that is not exactly one expression, an engine key no
+    loaded ``builtin var`` declares, and a graph with no loaded ``std/config``
+    module (e.g. ``default_stdlib=False`` with no explicit import of it) when
+    the override is :attr:`~agm.agl.setting_overrides.SettingOverride.required`
+    — a non-``required`` override is skipped silently in that case instead,
+    since it is ambient configuration rather than a request the host must
+    honor. Each diagnostic names the offending override's ``origin``.
+    Overrides are processed in sorted key order for deterministic diagnostics.
+
+    Callers reach this only through :func:`apply_setting_overrides`, which
+    decides *when* it may run; this function itself has no opinion on that.
+    """
+    from dataclasses import replace as dc_replace
+
+    from agm.agl.modules.ids import STD_CONFIG_ID
+    from agm.agl.parser import AglSyntaxError
+    from agm.agl.parser.parser import parse_program_seeded
+    from agm.agl.syntax.nodes import BuiltinVarDecl, Expr
+    from agm.agl.syntax.spans import SourceId
+
+    diagnostics: list[Diagnostic] = []
+    modules = dict(graph.modules)
+    std_config = modules.get(STD_CONFIG_ID)
+
+    for key in sorted(overrides):
+        override = overrides[key]
+        if std_config is None and not override.required:
+            # Ambient configuration, not a request: inert when std/config
+            # never loads, so it is skipped without even being parsed.
+            continue
+        try:
+            override_program, next_id = parse_program_seeded(
+                override.source, start_id=next_id, source=SourceId(label=override.origin)
+            )
+        except AglSyntaxError as exc:
+            base = exc.to_diagnostic()
+            diagnostics.append(
+                dc_replace(
+                    base,
+                    message=f"{override.origin}: invalid AgL expression: {base.message}",
+                )
+            )
+            continue
+
+        items = override_program.body.items
+        if len(items) != 1 or not isinstance(items[0], Expr):
+            diagnostics.append(
+                diagnostic_from_span(
+                    f"{override.origin}: expected exactly one AgL expression, "
+                    f"got {override.source!r}",
+                    override_program.span,
+                )
+            )
+            continue
+        value_expr = items[0]
+
+        if std_config is None:
+            diagnostics.append(
+                diagnostic_from_span(
+                    f"{override.origin}: cannot override engine key {key!r}: the "
+                    "standard library module 'std/config' is not loaded",
+                    override_program.span,
+                )
+            )
+            continue
+
+        target_index: int | None = None
+        target_decl: BuiltinVarDecl | None = None
+        for i, item in enumerate(std_config.program.body.items):
+            if isinstance(item, BuiltinVarDecl) and item.name == key:
+                target_index = i
+                target_decl = item
+                break
+        if target_index is None or target_decl is None:
+            diagnostics.append(
+                diagnostic_from_span(
+                    f"{override.origin}: unknown engine key {key!r}", override_program.span
+                )
+            )
+            continue
+
+        new_items = list(std_config.program.body.items)
+        new_items[target_index] = dc_replace(target_decl, default=value_expr)
+        new_body = dc_replace(std_config.program.body, items=tuple(new_items))
+        new_program = dc_replace(std_config.program, body=new_body)
+        std_config = dc_replace(std_config, program=new_program)
+        modules[STD_CONFIG_ID] = std_config
+
+    return dc_replace(graph, modules=modules), next_id, diagnostics
 
 
 def _check_artifact_provenance(
@@ -1202,7 +1454,8 @@ def _run_typecheck_program(
     except AglError as exc:
         return None, (exc.to_diagnostic(),)
     except Exception as exc:
-        return None, (Diagnostic(message=f"Type error: {exc}", line=1),)
+        diagnostic = Diagnostic(message=f"Type error: {exc}", line=1)
+        return None, (diagnostic,)
 
 
 def _run_matchcompile_program(
@@ -1319,6 +1572,7 @@ def _wire_extern_registry(
     capabilities: "HostCapabilities",
     registry: "ExternRegistry",
     companion_paths: "Mapping[ModuleId, Path | None]",
+    nominals: "Mapping[NominalId, NominalDescriptor] | None" = None,
 ) -> list[Diagnostic]:
     """Import every companion and resolve every declared extern, up front.
 
@@ -1351,6 +1605,8 @@ def _wire_extern_registry(
             )
         ]
     declarations = _extern_declarations(checked)
+    if nominals is not None:
+        registry.set_nominals(dict(nominals))
 
     diagnostics: list[Diagnostic] = []
     loaded_modules: set["ModuleId"] = set()
@@ -1380,98 +1636,19 @@ def _wire_extern_registry(
     return diagnostics
 
 
-def _reconcile_agents(
-    registry: "AgentRegistry",
-    declared_agents: "Mapping[tuple[tuple[str, ...], str], AgentDeclNode]",
-    *,
-    referenced_agents: frozenset[AgentId] = frozenset(),
-) -> list[Diagnostic]:
-    """Enforce the source↔host agent contract.
-
-    Returns error :class:`Diagnostic`s for BOTH contract violations (never
-    stopping at the first) so the user sees every mismatch at once:
-
-    - **Registered-but-undeclared** (decision 1): a name in
-      ``registry.agent_names`` that the source never declares.  Reported at
-      ``line=1`` (a registration has no source span).
-    - **Declared-but-unbacked** (decision 11): a root declaration, or a
-      referenced scoped declaration, with no dedicated registration AND no
-      default agent. Reported at the declaration's ``span.start_line``.
-      Unreferenced scoped declarations remain visible for warnings but their
-      runtime handles are deferred by lowering.
-
-    Order is deterministic: registered-but-undeclared first (sorted by name),
-    then declared-but-unbacked (sorted by display name). ``declared_agents``
-    maps structured declaration paths to their ``AgentDecl`` nodes (only the
-    declaration span is read).
-    """
-    errors: list[Diagnostic] = []
-
-    def agent_sort_key(agent_id: AgentId) -> tuple[tuple[str, ...], str]:
-        return (agent_id.scope_path, agent_id.declared_name)
-
-    declared_ids = {AgentId(name, scope_path) for scope_path, name in declared_agents}
-    unrecognized_ids = (agent_id for agent_id in registry.agent_ids if agent_id not in declared_ids)
-    for agent_id in sorted(unrecognized_ids, key=agent_sort_key):
-        name = agent_id.display_name
-        errors.append(
-            Diagnostic(
-                message=(
-                    f"Agent {name!r} is registered but never declared in the "
-                    f"program. Declare it with `agent {name}` or remove the "
-                    "registration."
-                ),
-                line=1,
-            )
-        )
-
-    if not registry.has_default_agent:
-        unbacked = sorted(
-            (
-                agent_id
-                for agent_id in declared_ids
-                if (not agent_id.scope_path or agent_id in referenced_agents)
-                and not registry.backs(agent_id)
-            ),
-            key=agent_sort_key,
-        )
-        for agent_id in unbacked:
-            name = agent_id.display_name
-            declaration = declared_agents[(agent_id.scope_path, agent_id.declared_name)]
-            errors.append(
-                Diagnostic(
-                    message=(
-                        f"Agent {name!r} is declared but has no backing: "
-                        "register it with register_agent or configure a "
-                        "default agent."
-                    ),
-                    line=declaration.span.start_line,
-                    column=declaration.span.start_col,
-                    end_line=declaration.span.end_line,
-                    end_column=declaration.span.end_col,
-                )
-            )
-
-    return errors
-
-
 def assemble_host_environment(
     *,
-    agents: dict[AgentId, AgentFn],
-    default_agent: AgentFn | None,
+    agent_dispatcher: AgentFn | None,
     extra_codecs: dict[str, "OutputCodec"],
     extern_registry: "ExternRegistry | None" = None,
 ) -> HostEnvironment:
     """Assemble the shared host runtime environment from registrations.
 
-    Builds the merged codec table, the ``AgentRegistry``, and the derived
-    ``HostCapabilities`` exactly as ``PipelineDriver.run`` does inline.
-    Used by BOTH ``run`` and ``ReplSession`` so the two share identical
-    agent/codec wiring (CARRY-IN 1: codec_kinds are derived from the actual
-    registries, not from duplicated constants).
+    Builds the merged codec table and the derived ``HostCapabilities`` exactly
+    as ``PipelineDriver.run`` does inline. Used by both ``run`` and
+    ``ReplSession`` so codec capabilities have one source of truth.
     """
     from agm.agl.capabilities import HostCapabilities
-    from agm.agl.runtime.agents import AgentRegistry
     from agm.agl.runtime.codec import JsonCodec, TextCodec
     from agm.agl.runtime.externs import ExternRegistry
 
@@ -1485,19 +1662,13 @@ def assemble_host_environment(
         **extra_codecs,
     }
 
-    registry = AgentRegistry(
-        named=dict(agents),
-        default_agent=default_agent,
-    )
     capabilities = HostCapabilities(
-        agent_names=registry.agent_names,
-        has_default_agent=registry.has_default_agent,
         supports_shell_exec=True,
         supports_extern=True,
         codec_kinds={name: codec.supported_kinds for name, codec in all_codecs.items()},
     )
     return HostEnvironment(
-        registry=registry,
+        agent_dispatcher=agent_dispatcher,
         capabilities=capabilities,
         codecs=all_codecs,
         extern_registry=extern_registry if extern_registry is not None else ExternRegistry(),

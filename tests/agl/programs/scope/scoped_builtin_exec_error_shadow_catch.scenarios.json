@@ -1,0 +1,16 @@
+{
+  "scenarios": [
+    {
+      "name": "shadowing_declaration_caught_at_its_own_scope",
+      "shell": [
+        {
+          "command": "false",
+          "returncode": 1
+        }
+      ],
+      "expect": {
+        "stdout": "caught: 1\n"
+      }
+    }
+  ]
+}

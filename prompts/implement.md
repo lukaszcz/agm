@@ -1,4 +1,4 @@
-Implement the task described in @${TASK_FILE}. Commit when done.
+Implement the task described in @%{TASK_FILE}. Commit when done.
 
 A task is not done until all its acceptance criteria are satisfied. Do not mark partially done tasks as complete.
 

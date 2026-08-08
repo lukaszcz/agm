@@ -26,7 +26,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import TypeAlias
 
-from agm.agl.ir.ids import AgentId, FunctionId, NominalId, SymbolId
+from agm.agl.ir.ids import FunctionId, NominalId, SymbolId
 
 # ---------------------------------------------------------------------------
 # JSON-tree comparison helpers
@@ -158,14 +158,6 @@ UNIT_VALUE: UnitValue = UnitValue()
 VOID_VALUE: UnitValue = UnitValue(printable_in_repl=False)
 
 
-@dataclass(frozen=True, slots=True)
-class AgentValue:
-    """A first-class agent handle — opaque; not renderable or comparable."""
-
-    name: str
-    agent_id: AgentId | None = None
-
-
 # ---------------------------------------------------------------------------
 # Callable value types
 # ---------------------------------------------------------------------------
@@ -178,11 +170,11 @@ class ConstructorValue:
     Carries only the owner/variant identity needed to build a record or enum
     at the call site.  Field order and types (and concreteness) come from the
     call site's checked result type; type arguments are erased — never
-    represented at runtime.  Like ``AgentValue`` it is not renderable or
+    represented at runtime.  It is not renderable or
     comparable by the language.
 
-    ``nominal`` is the ``NominalId`` (module + scope path + declared name) of the owning
-    type.  ``display_name`` is the user-facing name for rendering.  ``variant``
+    ``nominal`` is the opaque ``NominalId`` of the owning type.
+    ``display_name`` is the user-facing name for rendering.  ``variant``
     is the enum variant name, or ``None`` for a record constructor.
 
     Equality and hash are by ``(nominal, variant)``; ``display_name`` is
@@ -252,7 +244,7 @@ class DictValue:
 class RecordValue:
     """A record-typed value.
 
-    ``nominal`` is the ``NominalId`` (module + scope path + declared name) — the identity
+    ``nominal`` is the opaque ``NominalId`` — the identity
     key.  ``display_name`` is the user-facing name for rendering and
     diagnostics; it is excluded from equality.  ``fields`` holds
     the record's field values.
@@ -278,7 +270,7 @@ class RecordValue:
 class EnumValue:
     """An enum-typed value: the active variant name plus any payload fields.
 
-    ``nominal`` is the ``NominalId`` (module + scope path + declared name) — the identity
+    ``nominal`` is the opaque ``NominalId`` — the identity
     key.  ``display_name`` is the user-facing name for rendering and
     diagnostics; it is excluded from equality.  ``variant`` is the
     active variant name.  ``fields`` holds the variant's payload field values.
@@ -304,13 +296,15 @@ class EnumValue:
 class ExceptionValue:
     """A built-in AgL exception value.
 
-    ``nominal`` is the ``NominalId`` (module + scope path + declared name) — the identity
-    key.  Built-in exceptions use ``NominalId(PRELUDE_ID, name)``.
+    ``nominal`` is the opaque ``NominalId`` — the identity
+    key.  A built-in exception a program declares nothing of its own for uses
+    its reserved identity (see ``ir.reserved_nominals``) — the shipped
+    standard library's own identity; one the program redeclares as its own
+    ``builtin exception`` uses that declaration's identity instead.
     ``display_name`` is the user-facing exception class name (e.g.
     ``"AgentParseError"``); it is excluded from equality.
     ``fields`` maps the exception's declared field names to their values.
-    The ``"message"`` and ``"trace_id"`` fields are always present (base
-    ``Exception`` contract).
+    The ``"message"`` field is always present (base ``Exception`` contract).
 
     Equality is by ``(nominal, fields)``; ``display_name`` is
     excluded (rendering metadata only). Unhashable: ``fields`` may hold a
@@ -498,7 +492,6 @@ Value: TypeAlias = (
     | EnumValue
     | ExceptionValue
     | UnitValue
-    | AgentValue
     | ConstructorValue
     | IrClosureValue
     | IteratorValue
@@ -534,7 +527,6 @@ Frame = dict[SymbolId, Slot]
 __all__ = [
     "UNIT_VALUE",
     "VOID_VALUE",
-    "AgentValue",
     "ArrayValue",
     "BoolValue",
     "Cell",

@@ -5,7 +5,7 @@ open scoped_execution/workflow::Workflow
 open scoped_execution/workflow::Workflow::Status
 
 scope Dispatch
-agent reviewer = "reviewer"
+let reviewer = AgentCommand("reviewer")
 def fetch() -> Task = ask("Return a recursive task.", agent = reviewer)
 end Dispatch
 

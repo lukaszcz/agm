@@ -4,13 +4,13 @@ AGM runs real coding agents (claude, codex, and configurable runners) as subproc
 
 ## Agent Runner
 
-An agent invocation is a subprocess that receives a prompt and produces output. The runner module parses a configured runner command, validates the executable exists, attaches the prompt (either by appending a prompt-file reference or substituting a placeholder), and runs it with output capture. It tracks an *idle timeout* — if the process produces no output for a configured duration the current agent process is terminated and that invocation fails; workflow control remains with the caller. Structured results carry return code, captured streams, elapsed time, and timeout/spawn-error status.
+An agent invocation is a subprocess that receives a prompt and produces output. The runner module parses a configured runner command, validates the executable exists, attaches the prompt (via an interpolated placeholder or by appending a prompt-file reference), and runs it with output capture. Both prompt content and runner command arguments interpolate `%{name}` holes from environment and workflow context under one consistent set of rules; see [loop.md](../commands/loop.md#prompt-file-path) and [agents.md](../commands/agents.md#runner-command-interpolation) for the interpolation and escaping rules. It tracks an *idle timeout* — if the process produces no output for a configured duration the current agent process is terminated and that invocation fails; workflow control remains with the caller. Structured results carry return code, captured streams, elapsed time, and timeout/spawn-error status.
 
-Prompts are resolved from inline text or a file and preprocessed to expand environment variables, writing a temporary prompt file when substitution changes the content. Normal runs clean these files up; dry runs retain them so the printed prompt path can be inspected. Completion is detected by inspecting the agent's final output for a completion marker.
+Prompts are resolved from inline text or a file and preprocessed to expand environment variables, writing a temporary prompt file when substitution changes the content. Normal runs clean these files up; dry runs retain them so the printed prompt path can be inspected. Completion is detected by inspecting the agent's final output for a completion marker. Typed AgL `Agent` enum values decode into immutable host specs; pure per-kind builders produce argv for Claude, Codex, Pi, or a verbatim custom command. The prepared-prompt seam accepts those argv directly, retaining the shared prompt-file and process-result behavior. Most specs attach the prompt as a placeholder or an appended `@<path>` argument; a spec can instead declare stdin delivery (as `AgentCodex` does, since `codex exec` reads `-` as "prompt on stdin" rather than expanding an `@<path>` argument), in which case the runner pipes the prompt file's contents in and never appends a target.
 
 ## Runner Resolution
 
-Which runner (and which selector, for loops) is used is resolved by precedence: explicit CLI arguments override per-command config, which overrides the base config section, which falls back to a built-in default runner. The default runner is always the floor, so a runner is always available. The same precedence resolves timeouts.
+Loop, review, and revise each resolve their runner from explicit CLI arguments, then their own config section (a `[<section>.<command-name>]` sub-table layered over the base `[loop]`/`[review]`/`[revise]` table), then a shared built-in runner floor. Each command reads only its own section, so review and revise never inherit `[loop]`'s runner. Loop's selector and timeout resolve through the same precedence, without a floor.
 
 ## Loop
 
@@ -28,8 +28,10 @@ These share prompt-preprocessing that merges scope, aspects, and other context i
 
 ## Code Entry Points
 
-- `src/agm/agent/runner.py` — runner command parsing, prompt attachment, subprocess execution with idle timeout, the run-result structure.
+- `src/agm/agent/spec.py` — host agent specs, each building its own backend argv, plus `AGENT_SPECS`, the variant-to-spec catalog used by AgL decoding. A pure data leaf; the generic decoder lives on the AgL side, in `agl/runtime/agents.py`.
+- `src/agm/agent/defaults.py` — the built-in runner floor (`DEFAULT_AGENT_RUNNER`) shared by loop, review, and revise.
+- `src/agm/agent/runner.py` — runner command parsing, prompt attachment, prepared argv handling, subprocess execution with idle timeout, the run-result structure.
 - `src/agm/agent/prompt.py`, `prompt_source.py`, `response.py`, `output.py` — prompt preparation, source resolution, completion detection, and output formatting.
-- `src/agm/agent/loop.py`, `config.py` — runner/selector/timeout resolution and the default runner.
-- `src/agm/agent/review/` — the review, revise, and refine workflow implementations and their prompt preprocessing.
+- `src/agm/agent/loop.py` — loop runner/selector/timeout resolution.
+- `src/agm/agent/review/` — the review, revise, and refine workflow implementations and prompt preprocessing.
 - `src/agm/commands/loop/`, `review.py`, `revise.py`, `refine.py` — the commands that drive these workflows.

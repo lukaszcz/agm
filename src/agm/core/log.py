@@ -140,7 +140,12 @@ class LiveTracePathResolver:
         if log_file is None and self._auto_path is not None:
             path = self._auto_path
         else:
-            path = _log_file_path(command_name=self._command_name, log_file=log_file, unique=True)
+            path = _log_file_path(
+                command_name=self._command_name,
+                log_file=log_file,
+                unique=True,
+                extension=".jsonl",
+            )
             if log_file is None:
                 self._auto_path = path
         mkdir(path.parent, parents=True, exist_ok=True)
@@ -170,10 +175,14 @@ def resolve_log_file(
     """
     if not enabled:
         return None
-    return _log_file_path(command_name=command_name, log_file=log_file, unique=unique)
+    return _log_file_path(
+        command_name=command_name, log_file=log_file, unique=unique, extension=".log"
+    )
 
 
-def _log_file_path(*, command_name: str, log_file: str | None, unique: bool) -> Path:
+def _log_file_path(
+    *, command_name: str, log_file: str | None, unique: bool, extension: str
+) -> Path:
     """Resolve the trace path for enabled logging — the always-a-path core."""
     if log_file is not None:
         resolved = Path(log_file)
@@ -183,8 +192,8 @@ def _log_file_path(*, command_name: str, log_file: str | None, unique: bool) -> 
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     if unique:
         pid = os.getpid()
-        return default_agent_files_dir() / f"{command_name}-{timestamp}-{pid}.log"
-    return default_agent_files_dir() / f"{command_name}-{timestamp}.log"
+        return default_agent_files_dir() / f"{command_name}-{timestamp}-{pid}{extension}"
+    return default_agent_files_dir() / f"{command_name}-{timestamp}{extension}"
 
 
 def prepare_trace_log(
@@ -204,16 +213,20 @@ def prepare_trace_log(
     for other reasons (e.g. ``--dry-run``) short-circuit before calling.
     Shared by ``agm exec`` and ``agm repl``.
     """
-    log_path = resolve_log_file(
-        command_name=command_name, enabled=enabled, log_file=log_file, unique=True
+    if not enabled:
+        return None
+    log_path = _log_file_path(
+        command_name=command_name,
+        log_file=log_file,
+        unique=True,
+        extension=".jsonl",
     )
-    if log_path is not None:
-        try:
-            mkdir(log_path.parent, parents=True, exist_ok=True)
-            write_text(log_path, "", encoding="utf-8")
-        except OSError as exc:
-            print(f"Error: cannot write trace log to {log_path}: {exc}", file=sys.stderr)
-            raise SystemExit(1) from exc
+    try:
+        mkdir(log_path.parent, parents=True, exist_ok=True)
+        write_text(log_path, "", encoding="utf-8")
+    except OSError as exc:
+        print(f"Error: cannot write trace log to {log_path}: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
     return log_path
 
 

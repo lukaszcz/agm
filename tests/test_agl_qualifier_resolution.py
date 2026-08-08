@@ -8,16 +8,16 @@ from typing import Literal
 import pytest
 
 from agm.agl.modules.ids import ModuleId
-from agm.agl.parser import parse_program
-from agm.agl.scope import AglScopeError, resolve_module
+from agm.agl.scope import AglScopeError
 from agm.agl.scope.imports import ImportEnv, ModuleContribution
 from agm.agl.scope.program import resolve_program
 from agm.agl.syntax.nodes import QualifierChain, QualifierSegment
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
-from agm.agl.typecheck import AglTypeError, check_module
+from agm.agl.typecheck import AglTypeError
 from agm.agl.typecheck.env import TypeEnvironment
 from agm.agl.typecheck.program import check_program
 from tests.agl.ir_harness import base_caps, make_graph_from_files
+from tests.agl.module_graph import resolve_and_check_entry
 
 Outcome = Literal["accepted", "scope", "typecheck"]
 
@@ -38,8 +38,7 @@ def _qualifier(*segments: str, member: str = "") -> QualifierChain:
 
 def _module_outcome(source: str) -> Outcome:
     try:
-        resolved = resolve_module(parse_program(source))
-        check_module(resolved, base_caps())
+        resolve_and_check_entry(source, base_caps())
     except AglScopeError:
         return "scope"
     except AglTypeError:

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from agm.agent.defaults import DEFAULT_AGENT_RUNNER
 from agm.agl.diagnostics import Diagnostic
+from agm.config.engine_keys import ENGINE_KEYS
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -20,9 +20,10 @@ if TYPE_CHECKING:
     from agm.agl.semantics.values import Value
 
 __all__ = [
-    "build_engine_config_base",
+    "build_engine_config_seeds",
     "convert_config_value",
     "convert_param_value",
+    "engine_default_settings",
     "raw_option_str",
 ]
 
@@ -56,48 +57,44 @@ def raw_option_str(
     return None
 
 
-# Engine defaults for build_engine_config_base when a key is absent from
-# raw_values.  This is the SINGLE owner of the engine-key defaults: both the
-# REPL session and the IR evaluator seed their registers from
-# build_engine_config_base rather than carrying a table of their own.
-_ENGINE_DEFAULTS: dict[str, object] = {
-    "log": False,
-    "strict-json": False,
-    "max-iters": 0,
-    "runner": DEFAULT_AGENT_RUNNER,
-    "log-file": None,
-    "timeout": None,
-}
+def build_engine_config_seeds(raw_values: "Mapping[str, object]") -> "dict[str, Value]":
+    """Decode explicitly supplied scalar or ``Option`` host engine settings.
 
-
-def build_engine_config_base(raw_values: "Mapping[str, object]") -> "dict[str, Value]":
-    """Build the engine config base dict from raw host values.
-
-    Decodes each of the six engine keys via :func:`convert_config_value`.
-    Keys absent from *raw_values* fall back to the engine defaults
-    (``false``/``false``/``0``/:data:`~agm.agent.defaults.DEFAULT_AGENT_RUNNER`/
-    ``none``/``none``), where zero represents the disabled ``max-iters`` safety
-    valve.
-
-    Each caller is responsible for constructing *raw_values* with its own
-    layering (CLI/program/exec config).  This helper performs only the
-    decoding step, keeping the layering logic in the callers.
-
-    Engine keys are always built-in scalar or ``Option[text]`` types, never a
-    user-declared nominal type, so this builds its own fresh seeded
-    ``TypeTable`` rather than requiring one from the caller.
+    Callers seed ``default-agent`` separately as a typed ``Agent`` value. The
+    returned mapping deliberately omits absent keys. This preserves the
+    distinction between a host control and the runtime fallback, letting a
+    ``builtin var`` initializer supply the latter.  A present value of
+    ``None`` remains meaningful for ``Option`` settings such as ``timeout``.
     """
     from agm.agl.semantics.engine_keys import get_engine_key_type
     from agm.agl.semantics.type_table import create_seeded_type_table
 
     type_table = create_seeded_type_table()
     result: dict[str, Value] = {}
-    for key_name, default_raw in _ENGINE_DEFAULTS.items():
-        raw = raw_values.get(key_name, default_raw)
+    for key_name, raw in raw_values.items():
         key_type = get_engine_key_type(key_name)
-        assert key_type is not None, f"unknown engine key: {key_name!r}"
+        if key_type is None:
+            raise ValueError(f"unknown engine key: {key_name!r}")
         result[key_name] = convert_config_value(key_name, raw, key_type, type_table)
     return result
+
+
+def engine_default_settings() -> "dict[str, Value]":
+    """Build the typed engine-default value for every scalar/``Option[text]`` engine key.
+
+    Derives the raw values from the shared engine-key catalog, then decodes
+    them via :func:`convert_config_value` (``false``/``false``/``0``/``none``/
+    ``none``, where zero represents the disabled ``max-iters`` safety valve),
+    building its own fresh seeded ``TypeTable`` rather than requiring one from
+    the caller.
+
+    ``default-agent`` is an ``Agent`` value rather than a scalar or
+    ``Option[text]`` one and has no host-side default: it comes from the
+    ``std/config`` ``builtin var`` declaration like any other declared default.
+    """
+    return build_engine_config_seeds(
+        {spec.name: spec.default for spec in ENGINE_KEYS if spec.has_default}
+    )
 
 
 def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
@@ -229,18 +226,24 @@ def convert_param_value(
 def convert_config_value(
     name: str, raw: object, key_type: "AglType", type_table: "TypeTable | None" = None
 ) -> "Value":
-    """Convert a raw host config value to the declared engine-key AgL type.
+    """Convert a raw scalar or ``Option`` host engine value to its AgL type.
 
-    For ``Option[T]`` engine keys (``timeout``, ``log-file``) the raw value is
+    ``default-agent`` is an ``Agent`` value, not a scalar or ``Option`` setting;
+    a host-supplied AgL literal (``--agent``/``[exec] default-agent``) is parsed
+    separately as an engine-setting override rather than through this helper.
+    The one exception is ``[exec] runner``, a bare host command string with no
+    AgL syntax of its own: it is decoded here as an ``{"$case":
+    "AgentCommand", "command": ...}`` shape, the same decode path any other
+    engine key uses. For ``Option[T]`` engine keys (``timeout``, ``log-file``) the raw value is
     projected into the Option enum: a present *raw* becomes ``some(value)`` with
     its inner ``T`` decoded via :func:`convert_param_value`, and ``None`` becomes
     ``none``.  Non-Option keys fall back to :func:`convert_param_value`.
     *type_table* is threaded through to both; the Option unwrap itself reads
     ``key_type.type_args`` directly and never needs variant shapes from it.
 
-    Engine keys are always built-in scalar or ``Option[text]`` types, never a
-    user-declared nominal type, so *type_table* defaults to a fresh seeded
-    ``TypeTable`` when the caller has none in hand (e.g. CLI-flag config
+    The settings accepted here are built-in scalar or ``Option[text]`` types,
+    never user-declared nominal types, so *type_table* defaults to a fresh
+    seeded ``TypeTable`` when the caller has none in hand (e.g. CLI-flag config
     projection); callers that already hold the session/program table (the
     REPL) pass it explicitly.
     """

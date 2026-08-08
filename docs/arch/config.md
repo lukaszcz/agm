@@ -8,7 +8,9 @@ A config context locates the directories that contribute configuration. The proj
 
 ## Home Directory Overrides
 
-The AGM home directory defaults to `~/.agm` but is relocatable through the environment. `AGM_HOME` overrides the whole directory — config, prompts, sandbox settings, the AgL global library, and the stdlib all resolve beneath it. `AGM_STDLIB` overrides just the AgL standard-library root, taking precedence over every other stdlib candidate. Both accept a leading `~`. These env overrides are the only way to redirect the home layer, since it is where `config.toml` itself lives; project and workspace layers remain path-discovered as usual.
+The AGM home directory defaults to `~/.agm` but is relocatable through the environment. `AGM_HOME` overrides the whole directory — config, prompts, sandbox settings, the AgL global library, and the stdlib all resolve beneath it. `AGM_STDLIB` overrides just the AgL standard-library root, taking precedence over every other stdlib candidate and skipping the compatibility check described below (the deliberate escape hatch for synthetic or in-progress trees). Both accept a leading `~`. These env overrides are the only way to redirect the home layer, since it is where `config.toml` itself lives; project and workspace layers remain path-discovered as usual.
+
+Every non-override stdlib candidate (home, installation prefix, then the repository checkout) carries a top-level `STDLIB_CONTRACT` marker file holding a contract id; a candidate is only selected if its marker matches the id the running code expects, so a candidate left stale (by a manual edit, an interrupted install, or an older cross-version tree) is skipped in favor of a compatible one rather than silently loaded. When every candidate exists but none matches, resolution fails fast with an error naming the stale path and pointing at `just install`; when no candidate exists at all, the home destination is returned unresolved so diagnostics can name the path `just install` would populate. Unlike `config.toml`, the sandbox templates, and the prompts — which `tools/install_agm_config.py` writes only when absent, preserving user edits — the installed stdlib tree is a managed artifact: install refuses symlinks anywhere in the destination tree, then force-refreshes and prunes it, so the marker can never certify stale sources.
 
 ## Layering and Precedence
 
@@ -19,7 +21,7 @@ General configuration merges across scopes, from least to most specific:
 3. the project's config directory
 4. the workspace-local `.agm/config.toml`
 
-Later layers override earlier ones; table-valued sections merge by key rather than wholesale replacement. Path-valued settings are resolved relative to the config file that defined them, with a sensible fallback to the invocation directory.
+Later layers override earlier ones; table-valued sections merge by key rather than wholesale replacement. Path-valued settings resolve relative to the config file that defined them, with a sensible fallback to the invocation directory. They interpolate `%{VAR}` from the environment and expand `~`. Unresolved or malformed holes remain verbatim: one config file serves every command, so an irrelevant section must not prevent loading; any resulting failure follows the consuming command's normal path semantics.
 
 ## Sections and Per-Command Overrides
 
@@ -27,13 +29,13 @@ Configuration is organized into sections consumed by specific features — for e
 
 For AgL execution, four sources combine with a defined precedence:
 
-- **Engine settings** (`runner`, `log`, `strict-json`, `max-iters`, `log-file`, `timeout`) — the `std/config` `builtin var` bindings:
+- **Engine settings** (`default-agent`, `log`, `strict-json`, `max-iters`, `log-file`, `timeout`) — the `std/config` `builtin var` bindings:
   `source write (std/config::X := e) > CLI flag > [<program>].X > [exec].X > engine default`
   Their names, value kinds, and consuming side come from the pure shared catalog in `config/engine_keys.py`, also consumed by AgL semantics, deep IR validation, and the AgL evaluator/REPL.
 - **Param values** (`param NAME`):
   `agm exec`: `CLI flag > [<program>].Y > source default (param Y = e) > required error`; `agm repl`: after `program NAME` establishes the active program, `[<program>].Y > source default (param Y = e) > required error`. A REPL param before that declaration cannot use program config.
 
-`[exec]` holds global engine defaults with kebab field names (`strict-json`, `max-iters`, `log-file`). `[<program>]` is a **top-level** section keyed by the `program NAME` declaration or, for `agm exec`, the `.agl` file stem; it holds both engine-key overrides and param values for that specific program. The REPL loads its section only when `program NAME` establishes the active program, so the declaration must precede params that need config values. Inline `-c` programs with no `program` declaration have no config section. A file stem matching a reserved AGM section name (e.g. `loop`, `exec`) is a pre-execution error unless the source has an explicit `program NAME` declaration.
+`[exec]` holds global engine defaults with kebab field names (`default-agent`, `strict-json`, `max-iters`, `log-file`). `default-agent` is a quoted AgL `Agent` literal; it remains raw configuration data until `exec` or `repl` lazily parse and typecheck it. `[<program>]` is a **top-level** section keyed by the `program NAME` declaration or, for `agm exec`, the `.agl` file stem; it holds both engine-key overrides and param values for that specific program. The REPL loads its section only when `program NAME` establishes the active program, so the declaration must precede params that need config values. Inline `-c` programs with no `program` declaration have no config section. A file stem matching a reserved AGM section name (e.g. `loop`, `exec`) is a pre-execution error unless the source has an explicit `program NAME` declaration.
 
 ## Sandbox Configuration
 
@@ -45,7 +47,7 @@ Sandbox settings for `agm run` follow their own discovery and merge chain across
 - `src/agm/config/general.py` loads and merges the layered config and exposes the per-feature config readers.
 - `src/agm/config/command_config.py` resolves per-command override sections.
 - `src/agm/config/sections.py` is the pure data-leaf source of truth for reserved structural config-section names (shared with the AgL reserved-program-name guard).
-- `src/agm/config/engine_keys.py` is the pure data-leaf catalog of engine keys: each key's name, value kind, and consuming side (runtime-live — backed by a live interpreter field — versus host-consumed — reflected back into a live host service). Shared with the AgL engine-key type registry that maps each kind to an AgL type, and with the evaluator/REPL, which route a write by its consuming side.
+- `src/agm/config/engine_keys.py` is the pure data-leaf catalog of engine keys: each key's name, value kind, config accessor, host default, and consuming side (runtime-live — backed by a live interpreter field — versus host-consumed registers). Shared with host seed/default resolution, the AgL engine-key type registry that maps each kind to an AgL type, and the evaluator/REPL, which route a write by its consuming side. Its named trace-register projection and trace coupling helper keep the `log`/`log-file` pair explicit; `default-agent` remains a register-only `Agent` value with no host default.
 - `src/agm/config/module_roots.py` resolves AgL module search roots from the `[modules]` config.
 - `src/agm/config/sandbox/` discovers and merges SRT sandbox settings.
 - `config/` (repository root) holds the default config templates installed into `~/.agm/`.

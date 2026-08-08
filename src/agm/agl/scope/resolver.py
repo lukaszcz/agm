@@ -1,6 +1,6 @@
 """Static name-resolution pass for the AgL pipeline.
 
-``resolve_module(program)`` performs a full single-pass walk over the AST,
+Each module's ``_Resolver`` performs a full single-pass walk over its AST,
 building the lexical scope chain and populating side tables:
 
 - ``resolution``:     ``VarRef.node_id`` / bare-name ``AssignStmt.node_id`` → ``BindingRef``
@@ -29,14 +29,11 @@ Scope rules
 7. ``def`` declarations are valid at the module root and in named scope
    regions; a pre-pass collects them by path so root and same-scope members
    support mutual recursion.
-8. ``agent`` declarations are valid in entry-module root and named scope
-   regions; a pre-pass collects structured path identities and their value
-   bindings.
 
 Built-in call classification
 -----------------------------
 ``print`` / ``exec`` / ``ask`` are contextual built-ins.  They cannot be
-declared (``let``/``var``/``def``/``param``/``agent``/param/pattern/catch).
+declared (``let``/``var``/``def``/``param``/pattern/catch).
 In **call position** (a ``Call`` whose callee is a bare ``VarRef`` with one
 of these names), the resolver records ``Call.node_id → BuiltinKind`` in the
 ``builtin_calls`` side table and does NOT attempt to resolve the callee as a
@@ -46,14 +43,13 @@ normal binding.  A bare ``VarRef("print")`` (not in call position) raises
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from functools import partial
 from typing import TYPE_CHECKING, cast
 
-from agm.agl.diagnostics import Diagnostic
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CONFIG_ID, ModuleId, spell_declaration
+from agm.agl.modules.ids import STD_CONFIG_ID, STD_CORE_ID, ModuleId, spell_declaration
 from agm.agl.scope.imports import (
     NameAtom,
     QName,
@@ -69,22 +65,29 @@ from agm.agl.scope.imports import (
 )
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_NAMES,
-    AgentKey,
     AglScopeError,
     BinderKind,
     BindingRef,
     BuiltinKind,
     ConstructorRef,
     DeclarationKey,
+    LocalOpenSelection,
     ModuleResolution,
     PatternSlot,
     ScopeNode,
     ScopePath,
     SlotCandidate,
     alias_denotes_constructible_type,
+    apply_open_selection,
     duplicate_binder_message,
     immutable_binder_phrase,
+    import_item_path,
+    local_scope_bindings,
+    resolve_bare_constructor_contribution,
+    resolve_bare_contribution,
 )
+from agm.agl.scope.symbols import to_bare_atom as _bare_atom
+from agm.agl.scope.symbols import to_bare_path as _bare_path
 from agm.agl.semantics.engine_keys import RESERVED_PROGRAM_NAMES
 from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS
 from agm.agl.semantics.types import (
@@ -101,7 +104,6 @@ if TYPE_CHECKING:
     from agm.agl.scope.imports import ImportEnv
     from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.nodes import (
-    AgentDecl,
     ArrayLit,
     AssignStmt,
     BinaryOp,
@@ -125,6 +127,7 @@ from agm.agl.syntax.nodes import (
     FuncDef,
     If,
     ImportDecl,
+    ImportItem,
     IndexAccess,
     IndexTarget,
     InfixDecl,
@@ -212,14 +215,27 @@ def _scope_path_sort_key(path: ScopePath) -> tuple[int, ScopePath]:
     return (len(path), path)
 
 
-def _bare_atom(path: ScopePath) -> NameAtom:
-    """Keep single bare names compact while retaining nested paths."""
-    return path[0] if len(path) == 1 else path
+def _supersedes(candidate: ConstructorRef, cref: ConstructorRef) -> bool:
+    """Whether *cref* is a later declaration of *candidate*'s own name path.
 
-
-def _bare_path(atom: NameAtom) -> ScopePath:
-    """Normalize a bare contribution atom to its structured path."""
-    return (atom,) if isinstance(atom, str) else atom
+    An ambient candidate seeded from an earlier REPL entry names the very
+    path this entry's own declaration now owns, so a fresh constructor
+    reference must reach the newest declaration rather than the one the
+    session happened to seed first.  Only a full name path (module, scope
+    path, and owner name) identifies the same owner; two distinct owners
+    never share one, so genuine constructor overloading — two types' same
+    named variant, or one name declared in different modules — is untouched.
+    A built-in seeded without a declaration node carries no identity to
+    supersede or be superseded by, and the same declaration contributed
+    twice (over two overlapping import routes) is not a later one.
+    """
+    return (
+        candidate.owner_decl_node_id != cref.owner_decl_node_id
+        and _BUILTIN_CONSTRUCTOR_NODE_ID
+        not in (candidate.owner_decl_node_id, cref.owner_decl_node_id)
+        and (candidate.owner_module_id, candidate.owner_path, candidate.owner_name)
+        == (cref.owner_module_id, cref.owner_path, cref.owner_name)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -231,24 +247,23 @@ class _Resolver:
     """Stateful resolver that builds the scope tree and resolution tables.
 
     Implements explicit ``isinstance`` dispatch for each node kind.
-    Use ``resolve_module(program)`` — the public function — rather than instantiating
-    this class directly.
+    Use ``resolve_program`` — the public whole-program entry point — rather
+    than instantiating this class directly.
     """
 
     def __init__(
         self,
-        module_id: ModuleId = ENTRY_ID,
-        import_env: ImportEnv | None = None,
+        module_id: ModuleId,
+        import_env: ImportEnv,
+        all_public_types: dict[
+            tuple[ModuleId, NameAtom], RecordDef | EnumDef | ExceptionDef | TypeAlias
+        ],
         decl_info: dict[tuple[ModuleId, NameAtom], tuple[int, SourceSpan, BinderKind]]
         | None = None,
         cross_module_constructor_refs: Mapping[tuple[ModuleId, NameAtom], ConstructorRef]
         | None = None,
         cross_module_constructible_types: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
         cross_module_type_scopes: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
-        all_public_types: dict[
-            tuple[ModuleId, NameAtom], RecordDef | EnumDef | ExceptionDef | TypeAlias
-        ]
-        | None = None,
         is_entry: bool = True,
         repl_session_scope: ScopeNode | None = None,
         repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
@@ -256,9 +271,13 @@ class _Resolver:
         origin_path: Path | None = None,
         spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
     ) -> None:
-        # Program parameters (None = module mode).
+        # Program parameters. One _Resolver is built per module of a whole
+        # program (see scope/program.py::resolve_program); the import
+        # environment and whole-program public-type table are always real,
+        # never absent, since a program always builds them (an empty
+        # ImportEnv/dict for a module with no imports or no public types).
         self._module_id: ModuleId = module_id
-        self._import_env: ImportEnv | None = import_env
+        self._import_env: ImportEnv = import_env
         # Maps (module_id, name) → (node_id, span, kind) for cross-module refs.
         self._decl_info: dict[tuple[ModuleId, NameAtom], tuple[int, SourceSpan, BinderKind]] = (
             decl_info if decl_info is not None else {}
@@ -270,12 +289,12 @@ class _Resolver:
         # Public type declarations establish scope paths even when they have
         # no separately public child members.
         self._cross_module_type_scopes = cross_module_type_scopes
-        # Whole-program public-type table (program context only), used to
-        # follow a type alias's target across an import when deciding whether
-        # the alias has a variant-less constructor. ``None`` in module mode.
-        self._all_public_types: (
-            dict[tuple[ModuleId, NameAtom], RecordDef | EnumDef | ExceptionDef | TypeAlias] | None
-        ) = all_public_types
+        # Whole-program public-type table, used to follow a type alias's
+        # target across an import when deciding whether the alias has a
+        # variant-less constructor.
+        self._all_public_types: dict[
+            tuple[ModuleId, NameAtom], RecordDef | EnumDef | ExceptionDef | TypeAlias
+        ] = all_public_types
         # Whether this module is the entry module (program context only).
         self._is_entry: bool = is_entry
         # Optional REPL session scope for ``::name`` self-ref fallback.
@@ -287,6 +306,16 @@ class _Resolver:
         # into this entry's fresh resolver image and committed only after a
         # successful evaluation, so a failed entry cannot mutate session state.
         self._repl_session_scope_nodes = dict(repl_session_scope_nodes or {})
+        # A retained ordinary member may be replaced by a later member at the
+        # same path, but it cannot simultaneously become a namespace prefix.
+        # Type and named-scope members already own retained scope nodes and are
+        # therefore excluded from this ordinary-member set.
+        self._repl_session_ordinary_member_paths = {
+            (*path, name)
+            for path, node in self._repl_session_scope_nodes.items()
+            for name in node.members
+            if (*path, name) not in self._repl_session_scope_nodes
+        }
         # Each retained type-owned path maps to its rendered alias target, or
         # None for a nominal type: receiver classification cannot tell the two
         # apart from a path alone.
@@ -312,16 +341,8 @@ class _Resolver:
         self._root_scope: ScopeNode | None = None
         # Whether we are at the program root (for root-only checks).
         self._at_root: bool = False
-        # Agents keyed by their structured declaration paths.
-        self._declared_agents: dict[AgentKey, AgentDecl] = {}
-        # Ambient agents from the host (not in declared_agents).
-        self._ambient_agents: frozenset[str] = frozenset()
         # Top-level function defs.
         self._declared_functions: dict[str, FuncDef] = {}
-        # Program-declared agent identities referenced as a VarRef.
-        self._referenced_agents: set[AgentKey] = set()
-        # Header-only tracking for imports in non-entry modules (program context).
-        self._seen_non_import_item: bool = False
         # Source-declared program name.
         self._program_name: str | None = None
         # Names of all root-level type declarations (RecordDef/EnumDef/TypeAlias).
@@ -329,13 +350,29 @@ class _Resolver:
         # Named declarations are keyed uniformly by module and scope path; the
         # root is simply the empty path.
         self._declarations: dict[DeclarationKey, BindingRef] = {}
+        # Every ImportDecl's own scope path, keyed by node_id -- lets a
+        # region-scoped import's decl_bare contribution be found from any
+        # position that can lexically reach it (its own region and every
+        # descendant region), independent of the decl's textual position
+        # relative to whatever consults it.
+        self._import_decl_scope_paths: dict[int, ScopePath] = {}
         # The declaration item accompanies its path-keyed binding so legacy
         # root-only tables can be derived from the same collection without
         # admitting scoped members.
         self._declaration_items: dict[
-            DeclarationKey, FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias | AgentDecl
+            DeclarationKey, FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias
         ] = {}
-        self._scope_entity_kinds: dict[DeclarationKey, str] = {}
+        # Seeded with every retained scope path so a fresh entry's collision
+        # check (``_ensure_scope_path``, ``_register_declaration``, ``_define``)
+        # sees a session-retained named scope the same way it sees one
+        # declared earlier in this same entry: a member or declaration this
+        # entry tries to register at a retained scope's own path collides,
+        # cross-entry, exactly as it would within one entry.
+        self._scope_entity_kinds: dict[DeclarationKey, str] = {
+            (self._module_id, path[:-1], path[-1]): "scope"
+            for path in self._repl_session_scope_nodes
+            if path
+        }
         # Scoped externs are implemented by their member names in one module
         # companion, so distinct scope paths cannot share a Python symbol.
         self._scoped_extern_symbols: dict[str, FuncDef] = {}
@@ -347,6 +384,12 @@ class _Resolver:
         self._type_declarations: list[
             tuple[RecordDef | EnumDef | ExceptionDef | TypeAlias, ScopePath]
         ] = []
+        # The same declarations indexed by their declaring scope path, in
+        # declaration order, so a bare constructor lookup inside a region
+        # costs one dict hit instead of a scan of every type in the module.
+        self._type_declarations_by_path: dict[
+            ScopePath, list[RecordDef | EnumDef | ExceptionDef | TypeAlias]
+        ] = {}
         # Structured method identity -> nominal receiver owner path. This is
         # scope's single receiver classification artifact for later passes.
         self._method_declarations: dict[DeclarationKey, ScopePath] = {}
@@ -373,6 +416,10 @@ class _Resolver:
         self._active_match_site_node_id: int | None = None
         self._active_match_site_binder_kind: BinderKind | None = None
         self._next_pattern_slot_id: int = 0
+        # Filtered local opens are resolved live while binders are registered.
+        # Validate their selections once more against the completed scope tree
+        # so an item that was never referenced cannot silently remain unknown.
+        self._deferred_local_open_selections: list[LocalOpenSelection] = []
         # Loop-context flag: True when resolving inside a loop body (while_cond,
         # body, or until_cond). Reset to False across fn/def boundaries so that
         # `break`/`continue` cannot cross a function boundary into an outer loop.
@@ -390,7 +437,6 @@ class _Resolver:
         program: Program,
         *,
         parent_scope: ScopeNode | None = None,
-        ambient_agents: frozenset[str] = frozenset(),
         ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
         ambient_type_names: frozenset[str] = frozenset(),
     ) -> ModuleResolution:
@@ -400,11 +446,6 @@ class _Resolver:
         so name lookups fall through to session bindings (incremental REPL
         sessions).  New declarations live in the entry's own root scope and
         shadow parent bindings without a duplicate-declaration error.
-
-        *ambient_agents* are agent names the host already backs.  They count
-        as valid call targets alongside this program's own ``agent``
-        declarations, but never appear in ``ModuleResolution.declared_agents``
-        and never trigger an unused-agent warning.
 
         *ambient_constructor_candidates* carries constructor candidates from
         prior REPL entries so that constructor references to types declared in
@@ -446,16 +487,11 @@ class _Resolver:
         self._validate_non_method_type_params()
         self._validate_extern_backing()
 
-        # Pre-pass 2: collect path-keyed agent declarations before body
-        # resolution; root bindings are installed below and scoped bindings
-        # live in their member layers.
-        self._ambient_agents = ambient_agents
-        self._collect_agent_decls(program)
-        # Pre-pass 3: collect top-level def names for mutual recursion.
+        # Pre-pass 2: collect top-level def names for mutual recursion.
         self._collect_func_decls(program)
-        # Pre-pass 4: collect type-declaration names and validate type_params.
+        # Pre-pass 3: collect type-declaration names and validate type_params.
         self._collect_type_decl_names(program)
-        # Pre-pass 5: collect constructor candidates from RecordDef/EnumDef.
+        # Pre-pass 4: collect constructor candidates from RecordDef/EnumDef.
         self._collect_constructor_candidates(program)
 
         root = ScopeNode(node_id=program.node_id, parent=parent_scope, scope_path=())
@@ -464,16 +500,15 @@ class _Resolver:
         self._scope_nodes = self._build_scope_nodes(root)
         self._at_root = True
 
-        # Define root agents and functions as value bindings; scoped members
-        # are already present in their named-scope layers.
-        self._define_agent_bindings()
-        self._define_ambient_agent_bindings()
+        # Define root functions as value bindings; scoped members are already
+        # present in their named-scope layers.
         self._define_function_bindings()
         # Define constructor bindings in root scope.
         self._define_constructor_bindings()
 
         # Main walk: resolve all block items in order.
         self._resolve_block_items(program.body.items)
+        self._validate_deferred_local_open_selections()
 
         self._at_root = False
         self._pop_scope()
@@ -485,10 +520,8 @@ class _Resolver:
             root_scope=root,
             declarations=dict(self._declarations),
             scope_nodes=dict(self._scope_nodes),
-            declared_agents=dict(self._declared_agents),
             declared_functions=dict(self._declared_functions),
             program_name=self._program_name,
-            warnings=self._unused_agent_warnings(),
             declared_type_names=frozenset(self._declared_type_names),
             declared_type_paths=frozenset(self._type_paths),
             constructor_candidates={
@@ -525,10 +558,24 @@ class _Resolver:
             for child in item.items:
                 self._collect_item_declaration(child, path)
             return
-        if isinstance(item, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias, AgentDecl)):
+        if isinstance(item, ImportDecl):
+            self._import_decl_scope_paths[item.node_id] = tuple(
+                segment.name for segment in item.scope_path
+            )
+            return
+        if isinstance(item, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias)):
             path = tuple(segment.name for segment in item.scope_path)
             self._ensure_scope_path(path, item.node_id, item.span)
             self._register_declaration(item, path)
+            return
+        if isinstance(item, (LetDecl, VarDecl)) and item.scope_path:
+            # A binder's scope layer is order-independent even though its
+            # membership is not: create the path here so a binder with no
+            # sibling declaration still gets a scope node, but leave the
+            # member itself to be registered during the body walk, which is
+            # what makes textual precedence fall out of the mechanism.
+            path = tuple(segment.name for segment in item.scope_path)
+            self._ensure_scope_path(path, item.node_id, item.span)
 
     def _ensure_scope_path(self, path: ScopePath, node_id: int, span: SourceSpan) -> None:
         """Create every scope layer in *path*, rejecting ordinary-name clashes."""
@@ -537,7 +584,7 @@ class _Resolver:
             scope_path = path[: index + 1]
             key = (self._module_id, parent_path, name)
             existing = self._scope_entity_kinds.get(key)
-            if existing == "ordinary":
+            if existing == "ordinary" or scope_path in self._repl_session_ordinary_member_paths:
                 raise AglScopeError(f"Name '{name}' is already declared in this scope.", span=span)
             self._scope_entity_kinds.setdefault(key, "scope")
             self._scope_paths.add(scope_path)
@@ -545,7 +592,7 @@ class _Resolver:
 
     def _register_declaration(
         self,
-        item: FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias | AgentDecl,
+        item: FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias,
         path: ScopePath,
     ) -> None:
         """Register one declaration and its type members at *path*."""
@@ -565,13 +612,7 @@ class _Resolver:
                 )
             self._scope_entity_kinds[key] = "ordinary"
 
-        kind = (
-            BinderKind.constructor_binding
-            if is_type
-            else BinderKind.function_binding
-            if isinstance(item, FuncDef)
-            else BinderKind.agent_binding
-        )
+        kind = BinderKind.constructor_binding if is_type else BinderKind.function_binding
         self._declarations[key] = BindingRef(
             name=item.name,
             mutable=False,
@@ -593,8 +634,6 @@ class _Resolver:
                     )
                 self._scoped_extern_symbols[item.name] = item
             self._validate_type_params(item)
-        elif isinstance(item, AgentDecl):
-            self._validate_agent_decl(item)
         else:
             self._validate_type_params(item)
         if not is_type:
@@ -602,6 +641,7 @@ class _Resolver:
 
         type_item = cast(RecordDef | EnumDef | ExceptionDef | TypeAlias, item)
         self._type_declarations.append((type_item, path))
+        self._type_declarations_by_path.setdefault(path, []).append(type_item)
         type_scope = path + (item.name,)
         self._scope_paths.add(type_scope)
         self._scope_node_ids.setdefault(type_scope, item.node_id)
@@ -685,22 +725,46 @@ class _Resolver:
                     )
                 raise AglScopeError("'self' requires an enclosing type scope.", span=receiver.span)
 
+    def _reachable_decl_bare(
+        self, import_env: ImportEnv, path: ScopePath
+    ) -> Iterator[Mapping[NameAtom, frozenset[QName]]]:
+        """Yield each import declaration's bare contributions reaching *path*.
+
+        A region-scoped ``import`` contributes bare names to its own region
+        and everything nested inside it, so its declaration path must be a
+        prefix of *path*; a root import (empty path) reaches everywhere. The
+        one definition of that reach, shared by every consumer of
+        ``ImportEnv.decl_bare``.
+        """
+        for node_id, bare in import_env.decl_bare.items():
+            decl_scope_path = self._import_decl_scope_paths.get(node_id, ())
+            if path[: len(decl_scope_path)] == decl_scope_path:
+                yield bare
+
     def _is_orphan_receiver(self, owner_path: ScopePath) -> bool:
         """Return whether *owner_path* names a type imported from another module.
 
-        Consults the import environment's bare (unqualified) contributions —
-        the same table that makes an opened or ``using``-imported type name
-        callable without qualification — together with the whole-program type
-        table, so a receiver on a type this module can see but does not
-        declare reports the "no orphans" rule instead of the generic
-        "no enclosing type scope" diagnostic.
+        Consults the import environment's bare contributions — the same
+        names that make an opened or ``using``-imported type name callable
+        without qualification — together with the whole-program type table,
+        so a receiver on a type this module can see but does not declare
+        reports the "no orphans" rule instead of the generic "no enclosing
+        type scope" diagnostic. *owner_path*'s last segment is the receiver's
+        own bare name; every segment before it is the region the receiver is
+        declared in, whose reach is exactly a scoped import declared there or
+        in one of its ancestors -- the same reach an ordinary bare reference
+        there already gets from ``resolve_bare_contribution`` -- unioned with
+        the module-wide root table.
         """
-        if self._import_env is None:
+        if not owner_path:
             return False
-        atom = _bare_atom(owner_path)
+        name = owner_path[-1]
+        candidates: set[QName] = set(self._import_env.unqualified.get(name, frozenset()))
+        for bare in self._reachable_decl_bare(self._import_env, owner_path[:-1]):
+            candidates.update(bare.get(name, frozenset()))
         return any(
-            module != self._module_id and (module, name) in self._cross_module_type_scopes
-            for module, name in self._import_env.unqualified.get(atom, frozenset())
+            module != self._module_id and (module, source) in self._cross_module_type_scopes
+            for module, source in candidates
         )
 
     def _build_scope_nodes(self, root: ScopeNode) -> dict[ScopePath, ScopeNode]:
@@ -710,48 +774,38 @@ class _Resolver:
             if not path:
                 continue
             retained = self._repl_session_scope_nodes.get(path)
-            nodes[path] = ScopeNode(
+            node = ScopeNode(
                 node_id=self._scope_node_ids[path],
                 parent=nodes[path[:-1]],
                 scope_path=path,
-                members={} if retained is None else dict(retained.members),
             )
+            if retained is not None:
+                # A retained member counts as a write like any other: the
+                # local-open memo's correctness depends on every non-empty
+                # member layer having bumped the shared clock when built.
+                for name, ref in retained.members.items():
+                    node.register_member(name, ref)
+            nodes[path] = node
         # A replacement type declaration owns a fresh member layer: stale enum
         # variants from its prior definition must not survive into this entry.
         for item, path in self._type_declarations:
-            nodes[path + (item.name,)].members.clear()
+            nodes[path + (item.name,)].clear_members()
         for (_module_id, path, name), declaration in self._declarations.items():
-            nodes[path].members[name] = declaration
+            nodes[path].register_member(name, declaration)
         return nodes
 
     def _root_declaration_items(
         self,
         declaration_type: type[FuncDef]
-        | type[AgentDecl]
         | type[RecordDef]
         | type[EnumDef]
         | type[ExceptionDef]
         | type[TypeAlias],
-    ) -> Iterator[FuncDef | AgentDecl | RecordDef | EnumDef | ExceptionDef | TypeAlias]:
+    ) -> Iterator[FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias]:
         """Yield collected declarations of *declaration_type* at the root path."""
         for (module_id, path, _name), item in self._declaration_items.items():
             if module_id == self._module_id and not path and isinstance(item, declaration_type):
                 yield item
-
-    def _collect_agent_decls(self, program: Program) -> None:
-        """Collect agents from every static scope by declaration identity."""
-        for item in self._declaration_items.values():
-            if isinstance(item, AgentDecl):
-                path = tuple(segment.name for segment in item.scope_path)
-                self._declared_agents[(path, item.name)] = item
-
-    def _validate_agent_decl(self, decl: AgentDecl) -> None:
-        """Apply agent declaration validation independently of its scope path."""
-        if decl.name in _RESERVED_NAMES:
-            raise AglScopeError(
-                f"'{decl.name}' is built-in and cannot be declared as an agent.",
-                span=decl.span,
-            )
 
     def _collect_func_decls(self, program: Program) -> None:
         """Populate the legacy function table from root-path declarations only."""
@@ -893,7 +947,7 @@ class _Resolver:
                 variant=None,
                 owner_decl_node_id=_BUILTIN_CONSTRUCTOR_NODE_ID,
                 type_params=(),
-                owner_module_id=PRELUDE_ID,
+                owner_module_id=STD_CORE_ID,
             )
             self._add_constructor_candidate(exc_name, cref)
 
@@ -914,7 +968,7 @@ class _Resolver:
                             variant=variant_name,
                             owner_decl_node_id=_BUILTIN_CONSTRUCTOR_NODE_ID,
                             type_params=(),
-                            owner_module_id=PRELUDE_ID,
+                            owner_module_id=STD_CORE_ID,
                             can_match_bare_pattern=not _vfields,
                         )
                         self._add_constructor_candidate(variant_name, cref)
@@ -924,7 +978,7 @@ class _Resolver:
                     variant=None,
                     owner_decl_node_id=_BUILTIN_CONSTRUCTOR_NODE_ID,
                     type_params=(),
-                    owner_module_id=PRELUDE_ID,
+                    owner_module_id=STD_CORE_ID,
                 )
                 self._add_constructor_candidate(type_name, cref)
 
@@ -936,39 +990,68 @@ class _Resolver:
         scope_path: ScopePath = (),
         inject_bare: bool = True,
     ) -> None:
-        """Add *cref* to the candidates list for *ctor_key*.
+        """Add *cref* to the candidates list for *ctor_key*, superseding a stale owner.
 
-        Skips the entry if another candidate with the same ``owner_name`` is
-        already present (duplicate type declaration — the type-builder pass will
-        raise a clear "already declared" error for that; we must not conflate it
-        with genuine constructor overloading across distinct types).
+        A candidate that *cref* supersedes (see :func:`_supersedes`) is
+        replaced in place; otherwise a candidate already claiming this
+        spelling keeps it and *cref* is dropped.  The spelling is claimed by
+        another candidate with the same owner name in the same module
+        (a duplicate type declaration — the type-builder pass raises a clear
+        "already declared" error for that; we must not conflate it with
+        genuine constructor overloading across distinct types), by the same
+        owner at the same path in the scoped table, and, in the bare table,
+        by a host-seeded built-in of the same name.
         """
         scoped_key = (scope_path, ctor_key)
-        scoped_existing = self._scoped_constructor_candidates.get(scoped_key, [])
-        if not any(
-            (candidate.owner_module_id, candidate.owner_path, candidate.owner_name)
-            == (cref.owner_module_id, cref.owner_path, cref.owner_name)
-            for candidate in scoped_existing
-        ):
-            scoped_existing.append(cref)
-            self._scoped_constructor_candidates[scoped_key] = scoped_existing
+        self._scoped_constructor_candidates[scoped_key] = self._place_candidate(
+            self._scoped_constructor_candidates.get(scoped_key, []),
+            cref,
+            claims_spelling=lambda candidate: (
+                (
+                    candidate.owner_module_id,
+                    candidate.owner_path,
+                    candidate.owner_name,
+                )
+                == (cref.owner_module_id, cref.owner_path, cref.owner_name)
+            ),
+        )
         if not inject_bare:
             return
-        existing = self._constructor_candidates.get(ctor_key, [])
-        if any(
-            (c.owner_module_id, c.owner_name) == (cref.owner_module_id, cref.owner_name)
-            or (
-                (
-                    c.owner_decl_node_id == _BUILTIN_CONSTRUCTOR_NODE_ID
-                    or cref.owner_decl_node_id == _BUILTIN_CONSTRUCTOR_NODE_ID
+        self._constructor_candidates[ctor_key] = self._place_candidate(
+            self._constructor_candidates.get(ctor_key, []),
+            cref,
+            claims_spelling=lambda candidate: (
+                (candidate.owner_module_id, candidate.owner_name)
+                == (cref.owner_module_id, cref.owner_name)
+                or (
+                    (
+                        candidate.owner_decl_node_id == _BUILTIN_CONSTRUCTOR_NODE_ID
+                        or cref.owner_decl_node_id == _BUILTIN_CONSTRUCTOR_NODE_ID
+                    )
+                    and candidate.owner_name == cref.owner_name
                 )
-                and c.owner_name == cref.owner_name
-            )
-            for c in existing
-        ):
-            return
-        existing.append(cref)
-        self._constructor_candidates[ctor_key] = existing
+            ),
+        )
+
+    @staticmethod
+    def _place_candidate(
+        existing: list[ConstructorRef],
+        cref: ConstructorRef,
+        *,
+        claims_spelling: Callable[[ConstructorRef], bool],
+    ) -> list[ConstructorRef]:
+        """Return *existing* with *cref* superseding, yielding to, or joining it.
+
+        Replacement happens in place so candidate order — which decides the
+        representative binding and the reported one on an ambiguity — does
+        not depend on when a declaration was superseded.
+        """
+        for index, candidate in enumerate(existing):
+            if _supersedes(candidate, cref):
+                return [*existing[:index], cref, *existing[index + 1 :]]
+        if any(claims_spelling(candidate) for candidate in existing):
+            return existing
+        return [*existing, cref]
 
     def _alias_target_lookup(
         self, name: str, qualifier: QualifierChain | None, *, scope_path: ScopePath = ()
@@ -980,9 +1063,7 @@ class _Resolver:
         reference can never name a local declaration) — then falls back to the
         shared import-environment resolution
         (:func:`~agm.agl.scope.imports.resolve_alias_target`), which covers a
-        target reached through an open import or a module qualifier. In module
-        mode (no import environment or public-types table), only the local step
-        ever succeeds.
+        target reached through an open import or a module qualifier.
         """
         if qualifier is None or not qualifier.segments:
             local_paths: tuple[ScopePath, ...] = (scope_path, ()) if scope_path else ((),)
@@ -1157,69 +1238,9 @@ class _Resolver:
                 ),
             )
 
-    def _define_agent_bindings(self) -> None:
-        """Define root agents; scoped agents already live in scope memberships."""
-        for (_path, name), decl in self._declared_agents.items():
-            if decl.scope_path:
-                continue
-            ref = BindingRef(
-                name=name,
-                mutable=False,
-                decl_span=decl.span,
-                decl_node_id=decl.node_id,
-                kind=BinderKind.agent_binding,
-                module_id=self._module_id,
-            )
-            self._current_scope().define(name, ref)
-
-    def _define_ambient_agent_bindings(self) -> None:
-        """Define ambient agent names as value bindings so VarRefs resolve.
-
-        Ambient agents come from the host (e.g. earlier REPL entries) and are
-        NOT in ``_declared_agents``; they are never reported in
-        ``declared_agents`` and never trigger unused-agent warnings.
-
-        We use a synthetic span pointing to the program root node and the root
-        node_id as the decl_node_id (no real declaration AST node exists).
-        Only define if not already defined (declared agents take precedence).
-        """
-        scope = self._current_scope()
-        for name in self._ambient_agents:
-            if name in scope.bindings:
-                continue  # Already defined by a local agent declaration
-            # Use a sentinel span/node_id — the parent scope may have a real
-            # binding for this name (REPL session), so only add if absent.
-            if scope.lookup(name) is not None:
-                continue
-            # Create a synthetic binding ref for the ambient agent.
-            synthetic_span = SourceSpan(
-                start_line=0,
-                start_col=0,
-                end_line=0,
-                end_col=0,
-                start_offset=0,
-                end_offset=0,
-            )
-            ref = BindingRef(
-                name=name,
-                mutable=False,
-                decl_span=synthetic_span,
-                decl_node_id=-1,
-                kind=BinderKind.agent_binding,
-                module_id=self._module_id,
-            )
-            scope.define(name, ref)
-
     def _define_function_bindings(self) -> None:
         """Define each collected function as a value binding in the current scope."""
         for name, decl in self._declared_functions.items():
-            if name in self._current_scope().bindings:
-                # An ambient agent with the same name as this def was defined
-                # first (_define_ambient_agent_bindings runs before this method).
-                raise AglScopeError(
-                    f"Name '{name}' is already declared in this scope.",
-                    span=decl.span,
-                )
             ref = BindingRef(
                 name=name,
                 mutable=False,
@@ -1230,35 +1251,16 @@ class _Resolver:
             )
             self._current_scope().define(name, ref)
 
-    # ------------------------------------------------------------------
-    # Unused-agent warnings
-    # ------------------------------------------------------------------
-
-    def _unused_agent_warnings(self) -> tuple[Diagnostic, ...]:
-        """Warn for each program-declared agent never referenced."""
-        warnings: list[Diagnostic] = []
-        for key, decl in self._declared_agents.items():
-            if key not in self._referenced_agents:
-                warnings.append(
-                    Diagnostic(
-                        message=f"agent '{decl.name}' is declared but never called.",
-                        line=decl.span.start_line,
-                        column=decl.span.start_col,
-                        end_line=decl.span.end_line,
-                        end_column=decl.span.end_col,
-                        severity="warning",
-                    )
-                )
-        return tuple(warnings)
-
     def _resolve_builtin_var(self, node: BuiltinVarDecl) -> None:
         """Resolve a standard-library engine setting into a mutable register binding.
 
-        ``builtin var`` is reserved to the canonical ``std/config`` module.
-        The typecheck pass then validates that the name is a known engine key
-        with its canonical type.
+        ``builtin var`` is reserved to the canonical ``std/config`` module, but
+        is otherwise a member like any other: legal at the module root and
+        inside a named scope region (both keep ``_at_root`` set), rejected
+        only inside a nested block. The typecheck pass then validates that the
+        name is a known engine key with its canonical type.
         """
-        if not self._at_root or self._current_scope().scope_path:
+        if not self._at_root:
             raise AglScopeError(
                 f"'builtin var' declarations are only allowed at the module root, "
                 f"not inside a nested block (found 'builtin var {node.name}' here).",
@@ -1279,6 +1281,8 @@ class _Resolver:
             module_id=self._module_id,
         )
         self._define(node.name, ref)
+        if node.default is not None:
+            self._resolve_expr(node.default)
 
     # ------------------------------------------------------------------
     # Scope helpers
@@ -1368,13 +1372,48 @@ class _Resolver:
     def _define(self, name: str, ref: BindingRef) -> None:
         """Define *name* in the current scope; error on redeclaration.
 
-        A declaration may claim the bare spelling of a constructor declared in
-        another module (e.g. the prelude ``Retry``/``ExecResult`` names) or of a
-        same-module enum variant, since ``Owner::variant`` and a qualified
-        module path still reach those.  A same-module record, exception, or
-        alias constructor declares the bare name itself, so it collides.
+        A named scope's own body — reached while resolving a scope region or
+        the pushed layer of a root-position binder-path shorthand — is a
+        members layer, not a lexical bindings layer: a binder resolved there
+        is registered into ``members`` instead, so it becomes a member
+        reachable both bare (inside, via the outward walk) and by path
+        (outside). It is checked and recorded against the same
+        ``_scope_entity_kinds`` registry every other member at that path
+        uses (declarations in the pre-pass, nested scope layers via
+        ``_ensure_scope_path``), so one check governs collisions between a
+        binding and a ``def``, a type, or a nested scope at the same path,
+        regardless of textual order. ``_scope_entity_kinds`` is a fresh dict
+        per entry, so the check only ever sees THIS entry's own members: a
+        member the REPL session retained from a prior entry pre-populates
+        ``scope.members`` (for lookup) but leaves no ``_scope_entity_kinds``
+        trace, so redeclaring it is a replacement, matching how a redeclared
+        scoped ``def`` or type behaves across entries. A retained *scope's
+        own path*, unlike a retained member, is pre-seeded into the fresh
+        dict at construction, so a member or declaration this entry tries to
+        register there still collides — the cross-entry counterpart of
+        ``_ensure_scope_path``'s same-entry seeding. This is the only
+        reachable site: parameters, pattern/catch binders, and loop
+        variables always resolve inside a fresh child scope with an empty
+        path.
+
+        At the true root, a declaration may claim the bare spelling of a
+        constructor declared in another module (e.g. the prelude
+        ``Retry``/``ExecResult`` names) or of a same-module enum variant,
+        since ``Owner::variant`` and a qualified module path still reach
+        those.  A same-module record, exception, or alias constructor
+        declares the bare name itself, so it collides.
         """
         scope = self._current_scope()
+        if scope.scope_path:
+            key = (self._module_id, scope.scope_path, name)
+            if self._scope_entity_kinds.get(key) is not None:
+                raise AglScopeError(
+                    f"Name '{name}' is already declared in this scope.",
+                    span=ref.decl_span,
+                )
+            self._scope_entity_kinds[key] = "ordinary"
+            scope.register_member(name, replace(ref, scope_path=scope.scope_path))
+            return
         existing = scope.bindings.get(name)
         if existing is not None and (
             existing.kind is not BinderKind.constructor_binding
@@ -1404,23 +1443,29 @@ class _Resolver:
         """Resolve items in order; each binder adds to the current scope.
 
         This is the core sequencing logic.  Binders (``LetDecl``, ``VarDecl``,
-        ``AssignStmt``) and declarations (``FuncDef``, ``AgentDecl``, etc.) that
+        ``AssignStmt``) and declarations (``FuncDef``, etc.) that
         are not pure expressions are handled first; everything else is treated
         as an expression item.
 
-        In program context (``_import_env is not None``), additional enforcement:
+        Additional enforcement:
 
         - Non-entry modules: only ``FuncDef``, ``RecordDef``, ``EnumDef``,
           ``TypeAlias``, ``InfixDecl``, ``ImportDecl``, and ``ExportDecl`` are
           allowed at the module root.
           ``LetDecl``, ``VarDecl``, ``AssignStmt``, bare expressions, and
-          entry-only constructs (``AgentDecl``, ``ParamDecl``, ``ProgramDecl``)
+          entry-only constructs (``ParamDecl``, ``ProgramDecl``)
           are rejected with a scope error.
-        - Non-entry modules: ``ImportDecl`` and ``ExportDecl`` must precede all declarations
-          (header-only; ``_seen_non_import_item`` tracks this).
+        - Every module root and every region's own item sequence: ``ImportDecl``
+          and ``ExportDecl`` must precede all other items *in that same items
+          sequence* (header-only; ``seen_non_import_item`` tracks this locally
+          to this call, regardless of module kind). A region is one item of its
+          enclosing sequence for this purpose, so the enclosing sequence's
+          header rule governs a region as a whole, while its own header rule --
+          tracked by the recursive call this function makes for the region's
+          body -- governs the region's own items independently.
         """
-        has_import_context = self._import_env is not None
-        is_non_entry_root = has_import_context and not self._is_entry and self._at_root
+        is_non_entry_root = not self._is_entry and self._at_root
+        seen_non_import_item = False
 
         for item in items:
             if isinstance(item, OpenDecl):
@@ -1434,12 +1479,14 @@ class _Resolver:
                         "not inside a nested block.",
                         span=item.span,
                     )
-                if is_non_entry_root and self._seen_non_import_item:
+                if seen_non_import_item:
                     raise AglScopeError(
                         "Import and export declarations must appear before any other "
-                        "declarations in a library module.",
+                        "declarations in a module or scope region.",
                         span=item.span,
                     )
+                if isinstance(item, ImportDecl) and item.scope_path:
+                    self._contribute_regional_import_bare(item)
                 # The program module-system pass processes imports/exports; this pass skips them.
                 continue
             if isinstance(item, InfixDecl):
@@ -1448,12 +1495,10 @@ class _Resolver:
                         "infix declarations are only allowed at the program root.",
                         span=item.span,
                     )
-                if is_non_entry_root:
-                    self._seen_non_import_item = True
+                seen_non_import_item = True
                 continue
-            # Non-entry enforcement: track that a non-import item has been seen.
-            if is_non_entry_root:
-                self._seen_non_import_item = True
+            # Header enforcement: track that a non-import item has been seen.
+            seen_non_import_item = True
             # Named declarations switch to their declaration's lexical scope
             # in their own handlers. Every other item belongs to the current
             # layer, so validate its qualifier chains here.
@@ -1470,14 +1515,6 @@ class _Resolver:
                 # Placement in the canonical standard-library module is
                 # enforced by the declaration handler.
                 self._resolve_builtin_var(item)
-            elif isinstance(item, AgentDecl):
-                if is_non_entry_root:
-                    raise AglScopeError(
-                        f"'agent' declarations are only allowed in the entry module, "
-                        f"not in library modules (found 'agent {item.name}' here).",
-                        span=item.span,
-                    )
-                self._resolve_agent_decl(item)
             elif isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
                 self._resolve_type_decl(item)
             elif isinstance(item, LetDecl):
@@ -1541,53 +1578,17 @@ class _Resolver:
     # ------------------------------------------------------------------
 
     def _resolve_open_decl(self, decl: OpenDecl) -> None:
-        """Contribute a selected scope subtree to the current region."""
-        target = self._open_target_members(decl)
-        selected: list[tuple[NameAtom, BindingRef, ConstructorRef | None]] = []
-        if decl.mode is ImportMode.ALL:
-            selected = [(atom, ref, constructor) for atom, (ref, constructor) in target.items()]
-        else:
-            selected_paths: set[ScopePath] = set()
-            for item in decl.items:
-                prefix = (*tuple(segment.name for segment in item.scope_path), item.name)
-                matches = [atom for atom in target if _bare_path(atom)[: len(prefix)] == prefix]
-                if not matches:
-                    raise AglScopeError(
-                        f"'{'::'.join(prefix)}' is not a public member of the opened scope.",
-                        span=item.span,
-                    )
-                selected_paths.add(prefix)
-            if decl.mode is ImportMode.USING:
-                for item in decl.items:
-                    prefix = (*tuple(segment.name for segment in item.scope_path), item.name)
-                    for atom, value in target.items():
-                        path = _bare_path(atom)
-                        if path[: len(prefix)] == prefix:
-                            exposed = _bare_atom(
-                                (item.rename, *path[len(prefix) :])
-                                if item.rename is not None
-                                else path
-                            )
-                            ref, constructor = value
-                            selected.append((exposed, ref, constructor))
-            else:
-                selected = [
-                    (atom, ref, constructor)
-                    for atom, (ref, constructor) in target.items()
-                    if not any(
-                        _bare_path(atom)[: len(prefix)] == prefix for prefix in selected_paths
-                    )
-                ]
+        """Contribute a selected scope subtree to the current region.
 
-        for atom, ref, constructor in selected:
-            self._current_scope().contribute_bare(atom, ref)
-            if constructor is not None:
-                self._current_scope().contribute_bare_constructor(atom, constructor)
-
-    def _open_target_members(
-        self, decl: OpenDecl
-    ) -> dict[NameAtom, tuple[BindingRef, ConstructorRef | None]]:
-        """Return the relative public subtree of an opened local or imported scope."""
+        A local open's target scope may still be gaining members -- header
+        placement forces the ``open`` to precede its own scope's binders --
+        so it is recorded on the current region, with its full using/hiding
+        /rename selection, and resolved live against ``_scope_nodes`` at
+        every later bare reference (``resolve_bare_contribution`` and
+        ``resolve_bare_constructor_contribution``). A cross-module open's
+        target is complete before the walk starts, so it is resolved once,
+        eagerly, exactly as before.
+        """
         requested_path = tuple(segment.name for segment in decl.scope_ref.scope_path)
         # An explicit module route (``open geo/shapes::Point``) names its target
         # unambiguously; a same-named local scope must not intercept it.
@@ -1595,24 +1596,134 @@ class _Resolver:
             None if decl.scope_ref.module_route else self._open_local_scope_path(requested_path)
         )
         if local_path is not None:
-            local_members: dict[NameAtom, tuple[BindingRef, ConstructorRef | None]] = {}
-            for path, node in self._scope_nodes.items():
-                if path[: len(local_path)] != local_path:
-                    continue
-                for name, ref in node.members.items():
-                    relative = (*path[len(local_path) :], name)
-                    atom = _bare_atom(relative)
-                    local_members[atom] = (
-                        ref,
-                        next(iter(self._scoped_constructor_candidates.get((path, name), ())), None),
-                    )
-            return local_members
+            selection = LocalOpenSelection(scope_path=local_path, mode=decl.mode, items=decl.items)
+            self._current_scope().opened_local_scopes.add(selection)
+            if decl.mode is not ImportMode.ALL:
+                self._deferred_local_open_selections.append(selection)
+            return
 
+        target = self._open_target_members(decl)
+        if decl.mode is not ImportMode.ALL:
+            self._validate_open_selection_items(decl.items, target)
+        for atom, values in apply_open_selection(decl.mode, decl.items, target).items():
+            for ref, constructor in values:
+                self._current_scope().contribute_bare(atom, ref)
+                if constructor is not None:
+                    self._current_scope().contribute_bare_constructor(atom, constructor)
+
+    @staticmethod
+    def _validate_open_selection_items(
+        items: tuple[ImportItem, ...], target: Mapping[NameAtom, object]
+    ) -> None:
+        """Reject filtered-open paths absent from a completed target subtree."""
+        for item in items:
+            prefix = import_item_path(item)
+            if not any(_bare_path(atom)[: len(prefix)] == prefix for atom in target):
+                raise AglScopeError(
+                    f"'{'::'.join(prefix)}' is not a public member of the opened scope.",
+                    span=item.span,
+                )
+
+    def _validate_deferred_local_open_selections(self) -> None:
+        """Validate every filtered local open against the final member tree."""
+        for selection in self._deferred_local_open_selections:
+            target = local_scope_bindings(self._scope_nodes, selection.scope_path)
+            self._validate_open_selection_items(selection.items, target)
+
+    def _cross_module_member_ref(
+        self, atom: NameAtom, qname: QName, span: SourceSpan
+    ) -> tuple[BindingRef, ConstructorRef | None]:
+        """Build a bare/member ``BindingRef`` for one exposed atom's origin ``QName``.
+
+        Shared by every site that turns a (atom, origin) pair reached through
+        an import into a reference: promotes the ordinary cross-module
+        ``BindingRef`` to a constructor binding -- with the constructor's own
+        declaration id, kind, and owner path -- whenever *qname* names a
+        record, exception, enum variant, or generic-type constructor.
+        """
+        module, source = qname
+        constructor = self._cross_module_constructor_refs.get(qname)
+        ref = self._make_cross_module_ref(module, _bare_path(atom)[-1], source, span)
+        if constructor is not None:
+            ref = replace(
+                ref,
+                decl_node_id=constructor.owner_decl_node_id,
+                kind=BinderKind.constructor_binding,
+                scope_path=constructor.owner_path,
+            )
+        return ref, constructor
+
+    def _contribute_regional_import_bare(self, decl: ImportDecl) -> None:
+        """Contribute a region-scoped ``import``'s bare names to its own region only.
+
+        Mirrors the cross-module branch of ``_resolve_open_decl``: the
+        decl's own bare selection was computed once, module-wide, by
+        ``build_import_env`` and kept per declaration (``ImportEnv.decl_bare``)
+        instead of merged into the shared ``unqualified`` table, so it is
+        snapshotted here onto the current region's ``ScopeNode`` and narrows
+        to this region exactly like a cross-module ``open``'s selection does.
+        The qualifier route this import also establishes stays module-wide,
+        via ``self._import_env.contributions``, and needs no contribution here.
+
+        A wildcard candidate may draw one atom from several modules (e.g.
+        two sibling modules both exporting ``alpha``); every origin is
+        contributed, deferring an eventual clash to the atom's first use --
+        the same policy ``unqualified`` already applies at the module root --
+        rather than raising here.
+        """
+        for atom, qnames in self._import_env.decl_bare.get(decl.node_id, {}).items():
+            for qname in qnames:
+                ref, constructor = self._cross_module_member_ref(atom, qname, decl.span)
+                self._current_scope().contribute_bare(atom, ref)
+                if constructor is not None:
+                    self._current_scope().contribute_bare_constructor(atom, constructor)
+                self._contribute_regional_enum_variants(qname, decl.span)
+
+    def _contribute_regional_enum_variants(self, qname: QName, span: SourceSpan) -> None:
+        """Expand a bare-exposed enum type into its own bare variants, region-scoped.
+
+        A bare enum *type* name alone does not make its variants callable or
+        matchable -- ``_build_cross_module_constructor_candidates`` performs
+        the same expansion module-wide, from a root-position bare exposure.
+        Mirroring it here covers the scoped case, whose bare exposure never
+        reaches that module-wide table.
+        """
+        declaration = self._all_public_types.get(qname)
+        if not isinstance(declaration, EnumDef):
+            return
+        module, source = qname
+        owner_path = _bare_path(source)
+        scope = self._current_scope()
+        for variant in declaration.variants:
+            # A same-named top-level exception already owns the bare name
+            # (checked by its own plain atom, not the variant's owner-path
+            # key); the exception's own bare contribution stands alone.
+            if isinstance(self._all_public_types.get((module, variant.name)), ExceptionDef):
+                continue
+            variant_qname = (module, _bare_atom((*owner_path, variant.name)))
+            ref, constructor = self._cross_module_member_ref(variant.name, variant_qname, span)
+            scope.contribute_bare(variant.name, ref)
+            # Every enum variant has a constructor: `_cross_module_constructor_refs`
+            # is built from the same `_all_public_types` table by iterating this
+            # same declaration's variants unconditionally (see
+            # `_cross_module_constructor_refs` in scope/program.py).
+            assert constructor is not None
+            scope.contribute_bare_constructor(variant.name, constructor)
+
+    def _open_target_members(
+        self, decl: OpenDecl
+    ) -> dict[NameAtom, tuple[BindingRef, ConstructorRef | None]]:
+        """Return the relative public subtree of an opened imported scope.
+
+        Only ever called once a local scope target has been ruled out
+        (``_resolve_open_decl`` resolves and records a local target itself).
+        """
+        requested_path = tuple(segment.name for segment in decl.scope_ref.scope_path)
         route = decl.scope_ref.module_route
         scope_path = requested_path
         if not route and len(requested_path) > 1:
             route, scope_path = (requested_path[0],), requested_path[1:]
-        if not route and self._import_env is not None:
+        if not route:
             # A prior ``open import`` / ``using`` already contributed this
             # scope's members bare; reach the source scope they came from
             # before giving up on an explicit route.
@@ -1621,7 +1732,7 @@ class _Resolver:
             )
             if bare_members is not None:
                 return bare_members
-        if self._import_env is None or not route or not scope_path:
+        if not route or not scope_path:
             raise AglScopeError(
                 f"Unknown scope path '{'::'.join(requested_path)}'.", span=decl.scope_ref.span
             )
@@ -1668,15 +1779,7 @@ class _Resolver:
             if path[: len(scope_path)] != scope_path or len(path) == len(scope_path):
                 continue
             atom = _bare_atom(path[len(scope_path) :])
-            constructor = self._cross_module_constructor_refs.get(qname)
-            ref = self._make_cross_module_ref(qname[0], _bare_path(atom)[-1], qname[1], span)
-            if constructor is not None:
-                ref = replace(
-                    ref,
-                    decl_node_id=constructor.owner_decl_node_id,
-                    kind=BinderKind.constructor_binding,
-                    scope_path=constructor.owner_path,
-                )
+            ref, constructor = self._cross_module_member_ref(atom, qname, span)
             members[atom] = (ref, constructor)
         return members, is_public_type_scope
 
@@ -1690,13 +1793,26 @@ class _Resolver:
         later ``open A`` names the source scope those bare members came from,
         not an individual member, so it is resolved against every
         contribution's bare-exposed names rather than a module route.
+
+        A region-scoped import's own bare selection lives in ``decl_bare``
+        instead (narrowed away from the module-wide ``bare_names`` snapshot
+        above), so every such declaration reachable from the current region
+        -- its own region and every descendant, exactly the reach
+        ``resolve_bare_contribution`` already grants an ordinary bare
+        reference -- is searched the same way.
         """
-        assert self._import_env is not None
         matching: list[dict[NameAtom, tuple[BindingRef, ConstructorRef | None]]] = []
         for contribution in self._import_env.contributions.values():
             entries = (
                 (exposed, contribution.members[exposed]) for exposed in contribution.bare_names
             )
+            members, _is_public_type_scope = self._scope_subtree_members(
+                entries, requested_path, span
+            )
+            if members:
+                matching.append(members)
+        for bare in self._reachable_decl_bare(self._import_env, self._current_scope().scope_path):
+            entries = ((atom, qname) for atom, qnames in bare.items() for qname in qnames)
             members, _is_public_type_scope = self._scope_subtree_members(
                 entries, requested_path, span
             )
@@ -1723,31 +1839,9 @@ class _Resolver:
 
     def _resolve_scope_region(self, region: ScopeRegion) -> None:
         """Resolve a named region in its member layer."""
-        if not self._is_entry:
-
-            def reject_agent(node: object) -> None:
-                if isinstance(node, AgentDecl):
-                    raise AglScopeError(
-                        "'agent' declarations are only allowed in the entry module, "
-                        f"not in library modules (found 'agent {node.name}' here).",
-                        span=node.span,
-                    )
-
-            walk(region, reject_agent)
         path = self._current_scope().scope_path + (region.segment.name,)
         with self._named_scope(path):
             self._resolve_block_items(cast(tuple[Item, ...], region.items))
-
-    def _resolve_agent_decl(self, node: AgentDecl) -> None:
-        """Reject an unscoped agent declaration nested in an ordinary block."""
-        if node.scope_path:
-            return
-        if not self._at_root:
-            raise AglScopeError(
-                f"'agent' declarations are only allowed at the program root, "
-                f"not inside a nested block (found 'agent {node.name}' here).",
-                span=node.span,
-            )
 
     def _resolve_funcdef(self, node: FuncDef) -> None:
         """Resolve a ``def`` declaration (body + params).
@@ -1802,40 +1896,65 @@ class _Resolver:
     # Binder handlers
     # ------------------------------------------------------------------
 
-    def _resolve_let(self, node: LetDecl) -> None:
-        # A let initializer is non-recursive: no part of its pattern exists
-        # until its RHS has resolved. A simple name is still a pattern binder;
-        # only its slot handling differs from a broader pattern.
-        self._resolve_expr(node.value)
-        if isinstance(node.pattern, VarPattern):
-            candidates = tuple(self._constructor_candidates.get(node.pattern.name, ()))
-            if candidates:
-                self._pattern_constructor_candidates[node.pattern.node_id] = candidates
-            self._check_not_reserved(node.pattern.name, node.span)
-            self._define_binder(
-                node,
-                decl_node_id=node.pattern.node_id,
-                name=node.pattern.name,
-                mutable=False,
-                kind=BinderKind.let_binding,
+    @contextmanager
+    def _binder_scope(self, node: LetDecl | VarDecl, keyword: str) -> Iterator[None]:
+        """Enter the named layer a scoped ``let``/``var`` binder path selects.
+
+        A path prefix is legal at the program root and inside a scope
+        region's own body — both keep ``_at_root`` set, since a region does
+        not open a fresh lexical block — and rejected inside a nested block,
+        root-only like ``def``. An unprefixed binder resolves ambiently, so
+        a region's bare contents and a root shorthand for the same path
+        compose identically.
+        """
+        if not node.scope_path:
+            yield
+            return
+        if not self._at_root:
+            raise AglScopeError(
+                f"A scoped '{keyword}' binder path is only allowed at the program root, "
+                f"not inside a nested block.",
+                span=node.span,
             )
-            return
-        if isinstance(node.pattern, WildcardPattern):
-            return
-        with self._match_site_pattern_slots(node.node_id, _LET_PATTERN_POLICY):
-            self._bind_pattern_vars(node.pattern, self._current_scope(), _LET_PATTERN_POLICY)
+        with self._named_scope(tuple(segment.name for segment in node.scope_path)):
+            yield
+
+    def _resolve_let(self, node: LetDecl) -> None:
+        with self._binder_scope(node, "let"):
+            # A let initializer is non-recursive: no part of its pattern exists
+            # until its RHS has resolved. A simple name is still a pattern
+            # binder; only its slot handling differs from a broader pattern.
+            self._resolve_expr(node.value)
+            if isinstance(node.pattern, VarPattern):
+                candidates = tuple(self._constructor_candidates.get(node.pattern.name, ()))
+                if candidates:
+                    self._pattern_constructor_candidates[node.pattern.node_id] = candidates
+                self._check_not_reserved(node.pattern.name, node.span)
+                self._define_binder(
+                    node,
+                    decl_node_id=node.pattern.node_id,
+                    name=node.pattern.name,
+                    mutable=False,
+                    kind=BinderKind.let_binding,
+                )
+                return
+            if isinstance(node.pattern, WildcardPattern):
+                return
+            with self._match_site_pattern_slots(node.node_id, _LET_PATTERN_POLICY):
+                self._bind_pattern_vars(node.pattern, self._current_scope(), _LET_PATTERN_POLICY)
 
     def _resolve_var(self, node: VarDecl) -> None:
-        self._check_not_reserved(node.name, node.span)
-        # Resolve RHS before defining the name (lambda non-recursion).
-        self._resolve_expr(node.value)
-        self._define_binder(
-            node,
-            decl_node_id=node.node_id,
-            name=node.name,
-            mutable=True,
-            kind=BinderKind.var_binding,
-        )
+        with self._binder_scope(node, "var"):
+            self._check_not_reserved(node.name, node.span)
+            # Resolve RHS before defining the name (lambda non-recursion).
+            self._resolve_expr(node.value)
+            self._define_binder(
+                node,
+                decl_node_id=node.node_id,
+                name=node.name,
+                mutable=True,
+                kind=BinderKind.var_binding,
+            )
 
     def _define_binder(
         self,
@@ -1883,9 +2002,9 @@ class _Resolver:
         ref = self._current_scope().lookup(name)
         if ref is None:
             ref = self._lookup_bare_contribution(name, node.span)
-            # In program context with import_env, try structured open imports as fallback,
-            # so a bare target reaches an imported mutable binding just like a read.
-            if ref is None and self._import_env is not None:
+            # Try structured open imports as a fallback, so a bare target
+            # reaches an imported mutable binding just like a read.
+            if ref is None:
                 ref = self._lookup_import_env_unqualified(name, node.span)
             if ref is None:
                 raise AglScopeError(
@@ -1899,21 +2018,39 @@ class _Resolver:
         self._resolve_expr(node.value)
 
     def _resolve_qualified_assign(self, node: AssignStmt, target: NameTarget) -> None:
-        """Resolve a qualified assignment target (``MODQUAL::name := expr``).
+        """Resolve a qualified assignment target (``PATH::name := expr``).
 
-        Only ``builtin var`` bindings are assignable across a module boundary
-        (they are the sole mutable exported bindings); assigning any other
-        cross-module binding is rejected as immutable.
+        A local scope path is consulted first, through the same per-path
+        member namespace ``_resolve_local_scope_member`` consults for a
+        qualified read -- including the same ambiguity guard
+        (``_check_local_scope_route_ambiguity``) when the leading qualifier
+        segment is also a module route -- so a scoped ``var`` is assignable
+        through its path while a scoped ``let`` -- or a ``def``, a type, or
+        an agent sharing its path -- reuses the immutable-binder diagnostic
+        below. Only when the qualifier does not name a local scope path is a
+        cross-module target attempted; only a ``builtin var`` binding is
+        assignable across a module boundary (the sole mutable exported
+        binding kind).
         """
         assert target.qualifier is not None
         qualifier = target.qualifier
-        if self._import_env is None or not qualifier.route_segments:
-            raise AglScopeError(
-                f"'{target.name}' is not declared; assignment requires an existing "
-                f"mutable binding.",
-                span=node.span,
-            )
-        ref = self._lookup_qualified_binding(qualifier, target.name, node.span)
+        local_path = self._validate_local_scope_chain(qualifier)
+        if local_path is not None:
+            ref = self._scope_nodes[local_path].members.get(target.name)
+            if ref is None:
+                raise AglScopeError(
+                    f"Unknown member '{target.name}' in scope path '{'::'.join(local_path)}'.",
+                    span=node.span,
+                )
+            self._check_local_scope_route_ambiguity(qualifier, target.name, local_path)
+        else:
+            if not qualifier.route_segments:
+                raise AglScopeError(
+                    f"'{target.name}' is not declared; assignment requires an existing "
+                    f"mutable binding.",
+                    span=node.span,
+                )
+            ref = self._lookup_qualified_binding(qualifier, target.name, node.span)
         if not ref.mutable:
             raise AglScopeError(
                 f"Cannot assign to '{target.name}': "
@@ -1924,6 +2061,16 @@ class _Resolver:
         self._resolve_expr(node.value)
 
     def _resolve_param(self, node: ParamDecl) -> None:
+        """Resolve a ``param`` declaration, root or a region member alike.
+
+        A region does not clear ``_at_root`` (see ``_resolve_scope_region``),
+        so this single check admits both a root ``param`` and one declared
+        inside a scope region while still rejecting one nested in an ordinary
+        block. There is no declaration-path shorthand for ``param``, so unlike
+        ``let``/``var`` this needs no wrapper branching on ``node.scope_path``:
+        ``_define`` below already routes to the current scope's member layer
+        when a region pushed one.
+        """
         if not self._at_root:
             raise AglScopeError(
                 f"'param' declarations are only allowed at the program root, "
@@ -2062,16 +2209,23 @@ class _Resolver:
                 (IntLit, DecimalLit, BoolLit, NullLit, StringLit, UnitLit, Placeholder),
             ), f"unhandled expr node: {type(expr)}"  # pragma: no cover
 
-    def _resolve_varref(self, node: VarRef) -> None:
+    def _resolve_varref(self, node: VarRef, *, is_call_target: bool = False) -> None:
         """Resolve a name reference.
 
         When a VarRef resolves to a constructor_binding, look up the candidate set:
         - Exactly 1 candidate → record in constructor_refs.
         - ≥ 2 candidates → ambiguity error.
 
-        In program context (when ``_import_env`` is set), a bare reference uses
-        lexical scope then open imports; a current-module chain uses the own
-        root scope; and a module-route chain uses qualified cross-module access.
+        A bare reference uses lexical scope then open imports; a
+        current-module chain uses the own root scope; and a module-route
+        chain uses qualified cross-module access.
+
+        *is_call_target* is set only by :meth:`_resolve_call`, resolving its
+        own callee directly rather than through :meth:`_resolve_expr`: a
+        resolved binding that turns out to be a built-in function has a host
+        dispatch when it is the callee of a call (``_resolve_call`` classifies
+        it) but no value at all otherwise — a body-less declaration lowering
+        cannot give a symbol to (see :meth:`_reject_builtin_value_ref`).
         """
         if node.name == "_":
             raise AglScopeError("'_' is not defined.", span=node.span)
@@ -2085,21 +2239,23 @@ class _Resolver:
                 raise self._spaced_qualifier_repair(
                     self._spaced_qualifier_at(node.qualifier.span), node.qualifier.span
                 ) or AglScopeError(f"'{node.name}' is not defined in this module.", span=node.span)
+            self._reject_builtin_value_ref(node, ref, is_call_target=is_call_target)
             self._record_varref_binding(node, ref)
             return
         if self._resolve_local_scope_member(node):
+            self._reject_builtin_value_ref(
+                node, self._resolution.get(node.node_id), is_call_target=is_call_target
+            )
             return
         if node.qualifier is not None:
             self._resolve_qualified_chain(node)
-            return
-        if node.name in _BUILTIN_CALL_NAMES and self._current_scope().lookup(node.name) is None:
-            raise AglScopeError(
-                f"Built-in function '{node.name}' cannot be used as a value.", span=node.span
+            self._reject_builtin_value_ref(
+                node, self._resolution.get(node.node_id), is_call_target=is_call_target
             )
-
-        # Standard lexical lookup (module mode or bare name in program context).
+            return
+        # Standard lexical lookup.
         ref = self._current_scope().lookup(node.name)
-        regional_candidates = self._current_scope().bare_constructor_candidates(node.name)
+        regional_candidates = self._regional_constructor_candidates(node.name)
         if ref is None or (
             ref.kind is BinderKind.constructor_binding and regional_candidates is not None
         ):
@@ -2107,9 +2263,8 @@ class _Resolver:
             if contributed is not None:
                 ref = contributed
         if ref is None:
-            # In program context with import_env, try structured open imports as fallback.
-            if self._import_env is not None:
-                ref = self._lookup_import_env_unqualified(node.name, node.span)
+            # Try structured open imports as a fallback.
+            ref = self._lookup_import_env_unqualified(node.name, node.span)
             if ref is None:
                 raise self._spaced_qualifier_repair(
                     self._spaced_qualifier_around(node.span), node.span
@@ -2117,7 +2272,31 @@ class _Resolver:
                     f"'{node.name}' is not defined.",
                     span=node.span,
                 )
+        self._reject_builtin_value_ref(node, ref, is_call_target=is_call_target)
         self._record_varref_binding(node, ref, candidates=regional_candidates)
+
+    def _reject_builtin_value_ref(
+        self, node: VarRef, ref: BindingRef | None, *, is_call_target: bool
+    ) -> None:
+        """Raise if *ref* is a scoped ``builtin def``'s binding used as a value.
+
+        Mirrors :meth:`_resolve_call`'s own resolved-binding classification:
+        once a reference resolves to a ``function_binding`` under a built-in
+        name, a call site turns it into a host-dispatch classification
+        (*is_call_target* is set), while every other value context has no
+        host dispatch to offer. A non-``builtin`` ``def`` can never reach here
+        under a built-in name — that is rejected at declaration
+        (``_validate_function_decl``) — so this is exactly the built-in case.
+        """
+        if (
+            not is_call_target
+            and ref is not None
+            and ref.kind is BinderKind.function_binding
+            and node.name in _BUILTIN_CALL_NAMES
+        ):
+            raise AglScopeError(
+                f"Built-in function '{node.name}' cannot be used as a value.", span=node.span
+            )
 
     def _record_varref_binding(
         self,
@@ -2127,7 +2306,6 @@ class _Resolver:
         candidates: Collection[ConstructorRef] | None = None,
     ) -> None:
         """Record an ordinary value binding and its constructor metadata."""
-        self._track_agent_reference(ref)
         self._resolution[node.node_id] = ref
         if ref.kind != BinderKind.constructor_binding:
             return
@@ -2160,18 +2338,6 @@ class _Resolver:
         if ref.scope_path and ref.module_id == self._module_id:
             return tuple(self._scoped_constructor_candidates.get((ref.scope_path, name), ()))
         return tuple(self._constructor_candidates.get(name, ()))
-
-    def _track_agent_reference(self, ref: BindingRef) -> None:
-        """Preserve agent usage hidden behind constructor-selected pattern slots."""
-        while ref.kind is BinderKind.pattern_slot:
-            assert ref.slot_id is not None
-            alternative = self._pattern_slots[ref.slot_id].alternative
-            if alternative is None:
-                return
-            ref = alternative
-        agent_key = (ref.scope_path, ref.name)
-        if ref.kind is BinderKind.agent_binding and agent_key in self._declared_agents:
-            self._referenced_agents.add(agent_key)
 
     def _validate_qualifier_chains(self, program: object) -> None:
         """Validate qualifier syntax in the current lexical scope layer."""
@@ -2242,6 +2408,29 @@ class _Resolver:
                 )
         return path
 
+    def _check_local_scope_route_ambiguity(
+        self, chain: QualifierChain, name: str, path: ScopePath
+    ) -> None:
+        """Raise if *chain* names both a local scope path and a module route.
+
+        Shared by qualified value resolution and qualified assignment so a
+        read and a write of the same spelling agree: a leading qualifier
+        segment that is genuinely both a local scope (or type name) and an
+        imported module route is ambiguous regardless of which direction the
+        reference goes.
+        """
+        relative_path = tuple(segment.name for segment in chain.segments)
+        if not (
+            chain.anchor is None and qualifier_contributes(self._import_env, relative_path, name)
+        ):
+            return
+        local_kind = "a type name" if path in self._type_paths else "a local scope"
+        raise AglScopeError(
+            f"Qualifier '{relative_path[0]}' is both {local_kind} and a module route for "
+            f"'{name}'. {qualification_repair_guidance()}",
+            span=chain.span,
+        )
+
     def _resolve_local_scope_member(self, node: VarRef) -> bool:
         """Resolve a scoped member through ordered lexical scope layers.
 
@@ -2261,17 +2450,17 @@ class _Resolver:
             # different owner must not mask a module route sharing its suffix.
             # Keep a genuine route intact so its ordinary member diagnostics
             # remain available.
-            has_module_route = self._import_env is not None and bool(
+            has_module_route = bool(
                 qualifier_candidates(self._import_env, relative_path, anchored=chain.anchored)
             )
             # A route needs only its leading segment to be real: `lib::A::f()`
             # is a genuine import route through `lib` even though `A::f` (or a
             # longer suffix) does not itself name a complete module route.
-            has_leading_route = self._import_env is not None and bool(
+            has_leading_route = bool(
                 qualifier_candidates(self._import_env, relative_path[:1], anchored=chain.anchored)
             )
             has_opened_member = (
-                self._current_scope().bare_candidates(_bare_atom((*relative_path, node.name)))
+                self._bare_contribution_candidates(_bare_atom((*relative_path, node.name)))
                 is not None
             )
             known_segment = any(relative_path[0] in scope_path for scope_path in self._scope_nodes)
@@ -2294,24 +2483,13 @@ class _Resolver:
             raise AglScopeError(
                 f"Unknown member '{node.name}' in scope path '{rendered}'.", span=node.span
             )
-        if (
-            chain.anchor is None
-            and self._import_env is not None
-            and qualifier_contributes(self._import_env, relative_path, node.name)
-        ):
-            local_kind = "a type name" if path in self._type_paths else "a local scope"
-            raise AglScopeError(
-                f"Qualifier '{relative_path[0]}' is both {local_kind} and a module route for "
-                f"'{node.name}'. {qualification_repair_guidance()}",
-                span=chain.span,
-            )
+        self._check_local_scope_route_ambiguity(chain, node.name, path)
         if ref.kind is BinderKind.constructor_binding:
             candidates = self._scoped_constructor_candidates.get((path, node.name), ())
             if len(candidates) == 1:
                 self._constructor_refs[node.node_id] = candidates[0]
                 return True
             return False
-        self._track_agent_reference(ref)
         self._resolution[node.node_id] = ref
         return True
 
@@ -2332,14 +2510,13 @@ class _Resolver:
                 self._record_varref_binding(
                     node,
                     ref,
-                    candidates=self._current_scope().bare_constructor_candidates(atom),
+                    candidates=self._regional_constructor_candidates(atom),
                 )
                 return
         direct_error: AglScopeError | None = None
         local_type_path = self._validate_local_scope_chain(chain)
         if (
-            self._import_env is not None
-            and chain.anchor is not QualifierAnchor.CURRENT_MODULE
+            chain.anchor is not QualifierAnchor.CURRENT_MODULE
             and chain.segments
             and local_type_path not in self._type_paths
         ):
@@ -2367,38 +2544,20 @@ class _Resolver:
             return
         if direct_error is not None:
             raise direct_error
-        if (
-            chain.anchor is QualifierAnchor.CURRENT_MODULE
-            and len(chain.segments) == 1
-            and not any(
-                candidate.owner_name == chain.segments[0].name
-                and candidate.owner_module_id in (self._module_id, PRELUDE_ID)
-                for candidates in self._constructor_candidates.values()
-                for candidate in candidates
+        # Only a ``CURRENT_MODULE``-anchored chain reaches here: every other
+        # anchor either resolves above or leaves ``direct_error`` set. Its
+        # empty-segment self-reference form is handled in ``_resolve_varref``,
+        # so the chain names one segment this module does not declare.
+        segment = chain.segments[0]
+        missing_error = AglScopeError(
+            f"'{segment.name}' is not defined in this module.", span=segment.span
+        )
+        raise (
+            self._spaced_qualifier_repair(
+                self._spaced_qualifier_at(chain.span) or self._spaced_qualifier_around(node.span),
+                node.span,
             )
-        ):
-            segment = chain.segments[0]
-            missing_error = AglScopeError(
-                f"'{segment.name}' is not defined in this module.", span=segment.span
-            )
-            raise (
-                self._spaced_qualifier_repair(
-                    self._spaced_qualifier_at(chain.span)
-                    or self._spaced_qualifier_around(node.span),
-                    node.span,
-                )
-                or missing_error
-            )
-
-        if len(chain.segments) == 1 and chain.segments[0].type_args is not None:
-            raise AglScopeError(
-                f"'{chain.segments[0].name}' is not a known type.", span=chain.segments[0].span
-            )
-        qualifier_str = chain.render()
-        raise AglScopeError(
-            f"No module imported under qualifier '{qualifier_str}' or type named "
-            f"'{qualifier_str}'.",
-            span=chain.span,
+            or missing_error
         )
 
     def _resolve_constructor_chain(
@@ -2420,14 +2579,10 @@ class _Resolver:
             return False
         local_path = self._validate_local_scope_chain(chain)
         if local_path in self._type_paths:
-            if (
-                chain.anchor is None
-                and self._import_env is not None
-                and qualifier_contributes(
-                    self._import_env,
-                    tuple(segment.name for segment in chain.segments),
-                    variant,
-                )
+            if chain.anchor is None and qualifier_contributes(
+                self._import_env,
+                tuple(segment.name for segment in chain.segments),
+                variant,
             ):
                 rendered = "::".join(segment.name for segment in chain.segments)
                 if defer_route_diagnostics:
@@ -2437,7 +2592,9 @@ class _Resolver:
                     f"'{variant}'. {qualification_repair_guidance()}",
                     span=chain.span,
                 )
-            self._constructor_refs[node_id] = self._constructor_for_type_path(local_path, variant)
+            self._constructor_refs[node_id] = self._constructor_for_type_path(
+                local_path, variant, chain.span
+            )
             return True
         try:
             owner = self._imported_chain_owner(chain, variant)
@@ -2462,7 +2619,7 @@ class _Resolver:
                     if candidate.owner_name == type_name
                     and (
                         chain.anchor is not QualifierAnchor.CURRENT_MODULE
-                        or candidate.owner_module_id in (self._module_id, PRELUDE_ID)
+                        or candidate.owner_module_id == self._module_id
                     )
                 ),
                 None,
@@ -2472,7 +2629,9 @@ class _Resolver:
                 return True
         return False
 
-    def _constructor_for_type_path(self, path: ScopePath, variant: str) -> ConstructorRef:
+    def _constructor_for_type_path(
+        self, path: ScopePath, variant: str, span: SourceSpan
+    ) -> ConstructorRef:
         """Return the constructor-shaped chain result owned by local *path*.
 
         The owner's scope path stays in ``owner_path`` and never merges into
@@ -2494,7 +2653,16 @@ class _Resolver:
                 ),
                 None,
             )
-            assert retained is not None
+            if retained is None:
+                # A retained type path can go stale across REPL entries when a
+                # later entry's own declaration (not itself a type) claims the
+                # same path a prior entry's type left behind — the path is
+                # still in ``_type_paths``, but no constructor backs it any
+                # more. A clean diagnostic beats a crash for a condition
+                # reachable from ordinary REPL input.
+                raise AglScopeError(
+                    f"'{variant}' is not a member of '{'::'.join(path)}'.", span=span
+                )
             return retained
         assert isinstance(declaration, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
         return ConstructorRef(
@@ -2519,13 +2687,11 @@ class _Resolver:
             return None
         if len(chain.segments) == 1 and not chain.anchored:
             bare_atom = _bare_atom((chain.segments[0].name, variant))
-            bare_candidates = self._current_scope().bare_constructor_candidates(bare_atom)
+            bare_candidates = self._regional_constructor_candidates(bare_atom)
             # Several opened scopes contributing the same owner fall through to
             # the shared lookup below, which owns the ambiguity diagnostic.
             if bare_candidates is not None and len(bare_candidates) == 1:
                 return next(iter(bare_candidates))
-        if self._import_env is None:
-            return None
         owner_ref: BindingRef | None = None
         if len(chain.segments) == 1 and not chain.anchored:
             owner_ref = self._lookup_import_env_unqualified(chain.segments[0].name, chain.span)
@@ -2575,24 +2741,25 @@ class _Resolver:
             )
         return replace(candidate, variant=variant)
 
+    def _bare_contribution_candidates(self, name: NameAtom) -> set[BindingRef] | None:
+        """Return the nearest region's bare contributions for *name*, live where needed."""
+        return resolve_bare_contribution(self._current_scope(), name, self._scope_nodes)
+
+    def _regional_constructor_candidates(self, name: NameAtom) -> set[ConstructorRef] | None:
+        """Return the nearest region's constructor candidates for *name*, live where needed."""
+        return resolve_bare_constructor_contribution(
+            self._current_scope(), name, self._scope_nodes, self._declaring_constructor_candidates
+        )
+
     def _lookup_bare_contribution(self, name: NameAtom, span: SourceSpan) -> BindingRef | None:
         """Resolve one region's bare contributions, deferring clashes to use sites."""
-        candidates = self._current_scope().bare_candidates(name)
-        if candidates is None:
+        resolved = self._bare_contribution_candidates(name)
+        if resolved is None:
             return None
         assert self._root_scope is not None
-        resolved = set(candidates)
-        if name in self._root_scope.bare_contributions and self._import_env is not None:
-            for module, source in self._import_env.unqualified.get(name, frozenset()):
-                constructor = self._cross_module_constructor_refs.get((module, source))
-                ref = self._make_cross_module_ref(module, _bare_path(name)[-1], source, span)
-                if constructor is not None:
-                    ref = replace(
-                        ref,
-                        decl_node_id=constructor.owner_decl_node_id,
-                        kind=BinderKind.constructor_binding,
-                        scope_path=constructor.owner_path,
-                    )
+        if name in self._root_scope.bare_contributions:
+            for qname in self._import_env.unqualified.get(name, frozenset()):
+                ref, _constructor = self._cross_module_member_ref(name, qname, span)
                 if not any(
                     (existing.module_id, existing.scope_path, existing.decl_node_id, existing.kind)
                     == (ref.module_id, ref.scope_path, ref.decl_node_id, ref.kind)
@@ -2617,7 +2784,7 @@ class _Resolver:
         )
 
     def _lookup_import_env_unqualified(self, name: str, span: SourceSpan) -> BindingRef | None:
-        """Look up a bare name in the open-import environment (program context).
+        """Look up a bare name in the open-import environment.
 
         Returns a ``BindingRef`` if exactly one ``QName`` matches, or raises
         ``AglScopeError`` on ambiguity (clash-on-use).  Returns ``None`` if the
@@ -2625,7 +2792,6 @@ class _Resolver:
         and bare assignment targets, so an open import exposes a binding the
         same way for reads and writes.
         """
-        assert self._import_env is not None
         qnames = self._import_env.unqualified.get(name)
         if qnames is None:
             return None
@@ -2646,8 +2812,7 @@ class _Resolver:
         return self._make_cross_module_ref(qname[0], name, qname[1], span)
 
     def _resolve_varref_qualified(self, node: VarRef, module_qualifier: QualifierChain) -> None:
-        """Resolve an imported qualified VarRef in program context."""
-        assert self._import_env is not None
+        """Resolve an imported qualified VarRef."""
         qname = self._resolve_qualified_qname(module_qualifier, node.name, node.span)
         constructor = self._cross_module_constructor_refs.get(qname)
         if constructor is not None:
@@ -2668,7 +2833,6 @@ class _Resolver:
         self, qualifier: QualifierChain, name: str, span: SourceSpan
     ) -> tuple[ModuleId, NameAtom]:
         """Resolve a module route followed by one structured declaration path."""
-        assert self._import_env is not None
         route_segment = qualifier.segments[0]
         if route_segment.type_args is not None:
             raise AglScopeError(
@@ -2775,7 +2939,7 @@ class _Resolver:
         intended member (and, for ``Type::Ctor``, only when the member names a
         constructible type).
         """
-        if advisory is None or self._import_env is None:
+        if advisory is None:
             return None
         result = resolve_qualified(
             self._import_env, advisory.segments, advisory.member, anchored=advisory.anchored
@@ -2812,24 +2976,33 @@ class _Resolver:
     def _resolve_call(self, node: Call) -> None:
         """Resolve a ``Call`` node.
 
-        If the callee is a bare ``VarRef`` whose name is a built-in, classify
-        the call in ``builtin_calls`` and skip normal callee resolution.  For
-        all other callees, resolve the callee expression normally (it must
-        resolve to a binding).
+        A callee under a built-in name is classified in ``builtin_calls``
+        only once it resolves to a ``builtin def`` declaration, through the
+        same resolution every other reference uses — lexical lookup, region
+        contributions, and the import environment alike. A bare ``print(x)``
+        is therefore reached through the standard library's own declaration,
+        exactly as ``A::print(x)`` is reached through that region's; a name
+        no declaration provides is an ordinary scope error. Which scope path
+        reached the declaration never changes the host implementation the
+        name denotes.
         """
         callee = node.callee
-        if (
-            isinstance(callee, VarRef)
-            and callee.name in _BUILTIN_CALL_NAMES
-            and self._current_scope().lookup(callee.name) is None
-        ):
-            self._builtin_calls[node.node_id] = _BUILTIN_CALL_NAMES[callee.name]
-        else:
-            self._resolve_expr(callee)
-            if isinstance(callee, VarRef) and callee.name in _BUILTIN_CALL_NAMES:
+        if isinstance(callee, VarRef):
+            self._resolve_varref(callee, is_call_target=True)
+            if callee.name in _BUILTIN_CALL_NAMES:
                 ref = self._resolution.get(callee.node_id)
                 if ref is not None and ref.kind is BinderKind.function_binding:
                     self._builtin_calls[node.node_id] = _BUILTIN_CALL_NAMES[callee.name]
+        elif isinstance(callee, FieldAccess):
+            self._resolve_field_access(callee)
+            # Member selection is type-directed, so scope cannot yet know
+            # whether this spelling names a builtin method or an ordinary
+            # method with the same name. Record the possible host route; the
+            # checker confirms it only after selecting the method declaration.
+            if callee.field in _BUILTIN_CALL_NAMES:
+                self._builtin_calls[node.node_id] = _BUILTIN_CALL_NAMES[callee.field]
+        else:
+            self._resolve_expr(callee)
         # Resolve positional args.
         for arg in node.args:
             self._resolve_expr(arg)
@@ -3036,27 +3209,20 @@ class _Resolver:
             return tuple(
                 candidate
                 for candidate in self._constructor_candidates.get(node.name, ())
-                if candidate.owner_module_id in (self._module_id, PRELUDE_ID)
-                and not candidate.owner_path
+                if candidate.owner_module_id == self._module_id and not candidate.owner_path
             )
         if chain.anchor is None:
-            opened = self._current_scope().bare_constructor_candidates(
-                _bare_atom((*relative_path, node.name))
-            )
+            opened = self._regional_constructor_candidates(_bare_atom((*relative_path, node.name)))
             if opened:
                 return tuple(opened)
         local_path = self._validate_local_scope_chain(chain)
         if local_path is not None:
             if local_path in self._type_paths:
-                return (self._constructor_for_type_path(local_path, node.name),)
+                return (self._constructor_for_type_path(local_path, node.name, chain.span),)
             scoped = self._scoped_constructor_candidates.get((local_path, node.name), ())
             if scoped:
                 return tuple(scoped)
-        if (
-            self._import_env is not None
-            and chain.anchor is not QualifierAnchor.CURRENT_MODULE
-            and chain.segments
-        ):
+        if chain.anchor is not QualifierAnchor.CURRENT_MODULE and chain.segments:
             qname = self._try_resolve_qualified_qname(chain, node.name)
             if qname is not None:
                 imported = self._cross_module_constructor_refs.get(qname)
@@ -3090,7 +3256,6 @@ class _Resolver:
         self, chain: QualifierChain, name: str
     ) -> tuple[ModuleId, NameAtom] | None:
         """Resolve ``chain::name`` as one imported atom, or ``None`` on any failure."""
-        assert self._import_env is not None
         route = tuple(part for part in chain.segments[0].name.split("/"))
         atom = _bare_atom((*(segment.name for segment in chain.segments[1:]), name))
         return try_resolve_qualified_member(self._import_env, route, atom, anchored=chain.anchored)
@@ -3100,12 +3265,46 @@ class _Resolver:
 
         A region's opened contributions take precedence over the module-wide
         candidate table, so a bare spelling inside a scope selects the same
-        constructor a qualified reference would.
+        constructor a qualified reference would. Absent an opened
+        contribution, the enclosing named scopes are searched outward -- a
+        nominal declared in the same scope (or an ancestor scope) as the bare
+        spelling is reachable exactly as a bare value reference already finds
+        it via ``ScopeNode.lookup``, ahead of the module-wide table used only
+        for a root-declared nominal.
         """
-        regional = self._current_scope().bare_constructor_candidates(name)
+        regional = self._regional_constructor_candidates(name)
         if regional is not None:
             return tuple(regional)
+        scope: ScopeNode | None = self._current_scope()
+        while scope is not None:
+            if scope.scope_path:
+                owned = self._owned_scope_constructor_candidates(scope.scope_path, name)
+                if owned:
+                    return owned
+            scope = scope.parent
         return tuple(self._constructor_candidates.get(name, ()))
+
+    def _owned_scope_constructor_candidates(
+        self, scope_path: ScopePath, name: str
+    ) -> tuple[ConstructorRef, ...]:
+        """Return the union of *name*'s candidates declared directly in *scope_path*.
+
+        Covers a record or exception constructor, registered at *scope_path*
+        itself, and an enum variant, registered one level deeper at the type
+        scope of an enum declared directly in *scope_path*. Every same-named
+        candidate is returned, in declaration order, rather than the first
+        non-empty bucket found: the checker's scrutinee-type selection
+        disambiguates candidates, exactly as it does for the module-root
+        candidate table, so stopping early here would hide a same-scope
+        candidate behind an unrelated same-named one, non-deterministically
+        (``_type_declarations_by_path`` preserves declaration order).
+        """
+        candidates = list(self._scoped_constructor_candidates.get((scope_path, name), ()))
+        for item in self._type_declarations_by_path.get(scope_path, ()):
+            candidates.extend(
+                self._scoped_constructor_candidates.get((scope_path + (item.name,), name), ())
+            )
+        return tuple(candidates)
 
     def _bind_pattern_vars(
         self, pattern: Pattern, scope: ScopeNode, policy: _PatternResolutionPolicy
@@ -3248,66 +3447,3 @@ class _Resolver:
                 ),
             ),
         )
-
-
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
-
-
-def resolve_module(
-    program: Program,
-    *,
-    parent_scope: ScopeNode | None = None,
-    ambient_agents: frozenset[str] = frozenset(),
-    ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
-    ambient_type_names: frozenset[str] = frozenset(),
-    origin_path: Path | None = None,
-) -> ModuleResolution:
-    """Run the full static name-resolution pass over *program*.
-
-    Parameters
-    ----------
-    program:
-        A parsed ``syntax.Program`` AST.
-    parent_scope:
-        When given, the entry's root ``ScopeNode`` is parented to it, so name
-        lookups (``VarRef``, ``:=``) fall through to session bindings.  New
-        declarations live in the entry's own root scope and *shadow* parent
-        bindings without raising a duplicate-declaration error.  Default
-        ``None`` → standalone behaviour.
-    ambient_agents:
-        Agent names the host already backs.  They are valid call targets
-        alongside this program's own ``agent`` declarations, but are not
-        reported in ``ModuleResolution.declared_agents`` and never produce an
-        unused-agent warning.  Default empty → only in-program declarations
-        are valid.
-    ambient_constructor_candidates:
-        Constructor candidates from prior REPL entries.  Seeded before the
-        local pre-passes so that references to constructors declared in earlier
-        entries resolve correctly.  Default ``None`` → no ambient candidates.
-    ambient_type_names:
-        Type names from prior REPL entries, used for qualified constructor
-        access (``Owner::variant``).  Default empty.
-    origin_path:
-        *program*'s canonical source file, or ``None`` when it has no backing
-        file (inline ``-c`` sources, direct REPL entries).  ``extern def`` is
-        rejected unless a real path is given.  Default ``None``.
-
-    Returns
-    -------
-    ModuleResolution
-        The program annotated with resolution side tables.
-
-    Raises
-    ------
-    AglScopeError
-        On the first static scope violation (first-error abort).
-    """
-    return _Resolver(origin_path=origin_path).run(
-        program,
-        parent_scope=parent_scope,
-        ambient_agents=ambient_agents,
-        ambient_constructor_candidates=ambient_constructor_candidates,
-        ambient_type_names=ambient_type_names,
-    )

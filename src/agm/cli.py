@@ -1052,10 +1052,11 @@ def exec_cmd(
         "--max-call-depth",
         help="Override the maximum recursion call depth (CLI > config).",
     ),
-    runner: str | None = typer.Option(
+    agent: str | None = typer.Option(
         None,
-        "--runner",
-        help="Override the default agent runner command.",
+        "--agent",
+        metavar="AGL_LITERAL",
+        help="Seed std/config::default-agent from an AgL Agent literal.",
     ),
     log_file: str | None = typer.Option(
         None,
@@ -1179,7 +1180,7 @@ def exec_cmd(
             strict_json=strict_json,
             max_iters=max_iters,
             max_call_depth=max_call_depth,
-            runner=runner,
+            agent=agent,
             no_log=no_log,
             log_file=log_file,
             log=log,
@@ -1209,10 +1210,11 @@ def repl_cmd(
         "--max-call-depth",
         help="Override the maximum recursion call depth (CLI > config).",
     ),
-    runner: str | None = typer.Option(
+    agent: str | None = typer.Option(
         None,
-        "--runner",
-        help="Override the default agent runner command.",
+        "--agent",
+        metavar="AGL_LITERAL",
+        help="Seed std/config::default-agent from an AgL Agent literal.",
     ),
     confirm_agents: bool = typer.Option(
         False,
@@ -1267,7 +1269,7 @@ def repl_cmd(
             strict_json=strict_json,
             max_iters=max_iters,
             max_call_depth=max_call_depth,
-            runner=runner,
+            agent=agent,
             confirm_agents=confirm_agents,
             quiet=quiet,
             no_log=no_log,

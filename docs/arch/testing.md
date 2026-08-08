@@ -4,7 +4,7 @@ The test suite mirrors the architecture: the AgL pipeline is tested pass by pass
 
 ## Strategy
 
-- **AgL passes** are tested individually — lexer, parser, AST, scope, typecheck, match compilation, lowering, IR, and evaluator each have their own suites — plus end-to-end acceptance suites that run whole programs.
+- **AgL passes** are tested individually — lexer, parser, AST, scope, typecheck, match compilation, lowering, IR, and evaluator each have their own suites — plus end-to-end acceptance suites that run whole programs. Scope and typecheck have no per-module entry point (production always resolves and checks a whole program), so their unit suites build a real single-entry `ModuleGraph` through the shared helpers in `tests/agl/module_graph.py` (`resolve_entry`/`resolve_and_check_entry` for source text, `resolve_program_ast`/`resolve_and_check_program_ast` for an already-parsed `Program`) rather than resolving/checking a bare AST, so no unit test exercises a configuration production does not.
 - **Commands** are tested at the CLI boundary, exercising user workflows rather than internal call sequences.
 - **Domain and primitives** (project layout, git, config, process/env) have unit tests for their behavior and edge cases.
 
@@ -14,7 +14,7 @@ The guiding rule is to test user workflows and observable behavior, not implemen
 
 Some tests guard architectural properties rather than feature behavior:
 
-- **Package layering.** A dependency-contract test asserts the AgL package boundaries — `semantics` as the shared semantic foundation, match compilation importing no IR/lowering/evaluator/runtime code, the IR importing no frontend or match-compiler code, the evaluator never importing the frontend, the runtime staying eval-free, and the pipeline on top.
+- **Package layering.** A dependency-contract test asserts the AgL package boundaries — `semantics` as the shared semantic foundation, `syntax` as an AST-only leaf, `typecheck` confined to scope's output and the frontend layers beneath it, match compilation importing no IR/lowering/evaluator/runtime code, the IR importing no frontend or match-compiler code, the evaluator never importing the frontend, the runtime staying eval-free, and the pipeline on top.
 - **End-to-end acceptance.** Whole-program suites for module and multi-file AgL programs are part of the standing gate and must stay green. Their scenario harness scripts agent and shell boundaries, so workflow coverage remains deterministic without executing real agents or shell commands.
 - **Coverage.** The project maintains 100% test coverage of `src/` and 100% command coverage in end-to-end tests.
 

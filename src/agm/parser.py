@@ -183,8 +183,10 @@ _HELP_TEXTS: dict[str, str] = {
           hours (``Nh``). Disabled by default. ``--timeout DURATION``
           overrides the config value.
           [loop] prompt = "text" or [loop] prompt_file = "path" set the prompt
-          text or file, overriding the default task file (selector mode) or
-          loop.md (no-selector mode). ``--prompt`` and ``--prompt-file`` are
+          text or file, overriding the default prompts/implement.md runner
+          prompt (preprocessed after task selection with ``%{TASK_FILE}``) in
+          selector mode or loop.md in no-selector mode. ``--prompt`` and
+          ``--prompt-file`` are
           mutually exclusive and override the config values.
           [loop] selector_prompt = "text" or [loop] selector_prompt_file = "path"
           set the selector prompt text or file, overriding the default
@@ -215,8 +217,9 @@ _HELP_TEXTS: dict[str, str] = {
           With a selector (the default), AGM runs the selector with
           ``@select.md``. If the selector returns ``COMPLETE`` after
           whitespace is removed, AGM stops. Otherwise the selector output is
-          treated as the next task path and AGM runs the runner with that task
-          file. When no explicit selector command is configured, the runner
+          treated as the next task path. AGM preprocesses prompts/implement.md
+          with ``%{TASK_FILE}`` set to that path, then runs the runner with the
+          resulting prompt. When no explicit selector command is configured, the runner
           command is used for the progress update.
           With ``--no-selector`` / ``no_selector = true``, AGM appends
           ``@<resolved-loop-prompt>`` as the final argument to the runner and
@@ -233,10 +236,12 @@ _HELP_TEXTS: dict[str, str] = {
           suffix is appended as usual.
           ``--prompt TEXT`` or ``--prompt-file PATH`` (or the corresponding
           config.toml ``prompt`` / ``prompt_file`` keys) specify the prompt
-          to feed the runner, replacing the default task file in selector
-          mode or the loop.md prompt file in no-selector mode. The prompt
-          text is saved to a temporary file and processed with env var
-          substitution, just like loop.md. ``%%`` and ``%{PROMPT_FILE}`` in
+          to feed the runner, replacing the default prompts/implement.md
+          runner prompt (preprocessed after task selection with
+          ``%{TASK_FILE}``) in selector mode or the loop.md prompt file in
+          no-selector mode. The prompt text is saved to a temporary file and
+          follows the prompt
+          interpolation rules below. ``%%`` and ``%{PROMPT_FILE}`` in
           the command string resolve to this processed prompt file. In
           selector mode, the selected task file path is available in the
           ``TASK_FILE`` environment variable passed to the runner.
@@ -244,8 +249,7 @@ _HELP_TEXTS: dict[str, str] = {
           the corresponding config.toml ``selector_prompt`` /
           ``selector_prompt_file`` keys) specify the prompt to feed the
           selector, replacing the default ``select.md`` prompt.
-          The prompt text is saved to a temporary file and processed with
-          env var substitution, just like the default prompt.
+          The prompt follows the interpolation rules below.
           ``--extra-prompt TEXT`` or ``--extra-prompt-file PATH`` (or the
           corresponding config.toml ``extra_prompt`` / ``extra_prompt_file``
           keys) append extra content to the runner prompt, after the
@@ -258,16 +262,24 @@ _HELP_TEXTS: dict[str, str] = {
           or explicitly set). ``--extra-selector-prompt`` and
           ``--extra-selector-prompt-file`` are mutually exclusive.
 
-        Prompt preprocessing:
-          Before a prompt file is passed to the runner or selector, AGM
-          expands environment variable references in the prompt content
-          using ``$VAR`` or ``${VAR}`` syntax. Unrecognized variables are
-          left unchanged. When expansions modify the content, AGM writes
-          the expanded text to a temporary file; otherwise the original
-          file path is used. Beyond the process environment, AGM provides:
-            TASKS_DIR  the resolved tasks directory path
-            TASK_FILE  the selected task file path (selector mode; set
-                       in the runner process environment at runtime)
+        Prompt interpolation:
+          AGM expands ``%{name}`` holes before passing prompt or command
+          text to the runner or selector. A name is an AgL identifier (for
+          example, ``%{log-file}``). ``\\%{`` writes a literal ``%{`` and a
+          bare ``%`` is literal. ``$VAR`` and ``${VAR}`` are plain literal
+          text. An unknown variable, invalid hole name, or unterminated
+          ``%{`` is an error. Prompt-content variables are the full process
+          environment overlaid with AGM values, which win on conflicts:
+            TASKS_DIR  the resolved tasks directory path, in every loop prompt
+            TASK_FILE  the selected task path, only in a selector-mode runner
+                       prompt after task selection
+          When expansion changes a file, AGM writes a temporary prompt file;
+          otherwise it uses the original file. Runner and selector command
+          arguments interpolate the same holes as the prompt they accompany,
+          further overlaid with ``PROMPT_FILE``, which wins on conflicts.
+          ``%%`` is its ``PROMPT_FILE`` alias. Command strings are
+          shlex-split before interpolation, so quote or otherwise protect
+          ``\\%{`` so its backslash reaches the argv element.
 
           ``agm loop step`` performs a single loop iteration using the same
           runner, selector, and logging behavior as ``agm loop run``.
@@ -284,7 +296,12 @@ _HELP_TEXTS: dict[str, str] = {
                    [--review-file FILE|auto|none|--no-review-file]
 
         Run the review prompt with REVIEW_SCOPE and REVIEW_ASPECTS available
-        during prompt preprocessing. The default prompt is review.md.
+        during prompt preprocessing. Prompt holes use strict ``%{name}``
+        interpolation from the process environment overlaid with REVIEW_SCOPE
+        and REVIEW_ASPECTS, which win on conflicts. Runner command arguments
+        interpolate the same way, with ``%{PROMPT_FILE}`` (alias ``%%``) bound
+        to the prepared prompt file; see ``agm help loop`` for the full
+        interpolation rules. The default prompt is review.md.
         Review output is also saved to .agent-files/review-YYYYMMDD-HHMMSS-microseconds.md
         by default. Use --review-file FILE to choose a path, --review-file none
         or --no-review-file to disable saving, and --review-file auto to use
@@ -305,7 +322,12 @@ _HELP_TEXTS: dict[str, str] = {
                    REVIEW_FILE
 
         Run the revision prompt with REVIEW_FILE available during prompt
-        preprocessing. The default prompt is revise.md.
+        preprocessing. Prompt holes use strict ``%{name}`` interpolation from
+        the process environment overlaid with REVIEW_FILE, which wins on
+        conflicts. Runner command arguments interpolate the same way, with
+        ``%{PROMPT_FILE}`` (alias ``%%``) bound to the prepared prompt file;
+        see ``agm help loop`` for the full interpolation rules. The default
+        prompt is revise.md.
         When COMMAND is provided before REVIEW_FILE, config from
         [revise.COMMAND] is merged over [revise].
 
@@ -327,7 +349,14 @@ _HELP_TEXTS: dict[str, str] = {
                    [--log-file PATH|--no-log]
 
         Run review/revise cycles until revise returns COMPLETE, or until the
-        maximum number of revision attempts is reached. A CONTINUE response
+        maximum number of revision attempts is reached. Review prompts receive
+        REVIEW_SCOPE and REVIEW_ASPECTS; revise prompts receive REVIEW_FILE.
+        Prompt holes use strict ``%{name}`` interpolation from the process
+        environment overlaid with those values, which win on conflicts. Runner,
+        reviewer, and reviser command arguments interpolate the same way, with
+        ``%{PROMPT_FILE}`` (alias ``%%``) bound to the prepared prompt file;
+        see ``agm help loop`` for the full interpolation rules. A CONTINUE
+        response
         starts a fresh review; any other response retries revise with the same
         review file. The default maximum is 12.
         Review output is saved to the default timestamped review path by
@@ -361,6 +390,11 @@ _HELP_TEXTS: dict[str, str] = {
         .env.local, and env.sh files.
         Create missing project and workspace config.toml files under the project
         config directory.
+
+        General-config path-valued settings, including the independently
+        loaded ``[modules] lib_root`` and ``roots``, expand ``%{VAR}`` from
+        the process environment and a leading ``~``; unresolved or malformed
+        holes remain literal because one config file serves every command.
 
         To apply the environment to the current shell:
           eval "$(agm config env)"
@@ -496,7 +530,7 @@ _HELP_TEXTS: dict[str, str] = {
     """),
     "exec": textwrap.dedent("""\
         agm exec [--strict-json|--no-strict-json] [--max-iters N]
-                 [--max-call-depth N] [--runner COMMAND]
+                 [--max-call-depth N] [--agent AGL_LITERAL]
                  [--timeout DURATION|--no-timeout] [--dry-run]
                  [--log|--log-file PATH|--no-log] [--no-log-file]
                  [--no-stdlib] [-I DIR]...
@@ -521,7 +555,7 @@ _HELP_TEXTS: dict[str, str] = {
           --max-iters N         Cap unbounded loops; off by default (CLI > config).
           --max-call-depth N    Override the maximum recursion call depth
                                 (CLI > config).
-          --runner COMMAND      Override the default agent runner command.
+          --agent AGL_LITERAL   Seed std/config::default-agent from an AgL Agent literal.
           --timeout DURATION    Override initial shell-exec and agent idle timeouts;
                                 seed std/config::timeout to some(DURATION). Mutually
                                 exclusive with --no-timeout.
@@ -556,15 +590,15 @@ _HELP_TEXTS: dict[str, str] = {
     """),
     "repl": textwrap.dedent("""\
         agm repl [--strict-json|--no-strict-json] [--max-iters N] [--max-call-depth N]
-                 [--runner COMMAND] [--confirm-agents] [--dry-run] [--no-stdlib]
+                 [--agent AGL_LITERAL] [--confirm-agents] [--dry-run] [--no-stdlib]
                  [--quiet] [--log|--log-file PATH|--no-log]
 
         Start an interactive read-eval-print loop for AgL.  Each entry is
         parsed, type-checked, and evaluated once against a persistent session
         that accumulates bindings, types, and declarations across entries, so
         earlier results stay available and agent calls fire exactly once.  The
-        session reuses the [exec] configuration (runner, per-agent commands,
-        call-depth limit, JSON strictness, timeout).  Like agm exec, it
+        session reuses the [exec] configuration (default agent, call-depth
+        limit, JSON strictness, timeout). Like agm exec, it
         automatically opens std/core throughout each loaded program, so
         standard-library names are available unqualified. Other imports are
         qualified by default; use --no-stdlib to require an explicit std/core
@@ -587,7 +621,7 @@ _HELP_TEXTS: dict[str, str] = {
                                 (source writes > CLI > config).
           --max-call-depth N    Override the maximum recursion call depth
                                 (CLI > config; source pragmas are not applied in the REPL).
-          --runner COMMAND      Override the default agent runner command.
+          --agent AGL_LITERAL   Seed std/config::default-agent from an AgL Agent literal.
           --confirm-agents     Confirm each agent call before dispatching it
                                 (default: fire agent calls without confirming).
           --quiet               Suppress automatic echoing of entry results.
@@ -608,7 +642,7 @@ _HELP_TEXTS: dict[str, str] = {
 
         Exit codes:
           0  The session ended normally (:quit / :exit / Ctrl-D).
-          1  Pre-loop setup failure: invalid [exec] config, --runner, or an
+          1  Pre-loop setup failure: invalid [exec] config or an
              unwritable --log-file (reported before the prompt).
     """),
     "help": textwrap.dedent("""\
@@ -753,8 +787,8 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         mode; ``--no-selector`` is an error for this subcommand.
         ``--selector-prompt TEXT`` or ``--selector-prompt-file PATH`` overrides
         the default select.md prompt. ``--timeout DURATION`` sets an idle
-        timeout; see ``agm help loop`` for details. Prompt files are
-        preprocessed for environment variable expansion.
+        timeout; prompt files use strict ``%{name}`` interpolation. See
+        ``agm help loop`` for details.
     """),
     ("loop", "run"): textwrap.dedent("""\
         agm loop run [--runner COMMAND] [--selector COMMAND|--no-selector]
@@ -769,11 +803,12 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         Run the loop prompt until completion. Selector mode is the default;
         ``--no-selector`` switches to the no-selector loop-prompt mode.
         ``--prompt TEXT`` or ``--prompt-file PATH`` overrides the default
-        prompt file. ``--selector-prompt TEXT`` or ``--selector-prompt-file
+        prompts/implement.md runner prompt in selector mode, which AGM
+        preprocesses after task selection with ``%{TASK_FILE}``, or loop.md in
+        no-selector mode. ``--selector-prompt TEXT`` or ``--selector-prompt-file
         PATH`` overrides the default select.md selector prompt. ``--timeout
-        DURATION`` sets an idle timeout; see ``agm help loop`` for details.
-        Prompt files are preprocessed for environment variable expansion; see
-        ``agm help loop`` for details.
+        DURATION`` sets an idle timeout; prompt files use strict ``%{name}``
+        interpolation. See ``agm help loop`` for details.
         Bare ``agm loop CMD`` is a shorthand for this command when ``CMD``
         is not a built-in subcommand.
     """),
@@ -789,11 +824,12 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
 
         Perform one loop iteration using the same runner and selector
         resolution as ``agm loop run``. ``--prompt TEXT`` or
-        ``--prompt-file PATH`` overrides the default prompt file.
+        ``--prompt-file PATH`` overrides the default prompts/implement.md
+        runner prompt in selector mode, which AGM preprocesses after task
+        selection with ``%{TASK_FILE}``, or loop.md in no-selector mode.
         ``--selector-prompt TEXT`` or ``--selector-prompt-file PATH`` overrides
         the default select.md selector prompt. ``--timeout DURATION`` sets an
-        idle timeout; see ``agm help loop`` for details. Prompt files are
-        preprocessed for environment variable expansion; see
+        idle timeout; prompt files use strict ``%{name}`` interpolation. See
         ``agm help loop`` for details.
     """),
     ("worktree", "new"): textwrap.dedent("""\

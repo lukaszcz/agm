@@ -8,20 +8,19 @@ uncaught, terminate the program. There are no sentinel return values.
 
 ## The exception model
 
-Every exception is a value of one of the built-in exception types listed
-below. All of them conceptually extend the abstract base type `Exception`,
-which declares two fields present on every exception:
+Every exception is a value of a concrete built-in or user-declared exception
+type. Every exception type extends the abstract base type `Exception`, which
+declares one field present on every exception:
 
 ```text
 message: text     # human-readable description
-trace_id: text    # links the exception to its record in the run trace
 ```
 
 `Exception` itself is **not constructible** — `raise Exception(…)` is a
 static error. It exists for typing: a wildcard catch binds its variable as
-`Exception`, so only `message`, `trace_id`, and whole-value interpolation
-(`%{e}`) are available there. Accessing a subtype field such as `e.raw`
-requires catching the concrete type.
+`Exception`, so only `message` and whole-value interpolation (`%{e}`) are
+available there. Accessing a subtype field such as `e.raw` requires catching
+the concrete type.
 
 Programs may declare concrete exception types:
 
@@ -33,8 +32,10 @@ exception DeployError extends Exception
 
 An exception extends exactly one base exception type. Constructor fields include
 the inherited fields first, followed by fields declared on the subtype.
-`builtin exception` is the standard-library form for host-recognized exception
-types; the name, base, and fields must match the recognized shape exactly.
+`trace_id` is not reserved: a user-declared exception may use it as one of its
+own fields. `builtin exception` is the standard-library form for host-recognized
+exception types; the name, base, and fields must match the recognized shape
+exactly.
 
 ### Methods
 
@@ -93,11 +94,11 @@ field cycle is.
 
 Exception values support field access (`e.raw`), equality, and rendering.
 In interpolation and `print` an exception renders in **AgL record form**,
-including all fields (`message`, `trace_id`, and any type-specific fields)
-in declaration order — for example:
+including all fields (`message` and any type-specific fields) in declaration
+order — for example:
 
 ```
-CastError(message = "cannot parse \"x\" as int", trace_id = "evt-7", source_type = "text", target_type = "int", raw = "x")
+CastError(message = "cannot parse \"x\" as int", source_type = "text", target_type = "int", raw = "x")
 ```
 
 See [Strings and interpolation](strings-and-interpolation.md) for the uniform
@@ -164,8 +165,13 @@ caught by `catch`; it unwinds to the nearest enclosing function.
 
 Catch patterns:
 
-- `catch SomeError` / `catch SomeError as e` — matches exactly that built-in
-  exception type.
+- `catch SomeError` / `catch SomeError as e` — matches exactly the named
+  exception type, whether built-in or user-declared. It does not match that
+  type's subtypes. `SomeError` names whichever declaration of that name is in
+  scope where the `catch` clause is written; in the REPL, a name that is
+  later redeclared keeps naming its original declaration in a `catch` clause
+  written before the redeclaration, while a `catch` clause written afterward
+  names the new one.
 - `catch _` / `catch _ as e` — matches anything; `e` has type `Exception`.
 - `catch Exception as e` — equivalent to `catch _ as e`.
 
@@ -203,9 +209,8 @@ raise DeployError("api", 1, message = "deployment failed")
 ```
 
 Any concrete built-in exception type is constructible with named arguments
-for its fields; `trace_id` is injected by the runtime and is not written
-in source when omitted. The same construction rule applies to user-declared
-exception types. `Abort` is the conventional type for user-initiated failures.
+for its fields. The same construction rule applies to user-declared exception
+types. `Abort` is the conventional type for user-initiated failures.
 
 Exception values support the
 [record update](expressions.md#record-update) operator. Field names are
@@ -222,7 +227,7 @@ catch Exception as e =>
 
 ## Built-in exception catalog
 
-Field lists below are in addition to the base `message` and `trace_id`.
+Field lists below are in addition to the base `message`.
 
 ### `AgentCallError`
 
@@ -230,18 +235,18 @@ An agent **transport** failure: the agent could not run. Not eligible for
 `on_parse_error` retries ([Agent calls](agent-calls.md)).
 
 ```text
-agent: text       # the callee name
+agent: Agent      # the selected backend
 cause: text       # "spawn_failure" | "nonzero_exit" | "timeout"
 metadata: json    # host details: exit code, stderr tail, elapsed seconds
 ```
 
 ### `AgentParseError`
 
-Structured agent (or typed `exec`) output failed parsing or validation after
-all attempts allowed by the parse policy.
+Structured agent output failed parsing or validation after all attempts
+allowed by the parse policy.
 
 ```text
-agent: text             # callee name ("exec" for shell calls)
+agent: Agent            # selected backend
 target_type: text       # the contract's target type, e.g. "Review"
 expected_schema: json   # the derived JSON Schema
 raw: text               # the last attempt's raw output
@@ -268,8 +273,8 @@ timed_out: bool
 
 ### `ExternError`
 
-An `extern def` call failed: the companion Python callable raised, or its
-return value did not conform to the extern's declared return type
+An `extern def` call failed: the companion Python callable raised, or returned
+a Python value that has no AgL boundary representation
 ([Python FFI](ffi.md)).
 
 ```text
@@ -328,6 +333,10 @@ operation: text    # the operator, e.g. "/"
 
 ### `TypeError`
 
+Raised by an engine-setting write the host cannot accept — a negative
+`max-iters`, or a `timeout` whose text is not a duration ([Host
+environment](host-environment.md#engine-settings)).
+
 ```text
 (base fields only)
 ```
@@ -363,10 +372,12 @@ name: text
 operation: text
 ```
 
-`TypeError`, `UndefinedVariableError`, and `ImmutableBindingError` are
-prevented statically in normal programs — type errors, reads of undefined
-names, and `:=` on immutable bindings are all static errors — but the types
-exist, are catchable, and may be constructed and raised explicitly.
+`UndefinedVariableError` and `ImmutableBindingError` are prevented statically
+in normal programs — reads of undefined names and `:=` on immutable bindings
+are both static errors — but the types exist, are catchable, and may be
+constructed and raised explicitly. So is a type error, which is why
+`TypeError` reaches a running program only from an engine-setting write whose
+value the host rejects.
 
 ### `CastError`
 
@@ -412,11 +423,11 @@ The general-purpose user abort; carries only the base fields.
 ### `CyclicValueError`
 
 Raised when rendering (`print`, `render`, string interpolation, REPL echo),
-`as text`, `as json`, or an `extern def` call walks a value with a genuine
-reference cycle. Carries only the base fields. See
-[Cycles](types.md#cycles) for how a cycle arises, which operations raise this
-and which tolerate a cycle instead (`as?`, `copy`), and how equality and
-tracing treat one.
+`as text`, or `as json` encounters a genuine reference cycle. A cyclic array
+or dict can be passed to an `extern def`; this error arises if its companion
+calls Python `repr()` on the corresponding view. Carries only the base fields. See [Cycles](types.md#cycles) for how
+a cycle arises, which operations raise this and which tolerate a cycle instead
+(`as?`, `copy`), and how equality and tracing treat one.
 
 ```text
 (base fields only)
@@ -439,9 +450,10 @@ tracing treat one.
 | Call-depth limit exceeded | `RecursionError` |
 | Explicit `raise MatchError(...)` | `MatchError` |
 | Division by zero | `ArithmeticError` |
+| Engine-setting write the host rejects (negative `max-iters`, unparseable `timeout`) | `TypeError` |
 | Fallible `as` cast — source does not conform to target type | `CastError` |
 | `parse_json` — input is not well-formed JSON | `JsonParseError` |
-| Rendering, `as text`, `as json`, or an `extern def` call walks a value with a reference cycle | `CyclicValueError` |
+| Rendering, `as text`, or `as json` encounters a reference cycle; or an extern companion `repr()`s the corresponding cyclic view | `CyclicValueError` |
 | `raise` of a constructed or re-raised value | any concrete type |
 
 An exception that reaches the top of the program uncaught terminates the

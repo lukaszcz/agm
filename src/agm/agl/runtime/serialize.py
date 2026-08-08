@@ -25,7 +25,6 @@ from typing import assert_never
 
 from agm.agl.semantics.cycles import CYCLIC_VALUE_MARKER, AglCyclicValue, enter_container
 from agm.agl.semantics.values import (
-    AgentValue,
     ArrayValue,
     BoolValue,
     ConstructorValue,
@@ -47,8 +46,8 @@ from agm.agl.semantics.values import (
 class AglNonDataValue(Exception):
     """Sentinel: a value kind with no JSON representation reached the walk.
 
-    Raised by :func:`value_to_json_obj` for ``unit``, ``agent``,
-    ``constructor``, ``function``, and ``iterator`` values — none of these
+    Raised by :func:`value_to_json_obj` for ``unit``, ``constructor``,
+    ``function``, and ``iterator`` values — none of these
     kinds has a JSON-shaped representation. ``kind`` is the user-facing kind
     name (not the Python class name), used to build the substituted marker
     text in :func:`degraded_marker`.
@@ -92,7 +91,7 @@ def value_to_json_obj(value: Value, active: "set[int] | None" = None) -> object:
     than recursing forever. Callers pass no *active* argument — it exists
     only to thread the walk's own recursive calls.
 
-    A ``unit``, ``agent``, ``constructor``, ``function``, or ``iterator``
+    A ``unit``, ``constructor``, ``function``, or ``iterator``
     value has no JSON representation at all; such a value raises
     :class:`AglNonDataValue` rather than a bare :class:`TypeError`, so a
     caller that can legitimately receive one (e.g. because it carries the
@@ -131,8 +130,6 @@ def value_to_json_obj(value: Value, active: "set[int] | None" = None) -> object:
         return {k: value_to_json_obj(v, active) for k, v in value.fields.items()}
     if isinstance(value, UnitValue):
         raise AglNonDataValue("unit")
-    if isinstance(value, AgentValue):
-        raise AglNonDataValue("agent")
     if isinstance(value, ConstructorValue):
         raise AglNonDataValue("constructor")
     if isinstance(value, IrClosureValue):

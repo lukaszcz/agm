@@ -1,0 +1,5 @@
+scope Config
+def show() -> int = 1
+end Config
+
+Config::show := 4

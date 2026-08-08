@@ -240,6 +240,15 @@ class TestResolveLogFileNewShape:
         assert result.is_absolute()
         assert result == tmp_path / "out.jsonl"
 
+    def test_trace_preparation_preserves_an_explicit_log_extension(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from agm.core.log import prepare_trace_log
+
+        monkeypatch.chdir(tmp_path)
+        path = prepare_trace_log(command_name="exec", enabled=True, log_file="trace.log")
+        assert path == tmp_path / "trace.log"
+
     def test_unique_flag_differentiates_paths(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -437,7 +446,6 @@ def _exec_args(
         command=command,
         param_tokens=[],
         strict_json=None,
-        runner=None,
         log=log,
         no_log=no_log,
         log_file=log_file,
@@ -468,7 +476,7 @@ class TestIntegrationLogFlagWritesTrace:
         exec_command.run(_exec_args('print "hello"', log=True))
         agent_files = tmp_path / ".agent-files"
         assert agent_files.exists()
-        log_files = list(agent_files.glob("exec-*.log"))
+        log_files = list(agent_files.glob("exec-*.jsonl"))
         assert len(log_files) == 1
 
     def test_explicit_log_file_path_used(
@@ -497,7 +505,7 @@ class TestIntegrationConfigLogTrue:
         exec_command.run(_exec_args('print "hello"'))
         agent_files = tmp_path / ".agent-files"
         assert agent_files.exists()
-        log_files = list(agent_files.glob("exec-*.log"))
+        log_files = list(agent_files.glob("exec-*.jsonl"))
         assert len(log_files) == 1
 
     def test_config_log_file_creates_trace_at_path(

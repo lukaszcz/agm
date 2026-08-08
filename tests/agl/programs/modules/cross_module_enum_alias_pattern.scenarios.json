@@ -2,16 +2,24 @@
   "scenarios": [
     {
       "name": "alias_qualified_pattern_matches_first_variant",
-      "module_roots": ["program_modules/modules/cross_module_enum_alias_pattern"],
-      "params": {"red": true},
+      "module_roots": [
+        "program_modules/modules/cross_module_enum_alias_pattern"
+      ],
+      "params": {
+        "red": true
+      },
       "expect": {
         "stdout": "red\n"
       }
     },
     {
       "name": "alias_qualified_pattern_matches_second_variant",
-      "module_roots": ["program_modules/modules/cross_module_enum_alias_pattern"],
-      "params": {"red": false},
+      "module_roots": [
+        "program_modules/modules/cross_module_enum_alias_pattern"
+      ],
+      "params": {
+        "red": false
+      },
       "expect": {
         "stdout": "green\n"
       }

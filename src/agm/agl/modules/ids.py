@@ -40,11 +40,6 @@ class ModuleId:
         """Return ``True`` if this is the distinguished entry-module sentinel."""
         return _ENTRY_SEGMENT in self.segments
 
-    @property
-    def is_prelude(self) -> bool:
-        """Return ``True`` if this is the distinguished prelude sentinel."""
-        return _PRELUDE_SEGMENT in self.segments
-
     # ------------------------------------------------------------------
     # String representations
     # ------------------------------------------------------------------
@@ -57,8 +52,6 @@ class ModuleId:
         """Return a user-facing module label that never exposes sentinel bytes."""
         if self.is_entry:
             return "<entry>"
-        if self.is_prelude:
-            return "<prelude>"
         return self.path_str()
 
     def synthetic_name_component(self) -> str:
@@ -137,20 +130,12 @@ def spell_declaration(
 #: via :meth:`ModuleId.from_path`.  Use ``module_id.is_entry`` to test.
 ENTRY_ID: ModuleId = ModuleId(segments=(_ENTRY_SEGMENT,))
 
-# Reserved segment used exclusively in the PRELUDE_ID sentinel.  Contains a NUL
-# byte (different from _ENTRY_SEGMENT) so it cannot collide with any real module
-# or with ENTRY_ID.
-_PRELUDE_SEGMENT = "\x00prelude"
-
-#: Distinguished sentinel representing the built-in prelude / standard library.
-#: Used as the ``module_id`` component of :class:`~agm.agl.ir.ids.NominalId`
-#: for all built-in exception types (``RecursionError``, ``IndexError``,
-#: ``AgentParseError``, etc.) and other prelude nominals that have no source
-#: module.  Its reserved segment contains a NUL byte and can never be produced
-#: by :meth:`ModuleId.from_path`.
-PRELUDE_ID: ModuleId = ModuleId(segments=(_PRELUDE_SEGMENT,))
-
-#: Logical module id for the shipped core standard library.
+#: Logical module id for the shipped core standard library.  Every built-in
+#: type and function (``ExecResult``, every built-in exception, ``exec``,
+#: ``ask``, ...) is declared here (``stdlib/std/core.agl``); a program that
+#: declares nothing of its own for a built-in name is answered with this
+#: module's own identity for it (see
+#: :class:`~agm.agl.ir.builtin_nominals.BuiltinNominals`).
 STD_CORE_ID: ModuleId = ModuleId(segments=("std", "core"))
 
 #: Logical module id for the shipped engine-settings standard library

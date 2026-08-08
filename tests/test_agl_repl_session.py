@@ -12,6 +12,7 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import Mapping
 from pathlib import Path
+from shutil import copyfile
 from unittest.mock import patch
 
 import pytest
@@ -39,9 +40,12 @@ from agm.agl.semantics.values import (
     ArrayValue,
     BoolValue,
     IntValue,
+    RecordValue,
     TextValue,
     UnitValue,
 )
+from tests._agl_helpers import strip_decl_ids
+from tests._process_helpers import FakeShell
 
 # ---------------------------------------------------------------------------
 # Fake agents
@@ -73,6 +77,8 @@ def _literal_for_type(typ: Type) -> str:
         return "{}"
     if isinstance(typ, EnumType) and typ.name == "Option":
         return "None"
+    if isinstance(typ, EnumType) and typ.name == "Agent":
+        return 'AgentCommand("x")'
     raise AssertionError(f"no test literal for {typ!r}")
 
 
@@ -114,6 +120,17 @@ class TestPersistence:
         result = s.eval_entry("let box: A::Box[int] = A::Box(value = 1)")
 
         assert result.ok, result.diagnostics
+
+    def test_builtin_agent_method_is_callable_across_entries(self) -> None:
+        agent = CountingAgent("42")
+        session = ReplSession(agent_dispatcher=agent)
+        assert session.eval_entry('let worker = AgentCommand("worker")').ok
+
+        result = session.eval_entry('worker.ask::[int]("How many?")')
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(42)
+        assert agent.calls == 1
 
     def test_method_declared_after_its_type_is_callable_in_a_later_entry(self) -> None:
         session = ReplSession()
@@ -536,6 +553,321 @@ class TestPersistence:
 
 
 # ---------------------------------------------------------------------------
+# Scoped binding retention
+# ---------------------------------------------------------------------------
+
+
+class TestScopedBindingRetention:
+    """A scoped ``let``/``var``/``param`` retains across REPL entries.
+
+    Mirrors how scoped declarations (``def``, types) already retain by path
+    atom in ``TestPersistence`` above: a same-path binding declared later
+    replaces the retained one, region and shorthand spellings retain
+    identically, and a same-entry duplicate is still an error.
+    """
+
+    def test_region_form_binding_visible_bare_and_by_path_in_a_later_entry(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope A\nlet x = 1\nend A").ok
+
+        bare = s.eval_entry("scope A\ndef read() -> int = x\nend A")
+        by_path = s.eval_entry("A::x")
+
+        assert bare.ok, bare.diagnostics
+        assert by_path.ok, by_path.diagnostics
+        assert by_path.value == IntValue(1)
+        call = s.eval_entry("A::read()")
+        assert call.ok, call.diagnostics
+        assert call.value == IntValue(1)
+
+    def test_shorthand_form_binding_visible_bare_and_by_path_in_a_later_entry(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("let A::y = 2").ok
+
+        bare = s.eval_entry("scope A\ndef read() -> int = y\nend A")
+        by_path = s.eval_entry("A::y")
+
+        assert bare.ok, bare.diagnostics
+        assert by_path.ok, by_path.diagnostics
+        assert by_path.value == IntValue(2)
+        call = s.eval_entry("A::read()")
+        assert call.ok, call.diagnostics
+        assert call.value == IntValue(2)
+
+    def test_region_and_shorthand_forms_retain_identically(self) -> None:
+        region = ReplSession()
+        assert region.eval_entry("scope A\nlet x = 1\nend A").ok
+        region_result = region.eval_entry("A::x")
+
+        shorthand = ReplSession()
+        assert shorthand.eval_entry("let A::x = 1").ok
+        shorthand_result = shorthand.eval_entry("A::x")
+
+        assert region_result.ok, region_result.diagnostics
+        assert shorthand_result.ok, shorthand_result.diagnostics
+        assert region_result.value == shorthand_result.value == IntValue(1)
+
+    def test_redeclaring_a_retained_scoped_binding_replaces_it(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("let A::x = 1").ok
+
+        replaced = s.eval_entry("let A::x = 99")
+        result = s.eval_entry("A::x")
+
+        assert replaced.ok, replaced.diagnostics
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(99)
+
+    def test_same_entry_duplicate_scoped_binding_is_still_an_error(self) -> None:
+        s = ReplSession()
+
+        result = s.eval_entry("scope A\nlet z = 1\nlet z = 2\nend A")
+
+        assert not result.ok
+
+    def test_same_entry_duplicate_still_errors_after_a_prior_entry_retained_it(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("let A::x = 1").ok
+
+        result = s.eval_entry("scope A\nlet z = 2\nlet z = 3\nend A")
+
+        assert not result.ok
+
+    def test_shorthand_scoped_let_does_not_leak_into_the_bare_root_name(self) -> None:
+        """A shorthand ``let A::x`` must not promote as a root binding named ``x``."""
+        s = ReplSession()
+        assert s.eval_entry("let A::x = 2").ok
+
+        bare = s.eval_entry("x")
+
+        assert not bare.ok
+
+    def test_shorthand_scoped_let_does_not_replace_an_existing_root_binding(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("let x = 1").ok
+        assert s.eval_entry("let A::x = 2").ok
+
+        root = s.eval_entry("x")
+        scoped = s.eval_entry("A::x")
+
+        assert root.ok, root.diagnostics
+        assert scoped.ok, scoped.diagnostics
+        assert root.value == IntValue(1)
+        assert scoped.value == IntValue(2)
+
+    def test_region_form_redeclaration_across_entries_replaces_the_retained_member(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope A\nlet x = 1\nend A").ok
+
+        replaced = s.eval_entry("scope A\nlet x = 99\nend A")
+        result = s.eval_entry("A::x")
+
+        assert replaced.ok, replaced.diagnostics
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(99)
+
+    def test_cross_kind_replacement_from_binding_to_declaration(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("let A::x = 1").ok
+
+        replaced = s.eval_entry("def A::x() -> int = 2")
+        result = s.eval_entry("A::x()")
+
+        assert replaced.ok, replaced.diagnostics
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(2)
+
+    def test_cross_kind_replacement_from_declaration_to_binding(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("def A::x() -> int = 2").ok
+
+        replaced = s.eval_entry("let A::x = 1")
+        result = s.eval_entry("A::x")
+
+        assert replaced.ok, replaced.diagnostics
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(1)
+
+    def test_retained_member_cannot_be_reopened_as_a_nested_scope(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope A\nlet B = 1\nend A").ok
+
+        reopened = s.eval_entry("scope A::B\nlet x = 2\nend A::B")
+
+        assert not reopened.ok
+        original = s.eval_entry("A::B")
+        assert original.ok, original.diagnostics
+        assert original.value == IntValue(1)
+
+    def test_same_named_bindings_at_different_paths_coexist_and_stay_distinct(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("let A::x = 1").ok
+        assert s.eval_entry("let B::x = 2").ok
+
+        a = s.eval_entry("A::x")
+        b = s.eval_entry("B::x")
+
+        assert a.ok, a.diagnostics
+        assert b.ok, b.diagnostics
+        assert a.value == IntValue(1)
+        assert b.value == IntValue(2)
+
+    def test_redeclaring_one_path_does_not_disturb_a_same_named_sibling_path(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("let A::x = 1").ok
+        assert s.eval_entry("let B::x = 2").ok
+        assert s.eval_entry("let A::x = 100").ok
+
+        a = s.eval_entry("A::x")
+        b = s.eval_entry("B::x")
+
+        assert a.ok, a.diagnostics
+        assert b.ok, b.diagnostics
+        assert a.value == IntValue(100)
+        assert b.value == IntValue(2)
+
+    def test_retained_scoped_var_assignable_by_path_in_a_later_entry(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope A\nvar counter = 0\nend A").ok
+
+        assign = s.eval_entry("A::counter := A::counter + 1")
+        result = s.eval_entry("A::counter")
+
+        assert assign.ok, assign.diagnostics
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(1)
+
+    def test_retained_scoped_var_assignable_bare_after_open_in_a_later_entry(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope A\nvar counter = 0\nend A").ok
+        assert s.eval_entry("A::counter := 5").ok
+
+        assign = s.eval_entry("open A\ncounter := counter + 1")
+        result = s.eval_entry("A::counter")
+
+        assert assign.ok, assign.diagnostics
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(6)
+
+    def test_retained_open_sees_a_member_promoted_by_a_later_entry(self) -> None:
+        """An ``open`` recorded in one entry still resolves a member a later
+        entry's promotion adds to the opened path, live rather than from
+        whatever the path held when the ``open`` itself was promoted."""
+        s = ReplSession()
+        assert s.eval_entry("scope A\nvar x = 1\nend A").ok
+        assert s.eval_entry("open A").ok
+        assert s.eval_entry("scope A\nvar y = 2\nend A").ok
+
+        result = s.eval_entry("y")
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(2)
+
+    def test_scoped_declarations_and_bindings_coexist_at_one_path(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("let A::x = 1").ok
+
+        added = s.eval_entry("scope A\ndef doubled() -> int = x * 2\nend A")
+        result = s.eval_entry("A::doubled()")
+
+        assert added.ok, added.diagnostics
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(2)
+
+    def test_reset_clears_retained_scoped_bindings(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("let A::x = 1").ok
+
+        s.reset()
+
+        after_reset = s.eval_entry("A::x")
+        redeclared = s.eval_entry("let A::x = 7")
+
+        assert not after_reset.ok
+        assert redeclared.ok, redeclared.diagnostics
+        assert redeclared.value == IntValue(7)
+
+    def test_echo_distinguishes_a_root_binding_from_a_scoped_one(self) -> None:
+        s = ReplSession()
+
+        root = s.eval_entry("let x = 10")
+        scoped = s.eval_entry("let A::x = 20")
+
+        assert root.ok, root.diagnostics
+        assert scoped.ok, scoped.diagnostics
+        assert root.name == "x"
+        assert scoped.name == "A::x"
+
+
+# ---------------------------------------------------------------------------
+# Cross-entry scope/member collisions
+# ---------------------------------------------------------------------------
+
+
+class TestCrossEntryScopeCollision:
+    """A member cannot claim a name owned by a retained nested scope layer.
+
+    Mirrors the same-entry rule (a binding, a ``def``, a type, and a nested
+    scope all collide at one path) across REPL entries: a name that a prior
+    entry established as a nested scope's own path is not free for a later
+    entry to claim as an ordinary member, for either the shorthand ``let`` or
+    the shorthand ``def`` spelling.
+    """
+
+    def test_shorthand_let_cannot_claim_a_retained_nested_scopes_path(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope A\nscope B\ndef q() -> int = 2\nend B\nend A").ok
+
+        result = s.eval_entry("let A::B = 1")
+
+        assert not result.ok
+        still_reachable = s.eval_entry("A::B::q()")
+        assert still_reachable.ok, still_reachable.diagnostics
+        assert still_reachable.value == IntValue(2)
+
+    def test_shorthand_def_cannot_claim_a_retained_nested_scopes_path(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope A\nscope B\ndef q() -> int = 2\nend B\nend A").ok
+
+        result = s.eval_entry("def A::B() -> int = 1")
+
+        assert not result.ok
+        still_reachable = s.eval_entry("A::B::q()")
+        assert still_reachable.ok, still_reachable.diagnostics
+        assert still_reachable.value == IntValue(2)
+
+    def test_type_declared_at_a_retained_scopes_path_keeps_the_scopes_own_members(self) -> None:
+        """A type declared at a path a scope previously occupied does not disturb it.
+
+        Scope paths are namespaces, independent of whichever declaration (if
+        any) occupies that path as a nominal type: a record declared at
+        ``A::B`` shares the namespace position with a function ``A::B::q``
+        declared there earlier, rather than colliding with or displacing it.
+        """
+        s = ReplSession()
+        assert s.eval_entry("scope A\nscope B\ndef q() -> int = 2\nend B\nend A").ok
+        assert s.eval_entry("record A::B()").ok
+
+        result = s.eval_entry("A::B::q()")
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(2)
+
+    def test_unknown_member_of_a_retained_type_path_reports_a_diagnostic_not_a_crash(
+        self,
+    ) -> None:
+        """A qualified reference into a retained type path for a name the type
+        does not own must be a normal diagnostic, not an internal crash."""
+        s = ReplSession()
+        assert s.eval_entry("record A::B()").ok
+
+        result = s.eval_entry("A::B::x")
+
+        assert not result.ok
+        assert any("not a member of 'A::B'" in d.message for d in result.diagnostics)
+
+
+# ---------------------------------------------------------------------------
 # Standard library
 # ---------------------------------------------------------------------------
 
@@ -630,15 +962,964 @@ class TestStdlib:
                 assert not result.ok
                 assert any("abstract" in diagnostic.message for diagnostic in result.diagnostics)
                 continue
-            fields = {
-                field_name: field_type
-                for field_name, field_type in table.exception_fields(typ).items()
-                if field_name != "trace_id"
-            }
+            fields = table.exception_fields(typ)
             result = s.eval_entry(f"{name}({_constructor_args(fields)})")
             assert result.ok, (name, result.diagnostics)
             assert result.value_type is not None
             assert result.value_type.name == name
+
+
+# ---------------------------------------------------------------------------
+# Builtin identity across REPL entries
+# ---------------------------------------------------------------------------
+
+_EXEC_RESULT_FIELDS = "  stdout: text\n  exit_code: int\n  stderr: text\n  timed_out: bool\n"
+
+_AGENT_VARIANTS = (
+    "  | AgentCommand(command: text)\n"
+    "  | AgentClaude(model: text, thinking: text)\n"
+    "  | AgentCodex(model: text, thinking: text)\n"
+    "  | AgentPi(provider: text, model: text, thinking: text)\n"
+)
+
+_AGENT_REQUEST_FIELDS = (
+    "  agent: Agent\n"
+    "  prompt: text\n"
+    "  target_type: Option[text]\n"
+    "  format_instructions: Option[text]\n"
+    "  json_schema: Option[json]\n"
+    "  attempt: int\n"
+    "  previous_error: Option[text]\n"
+    "  metadata: json\n"
+)
+
+_PARSE_POLICY_VARIANTS = "  | Abort\n  | Retry(n: int)\n"
+
+# A plain (non-``builtin``) ``Option`` declaration, shaped like the standard
+# library's own, for arrangements that declare their own host-contract types
+# without loading the standard library: ``AgentRequest``'s canonical shape
+# uses ``Option``-typed fields, and ``Option`` itself is an ordinary type the
+# standard library happens to define -- never a ``builtin`` name of its own --
+# so a program without the standard library must supply an equivalent one.
+_OPTION_DECL = "enum Option[T] =\n  | None\n  | Some(value: T)\n"
+
+
+def _session_with_import_root(root: Path) -> ReplSession:
+    """Create a ``ReplSession`` with *root* as the only module search root."""
+    from agm.agl.modules.roots import assemble_roots
+
+    roots = assemble_roots(
+        invocation_root=root,
+        stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+        lib_root=None,
+        configured=[],
+        cli=[],
+        cwd=root,
+    )
+    s = ReplSession()
+    s._roots = roots  # inject roots directly
+    return s
+
+
+class TestBuiltinIdentityAcrossEntries:
+    """A REPL session's shared ``TypeTable`` accumulates ``builtin`` declarations
+    across entries even though each entry re-checks only its own text. Both the
+    link image that mints host values and the bare-name scan that types an
+    unannotated ``exec()`` must track that accumulation instead of seeing only
+    the current entry (which loses an earlier entry's declaration) or the
+    first-ever entry (which keeps a stale one alive over a later redeclaration).
+    """
+
+    def test_host_minted_value_keeps_the_scoped_identity_declared_in_an_earlier_entry(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A value minted for a ``builtin`` type declared in one entry keeps that
+        entry's own scoped identity when a LATER entry -- which re-checks only
+        its own text -- mints a value of that type; it must not fall back to the
+        shipped standard library's identity just because the later entry itself
+        declares nothing."""
+        s = ReplSession(default_stdlib=False)
+        declare = s.eval_entry(
+            "scope Stdlib\n"
+            f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
+            "builtin def print[T](value: T) -> unit\n"
+            "builtin def exec(command: text) -> ExecResult\n"
+            "end Stdlib\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        shell = FakeShell([{"command": "echo hey", "stdout": "hey"}])
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            call = s.eval_entry('Stdlib::print(Stdlib::exec("echo hey"))')
+        shell.assert_complete()
+
+        assert call.ok, call.diagnostics
+        assert capsys.readouterr().out.strip() == (
+            'Stdlib::ExecResult(stdout = "hey", exit_code = 0, stderr = "", timed_out = false)'
+        )
+
+    def test_unannotated_exec_types_as_the_most_recently_declared_builtin(self) -> None:
+        """The bare-name scan behind a program's own ``ExecResult`` identity must
+        resolve to the LIVE (most recently registered) declaration, not the
+        oldest surviving one, when two entries each declare their own scoped
+        ``builtin record ExecResult``."""
+        s = ReplSession(default_stdlib=False)
+        first = s.eval_entry(
+            "scope A\n"
+            f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
+            "builtin def exec(command: text) -> ExecResult\n"
+            "end A\n"
+        )
+        second = s.eval_entry(
+            "scope B\n"
+            f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
+            "builtin def exec(command: text) -> ExecResult\n"
+            "end B\n"
+        )
+        assert first.ok, first.diagnostics
+        assert second.ok, second.diagnostics
+
+        result = s.eval_entry('B::exec("echo hi")', check_only=True)
+
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value_type, RecordType)
+        assert result.value_type.scope_path == ("B",)
+
+    def test_unpromoted_builtin_exception_declaration_does_not_type_a_later_catch_clause(
+        self,
+    ) -> None:
+        """A ROOT ``builtin exception`` declaration the entry never promoted
+        must not steer a later ``catch`` clause or the host's raise identity
+        -- the exception-shaped counterpart of
+        ``TestRedefinition.test_unpromoted_builtin_declaration_does_not_type_a_later_host_call``.
+        Its own rollback path (``TypeEnvironment.restore_type_names_from``)
+        must not skip a reserved name just because such a name is normally
+        non-shadowable: it can appear among an entry's own unpromoted names
+        only when that entry itself wrote the ``builtin`` declaration.
+
+        Declared without the standard library and at ROOT: a root reserved
+        name always conflicts with the standard library's own root
+        declaration once loaded (see
+        ``TestBuiltinIdentityWithStandardLibrary``), and a SCOPED name is
+        never in ``restore_type_names_from``'s reserved-name set to begin
+        with (it is keyed by the joined ``scope::name`` spelling, never the
+        bare reserved one), so only a root declaration without the standard
+        library actually exercises the skip this audit fixed.
+        """
+        s = ReplSession(default_stdlib=False)
+        failed = s.eval_entry(
+            'let stop: int = raise Abort(message = "stop")\n'
+            "builtin exception RangeError extends Exception()"
+        )
+        assert not failed.ok
+        # A RUNTIME (partial-promotion) failure, not a static rejection --
+        # confirms this actually reached `restore_type_names_from` rather
+        # than failing before any declaration could even be checked.
+        assert failed.error is not None
+
+        result = s.eval_entry(
+            "let step = 0\n"
+            "try\n"
+            "  for i in 1 to 5 by step do\n"
+            "    ()\n"
+            "  done\n"
+            "catch RangeError as error =>\n"
+            "  ()"
+        )
+        assert result.ok, result.diagnostics
+        assert result.error is None
+
+    def test_unpromoted_builtin_record_declaration_does_not_displace_the_live_one(
+        self,
+    ) -> None:
+        """An entry that redeclares a ROOT ``builtin record`` and then fails at
+        runtime must leave the session's EARLIER declaration of that name in
+        force: a later host call keeps minting the identity values already in
+        the session carry, so comparing an old value against a fresh one is
+        still a comparison of one type against itself.
+
+        This is the rollback direction ``restore_type_names_from`` owns.
+        Skipping a reserved bare name there instead leaves the unpromoted
+        redeclaration holding the name, and the session then reports two
+        identically-spelled ``ExecResult`` types as incomparable.
+        """
+        s = ReplSession(default_stdlib=False)
+        declare = s.eval_entry(
+            f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
+            "builtin def exec(command: text) -> ExecResult\n"
+            "builtin\nexception Exception\n  *\n  message: text\n"
+            "builtin exception Abort extends Exception()\n"
+        )
+        assert declare.ok, declare.diagnostics
+        original = s.eval_entry(
+            'let a = ExecResult(stdout = "hi", exit_code = 0, stderr = "", timed_out = false)'
+        )
+        assert original.ok, original.diagnostics
+        assert isinstance(original.value_type, RecordType)
+
+        failed = s.eval_entry(
+            'let stop: int = raise Abort(message = "stop")\n'
+            f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
+        )
+        assert not failed.ok
+        # A RUNTIME (partial-promotion) failure, so the redeclaration was
+        # checked and then rolled back rather than rejected outright.
+        assert failed.error is not None
+
+        shell = FakeShell(stdout="hi")
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            minted = s.eval_entry('let b = exec("echo hi")')
+        assert minted.ok, minted.diagnostics
+        assert isinstance(minted.value_type, RecordType)
+        assert minted.value_type.decl_id == original.value_type.decl_id
+
+        equal = s.eval_entry("a == b")
+        assert equal.ok, equal.diagnostics
+        assert equal.value == BoolValue(True)
+
+
+# ---------------------------------------------------------------------------
+# Builtin identity vs. the standard library's own canonical declarations
+# ---------------------------------------------------------------------------
+
+
+class TestBuiltinIdentityWithStandardLibrary:
+    """A program's own ``builtin`` declaration of a reserved name must win the
+    bare-name resolution the checker and the host both use, even though the
+    standard library's own root declaration of the same name is ALSO
+    registered in the shared ``TypeTable`` once the default standard library
+    is loaded. Before the fix, the checker's and the host's independent
+    resolutions disagreed whenever both were present: the checker picked the
+    program's own declaration (a forward scan that sees it registered last)
+    while the host picked whichever module's AST happened to be walked last
+    -- silently falling back to the standard library's own identity even
+    though the checker was typing calls against the program's own one.
+
+    A ROOT ``builtin`` declaration of a reserved name is always rejected once
+    the standard library is loaded (``validate_builtin_declaration_uniqueness``
+    keys uniqueness on scope path + name alone, so a root declaration
+    unconditionally collides with the standard library's own root one, in
+    any module); every scenario below that needs a root declaration to
+    succeed therefore runs without the standard library, and the "declared
+    with the standard library" arrangement is instead covered by the
+    dedicated rejection test, which applies identically to every ``builtin``
+    kind since they all share that one uniqueness check.
+    """
+
+    def test_root_builtin_declaration_conflicts_with_the_standard_librarys_own(
+        self,
+    ) -> None:
+        """A root ``builtin`` declaration of a reserved name always collides
+        with the standard library's own root declaration of it -- a
+        pre-existing invariant this fix leaves untouched, so "declared at
+        root with the standard library loaded" is a rejection, not a
+        success, for every ``builtin`` kind (record/enum/exception share one
+        uniqueness namespace)."""
+        s = ReplSession()
+        declare = s.eval_entry(f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}")
+        assert not declare.ok
+        assert any("ExecResult" in d.message for d in declare.diagnostics)
+
+    def test_scoped_builtin_record_declared_with_stdlib_types_and_mints_consistently(
+        self,
+    ) -> None:
+        """The reported crash: with the scoped declaration losing the
+        bare-name race, ``a.field`` raised an internal nominal-mismatch error
+        and ``a == b`` was wrongly ``False`` even though ``a`` and ``b`` name
+        the identical declaration."""
+        s = ReplSession()
+        declare = s.eval_entry(f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n")
+        assert declare.ok, declare.diagnostics
+
+        shell = FakeShell(stdout="hi")
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            result = s.eval_entry('let a = exec("echo hi")')
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value_type, RecordType)
+        assert result.value_type.scope_path == ("A",)
+
+        ctor = s.eval_entry(
+            'let b = A::ExecResult(stdout = "hi", exit_code = 0, stderr = "", timed_out = false)'
+        )
+        assert ctor.ok, ctor.diagnostics
+        equal = s.eval_entry("let c = a == b")
+        assert equal.ok, equal.diagnostics
+        assert equal.value == BoolValue(True)
+
+        field = s.eval_entry("a.exit_code")
+        assert field.ok, field.diagnostics
+        assert field.value == IntValue(0)
+
+    def test_root_builtin_record_declared_without_stdlib_types_and_mints_consistently(
+        self,
+    ) -> None:
+        s = ReplSession(default_stdlib=False)
+        declare = s.eval_entry(
+            f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
+            "builtin def exec(command: text) -> ExecResult\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        shell = FakeShell(stdout="hi")
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            result = s.eval_entry('let a = exec("echo hi")')
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value_type, RecordType)
+        assert result.value_type.scope_path == ()
+
+        ctor = s.eval_entry(
+            'let b = ExecResult(stdout = "hi", exit_code = 0, stderr = "", timed_out = false)'
+        )
+        assert ctor.ok, ctor.diagnostics
+        equal = s.eval_entry("a == b")
+        assert equal.ok, equal.diagnostics
+        assert equal.value == BoolValue(True)
+
+    def test_scoped_builtin_exception_declared_with_stdlib_is_caught_by_its_own_identity(
+        self,
+    ) -> None:
+        """The ``builtin exception`` counterpart of the scoped-record repro
+        above. ``catch`` names an exception type by ordinary LEXICAL name
+        resolution (unlike ``exec``'s bare-name-anywhere default type), so
+        the catching ``def`` is declared inside the same scope as the
+        declaration -- exactly like the shipped standard library's own
+        exception-catching code would be -- while the RAISED value's
+        identity still comes from the host's scope-agnostic bare-name mint,
+        which is what this fix keeps in agreement with it."""
+        s = ReplSession()
+        declare = s.eval_entry(
+            "scope A\n"
+            "builtin exception RangeError extends Exception()\n"
+            "def trigger(step: int) -> unit =\n"
+            "  try\n"
+            "    for i in 1 to 5 by step do\n"
+            "      ()\n"
+            "    done\n"
+            "  catch RangeError as error =>\n"
+            "    ()\n"
+            "end A\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        result = s.eval_entry("A::trigger(0)")
+        assert result.ok, result.diagnostics
+        assert result.error is None
+
+    def test_later_entry_builtin_declaration_does_not_retype_an_earlier_hosts_mint(
+        self,
+    ) -> None:
+        """A value the host minted BEFORE a program declared its own
+        ``builtin record`` keeps its own (canonical) identity; only a mint
+        AFTER the declaration picks up the program's own one, and the two
+        are unrelated nominal types -- the same supersession semantics an
+        ordinary record redeclaration already has."""
+        s = ReplSession()
+        shell = FakeShell(stdout="hi")
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            before = s.eval_entry('let a = exec("echo hi")')
+        assert before.ok, before.diagnostics
+        assert isinstance(before.value_type, RecordType)
+        before_decl_id = before.value_type.decl_id
+
+        declare = s.eval_entry(f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n")
+        assert declare.ok, declare.diagnostics
+
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            after = s.eval_entry('let b = exec("echo hi")')
+        assert after.ok, after.diagnostics
+        assert isinstance(after.value_type, RecordType)
+        assert after.value_type.decl_id != before_decl_id
+        assert after.value_type.scope_path == ("A",)
+
+        still_reads_old_field = s.eval_entry("a.exit_code")
+        cross = s.eval_entry("a == b")
+        assert still_reads_old_field.ok, still_reads_old_field.diagnostics
+        assert still_reads_old_field.value == IntValue(0)
+        assert not cross.ok  # unrelated nominal types: a static error, not False
+
+
+# ---------------------------------------------------------------------------
+# Builtin identity across imported library modules
+# ---------------------------------------------------------------------------
+
+
+class TestBuiltinIdentityAcrossModules:
+    """A ``builtin`` declaration inside an imported library module must type
+    and mint through the exact same shared ``TypeTable`` resolution as one
+    written directly in the entry: the host and the checker both read
+    whichever declaration the table's bare-name resolution currently
+    answers with, regardless of which module wrote it. Every declaration
+    below is scoped: an unscoped one would collide with the standard
+    library's own root declaration (see
+    ``TestBuiltinIdentityWithStandardLibrary``), and two unscoped
+    declarations from different modules would collide with EACH OTHER --
+    ``validate_builtin_declaration_uniqueness`` keys uniqueness on scope path
+    + name only, ignoring which module a declaration came from.
+    """
+
+    def _make_session_with_root(self, root: Path) -> ReplSession:
+        """Create a ReplSession with *root* as the only module search root."""
+        return _session_with_import_root(root)
+
+    def test_builtin_declared_in_an_imported_library_module_types_and_mints_consistently(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "lib.agl").write_text(
+            f"scope Lib\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end Lib\n"
+        )
+        s = self._make_session_with_root(tmp_path)
+        declare = s.eval_entry("import lib")
+        assert declare.ok, declare.diagnostics
+
+        shell = FakeShell(stdout="hi")
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            result = s.eval_entry('let a = exec("echo hi")')
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value_type, RecordType)
+        assert isinstance(result.value, RecordValue)
+        assert result.value.nominal.value == result.value_type.decl_id
+
+        ctor = s.eval_entry(
+            'let b = lib::Lib::ExecResult(stdout = "hi", exit_code = 0, stderr = "", '
+            "timed_out = false)"
+        )
+        assert ctor.ok, ctor.diagnostics
+        equal = s.eval_entry("a == b")
+        assert equal.ok, equal.diagnostics
+        assert equal.value == BoolValue(True)
+
+    def test_two_modules_declaring_the_same_bare_builtin_name_still_agree_on_identity(
+        self, tmp_path: Path
+    ) -> None:
+        """Two imported modules, each with their own scoped ``builtin record
+        ExecResult`` (at different scope paths, so neither collides with the
+        other), leave the shared ``TypeTable``'s bare-name tie-break to pick
+        a winner (last-registered, unaffected by this fix -- see
+        ``TypeTable.builtin_declaration``); what this fix guarantees is that
+        the checker and the host agree on whichever declaration that is, not
+        which declaration wins."""
+        (tmp_path / "lib_a.agl").write_text(
+            f"scope X\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end X\n"
+        )
+        (tmp_path / "lib_b.agl").write_text(
+            f"scope Y\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end Y\n"
+        )
+        s = self._make_session_with_root(tmp_path)
+        declare = s.eval_entry("import lib_a\nimport lib_b")
+        assert declare.ok, declare.diagnostics
+
+        shell = FakeShell(stdout="hi")
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            result = s.eval_entry('let a = exec("echo hi")')
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value_type, RecordType)
+        assert isinstance(result.value, RecordValue)
+        assert result.value.nominal.value == result.value_type.decl_id
+
+
+# ---------------------------------------------------------------------------
+# Builtin identity for the other host-contract nominals: ``AgentRequest``
+# (``ask-request``'s result), ``Agent`` (the ``agent`` argument to
+# ``ask``/``ask-request``), and ``ParsePolicy`` (``on_parse_error``).
+#
+# Every one of these resolutions goes through a program's own ``builtin``
+# declaration of the name (``BuiltinCallChecker._builtin_contract_type``), so
+# the identity a host call is typed against is always the identity the host
+# actually mints. The classes below are the direct counterparts of
+# ``TestBuiltinIdentity*`` above, covering the same arrangements
+# (root/scoped, with/without the standard library, same-entry/earlier-entry/
+# imported-module declarations, and the no-declaration-at-all regression)
+# for each of the three.
+# ---------------------------------------------------------------------------
+
+
+class TestAgentRequestBuiltinIdentity:
+    """``ask-request``'s result type (``BuiltinCallChecker.check_ask_request``)."""
+
+    def test_scoped_agent_request_declared_with_stdlib_types_and_mints_consistently(self) -> None:
+        """The reported crash: with the scoped declaration losing the
+        bare-name race, ``q.prompt`` raised an internal nominal-mismatch
+        error even though ``q`` was minted against that very declaration."""
+        s = ReplSession()
+        declare = s.eval_entry(
+            f"scope A\nbuiltin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}end A\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        result = s.eval_entry('let q = ask-request("hi")')
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value_type, RecordType)
+        assert result.value_type.scope_path == ("A",)
+
+        field = s.eval_entry("q.prompt")
+        assert field.ok, field.diagnostics
+        assert field.value == TextValue("hi")
+
+    def test_agent_request_declared_in_the_same_entry_as_the_ask_request_call(self) -> None:
+        s = ReplSession()
+        result = s.eval_entry(
+            f"scope A\nbuiltin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}end A\n"
+            'let q = ask-request("hi")'
+        )
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value_type, RecordType)
+        assert result.value_type.scope_path == ("A",)
+
+    def test_scoped_agent_and_agent_request_declared_together_with_agent_omitted_rejected(
+        self,
+    ) -> None:
+        """Both ``Agent`` and ``AgentRequest`` declared together at the same
+        scope, with the ``agent`` argument OMITTED entirely: the host still
+        fills the field from the canonical default agent regardless, into a
+        field statically typed as this scope's own ``Agent`` -- the contract
+        is incoherent whether or not a value is explicitly supplied for the
+        argument that field holds."""
+        s = ReplSession()
+        declare = s.eval_entry(
+            f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}"
+            f"builtin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}end A\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        result = s.eval_entry('let q = ask-request("hi")')
+        assert not result.ok
+        assert any("AgentRequest" in d.message and "agent" in d.message for d in result.diagnostics)
+
+    def test_root_agent_request_declared_without_stdlib_rejected_as_incoherent(self) -> None:
+        """Without the standard library, a root ``AgentRequest`` whose own
+        ``agent`` field types to this program's own root ``Agent`` (the only
+        ``Agent`` there is here, since nothing seeds a canonical one without
+        the standard library) is an incoherent contract: the host always
+        fills that field with the standard ``Agent`` identity, never
+        whatever declaration the contract's own field type happens to name,
+        so the call is rejected rather than minting a value whose identity
+        disagrees with its static field type."""
+        s = ReplSession(default_stdlib=False)
+        declare = s.eval_entry(
+            f"{_OPTION_DECL}"
+            f"builtin\nenum Agent\n{_AGENT_VARIANTS}"
+            f"builtin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}"
+            'builtin def ask-request(prompt: text, agent: Agent = AgentCommand(command = "noop")) '
+            "-> AgentRequest\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        # No standard library, so ``std/config::default-agent`` -- the
+        # ``agent`` parameter's canonical default -- was never declared;
+        # supplying ``agent`` explicitly is unrelated to the fix under test.
+        result = s.eval_entry('let q = ask-request("hi", agent = AgentCommand(command = "noop"))')
+        assert not result.ok
+        assert any("AgentRequest" in d.message and "agent" in d.message for d in result.diagnostics)
+
+    def test_ask_request_without_any_program_declaration_types_as_canonical_agent_request(
+        self,
+    ) -> None:
+        """Regression: a program that declares none of its own builtin types
+        keeps ``ask-request``'s canonical (root) ``AgentRequest`` identity
+        exactly as before this fix."""
+        s = ReplSession()
+        result = s.eval_entry('let q = ask-request("hi")')
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value_type, RecordType)
+        assert result.value_type.scope_path == ()
+
+        field = s.eval_entry("q.prompt")
+        assert field.ok, field.diagnostics
+        assert field.value == TextValue("hi")
+
+    def test_agent_request_declared_in_an_imported_library_module_types_and_mints_consistently(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "lib.agl").write_text(
+            f"scope Lib\nbuiltin record AgentRequest\n{_AGENT_REQUEST_FIELDS}end Lib\n"
+        )
+        s = _session_with_import_root(tmp_path)
+        declare = s.eval_entry("import lib")
+        assert declare.ok, declare.diagnostics
+
+        result = s.eval_entry('let q = ask-request("hi")')
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value_type, RecordType)
+        assert result.value_type.scope_path == ("Lib",)
+
+        field = s.eval_entry("q.prompt")
+        assert field.ok, field.diagnostics
+        assert field.value == TextValue("hi")
+
+
+class TestAgentArgumentBuiltinIdentity:
+    """The ``agent`` argument to ``ask``/``ask-request``
+    (``BuiltinCallChecker._validate_ask_like_arguments``)."""
+
+    def test_scoped_agent_value_rejected_as_ask_request_agent_argument(self) -> None:
+        """A value of the program's own scoped ``Agent`` is rejected as the
+        ``agent`` argument to ``ask-request``.
+
+        Only ``Agent`` is redeclared here (matching the reported repro
+        exactly), not ``AgentRequest``, so ``AgentRequest``'s own ``agent``
+        field keeps its canonical (root) static field type: the value's
+        differently-scoped ``Agent`` is an ordinary static type mismatch
+        against it, restoring the clean, pre-existing diagnostic instead of
+        the internal crash that accepting the mismatched value used to lead
+        to at evaluation.
+        """
+        s = ReplSession()
+        declare = s.eval_entry(f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}end A\n")
+        assert declare.ok, declare.diagnostics
+
+        g = s.eval_entry('let g = A::Agent::AgentCommand("echo")')
+        assert g.ok, g.diagnostics
+
+        result = s.eval_entry('let q = ask-request("hi", agent = g)')
+        assert not result.ok
+        assert any("A::Agent" in d.message for d in result.diagnostics)
+
+    def test_scoped_agent_and_agent_request_declared_together_rejected_as_incoherent(
+        self,
+    ) -> None:
+        """A program that redeclares BOTH ``Agent`` and ``AgentRequest`` at
+        the same scope gets an incoherent contract: ``AgentRequest.agent``
+        resolves to that same scoped ``Agent``, not the standard identity the
+        host actually fills the field with, so the call is rejected rather
+        than minting a field whose static type disagrees with its value."""
+        s = ReplSession()
+        declare = s.eval_entry(
+            f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}"
+            f"builtin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}end A\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        g = s.eval_entry('let g = A::Agent::AgentCommand("echo")')
+        assert g.ok, g.diagnostics
+
+        result = s.eval_entry('let q = ask-request("hi", agent = g)')
+        assert not result.ok
+        assert any("AgentRequest" in d.message and "agent" in d.message for d in result.diagnostics)
+
+    def test_scoped_agent_value_rejected_as_ask_agent_argument(self) -> None:
+        """``ask`` shares ``_validate_ask_like_arguments`` with ``ask-request``,
+        so it rejects the same scoped ``Agent`` value the same way; checked
+        only (an actual agent dispatch is out of scope here)."""
+        s = ReplSession()
+        declare = s.eval_entry(f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}end A\n")
+        assert declare.ok, declare.diagnostics
+
+        g = s.eval_entry('let g = A::Agent::AgentCommand("echo")')
+        assert g.ok, g.diagnostics
+
+        result = s.eval_entry('ask("hi", agent = g)', check_only=True)
+        assert not result.ok
+        assert any("A::Agent" in d.message for d in result.diagnostics)
+
+    def test_root_agent_value_without_stdlib_rejected_as_ask_request_agent_argument(self) -> None:
+        """Without the standard library, a root ``AgentRequest`` whose own
+        ``agent`` field types to this program's own root ``Agent`` is
+        incoherent regardless of which value is supplied for ``agent``: the
+        contract itself is rejected before its argument is even checked."""
+        s = ReplSession(default_stdlib=False)
+        declare = s.eval_entry(
+            f"{_OPTION_DECL}"
+            f"builtin\nenum Agent\n{_AGENT_VARIANTS}"
+            f"builtin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}"
+            'builtin def ask-request(prompt: text, agent: Agent = AgentCommand(command = "noop")) '
+            "-> AgentRequest\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        g = s.eval_entry('let g = AgentClaude("sonnet", "medium")')
+        assert g.ok, g.diagnostics
+
+        result = s.eval_entry('let q = ask-request("hi", agent = g)')
+        assert not result.ok
+        assert any("AgentRequest" in d.message and "agent" in d.message for d in result.diagnostics)
+
+    def test_unrelated_value_is_still_rejected_as_the_agent_argument(self) -> None:
+        """Regression: passing a value of an unrelated type as ``agent`` is
+        still a static rejection -- the shape-mismatch direction of this fix,
+        confirmed with the program's own scoped ``Agent`` also live."""
+        s = ReplSession()
+        declare = s.eval_entry(f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}end A\n")
+        assert declare.ok, declare.diagnostics
+
+        not_agent = s.eval_entry("enum NotAgent\n  | X")
+        assert not_agent.ok, not_agent.diagnostics
+
+        result = s.eval_entry('ask-request("hi", agent = NotAgent::X)', check_only=True)
+        assert not result.ok
+        assert any("NotAgent" in d.message for d in result.diagnostics)
+
+    def test_agent_declared_in_an_imported_library_module_rejected_as_agent_argument(
+        self, tmp_path: Path
+    ) -> None:
+        """Only ``Agent`` is declared by the library module here (not
+        ``AgentRequest``), so -- as in
+        ``test_scoped_agent_value_rejected_as_ask_request_agent_argument``
+        above -- the value's own (differently-scoped) ``Agent`` is an
+        ordinary static type mismatch against ``AgentRequest``'s canonical
+        field type."""
+        (tmp_path / "lib.agl").write_text(
+            f"scope Lib\nbuiltin enum Agent\n{_AGENT_VARIANTS}end Lib\n"
+        )
+        s = _session_with_import_root(tmp_path)
+        declare = s.eval_entry("import lib")
+        assert declare.ok, declare.diagnostics
+
+        g = s.eval_entry('let g = lib::Lib::Agent::AgentCommand("echo")')
+        assert g.ok, g.diagnostics
+
+        result = s.eval_entry('let q = ask-request("hi", agent = g)')
+        assert not result.ok
+        assert any("Lib::Agent" in d.message for d in result.diagnostics)
+
+    def test_scoped_agent_receiver_rejected_as_ask_request_receiver(self) -> None:
+        """The receiver of ``x.ask-request(...)`` IS the agent the host stores
+        in ``AgentRequest.agent``, so it is held to the same identity
+        requirement as the ``agent`` named argument. Reaching evaluation with
+        a differently-scoped ``Agent`` receiver instead mints a request whose
+        ``agent`` field value disagrees with its static type, which an
+        exhaustive ``case q.agent of`` then cannot dispatch."""
+        s = ReplSession()
+        declare = s.eval_entry(
+            f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}"
+            "builtin def Agent::ask-request(self, prompt: text) -> AgentRequest\n"
+            "end A\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        g = s.eval_entry('let g = A::Agent::AgentCommand("echo")')
+        assert g.ok, g.diagnostics
+
+        result = s.eval_entry('let q = g.ask-request("hi")')
+        assert not result.ok
+        assert any("A::Agent" in d.message for d in result.diagnostics)
+
+    def test_canonical_agent_receiver_still_builds_a_request(self) -> None:
+        """Regression: the ordinary receiver form still works and still mints
+        a request whose ``agent`` field is readable."""
+        s = ReplSession()
+        result = s.eval_entry('let q = AgentCommand("echo").ask-request("hi")')
+        assert result.ok, result.diagnostics
+        field = s.eval_entry("q.prompt")
+        assert field.ok, field.diagnostics
+        assert field.value == TextValue("hi")
+
+
+class TestHostRaisedExceptionContractIdentity:
+    """A ``builtin exception`` the host raises carries the same requirement a
+    host-minted record does: the host fills its nominal-typed fields with
+    standard identities, so a program's own redeclaration of one of those
+    names cannot be what such a field resolves to."""
+
+    _AGENT_CALL_ERROR = (
+        "builtin\nexception AgentCallError extends Exception\n"
+        "  *\n  agent: Agent\n  cause: text\n  metadata: json\n"
+    )
+
+    def test_scoped_agent_and_agent_call_error_declared_together_rejected(self) -> None:
+        """``AgentCallError.agent`` resolving to a sibling scoped ``Agent``
+        makes the caught value's ``agent`` field statically that scoped enum
+        while the host always raises with the standard one -- rejected at the
+        ``catch`` clause rather than left to fail dispatching a ``case`` over
+        the field at evaluation."""
+        s = ReplSession()
+        declare = s.eval_entry(
+            f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}{self._AGENT_CALL_ERROR}"
+            "def trigger() -> text =\n"
+            "  try\n"
+            '    ask("hi")\n'
+            "  catch AgentCallError as e =>\n"
+            "    case e.agent of\n"
+            "      | AgentCommand(command) => command\n"
+            "      | AgentClaude(model, thinking) => model\n"
+            "      | AgentCodex(model, thinking) => model\n"
+            "      | AgentPi(provider, model, thinking) => model\n"
+            "end A\n"
+        )
+        assert not declare.ok
+        assert any(
+            "AgentCallError" in d.message and "agent" in d.message for d in declare.diagnostics
+        )
+
+    def test_scoped_agent_call_error_over_the_standard_agent_is_still_caught(self) -> None:
+        """Regression: with nothing shadowing ``Agent``, the same scoped
+        ``builtin exception AgentCallError`` keeps the standard identity in
+        its own ``agent`` field, so it is caught by its own declaration and
+        its field is dispatched over successfully."""
+        s = ReplSession()
+        declare = s.eval_entry(
+            f"scope A\n{self._AGENT_CALL_ERROR}"
+            "def trigger() -> text =\n"
+            "  try\n"
+            '    ask("hi")\n'
+            "  catch AgentCallError as e =>\n"
+            "    case e.agent of\n"
+            "      | AgentCommand(command) => command\n"
+            "      | AgentClaude(model, thinking) => model\n"
+            "      | AgentCodex(model, thinking) => model\n"
+            "      | AgentPi(provider, model, thinking) => model\n"
+            "end A\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        result = s.eval_entry("A::trigger()")
+        assert result.ok, result.diagnostics
+        assert result.error is None
+        assert isinstance(result.value, TextValue)
+
+
+class TestParsePolicyBuiltinIdentity:
+    """``on_parse_error``'s static ``ParsePolicy`` constructor recognition
+    (``BuiltinCallChecker._extract_parse_policy_str`` /
+    ``_accepts_as_parse_policy_constructor``)."""
+
+    def test_scoped_parse_policy_constructor_accepted_by_exec(self) -> None:
+        """The reported rejection: a static constructor of the program's own
+        scoped ``ParsePolicy``, written at its own qualified path
+        (``A::ParsePolicy::Retry``), was rejected because the qualifier
+        check only ever accepted the bare root spelling."""
+        s = ReplSession()
+        declare = s.eval_entry(
+            f"scope A\nbuiltin\nenum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}end A\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        shell = FakeShell(stdout="2")
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            result = s.eval_entry(
+                'let r = exec::[int]("echo hi", on_parse_error = A::ParsePolicy::Retry(n = 2))'
+            )
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(2)
+
+    def test_scoped_parse_policy_abort_constructor_accepted_by_exec(self) -> None:
+        s = ReplSession()
+        declare = s.eval_entry(
+            f"scope A\nbuiltin\nenum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}end A\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        shell = FakeShell(stdout="2")
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            result = s.eval_entry(
+                'let r = exec::[int]("echo hi", on_parse_error = A::ParsePolicy::Abort)'
+            )
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(2)
+
+    def test_root_parse_policy_without_stdlib_accepted_by_exec(self) -> None:
+        s = ReplSession(default_stdlib=False)
+        declare = s.eval_entry(
+            f"builtin\nrecord ExecResult\n{_EXEC_RESULT_FIELDS}"
+            f"builtin\nenum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}"
+            "builtin def exec(command: text) -> ExecResult\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        shell = FakeShell(stdout="2")
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            result = s.eval_entry('let r = exec::[int]("echo hi", on_parse_error = Retry(n = 2))')
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(2)
+
+    def test_on_parse_error_without_any_program_declaration_still_accepts_canonical_forms(
+        self,
+    ) -> None:
+        """Regression: a program that declares none of its own builtin types
+        keeps every canonical ``on_parse_error`` spelling accepted exactly as
+        before this fix."""
+        s = ReplSession()
+        shell = FakeShell(stdout="2")
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            bare = s.eval_entry('let a = exec::[int]("echo hi", on_parse_error = Retry(n = 2))')
+        assert bare.ok, bare.diagnostics
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            qualified = s.eval_entry(
+                'let b = exec::[int]("echo hi", on_parse_error = ParsePolicy::Abort)'
+            )
+        assert qualified.ok, qualified.diagnostics
+
+    def test_on_parse_error_rejects_a_local_binding_shadowing_abort(self) -> None:
+        """The reported bug: a local ``let Abort = ...`` binding shadows the
+        ``ParsePolicy::Abort`` constructor's bare spelling, so the checker
+        must resolve ``on_parse_error``'s value through real name
+        resolution rather than matching the raw spelling ``Abort`` -- a
+        shadowing local binding is not a constructor at all and is rejected
+        exactly like any other non-constructor expression there."""
+        s = ReplSession()
+        result = s.eval_entry(
+            "let Abort = ParsePolicy::Retry(n = 3)\n"
+            'let n: int = exec::[int]("echo 7", on_parse_error = Abort)\nn',
+            check_only=True,
+        )
+        assert not result.ok
+        assert any("on_parse_error" in d.message for d in result.diagnostics)
+
+    def test_on_parse_error_rejects_a_local_binding_shadowing_abort_call_form(self) -> None:
+        """The call-form (``Abort()``) counterpart of the shadowing bug:
+        it bypassed real resolution the same way the bare-spelling form
+        did, and is rejected the same way."""
+        s = ReplSession()
+        result = s.eval_entry(
+            "let Abort = ParsePolicy::Retry(n = 3)\n"
+            'let n: int = exec::[int]("echo 7", on_parse_error = Abort())\nn',
+            check_only=True,
+        )
+        assert not result.ok
+        assert any("on_parse_error" in d.message for d in result.diagnostics)
+
+    def test_on_parse_error_rejects_a_local_binding_shadowing_retry(self) -> None:
+        """The ``Retry`` counterpart: a local binding shadowing ``Retry``'s
+        bare spelling is rejected rather than silently reinterpreted as a
+        ``ParsePolicy::Retry`` call spelled the same way."""
+        s = ReplSession()
+        result = s.eval_entry(
+            'let Retry = 5\nlet n: int = exec::[int]("echo 7", on_parse_error = Retry(n = 3))\nn',
+            check_only=True,
+        )
+        assert not result.ok
+        assert any("on_parse_error" in d.message for d in result.diagnostics)
+
+    def test_on_parse_error_rejects_a_qualifier_naming_an_unrelated_enum(self) -> None:
+        """Regression: an unrelated enum's constructor is still rejected as
+        ``on_parse_error``, with the program's own scoped ``ParsePolicy``
+        also live -- the shape-mismatch direction of this fix."""
+        s = ReplSession()
+        declare = s.eval_entry(
+            f"scope A\nbuiltin\nenum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}end A\n"
+        )
+        assert declare.ok, declare.diagnostics
+        not_policy = s.eval_entry("enum NotPolicy\n  | Abort")
+        assert not_policy.ok, not_policy.diagnostics
+
+        result = s.eval_entry(
+            'let n: int = exec::[int]("ls", on_parse_error = NotPolicy::Abort())', check_only=True
+        )
+        assert not result.ok
+        assert any("ParsePolicy" in d.message for d in result.diagnostics)
+
+    def test_parse_policy_declared_in_an_imported_library_module_accepted_by_exec(
+        self, tmp_path: Path
+    ) -> None:
+        """``open import`` brings ``Lib::ParsePolicy`` into scope at its own
+        path without the module route prefix -- the qualifier spelling this
+        fix recognizes (a module-route-qualified spelling like
+        ``lib::Lib::ParsePolicy::Retry`` is outside this fix's scope, exactly
+        as it was for the canonical ``ParsePolicy`` before it: an on_parse_error
+        constructor was never recognized through an import route prefix)."""
+        (tmp_path / "lib.agl").write_text(
+            f"scope Lib\nbuiltin enum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}end Lib\n"
+        )
+        s = _session_with_import_root(tmp_path)
+        declare = s.eval_entry("open import lib")
+        assert declare.ok, declare.diagnostics
+
+        shell = FakeShell(stdout="2")
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            result = s.eval_entry(
+                'let r = exec::[int]("echo hi", on_parse_error = Lib::ParsePolicy::Retry(n = 2))'
+            )
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(2)
 
 
 # ---------------------------------------------------------------------------
@@ -671,6 +1952,30 @@ class TestRedefinition:
         bad = s.eval_entry("let r2 = R(a = 1)")
         assert not bad.ok  # old field 'a' no longer valid
 
+    def test_builtin_agent_redeclaration_preserves_prior_values(self) -> None:
+        declaration = """\
+builtin
+enum Agent
+  | AgentCommand(command: text)
+  | AgentClaude(model: text, thinking: text)
+  | AgentCodex(model: text, thinking: text)
+  | AgentPi(provider: text, model: text, thinking: text)
+"""
+        session = ReplSession(default_stdlib=False)
+        assert session.eval_entry(declaration).ok
+        assert session.eval_entry('let stale = AgentClaude("sonnet", "medium")').ok
+        assert session.eval_entry(declaration).ok
+
+        stale = session.eval_entry("stale")
+        fresh = session.eval_entry('AgentCommand(command = "echo hello")')
+
+        assert stale.ok, stale.diagnostics
+        assert isinstance(stale.value_type, EnumType)
+        assert stale.value_type.name == "Agent"
+        assert fresh.ok, fresh.diagnostics
+        assert isinstance(fresh.value_type, EnumType)
+        assert fresh.value_type.name == "Agent"
+
     def test_record_redefinition_clears_generic_metadata(self) -> None:
         s = ReplSession()
         first = s.eval_entry("record Box[T]\n  x: T")
@@ -683,10 +1988,71 @@ class TestRedefinition:
         assert not use.ok
         assert any("does not take type arguments" in d.message for d in use.diagnostics)
 
+    def test_redeclaring_a_generic_record_as_non_generic_gives_the_name_to_the_new_one(
+        self,
+    ) -> None:
+        """A bare construction after the redeclaration builds the NEW record.
+
+        The construction itself must work rather than crash, and the value it
+        builds must belong to the newest declaration: comparing it with a
+        value of the superseded generic declaration is a type error, because
+        the two declarations are unrelated types.
+        """
+        s = ReplSession()
+        assert s.eval_entry("record Box[T]\n  x: T").ok
+        assert s.eval_entry("let old = Box(x = 1)").ok
+        assert s.eval_entry("record Box\n  x: int").ok
+
+        result = s.eval_entry("let fresh = Box(x = 1)")
+        cross = s.eval_entry("old == fresh")
+
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value, RecordValue)
+        assert result.value.display_name == "Box"
+        assert result.value.fields == {"x": IntValue(1)}
+        assert not cross.ok
+
+    def test_redeclaring_a_record_as_an_enum_reports_a_diagnostic_not_a_crash(self) -> None:
+        """A record's construction spelling does not outlive its declaration.
+
+        Once the name belongs to an enum, the record form it used to accept
+        is reported as a diagnostic rather than routed into the enum's
+        variant-constructor path, which has no variant to build.
+        """
+        s = ReplSession()
+        assert s.eval_entry("record R(a: int)").ok
+        assert s.eval_entry("enum R\n  | V(b: int)").ok
+
+        stale = s.eval_entry("R(a = 3)")
+        fresh = s.eval_entry("R::V(b = 4)")
+
+        assert not stale.ok
+        assert fresh.ok, fresh.diagnostics
+
+    def test_redeclaring_an_opened_enum_drops_its_stale_bare_variant(self) -> None:
+        """A local ``open`` recorded before the enum is redeclared must not
+        resurrect a variant the redeclaration's fresh member layer dropped."""
+        s = ReplSession()
+        assert s.eval_entry("enum Color\n  | Red\n  | Green").ok
+        assert s.eval_entry("open Color").ok
+        assert s.eval_entry("enum Color\n  | Blue").ok
+
+        stale = s.eval_entry("Red")
+        fresh = s.eval_entry("Blue")
+
+        assert not stale.ok
+        assert fresh.ok, fresh.diagnostics
+
     def test_failed_record_redefinition_restores_previous_methods(self) -> None:
+        """A failed entry that would have redeclared a type changes nothing.
+
+        The previous declaration, its methods, and a binding built against it
+        all remain in effect exactly as before the failed entry.
+        """
         session = ReplSession()
         assert session.eval_entry("record R(value: int)").ok
         assert session.eval_entry("def R::get(self) -> int = self.value").ok
+        assert session.eval_entry("let existing = R(value = 7)").ok
 
         failed = session.eval_entry(
             'let stop: int = raise Abort(message = "stop")\nrecord R(value: text)'
@@ -696,6 +2062,87 @@ class TestRedefinition:
         result = session.eval_entry("R(value = 42).get()")
         assert result.ok, result.diagnostics
         assert result.value == IntValue(42)
+        existing_method = session.eval_entry("existing.get()")
+        assert existing_method.ok, existing_method.diagnostics
+        assert existing_method.value == IntValue(7)
+
+    def test_unpromoted_redeclaration_leaves_the_previous_declaration_owning_the_name(
+        self,
+    ) -> None:
+        """A redeclaration the entry never promoted does not keep the name.
+
+        The previous declaration owns the name afterwards, so a later method
+        declaration is checked against ITS members: a method colliding with a
+        field it has is rejected, and one named after a field only the
+        rolled-back declaration had is accepted and callable.
+        """
+        session = ReplSession()
+        assert session.eval_entry("record R(a: int)").ok
+
+        failed = session.eval_entry(
+            'let stop: int = raise Abort(message = "stop")\nrecord R(b: int)'
+        )
+
+        assert not failed.ok
+        collides = session.eval_entry("def R::a(self) -> int = 1")
+        allowed = session.eval_entry("def R::b(self) -> int = 2")
+        call = session.eval_entry("R(a = 1).b()")
+        assert not collides.ok
+        assert allowed.ok, allowed.diagnostics
+        assert call.ok, call.diagnostics
+        assert call.value == IntValue(2)
+
+    def test_unpromoted_exception_is_not_a_member_conflict_for_a_later_method(self) -> None:
+        """A never-promoted exception cannot make a later method collide.
+
+        A retained SUPERSEDED declaration still owns its own members, because
+        values built from it survive; a declaration the entry never promoted
+        has no values and no name, so a method named after one of its fields
+        must be accepted rather than rejected against a type the session
+        cannot even name.
+        """
+        session = ReplSession()
+        assert session.eval_entry("exception Base extends Exception\n  a: int").ok
+
+        failed = session.eval_entry(
+            'let stop: int = raise Abort(message = "stop")\nexception Ghost extends Base\n  b: int'
+        )
+        assert not failed.ok
+        assert not session.eval_entry('Ghost(a = 1, b = 2, message = "x")').ok
+
+        method = session.eval_entry("def Base::b(self) -> int = self.a")
+
+        assert method.ok, method.diagnostics
+        call = session.eval_entry('Base(a = 7, message = "m").b()')
+        assert call.ok, call.diagnostics
+        assert call.value == IntValue(7)
+
+    def test_unpromoted_builtin_declaration_does_not_type_a_later_host_call(self) -> None:
+        """A never-promoted ``builtin`` declaration must not steer a later entry.
+
+        The bare-name scan that types an unannotated ``exec()`` reads the
+        newest registered ``builtin ExecResult`` declaration; a declaration
+        the entry never promoted is not one, so the call keeps the type the
+        surviving declaration gives it — the same one the host actually mints.
+        """
+        session = ReplSession(default_stdlib=False)
+        declared = session.eval_entry(
+            f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
+            "builtin def exec(command: text) -> ExecResult\n"
+        )
+        assert declared.ok, declared.diagnostics
+
+        failed = session.eval_entry(
+            'let stop: int = raise Abort(message = "stop")\n'
+            f"scope Ghost\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end Ghost"
+        )
+        assert not failed.ok
+
+        call = session.eval_entry('exec("echo hi")', check_only=True)
+
+        assert call.ok, call.diagnostics
+        assert isinstance(call.value_type, RecordType)
+        assert call.value_type.scope_path == ()
 
 
 # ---------------------------------------------------------------------------
@@ -740,46 +2187,137 @@ class TestRecursiveTypesAcrossEntries:
         stale = s.eval_entry('let bad = Category(name = "root", subcategories = [])')
         assert not stale.ok
 
-    def test_type_redefinition_invalidation_detects_nested_nominal_types(self) -> None:
-        from agm.agl.semantics.types import (
-            ArrayType,
-            DictType,
-            ExceptionType,
-            FunctionType,
-            RecordType,
-            TextType,
-        )
+    def test_binding_before_redeclaration_keeps_reading_old_fields_and_rendering(self) -> None:
+        """A record redeclaration is supersession, not invalidation.
 
-        identities = frozenset({((), "R")})
-
-        assert ReplSession._type_mentions_entry_nominal(ExceptionType("R"), identities)
-        assert ReplSession._type_mentions_entry_nominal(ArrayType(RecordType("R")), identities)
-        assert ReplSession._type_mentions_entry_nominal(DictType(RecordType("R")), identities)
-        assert ReplSession._type_mentions_entry_nominal(
-            FunctionType((RecordType("R"),), TextType()), identities
-        )
-        assert ReplSession._type_mentions_entry_nominal(
-            FunctionType((), RecordType("R")), identities
-        )
-        assert not ReplSession._type_mentions_entry_nominal(TextType(), identities)
-
-    def test_record_redefinition_invalidates_old_nominal_values(self) -> None:
+        A binding built against the old declaration keeps reading its own
+        (old) fields and rendering the same way, while a new construction
+        under the same name uses the new shape; accessing a field the old
+        declaration never had still fails, exactly as it always would.
+        """
         s = ReplSession()
         assert s.eval_entry("record R\n  old: int").ok
         assert s.eval_entry("let stale = R(old = 1)").ok
+        old_render = s.eval_entry("stale")
+        assert old_render.ok
         assert s.eval_entry("record R\n  fresh: int").ok
 
-        result = s.eval_entry("stale.fresh")
+        old_field = s.eval_entry("stale.old")
+        old_render_after = s.eval_entry("stale")
+        fresh = s.eval_entry("R(fresh = 2)")
+        missing_field = s.eval_entry("stale.fresh")
 
-        assert not result.ok
+        assert old_field.ok, old_field.diagnostics
+        assert old_field.value == IntValue(1)
+        assert old_render_after.ok
+        assert old_render_after.value == old_render.value
+        assert fresh.ok, fresh.diagnostics
+        assert not missing_field.ok
 
-    def test_scoped_record_redefinition_invalidates_dependent_scoped_function(self) -> None:
-        """A redefined scoped type invalidates dependent retained scope members too.
+    def test_old_declarations_methods_still_resolve_new_declaration_starts_with_none(
+        self,
+    ) -> None:
+        s = ReplSession()
+        assert s.eval_entry("record R(value: int)").ok
+        assert s.eval_entry("def R::get(self) -> int = self.value").ok
+        assert s.eval_entry("let old = R(value = 1)").ok
+        assert s.eval_entry("record R(value: text)").ok
 
-        Mirrors ``test_record_redefinition_invalidates_old_nominal_values`` at
-        root scope: a scoped function returning a redefined scoped record must
-        stop resolving cleanly, instead of surviving with a stale runtime
-        layout that no longer matches its (new) static field set.
+        old_method = s.eval_entry("old.get()")
+        new_method = s.eval_entry('R(value = "x").get()')
+
+        assert old_method.ok, old_method.diagnostics
+        assert old_method.value == IntValue(1)
+        assert not new_method.ok
+
+    def test_old_and_new_typed_values_are_never_comparable(self) -> None:
+        """Two values of the same (old) declaration compare equal; across
+        declarations, equality is a static type error even when both share
+        one display name — the two are unrelated nominal types."""
+        s = ReplSession()
+        assert s.eval_entry("record R(value: int)").ok
+        assert s.eval_entry("let a = R(value = 1)").ok
+        assert s.eval_entry("let b = R(value = 1)").ok
+        assert s.eval_entry("record R(value: int)").ok
+        assert s.eval_entry("let c = R(value = 1)").ok
+
+        same_old = s.eval_entry("a == b")
+        cross = s.eval_entry("a == c")
+
+        assert same_old.ok, same_old.diagnostics
+        assert same_old.value == BoolValue(True)
+        assert not cross.ok
+
+    def test_catch_clause_matches_the_declaration_in_scope_where_it_is_written(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("exception E extends Exception()").ok
+        assert s.eval_entry('let old_exc = E(message = "old")').ok
+        assert s.eval_entry(
+            'def catch_only_old() -> text = try raise old_exc catch E as e => "caught-old"'
+        ).ok
+        assert s.eval_entry("exception E extends Exception()").ok
+        assert s.eval_entry('let new_exc = E(message = "new")').ok
+
+        # A ``catch E`` written after the redeclaration binds the new E: it
+        # catches a freshly raised new-E value but not the retained old one.
+        catches_new = s.eval_entry('try raise new_exc catch E as e => "caught-new-clause"')
+        does_not_catch_old = s.eval_entry('try raise old_exc catch E as e => "caught-new-clause"')
+        # A ``catch E`` compiled before the redeclaration keeps matching only
+        # the old E, unaffected by the redeclaration that came afterward.
+        still_catches_old = s.eval_entry("catch_only_old()")
+
+        assert catches_new.ok, catches_new.diagnostics
+        assert catches_new.value == TextValue("caught-new-clause")
+        assert not does_not_catch_old.ok
+        assert does_not_catch_old.error is not None
+        assert does_not_catch_old.error.type_name == "E"
+        assert still_catches_old.ok, still_catches_old.diagnostics
+        assert still_catches_old.value == TextValue("caught-old")
+
+    def test_enum_variant_on_an_old_typed_value_survives_redeclaration(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("enum Color\n  | Red(shade: int)\n  | Green").ok
+        assert s.eval_entry("let old = Color::Red(shade = 1)").ok
+        assert s.eval_entry("enum Color\n  | Blue").ok
+
+        old_match = s.eval_entry("case old of\n  | Red(shade) => shade\n  | Green() => 0")
+        fresh = s.eval_entry("Color::Blue")
+        cross_match = s.eval_entry("case old of\n  | Blue() => 1\n  | Green() => 0")
+
+        assert old_match.ok, old_match.diagnostics
+        assert old_match.value == IntValue(1)
+        assert fresh.ok, fresh.diagnostics
+        assert not cross_match.ok
+
+    def test_type_qualified_variant_pattern_names_the_newest_enum_declaration(self) -> None:
+        """A qualifier is a type name, so it names the newest declaration.
+
+        A bare constructor pattern follows the subject's own declaration and
+        keeps destructuring a value built before the redeclaration, but a
+        pattern that spells the enum out qualifies against the enum the name
+        means now — which is not the subject's — and is rejected.
+        """
+        s = ReplSession()
+        assert s.eval_entry("enum E\n  | A(x: int)").ok
+        assert s.eval_entry("let old = E::A(x = 1)").ok
+        assert s.eval_entry("enum E\n  | A(x: int)").ok
+
+        bare = s.eval_entry("case old of\n  | A(x) => x")
+        qualified = s.eval_entry("case old of\n  | E::A(x) => x")
+        fresh = s.eval_entry("case E::A(x = 2) of\n  | E::A(x) => x")
+
+        assert bare.ok, bare.diagnostics
+        assert bare.value == IntValue(1)
+        assert not qualified.ok
+        assert fresh.ok, fresh.diagnostics
+        assert fresh.value == IntValue(2)
+
+    def test_scoped_binding_before_redeclaration_keeps_using_its_old_declaration(self) -> None:
+        """A scoped record redeclaration supersedes rather than invalidates.
+
+        A scoped function returning a scoped record built before the record
+        is redeclared keeps returning a value of the OLD declaration —
+        readable through its own (old) field — after the redeclaration.
         """
         s = ReplSession()
         assert s.eval_entry("scope A\nrecord R(n: int)\nend A").ok
@@ -789,9 +2327,14 @@ class TestRecursiveTypesAcrossEntries:
         assert call.value == IntValue(1)
         assert s.eval_entry("scope A\nrecord R(m: text)\nend A").ok
 
-        result = s.eval_entry("A::make().m")
+        still_old = s.eval_entry("A::make().n")
+        missing_new_field = s.eval_entry("A::make().m")
+        fresh = s.eval_entry('let fresh: A::R = A::R("hi")')
 
-        assert not result.ok
+        assert still_old.ok, still_old.diagnostics
+        assert still_old.value == IntValue(1)
+        assert not missing_new_field.ok
+        assert fresh.ok, fresh.diagnostics
 
     def test_ask_with_recursive_output_type_does_not_crash(self) -> None:
         """The REPL's contract-preview path (make_contract) handles a recursive ask target.
@@ -805,7 +2348,7 @@ class TestRecursiveTypesAcrossEntries:
         agent = CountingAgent(
             '{"$case": "Node", "value": 1, "left": {"$case": "Leaf"}, "right": {"$case": "Leaf"}}'
         )
-        s = ReplSession(default_agent=agent)
+        s = ReplSession(agent_dispatcher=agent)
         declare = s.eval_entry("enum Tree\n  | Leaf\n  | Node(value: int, left: Tree, right: Tree)")
         assert declare.ok
         asked = s.eval_entry('let t: Tree = ask """build a tree"""')
@@ -845,6 +2388,21 @@ class TestEchoData:
         assert _int({name: value for name, _typ, value in s.bindings()}["total"]) == 5
 
     @pytest.mark.parametrize("binder", ("let", "var"))
+    def test_shorthand_scoped_binder_echoes_its_full_path_name(self, binder: str) -> None:
+        """A scoped binder's echo name distinguishes it from a same-named root binding.
+
+        Regression: naming previously reused the bare binder name for a
+        scoped ``let``/``var``, so ``A::total`` and a root ``total`` were
+        indistinguishable in the echo.
+        """
+        s = ReplSession()
+        r = s.eval_entry(f"{binder} A::total = 5")
+
+        assert r.kind == "binding"
+        assert r.name == "A::total"
+        assert r.value == IntValue(5)
+
+    @pytest.mark.parametrize("binder", ("let", "var"))
     def test_trailing_discard_binder_evaluates_and_echoes_nothing(self, binder: str) -> None:
         from agm.agl.repl.render import render_entry_result
 
@@ -875,12 +2433,12 @@ class TestEchoData:
         assert live.ok, live.diagnostics
         assert live.kind == "binding"
         assert live.name is None
-        assert live.value_type == RecordType("Pair")
+        assert strip_decl_ids(live.value_type) == RecordType("Pair")
         assert render_entry_result(live, echo=True) == ": Pair = Pair(\n  left = 2,\n  right = 3\n)"
         assert checked.ok, checked.diagnostics
         assert checked.kind == "binding"
         assert checked.name is None
-        assert checked.value_type == RecordType("Pair")
+        assert strip_decl_ids(checked.value_type) == RecordType("Pair")
         assert (
             render_entry_result(checked, echo=True, check_only=True)
             == ": record Pair\n  left: int\n  right: int"
@@ -903,7 +2461,7 @@ class TestEchoData:
         assert constructor.ok, constructor.diagnostics
         assert constructor.kind == "binding"
         assert constructor.name is None
-        assert constructor.value_type == RecordType("Pair")
+        assert strip_decl_ids(constructor.value_type) == RecordType("Pair")
         assert (
             render_entry_result(constructor, echo=True)
             == ": Pair = Pair(\n  left = 2,\n  right = 3\n)"
@@ -1014,7 +2572,7 @@ class TestTypeOf:
 
     def test_type_of_fires_no_agent(self) -> None:
         agent = CountingAgent("RESULT")
-        s = ReplSession(default_agent=agent)
+        s = ReplSession(agent_dispatcher=agent)
         # type_of an agent-calling expression must NOT dispatch.
         assert s.type_of('ask """ask"""') == repr(TextType())
         assert agent.calls == 0
@@ -1432,7 +2990,7 @@ class TestFailureEffects:
 class TestExactlyOnce:
     def test_agent_fires_exactly_once(self) -> None:
         agent = CountingAgent("the-answer")
-        s = ReplSession(default_agent=agent)
+        s = ReplSession(agent_dispatcher=agent)
         r1 = s.eval_entry('let g = ask """say something"""')
         assert r1.ok
         assert agent.calls == 1
@@ -1446,7 +3004,7 @@ class TestExactlyOnce:
         from agm.agl.repl.render import render_entry_result
 
         agent = CountingAgent("the-answer")
-        s = ReplSession(default_agent=agent)
+        s = ReplSession(agent_dispatcher=agent)
         result = s.eval_entry('ask """say something"""')
 
         assert result.ok
@@ -1457,7 +3015,7 @@ class TestExactlyOnce:
         from agm.agl.repl.render import render_entry_result
 
         agent = CountingAgent("the-answer")
-        s = ReplSession(default_agent=agent)
+        s = ReplSession(agent_dispatcher=agent)
         first = s.eval_entry('let txt: text = ask """say something"""')
         second = s.eval_entry("txt")
 
@@ -1469,7 +3027,7 @@ class TestExactlyOnce:
 
     def test_distinct_agent_responses_across_entries(self) -> None:
         agent = CountingAgent("first", "second", "third")
-        s = ReplSession(default_agent=agent)
+        s = ReplSession(agent_dispatcher=agent)
         s.eval_entry('let a = ask """q1"""')
         s.eval_entry('let b = ask """q2"""')
         s.eval_entry('let c = ask """q3"""')
@@ -1477,12 +3035,13 @@ class TestExactlyOnce:
         assert vals == {"a": "first", "b": "second", "c": "third"}
         assert agent.calls == 3
 
-    def test_named_agent_dispatch(self) -> None:
-        # In AgL, named-agent calls use ask(prompt, agent: name) syntax.
+    def test_agent_value_dispatch(self) -> None:
         named = CountingAgent("named-reply")
-        s = ReplSession()
-        s.register_agent("reviewer", named)
-        r = s.eval_entry('agent reviewer\nlet out = ask("""review this""", agent = reviewer)')
+        s = ReplSession(agent_dispatcher=named)
+        r = s.eval_entry(
+            'let reviewer = AgentCommand("reviewer")\n'
+            'let out = ask("""review this""", agent = reviewer)'
+        )
         assert r.ok, r.diagnostics
         assert _text({name: value for name, _typ, value in s.bindings()}["out"]) == "named-reply"
         assert named.calls == 1
@@ -1494,16 +3053,11 @@ class TestExactlyOnce:
 
 
 class TestAgentDeclarations:
-    def test_registered_agent_callable_without_declaration(self) -> None:
-        # Host registration both DECLARES and BACKS an agent in the REPL: a
-        # source ``agent`` declaration is still needed for the agent to appear
-        # as a value in ask(agent: …) calls, but the host registration means
-        # the ask(prompt) default-agent path works without any source decl.
-        # For named agents, the source must declare them to use as a value.
-        # Test: registering and declaring an agent in the same entry works.
-        s = ReplSession()
-        s.register_agent("reviewer", CountingAgent("ok"))
-        r = s.eval_entry('agent reviewer\nask("""look""", agent = reviewer)')
+    def test_agent_value_dispatches_without_a_declaration(self) -> None:
+        s = ReplSession(agent_dispatcher=CountingAgent("ok"))
+        r = s.eval_entry(
+            'let reviewer = AgentCommand("reviewer")\nask("""look""", agent = reviewer)'
+        )
         assert r.ok
 
     def test_undeclared_unregistered_agent_call_errors(self) -> None:
@@ -1514,13 +3068,9 @@ class TestAgentDeclarations:
         assert not r.ok
         assert r.diagnostics
 
-    def test_cross_entry_source_declaration_resolves(self) -> None:
-        # An ``agent X`` declaration in one entry makes a later ask(agent: X)
-        # call resolve without re-declaring it (X is in the ambient set).
-        # The agent is also registered so the call has a backing when it dispatches.
-        s = ReplSession()
-        s.register_agent("helper", CountingAgent("done"))
-        r1 = s.eval_entry("agent helper")
+    def test_cross_entry_agent_value_resolves(self) -> None:
+        s = ReplSession(agent_dispatcher=CountingAgent("done"))
+        r1 = s.eval_entry('let helper = AgentCommand("helper")')
         assert r1.ok
         r2 = s.eval_entry('let out = ask("""go""", agent = helper)')
         assert r2.ok, r2.diagnostics
@@ -1528,10 +3078,9 @@ class TestAgentDeclarations:
 
     def test_scoped_declaration_retains_its_handle_across_entries(self) -> None:
         agent = CountingAgent("done")
-        s = ReplSession()
-        s.register_scoped_agent(("Tools",), "helper", agent)
+        s = ReplSession(agent_dispatcher=agent)
 
-        declared = s.eval_entry("scope Tools\nagent helper\nend Tools")
+        declared = s.eval_entry('scope Tools\nlet helper = AgentCommand("helper")\nend Tools')
         assert declared.ok, declared.diagnostics
         ref = s._session_scope_nodes[("Tools",)].members["helper"]
         handle = s._link_image.symbol_for_decl(ref.decl_node_id)
@@ -1556,21 +3105,9 @@ class TestAgentDeclarations:
         assert not r.ok
         assert r.diagnostics
 
-    def test_unused_declaration_warning_surfaced(self) -> None:
-        # A bare cross-entry ``agent X`` declaration legitimately produces an
-        # "unused" scope warning, routed alongside type-checker warnings.
+    def test_type_of_allows_agent_value_call(self) -> None:
         s = ReplSession()
-        r = s.eval_entry("agent solo")
-        assert r.ok
-        assert any("solo" in w.message for w in r.warnings)
-
-    def test_type_of_allows_registered_agent_call(self) -> None:
-        # The introspection (``type_of``) resolve path must also treat registered
-        # agents as ambient, so typing an ask(agent: …) expression does not raise
-        # a scope error.  The agent must be source-declared to appear as a value.
-        s = ReplSession()
-        s.register_agent("reviewer", CountingAgent("x"))
-        s.eval_entry("agent reviewer")
+        s.eval_entry('let reviewer = AgentCommand("reviewer")')
         assert s.type_of('ask("""ask""", agent = reviewer)') == repr(TextType())
 
     def test_reset_clears_declared_agents(self) -> None:
@@ -1657,6 +3194,114 @@ class TestParams:
         assert r.ok
         assert s.program_name() == "demo"
 
+    def test_unset_scoped_param_reference_is_clean_error(self) -> None:
+        # A required scoped param must report the same clean diagnostic as a
+        # root param and leave the session alive for later entries, not crash
+        # with an unhandled IR error.
+        s = ReplSession()
+        r = s.eval_entry("scope A\nparam p: int\nend A\nprint(A::p)")
+        assert not r.ok
+        assert r.diagnostics
+        assert "A::p" in r.diagnostics[0].message
+        assert "Missing required param" in r.diagnostics[0].message
+        after = s.eval_entry('"still alive"')
+        assert after.ok
+        assert _text(after.value) == "still alive"
+
+    def test_program_name_loads_scoped_param_config(self) -> None:
+        # A config-file value for a scoped param must be applied by its full
+        # path spelling, exactly like a root param by its bare name.
+        s = ReplSession(
+            params_config_loader=lambda name: {"p": 42, "A::q": 77} if name == "demo" else {}
+        )
+        r = s.eval_entry("program demo\nparam p: int\nscope A\nparam q: int\nend A\n[p, A::q]")
+        assert r.ok
+        assert s.program_name() == "demo"
+        n1, t1, v1 = s.declared_params()[0]
+        n2, t2, v2 = s.declared_params()[1]
+        assert (n1, _int(v1)) == ("p", 42)
+        assert (n2, _int(v2)) == ("A::q", 77)
+
+    def test_declared_params_lists_scoped_param_by_full_path(self) -> None:
+        s = ReplSession()
+        s.eval_entry("scope A\nparam p: int = 5\nend A")
+        ins = s.declared_params()
+        assert len(ins) == 1
+        name, typ, val = ins[0]
+        assert name == "A::p"
+        assert isinstance(typ, IntType)
+        assert _int(val) == 5
+
+    def test_scoped_param_metadata_is_removed_when_another_member_replaces_it(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope A\nparam x: int = 1\nend A").ok
+
+        replacement = s.eval_entry("scope A\nlet x = 2\nend A")
+
+        assert replacement.ok, replacement.diagnostics
+        assert s.declared_params() == []
+        value = s.eval_entry("A::x")
+        assert value.ok, value.diagnostics
+        assert value.value == IntValue(2)
+
+    def test_let_binding_displaces_same_named_root_param_in_later_entry(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("param count: int = 1").ok
+
+        result = s.eval_entry("let count = 5")
+
+        assert result.ok, result.diagnostics
+        assert s.declared_params() == []
+        value = s.eval_entry("count")
+        assert value.ok, value.diagnostics
+        assert value.value == IntValue(5)
+
+    def test_let_binding_displaces_same_keyed_scoped_param_in_later_entry(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry('scope Deploy\nparam region: text = "eu"\nend Deploy').ok
+
+        result = s.eval_entry('scope Deploy\nlet region = "us"\nend Deploy')
+
+        assert result.ok, result.diagnostics
+        assert s.declared_params() == []
+        value = s.eval_entry("Deploy::region")
+        assert value.ok, value.diagnostics
+        assert value.value == TextValue("us")
+
+    def test_single_entry_displaces_root_and_scoped_param_together(self) -> None:
+        s = ReplSession()
+        setup = s.eval_entry(
+            'param count: int = 1\nscope Deploy\nparam region: text = "eu"\nend Deploy'
+        )
+        assert setup.ok, setup.diagnostics
+        assert {name for name, _t, _v in s.declared_params()} == {"count", "Deploy::region"}
+
+        result = s.eval_entry('let count = 5\nscope Deploy\nlet region = "us"\nend Deploy')
+
+        assert result.ok, result.diagnostics
+        assert s.declared_params() == []
+
+    def test_undisplaced_param_remains_listed_after_sibling_displacement(self) -> None:
+        s = ReplSession()
+        setup = s.eval_entry("param count: int = 1\nparam other: int = 2")
+        assert setup.ok, setup.diagnostics
+
+        result = s.eval_entry("let count = 5")
+
+        assert result.ok, result.diagnostics
+        assert {name for name, _t, _v in s.declared_params()} == {"other"}
+
+    def test_scoped_param_failing_default_does_not_corrupt_next_entry(self) -> None:
+        # A scoped param whose default raises must not be promoted; the next
+        # entry must degrade gracefully rather than crash on an unbound symbol.
+        s = ReplSession()
+        first = s.eval_entry('scope A\nparam p: int = "x" as int\nend A')
+        assert not first.ok
+        assert s.declared_params() == []
+        second = s.eval_entry("let q = A::p + 1")
+        assert not second.ok
+        assert second.diagnostics
+
 
 # ---------------------------------------------------------------------------
 # reset
@@ -1717,7 +3362,7 @@ class TestLoadFile:
         agent = CountingAgent("loaded")
         f = tmp_path / "p.agl"
         f.write_text('let g = ask """hi"""\n')
-        s = ReplSession(default_agent=agent)
+        s = ReplSession(agent_dispatcher=agent)
         s.load_file(f)
         assert agent.calls == 1
         # Referencing it later does not re-run.
@@ -1904,7 +3549,7 @@ class TestWarnings:
 class TestCheckOnly:
     def test_check_only_types_expression_without_eval(self) -> None:
         agent = CountingAgent("nope")
-        s = ReplSession(default_agent=agent)
+        s = ReplSession(agent_dispatcher=agent)
         r = s.eval_entry('ask """ask"""', check_only=True)
         assert r.ok
         assert r.kind == "expression"
@@ -1964,28 +3609,6 @@ class TestCheckOnly:
 
 
 class TestRegistrationAndAgents:
-    def test_agents_lists_named_and_ask(self) -> None:
-        s = ReplSession(default_agent=CountingAgent("x"))
-        s.register_agent("alpha", CountingAgent("a"))
-        s.register_agent("beta", CountingAgent("b"))
-        assert s.agents() == ["alpha", "beta", "ask"]
-
-    def test_agents_without_default_excludes_ask(self) -> None:
-        s = ReplSession()
-        s.register_agent("only", CountingAgent("x"))
-        assert s.agents() == ["only"]
-
-    def test_register_agent_reserved_name_rejected(self) -> None:
-        s = ReplSession()
-        with pytest.raises(ValueError):
-            s.register_agent("ask", CountingAgent("x"))
-
-    def test_register_duplicate_agent_rejected(self) -> None:
-        s = ReplSession()
-        s.register_agent("dup", CountingAgent("x"))
-        with pytest.raises(ValueError):
-            s.register_agent("dup", CountingAgent("y"))
-
     def test_register_codec_validation(self) -> None:
         from agm.agl.runtime.codec import JsonCodec
 
@@ -2016,7 +3639,7 @@ class TestContractError:
             def name(self) -> str:
                 return "bad"
 
-        s = ReplSession(default_agent=CountingAgent("ok"))
+        s = ReplSession(agent_dispatcher=CountingAgent("ok"))
         s.register_codec(BadCodec())
         r = s.eval_entry('let x = ask("hi", format = "bad")')
         assert not r.ok
@@ -2081,7 +3704,7 @@ class TestAgentCancellation:
         assert session.eval_entry("2 + 2").ok
 
     def test_declined_agent_aborts_entry_with_diagnostic(self) -> None:
-        s = ReplSession(default_agent=_CancellingAgent())
+        s = ReplSession(agent_dispatcher=_CancellingAgent())
         r = s.eval_entry('let g = ask """do it"""')
         assert not r.ok
         assert r.error is None
@@ -2089,7 +3712,7 @@ class TestAgentCancellation:
         assert "cancelled" in r.diagnostics[0].message.lower()
 
     def test_declined_agent_leaves_bindings_unchanged(self) -> None:
-        s = ReplSession(default_agent=_CancellingAgent())
+        s = ReplSession(agent_dispatcher=_CancellingAgent())
         s.eval_entry("let keep = 7")
         before = _snapshot(s)
         r = s.eval_entry('let g = ask """do it"""')
@@ -2099,7 +3722,7 @@ class TestAgentCancellation:
         assert all(n != "g" for n, _t, _v in s.bindings())
 
     def test_keyboard_interrupt_aborts_entry(self) -> None:
-        s = ReplSession(default_agent=_InterruptAgent())
+        s = ReplSession(agent_dispatcher=_InterruptAgent())
         s.eval_entry("let x = 1")
         before = _snapshot(s)
         r = s.eval_entry('let g = ask """slow"""')
@@ -2108,7 +3731,7 @@ class TestAgentCancellation:
         assert _snapshot(s) == before
 
     def test_cancellation_preserves_prior_assignment(self) -> None:
-        s = ReplSession(default_agent=_CancellingAgent())
+        s = ReplSession(agent_dispatcher=_CancellingAgent())
         s.eval_entry("var v = 1")
         r = s.eval_entry('v := 2\nlet g = ask """x"""')
         assert not r.ok
@@ -2120,14 +3743,14 @@ class TestAgentCancellation:
         # before a cancelled agent call must be promoted, mirroring the
         # partial-effects behavior for runtime raises. Previously cancellation
         # carried no failure span, so every type declaration was dropped.
-        s = ReplSession(default_agent=_CancellingAgent())
+        s = ReplSession(agent_dispatcher=_CancellingAgent())
         r = s.eval_entry('record Box\n  value: int\nlet g = ask """x"""')
         assert not r.ok
         assert s.eval_entry("Box(value = 3)").ok
 
     def test_cancellation_excludes_record_declared_after_call(self) -> None:
         # A type declared after the cancelled call is not promoted.
-        s = ReplSession(default_agent=_CancellingAgent())
+        s = ReplSession(agent_dispatcher=_CancellingAgent())
         r = s.eval_entry('let g = ask """x"""\nrecord After\n  value: int')
         assert not r.ok
         assert not s.eval_entry("After(value: 1)").ok
@@ -2140,7 +3763,7 @@ class TestAgentCancellation:
 
 class TestTraceLogging:
     def test_no_trace_path_writes_nothing(self, tmp_path: Path) -> None:
-        s = ReplSession(default_agent=CountingAgent("ok"))
+        s = ReplSession(agent_dispatcher=CountingAgent("ok"))
         r = s.eval_entry('let g = ask """hi"""')
         assert r.ok
         assert r.trace_path is None
@@ -2149,7 +3772,7 @@ class TestTraceLogging:
         import json
 
         trace = tmp_path / "repl.log"
-        s = ReplSession(default_agent=CountingAgent("reply"), trace_path=trace)
+        s = ReplSession(agent_dispatcher=CountingAgent("reply"), trace_path=trace)
         r = s.eval_entry('let g = ask """ask"""')
         assert r.ok
         assert r.trace_path == trace
@@ -2158,13 +3781,14 @@ class TestTraceLogging:
         kinds = [rec["kind"] for rec in records]
         assert "run_start" in kinds
         assert "run_end" in kinds
-        assert "agent_call_attempt" in kinds
+        assert "agent_request" in kinds
+        assert "agent_response" in kinds
 
     def test_each_entry_is_its_own_run(self, tmp_path: Path) -> None:
         import json
 
         trace = tmp_path / "repl.log"
-        s = ReplSession(default_agent=CountingAgent("a", "b"), trace_path=trace)
+        s = ReplSession(agent_dispatcher=CountingAgent("a", "b"), trace_path=trace)
         s.eval_entry('let x = ask """one"""')
         s.eval_entry('let y = ask """two"""')
         records = [json.loads(line) for line in trace.read_text().splitlines() if line]
@@ -2174,7 +3798,7 @@ class TestTraceLogging:
 
     def test_check_only_writes_no_trace(self, tmp_path: Path) -> None:
         trace = tmp_path / "repl.log"
-        s = ReplSession(default_agent=CountingAgent("ok"), trace_path=trace)
+        s = ReplSession(agent_dispatcher=CountingAgent("ok"), trace_path=trace)
         r = s.eval_entry('let g = ask """hi"""', check_only=True)
         assert r.ok
         assert r.trace_path is None
@@ -2184,12 +3808,16 @@ class TestTraceLogging:
         import json
 
         trace = tmp_path / "repl.log"
-        s = ReplSession(default_agent=_CancellingAgent(), trace_path=trace)
+        s = ReplSession(agent_dispatcher=_CancellingAgent(), trace_path=trace)
         r = s.eval_entry('let g = ask """x"""')
         assert not r.ok
         records = [json.loads(line) for line in trace.read_text().splitlines() if line]
         run_end = [rec for rec in records if rec["kind"] == "run_end"]
         assert run_end and run_end[-1]["ok"] is False
+        assert any(rec["kind"] == "agent_request" for rec in records)
+        responses = [rec for rec in records if rec["kind"] == "agent_response"]
+        assert responses and responses[-1]["cancelled"] is True
+        assert responses[-1]["reason"]
 
     def test_write_failure_disables_logging_for_that_entry_only(self, tmp_path: Path) -> None:
         """A transient write failure must not kill logging for the whole session."""
@@ -2198,7 +3826,7 @@ class TestTraceLogging:
         from agm.core import log as core_log
 
         trace = tmp_path / "repl.log"
-        s = ReplSession(default_agent=CountingAgent("a", "b"), trace_path=trace)
+        s = ReplSession(agent_dispatcher=CountingAgent("a", "b"), trace_path=trace)
         real_append = core_log.append_jsonl
         calls = {"n": 0}
 
@@ -2523,6 +4151,69 @@ class TestFuncDef:
         assert not after.ok
         assert not s.eval_entry("B::Later()").ok
 
+    def test_runtime_failure_promotes_only_the_completed_binder_in_a_region(self) -> None:
+        """A region is not one promotable group: each binder completes on its own.
+
+        ``A::a``'s initializer runs and completes before ``A::b``'s raises, so
+        only ``a`` may be promoted — a failed sibling binder in the same region
+        must not be treated as completed merely because it shares the region.
+        """
+        s = ReplSession()
+        failed = s.eval_entry("scope A\nlet a = 1\nvar b = 1 / 0\nend A")
+        assert not failed.ok
+        assert s.eval_entry("A::a").value == IntValue(1)
+        assert not s.eval_entry("A::b").ok
+
+    def test_runtime_failure_after_region_form_scoped_let_gives_clean_diagnostic(self) -> None:
+        """A region-form ``let`` past a failing sibling initializer never ran.
+
+        Regression test: ``d``'s scope-member ref keys on its pattern binder
+        candidate node id, not the ``LetDecl`` node's own id; the promotion
+        plan's node-id set must be computed the same way, or ``d`` is treated
+        as unconditionally promoted and later lookup crashes the session
+        instead of diagnosing cleanly.
+        """
+        s = ReplSession()
+        failed = s.eval_entry("scope A\nlet a = 1\nvar c = 1 / 0\nlet d = 4\nend A")
+        assert not failed.ok
+        r = s.eval_entry("A::d")
+        assert not r.ok
+
+    def test_runtime_failure_after_scoped_let_in_nested_region_gives_clean_diagnostic(
+        self,
+    ) -> None:
+        """The region-form ``let`` fix also holds across nested regions."""
+        s = ReplSession()
+        failed = s.eval_entry(
+            "scope A\nlet a = 1\nscope B\nvar c = 1 / 0\nlet d = 4\nend B\nlet e = 5\nend A"
+        )
+        assert not failed.ok
+        assert not s.eval_entry("A::e").ok
+        assert not s.eval_entry("A::B::d").ok
+
+    def test_runtime_failure_after_scoped_let_in_repeated_region_gives_clean_diagnostic(
+        self,
+    ) -> None:
+        """The region-form ``let`` fix also holds when the same scope is reopened."""
+        s = ReplSession()
+        failed = s.eval_entry("scope A\nlet a = 1\nend A\nscope A\nvar b = 1 / 0\nlet c = 4\nend A")
+        assert not failed.ok
+        assert not s.eval_entry("A::c").ok
+
+    def test_runtime_failure_after_scoped_var_in_region_gives_clean_diagnostic(self) -> None:
+        """Control: a ``var`` past a failing sibling was already handled correctly."""
+        s = ReplSession()
+        failed = s.eval_entry("scope A\nlet a = 1\nvar c = 1 / 0\nvar d = 4\nend A")
+        assert not failed.ok
+        assert not s.eval_entry("A::d").ok
+
+    def test_runtime_failure_after_shorthand_scoped_let_gives_clean_diagnostic(self) -> None:
+        """Control: the declaration-path shorthand form was already handled correctly."""
+        s = ReplSession()
+        failed = s.eval_entry("let A::a = 1\nvar A::c = 1 / 0\nlet A::d = 4")
+        assert not failed.ok
+        assert not s.eval_entry("A::d").ok
+
 
 # ---------------------------------------------------------------------------
 # REPL import support
@@ -2799,22 +4490,66 @@ class TestImports:
         assert not s._loaded_lib_modules
         assert not s._accumulated_imports
 
-    def test_runtime_failure_restores_unpromoted_type_nominal(self, tmp_path: Path) -> None:
+    def test_interpreter_initialization_failure_rolls_back_link_image(self, tmp_path: Path) -> None:
+        """A failed setting bootstrap leaves no linked declarations but consumes node ids."""
+        from agm.agl.lower import LinkImage
+
+        std_dir = tmp_path / "std"
+        std_dir.mkdir()
+        copyfile(
+            Path(__file__).resolve().parents[1] / "stdlib" / "std" / "core.agl",
+            std_dir / "core.agl",
+        )
+        config = std_dir / "config.agl"
+        config.write_text(
+            "import std/core using Option, Agent\n"
+            'builtin var default-agent: Agent = AgentCommand("runner")\n'
+            'builtin var timeout: Option[text] = Some("not-a-timeout")\n',
+            encoding="utf-8",
+        )
+        session = ReplSession(stdlib_root=tmp_path)
+
+        failed = session.eval_entry("import std/config\nlet stale = 1")
+
+        assert not failed.ok
+        assert session._link_image == LinkImage()
+        next_node_id = session._next_node_id
+        assert next_node_id > 0
+
+        config.write_text(
+            "import std/core using Option, Agent\n"
+            'builtin var default-agent: Agent = AgentCommand("runner")\n'
+            'builtin var timeout: Option[text] = Some("2s")\n',
+            encoding="utf-8",
+        )
+        succeeded = session.eval_entry("import std/config\nlet fresh = 2")
+
+        assert succeeded.ok, succeeded.diagnostics
+        assert {name for name, _typ, _value in session.bindings()} == {"fresh"}
+        assert session._session_scope.bindings["fresh"].decl_node_id >= next_node_id
+
+    def test_companion_import_failure_rolls_back_link_image(self, tmp_path: Path) -> None:
+        """A rejected entry leaves no linked declarations, however it was rejected.
+
+        A failing companion import rejects the entry after lowering has already
+        allocated into the persistent image, exactly as a failing setting
+        bootstrap does, so both discard the same complete link delta.
+        """
+        from agm.agl.lower import LinkImage
+
+        (tmp_path / "broken.agl").write_text("extern def f() -> int\n")
+        (tmp_path / "broken.py").write_text("raise RuntimeError('boom')\n")
         s = self._make_session_with_root(tmp_path)
-        r1 = s.eval_entry("record R\n  x: int")
-        assert r1.ok, r1.diagnostics
 
-        r2 = s.eval_entry("let z: decimal = 1 / 0\nrecord R\n  y: int")
-        assert not r2.ok
-        from agm.agl.ir.ids import NominalId
-        from agm.agl.modules.ids import ENTRY_ID
+        failed = s.eval_entry("open import broken\ndef helper() -> int\n  7\nlet stale = helper()")
 
-        assert s._link_image._state.nominals[NominalId(ENTRY_ID, "R")].fields == ("x",)
+        assert not failed.ok
+        assert s._link_image == LinkImage()
 
-        r3 = s.eval_entry("let f = R\nlet v = f(1)\nv.x")
+        succeeded = s.eval_entry("def helper() -> int\n  1\nhelper()")
 
-        assert r3.ok, r3.diagnostics
-        assert _int(r3.value) == 1
+        assert succeeded.ok, succeeded.diagnostics
+        assert _int(succeeded.value) == 1
 
     def test_runtime_failure_does_not_mark_module_linked(self, tmp_path: Path) -> None:
         # Regression: when an entry imports a previously unseen
@@ -2875,15 +4610,6 @@ class TestImports:
             for diagnostic in r.diagnostics
         ] == [("error", "invalid.agl", 2)]
         assert s.bindings() == []
-
-    def test_agent_decl_in_graph_mode(self, tmp_path: Path) -> None:
-        # Declaring an agent in program context installs it in the entry scope.
-        lib = tmp_path / "mylib.agl"
-        lib.write_text("def id_fn(n: int) -> int = n\n")
-        s = self._make_session_with_root(tmp_path)
-        s.register_agent("helper", CountingAgent("ok"))
-        r = s.eval_entry("open import mylib\nagent helper\nid_fn(7)")
-        assert r.ok, r.diagnostics
 
     def test_agl_raise_in_graph_mode(self, tmp_path: Path) -> None:
         # An AglRaise exception during program evaluation aborts the entry.
@@ -3059,9 +4785,11 @@ class TestImports:
         lib.write_text("def add(a: int, b: int) -> int = a + b\n")
         s = self._make_session_with_root(tmp_path)
         # The custom-format ask produces a pre-lower contract materialization error.
-        s.register_agent("helper", CountingAgent("ok"))
         s.register_codec(BadCodec())
-        r = s.eval_entry('import mylib\nagent helper\nask("hi", agent = helper, format = "bad")')
+        r = s.eval_entry(
+            'import mylib\nlet helper = AgentCommand("helper")\n'
+            'ask("hi", agent = helper, format = "bad")'
+        )
         assert not r.ok
         assert any("Contract error" in d.message for d in r.diagnostics)
 
@@ -3077,17 +4805,6 @@ class TestImports:
         r2 = s.eval_entry("open import mylib\nprogram second\nadd(1, 2)")
         assert not r2.ok
         assert "Program name already set" in r2.diagnostics[0].message
-
-    def test_cancellation_in_graph_mode(self, tmp_path: Path) -> None:
-        # AgentCancelled during program execution aborts the entry.
-        lib = tmp_path / "mylib.agl"
-        lib.write_text("def noop(n: int) -> int = n\n")
-        s = self._make_session_with_root(tmp_path)
-        s.register_agent("helper", _CancellingAgent())
-        r = s.eval_entry('import mylib\nagent helper\nnoop(ask("hi", agent = helper))')
-        assert not r.ok
-        assert r.error is None
-        assert r.diagnostics
 
     def test_parse_error_in_imported_module_has_source_label(self, tmp_path: Path) -> None:
         # Regression: parse error in an imported module must surface
@@ -3188,6 +4905,275 @@ class TestImports:
         assert "unexpected loader failure" in r.diagnostics[0].message
         monkeypatch.setattr(loader_mod, "build_repl_graph", original_build)
 
+    def test_region_scoped_import_retains_its_qualifier_route_across_entries(
+        self, tmp_path: Path
+    ) -> None:
+        """A scoped import's module-wide qualifier route persists like the root spelling."""
+        (tmp_path / "mylib.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
+        s = self._make_session_with_root(tmp_path)
+
+        assert s.eval_entry(
+            "scope A\nopen import mylib\ndef go() -> int = add(1, 2)\nend A\nA::go()"
+        ).ok
+        r = s.eval_entry("mylib::add(1, 2)")
+        assert r.ok, r.diagnostics
+        assert _int(r.value) == 3
+
+    def test_region_scoped_import_retains_its_bare_narrowing_across_entries(
+        self, tmp_path: Path
+    ) -> None:
+        """A later entry's same-named region still sees the earlier entry's scoped import."""
+        (tmp_path / "mylib.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
+        s = self._make_session_with_root(tmp_path)
+
+        assert s.eval_entry(
+            "scope A\nopen import mylib\ndef go() -> int = add(1, 2)\nend A\nA::go()"
+        ).ok
+        r = s.eval_entry("scope A\ndef go2() -> int = add(3, 4)\nend A\nA::go2()")
+        assert r.ok, r.diagnostics
+        assert _int(r.value) == 7
+
+    def test_later_region_scoped_import_replaces_the_prior_selection(self, tmp_path: Path) -> None:
+        (tmp_path / "mylib.agl").write_text("def x() -> int = 1\ndef y() -> int = 2\n")
+        s = self._make_session_with_root(tmp_path)
+
+        assert s.eval_entry("scope A\nimport mylib using x\nend A").ok
+        replacement = s.eval_entry("scope A\nimport mylib using y\nend A")
+
+        assert replacement.ok, replacement.diagnostics
+        old_selection = s.eval_entry("scope A\ndef old() -> int = x()\nend A")
+        assert not old_selection.ok
+        new_selection = s.eval_entry("scope A\ndef new() -> int = y()\nend A\nA::new()")
+        assert new_selection.ok, new_selection.diagnostics
+        assert new_selection.value == IntValue(2)
+
+    def test_region_scoped_import_still_does_not_leak_bare_names_to_the_root(
+        self, tmp_path: Path
+    ) -> None:
+        """Retention must not widen a scoped import's bare reach beyond its own region."""
+        (tmp_path / "mylib.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
+        s = self._make_session_with_root(tmp_path)
+
+        assert s.eval_entry("scope A\nopen import mylib\nend A").ok
+        r = s.eval_entry("add(1, 2)")
+        assert not r.ok
+
+    def test_non_open_region_scoped_import_retains_its_qualifier_route_across_entries(
+        self, tmp_path: Path
+    ) -> None:
+        """A plain (non-``open``) region-scoped import also persists across entries.
+
+        A later entry extending the same region must still resolve the
+        qualifier the import established, without redeclaring it.
+        """
+        (tmp_path / "mylib.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
+        s = self._make_session_with_root(tmp_path)
+
+        assert s.eval_entry(
+            "scope A\nimport mylib\ndef go() -> int = mylib::add(1, 2)\nend A\nA::go()"
+        ).ok
+        r = s.eval_entry("scope A\ndef go2() -> int = mylib::add(3, 4)\nend A\nA::go2()")
+
+        assert r.ok, r.diagnostics
+        assert _int(r.value) == 7
+
+    def test_root_import_after_retained_scope_region_is_not_rejected(self, tmp_path: Path) -> None:
+        """A retained region's preamble ordering must not gate a later root import.
+
+        Regression: the preamble used to place retained scope regions before
+        this entry's own root ``import``, which the header rule ("import and
+        export declarations must appear before any other declarations")
+        then rejected -- even though the entry's import is legitimately at
+        its own root.
+        """
+        (tmp_path / "mylib.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
+        (tmp_path / "other.agl").write_text("def mul(a: int, b: int) -> int = a * b\n")
+        s = self._make_session_with_root(tmp_path)
+
+        assert s.eval_entry("scope A\nopen import mylib\nend A").ok
+
+        r = s.eval_entry("import other\nother::mul(2, 3)")
+
+        assert r.ok, r.diagnostics
+        assert _int(r.value) == 6
+
+    def test_root_import_after_retained_purely_local_scope_region_is_not_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        """Same header-ordering regression, but the retained region has no import at all."""
+        (tmp_path / "other.agl").write_text("def val() -> int = 5\n")
+        s = self._make_session_with_root(tmp_path)
+
+        assert s.eval_entry("scope Src\ndef v() -> int = 1\nend Src\nscope T\nopen Src\nend T").ok
+
+        r = s.eval_entry("import other\nother::val()")
+
+        assert r.ok, r.diagnostics
+        assert _int(r.value) == 5
+
+    def test_root_open_import_survives_a_later_region_scoped_import_of_the_same_module(
+        self, tmp_path: Path
+    ) -> None:
+        """A region-scoped import must not revoke an earlier root import's bare names.
+
+        Regression: retention keyed the replacement decision on module identity
+        alone, so a region-scoped ``import mylib`` clobbered the generation
+        recorded for the earlier ROOT ``open import mylib``, silently removing
+        its bare names from later entries.
+        """
+        (tmp_path / "mylib.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
+        s = self._make_session_with_root(tmp_path)
+
+        assert s.eval_entry("open import mylib\nadd(1, 2)").ok
+        assert s.eval_entry("scope A\nimport mylib\nend A").ok
+
+        r = s.eval_entry("add(1, 2)")
+
+        assert r.ok, r.diagnostics
+        assert _int(r.value) == 3
+
+
+# ---------------------------------------------------------------------------
+# Unpromoted nominal declarations: a declaration a partially failed entry
+# never promotes drops out of name resolution -- the previous declaration
+# (or its absence) stays in effect for every later entry exactly as before
+# the failed entry. This holds uniformly for every declaration kind,
+# ``builtin`` included: the link image's nominal state -- descriptors and
+# the host-mint table alike -- is rebuilt from the shared type table on
+# every lowering, and that table excludes a declaration it marked as never
+# having taken effect (``TypeTable.orphan``) while retaining the one that
+# survived.
+# ---------------------------------------------------------------------------
+
+
+class TestUnpromotedNominalDeclarationEffects:
+    def test_runtime_failure_leaves_the_previous_record_declaration_in_effect(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("record R\n  x: int").ok
+
+        failed = s.eval_entry("let z: decimal = 1 / 0\nrecord R\n  y: int")
+        assert not failed.ok
+
+        construct = s.eval_entry("let f = R\nlet v = f(1)\nv.x")
+        match = s.eval_entry("case R(x = 2) of\n  | R(x) => x")
+
+        assert construct.ok, construct.diagnostics
+        assert construct.value == IntValue(1)
+        assert match.ok, match.diagnostics
+        assert match.value == IntValue(2)
+
+    def test_runtime_failure_leaves_the_previous_enum_declaration_in_effect(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("enum Color\n  | Red\n  | Green").ok
+
+        failed = s.eval_entry("let z: decimal = 1 / 0\nenum Color\n  | Blue")
+        assert not failed.ok
+
+        construct = s.eval_entry("Color::Red")
+        match = s.eval_entry("case Color::Green of\n  | Red => 0\n  | Green => 1")
+        stale_variant = s.eval_entry("Color::Blue")
+
+        assert construct.ok, construct.diagnostics
+        assert match.ok, match.diagnostics
+        assert match.value == IntValue(1)
+        assert not stale_variant.ok
+
+    def test_runtime_failure_leaves_the_previous_exception_declaration_in_effect(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("exception E extends Exception\n  code: int").ok
+
+        failed = s.eval_entry(
+            "let z: decimal = 1 / 0\nexception E extends Exception\n  label: text"
+        )
+        assert not failed.ok
+
+        caught = s.eval_entry('try raise E(message = "boom", code = 1) catch E as e => e.code')
+        stale_field = s.eval_entry('try raise E(message = "boom", label = "x") catch E as e => 0')
+
+        assert caught.ok, caught.diagnostics
+        assert caught.value == IntValue(1)
+        assert not stale_field.ok
+
+    def test_runtime_failure_leaves_a_first_declaration_entirely_undeclared(self) -> None:
+        """A declaration with no PREVIOUS declaration to fall back to is simply
+        absent -- not resurrected in some intermediate state -- once its own
+        entry fails before promoting it."""
+        s = ReplSession()
+
+        failed = s.eval_entry("let z: decimal = 1 / 0\nrecord R\n  x: int")
+        assert not failed.ok
+
+        use = s.eval_entry("R(x = 1)")
+
+        assert not use.ok
+
+    def test_runtime_failure_leaves_the_canonical_builtin_identity_in_effect(self) -> None:
+        """A ``builtin`` declaration is unpromoted the same way as any other
+        kind: proven here by a later host mint of ``RangeError`` (no earlier
+        program declaration exists) still landing on the canonical identity
+        and remaining catchable, exactly as an ordinary nominal falls back to
+        whatever preceded the failed entry."""
+        s = ReplSession(default_stdlib=False)
+
+        failed = s.eval_entry(
+            "let z: decimal = 1 / 0\n"
+            "scope Failed\n"
+            "builtin exception RangeError extends Exception()\n"
+            "end Failed"
+        )
+        assert not failed.ok
+
+        caught = s.eval_entry(
+            "let step = 0\n"
+            "try\n"
+            "  for i in 1 to 5 by step do\n"
+            "    ()\n"
+            "  done\n"
+            "catch RangeError as error =>\n"
+            "  ()"
+        )
+
+        assert caught.ok, caught.diagnostics
+
+    def test_runtime_failure_leaves_the_previous_builtin_declaration_in_effect(self) -> None:
+        """The same declaration kind, but with an earlier one already in
+        effect: an unpromoted, scoped redeclaration must leave THAT earlier
+        declaration's own spelling live rather than the failed entry's
+        scoped spelling.
+
+        A later ``catch RangeError`` cannot itself observe which identity is
+        live here: the standard-library exception namespace always reseeds a
+        recognized name like ``RangeError`` fresh in every later entry (see
+        ``TypeEnvironment.seed_from``'s ``BUILTIN_EXCEPTIONS`` exclusion), so
+        a catch clause resolves to the canonical identity regardless of any
+        program declaration, in every entry but the declaring one itself.
+        What is actually in effect is which spelling a fresh host mint
+        raises under (``DeclaredNominal.display_name``, baked into the
+        raised value's ``display_name`` at the mint site) -- a later entry's
+        uncaught error reports the identity the mint actually used, which is
+        the previously-declared, unscoped ``"RangeError"`` here, since the
+        host-mint table is rebuilt from the shared type table on every
+        lowering and that table still carries the earlier declaration under
+        its own identity.
+        """
+        s = ReplSession(default_stdlib=False)
+        declared = s.eval_entry("builtin exception RangeError extends Exception()")
+        assert declared.ok, declared.diagnostics
+
+        failed = s.eval_entry(
+            "let z: decimal = 1 / 0\n"
+            "scope Failed\n"
+            "builtin exception RangeError extends Exception()\n"
+            "end Failed"
+        )
+        assert not failed.ok
+
+        raised = s.eval_entry("let step = 0\nfor i in 1 to 5 by step do\n  ()\ndone")
+
+        assert not raised.ok
+        assert raised.error is not None
+        assert raised.error.type_name == "RangeError"
+
 
 # ---------------------------------------------------------------------------
 # extern def (Python FFI) in the REPL
@@ -3281,6 +5267,22 @@ class TestExternRepl:
         assert result.diagnostics
         assert "companion" in result.diagnostics[0].message.lower()
         assert result.diagnostics[0].line == 1
+
+    def test_companion_import_failure_leaves_the_repl_entry_unsuccessful(
+        self, tmp_path: Path
+    ) -> None:
+        self._write_extern_lib(
+            tmp_path,
+            "broken",
+            "extern def f() -> int\n",
+            "raise RuntimeError('boom')\n",
+        )
+        session = self._make_session_with_root(tmp_path)
+
+        result = session.eval_entry("open import broken\nf()")
+
+        assert not result.ok
+        assert result.diagnostics
 
     # -- One extern registry per session: a companion imports exactly once --
 
@@ -3463,23 +5465,6 @@ class TestFunctionAgentValueEcho:
         assert isinstance(r.value, IrClosureValue)
         rendered = render_value(r.value)
         assert rendered == "<function: int -> int>"
-
-    def test_bare_agent_name_echo_does_not_crash(self) -> None:
-        """A bare agent-name entry echoes the surface form without crashing."""
-        s = ReplSession()
-        s.register_agent("reviewer", CountingAgent("ok"))
-        # Declare the agent in source so it becomes a value binding in scope.
-        s.eval_entry("agent reviewer")
-        r = s.eval_entry("reviewer")
-        assert r.ok
-        assert r.kind == "expression"
-        assert r.value is not None
-        from agm.agl.runtime.render import render_value
-        from agm.agl.semantics.values import AgentValue
-
-        assert isinstance(r.value, AgentValue)
-        rendered = render_value(r.value)
-        assert rendered == "<agent reviewer>"
 
     def test_bindings_after_def_does_not_crash(self) -> None:
         """:bindings() after a ``def`` must not crash (Closure has a surface form)."""
@@ -3888,3 +5873,287 @@ class TestBareTypeEntry:
         assert r.ok
         assert r.kind == "type"
         assert render_entry_result(r, echo=True, check_only=True) == "<type: int>"
+
+
+# ---------------------------------------------------------------------------
+# Session bootstrap (ReplSession.open)
+# ---------------------------------------------------------------------------
+
+
+class TestSessionOpen:
+    """``ReplSession.open`` loads the initial library image before any entry runs.
+
+    A host (``agm repl``) calls it once, right after constructing the
+    session and before printing a banner or accepting input, so a rejected
+    engine-setting override is reported before the session appears to have
+    started. The loaded library modules become the cache the first entry
+    reuses, so opening the session never doubles the standard-library
+    compile a lone first entry would otherwise perform on its own.
+    """
+
+    def test_open_with_no_overrides_preloads_the_default_stdlib(self) -> None:
+        from agm.agl.modules.ids import STD_CONFIG_ID, STD_CORE_ID
+
+        s = ReplSession()
+        assert s.open() == ()
+        assert STD_CORE_ID in s._loaded_lib_modules
+        assert STD_CONFIG_ID in s._loaded_lib_modules
+        assert s._next_node_id > 0
+
+    def test_open_without_stdlib_is_a_harmless_no_op(self) -> None:
+        s = ReplSession(default_stdlib=False)
+        assert s.open() == ()
+        assert s._loaded_lib_modules == {}
+
+    def test_open_applies_a_well_formed_override_before_the_first_entry(self) -> None:
+        from agm.agl.semantics.values import EnumValue, TextValue
+        from agm.agl.setting_overrides import SettingOverride
+
+        s = ReplSession(
+            setting_overrides={
+                "default-agent": SettingOverride(
+                    source='AgentCommand("preloaded")', origin="--agent"
+                )
+            }
+        )
+        assert s.open() == ()
+
+        result = s.eval_entry("import std/config\nstd/config::default-agent")
+        assert result.ok
+        assert isinstance(result.value, EnumValue)
+        assert result.value.variant == "AgentCommand"
+        assert result.value.fields["command"] == TextValue("preloaded")
+
+    def test_open_rejects_an_unparseable_override_naming_its_origin(self) -> None:
+        from agm.agl.setting_overrides import SettingOverride
+
+        s = ReplSession(
+            setting_overrides={"default-agent": SettingOverride(source="(", origin="--agent")}
+        )
+        diagnostics = s.open()
+        assert diagnostics
+        from agm.agl.diagnostics import format_diagnostic
+
+        assert any("--agent" in format_diagnostic(d) for d in diagnostics)
+        # A rejected override promotes nothing, so the session is left exactly
+        # as constructed rather than with a half-applied initial image.
+        assert s._loaded_lib_modules == {}
+        assert s._next_node_id == 0
+
+    def test_open_rejects_a_wrong_typed_override_naming_its_origin(self) -> None:
+        from agm.agl.setting_overrides import SettingOverride
+
+        s = ReplSession(
+            setting_overrides={
+                "default-agent": SettingOverride(source='"not-an-agent"', origin="--agent")
+            }
+        )
+        diagnostics = s.open()
+        assert diagnostics
+        from agm.agl.diagnostics import format_diagnostic
+
+        assert any("--agent" in format_diagnostic(d) for d in diagnostics)
+
+    def test_open_rejects_a_non_constant_override_naming_its_origin(self) -> None:
+        from agm.agl.setting_overrides import SettingOverride
+
+        s = ReplSession(
+            setting_overrides={
+                "default-agent": SettingOverride(
+                    source='AgentCommand("not " + "constant")', origin="--agent"
+                )
+            }
+        )
+        diagnostics = s.open()
+        assert diagnostics
+        from agm.agl.diagnostics import format_diagnostic
+
+        assert any("--agent" in format_diagnostic(d) for d in diagnostics)
+
+    def test_reset_leaves_the_override_in_force(self) -> None:
+        from agm.agl.semantics.values import EnumValue, TextValue
+        from agm.agl.setting_overrides import SettingOverride
+
+        s = ReplSession(
+            setting_overrides={
+                "default-agent": SettingOverride(
+                    source='AgentCommand("preloaded")', origin="--agent"
+                )
+            }
+        )
+        assert s.open() == ()
+        assert s.eval_entry("import std/config").ok
+
+        s.reset()
+
+        result = s.eval_entry("import std/config\nstd/config::default-agent")
+        assert result.ok
+        assert isinstance(result.value, EnumValue)
+        assert result.value.variant == "AgentCommand"
+        assert result.value.fields["command"] == TextValue("preloaded")
+
+    def test_stdlib_is_loaded_exactly_once_across_open_and_two_entries(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The initial image ``open`` builds is the cache every entry reuses.
+
+        Spies on the module loader the way the ``agm exec`` guard does
+        (``test_agl_pipeline_setting_overrides.py``), but counts freshly
+        loaded modules per call rather than call count -- ``open`` calls
+        ``build_repl_graph`` too, same as an entry, so counting calls alone
+        would not distinguish "loaded the stdlib" from "reused the cache".
+        """
+        import agm.agl.modules.loader as loader_mod
+        from agm.agl.setting_overrides import SettingOverride
+
+        original = loader_mod.build_repl_graph
+        new_module_counts: list[int] = []
+
+        def spy(*args: object, **kwargs: object) -> object:
+            result = original(*args, **kwargs)
+            _graph, _next_id, new_modules = result
+            new_module_counts.append(len(new_modules))
+            return result
+
+        monkeypatch.setattr(loader_mod, "build_repl_graph", spy)
+
+        s = ReplSession(
+            setting_overrides={
+                "default-agent": SettingOverride(
+                    source='AgentCommand("preloaded")', origin="--agent"
+                )
+            }
+        )
+        assert s.open() == ()
+        assert new_module_counts and new_module_counts[0] > 0
+
+        assert s.eval_entry("1 + 1").ok
+        assert s.eval_entry("2 + 2").ok
+
+        assert new_module_counts[1:] == [0, 0]
+
+    def test_open_rejects_a_required_override_when_std_config_never_loads(self) -> None:
+        """``--no-stdlib`` never loads ``std/config``, but a ``required`` override
+        (the default; mirrors a CLI ``--agent`` flag) is a request the host
+        cannot silently drop -- it still fails ``open()`` up front, rather than
+        being deferred to whichever entry, if any, first imports ``std/config``.
+        """
+        from agm.agl.diagnostics import format_diagnostic
+        from agm.agl.setting_overrides import SettingOverride
+
+        s = ReplSession(
+            default_stdlib=False,
+            setting_overrides={
+                "default-agent": SettingOverride(source='AgentCommand("x")', origin="--agent")
+            },
+        )
+        diagnostics = s.open()
+        assert diagnostics
+        assert any("--agent" in format_diagnostic(d) for d in diagnostics)
+        assert s._loaded_lib_modules == {}
+
+    def test_open_with_non_required_override_and_no_stdlib_is_a_harmless_no_op(self) -> None:
+        """A non-``required`` override (ambient configuration, e.g.
+        ``[exec] default-agent``) is simply inert when ``std/config`` never
+        loads: ``open()`` must not fail because of it.
+        """
+        from agm.agl.setting_overrides import SettingOverride
+
+        s = ReplSession(
+            default_stdlib=False,
+            setting_overrides={
+                "default-agent": SettingOverride(
+                    source='AgentCommand("x")', origin="[exec] default-agent", required=False
+                )
+            },
+        )
+        assert s.open() == ()
+        assert s._loaded_lib_modules == {}
+
+    def test_open_reports_an_unreadable_stdlib_module_instead_of_raising(
+        self, tmp_path: Path
+    ) -> None:
+        """A module under the stdlib root that fails to read is a diagnostic, not a crash.
+
+        ``open`` documents "Never raises": every failure
+        ``load_and_check_program`` can produce must come back as a diagnostic
+        tuple, the same as it already does for a syntax/scope/type error. A
+        module file's own I/O failure -- invalid UTF-8 here, the same class of
+        failure a permission-denied file would raise via
+        ``agm.core.fs.read_text`` -- was previously left uncaught, an
+        unhandled ``UnicodeDecodeError`` breaking the "Never raises" contract.
+        """
+        std_dir = tmp_path / "std"
+        std_dir.mkdir()
+        (std_dir / "core.agl").write_bytes(b"\xff\xfe not valid utf-8 \x80\x81")
+        s = ReplSession(stdlib_root=tmp_path)
+
+        diagnostics = s.open()
+
+        assert diagnostics
+        assert s._loaded_lib_modules == {}
+
+
+class TestDeferredStdlibResolution:
+    """Constructing a session without an explicit ``stdlib_root`` stays total.
+
+    ``resolve_stdlib_root`` can raise ``StaleStdlibError`` when the default
+    search chain finds nothing usable. Resolving it eagerly in the
+    constructor would let that raise escape before any session exists to
+    report a diagnostic through, so it is deferred to first use
+    (``_ensure_roots``) instead.
+    """
+
+    def test_construction_does_not_raise_against_a_stale_default_stdlib(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import agm.config.module_roots as module_roots
+        from agm.config.module_roots import StaleStdlibError
+
+        def _raise_stale(*, home: Path) -> Path:
+            raise StaleStdlibError(home / ".agm" / "stdlib")
+
+        monkeypatch.delenv("AGM_STDLIB", raising=False)
+        monkeypatch.setattr(module_roots, "resolve_stdlib_root", _raise_stale)
+
+        # Must not raise: resolution has not happened yet.
+        s = ReplSession()
+
+        # The raise, reached lazily on first use, is caught by ``open``'s own
+        # "Never raises" contract rather than propagating.
+        diagnostics = s.open()
+        assert diagnostics
+        assert "out of date" in diagnostics[0].message
+
+    def test_default_stdlib_resolution_honors_agm_home(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A relocated ``AGM_HOME`` -- not the process home directory -- selects the stdlib.
+
+        Mirrors how ``commands/repl.py`` resolves this session's stdlib root
+        (``current_config_context(...).home``): the deferred resolution in
+        ``_ensure_roots`` must use the same seam, not a hardcoded
+        ``Path.home()``, so a relocated ``AGM_HOME`` is honored here exactly
+        as it is for every other AGM home lookup.
+        """
+        from agm.config.module_roots import STDLIB_CONTRACT_ID
+
+        agm_home = tmp_path / "relocated-agm"
+        stdlib_root = agm_home / "stdlib"
+        std_dir = stdlib_root / "std"
+        std_dir.mkdir(parents=True)
+        real_stdlib = Path(__file__).resolve().parents[1] / "stdlib" / "std"
+        for name in ("core.agl", "config.agl"):
+            (std_dir / name).write_text(
+                (real_stdlib / name).read_text(encoding="utf-8"), encoding="utf-8"
+            )
+        (stdlib_root / "STDLIB_CONTRACT").write_text(STDLIB_CONTRACT_ID, encoding="utf-8")
+
+        monkeypatch.delenv("AGM_STDLIB", raising=False)
+        monkeypatch.setenv("AGM_HOME", str(agm_home))
+
+        s = ReplSession()
+        assert s.open() == ()
+
+        assert s._roots is not None
+        assert stdlib_root.resolve() in s._roots.roots

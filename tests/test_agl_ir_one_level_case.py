@@ -39,8 +39,8 @@ from agm.agl.semantics.values import IntValue
 
 _SOURCE = "case"
 _LOC = Location(SourceId(0), 0, 1, 1, 0)
-_COLOR = NominalId(ENTRY_ID, "Color")
-_OTHER = NominalId(ENTRY_ID, "Other")
+_COLOR = NominalId(1)
+_OTHER = NominalId(2)
 _PAYLOAD = SymbolId(0)
 _RESULT = SymbolId(1)
 
@@ -63,7 +63,9 @@ def _program(
 def _color_descriptor() -> NominalDescriptor:
     return NominalDescriptor(
         nominal=_COLOR,
-        display_name="Color",
+        module_id=ENTRY_ID,
+        scope_path=(),
+        declared_name="Color",
         kind=NominalKind.ENUM,
         variants=(
             VariantDescriptor("Plain", ()),
@@ -188,7 +190,9 @@ def test_validation_rejects_unknown_nominal_and_variant() -> None:
 def test_validation_rejects_non_enum_nominal_and_corrupted_literal_key() -> None:
     record_descriptor = NominalDescriptor(
         nominal=_COLOR,
-        display_name="Color",
+        module_id=ENTRY_ID,
+        scope_path=(),
+        declared_name="Color",
         kind=NominalKind.RECORD,
     )
     enum_case = IrCase(

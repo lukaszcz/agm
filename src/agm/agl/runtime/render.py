@@ -20,7 +20,6 @@ from agm.agl.runtime.serialize import dumps_exact, value_to_json_obj
 from agm.agl.semantics.cycles import enter_container
 from agm.agl.semantics.text_literal import quote_text
 from agm.agl.semantics.values import (
-    AgentValue,
     ArrayValue,
     BoolValue,
     ConstructorValue,
@@ -144,9 +143,6 @@ def _render(
 
     if isinstance(value, (IntValue, DecimalValue, BoolValue)):
         return _scalar_text(value)
-
-    if isinstance(value, AgentValue):
-        return f"<agent {value.name}>"
 
     if isinstance(value, ConstructorValue):
         if value.variant is not None:

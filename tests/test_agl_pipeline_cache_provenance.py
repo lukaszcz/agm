@@ -175,6 +175,18 @@ def test_graph_artifact_is_rechecked_when_host_capabilities_change() -> None:
     assert discovery.compiled is not compiled
 
 
+def test_program_run_rechecks_prechecked_artifact_when_host_capabilities_change() -> None:
+    runtime = PipelineDriver()
+    prepared = _prepare_graph("let value = 1\nvalue")
+    discovery = runtime.discover_params(prepared)
+    assert discovery.checked is not None
+    _change_capabilities(runtime)
+
+    run = runtime.run_prepared(prepared, check_only=True, checked=discovery.checked)
+
+    assert run.ok
+
+
 def test_program_run_rechecks_compiled_artifact_when_host_capabilities_change() -> None:
     runtime = PipelineDriver()
     prepared = _prepare_graph("let value = 1\nvalue")

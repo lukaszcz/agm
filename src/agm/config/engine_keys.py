@@ -24,6 +24,7 @@ class EngineKeyKind(Enum):
     INT = "int"
     TEXT = "text"
     OPTION_TEXT = "option_text"
+    AGENT = "agent"
 
 
 class EngineKeyConsumer(Enum):
@@ -34,9 +35,8 @@ class EngineKeyConsumer(Enum):
         cap, the strict-json mode, the shell timeout), so a write takes effect
         inside the evaluator itself.
     ``HOST_CONSUMED``
-        The key has no interpreter field; its value lives in a register and a
-        write is reflected back into a live host service (the agent runner, the
-        trace destination) by the host.
+        The key has no interpreter field; its value lives in a register for the
+        host to read on demand.
     """
 
     RUNTIME_LIVE = "runtime_live"
@@ -45,22 +45,67 @@ class EngineKeyConsumer(Enum):
 
 @dataclass(frozen=True)
 class EngineKeySpec:
-    """One engine key: its kebab-case name, value kind, and consuming side."""
+    """One engine key: its shape, config accessor, and host default.
+
+    ``config_attr`` names the corresponding ``ExecConfig`` attribute without
+    making this pure data leaf import the config layer. ``has_default``
+    distinguishes an absent host default from an ``Option`` default whose value
+    is ``None``.
+    """
 
     name: str
     kind: EngineKeyKind
     consumer: EngineKeyConsumer
+    config_attr: str | None = None
+    default: object = None
+    has_default: bool = True
 
 
 # Ordered catalog of every engine key.  This is the one place a key is declared;
 # every projection below is derived from it.
 ENGINE_KEYS: tuple[EngineKeySpec, ...] = (
-    EngineKeySpec("log", EngineKeyKind.BOOL, EngineKeyConsumer.HOST_CONSUMED),
-    EngineKeySpec("strict-json", EngineKeyKind.BOOL, EngineKeyConsumer.RUNTIME_LIVE),
-    EngineKeySpec("max-iters", EngineKeyKind.INT, EngineKeyConsumer.RUNTIME_LIVE),
-    EngineKeySpec("runner", EngineKeyKind.TEXT, EngineKeyConsumer.HOST_CONSUMED),
-    EngineKeySpec("log-file", EngineKeyKind.OPTION_TEXT, EngineKeyConsumer.HOST_CONSUMED),
-    EngineKeySpec("timeout", EngineKeyKind.OPTION_TEXT, EngineKeyConsumer.RUNTIME_LIVE),
+    EngineKeySpec(
+        "log",
+        EngineKeyKind.BOOL,
+        EngineKeyConsumer.HOST_CONSUMED,
+        config_attr="log",
+        default=False,
+    ),
+    EngineKeySpec(
+        "strict-json",
+        EngineKeyKind.BOOL,
+        EngineKeyConsumer.RUNTIME_LIVE,
+        config_attr="strict_json",
+        default=False,
+    ),
+    EngineKeySpec(
+        "max-iters",
+        EngineKeyKind.INT,
+        EngineKeyConsumer.RUNTIME_LIVE,
+        config_attr="default_loop_limit",
+        default=0,
+    ),
+    EngineKeySpec(
+        "default-agent",
+        EngineKeyKind.AGENT,
+        EngineKeyConsumer.HOST_CONSUMED,
+        config_attr="default_agent",
+        has_default=False,
+    ),
+    EngineKeySpec(
+        "log-file",
+        EngineKeyKind.OPTION_TEXT,
+        EngineKeyConsumer.HOST_CONSUMED,
+        config_attr="log_file",
+        default=None,
+    ),
+    EngineKeySpec(
+        "timeout",
+        EngineKeyKind.OPTION_TEXT,
+        EngineKeyConsumer.RUNTIME_LIVE,
+        config_attr="timeout",
+        default=None,
+    ),
 )
 
 # Ordered projection for consumers that only need name -> value kind.
@@ -80,5 +125,22 @@ def engine_keys_for(consumer: EngineKeyConsumer) -> frozenset[str]:
 # Keys whose write applies a live effect inside the AgL evaluator.
 RUNTIME_LIVE_ENGINE_KEYS: frozenset[str] = engine_keys_for(EngineKeyConsumer.RUNTIME_LIVE)
 
-# Keys backed by a register and reflected into a live host service on write.
+# Keys backed by a host-owned register.
 HOST_CONSUMED_ENGINE_KEYS: frozenset[str] = engine_keys_for(EngineKeyConsumer.HOST_CONSUMED)
+
+#: The register pair backing the trace destination. A write to either repoints
+#: the same trace store; see ``IrInterpreter._reconfigure_host_service``.
+TRACE_ENGINE_KEYS: frozenset[str] = frozenset(
+    spec.name
+    for spec in ENGINE_KEYS
+    if spec.consumer is EngineKeyConsumer.HOST_CONSUMED and spec.name in {"log", "log-file"}
+)
+
+
+def trace_write_implies_enabled(key: str, value_is_some: bool) -> bool:
+    """Return whether a trace-register write also enables trace logging.
+
+    A ``Some`` write to ``log-file`` supplies a trace destination and therefore
+    implies the ``log`` register is enabled.
+    """
+    return key == "log-file" and value_is_some

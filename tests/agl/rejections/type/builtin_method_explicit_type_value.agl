@@ -1,0 +1,2 @@
+let worker = AgentCommand("worker")
+let ask_text = worker.ask::[text]

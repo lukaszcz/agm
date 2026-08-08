@@ -39,6 +39,8 @@ from agm.agl.ir import (
     IrAssign,
     IrBind,
     IrBlock,
+    IrBuiltinLoad,
+    IrBuiltinStore,
     IrCapture,
     IrCoerce,
     IrConstBool,
@@ -81,7 +83,7 @@ from agm.agl.ir import (
     VariantDescriptor,
 )
 from agm.agl.ir.ids import NominalId
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
+from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.semantics.values import (
     VOID_VALUE,
     ArrayValue,
@@ -889,7 +891,7 @@ class TestDefensiveErrors:
             (
                 IrVariantIs(
                     _LOC,
-                    nominal=NominalId(ENTRY_ID, "Color"),
+                    nominal=NominalId(1),
                     variant="Red",
                     value=IrConstInt(_LOC, 1),
                     negated=False,
@@ -924,7 +926,7 @@ class TestIrField:
         """
         rec_sym, rec_desc = _let_sym(0, "rec")
         out_sym, out_desc = _let_sym(1, "out")
-        nominal = NominalId(ENTRY_ID, "Point")
+        nominal = NominalId(2)
         make_record = IrMakeRecord(
             location=_LOC,
             nominal=nominal,
@@ -952,7 +954,9 @@ class TestIrField:
             nominals={
                 nominal: NominalDescriptor(
                     nominal=nominal,
-                    display_name="Point",
+                    module_id=ENTRY_ID,
+                    scope_path=(),
+                    declared_name="Point",
                     kind=NominalKind.RECORD,
                     fields=("x", "y"),
                 )
@@ -977,13 +981,13 @@ class TestIrField:
                 "x",
                 x_val=3,
                 y_val=4,
-                expected_nominal=NominalId(ENTRY_ID, "Other"),
+                expected_nominal=NominalId(3),
             )
 
     def _run_with_exception_field(self, field: str, mode: IrFieldMode) -> Value:
         """Project *field* from a concrete exception using *mode*."""
-        exception_nominal = NominalId(PRELUDE_ID, "Abort")
-        base_nominal = NominalId(PRELUDE_ID, "Exception")
+        exception_nominal = NominalId(4)
+        base_nominal = NominalId(5)
         rec_sym, rec_desc = _let_sym(0, "exc")
         out_sym, out_desc = _let_sym(1, "out")
         prog = _make_program(
@@ -1034,7 +1038,7 @@ class TestIrField:
         """IrField uses the same nominal projection contract for enum payloads."""
         enum_sym, enum_desc = _let_sym(0, "wrapped")
         out_sym, out_desc = _let_sym(1, "out")
-        nominal = NominalId(ENTRY_ID, "Wrapper")
+        nominal = NominalId(6)
         prog = _make_program(
             (
                 IrBind(
@@ -1058,7 +1062,9 @@ class TestIrField:
             nominals={
                 nominal: NominalDescriptor(
                     nominal=nominal,
-                    display_name="Wrapper",
+                    module_id=ENTRY_ID,
+                    scope_path=(),
+                    declared_name="Wrapper",
                     kind=NominalKind.ENUM,
                     variants=(VariantDescriptor("wrap", ("value",)),),
                 )
@@ -1077,7 +1083,7 @@ class TestIrField:
                     IrField(
                         _LOC,
                         value=IrLoad(_LOC, SymbolId(0)),
-                        nominal=NominalId(ENTRY_ID, "Point"),
+                        nominal=NominalId(7),
                         field="x",
                     ),
                 ),
@@ -1107,7 +1113,7 @@ class TestIrUpdateRecord:
         """IrUpdateRecord copies the record with listed fields replaced."""
         rec_sym, rec_desc = _let_sym(0, "rec")
         out_sym, out_desc = _let_sym(1, "out")
-        nominal = NominalId(ENTRY_ID, "Point")
+        nominal = NominalId(8)
         make_record = IrMakeRecord(
             location=_LOC,
             nominal=nominal,
@@ -1134,7 +1140,9 @@ class TestIrUpdateRecord:
             nominals={
                 nominal: NominalDescriptor(
                     nominal=nominal,
-                    display_name="Point",
+                    module_id=ENTRY_ID,
+                    scope_path=(),
+                    declared_name="Point",
                     kind=NominalKind.RECORD,
                     fields=("x", "y"),
                 )
@@ -1509,7 +1517,7 @@ class TestFunctionEvaluation:
                 raise_loc,
                 IrMakeException(
                     raise_loc,
-                    NominalId(ENTRY_ID, "Abort"),
+                    NominalId(9),
                     "Abort",
                     (("message", IrConstText(raise_loc, "boom")),),
                 ),
@@ -2211,6 +2219,28 @@ class TestIrExec:
                 IrInterpreter(prog).run()
         assert exc_info.value.exc.display_name == "ExecError"
 
+    def test_host_setting_write_rolls_back_when_live_reconfiguration_fails(self) -> None:
+        """A failed host callback leaves the setting register at its prior value."""
+
+        class Reconfigurer:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def reconfigure_trace(self, *, enabled: bool, log_file: str | None) -> None:
+                del enabled, log_file
+                self.calls += 1
+                if self.calls > 1:
+                    raise RuntimeError("trace service unavailable")
+
+        reconfigurer = Reconfigurer()
+        program = _make_program((IrBuiltinStore(_LOC, "log", IrConstBool(_LOC, True)),))
+        interpreter = IrInterpreter(program, host_reconfigurer=reconfigurer)
+
+        with pytest.raises(RuntimeError, match="trace service unavailable"):
+            interpreter.run()
+
+        assert interpreter.builtin_host_settings["log"] == BoolValue(False)
+
     def test_ir_exec_spawn_error_records_exec_trace(self, tmp_path: pathlib.Path) -> None:
         """A shell spawn failure still records the attempted exec command."""
         import json
@@ -2246,7 +2276,8 @@ class TestIrExec:
         assert record["command"] == "dummy"
         assert record["exit_code"] == -1
         assert record["stderr"] == "No such file or directory"
-        assert exc_info.value.exc.fields["trace_id"].value == record["trace_id"]
+        assert "trace_id" not in exc_info.value.exc.fields
+        assert "trace_id" not in record
 
     def test_ir_exec_preserves_command_expression_raise_span(self) -> None:
         """IrExec does not overwrite a span from its command expression."""
@@ -2258,7 +2289,7 @@ class TestIrExec:
             command_loc,
             IrMakeException(
                 command_loc,
-                NominalId(ENTRY_ID, "Abort"),
+                NominalId(10),
                 "Abort",
                 (("message", IrConstText(command_loc, "boom")),),
             ),
@@ -2487,4 +2518,19 @@ class TestIrExec:
         with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=fake_rcr):
             with pytest.raises(AglRaise) as exc_info:
                 IrInterpreter(prog).run()
-        assert exc_info.value.exc.display_name == "AgentParseError"
+        assert exc_info.value.exc.display_name == "ExecError"
+
+
+class TestHostConsumedSettingRegister:
+    """A host-consumed ``builtin var`` register with no seed and no declaration.
+
+    ``default-agent`` is declared by the shipped ``std/config`` module, not by
+    the interpreter itself; a hand-built program that reads it without either
+    a host seed or that declaration has no value to produce.
+    """
+
+    def test_reading_an_unseeded_undeclared_setting_raises_invalid_ir_error(self) -> None:
+        program = _make_program((IrBuiltinLoad(_LOC, "default-agent"),))
+
+        with pytest.raises(InvalidIrError):
+            IrInterpreter(program).run()

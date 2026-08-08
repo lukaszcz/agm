@@ -47,8 +47,9 @@ from agm.agl.ir.program import (
     SourceFile,
     SymbolDescriptor,
 )
+from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
 from agm.agl.ir.validate import validate_ir
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import (
     VOID_VALUE,
@@ -77,14 +78,9 @@ _DUMMY_LOC = Location(
 
 def _lower(source: str) -> ExecutableProgram:
     """Parse → resolve → check → lower *source*; return the ExecutableProgram."""
-    from agm.agl.lower import lower_module
-    from agm.agl.parser import parse_program
-    from agm.agl.scope import resolve_module
-    from agm.agl.typecheck import check_module
-    from tests.agl.ir_harness import _compiled_checked, base_caps
+    from tests.agl.ir_harness import lower_ir
 
-    checked = check_module(resolve_module(parse_program(source)), base_caps())
-    return lower_module(_compiled_checked(checked), source_text=source, source_label="<test>")
+    return lower_ir(source)
 
 
 def _make_minimal_program(
@@ -97,13 +93,15 @@ def _make_minimal_program(
     from agm.agl.semantics.type_table import create_seeded_type_table
     from agm.agl.semantics.types import BUILTIN_EXCEPTIONS
 
-    max_iter_nominal = NominalId(PRELUDE_ID, "MaxIterationsExceeded")
+    max_iter_nominal = NominalId(require_reserved_nominal_id("MaxIterationsExceeded"))
     exc_type = BUILTIN_EXCEPTIONS["MaxIterationsExceeded"]
     exc_fields = create_seeded_type_table().exception_fields(exc_type)
     nominals = {
         max_iter_nominal: NominalDescriptor(
             nominal=max_iter_nominal,
-            display_name="MaxIterationsExceeded",
+            module_id=STD_CORE_ID,
+            scope_path=(),
+            declared_name="MaxIterationsExceeded",
             kind=NominalKind.EXCEPTION,
             fields=tuple(exc_fields.keys()),
             variants=(),
@@ -753,28 +751,22 @@ def test_for_loop_non_iterable_bool_raises_type_error() -> None:
     """for x in bool do body done — non-iterable type is a typecheck error."""
     from agm.agl.typecheck.env import AglTypeError
     from tests.agl.ir_harness import base_caps
+    from tests.agl.module_graph import resolve_and_check_entry
 
     source = "for x in true do\n  ()\ndone\n"
     with pytest.raises(AglTypeError):
-        from agm.agl.parser import parse_program
-        from agm.agl.scope import resolve_module
-        from agm.agl.typecheck import check_module
-
-        check_module(resolve_module(parse_program(source)), base_caps())
+        resolve_and_check_entry(source, base_caps())
 
 
 def test_for_loop_int_collection_raises_type_error() -> None:
     """for x in int_expr do body done — int is not an iterable collection."""
     from agm.agl.typecheck.env import AglTypeError
     from tests.agl.ir_harness import base_caps
+    from tests.agl.module_graph import resolve_and_check_entry
 
     source = "for x in 42 do\n  ()\ndone\n"
     with pytest.raises(AglTypeError):
-        from agm.agl.parser import parse_program
-        from agm.agl.scope import resolve_module
-        from agm.agl.typecheck import check_module
-
-        check_module(resolve_module(parse_program(source)), base_caps())
+        resolve_and_check_entry(source, base_caps())
 
 
 # ---------------------------------------------------------------------------

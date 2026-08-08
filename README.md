@@ -184,10 +184,9 @@ Execute an AgL (Agent Language) workflow program. AgL is a statically-typed, exp
 DSL for composable agent workflows: it supports typed params and outputs, user-defined functions
 (`def`/`fn`), functions implemented by a co-located Python file (`extern def`), structured JSON
 targets, do-loops with retry/abort policies, control flow (if/case/try), shell execution (`exec`),
-and named agents declared in the source (`agent NAME`, optionally `= "runner"`). All calls —
-including `ask`, `print`, and `exec` — use the uniform `f(arg, name = val)` syntax. The runner
-command for each declared agent is resolved from `[exec.agents]` (per-agent), the source runner
-hint, `--runner`, `[exec] runner`, `[loop] runner`, or `claude -p` (built-in default).
+and typed `Agent` values. `ask` receives an `Agent` value — for example
+`AgentCommand("claude -p")` or `AgentClaude("sonnet", "medium")` — explicitly or from
+`std/config::default-agent`. The selected value determines the invoked command.
 
 Programs can span multiple `.agl` files via the module system (`import utils/math`).
 Every loaded entry and library module, except `std/core` itself, opens `std/core` by

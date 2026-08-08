@@ -80,11 +80,10 @@ Field notes:
 
 - `params` — passed to `runtime.run(source, params=...)` verbatim. JSON numbers with
   a fractional part are loaded as `decimal.Decimal` (AgL has no binary floats).
-- `agents` — per-agent response queues, consumed in call order **across all call
-  sites** of that agent. A list is a strict queue (a call past its end fails the
+- `agents` — response queues selected by the `Agent` value at each call site,
+  consumed in call order. A list is a strict queue (a call past its end fails the
   test); the object form allows `repeat_last` for loop-exhaustion scenarios. The key
-  `ask` scripts the built-in default agent (passed as the runtime's
-  `default_agent`, since `ask` cannot be registered by name).
+  `ask` scripts the default non-command `Agent` variants.
 - `shell` — ordered scripted shell calls. Each object names the rendered
   `command` and may set `stdout`, `stderr`, `returncode`, `timed_out`, or
   `spawn_error`; omitted fields describe a successful command with empty output.

@@ -6,9 +6,8 @@ Usage::
 
     driver = PipelineDriver(
         default_strict_json=False,
-        default_agent=my_agent_fn,
+        agent_dispatcher=my_agent_fn,
     )
-    driver.register_agent("reviewer", reviewer_fn)
     result = driver.run(source_text, param_values={"spec": "..."})
 
     if result.ok:
@@ -28,7 +27,6 @@ from agm.agl.diagnostics import (
     format_diagnostic,
 )
 from agm.agl.pipeline import (
-    AgentDeclInfo,
     CallSiteInfo,
     PipelineDriver,
     PreparedProgram,
@@ -38,7 +36,6 @@ from agm.agl.pipeline import (
 from agm.agl.runtime.agents import AgentFn
 
 __all__ = [
-    "AgentDeclInfo",
     "AgentFn",
     "AglError",
     "CallSiteInfo",

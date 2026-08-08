@@ -144,7 +144,7 @@ def test_prepare_select_invocation_prefers_selector_when_configured(
     prompt_dir = home / ".agm" / "prompts"
     prompt_dir.mkdir(parents=True)
     prompt_path = prompt_dir / "select.md"
-    prompt_path.write_text("update $TASKS_DIR\n", encoding="utf-8")
+    prompt_path.write_text("update %{TASKS_DIR}\n", encoding="utf-8")
 
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
@@ -581,10 +581,12 @@ class TestPreparePromptFromSource:
         temp_files: list[Path] = []
         env = {"MY_VAR": "hello"}
 
-        resolved = prepare_prompt_from_source("greet $MY_VAR world", temp_files=temp_files, env=env)
+        resolved = prepare_prompt_from_source(
+            "greet %{MY_VAR} world", temp_files=temp_files, env=env
+        )
 
         assert isinstance(resolved.source, str)
-        assert resolved.source == "greet $MY_VAR world"
+        assert resolved.source == "greet %{MY_VAR} world"
         assert resolved.effective_file.read_text(encoding="utf-8") == "greet hello world"
         assert resolved.effective_file in temp_files
         # Clean up
@@ -603,7 +605,7 @@ class TestPreparePromptFromSource:
 
     def test_file_path_processes_existing_file(self, tmp_path: Path) -> None:
         prompt_path = tmp_path / "custom-prompt.md"
-        prompt_path.write_text("task: $TASK_VAR", encoding="utf-8")
+        prompt_path.write_text("task: %{TASK_VAR}", encoding="utf-8")
 
         temp_files: list[Path] = []
         env = {"TASK_VAR": "testing"}
@@ -632,7 +634,7 @@ class TestPreparePromptFromSource:
         env = loop_env(Path("/tmp/tasks"))
 
         resolved = prepare_prompt_from_source(
-            "look in $TASKS_DIR for tasks", temp_files=temp_files, env=env
+            "look in %{TASKS_DIR} for tasks", temp_files=temp_files, env=env
         )
 
         assert isinstance(resolved.source, str)
@@ -641,7 +643,7 @@ class TestPreparePromptFromSource:
 
     def test_file_path_expands_tasks_dir_from_loop_env(self, tmp_path: Path) -> None:
         prompt_path = tmp_path / "custom-prompt.md"
-        prompt_path.write_text("dir=$TASKS_DIR", encoding="utf-8")
+        prompt_path.write_text("dir=%{TASKS_DIR}", encoding="utf-8")
 
         temp_files: list[Path] = []
         env = loop_env(Path("/tmp/tasks"))
@@ -975,7 +977,7 @@ class TestPrepareProgressInvocationSelectorPrompt:
             tasks_dir=None,
             prompt=None,
             prompt_file=None,
-            selector_prompt="custom selector $TASKS_DIR",
+            selector_prompt="custom selector %{TASKS_DIR}",
             selector_prompt_file=None,
             extra_prompt=None,
             extra_prompt_file=None,
@@ -1002,7 +1004,7 @@ class TestPrepareProgressInvocationSelectorPrompt:
         default_prompt.write_text("default update\n", encoding="utf-8")
 
         custom_prompt = tmp_path / "custom-selector.md"
-        custom_prompt.write_text("select task from $TASKS_DIR\n", encoding="utf-8")
+        custom_prompt.write_text("select task from %{TASKS_DIR}\n", encoding="utf-8")
 
         monkeypatch.setenv("HOME", str(home))
         monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
@@ -1041,7 +1043,7 @@ class TestPrepareProgressInvocationSelectorPrompt:
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
         default_prompt = prompt_dir / "select.md"
-        default_prompt.write_text("default update $TASKS_DIR\n", encoding="utf-8")
+        default_prompt.write_text("default update %{TASKS_DIR}\n", encoding="utf-8")
 
         monkeypatch.setenv("HOME", str(home))
         monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
@@ -1162,31 +1164,249 @@ class TestValidateCommandNotFound:
     def test_validate_command_exits_when_not_found(self) -> None:
 
         with pytest.raises(SystemExit) as exc_info:
-            validate_command(["nonexistent-command-xyz123"], kind="runner")
+            validate_command(["nonexistent-command-xyz123"], kind="runner", env={})
         assert exc_info.value.code == 1
+
+    def test_interpolates_executable_without_mutating_command(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        command = ["%{RUNNER_EXECUTABLE}", "--option=%{RUNNER_OPTION}"]
+        env = {"RUNNER_EXECUTABLE": "fake-runner", "RUNNER_OPTION": "value"}
+        looked_up: list[str] = []
+        monkeypatch.setattr(
+            "shutil.which", lambda executable: looked_up.append(executable) or "/bin/fake"
+        )
+
+        validate_command(command, kind="runner", env=env)
+
+        assert looked_up == ["fake-runner"]
+        assert command == ["%{RUNNER_EXECUTABLE}", "--option=%{RUNNER_OPTION}"]
+
+    @pytest.mark.parametrize("placeholder", ["%{PROMPT_FILE}", "%%"])
+    def test_defers_prompt_file_executable_validation_and_uses_target_overlay(
+        self, monkeypatch: pytest.MonkeyPatch, placeholder: str
+    ) -> None:
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda executable: pytest.fail(f"preflight checked {executable!r}"),
+        )
+
+        command = [placeholder]
+        validate_command(command, kind="runner", env={"PROMPT_FILE": "wrong-executable"})
+
+        assert command_with_prompt_target(
+            command, Path("/tmp/correct-prompt-file"), env={"PROMPT_FILE": "wrong-executable"}
+        ) == ["/tmp/correct-prompt-file"]
+
+    def test_preflight_does_not_reject_a_hole_the_child_env_will_resolve(self) -> None:
+        """Preflight must use the same env the command will actually run with.
+
+        A runner whose executable path is templated with a variable that only
+        exists in the workflow env (e.g. ``TASKS_DIR``, never in ``os.environ``)
+        must validate successfully when that env is threaded through, matching
+        what happens at run time via ``command_with_prompt_target``.
+        """
+        env = {"TASKS_DIR": "/work/tasks"}
+        looked_up: list[str] = []
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "shutil.which", lambda executable: looked_up.append(executable) or "/bin/fake"
+            )
+            validate_command(["%{TASKS_DIR}/bin/runner"], kind="runner", env=env)
+
+        assert looked_up == ["/work/tasks/bin/runner"]
+
+    @pytest.mark.parametrize("executable", ["%{MISSING_RUNNER_EXECUTABLE}", "%{unterminated"])
+    def test_invalid_executable_hole_exits_cleanly(
+        self, executable: str, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit) as exc_info:
+            validate_command([executable], kind="runner", env={})
+
+        assert exc_info.value.code == 1
+        error = capsys.readouterr().err
+        assert "runner command executable" in error
+        assert "Traceback" not in error
+
+    @pytest.mark.parametrize(
+        "executable, expected",
+        [
+            ("%{PROMPT_FILE}-%{MISSING_RUNNER_EXECUTABLE}", "MISSING_RUNNER_EXECUTABLE"),
+            ("%%-%{MISSING_RUNNER_EXECUTABLE}", "MISSING_RUNNER_EXECUTABLE"),
+            ("%%-%{unterminated", "unterminated"),
+        ],
+    )
+    def test_prompt_file_executable_still_rejects_ordinary_hole_errors(
+        self, executable: str, expected: str, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit) as exc_info:
+            validate_command([executable], kind="runner", env={})
+
+        assert exc_info.value.code == 1
+        assert expected in capsys.readouterr().err
 
 
 class TestCommandWithPromptTarget:
     def test_replaces_percent_percent_placeholder(self) -> None:
-
-        result = command_with_prompt_target(["runner", "%%"], Path("/tmp/prompt.md"))
+        result = command_with_prompt_target(["runner", "%%"], Path("/tmp/prompt.md"), env={})
         assert result == ["runner", "/tmp/prompt.md"]
 
-    def test_replaces_prompt_file_placeholder(self) -> None:
+    def test_replaces_prompt_file_placeholder_in_multiple_elements(self, tmp_path: Path) -> None:
+        target = tmp_path / "prompt.md"
 
-        result = command_with_prompt_target(["runner", "%{PROMPT_FILE}"], Path("/tmp/prompt.md"))
-        assert result == ["runner", "/tmp/prompt.md"]
+        result = command_with_prompt_target(
+            ["runner", "--input=%{PROMPT_FILE}", "%{PROMPT_FILE}"],
+            target,
+            env={"PROMPT_FILE": "wrong-path"},
+        )
+
+        assert result == ["runner", f"--input={target}", str(target)]
+
+    def test_replaces_alias_and_prompt_file_hole_in_same_element(self, tmp_path: Path) -> None:
+        target = tmp_path / "prompt.md"
+
+        result = command_with_prompt_target(["runner", "%%:%{PROMPT_FILE}"], target, env={})
+
+        assert result == ["runner", f"{target}:{target}"]
+
+    def test_percent_percent_alias_inserts_target_without_reinterpolating_it(self) -> None:
+        target = Path("/tmp/%{PROJECT}/prompt.md")
+
+        result = command_with_prompt_target(
+            ["runner", "--prompt=%%"], target, env={"PROJECT": "rewritten"}
+        )
+
+        assert result == ["runner", f"--prompt={target}"]
+
+    def test_alias_inside_an_interpolated_value_is_not_treated_as_a_placeholder(self) -> None:
+        result = command_with_prompt_target(
+            ["runner", "--label=%{DISCOUNT}"], Path("/tmp/p.md"), env={"DISCOUNT": "50%% off"}
+        )
+
+        assert result == ["runner", "--label=50%% off", "@/tmp/p.md"]
 
     def test_appends_at_target_when_no_placeholder(self) -> None:
-
-        result = command_with_prompt_target(["runner"], Path("/tmp/prompt.md"))
+        result = command_with_prompt_target(["runner"], Path("/tmp/prompt.md"), env={})
         assert result == ["runner", "@/tmp/prompt.md"]
 
-    def test_replaced_true_returns_modified_command(self, tmp_path: Path) -> None:
+    def test_expands_other_environment_variables(self) -> None:
+        result = command_with_prompt_target(
+            ["runner", "--option=%{RUNNER_OPTION}", "%{PROMPT_FILE}"],
+            Path("/tmp/prompt.md"),
+            env={"RUNNER_OPTION": "from-environment"},
+        )
 
-        target = tmp_path / "prompt.md"
-        result = command_with_prompt_target(["runner", "--input", "%%", "--flag"], target)
-        assert result == ["runner", "--input", str(target), "--flag"]
+        assert result == ["runner", "--option=from-environment", "/tmp/prompt.md"]
+
+    def test_escaped_prompt_file_hole_remains_literal_and_appends_fallback(self) -> None:
+        result = command_with_prompt_target(
+            ["runner", r"\%{PROMPT_FILE}"], Path("/tmp/prompt.md"), env={}
+        )
+
+        assert result == ["runner", "%{PROMPT_FILE}", "@/tmp/prompt.md"]
+
+    def test_unknown_hole_raises_with_runner_element_and_variable(self) -> None:
+        from agm.util.interp import InterpolationError
+
+        with pytest.raises(InterpolationError) as exc_info:
+            command_with_prompt_target(
+                ["runner", "%{UNKNOWN_RUNNER_VALUE}"], Path("/tmp/prompt.md"), env={}
+            )
+
+        assert exc_info.value.text == "UNKNOWN_RUNNER_VALUE"
+        assert "%{UNKNOWN_RUNNER_VALUE}" in str(exc_info.value)
+
+    def test_unknown_hole_error_names_the_offending_argv_element(self) -> None:
+        """Regression: a runner with several holes must say which element failed.
+
+        Previously the message only reported the missing variable and an
+        offset relative to an unnamed element, e.g. for
+        ``claude -p --add-dir %{A} --settings %{B}`` the user could not tell
+        whether ``--add-dir %{A}`` or ``--settings %{B}`` was at fault.
+        """
+        from agm.util.interp import InterpolationError
+
+        with pytest.raises(InterpolationError) as exc_info:
+            command_with_prompt_target(
+                ["claude", "-p", "--add-dir", "%{A}", "--settings", "%{B}"],
+                Path("/tmp/prompt.md"),
+                env={},
+            )
+
+        assert exc_info.value.text == "A"
+        assert "%{A}" in str(exc_info.value)
+
+    def test_exiting_wrapper_reports_unknown_hole(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from agm.agent.runner import command_with_prompt_target_or_exit
+
+        with pytest.raises(SystemExit) as exc_info:
+            command_with_prompt_target_or_exit(
+                ["runner", "%{UNKNOWN_RUNNER_VALUE}"], Path("/tmp/prompt.md"), env={}
+            )
+
+        assert exc_info.value.code == 1
+        error = capsys.readouterr().err
+        assert "UNKNOWN_RUNNER_VALUE" in error
+        assert "%{UNKNOWN_RUNNER_VALUE}" in error
+
+    @pytest.mark.parametrize("element", ["%{unterminated", "%{not valid}"])
+    def test_malformed_hole_raises_with_runner_element(self, element: str) -> None:
+        from agm.util.interp import InterpolationError
+
+        with pytest.raises(InterpolationError):
+            command_with_prompt_target(["runner", element], Path("/tmp/prompt.md"), env={})
+
+    def test_bare_percent_is_unchanged_and_appends_fallback(self) -> None:
+        result = command_with_prompt_target(
+            ["runner", "--format=%s"], Path("/tmp/prompt.md"), env={}
+        )
+
+        assert result == ["runner", "--format=%s", "@/tmp/prompt.md"]
+
+    def test_argv_interpolates_from_the_given_env_not_os_environ(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: argv holes must resolve from the child env, not os.environ.
+
+        ``%{TASKS_DIR}`` is set by ``loop_env`` on the workflow env dict handed
+        to the child process; it is never exported to the real ``os.environ``.
+        Before the fix, ``command_with_prompt_target`` always read
+        ``os.environ`` directly, so a runner containing ``%{TASKS_DIR}`` would
+        fail with "missing variable" even though the spawned process has it.
+        """
+        monkeypatch.delenv("TASKS_DIR", raising=False)
+        child_env = {"TASKS_DIR": "/work/.agent-files/tasks"}
+
+        result = command_with_prompt_target(
+            ["runner", "--tasks-dir=%{TASKS_DIR}"], Path("/tmp/prompt.md"), env=child_env
+        )
+
+        assert result == ["runner", "--tasks-dir=/work/.agent-files/tasks", "@/tmp/prompt.md"]
+
+    def test_stale_outer_task_file_export_does_not_leak_into_selector_argv(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: a popped TASK_FILE must not resolve from the outer environment.
+
+        ``loop_env`` pops ``TASK_FILE`` from the workflow env when no task is
+        selected yet (e.g. for the selector invocation).  If the outer shell
+        still exports a stale ``TASK_FILE``, argv interpolation must fail
+        closed (missing variable) rather than silently pick up the stale
+        value from ``os.environ``.
+        """
+        from agm.util.interp import InterpolationError
+
+        monkeypatch.setenv("TASK_FILE", "/stale/outer/task.md")
+        selector_env = loop_env(Path("/work/.agent-files/tasks"))
+        assert "TASK_FILE" not in selector_env
+
+        with pytest.raises(InterpolationError) as exc_info:
+            command_with_prompt_target(
+                ["selector", "%{TASK_FILE}"], Path("/tmp/select.md"), env=selector_env
+            )
+
+        assert exc_info.value.text == "TASK_FILE"
 
 
 class TestSelectorResultEdgeCases:
@@ -1463,6 +1683,84 @@ class TestRunCommandExit127Fatal:
 
 
 # ---------------------------------------------------------------------------
+# loop/step.py – run_prompt_command spawn-failure handling
+# ---------------------------------------------------------------------------
+
+
+class TestRunCommandSpawnFailure:
+    """A deferred prompt-file-targeting command (``%%``/``%{PROMPT_FILE}``) skips the
+    ``shutil.which`` preflight check, so a spawn failure (e.g. the resolved
+    executable is not actually executable) can still occur at run time.  This
+    must surface as a clean ``Error: ...`` on stderr with exit code 1 — the same
+    shape as the "not installed or not in PATH" preflight error — never a raw
+    traceback.
+    """
+
+    def test_spawn_oserror_exits_cleanly_instead_of_raising(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        target = tmp_path / "prompt.md"
+        target.write_text("prompt", encoding="utf-8")
+
+        def fake_run_capture(
+            cmd: list[str],
+            *,
+            env: dict[str, str],
+            stdout_callback: Any = None,
+            stderr_callback: Any = None,
+            timeout_callback: Any = None,
+            isolate_process_group: bool = False,
+            idle_timeout: float | None = None,
+        ) -> tuple[int, str, str]:
+            # ``run_capture`` re-raises the original spawn exception (see
+            # src/agm/core/process.py); simulate the exact scenario from the
+            # regression: a resolved-but-unexecutable "runner".
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr("agm.agent.runner.run_capture", fake_run_capture)
+
+        with pytest.raises(SystemExit) as exc_info:
+            run_prompt_command(["%%"], target, env={})
+
+        assert exc_info.value.code == 1
+        error = capsys.readouterr().err
+        assert "Error:" in error
+        assert "Traceback" not in error
+        assert "Permission denied" in error
+
+    def test_validate_command_passes_and_run_prompt_command_still_exits_cleanly(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """End-to-end reproduction: ``validate_command`` defers for ``%%``, so the
+        spawn failure only surfaces once the command actually runs.
+        """
+        target = tmp_path / "prompt.md"
+        target.write_text("prompt", encoding="utf-8")
+
+        # validate_command must not raise for a prompt-targeting command.
+        validate_command(["%%"], kind="runner", env={})
+
+        def fake_run_capture(
+            cmd: list[str],
+            *,
+            env: dict[str, str],
+            stdout_callback: Any = None,
+            stderr_callback: Any = None,
+            timeout_callback: Any = None,
+            isolate_process_group: bool = False,
+            idle_timeout: float | None = None,
+        ) -> tuple[int, str, str]:
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr("agm.agent.runner.run_capture", fake_run_capture)
+
+        with pytest.raises(SystemExit) as exc_info:
+            run_prompt_command(["%%"], target, env={})
+        assert exc_info.value.code == 1
+        assert "Traceback" not in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
 # loop/step.py – validate_command
 # ---------------------------------------------------------------------------
 
@@ -1474,7 +1772,7 @@ class TestValidateCommandNotInPath:
         """validate_command exits when shutil.which returns None."""
         monkeypatch.setattr("shutil.which", lambda _: None)
         with pytest.raises(SystemExit) as exc_info:
-            validate_command(["missing-cmd"], kind="runner")
+            validate_command(["missing-cmd"], kind="runner", env={})
         assert exc_info.value.code == 1
 
 
@@ -2033,7 +2331,7 @@ class TestAppendExtraPrompt:
 
         temp_files: list[Path] = []
         result = append_extra_prompt(
-            prompt, "See $TASKS_DIR", temp_files=temp_files, env={"TASKS_DIR": "/tasks"}
+            prompt, "See %{TASKS_DIR}", temp_files=temp_files, env={"TASKS_DIR": "/tasks"}
         )
 
         assert result.read_text(encoding="utf-8") == "Original" + chr(10) + "See /tasks"
@@ -2046,7 +2344,7 @@ class TestAppendExtraPrompt:
         prompt.write_text("Original", encoding="utf-8")
 
         extra_file = tmp_path / "extra.md"
-        extra_file.write_text("See $TASKS_DIR", encoding="utf-8")
+        extra_file.write_text("See %{TASKS_DIR}", encoding="utf-8")
 
         temp_files: list[Path] = []
         result = append_extra_prompt(
@@ -2557,6 +2855,80 @@ class TestLoopRunIntegration:
         task_file_env = runner_envs[0].get("TASK_FILE")
         assert task_file_env is not None
         assert Path(task_file_env).resolve() == task_file.resolve()
+
+    def test_selector_mode_prepares_explicit_prompt_for_each_selected_task(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = _setup_home_with_prompts(tmp_path, ["select.md"])
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", _which_always_found)
+        monkeypatch.chdir(tmp_path)
+
+        tasks_dir = tmp_path / ".agent-files" / "tasks"
+        tasks_dir.mkdir(parents=True)
+        task_files = [tasks_dir / "task-1.md", tasks_dir / "task-2.md"]
+        for task_file in task_files:
+            task_file.write_text("task\n", encoding="utf-8")
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("Implement %{TASK_FILE}\n", encoding="utf-8")
+
+        original_prepare = prepare_prompt_from_source
+        prepared_sources: list[str | Path] = []
+
+        def track_prepare(
+            source: str | Path, *, temp_files: list[Path], env: dict[str, str]
+        ) -> Any:
+            if source == prompt:
+                prepared_sources.append(source)
+            return original_prepare(source, temp_files=temp_files, env=env)
+
+        selector_outputs = iter(["task-1.md\n", "task-2.md\n", "COMPLETE\n"])
+        runner_prompts: list[str] = []
+
+        def fake_run_command(
+            command: list[str],
+            target: Path,
+            *,
+            env: dict[str, str],
+            stdout_callback: object = None,
+            stderr_callback: object = None,
+            idle_timeout: float | None = None,
+        ) -> str:
+            if command == ["fake-selector"]:
+                return next(selector_outputs)
+            runner_prompts.append(target.read_text(encoding="utf-8"))
+            return "runner output\n"
+
+        monkeypatch.setattr("agm.commands.loop.step.prepare_prompt_from_source", track_prepare)
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
+
+        loop_run(
+            LoopArgs(
+                command_name=None,
+                runner="fake-runner",
+                runner_args=[],
+                selector="fake-selector",
+                no_selector=False,
+                tasks_dir=None,
+                no_log=True,
+                log_file=None,
+                prompt=None,
+                prompt_file=str(prompt),
+                selector_prompt=None,
+                selector_prompt_file=None,
+                extra_prompt=None,
+                extra_prompt_file=None,
+                extra_selector_prompt=None,
+                extra_selector_prompt_file=None,
+                timeout=None,
+            )
+        )
+
+        assert prepared_sources == [prompt, prompt]
+        assert runner_prompts == [
+            f"Implement {task_files[0]}\n",
+            f"Implement {task_files[1]}\n",
+        ]
 
     def test_runner_exit_127_aborts_loop_via_real_run_prompt_command(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

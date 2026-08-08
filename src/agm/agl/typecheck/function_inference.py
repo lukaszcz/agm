@@ -1,9 +1,10 @@
 """Function-header resolution and disposable candidate return inference.
 
-Standalone and program checking share this seam. Candidate discovery builds
-function dependency SCCs within either a standalone module or one import SCC,
-closes each component before its dependents, and publishes only concrete
-signatures outside that import SCC.
+Whole-program checking and a lone module checked in isolation (the sanctioned
+test seam over ``_check_prepared_module``) share this seam. Candidate
+discovery builds function dependency SCCs within either one import SCC or a
+single isolated module, closes each component before its dependents, and
+publishes only concrete signatures outside that import SCC.
 """
 
 from __future__ import annotations
@@ -28,7 +29,6 @@ from agm.agl.semantics.types import (
     substitute,
 )
 from agm.agl.syntax.nodes import (
-    AgentDecl,
     FieldAccess,
     FuncDef,
     LetDecl,
@@ -36,10 +36,10 @@ from agm.agl.syntax.nodes import (
     ParamDecl,
     ParamKind,
     Program,
-    ScopeRegion,
     VarDecl,
     VarRef,
     pattern_binding_node_ids,
+    static_items,
 )
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck.inference import ConstraintRole, InferenceEngine, InferenceError
@@ -134,8 +134,8 @@ class ModuleCandidateComponent:
 
     ``modules`` is exactly one loader-provided import SCC. Provisional
     signatures are visible only within those modules; ``publication_envs``
-    receives the closed candidates for later program checking. Standalone
-    checking uses the synthetic singleton.
+    receives the closed candidates for later program checking. A lone module
+    checked in isolation uses the synthetic singleton.
     """
 
     modules: tuple[CandidateModule, ...]
@@ -149,7 +149,7 @@ class ModuleCandidateComponent:
         capabilities: "HostCapabilities",
         module_id: ModuleId,
     ) -> "ModuleCandidateComponent":
-        """Build the standalone checker's synthetic one-module component."""
+        """Build the synthetic component for one module checked in isolation."""
         return cls((CandidateModule(resolved, env, capabilities, module_id),), (env,))
 
     def discovery_targets(self) -> tuple[TypeEnvironment, ...]:
@@ -214,24 +214,13 @@ def _declaration_key(node: FuncDef) -> tuple[int, int]:
 _CandidateFunction = tuple[CandidateModule, FuncDef]
 
 
-def _static_items(items: tuple[object, ...]) -> tuple[object, ...]:
-    """Flatten named scope regions while retaining their declaration paths."""
-    result: list[object] = []
-    for item in items:
-        if isinstance(item, ScopeRegion):
-            result.extend(_static_items(item.items))
-        else:
-            result.append(item)
-    return tuple(result)
-
-
 def _candidate_functions(component: ModuleCandidateComponent) -> dict[int, _CandidateFunction]:
     """Return this import SCC's unannotated ordinary functions by declaration id."""
     functions: dict[int, _CandidateFunction] = {}
     for module in component.modules:
         program = module.resolved.program
         assert isinstance(program, Program)
-        for item in _static_items(program.body.items):
+        for item in static_items(program.body.items):
             if (
                 isinstance(item, FuncDef)
                 and item.return_type is None
@@ -378,12 +367,12 @@ def _seed_candidate_visible_bindings(
         # dependents — are typed by the authoritative pass once every signature
         # is concrete.
         tainted = set(session.provisional_declaration_ids)
-        for item in _static_items(program.body.items):
+        for item in static_items(program.body.items):
             if isinstance(item, FuncDef):
                 session.visible_binding_snapshots[(module.module_id, item.node_id)] = (
                     module.env.snapshot_binding_types()
                 )
-            elif isinstance(item, (AgentDecl, LetDecl, ParamDecl, VarDecl)):
+            elif isinstance(item, (LetDecl, ParamDecl, VarDecl)):
                 if _references_tainted_binding(module, item, tainted):
                     if isinstance(item, LetDecl):
                         # A let site's selected binders are the declaration ids
@@ -725,6 +714,7 @@ def register_method_header(
             ),
             receiver_type_param_arity=receiver.type_param_arity,
             type_params=signature.type_params,
+            is_builtin=node.is_builtin,
         ),
     )
 

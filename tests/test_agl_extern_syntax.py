@@ -23,10 +23,11 @@ from agm.agl.lexer import tokenize
 from agm.agl.modules.loader import build_repl_graph, load_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import AglSyntaxError, parse_program, parse_program_seeded
-from agm.agl.scope import AglScopeError, resolve_module
+from agm.agl.scope import AglScopeError
 from agm.agl.scope.program import resolve_program
 from agm.agl.syntax.nodes import FuncDef
 from tests.agl.ir_harness import make_graph_from_files, write_companion_file
+from tests.agl.module_graph import resolve_program_ast
 
 _STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 
@@ -37,8 +38,18 @@ def first(source: str) -> object:
 
 
 def parse_and_resolve(source: str, *, origin_path: Path | None = None) -> object:
-    """Parse *source* and run scope resolution, threading *origin_path*."""
-    return resolve_module(parse_program(source.strip()), origin_path=origin_path)
+    """Parse *source* and run scope resolution, threading *origin_path*.
+
+    Uses ``resolve_program_ast``'s hand-built single-module graph rather than
+    a real loaded one: ``TestPlacement``/``TestScope`` use this with a
+    virtual, non-existent *origin_path* to test the scope resolver's own
+    file-backed-origin rule in isolation from the module loader's separate
+    (already graph-tested, see the ``TestScope``/``TestPlacement`` cases
+    below that call ``make_graph_from_files``/``load_graph`` directly)
+    missing-companion-file check. Building a real loaded graph here would hit
+    that loader check first and mask the one this helper means to test.
+    """
+    return resolve_program_ast(parse_program(source.strip()), origin_path=origin_path)
 
 
 def reject_scope(source: str, *, origin_path: Path | None = None) -> AglScopeError:

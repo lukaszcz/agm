@@ -8,7 +8,14 @@ reserved by AGM.
 
 from __future__ import annotations
 
-from agm.agl.semantics.types import OPTION_TEXT_TYPE, BoolType, IntType, TextType, Type
+from agm.agl.semantics.types import (
+    BUILTIN_PRELUDE_TYPES,
+    OPTION_TEXT_TYPE,
+    BoolType,
+    IntType,
+    TextType,
+    Type,
+)
 from agm.command_catalog import COMMAND_NAMES
 from agm.config.engine_keys import ENGINE_KEY_KINDS, EngineKeyKind
 from agm.config.engine_keys import ENGINE_KEY_NAMES as ENGINE_KEY_NAMES
@@ -23,6 +30,7 @@ _TYPE_BY_KIND: dict[EngineKeyKind, Type] = {
     EngineKeyKind.INT: IntType(),
     EngineKeyKind.TEXT: TextType(),
     EngineKeyKind.OPTION_TEXT: OPTION_TEXT_TYPE,
+    EngineKeyKind.AGENT: BUILTIN_PRELUDE_TYPES["Agent"],
 }
 
 # Lookup: kebab key name → resolved AgL type.

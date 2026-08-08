@@ -2,8 +2,8 @@
 
 Covers:
 - ``compile_coercion`` — every branch of the coercion compiler.
-- ``lower_module`` — lowering of supported nodes, including coercion
-  insertion, binding/assignment lowering, and validate_ir pass.
+- Lowering of supported nodes, including coercion insertion,
+  binding/assignment lowering, and validate_ir pass.
 
 Pipeline helper: reuses the ``parse_resolve_check`` pattern from
 ``tests/test_agl_typecheck.py`` to obtain a ``CheckedModule`` from source.
@@ -21,10 +21,10 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.contracts import ConversionFailureMode, ConversionStrategy
-from agm.agl.ir.ids import SymbolId
+from agm.agl.ir.ids import NominalId, SymbolId
 from agm.agl.ir.nodes import (
-    AutoTraceField,
     IrArith,
+    IrAsk,
     IrAssign,
     IrBind,
     IrBlock,
@@ -46,6 +46,7 @@ from agm.agl.ir.nodes import (
     IrField,
     IrFieldMode,
     IrIf,
+    IrIndex,
     IrIndirectCall,
     IrIterHasNext,
     IrIterInit,
@@ -81,12 +82,16 @@ from agm.agl.ir.operations import (
 )
 from agm.agl.ir.program import ExecutableProgram, FunctionDescriptor, IrFunctionBody
 from agm.agl.ir.validate import validate_ir
-from agm.agl.lower import LinkImage, compile_coercion, lower_module, lower_repl_entry
+from agm.agl.lower import LinkImage, LoweredReplEntry, compile_coercion, lower_repl_program
 from agm.agl.lower.lowerer import InitializerOrigin, _Lowerer
 from agm.agl.lower.repl import ParamOrigin, ReplPromotionPlan
-from agm.agl.matchcompile import MatchCompiledModule, compile_module_matches
-from agm.agl.parser import parse_program, parse_program_seeded
-from agm.agl.scope import resolve_module
+from agm.agl.matchcompile import MatchCompiledProgram, compile_program_matches
+from agm.agl.modules.ids import ENTRY_ID
+from agm.agl.modules.loader import build_repl_graph
+from agm.agl.modules.roots import RootSet
+from agm.agl.parser import parse_program_seeded
+from agm.agl.scope.program import resolve_program
+from agm.agl.scope.symbols import ScopeNode
 from agm.agl.semantics.types import (
     ArrayType,
     BoolType,
@@ -101,9 +106,10 @@ from agm.agl.semantics.types import (
     UnitType,
 )
 from agm.agl.syntax.nodes import Case, FuncDef, ParamDecl, Placeholder
-from agm.agl.typecheck import check_module
 from agm.agl.typecheck.env import CheckedModule
-from tests.agl.ir_harness import _compiled_checked
+from agm.agl.typecheck.program import check_program
+from tests.agl.ir_harness import _compiled_checked, compile_checked_module, lower_compiled_module
+from tests.agl.module_graph import resolve_and_check_entry
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 _MIXED_ROOT_AND_SCOPED_DECLARATIONS = (
@@ -125,8 +131,6 @@ _MIXED_ROOT_AND_SCOPED_DECLARATIONS = (
 
 def _caps() -> HostCapabilities:
     return HostCapabilities(
-        agent_names=frozenset(),
-        has_default_agent=True,
         supports_shell_exec=True,
         codec_kinds={
             "text": frozenset({"text"}),
@@ -137,38 +141,75 @@ def _caps() -> HostCapabilities:
     )
 
 
-def _check(source: str) -> CheckedModule:
-    prog = parse_program(source)
-    resolved = resolve_module(prog)
-    return check_module(resolved, _caps())
+def _check(source: str, *, default_stdlib: bool = True) -> CheckedModule:
+    return resolve_and_check_entry(source, _caps(), default_stdlib=default_stdlib)
+
+
+def _repl_entry(
+    source: str,
+    *,
+    start_id: int = 0,
+    image: LinkImage | None = None,
+    parent_scope: ScopeNode | None = None,
+    seed_env: object = None,
+    default_stdlib: bool = False,
+) -> tuple[LoweredReplEntry, int, ScopeNode, CheckedModule]:
+    """Resolve, check, compile, and lower one REPL entry against *image*.
+
+    Mirrors the real REPL session's own pipeline (``build_repl_graph`` ->
+    ``resolve_program`` -> ``check_program`` -> ``compile_program_matches``
+    -> ``lower_repl_program``), seeding this entry's own node ids from
+    *start_id* rather than always restarting at 0 (unlike
+    ``resolve_and_check_entry``), so two chained calls sharing one *image*
+    keep disjoint node ids exactly as two real successive REPL entries do.
+    *parent_scope*/*seed_env* thread a prior entry's root scope/type
+    environment through, exactly as a real REPL session replays session
+    state into each new entry. Returns the lowered entry, the next free node
+    id, this entry's own root scope (to thread into a following entry's
+    *parent_scope*), and its ``CheckedModule`` (whose ``type_env`` threads
+    into a following entry's *seed_env*).
+    """
+    program, next_id = parse_program_seeded(source, start_id=start_id)
+    graph, next_id, _new_modules = build_repl_graph(
+        program,
+        next_id,
+        path=None,
+        cached={},
+        roots=RootSet(roots=frozenset()),
+        default_stdlib=default_stdlib,
+    )
+    resolved = resolve_program(graph, entry_parent_scope=parent_scope)
+    checked_program = check_program(resolved, _caps(), entry_seed_env=seed_env)
+    result = compile_program_matches(checked_program)
+    assert isinstance(result.compiled, MatchCompiledProgram)
+    entry = lower_repl_program(result.compiled, image=image or LinkImage(), source_text=source)
+    root_scope = resolved.modules[graph.entry_id].resolved.root_scope
+    return entry, next_id, root_scope, checked_program.modules[graph.entry_id]
 
 
 def test_lower_repl_entry_accumulates_tables_and_resolves_prior_symbols() -> None:
+    # This test chains two REPL entries through one growing node-id space and
+    # one shared root_scope -- the second entry's ids continue from the
+    # first's own next free id, so the two entries' node ids stay disjoint
+    # within the one LinkImage they share. resolve_and_check_entry always
+    # reseeds a fresh entry at id 0 (it builds one isolated real graph per
+    # call), so it cannot express this continuation without either colliding
+    # the second entry's ids with the first's or reimplementing the REPL
+    # session's own id-management machinery here -- which is exactly what
+    # _repl_entry above does, mirroring the real ReplSession pipeline.
     image = LinkImage()
-    first_program, next_id = parse_program_seeded("let x = 41\n()", start_id=0)
-    first_checked = check_module(resolve_module(first_program), _caps())
-
-    first = lower_repl_entry(
-        _compiled_checked(first_checked),
-        image=image,
-        source_text="let x = 41\n()",
-        source_label="<repl:1>",
+    first, next_id, first_root_scope, first_checked = _repl_entry(
+        "let x = 41\n()", start_id=0, image=image
     )
     first_symbols = set(first.program.symbols)
     first_sources = set(first.program.sources)
 
-    second_source = "let y = x + 1\ny"
-    second_program, _ = parse_program_seeded(second_source, start_id=next_id)
-    second_checked = check_module(
-        resolve_module(second_program, parent_scope=first_checked.resolved.root_scope),
-        _caps(),
-        seed_env=first_checked.type_env,
-    )
-    second = lower_repl_entry(
-        _compiled_checked(second_checked),
+    second, _next_id, _second_root_scope, _second_checked = _repl_entry(
+        "let y = x + 1\ny",
+        start_id=next_id,
         image=image,
-        source_text=second_source,
-        source_label="<repl:2>",
+        parent_scope=first_root_scope,
+        seed_env=first_checked.type_env,
     )
 
     assert first_symbols < set(second.program.symbols)
@@ -177,62 +218,14 @@ def test_lower_repl_entry_accumulates_tables_and_resolves_prior_symbols() -> Non
     assert second.program.modules[second.program.entry_module].initializers
 
 
-def test_lowering_records_each_entry_initializer_origin() -> None:
-    source = (
-        "let before = 1\n"
-        "var count = 1\n"
-        "count := count + 1\n"
-        "def later() -> int = 4\n"
-        "agent worker\n"
-        "param limit: int = 5\n"
-        "record Box\n"
-        "  value: int\n"
-        "type Alias = Box\n"
-        "builtin def print[T](value: T) -> unit\n"
-        "later()"
-    )
-    program, _next_id = parse_program_seeded(source, start_id=0)
-    image = LinkImage()
-    lowered = lower_repl_entry(
-        _compiled_checked(check_module(resolve_module(program), _caps())),
-        image=image,
-        source_text=source,
-        source_label="<repl:origins>",
-    )
-
-    items = program.body.items
-    initializers = lowered.program.modules[lowered.program.entry_module].initializers
-    origins = image._state.initializer_origins[lowered.program.entry_module]
-
-    assert len(origins) == len(initializers)
-    assert tuple(origin.source_index for origin in origins) == (3, 0, 1, 2, 4, 9)
-    assert tuple(origin.is_function for origin in origins) == (
-        True,
-        False,
-        False,
-        False,
-        False,
-        False,
-    )
-    for origin, _initializer in zip(origins, initializers, strict=True):
-        item = items[origin.source_index]
-        assert origin.is_function == (isinstance(item, FuncDef) and not item.is_builtin)
-
-
 def test_repl_promotion_plan_pairs_params_with_lowered_symbols() -> None:
     source = "param first: int = 1\nparam second: int = 2\n()"
-    program, _next_id = parse_program_seeded(source, start_id=0)
     image = LinkImage()
-    lowered = lower_repl_entry(
-        _compiled_checked(check_module(resolve_module(program), _caps())),
-        image=image,
-        source_text=source,
-        source_label="<repl:param-origins>",
-    )
+    lowered, _next_id, _root_scope, checked = _repl_entry(source, image=image)
 
     expected = tuple(
         (item.node_id, image._state.decl_to_sym[item.node_id])
-        for item in program.body.items
+        for item in checked.resolved.program.body.items
         if isinstance(item, ParamDecl)
     )
     assert (
@@ -253,52 +246,23 @@ def test_repl_promotion_excludes_uninstalled_params_before_dependency_closure() 
 
 
 def test_lower_repl_trailing_binder_has_no_expression_marker() -> None:
-    source = "let x = 41"
-    program, _next_id = parse_program_seeded(source, start_id=0)
-    entry = lower_repl_entry(
-        _compiled_checked(check_module(resolve_module(program), _caps())),
-        image=LinkImage(),
-        source_text=source,
-        source_label="<repl:1>",
-    )
+    entry, _next_id, _root_scope, _checked = _repl_entry("let x = 41")
 
     assert entry.trailing_expression is None
 
 
 def test_lower_repl_trailing_scope_region_has_no_expression_marker() -> None:
-    source = "scope Tools\ndef helper() -> int = 1\nend Tools"
-    program, _next_id = parse_program_seeded(source, start_id=0)
-    entry = lower_repl_entry(
-        _compiled_checked(check_module(resolve_module(program), _caps())),
-        image=LinkImage(),
-        source_text=source,
-        source_label="<repl:1>",
+    entry, _next_id, _root_scope, _checked = _repl_entry(
+        "scope Tools\ndef helper() -> int = 1\nend Tools"
     )
 
     assert entry.trailing_expression is None
 
 
-def _lower(source: str) -> ExecutableProgram:
+def _lower(source: str, *, default_stdlib: bool = True) -> ExecutableProgram:
     """Parse → check → lower the source; return ExecutableProgram."""
-    checked = _check(source)
-    return lower_module(
-        _compiled_checked(checked),
-        source_text=source,
-        source_label="<test>",
-    )
-
-
-def test_scoped_functions_link_while_unused_scoped_agents_remain_deferred() -> None:
-    program = _lower(_MIXED_ROOT_AND_SCOPED_DECLARATIONS)
-
-    # Named-scope functions still lower and link (all 3 functions present, callable
-    # via their scoped identity) but are not exposed under their unqualified name:
-    # only the root function and the root agent get a public_name.
-    public_names = {
-        symbol.public_name for symbol in program.symbols.values() if symbol.public_name is not None
-    }
-    assert public_names == {"root", "root_agent"}
-    assert len(program.functions) == 3
+    checked = _check(source, default_stdlib=default_stdlib)
+    return lower_compiled_module(compile_checked_module(checked), source_text=source)
 
 
 def test_scoped_only_function_has_no_public_name() -> None:
@@ -325,8 +289,7 @@ def test_root_and_scoped_functions_with_same_name_do_not_collide_in_public_names
 
 
 def test_lowering_preserves_scoped_nominal_identity_for_generic_and_enum_types() -> None:
-    from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import ENTRY_ID
+    from tests.agl.ir_harness import nominal_id_for
 
     source = """
 record Token()
@@ -342,10 +305,28 @@ case flag of | Left::Flag::on => box.value
 
     program = _lower(source)
 
-    assert NominalId(ENTRY_ID, "Token") in program.nominals
-    assert NominalId(ENTRY_ID, "Token", ("Left",)) in program.nominals
-    assert NominalId(ENTRY_ID, "Box", ("Left",)) in program.nominals
-    assert NominalId(ENTRY_ID, "Flag", ("Left",)) in program.nominals
+    assert nominal_id_for(program, "Token") in program.nominals
+    assert nominal_id_for(program, "Left::Token") in program.nominals
+    assert nominal_id_for(program, "Left::Box") in program.nominals
+    assert nominal_id_for(program, "Left::Flag") in program.nominals
+
+
+def test_lowering_registers_a_generic_enum_nominal_with_enum_kind() -> None:
+    """A generic enum's own nominal registers with ``NominalKind.ENUM``.
+
+    The test above covers a generic *record* (``Box[T]``); this covers the
+    sibling ``else`` branch of ``lower_program``'s generic-type loop for a
+    generic *enum* -- ``all_generic_types()``
+    otherwise only ever yields a record in this file's other fixtures.
+    """
+    from agm.agl.ir.program import NominalKind
+    from tests.agl.ir_harness import nominal_id_for
+
+    source = "enum Box[T]\n  | empty\n  | full(value: T)\nlet b: Box[int] = full(value = 1)\n()"
+    program = _lower(source)
+    nominal_id = nominal_id_for(program, "Box")
+    assert nominal_id in program.nominals
+    assert program.nominals[nominal_id].kind == NominalKind.ENUM
 
 
 def _let_root_capture(initializer: object) -> IrBind:
@@ -423,7 +404,6 @@ def _make_lowerer(checked: CheckedModule, source: str) -> "_Lowerer":
     from agm.agl.ir.ids import SourceId
     from agm.agl.ir.program import SourceFile
     from agm.agl.lower.lowerer import _LinkState, _Lowerer
-    from agm.agl.modules.ids import ENTRY_ID
     from agm.util.text import normalize_newlines
 
     link = _LinkState()
@@ -431,9 +411,7 @@ def _make_lowerer(checked: CheckedModule, source: str) -> "_Lowerer":
     link.next_source += 1
     normalized = normalize_newlines(source)
     link.sources[source_id] = SourceFile(display_name="<test>", normalized_text=normalized)
-    match_result = compile_module_matches(checked)
-    assert isinstance(match_result.compiled, MatchCompiledModule)
-    compiled = match_result.compiled
+    compiled = compile_checked_module(checked)
     return _Lowerer(compiled.checked, link, ENTRY_ID, source_id, source, compiled.sites)
 
 
@@ -584,7 +562,7 @@ class TestCompileCoercion:
 
 
 # ---------------------------------------------------------------------------
-# lower_module: basic sanity — validate_ir passes
+# lowering: basic sanity — validate_ir passes
 # ---------------------------------------------------------------------------
 
 
@@ -616,7 +594,7 @@ class TestLowerProgramValidateIr:
 
 
 # ---------------------------------------------------------------------------
-# lower_module: literal lowering
+# lowering: literal lowering
 # ---------------------------------------------------------------------------
 
 
@@ -674,7 +652,7 @@ class TestLiteralLowering:
 
 
 # ---------------------------------------------------------------------------
-# lower_module: array literal lowering
+# lowering: array literal lowering
 # ---------------------------------------------------------------------------
 
 
@@ -737,7 +715,7 @@ class TestArrayLitLowering:
 
 
 # ---------------------------------------------------------------------------
-# lower_module: dict literal lowering
+# lowering: dict literal lowering
 # ---------------------------------------------------------------------------
 
 
@@ -789,7 +767,7 @@ class TestDictLitLowering:
 
 
 # ---------------------------------------------------------------------------
-# lower_module: let / var binding lowering
+# lowering: let / var binding lowering
 # ---------------------------------------------------------------------------
 
 
@@ -943,7 +921,7 @@ class TestBindingLowering:
 
 
 # ---------------------------------------------------------------------------
-# lower_module: VarRef lowering (IrLoad)
+# lowering: VarRef lowering (IrLoad)
 # ---------------------------------------------------------------------------
 
 
@@ -964,7 +942,7 @@ class TestVarRefLowering:
 
 
 # ---------------------------------------------------------------------------
-# lower_module: AssignStmt lowering (simple name target only)
+# lowering: AssignStmt lowering (simple name target only)
 # ---------------------------------------------------------------------------
 
 
@@ -1004,7 +982,7 @@ class TestAssignStmtLowering:
 
 
 # ---------------------------------------------------------------------------
-# lower_module: Block lowering
+# lowering: Block lowering
 #
 # A Block node appears as an expression only inside branches of control-flow
 # (if/case/do/try) and function bodies. We test the
@@ -1025,7 +1003,7 @@ class TestBlockLowering:
 
         src = "let _a: int = 1\n_a"
         checked = _check(src)
-        # Build a _Lowerer in the same state as lower_module would, but stop
+        # Build a _Lowerer in the same state full lowering would, but stop
         # before running the top-level body so we can call lower_expr manually.
         lowerer = _make_lowerer(checked, src)
 
@@ -1092,7 +1070,7 @@ class TestBlockLowering:
 
 
 # ---------------------------------------------------------------------------
-# lower_module: sources table
+# lowering: sources table
 # ---------------------------------------------------------------------------
 
 
@@ -1104,7 +1082,7 @@ class TestSourcesTable:
     def test_source_display_name(self) -> None:
         prog = _lower("()")
         (src_id,) = prog.sources
-        assert prog.sources[src_id].display_name == "<test>"
+        assert prog.sources[src_id].display_name == "<entry>"
 
     def test_source_normalized_text(self) -> None:
         src = "()"
@@ -1114,7 +1092,7 @@ class TestSourcesTable:
 
 
 # ---------------------------------------------------------------------------
-# lower_module: nominals table starts empty
+# lowering: nominals table starts empty
 # ---------------------------------------------------------------------------
 
 
@@ -1125,13 +1103,12 @@ class TestNominalsEmpty:
         Even an empty program populates nominals with all built-in prelude
         records/enums and exceptions. User-declared records/enums are added on top.
         """
-        from agm.agl.ir.ids import NominalId
         from agm.agl.ir.program import NominalKind
-        from agm.agl.modules.ids import PRELUDE_ID
         from agm.agl.semantics.types import BUILTIN_EXCEPTIONS, BUILTIN_PRELUDE_TYPES
+        from tests.agl.ir_harness import nominal_id_for
 
         prog = _lower("()")
-        nominal_names = {desc.nominal.declared_name for desc in prog.nominals.values()}
+        nominal_names = {desc.declared_name for desc in prog.nominals.values()}
         for builtin_name in BUILTIN_PRELUDE_TYPES:
             assert builtin_name in nominal_names, (
                 f"Built-in prelude type {builtin_name!r} missing from program.nominals"
@@ -1141,19 +1118,18 @@ class TestNominalsEmpty:
                 f"Built-in exception {builtin_name!r} missing from program.nominals"
             )
 
-        assert prog.nominals[NominalId(PRELUDE_ID, "ExecResult")].kind is NominalKind.RECORD
-        assert prog.nominals[NominalId(PRELUDE_ID, "ParsePolicy")].kind is NominalKind.ENUM
-        assert prog.nominals[NominalId(PRELUDE_ID, "Abort")].kind is NominalKind.EXCEPTION
+        assert prog.nominals[nominal_id_for(prog, "ExecResult")].kind is NominalKind.RECORD
+        assert prog.nominals[nominal_id_for(prog, "ParsePolicy")].kind is NominalKind.ENUM
+        assert prog.nominals[nominal_id_for(prog, "Abort")].kind is NominalKind.EXCEPTION
 
     def test_user_exception_nominal_stamped_with_declaring_module_id(self) -> None:
         """A user-declared exception's nominal is stamped with its real module_id.
 
-        Declares the exception before a record so ``_build_nominals``' loop
-        continues past the exception branch onto another declaration.
+        Declares the exception before a record so ``lower_program``'s nominal
+        loop continues past the exception branch onto another declaration.
         """
-        from agm.agl.ir.ids import NominalId
         from agm.agl.ir.program import NominalKind
-        from agm.agl.modules.ids import ENTRY_ID
+        from tests.agl.ir_harness import nominal_id_for
 
         source = (
             "exception Boom extends Exception\n"
@@ -1166,22 +1142,19 @@ class TestNominalsEmpty:
             "p"
         )
         prog = _lower(source)
-        boom_nominal = NominalId(ENTRY_ID, "Boom")
+        boom_nominal = nominal_id_for(prog, "Boom")
         assert boom_nominal in prog.nominals
         descriptor = prog.nominals[boom_nominal]
         assert descriptor.kind is NominalKind.EXCEPTION
-        assert set(descriptor.fields) == {"message", "trace_id", "code"}
+        assert set(descriptor.fields) == {"message", "code"}
 
     def test_type_alias_does_not_create_spurious_nominal(self) -> None:
         """A type alias does NOT register a spurious NominalId in program.nominals.
 
-        ``type Foo = Record`` must not create NominalId(..., "Foo") — only the
-        canonical declaration NominalId(..., "Record") must exist.  Same for
-        enum aliases.
+        ``type Foo = Record`` must not create a descriptor for ``Foo`` — only
+        the canonical declaration for ``Record`` must exist.  Same for enum
+        aliases.
         """
-        from agm.agl.ir.ids import NominalId
-        from agm.agl.modules.ids import ENTRY_ID
-
         source = (
             "record Point\n"
             "  x: int\n"
@@ -1202,7 +1175,6 @@ class TestNominalsEmpty:
         prog = _lower(source)
 
         nominal_names = {desc.display_name for desc in prog.nominals.values()}
-        nominal_ids = set(prog.nominals.keys())
 
         # The canonical record and enum nominals must be present
         assert "Point" in nominal_names, "NominalId for 'Point' must be registered"
@@ -1212,19 +1184,175 @@ class TestNominalsEmpty:
         assert "PointAlias" not in nominal_names, (
             "Record alias 'PointAlias' must NOT register a spurious nominal descriptor"
         )
-        assert NominalId(ENTRY_ID, "PointAlias") not in nominal_ids, (
-            "NominalId(ENTRY_ID, 'PointAlias') must NOT appear in program.nominals"
+        assert not any(desc.declared_name == "PointAlias" for desc in prog.nominals.values()), (
+            "No descriptor for 'PointAlias' must appear in program.nominals"
         )
         assert "ColorAlias" not in nominal_names, (
             "Enum alias 'ColorAlias' must NOT register a spurious nominal descriptor"
         )
-        assert NominalId(ENTRY_ID, "ColorAlias") not in nominal_ids, (
-            "NominalId(ENTRY_ID, 'ColorAlias') must NOT appear in program.nominals"
+        assert not any(desc.declared_name == "ColorAlias" for desc in prog.nominals.values()), (
+            "No descriptor for 'ColorAlias' must appear in program.nominals"
         )
 
 
 # ---------------------------------------------------------------------------
-# lower_module: unsupported nodes raise a clear error
+# lowering: the program's built-in nominal table
+# ---------------------------------------------------------------------------
+
+
+class TestBuiltinNominalsTable:
+    """``ExecutableProgram.builtin_nominals`` — the host's per-program nominal table."""
+
+    def test_answers_for_every_builtin_name_with_the_shipped_identity(self) -> None:
+        """A program that declares no ``builtin`` types still answers for every name.
+
+        A trivial program declares no ``builtin`` types of its own, so every
+        built-in prelude/exception name resolves to the shipped standard
+        library's own identity.
+        """
+        from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
+
+        prog = _lower("()")
+        for name in ("ExecResult", "AgentRequest", "RangeError", "MaxIterationsExceeded"):
+            assert prog.builtin_nominals.nominal(name) == NO_BUILTIN_DECLARATIONS.nominal(name)
+
+    def test_declared_builtin_type_resolves_to_the_declaration_identity(self) -> None:
+        """A program's own ``builtin`` declaration is reflected in its table.
+
+        The declaration is at the root (empty scope path) of the entry
+        module — a bare builtin name may be declared only once per program
+        and ``std/core`` already declares a root ``RangeError``, so this
+        compiles with ``default_stdlib=False`` — so it carries the entry
+        module's own identity, a distinct nominal from the shipped standard
+        library's own ``RangeError``: the declaration is what drives the
+        table's answer, not a shared name.
+        """
+        source = "builtin exception RangeError extends Exception()\n()\n"
+        checked = _check(source, default_stdlib=False)
+        typedef = checked.type_env.type_table.get(ENTRY_ID, "RangeError")
+        assert typedef is not None
+        prog = _lower(source, default_stdlib=False)
+        assert prog.builtin_nominals.nominal("RangeError") == NominalId(typedef.decl_node_id)
+
+    def test_scoped_declared_builtin_type_resolves_to_its_own_declared_path(self) -> None:
+        """A SCOPED ``builtin`` declaration's own path drives the table's answer.
+
+        A ``builtin`` declaration inside a named scope region is a distinct
+        nominal from a same-named one at another path (or at the root), so
+        the table answers with the declaration's own module and scope path
+        here, not the shipped standard library's own root identity. A bare
+        builtin name may be declared only once per program and ``std/core``
+        already declares a root ``RangeError``, so this compiles with
+        ``default_stdlib=False``.
+        """
+        from tests.agl.ir_harness import nominal_id_for
+
+        source = "scope A\nbuiltin exception RangeError extends Exception()\nend A\n()\n"
+        prog = _lower(source, default_stdlib=False)
+        assert prog.builtin_nominals.nominal("RangeError") == nominal_id_for(prog, "A::RangeError")
+
+    def test_range_error_raised_at_runtime_carries_the_table_nominal(self) -> None:
+        """A ``for`` loop with a non-positive step raises ``RangeError`` with the table's nominal.
+
+        Uses a variable (not a literal) step: a literal non-positive step is
+        rejected statically, before this runtime guard is ever reached.
+        """
+        from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
+        from tests.agl.ir_harness import evaluate_ir_raises
+
+        exc = evaluate_ir_raises("let step = 0\nfor i in 1 to 5 by step do\n  ()\ndone\n")
+        assert exc.display_name == "RangeError"
+        assert exc.nominal == NO_BUILTIN_DECLARATIONS.nominal("RangeError")
+
+    def test_scoped_range_error_raised_at_runtime_carries_the_scoped_nominal(self) -> None:
+        """A host-raised exception now carries its declaring region's own path.
+
+        Before per-path identity was restored, a scoped ``builtin
+        exception`` kept its declared path while the host minted a
+        path-free nominal, so a catch clause declared at that same path
+        could never match a host-raised instance. Here the ``for``-loop
+        step guard's host-raised ``RangeError`` — with the type declared
+        inside ``scope A`` and nothing declared at the root — carries the
+        exact scoped identity a same-region ``catch RangeError`` resolves
+        to, not the path-free one, and reports its declared spelling. A bare
+        builtin name may be declared only once per program and ``std/core``
+        already declares a root ``RangeError``, so this compiles with
+        ``default_stdlib=False``: that is what makes "nothing declared at
+        the root" true here.
+        """
+        from tests.agl.ir_harness import evaluate_ir_raises, lower_ir, nominal_id_for
+
+        source = (
+            "scope A\n"
+            "builtin exception RangeError extends Exception()\n"
+            "end A\n"
+            "let step = 0\n"
+            "for i in 1 to 5 by step do\n"
+            "  ()\n"
+            "done\n"
+        )
+        program = lower_ir(source, default_stdlib=False)
+        exc = evaluate_ir_raises(source, default_stdlib=False)
+        assert exc.display_name == "A::RangeError"
+        assert exc.nominal == nominal_id_for(program, "A::RangeError")
+
+    def test_max_iterations_exceeded_raised_at_runtime_carries_the_table_nominal(self) -> None:
+        """A ``do[n]`` loop exhausted at its bound carries the table's nominal."""
+        from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
+        from tests.agl.ir_harness import evaluate_ir_raises
+
+        exc = evaluate_ir_raises("var dummy = 0\ndo[3]\n  dummy := 1\nuntil false\n")
+        assert exc.display_name == "MaxIterationsExceeded"
+        assert exc.nominal == NO_BUILTIN_DECLARATIONS.nominal("MaxIterationsExceeded")
+
+    @pytest.mark.parametrize(
+        ("source", "default_stdlib"),
+        [
+            ("()\n", True),
+            ("()\n", False),
+            ("builtin exception RangeError extends Exception()\n()\n", False),
+            ("scope A\nbuiltin exception RangeError extends Exception()\nend A\n()\n", False),
+            (
+                "scope A\n"
+                "builtin record ExecResult\n"
+                "  stdout: text\n"
+                "  exit_code: int\n"
+                "  stderr: text\n"
+                "  timed_out: bool\n"
+                "end A\n"
+                "()\n",
+                False,
+            ),
+        ],
+        ids=["stdlib", "no-stdlib", "root-builtin", "scoped-builtin", "scoped-builtin-record"],
+    )
+    def test_every_host_minted_identity_has_a_matching_descriptor(
+        self, source: str, default_stdlib: bool
+    ) -> None:
+        """Whatever a program declares, every host-minted identity is describable.
+
+        The host stamps ``builtin_nominals.nominal(name)`` on the values it
+        mints and spells them with ``builtin_nominals.resolve(name)``.
+        Both must agree with the linked program's own descriptor table, or a
+        host-minted value would carry an identity the evaluator, the extern
+        boundary, and rendering cannot resolve. Covers the four arrangements
+        that mint identities by different routes: the shipped standard
+        library's declarations, no declarations at all, a program's own root
+        ``builtin`` declaration, and a scoped one.
+        """
+        from agm.agl.semantics.types import BUILTIN_EXCEPTIONS, BUILTIN_PRELUDE_TYPES
+        from tests.agl.ir_harness import lower_ir
+
+        program = lower_ir(source, default_stdlib=default_stdlib)
+        for name in (*BUILTIN_PRELUDE_TYPES, *BUILTIN_EXCEPTIONS):
+            descriptor = program.nominals.get(program.builtin_nominals.nominal(name))
+            assert descriptor is not None, f"no descriptor for host-minted {name!r}"
+            assert descriptor.declared_name == name
+            assert descriptor.display_name == program.builtin_nominals.resolve(name).display_name
+
+
+# ---------------------------------------------------------------------------
+# lowering: unsupported nodes raise a clear error
 # ---------------------------------------------------------------------------
 
 
@@ -1311,7 +1439,7 @@ let c = Color::Red
 
 
 # ---------------------------------------------------------------------------
-# lower_module: Location fields are valid
+# lowering: Location fields are valid
 # ---------------------------------------------------------------------------
 
 
@@ -1334,7 +1462,7 @@ class TestLocationValidity:
 
 
 # ---------------------------------------------------------------------------
-# lower_module: validate_ir integration
+# lowering: validate_ir integration
 # ---------------------------------------------------------------------------
 
 
@@ -1399,7 +1527,11 @@ class TestIrFieldLowering:
         unit_lit = UnitLit(span=span, node_id=fake_node_id + 1)
         field_access = FieldAccess(obj=unit_lit, field="myfield", span=span, node_id=fake_node_id)
 
-        checked.node_types[unit_lit.node_id] = RecordType("Point")
+        point_typedef = checked.type_env.type_table.get(ENTRY_ID, "Point")
+        assert point_typedef is not None
+        checked.node_types[unit_lit.node_id] = RecordType(
+            "Point", decl_id=point_typedef.decl_node_id
+        )
         lowerer = _make_lowerer(checked, source)
         result = lowerer.lower_expr(field_access)
 
@@ -1409,7 +1541,8 @@ class TestIrFieldLowering:
 
     def test_abstract_exception_field_access_uses_upper_bound_mode(self) -> None:
         """Field access on abstract Exception records a static upper bound."""
-        from agm.agl.modules.ids import PRELUDE_ID
+        from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
+        from agm.agl.modules.ids import STD_CORE_ID
         from agm.agl.syntax.nodes import FieldAccess, UnitLit
         from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
 
@@ -1428,7 +1561,9 @@ class TestIrFieldLowering:
         unit_lit = UnitLit(span=span, node_id=fake_node_id + 1)
         field_access = FieldAccess(obj=unit_lit, field="message", span=span, node_id=fake_node_id)
 
-        checked.node_types[unit_lit.node_id] = ExceptionType("Exception", PRELUDE_ID)
+        checked.node_types[unit_lit.node_id] = ExceptionType(
+            "Exception", STD_CORE_ID, decl_id=require_reserved_nominal_id("Exception")
+        )
         lowerer = _make_lowerer(checked, source)
         result = lowerer.lower_expr(field_access)
 
@@ -1805,6 +1940,22 @@ let add = make(10).add
         assert receiver.symbol == receiver_bind.symbol
 
 
+class TestBuiltinMethodLowering:
+    """Selected builtin methods reuse the builtin lowering path."""
+
+    def test_agent_method_call_lowers_to_ask_with_receiver_operand(self) -> None:
+        source = """\
+let agents = [AgentCommand("worker")]
+let result: text = agents[0].ask("Summarize")
+()\
+"""
+        program = _lower(source)
+        result = _let_root_capture(program.modules[program.entry_module].initializers[-2])
+
+        assert isinstance(result.value, IrAsk)
+        assert isinstance(result.value.agent, IrIndex)
+
+
 class TestIndirectCallLowering:
     """Golden tests: indirect call lowers to IrIndirectCall with coerced args."""
 
@@ -1980,32 +2131,6 @@ class TestPartialCallLowering:
 class TestLowerGraph:
     """Golden tests for lower_program."""
 
-    def test_lower_program_links_scoped_functions_without_eager_scoped_agents(self) -> None:
-        from agm.agl.lower.program import lower_program
-        from agm.agl.modules.loader import load_graph
-        from agm.agl.modules.roots import RootSet
-        from agm.agl.scope.program import resolve_program
-        from agm.agl.typecheck.program import check_program
-
-        graph = load_graph(
-            _MIXED_ROOT_AND_SCOPED_DECLARATIONS,
-            entry_path=None,
-            roots=RootSet(roots=frozenset()),
-            default_stdlib=False,
-        )
-
-        program = lower_program(_compiled_checked(check_program(resolve_program(graph), _caps())))
-
-        # Same expectation as the single-module case: named-scope functions link
-        # but do not get a public_name, since they are not root-level bindings.
-        public_names = {
-            symbol.public_name
-            for symbol in program.symbols.values()
-            if symbol.public_name is not None
-        }
-        assert public_names == {"root", "root_agent"}
-        assert len(program.functions) == 3
-
     def test_lower_program_simple(self, tmp_path: Path) -> None:
         """lower_program on a two-module program builds a valid ExecutableProgram.
 
@@ -2013,7 +2138,7 @@ class TestLowerGraph:
         - Both modules appear in ``program.modules`` with distinct entries.
         - Both modules' functions appear in ``program.functions`` with DISTINCT FunctionIds.
         - ``program.nominals`` contains types from both modules (one record per module).
-        - Exactly one ``SourceFile`` per module (2 sources total).
+        - Exactly one ``SourceFile`` per module (3 sources total, including std/core).
         - The library ``ExecutableModule.initializers`` contains ONLY function binds
           (IrBind wrapping IrMakeClosure).
         - The entry module is LAST in ``program.modules`` insertion order.
@@ -2066,7 +2191,7 @@ class TestLowerGraph:
         prog = lower_program(_compiled_checked(cg))
 
         # Both modules must appear
-        assert len(prog.modules) == 2
+        assert len(prog.modules) == 3
 
         # Entry module is LAST in insertion order
         module_ids = list(prog.modules.keys())
@@ -2074,8 +2199,8 @@ class TestLowerGraph:
             "Entry module must be last in program.modules insertion order"
         )
 
-        # Exactly one SourceFile per module
-        assert len(prog.sources) == 2
+        # Exactly one SourceFile per module, including the automatic std/core import.
+        assert len(prog.sources) == 3
 
         # Both modules' functions appear in program.functions with DISTINCT FunctionIds.
         # lib has make_point; entry has no user functions here, but they share one table.
@@ -2166,12 +2291,11 @@ class TestLowerGraph:
         """Type alias does not register a spurious NominalId in lower_program.
 
         A program with ``type Foo = Point`` (where Point is a record) must NOT
-        create a ``NominalId(mid, "Foo")`` entry in ``program.nominals``.
-        Only the canonical declaration site ``NominalId(mid, "Point")`` must exist.
+        create a descriptor for ``Foo`` in ``program.nominals``. Only the
+        canonical declaration site for ``Point`` must exist.
         """
         import os
 
-        from agm.agl.ir.ids import NominalId
         from agm.agl.lower.program import lower_program
         from agm.agl.modules.ids import ModuleId
         from agm.agl.modules.loader import load_graph
@@ -2217,7 +2341,6 @@ class TestLowerGraph:
         prog = lower_program(_compiled_checked(cg))
 
         nominal_names = {desc.display_name for desc in prog.nominals.values()}
-        nominal_ids = set(prog.nominals.keys())
 
         # Canonical record and enum nominals must be present
         assert "Point" in nominal_names, "NominalId for 'Point' must be registered"
@@ -2227,16 +2350,16 @@ class TestLowerGraph:
         assert "PointAlias" not in nominal_names, (
             "Record alias 'PointAlias' must NOT register a spurious nominal descriptor"
         )
-        assert NominalId(lib_mid, "PointAlias") not in nominal_ids, (
-            "NominalId(lib_mid, 'PointAlias') must NOT appear in program.nominals"
+        assert not any(desc.declared_name == "PointAlias" for desc in prog.nominals.values()), (
+            "No descriptor for 'PointAlias' must appear in program.nominals"
         )
 
         # Enum alias must NOT register a spurious nominal (exercises EnumType guard in graph.py)
         assert "ColorAlias" not in nominal_names, (
             "Enum alias 'ColorAlias' must NOT register a spurious nominal descriptor"
         )
-        assert NominalId(lib_mid, "ColorAlias") not in nominal_ids, (
-            "NominalId(lib_mid, 'ColorAlias') must NOT appear in program.nominals"
+        assert not any(desc.declared_name == "ColorAlias" for desc in prog.nominals.values()), (
+            "No descriptor for 'ColorAlias' must appear in program.nominals"
         )
 
 
@@ -2436,11 +2559,29 @@ class TestHostOpLowering:
         assert required_map["x"] is True
         assert required_map["y"] is False
 
+    def test_scoped_param_public_name_is_its_full_path_spelling(self) -> None:
+        """A scoped param's IrParam.public_name is its full `::` path, the
+        external key CLI/config lookups use."""
+        source = 'scope Deploy\nparam region: text = "eu"\nend Deploy\nDeploy::region'
+        prog = _lower(source)
+        assert len(prog.params) == 1
+        p = prog.params[0]
+        assert p.public_name == "Deploy::region"
+
+    def test_scoped_param_symbol_public_name_matches_its_ir_param(self) -> None:
+        """The allocated symbol's own public_name matches the IrParam's, so
+        REPL echo/result collection stays keyed by the same external spelling."""
+        source = "scope A\nscope B\nparam x: int\nend B\nend A\nA::B::x"
+        prog = _lower(source)
+        (p,) = prog.params
+        assert p.public_name == "A::B::x"
+        assert prog.symbols[p.symbol].public_name == "A::B::x"
+
     def test_ask_lowers_to_ir_ask_m6b(self) -> None:
         """ask() now lowers to IrAsk."""
         from agm.agl.ir.nodes import IrAsk
 
-        source = 'agent impl\nlet r: text = ask("prompt", agent = impl)\n()'
+        source = 'let impl = AgentCommand("impl")\nlet r: text = ask("prompt", agent = impl)\n()'
         prog = _lower(source)
         # The let site's private root captures the IrAsk result.
         inits = prog.modules[prog.entry_module].initializers
@@ -2476,27 +2617,14 @@ class TestHostOpLowering:
         assert contract.codec_name == "none"
         assert contract.is_unit is True
 
-    def test_agent_decl_lowers_to_ir_agent_handle_bind(self) -> None:
-        """AgentDecl lowers to IrBind(symbol, IrAgentHandle(name))."""
-        from agm.agl.ir.nodes import IrAgentHandle, IrBind
-
-        source = "agent my_agent\n()"
-        prog = _lower(source)
-        inits = prog.modules[prog.entry_module].initializers
-        # Expect an IrBind whose value is IrAgentHandle with the agent's name.
-        handle_binds = [
-            n for n in inits if isinstance(n, IrBind) and isinstance(n.value, IrAgentHandle)
-        ]
-        assert len(handle_binds) == 1, (
-            f"Expected exactly 1 IrBind(IrAgentHandle), got {len(handle_binds)}"
-        )
-        assert handle_binds[0].value.agent_name == "my_agent"
-
-    def test_ask_request_lowers_to_ir_ask_request_with_contract(self) -> None:
-        """ask-request lowers to IrAskRequest + ContractRequest in program.contracts."""
+    def test_ask_request_lowers_to_ir_ask_request_without_a_contract(self) -> None:
+        """ask-request lowers to IrAskRequest and allocates nothing in program.contracts."""
         from agm.agl.ir.nodes import IrAskRequest
 
-        source = 'agent worker\nlet req = ask-request("my prompt", agent = worker)\n()'
+        source = (
+            'let worker = AgentCommand("worker")\n'
+            'let req = ask-request("my prompt", agent = worker)\n()'
+        )
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
         # The let site's private root captures the IrAskRequest result.
@@ -2511,13 +2639,50 @@ class TestHostOpLowering:
         )
         ask_req = ask_req_binds[0].value
         assert isinstance(ask_req, IrAskRequest)
-        # The contract_id must reference an entry in program.contracts.
-        assert ask_req.contract_id in prog.contracts, (
-            f"IrAskRequest.contract_id {ask_req.contract_id} not in program.contracts"
+        # ask-request is fixed-text and side-effect-free: it dispatches nothing and
+        # parses nothing, so lowering it must allocate no ContractRequest at all.
+        assert prog.contracts == {}, f"Expected no allocated contracts, got {prog.contracts!r}"
+
+    def test_ask_request_method_form_allocates_no_contract(self) -> None:
+        """Agent::ask-request(...) goes through the same contract-free lowering path."""
+        from agm.agl.ir.nodes import IrAskRequest
+
+        source = (
+            'let worker = AgentCommand("worker")\nlet req = worker.ask-request("my prompt")\n()'
         )
-        contract = prog.contracts[ask_req.contract_id]
-        # ask-request is always is_unit=False (result is always an AgentRequest record).
-        assert contract.is_unit is False
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        assert any(
+            isinstance(n, (IrSequence, IrBind))
+            and isinstance(_let_root_capture(n).value, IrAskRequest)
+            for n in inits
+        ), "Expected the method form to lower to an IrAskRequest"
+        assert prog.contracts == {}, f"Expected no allocated contracts, got {prog.contracts!r}"
+
+    def test_ask_request_does_not_shift_the_contracts_of_other_host_calls(self) -> None:
+        """Mixing ask-request with ask/exec leaves every allocated contract resolvable."""
+        from agm.agl.ir.nodes import IrAsk, IrAskRequest, IrExec
+
+        source = (
+            'let worker = AgentCommand("worker")\n'
+            'let req = ask-request("my prompt", agent = worker)\n'
+            'let answer: text = ask("question", agent = worker)\n'
+            'exec("ls")\n()'
+        )
+        prog = _lower(source)
+        nodes = [
+            _let_root_capture(n).value if isinstance(n, (IrSequence, IrBind)) else n
+            for n in prog.modules[prog.entry_module].initializers
+        ]
+        assert any(isinstance(n, IrAskRequest) for n in nodes)
+        parsing_nodes = [n for n in nodes if isinstance(n, (IrAsk, IrExec))]
+        assert len(parsing_nodes) == 2, f"Expected one IrAsk and one IrExec, got {parsing_nodes!r}"
+        # Only the dispatching host ops allocate, and each still resolves.
+        assert len(prog.contracts) == 2, f"Expected exactly 2 contracts, got {prog.contracts!r}"
+        for node in parsing_nodes:
+            assert node.contract_id in prog.contracts, (
+                f"{type(node).__name__}.contract_id {node.contract_id} not in program.contracts"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -2973,16 +3138,14 @@ class TestTemplateLowering:
 
 
 # ---------------------------------------------------------------------------
-# Structural lowering: IrMakeException / AutoTraceField
+# Structural lowering: IrMakeException
 # ---------------------------------------------------------------------------
 
 
 class TestIrMakeExceptionLowering:
     """Structural tests for exception construction lowering.
 
-    IrMakeException.fields contains IrExpr for explicitly provided fields and
-    AutoTraceField sentinels for declared-but-omitted fields.  These tests pin
-    the exact slot shape so a wrong AutoTraceField placement fails.
+    IrMakeException.fields contains the expressions supplied by the caller.
     """
 
     def _get_raise_in_fn(self, source: str) -> IrRaise:
@@ -3011,8 +3174,8 @@ class TestIrMakeExceptionLowering:
         assert isinstance(exc, IrMakeException)
         assert exc.display_name == "Abort"
 
-    def test_provided_field_is_ir_expr_not_auto_trace_field(self) -> None:
-        """Explicitly provided 'message' field → IrConstText, not AutoTraceField."""
+    def test_provided_field_is_ir_expr(self) -> None:
+        """An explicitly provided message field lowers to IrConstText."""
         source = 'def stop_fn() -> unit =\n  raise Abort(message = "stop")\nstop_fn()\n'
         raise_node = self._get_raise_in_fn(source)
         exc = raise_node.exc
@@ -3024,27 +3187,6 @@ class TestIrMakeExceptionLowering:
         )
         assert msg_slot.value == "stop"
 
-    def test_unprovided_trace_id_field_is_auto_trace_field(self) -> None:
-        """Undeclared 'trace_id' field → AutoTraceField sentinel, not an IrExpr.
-
-        When a caller omits a declared exception field, the lowerer places an
-        AutoTraceField sentinel; the evaluator fills in a fresh trace id at
-        construction time.  This test pins that exactly one AutoTraceField
-        is present for the omitted trace_id.
-        """
-        source = 'def stop_fn() -> unit =\n  raise Abort(message = "stop")\nstop_fn()\n'
-        raise_node = self._get_raise_in_fn(source)
-        exc = raise_node.exc
-        assert isinstance(exc, IrMakeException)
-        fields_dict = dict(exc.fields)
-        trace_slot = fields_dict["trace_id"]
-        assert isinstance(trace_slot, AutoTraceField), (
-            f"omitted 'trace_id' must be AutoTraceField, got {type(trace_slot).__name__}"
-        )
-        # Only the omitted field gets an AutoTraceField; the provided 'message' does not.
-        auto_fields = [v for _, v in exc.fields if isinstance(v, AutoTraceField)]
-        assert len(auto_fields) == 1
-
 
 # ---------------------------------------------------------------------------
 # Golden lowering: loop desugar
@@ -3053,7 +3195,6 @@ class TestIrMakeExceptionLowering:
 
 def _get_loop_ir(source: str) -> "IrLoop | IrSequence":
     """Lower *source* and return the top-level loop IR node (IrSequence or IrLoop)."""
-    from agm.agl.modules.ids import ENTRY_ID
 
     executable = _lower(source)
     # Find the loop/sequence node; skip IrBind for var declarations.
@@ -3181,22 +3322,19 @@ class TestLoopDesugar:
         exc = raise_node.exc
         assert isinstance(exc, IrMakeException)
         fields = exc.fields
-        # Declaration order: message, trace_id, limit, condition,
-        #                    last_condition_value, metadata
-        assert len(fields) == 6
-        assert fields[0][0] == "message"
+        assert [name for name, _ in fields] == [
+            "message",
+            "limit",
+            "condition",
+            "last_condition_value",
+            "metadata",
+        ]
         assert isinstance(fields[0][1], IrRenderTemplate)
-        assert fields[1][0] == "trace_id"
-        assert isinstance(fields[1][1], AutoTraceField)
-        assert fields[2][0] == "limit"
-        assert isinstance(fields[2][1], IrLoad)  # IrLoad(__n_sym)
-        assert fields[3][0] == "condition"
-        assert isinstance(fields[3][1], IrConstText)
-        assert fields[4][0] == "last_condition_value"
-        assert isinstance(fields[4][1], IrConstBool)
-        assert fields[4][1].value is False
-        assert fields[5][0] == "metadata"
-        assert isinstance(fields[5][1], IrConstJsonNull)
+        assert isinstance(fields[1][1], IrLoad)  # IrLoad(__n_sym)
+        assert isinstance(fields[2][1], IrConstText)
+        assert isinstance(fields[3][1], IrConstBool)
+        assert fields[3][1].value is False
+        assert isinstance(fields[4][1], IrConstJsonNull)
 
     def test_done_terminator_condition_source_is_false(self) -> None:
         """``do[n] … done`` sets ``condition="false"`` in MaxIterationsExceeded."""
@@ -3499,8 +3637,6 @@ class TestRangeForDesugar:
         fields_dict = dict(exc.fields)
         assert "message" in fields_dict
         assert isinstance(fields_dict["message"], IrConstText)
-        assert "trace_id" in fields_dict
-        assert isinstance(fields_dict["trace_id"], AutoTraceField)
         # IrLoop is last
         assert isinstance(loop, IrLoop)
 
@@ -3610,10 +3746,11 @@ class TestRangeForDesugar:
         assert advance.op is ArithOp.SUB
 
     def test_step_guard_raises_range_error_ir(self) -> None:
-        """The step guard IrMakeException has nominal RangeError, message+trace_id fields."""
-        from agm.agl.modules.ids import PRELUDE_ID as _PRELUDE_ID
+        """The step guard IrMakeException has the RangeError message field."""
+        from tests.agl.ir_harness import nominal_id_for
 
         source = "for i in 1 to 5 do\n  ()\ndone\n"
+        program = _lower(source)
         node = _get_loop_ir(source)
         assert isinstance(node, IrSequence)
         guard_if = node.items[3]
@@ -3622,13 +3759,11 @@ class TestRangeForDesugar:
         assert isinstance(raise_node, IrRaise)
         exc = raise_node.exc
         assert isinstance(exc, IrMakeException)
-        assert exc.nominal.module_id == _PRELUDE_ID
-        assert exc.nominal.declared_name == "RangeError"
+        assert exc.nominal == nominal_id_for(program, "RangeError")
         assert exc.display_name == "RangeError"
         fields_dict = dict(exc.fields)
-        assert set(fields_dict.keys()) == {"message", "trace_id"}
+        assert set(fields_dict.keys()) == {"message"}
         assert isinstance(fields_dict["message"], IrConstText)
-        assert isinstance(fields_dict["trace_id"], AutoTraceField)
 
     def test_range_with_n_bound_preloop_order(self) -> None:
         """``for i in 1 to 5 do[3]`` range pre-loop precedes __n/__count.
@@ -3795,6 +3930,5 @@ class TestRangeForDesugar:
         exc = BUILTIN_EXCEPTIONS["RangeError"]
         assert exc.name == "RangeError"
         fields = create_seeded_type_table().exception_fields(exc)
-        assert set(fields.keys()) == {"message", "trace_id"}
+        assert set(fields.keys()) == {"message"}
         assert isinstance(fields["message"], _TextType)
-        assert isinstance(fields["trace_id"], _TextType)

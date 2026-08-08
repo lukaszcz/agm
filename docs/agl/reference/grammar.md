@@ -14,7 +14,7 @@ they describe a line break and indentation change, not text written in source.
 
 ```ebnf
 name       ::= NAME | OP_NAME
-field_name ::= NAME | "agent" | "to" | "downto" | "by"
+field_name ::= NAME | "to" | "downto" | "by"
 
 program      ::= module_block EOF
 
@@ -22,17 +22,16 @@ module_block ::= module_item ((NEWLINE | ";") module_item)* (NEWLINE | ";")?
 module_item   ::= scope_region | item
 block         ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 
-item       ::= import_decl                  (* header position only *)
+item       ::= import_decl                  (* header position only; scope_item also permits it *)
              | open_decl                    (* module-root or scope-region header only *)
              | builtin_var_def              (* root only; standard library only *)
              | builtin_modifier? record_def (* root only *)
              | builtin_modifier? enum_def   (* root only *)
              | type_alias                   (* root only *)
              | builtin_modifier? exception_def (* root only *)
-             | export_decl                  (* root only *)
+             | export_decl                  (* root only; scope_item also permits it *)
              | param_decl                   (* root only *)
              | program_decl                 (* root only *)
-             | agent_decl                   (* entry module root; scope_item also permits it *)
              | infix_decl                   (* root only *)
              | func_def                     (* root only *)
              | builtin_func_def             (* root only *)
@@ -56,20 +55,28 @@ scope_region ::= "scope" scope_path (NEWLINE | ";")
                  "end" scope_path
 scope_path   ::= NAME ("::" NAME)*
 scope_item   ::= scope_region | open_decl
+               | import_decl                  (* header position only *)
+               | export_decl
                | record_def | enum_def | exception_def | type_alias
                | func_def | extern_func_def
-               | agent_decl
+               | builtin_var_def
+               | builtin_modifier? record_def | builtin_modifier? enum_def
+               | builtin_modifier? exception_def | builtin_func_def
+               | param_decl
+               | let_decl | var_decl
 ```
 
 A scope region has a mandatory matching closer: `scope A::B` closes with
 `end A::B`. Regions may appear only as module-root items or as items of another
 scope region. They may nest, and a multi-segment header is equivalent to
 nested single-segment regions. Scope
-regions contain only nested regions, header `open` declarations, and static
-declarations; bindings, expressions, `builtin` declarations, infix declarations,
-imports, exports, `program`, and `param` declarations are not permitted. `scope` is contextual at item start before a
-scope path, and `end` is contextual only for a complete closer at an open
-region's layout level; both remain ordinary names in expression positions.
+regions contain nested regions, header `open` and `import` declarations,
+`export` declarations, static declarations (including every `builtin` form),
+`param` declarations, and `let`/`var` bindings; bare expressions, `:=`
+assignments, infix declarations, and `program` declarations are not
+permitted. `scope` is contextual at item start before a scope path, and `end`
+is contextual only for a complete closer at an open region's layout level;
+both remain ordinary names in expression positions.
 
 `"builtin"` is a **declaration modifier** that behaves like a decorator: it may
 sit on the same line as the declaration it adorns (`builtin enum …`) or on the
@@ -236,7 +243,6 @@ param_marker     ::= "/" | "*" | "@" NAME    (* NAME must be pos, std, or named 
 param_decl       ::= "param" name type_ann? ("=" expr)?
 program_decl     ::= "program" name
 
-agent_decl       ::= "agent" decl_head ("=" STRING)?
 ```
 
 A `param_marker` splits a parameter or field list into **zones**: `/` (≡ `@std`)
@@ -251,9 +257,6 @@ entry is an ordinary name in scope as a type throughout the declaration's body.
 `_` is an unused positional slot and introduces no type name. See
 [Generics](generics.md).
 
-The runner string of an `agent` declaration must be a literal string with no
-`%{…}` interpolation; an interpolation hole is a static error.
-
 ## Type expressions
 
 ```ebnf
@@ -267,7 +270,6 @@ type_expr ::= "unit"
             | qualifier_chain name
             | "array" "[" type_expr "]"
             | "dict" "[" "text" "," type_expr "]"
-            | "agent"
             | func_type
 
 func_type ::= type_atom "->" type_expr
@@ -279,7 +281,6 @@ type_atom ::= "unit" | "text" | "json" | "bool" | "int" | "decimal"
             | qualifier_chain name
             | "array" "[" type_expr "]"
             | "dict" "[" "text" "," type_expr "]"
-            | "agent"
 type_list ::= type_expr ("," type_expr)* ","?
 
 qualifier_chain   ::= "::" qualifier_segment*
@@ -346,21 +347,34 @@ previously declared user operator.
 
 ```ebnf
 let_decl       ::= "let" pattern type_ann? "=" expr
-var_decl       ::= "var" name type_ann? "=" expr
-builtin_var_def ::= "builtin" NEWLINE? "var" name type_ann  (* body-less; std/config only *)
+var_decl       ::= "var" decl_head type_ann? "=" expr
+builtin_var_def ::= "builtin" NEWLINE? "var" name type_ann ["=" expr]  (* std/config only *)
 assign_stmt ::= assign_target ":=" expr
 assign_target ::= qualifier_chain? name
                 | postfix "[" expr "]"
 ```
 
 A `builtin var` is a body-less, host-backed mutable binding with a mandatory
-type and no initializer; the `builtin` modifier may sit on the same line or the
-line directly above (like `builtin def`). It may be declared only at the root of
-`std/config`; entry modules and other library modules cannot declare one.
+type and an optional constant initializer. The initializer must have the
+declared type and use only literals, literal containers, and constructors. It
+becomes the engine default only when the host supplies no initial value. The
+`builtin` modifier may sit on the same line or the line directly above (like
+`builtin def`). It may be declared only at the root, or in a named scope region,
+of `std/config`; entry modules and other library modules cannot declare one.
 
-Assignment has type `unit` and returns `void`. A bare (non-indexed) cross-module
-assignment target — written with a qualifier, or bare when an open import puts
-the name in scope — is valid only when it resolves to a `builtin var`;
+`var`'s `decl_head` accepts the same optional scope-path prefix as the type
+declarations above (`var A::count = 0`). `let` needs no separate grammar for
+its own shorthand: a `pattern` that is exactly a bare qualifier chain
+spellable as a declaration head (no argument list, no `as` binder, and
+otherwise a plain, non-`::`-anchored name chain) declares a scoped binding
+instead of matching a pattern — see [Bindings and scope](bindings-and-scope.md)
+for the full disambiguation.
+
+Assignment has type `unit` and returns `void`. `assign_target`'s qualifier
+accepts any number of segments: a local scope path (`A::B::count`) reaches a
+scoped `var` exactly as a qualified read does, while a bare (non-indexed)
+cross-module target — written with a qualifier, or bare when an open import
+puts the name in scope — is valid only when it resolves to a `builtin var`;
 type-qualified constructor forms are not assignment targets. An indexed
 assignment target's object expression is evaluated like any other read, so
 `assign_target` accepts any array- or dict-typed expression there — see
@@ -438,7 +452,7 @@ try_body          ::= suite | (marked_item ";")* try_tail
 try_tail          ::= or_expr | inline_assign | try_letvar_decl | raise_expr
                     | return_expr | if_expr | case_expr | loop
 try_letvar_decl   ::= "let" pattern type_ann? "=" try_value
-                    | "var" name type_ann? "=" try_value
+                    | "var" decl_head type_ann? "=" try_value
 try_value         ::= or_expr | raise_expr | return_expr | if_expr | case_expr | loop
 catch_clause      ::= "catch" catch_pattern "=>" branch_body
 catch_pattern     ::= name ("as" name)?
@@ -460,7 +474,8 @@ pattern_atom   ::= "_"
                  | INT | DECIMAL | "true" | "false" | "null" | STRING
                  | name
                  | name "(" pattern_fields? ")"
-                 | qualifier_chain name ("(" pattern_fields? ")")?
+                 | qualifier_chain name
+                 | qualifier_chain name "(" pattern_fields? ")"
 pattern_fields ::= pattern_field ("," pattern_field)* ","?
 pattern_field  ::= pattern              (* positional sub-pattern *)
                  | field_name "=" pattern
@@ -475,7 +490,10 @@ A qualified variant pattern (`Option::some(value)`,
 `module::Option::some(value)`, or `/module::Option::some(value)`) names the
 owning enum and variant with `::`. A leading `/` is an anchored qualifier;
 without it, the qualifier is resolved as a suffix. The complete qualifier
-through `::` is byte-adjacent.
+through `::` is byte-adjacent. A qualified pattern's argument list is
+optional (`Option::none` and `Option::none()` are both nullary matches) except
+at the root of a `let` pattern, where writing it or not distinguishes a match
+from a scoped binding — see [Bindings and scope](bindings-and-scope.md).
 Unqualified constructor ownership is selected by the scrutinee's static nominal
 type, even when multiple enums share a variant name or a record constructor
 spelling collides with an enum variant; a qualifier is optional and must agree
@@ -493,15 +511,20 @@ A `STRING` pattern may not contain interpolation.
 ## Raw-tail calls
 
 ```ebnf
-raw_call  ::= ("exec!" | "ask!") type_args? raw_tail
-type_args ::= "::" "[" type_expr ("," type_expr)* "]"
-raw_tail  ::= inline_raw_tail | block_raw_tail
+raw_call        ::= raw_callee type_args? raw_tail
+dotted_raw_call ::= postfix "." raw_callee type_args? raw_tail
+raw_callee      ::= "exec!" | "ask!"
+type_args       ::= "::" "[" type_expr ("," type_expr)* "]"
+raw_tail        ::= inline_raw_tail | block_raw_tail
 ```
 
-The optional `type_args` group is recognized only when its `::` is immediately
-adjacent to the raw name: `exec!::[T]` and `ask!::[T]`. Whitespace before the
-`::` makes it payload text instead, so `exec! ::[T]` and `ask! ::[T]` have no
-type arguments.
+A raw tail may start a call directly or follow a runtime member projection.
+`receiver.ask! payload` is equivalent to `receiver.ask(payload)`, including
+normal field-then-method resolution. The optional `type_args` group is
+recognized only when its `::` is immediately adjacent to the raw name:
+`exec!::[T]` and `receiver.ask!::[T]`. Whitespace before the `::` makes it
+payload text instead, so `ask! ::[T]` and `receiver.ask! ::[T]` have no type
+arguments.
 
 An inline raw tail is all text from its first non-whitespace character through
 the end of the line, except that trailing spaces and tabs are removed. A block
@@ -515,9 +538,9 @@ a block with at least one nonblank line. Raw text is tokenized as fragments and
 A raw call is valid only where the grammar guarantees that nothing else follows
 on its line: as a block item; as a `let`, `var`, or assignment RHS; as an
 inline `def` body; as a `return` operand at a block-item or function-body tail;
-or as the final single-argument juxtaposition argument. It is not valid inside
-brackets, branch/catch inline bodies, or another inline expression. Use the
-ordinary call form there.
+or as the final single-argument juxtaposition argument (for example,
+`print receiver.ask! prompt`). It is not valid inside brackets, branch/catch
+inline bodies, or another inline expression. Use the ordinary call form there.
 
 ```agl
 let path = "."
@@ -598,8 +621,8 @@ break_expr     ::= "break"
 continue_expr  ::= "continue"
 ```
 
-A bare name atom is resolved by scope and position: it may name a variable,
-an agent, a record constructor, an enum variant, or a generic `def`/constructor
+A bare name atom is resolved by scope and position: it may name a variable, a
+record constructor, an enum variant, or a generic `def`/constructor
 used as a first-class value. The typed postfix form carries explicit type
 arguments to a generic `def` or bare constructor (`id::[int](5)`,
 `some::[int](value = 1)`, `apply::[int, int](…)`), or instantiate a generic

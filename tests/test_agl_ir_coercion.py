@@ -1,7 +1,7 @@
 """IR evaluation tests for coercion round-trips.
 
 Each test evaluates a source program through the IR pipeline
-(lower_module → IrInterpreter) and asserts the final binding snapshots.
+(lowering → IrInterpreter) and asserts the final binding snapshots.
 
 Where noted, a test also structurally asserts that the lowered IR contains
 the expected ``IrCoerce``/``Coercion`` node (complementing the golden
@@ -43,9 +43,6 @@ import decimal
 from agm.agl.ir.nodes import IrCoerce, IrMakeArray, IrMakeDict, IrMakeJsonArray, IrMakeJsonObject
 from agm.agl.ir.operations import IntToDecimal, ToJson
 from agm.agl.ir.program import ExecutableProgram
-from agm.agl.lower import lower_module
-from agm.agl.parser import parse_program
-from agm.agl.scope import resolve_module
 from agm.agl.semantics.values import (
     ArrayValue,
     DecimalValue,
@@ -55,9 +52,8 @@ from agm.agl.semantics.values import (
     TextValue,
     Value,
 )
-from agm.agl.typecheck import check_module
 from tests._agl_helpers import let_root_capture
-from tests.agl.ir_harness import _compiled_checked, base_caps, evaluate_ir
+from tests.agl.ir_harness import evaluate_ir, lower_ir
 
 # ---------------------------------------------------------------------------
 # Shared pipeline helper for structural IR assertions
@@ -65,8 +61,7 @@ from tests.agl.ir_harness import _compiled_checked, base_caps, evaluate_ir
 
 
 def _lower(source: str) -> ExecutableProgram:
-    checked = check_module(resolve_module(parse_program(source)), base_caps())
-    return lower_module(_compiled_checked(checked), source_text=source, source_label="<test>")
+    return lower_ir(source)
 
 
 # ---------------------------------------------------------------------------

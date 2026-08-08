@@ -14,10 +14,13 @@ from pathlib import Path
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CORE_ID, ModuleId
-from agm.agl.parser import parse_program
+from agm.agl.ir.reserved_nominals import (
+    NO_DECL_ID,
+    RESERVED_NOMINAL_NAMES,
+    reserved_nominal_id,
+)
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 from agm.agl.repl import ReplSession
-from agm.agl.scope import resolve_module
 from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.analyses import (
     compute_finite_closure,
@@ -37,7 +40,7 @@ from agm.agl.semantics.type_table import (
 )
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
-    AgentType,
+    COMPATIBILITY_PRELUDE_TYPE_NAMES,
     ArrayType,
     BoolType,
     BottomType,
@@ -55,14 +58,22 @@ from agm.agl.semantics.types import (
     TypeVarType,
     UnitType,
 )
-from agm.agl.syntax.nodes import LetDecl, ParamKind, VarDecl, simple_let_pattern_name
-from agm.agl.typecheck import AglTypeError, CheckedModule, check_module
+from agm.agl.syntax.nodes import (
+    EnumDef,
+    ExceptionDef,
+    LetDecl,
+    ParamKind,
+    RecordDef,
+    VarDecl,
+    simple_let_pattern_name,
+)
+from agm.agl.typecheck import AglTypeError, CheckedModule
 from agm.agl.typecheck.program import check_program
+from tests._agl_helpers import strip_decl_ids
 from tests.agl.ir_harness import evaluate_ir_output, make_graph_from_files
+from tests.agl.module_graph import resolve_and_check_entry
 
 _CAPS = HostCapabilities(
-    agent_names=frozenset(),
-    has_default_agent=True,
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
@@ -74,8 +85,8 @@ _LIB_ID = ModuleId.from_path("lib")
 
 
 def _check(src: str) -> CheckedModule:
-    """Parse + resolve + check a single-module AgL program."""
-    return check_module(resolve_module(parse_program(src)), _CAPS)
+    """Resolve + check *src* as the entry of a real module graph."""
+    return resolve_and_check_entry(src, _CAPS)
 
 
 def test_scoped_generic_enum_does_not_claim_the_root_type_or_constructor_namespace() -> None:
@@ -103,7 +114,7 @@ def test_type_references_inside_a_scope_use_the_nearest_scoped_type() -> None:
     )
 
     result_type = checked.node_types[checked.resolved.program.body.items[-1].node_id]
-    assert result_type == RecordType("T", scope_path=("A",))
+    assert strip_decl_ids(result_type) == RecordType("T", scope_path=("A",))
 
 
 def _check_program(tmp_path: Path, modules: dict[str, str]):
@@ -153,8 +164,10 @@ def test_program_type_table_keys_keep_root_and_scoped_nominals_distinct(tmp_path
         },
     )
 
-    assert checked.program_type_table[(ENTRY_ID, (), "Visible")] == RecordType("Visible")
-    assert checked.program_type_table[(ENTRY_ID, ("A",), "Visible")] == RecordType(
+    assert strip_decl_ids(checked.program_type_table[(ENTRY_ID, (), "Visible")]) == RecordType(
+        "Visible"
+    )
+    assert strip_decl_ids(checked.program_type_table[(ENTRY_ID, ("A",), "Visible")]) == RecordType(
         "Visible", scope_path=("A",)
     )
 
@@ -200,22 +213,42 @@ def _binding_value_type(checked: CheckedModule, name: str):
 
 class TestTypeDefHandle:
     def test_record_handle(self) -> None:
-        typedef = TypeDef(kind="record", name="Point", module_id=ENTRY_ID)
-        assert typedef.handle() == RecordType(name="Point", module_id=ENTRY_ID)
+        typedef = TypeDef(kind="record", name="Point", module_id=ENTRY_ID, decl_node_id=700000)
+        assert typedef.handle() == RecordType(name="Point", module_id=ENTRY_ID, decl_id=700000)
 
     def test_enum_handle(self) -> None:
-        typedef = TypeDef(kind="enum", name="Color", module_id=ENTRY_ID)
-        assert typedef.handle() == EnumType(name="Color", module_id=ENTRY_ID)
+        typedef = TypeDef(kind="enum", name="Color", module_id=ENTRY_ID, decl_node_id=700001)
+        assert typedef.handle() == EnumType(name="Color", module_id=ENTRY_ID, decl_id=700001)
 
     def test_generic_record_handle_with_type_args(self) -> None:
-        typedef = TypeDef(kind="record", name="Box", module_id=ENTRY_ID, type_params=("T",))
+        typedef = TypeDef(
+            kind="record", name="Box", module_id=ENTRY_ID, type_params=("T",), decl_node_id=700002
+        )
         handle = typedef.handle(type_args=(IntType(),))
-        assert handle == RecordType(name="Box", type_args=(IntType(),), module_id=ENTRY_ID)
+        assert handle == RecordType(
+            name="Box", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700002
+        )
 
-    def test_exception_kind_unsupported(self) -> None:
-        typedef = TypeDef(kind="exception", name="Boom", module_id=ENTRY_ID)
-        with pytest.raises(ValueError, match="does not support kind"):
-            typedef.handle()
+    def test_exception_handle(self) -> None:
+        typedef = TypeDef(kind="exception", name="Boom", module_id=ENTRY_ID, decl_node_id=700003)
+        assert typedef.handle() == ExceptionType(name="Boom", module_id=ENTRY_ID, decl_id=700003)
+
+    def test_exception_handle_rejects_type_args(self) -> None:
+        typedef = TypeDef(kind="exception", name="Boom", module_id=ENTRY_ID, decl_node_id=700003)
+        with pytest.raises(ValueError, match="does not accept type_args"):
+            typedef.handle(type_args=(IntType(),))
+
+    def test_record_handle_stamps_decl_id_from_decl_node_id(self) -> None:
+        typedef = TypeDef(kind="record", name="Point", module_id=ENTRY_ID, decl_node_id=42)
+        assert typedef.handle().decl_id == 42
+
+    def test_enum_handle_stamps_decl_id_from_decl_node_id(self) -> None:
+        typedef = TypeDef(kind="enum", name="Color", module_id=ENTRY_ID, decl_node_id=43)
+        assert typedef.handle().decl_id == 43
+
+    def test_exception_handle_stamps_decl_id_from_decl_node_id(self) -> None:
+        typedef = TypeDef(kind="exception", name="Boom", module_id=ENTRY_ID, decl_node_id=44)
+        assert typedef.handle().decl_id == 44
 
 
 class TestRegisterAndGet:
@@ -226,6 +259,7 @@ class TestRegisterAndGet:
             name="Point",
             module_id=ENTRY_ID,
             fields=(("x", IntType()), ("y", IntType())),
+            decl_node_id=700000,
         )
         table.register(typedef)
         assert table.get(ENTRY_ID, "Point") == typedef
@@ -237,6 +271,7 @@ class TestRegisterAndGet:
             name="Color",
             module_id=_LIB_ID,
             variants=(("Red", ()), ("Blue", ())),
+            decl_node_id=700004,
         )
         table.register(typedef)
         assert table.get(_LIB_ID, "Color") == typedef
@@ -248,10 +283,18 @@ class TestRegisterAndGet:
     def test_same_name_in_different_modules_are_independent_entries(self) -> None:
         table = TypeTable()
         entry_def = TypeDef(
-            kind="record", name="Widget", module_id=ENTRY_ID, fields=(("a", IntType()),)
+            kind="record",
+            name="Widget",
+            module_id=ENTRY_ID,
+            fields=(("a", IntType()),),
+            decl_node_id=700005,
         )
         lib_def = TypeDef(
-            kind="record", name="Widget", module_id=_LIB_ID, fields=(("b", TextType()),)
+            kind="record",
+            name="Widget",
+            module_id=_LIB_ID,
+            fields=(("b", TextType()),),
+            decl_node_id=700006,
         )
         table.register(entry_def)
         table.register(lib_def)
@@ -273,9 +316,10 @@ class TestNonGenericAccessors:
                 name="Point",
                 module_id=ENTRY_ID,
                 fields=(("x", IntType()), ("y", IntType())),
+                decl_node_id=700000,
             )
         )
-        handle = RecordType(name="Point", module_id=ENTRY_ID)
+        handle = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700000)
         assert dict(table.record_fields(handle)) == {"x": IntType(), "y": IntType()}
 
     def test_enum_variants_non_generic(self) -> None:
@@ -286,9 +330,10 @@ class TestNonGenericAccessors:
                 name="Color",
                 module_id=ENTRY_ID,
                 variants=(("Red", ()), ("Custom", (("hex", TextType()),))),
+                decl_node_id=700001,
             )
         )
-        handle = EnumType(name="Color", module_id=ENTRY_ID)
+        handle = EnumType(name="Color", module_id=ENTRY_ID, decl_id=700001)
         result = table.enum_variants(handle)
         assert {v: dict(f) for v, f in result.items()} == {
             "Red": {},
@@ -310,18 +355,30 @@ class TestNonGenericAccessors:
     def test_record_fields_raises_when_key_registered_as_enum(self) -> None:
         table = TypeTable()
         table.register(
-            TypeDef(kind="enum", name="Color", module_id=ENTRY_ID, variants=(("Red", ()),))
+            TypeDef(
+                kind="enum",
+                name="Color",
+                module_id=ENTRY_ID,
+                variants=(("Red", ()),),
+                decl_node_id=700001,
+            )
         )
-        handle = RecordType(name="Color", module_id=ENTRY_ID)
+        handle = RecordType(name="Color", module_id=ENTRY_ID, decl_id=700001)
         with pytest.raises(AssertionError):
             table.record_fields(handle)
 
     def test_enum_variants_raises_when_key_registered_as_record(self) -> None:
         table = TypeTable()
         table.register(
-            TypeDef(kind="record", name="Point", module_id=ENTRY_ID, fields=(("x", IntType()),))
+            TypeDef(
+                kind="record",
+                name="Point",
+                module_id=ENTRY_ID,
+                fields=(("x", IntType()),),
+                decl_node_id=700000,
+            )
         )
-        handle = EnumType(name="Point", module_id=ENTRY_ID)
+        handle = EnumType(name="Point", module_id=ENTRY_ID, decl_id=700000)
         with pytest.raises(AssertionError):
             table.enum_variants(handle)
 
@@ -340,15 +397,13 @@ class TestExceptionAccessors:
                 kind="exception",
                 name="Exception",
                 module_id=ENTRY_ID,
-                fields=(("message", TextType()), ("trace_id", TextType())),
+                fields=(("message", TextType()),),
                 abstract=True,
+                decl_node_id=700007,
             )
         )
-        handle = ExceptionType(name="Exception", module_id=ENTRY_ID)
-        assert dict(table.exception_fields(handle)) == {
-            "message": TextType(),
-            "trace_id": TextType(),
-        }
+        handle = ExceptionType(name="Exception", module_id=ENTRY_ID, decl_id=700007)
+        assert dict(table.exception_fields(handle)) == {"message": TextType()}
 
     def test_exception_fields_flattens_base_chain_root_mid_leaf_order(self) -> None:
         """A three-level ``extends`` chain flattens base-first, in declaration order."""
@@ -358,8 +413,9 @@ class TestExceptionAccessors:
                 kind="exception",
                 name="Root",
                 module_id=ENTRY_ID,
-                fields=(("message", TextType()), ("trace_id", TextType())),
+                fields=(("message", TextType()),),
                 abstract=True,
+                decl_node_id=700008,
             )
         )
         table.register(
@@ -368,7 +424,8 @@ class TestExceptionAccessors:
                 name="Mid",
                 module_id=ENTRY_ID,
                 fields=(("code", IntType()),),
-                base=(ENTRY_ID, "Root"),
+                base=700008,
+                decl_node_id=700009,
             )
         )
         table.register(
@@ -377,16 +434,12 @@ class TestExceptionAccessors:
                 name="Leaf",
                 module_id=ENTRY_ID,
                 fields=(("detail", TextType()),),
-                base=(ENTRY_ID, "Mid"),
+                base=700009,
+                decl_node_id=700010,
             )
         )
-        handle = ExceptionType(name="Leaf", module_id=ENTRY_ID)
-        assert list(table.exception_fields(handle).keys()) == [
-            "message",
-            "trace_id",
-            "code",
-            "detail",
-        ]
+        handle = ExceptionType(name="Leaf", module_id=ENTRY_ID, decl_id=700010)
+        assert list(table.exception_fields(handle).keys()) == ["message", "code", "detail"]
 
     def test_exception_fields_resolves_cross_module_base(self) -> None:
         table = TypeTable()
@@ -395,8 +448,9 @@ class TestExceptionAccessors:
                 kind="exception",
                 name="Base",
                 module_id=_LIB_ID,
-                fields=(("message", TextType()), ("trace_id", TextType())),
+                fields=(("message", TextType()),),
                 abstract=True,
+                decl_node_id=700011,
             )
         )
         table.register(
@@ -405,13 +459,13 @@ class TestExceptionAccessors:
                 name="Child",
                 module_id=ENTRY_ID,
                 fields=(("code", IntType()),),
-                base=(_LIB_ID, "Base"),
+                base=700011,
+                decl_node_id=700012,
             )
         )
-        handle = ExceptionType(name="Child", module_id=ENTRY_ID)
+        handle = ExceptionType(name="Child", module_id=ENTRY_ID, decl_id=700012)
         assert dict(table.exception_fields(handle)) == {
             "message": TextType(),
-            "trace_id": TextType(),
             "code": IntType(),
         }
 
@@ -419,15 +473,29 @@ class TestExceptionAccessors:
         table = TypeTable()
         table.register(
             TypeDef(
-                kind="exception", name="Boom", module_id=ENTRY_ID, fields=(("code", IntType()),)
+                kind="exception",
+                name="Boom",
+                module_id=ENTRY_ID,
+                fields=(("code", IntType()),),
+                decl_node_id=700003,
             )
         )
-        handle = ExceptionType(name="Boom", module_id=ENTRY_ID)
+        handle = ExceptionType(name="Boom", module_id=ENTRY_ID, decl_id=700003)
         first = table.exception_fields(handle)
         second = table.exception_fields(handle)
         assert first is second
 
-    def test_exception_fields_cache_updates_when_base_is_redefined(self) -> None:
+    def test_exception_fields_cache_updates_when_a_base_def_is_overwritten(self) -> None:
+        """A cached descendant mapping follows a changed base declaration.
+
+        A declaration's shape is immutable once registered (a redeclaration
+        always mints a fresh identity -- see ``TypeTable.register``), so
+        ``merge_from`` treating another table as authoritative is the one path
+        that changes a def under an existing identity. Flattened exception
+        caches are keyed by descendant, not by the base that changed, so this
+        proves they are dropped wholesale rather than only for the identity
+        whose def moved.
+        """
         table = TypeTable()
         table.register(
             TypeDef(
@@ -435,6 +503,7 @@ class TestExceptionAccessors:
                 name="Base",
                 module_id=ENTRY_ID,
                 fields=(("old", IntType()),),
+                decl_node_id=700013,
             )
         )
         table.register(
@@ -443,25 +512,33 @@ class TestExceptionAccessors:
                 name="Child",
                 module_id=ENTRY_ID,
                 fields=(("own", TextType()),),
-                base=(ENTRY_ID, "Base"),
+                base=700013,
+                decl_node_id=700012,
             )
         )
-        child = ExceptionType(name="Child", module_id=ENTRY_ID)
+        child = ExceptionType(name="Child", module_id=ENTRY_ID, decl_id=700012)
         assert dict(table.exception_fields(child)) == {"old": IntType(), "own": TextType()}
 
-        table.unregister(ENTRY_ID, "Base")
-        table.register(
+        source = TypeTable()
+        source.register(
             TypeDef(
                 kind="exception",
                 name="Base",
                 module_id=ENTRY_ID,
                 fields=(("new", BoolType()),),
+                decl_node_id=700013,
             )
         )
+        table.merge_from(source)
 
         assert dict(table.exception_fields(child)) == {"new": BoolType(), "own": TextType()}
 
-    def test_exception_field_kinds_cache_updates_when_base_is_redefined(self) -> None:
+    def test_exception_field_kinds_cache_updates_when_a_base_def_is_overwritten(self) -> None:
+        """The field-kinds memo follows a changed base the same way.
+
+        Same authoritative-``merge_from`` path as the field mapping above,
+        against the separate ``exception_field_kinds`` memo.
+        """
         table = TypeTable()
         table.register(
             TypeDef(
@@ -470,6 +547,7 @@ class TestExceptionAccessors:
                 module_id=ENTRY_ID,
                 fields=(("old", IntType()),),
                 field_kinds=("standard",),
+                decl_node_id=700013,
             )
         )
         table.register(
@@ -479,22 +557,25 @@ class TestExceptionAccessors:
                 module_id=ENTRY_ID,
                 fields=(("own", TextType()),),
                 field_kinds=("named_only",),
-                base=(ENTRY_ID, "Base"),
+                base=700013,
+                decl_node_id=700012,
             )
         )
-        child = ExceptionType(name="Child", module_id=ENTRY_ID)
+        child = ExceptionType(name="Child", module_id=ENTRY_ID, decl_id=700012)
         assert table.exception_field_kinds(child) == (("old", "standard"), ("own", "named_only"))
 
-        table.unregister(ENTRY_ID, "Base")
-        table.register(
+        source = TypeTable()
+        source.register(
             TypeDef(
                 kind="exception",
                 name="Base",
                 module_id=ENTRY_ID,
                 fields=(("new", BoolType()),),
                 field_kinds=("positional_only",),
+                decl_node_id=700013,
             )
         )
+        table.merge_from(source)
 
         assert table.exception_field_kinds(child) == (
             ("new", "positional_only"),
@@ -510,9 +591,15 @@ class TestExceptionAccessors:
     def test_exception_fields_raises_when_key_registered_as_record(self) -> None:
         table = TypeTable()
         table.register(
-            TypeDef(kind="record", name="Point", module_id=ENTRY_ID, fields=(("x", IntType()),))
+            TypeDef(
+                kind="record",
+                name="Point",
+                module_id=ENTRY_ID,
+                fields=(("x", IntType()),),
+                decl_node_id=700000,
+            )
         )
-        handle = ExceptionType(name="Point", module_id=ENTRY_ID)
+        handle = ExceptionType(name="Point", module_id=ENTRY_ID, decl_id=700000)
         with pytest.raises(AssertionError):
             table.exception_fields(handle)
 
@@ -526,7 +613,8 @@ class TestExceptionAccessors:
                 kind="exception",
                 name="A",
                 module_id=ENTRY_ID,
-                base=(ENTRY_ID, "B"),
+                base=700015,
+                decl_node_id=700014,
             )
         )
         table.register(
@@ -534,10 +622,11 @@ class TestExceptionAccessors:
                 kind="exception",
                 name="B",
                 module_id=ENTRY_ID,
-                base=(ENTRY_ID, "A"),
+                base=700014,
+                decl_node_id=700015,
             )
         )
-        handle = ExceptionType(name="A", module_id=ENTRY_ID)
+        handle = ExceptionType(name="A", module_id=ENTRY_ID, decl_id=700014)
         with pytest.raises(AssertionError, match="cyclic exception base chain"):
             table.exception_fields(handle)
 
@@ -550,6 +639,7 @@ class TestExceptionAccessors:
                 module_id=ENTRY_ID,
                 fields=(("message", TextType()),),
                 abstract=True,
+                decl_node_id=700008,
             )
         )
         table.register(
@@ -558,15 +648,20 @@ class TestExceptionAccessors:
                 name="Child",
                 module_id=ENTRY_ID,
                 fields=(("code", IntType()),),
-                base=(ENTRY_ID, "Root"),
+                base=700008,
+                decl_node_id=700012,
             )
         )
-        root_def = table.exception_def(ExceptionType(name="Root", module_id=ENTRY_ID))
+        root_def = table.exception_def(
+            ExceptionType(name="Root", module_id=ENTRY_ID, decl_id=700008)
+        )
         assert root_def.abstract is True
         assert root_def.base is None
-        child_def = table.exception_def(ExceptionType(name="Child", module_id=ENTRY_ID))
+        child_def = table.exception_def(
+            ExceptionType(name="Child", module_id=ENTRY_ID, decl_id=700012)
+        )
         assert child_def.abstract is False
-        assert child_def.base == (ENTRY_ID, (), "Root")
+        assert child_def.base == 700008
 
     def test_exception_def_missing_def_raises_keyerror(self) -> None:
         table = TypeTable()
@@ -577,9 +672,15 @@ class TestExceptionAccessors:
     def test_exception_def_raises_when_key_registered_as_enum(self) -> None:
         table = TypeTable()
         table.register(
-            TypeDef(kind="enum", name="Color", module_id=ENTRY_ID, variants=(("Red", ()),))
+            TypeDef(
+                kind="enum",
+                name="Color",
+                module_id=ENTRY_ID,
+                variants=(("Red", ()),),
+                decl_node_id=700001,
+            )
         )
-        handle = ExceptionType(name="Color", module_id=ENTRY_ID)
+        handle = ExceptionType(name="Color", module_id=ENTRY_ID, decl_id=700001)
         with pytest.raises(AssertionError):
             table.exception_def(handle)
 
@@ -593,14 +694,22 @@ class TestExceptionAccessors:
 class TestMethodRegistry:
     def test_registers_methods_for_record_enum_and_exception_owners(self) -> None:
         table = TypeTable()
-        point = RecordType(name="Point", module_id=_LIB_ID, scope_path=("Models",))
-        color = EnumType(name="Color", module_id=ENTRY_ID)
-        fault = ExceptionType(name="Fault", module_id=ENTRY_ID)
+        point = RecordType(name="Point", module_id=_LIB_ID, scope_path=("Models",), decl_id=700016)
+        color = EnumType(name="Color", module_id=ENTRY_ID, decl_id=700001)
+        fault = ExceptionType(name="Fault", module_id=ENTRY_ID, decl_id=700017)
         table.register(
-            TypeDef(kind="record", name="Point", module_id=_LIB_ID, scope_path=("Models",))
+            TypeDef(
+                kind="record",
+                name="Point",
+                module_id=_LIB_ID,
+                scope_path=("Models",),
+                decl_node_id=700016,
+            )
         )
-        table.register(TypeDef(kind="enum", name="Color", module_id=ENTRY_ID))
-        table.register(TypeDef(kind="exception", name="Fault", module_id=ENTRY_ID))
+        table.register(TypeDef(kind="enum", name="Color", module_id=ENTRY_ID, decl_node_id=700001))
+        table.register(
+            TypeDef(kind="exception", name="Fault", module_id=ENTRY_ID, decl_node_id=700017)
+        )
         point_shift = MethodDef(
             module_id=_LIB_ID,
             scope_path=("Models", "Point"),
@@ -642,14 +751,28 @@ class TestMethodRegistry:
 
     def test_exception_lookup_inherits_a_method_from_a_three_level_base_chain(self) -> None:
         table = TypeTable()
-        root = ExceptionType(name="Root", module_id=ENTRY_ID)
-        leaf = ExceptionType(name="Leaf", module_id=ENTRY_ID)
-        table.register(TypeDef(kind="exception", name="Root", module_id=ENTRY_ID))
+        root = ExceptionType(name="Root", module_id=ENTRY_ID, decl_id=700008)
+        leaf = ExceptionType(name="Leaf", module_id=ENTRY_ID, decl_id=700010)
         table.register(
-            TypeDef(kind="exception", name="Mid", module_id=ENTRY_ID, base=(ENTRY_ID, "Root"))
+            TypeDef(kind="exception", name="Root", module_id=ENTRY_ID, decl_node_id=700008)
         )
         table.register(
-            TypeDef(kind="exception", name="Leaf", module_id=ENTRY_ID, base=(ENTRY_ID, "Mid"))
+            TypeDef(
+                kind="exception",
+                name="Mid",
+                module_id=ENTRY_ID,
+                base=700008,
+                decl_node_id=700009,
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Leaf",
+                module_id=ENTRY_ID,
+                base=700009,
+                decl_node_id=700010,
+            )
         )
         describe = MethodDef(
             module_id=ENTRY_ID,
@@ -665,11 +788,19 @@ class TestMethodRegistry:
 
     def test_register_method_invalidates_cached_inherited_lookup_miss(self) -> None:
         table = TypeTable()
-        base = ExceptionType(name="Base", module_id=ENTRY_ID)
-        child = ExceptionType(name="Child", module_id=ENTRY_ID)
-        table.register(TypeDef(kind="exception", name="Base", module_id=ENTRY_ID))
+        base = ExceptionType(name="Base", module_id=ENTRY_ID, decl_id=700013)
+        child = ExceptionType(name="Child", module_id=ENTRY_ID, decl_id=700012)
         table.register(
-            TypeDef(kind="exception", name="Child", module_id=ENTRY_ID, base=(ENTRY_ID, "Base"))
+            TypeDef(kind="exception", name="Base", module_id=ENTRY_ID, decl_node_id=700013)
+        )
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Child",
+                module_id=ENTRY_ID,
+                base=700013,
+                decl_node_id=700012,
+            )
         )
 
         assert table.lookup_method(child, "status") is None
@@ -689,65 +820,55 @@ class TestMethodRegistry:
     def test_exception_lookup_rejects_a_cyclic_base_chain(self) -> None:
         table = TypeTable()
         table.register(
-            TypeDef(kind="exception", name="A", module_id=ENTRY_ID, base=(ENTRY_ID, "B"))
+            TypeDef(
+                kind="exception",
+                name="A",
+                module_id=ENTRY_ID,
+                base=700015,
+                decl_node_id=700014,
+            )
         )
         table.register(
-            TypeDef(kind="exception", name="B", module_id=ENTRY_ID, base=(ENTRY_ID, "A"))
+            TypeDef(
+                kind="exception",
+                name="B",
+                module_id=ENTRY_ID,
+                base=700014,
+                decl_node_id=700015,
+            )
         )
 
         with pytest.raises(AssertionError, match="cyclic exception base chain"):
-            table.lookup_method(ExceptionType(name="A", module_id=ENTRY_ID), "missing")
+            table.lookup_method(
+                ExceptionType(name="A", module_id=ENTRY_ID, decl_id=700014), "missing"
+            )
 
     def test_lookup_miss_returns_none_for_owner_with_no_methods(self) -> None:
         table = TypeTable()
-        point = RecordType(name="Point", module_id=ENTRY_ID)
-        table.register(TypeDef(kind="record", name="Point", module_id=ENTRY_ID))
+        point = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700000)
+        table.register(
+            TypeDef(kind="record", name="Point", module_id=ENTRY_ID, decl_node_id=700000)
+        )
 
         assert table.lookup_method(point, "missing") is None
-
-    def test_unregister_and_reregister_discards_stale_exception_methods_and_cache(self) -> None:
-        table = TypeTable()
-        base = ExceptionType(name="Base", module_id=ENTRY_ID)
-        child = ExceptionType(name="Child", module_id=ENTRY_ID)
-        table.register(TypeDef(kind="exception", name="Base", module_id=ENTRY_ID))
-        table.register(
-            TypeDef(kind="exception", name="Child", module_id=ENTRY_ID, base=(ENTRY_ID, "Base"))
-        )
-        old = MethodDef(
-            module_id=ENTRY_ID,
-            scope_path=("Base",),
-            name="message",
-            decl_node_id=1,
-            signature=FunctionType(params=(base,), result=TextType()),
-            receiver_type_param_arity=0,
-        )
-        table.register_method(base, old)
-        assert table.lookup_method(child, "message") == old
-
-        table.unregister(ENTRY_ID, "Base")
-        table.register(TypeDef(kind="exception", name="Base", module_id=ENTRY_ID))
-        replacement = MethodDef(
-            module_id=ENTRY_ID,
-            scope_path=("Base",),
-            name="status",
-            decl_node_id=2,
-            signature=FunctionType(params=(base,), result=IntType()),
-            receiver_type_param_arity=0,
-        )
-        table.register_method(base, replacement)
-
-        assert table.lookup_method(child, "message") is None
-        assert table.lookup_method(child, "status") == replacement
 
     def test_merge_from_overwrites_method_entries_and_invalidates_exception_lookup_cache(
         self,
     ) -> None:
-        base = ExceptionType(name="Base", module_id=ENTRY_ID)
-        child = ExceptionType(name="Child", module_id=ENTRY_ID)
+        base = ExceptionType(name="Base", module_id=ENTRY_ID, decl_id=700013)
+        child = ExceptionType(name="Child", module_id=ENTRY_ID, decl_id=700012)
         target = TypeTable()
-        target.register(TypeDef(kind="exception", name="Base", module_id=ENTRY_ID))
         target.register(
-            TypeDef(kind="exception", name="Child", module_id=ENTRY_ID, base=(ENTRY_ID, "Base"))
+            TypeDef(kind="exception", name="Base", module_id=ENTRY_ID, decl_node_id=700013)
+        )
+        target.register(
+            TypeDef(
+                kind="exception",
+                name="Child",
+                module_id=ENTRY_ID,
+                base=700013,
+                decl_node_id=700012,
+            )
         )
         target.register_method(
             base,
@@ -765,7 +886,9 @@ class TestMethodRegistry:
         assert table_method.signature.result == TextType()
 
         source = TypeTable()
-        source.register(TypeDef(kind="exception", name="Base", module_id=ENTRY_ID))
+        source.register(
+            TypeDef(kind="exception", name="Base", module_id=ENTRY_ID, decl_node_id=700013)
+        )
         replacement = MethodDef(
             module_id=ENTRY_ID,
             scope_path=("Base",),
@@ -780,7 +903,7 @@ class TestMethodRegistry:
         assert target.lookup_method(child, "status") == replacement
 
     def test_merge_from_skips_identical_method_entries(self) -> None:
-        fault = ExceptionType(name="Fault", module_id=ENTRY_ID)
+        fault = ExceptionType(name="Fault", module_id=ENTRY_ID, decl_id=700017)
         method = MethodDef(
             module_id=ENTRY_ID,
             scope_path=("Fault",),
@@ -790,10 +913,14 @@ class TestMethodRegistry:
             receiver_type_param_arity=0,
         )
         source = TypeTable()
-        source.register(TypeDef(kind="exception", name="Fault", module_id=ENTRY_ID))
+        source.register(
+            TypeDef(kind="exception", name="Fault", module_id=ENTRY_ID, decl_node_id=700017)
+        )
         source.register_method(fault, method)
         target = TypeTable()
-        target.register(TypeDef(kind="exception", name="Fault", module_id=ENTRY_ID))
+        target.register(
+            TypeDef(kind="exception", name="Fault", module_id=ENTRY_ID, decl_node_id=700017)
+        )
         target.register_method(fault, method)
         before = dict(target.methods_for(fault))
 
@@ -802,14 +929,70 @@ class TestMethodRegistry:
         assert dict(target.methods_for(fault)) == before == {"status": method}
         assert target.lookup_method(fault, "status") == method
 
+    def test_merge_from_drops_inherited_methods_of_an_overwritten_base_def(self) -> None:
+        """An overwritten base def takes its own methods, and the memo, with it.
+
+        The authoritative table carries no method for that identity, so
+        nothing re-registers one: only dropping the base's direct map AND the
+        flattened descendant memo can stop the inherited entry from still
+        answering.
+        """
+        base = ExceptionType(name="Base", module_id=ENTRY_ID, decl_id=700013)
+        child = ExceptionType(name="Child", module_id=ENTRY_ID, decl_id=700012)
+        target = TypeTable()
+        target.register(
+            TypeDef(kind="exception", name="Base", module_id=ENTRY_ID, decl_node_id=700013)
+        )
+        target.register(
+            TypeDef(
+                kind="exception",
+                name="Child",
+                module_id=ENTRY_ID,
+                base=700013,
+                decl_node_id=700012,
+            )
+        )
+        target.register_method(
+            base,
+            MethodDef(
+                module_id=ENTRY_ID,
+                scope_path=("Base",),
+                name="message",
+                decl_node_id=1,
+                signature=FunctionType(params=(base,), result=TextType()),
+                receiver_type_param_arity=0,
+            ),
+        )
+        assert target.lookup_method(child, "message") is not None
+
+        source = TypeTable()
+        source.register(
+            TypeDef(
+                kind="exception",
+                name="Base",
+                module_id=ENTRY_ID,
+                fields=(("code", IntType()),),
+                decl_node_id=700013,
+            )
+        )
+        target.merge_from(source)
+
+        assert target.lookup_method(child, "message") is None
+
     def test_generic_owner_records_receiver_type_parameter_arity(self) -> None:
         table = TypeTable()
         box = RecordType(
-            name="Box",
-            type_args=(TypeVarType("T"),),
-            module_id=ENTRY_ID,
+            name="Box", type_args=(TypeVarType("T"),), module_id=ENTRY_ID, decl_id=700002
         )
-        table.register(TypeDef(kind="record", name="Box", module_id=ENTRY_ID, type_params=("T",)))
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Box",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                decl_node_id=700002,
+            )
+        )
         get = MethodDef(
             module_id=ENTRY_ID,
             scope_path=("Box",),
@@ -820,7 +1003,9 @@ class TestMethodRegistry:
         )
         table.register_method(box, get)
 
-        found = table.lookup_method(RecordType(name="Box", module_id=ENTRY_ID), "get")
+        found = table.lookup_method(
+            RecordType(name="Box", module_id=ENTRY_ID, decl_id=700002), "get"
+        )
         assert found == get
         assert found.receiver_type_param_arity == 1
 
@@ -837,19 +1022,20 @@ class TestExceptionFieldKinds:
     field_kinds`` stores the stable string values instead (converted back to
     ``ParamKind`` by ``typecheck.env``)."""
 
-    def test_root_only_excludes_trace_id(self) -> None:
+    def test_root_only_returns_declared_field_kinds(self) -> None:
         table = TypeTable()
         table.register(
             TypeDef(
                 kind="exception",
                 name="Exception",
                 module_id=ENTRY_ID,
-                fields=(("message", TextType()), ("trace_id", TextType())),
+                fields=(("message", TextType()),),
                 abstract=True,
-                field_kinds=(ParamKind.NAMED_ONLY.value, ParamKind.NAMED_ONLY.value),
+                field_kinds=(ParamKind.NAMED_ONLY.value,),
+                decl_node_id=700007,
             )
         )
-        handle = ExceptionType(name="Exception", module_id=ENTRY_ID)
+        handle = ExceptionType(name="Exception", module_id=ENTRY_ID, decl_id=700007)
         assert table.exception_field_kinds(handle) == (("message", ParamKind.NAMED_ONLY.value),)
 
     def test_flattens_base_chain_and_honors_each_level_own_marker(self) -> None:
@@ -862,9 +1048,10 @@ class TestExceptionFieldKinds:
                 kind="exception",
                 name="Root",
                 module_id=ENTRY_ID,
-                fields=(("message", TextType()), ("trace_id", TextType())),
+                fields=(("message", TextType()),),
                 abstract=True,
-                field_kinds=(ParamKind.NAMED_ONLY.value, ParamKind.NAMED_ONLY.value),
+                field_kinds=(ParamKind.NAMED_ONLY.value,),
+                decl_node_id=700008,
             )
         )
         table.register(
@@ -873,8 +1060,9 @@ class TestExceptionFieldKinds:
                 name="Mid",
                 module_id=ENTRY_ID,
                 fields=(("code", IntType()),),
-                base=(ENTRY_ID, "Root"),
+                base=700008,
                 field_kinds=(ParamKind.STANDARD.value,),
+                decl_node_id=700009,
             )
         )
         table.register(
@@ -883,11 +1071,12 @@ class TestExceptionFieldKinds:
                 name="Leaf",
                 module_id=ENTRY_ID,
                 fields=(("detail", TextType()),),
-                base=(ENTRY_ID, "Mid"),
+                base=700009,
                 field_kinds=(ParamKind.POSITIONAL_ONLY.value,),
+                decl_node_id=700010,
             )
         )
-        handle = ExceptionType(name="Leaf", module_id=ENTRY_ID)
+        handle = ExceptionType(name="Leaf", module_id=ENTRY_ID, decl_id=700010)
         assert table.exception_field_kinds(handle) == (
             ("message", ParamKind.NAMED_ONLY.value),
             ("code", ParamKind.STANDARD.value),
@@ -901,9 +1090,10 @@ class TestExceptionFieldKinds:
                 kind="exception",
                 name="Base",
                 module_id=_LIB_ID,
-                fields=(("message", TextType()), ("trace_id", TextType())),
+                fields=(("message", TextType()),),
                 abstract=True,
-                field_kinds=(ParamKind.NAMED_ONLY.value, ParamKind.NAMED_ONLY.value),
+                field_kinds=(ParamKind.NAMED_ONLY.value,),
+                decl_node_id=700011,
             )
         )
         table.register(
@@ -912,11 +1102,12 @@ class TestExceptionFieldKinds:
                 name="Child",
                 module_id=ENTRY_ID,
                 fields=(("code", IntType()),),
-                base=(_LIB_ID, "Base"),
+                base=700011,
                 field_kinds=(ParamKind.STANDARD.value,),
+                decl_node_id=700012,
             )
         )
-        handle = ExceptionType(name="Child", module_id=ENTRY_ID)
+        handle = ExceptionType(name="Child", module_id=ENTRY_ID, decl_id=700012)
         assert table.exception_field_kinds(handle) == (
             ("message", ParamKind.NAMED_ONLY.value),
             ("code", ParamKind.STANDARD.value),
@@ -931,9 +1122,10 @@ class TestExceptionFieldKinds:
                 module_id=ENTRY_ID,
                 fields=(("code", IntType()),),
                 field_kinds=(ParamKind.STANDARD.value,),
+                decl_node_id=700003,
             )
         )
-        handle = ExceptionType(name="Boom", module_id=ENTRY_ID)
+        handle = ExceptionType(name="Boom", module_id=ENTRY_ID, decl_id=700003)
         first = table.exception_field_kinds(handle)
         second = table.exception_field_kinds(handle)
         assert first is second
@@ -947,49 +1139,41 @@ class TestExceptionFieldKinds:
     def test_raises_when_key_registered_as_record(self) -> None:
         table = TypeTable()
         table.register(
-            TypeDef(kind="record", name="Point", module_id=ENTRY_ID, fields=(("x", IntType()),))
+            TypeDef(
+                kind="record",
+                name="Point",
+                module_id=ENTRY_ID,
+                fields=(("x", IntType()),),
+                decl_node_id=700000,
+            )
         )
-        handle = ExceptionType(name="Point", module_id=ENTRY_ID)
+        handle = ExceptionType(name="Point", module_id=ENTRY_ID, decl_id=700000)
         with pytest.raises(AssertionError):
             table.exception_field_kinds(handle)
 
     def test_raises_on_cyclic_base_chain(self) -> None:
         table = TypeTable()
         table.register(
-            TypeDef(kind="exception", name="A", module_id=ENTRY_ID, base=(ENTRY_ID, "B"))
+            TypeDef(
+                kind="exception",
+                name="A",
+                module_id=ENTRY_ID,
+                base=700015,
+                decl_node_id=700014,
+            )
         )
         table.register(
-            TypeDef(kind="exception", name="B", module_id=ENTRY_ID, base=(ENTRY_ID, "A"))
+            TypeDef(
+                kind="exception",
+                name="B",
+                module_id=ENTRY_ID,
+                base=700014,
+                decl_node_id=700015,
+            )
         )
-        handle = ExceptionType(name="A", module_id=ENTRY_ID)
+        handle = ExceptionType(name="A", module_id=ENTRY_ID, decl_id=700014)
         with pytest.raises(AssertionError, match="cyclic exception base chain"):
             table.exception_field_kinds(handle)
-
-    def test_unregister_invalidates_cached_field_kinds(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="exception",
-                name="Boom",
-                module_id=ENTRY_ID,
-                fields=(("code", IntType()),),
-                field_kinds=(ParamKind.NAMED_ONLY.value,),
-            )
-        )
-        handle = ExceptionType(name="Boom", module_id=ENTRY_ID)
-        assert table.exception_field_kinds(handle) == (("code", ParamKind.NAMED_ONLY.value),)
-
-        table.unregister(ENTRY_ID, "Boom")
-        table.register(
-            TypeDef(
-                kind="exception",
-                name="Boom",
-                module_id=ENTRY_ID,
-                fields=(("code", IntType()),),
-                field_kinds=(ParamKind.STANDARD.value,),
-            )
-        )
-        assert table.exception_field_kinds(handle) == (("code", ParamKind.STANDARD.value),)
 
 
 # ---------------------------------------------------------------------------
@@ -1012,9 +1196,12 @@ class TestGenericSubstitution:
                     ("firsts", ArrayType(TypeVarType("T"))),
                     ("seconds", DictType(TypeVarType("U"))),
                 ),
+                decl_node_id=700018,
             )
         )
-        handle = RecordType(name="Pair", type_args=(IntType(), TextType()), module_id=ENTRY_ID)
+        handle = RecordType(
+            name="Pair", type_args=(IntType(), TextType()), module_id=ENTRY_ID, decl_id=700018
+        )
         result = table.record_fields(handle)
         assert dict(result) == {
             "first": IntType(),
@@ -1032,9 +1219,10 @@ class TestGenericSubstitution:
                 module_id=ENTRY_ID,
                 type_params=("T",),
                 variants=(("None", ()), ("Just", (("value", TypeVarType("T")),))),
+                decl_node_id=700019,
             )
         )
-        handle = EnumType(name="Maybe", type_args=(IntType(),), module_id=ENTRY_ID)
+        handle = EnumType(name="Maybe", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700019)
         result = table.enum_variants(handle)
         assert {v: dict(f) for v, f in result.items()} == {
             "None": {},
@@ -1051,9 +1239,15 @@ class TestMemoization:
     def test_record_fields_returns_same_object_for_same_handle(self) -> None:
         table = TypeTable()
         table.register(
-            TypeDef(kind="record", name="Point", module_id=ENTRY_ID, fields=(("x", IntType()),))
+            TypeDef(
+                kind="record",
+                name="Point",
+                module_id=ENTRY_ID,
+                fields=(("x", IntType()),),
+                decl_node_id=700000,
+            )
         )
-        handle = RecordType(name="Point", module_id=ENTRY_ID)
+        handle = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700000)
         first = table.record_fields(handle)
         second = table.record_fields(handle)
         assert first is second
@@ -1061,9 +1255,15 @@ class TestMemoization:
     def test_enum_variants_returns_same_object_for_same_handle(self) -> None:
         table = TypeTable()
         table.register(
-            TypeDef(kind="enum", name="Color", module_id=ENTRY_ID, variants=(("Red", ()),))
+            TypeDef(
+                kind="enum",
+                name="Color",
+                module_id=ENTRY_ID,
+                variants=(("Red", ()),),
+                decl_node_id=700001,
+            )
         )
-        handle = EnumType(name="Color", module_id=ENTRY_ID)
+        handle = EnumType(name="Color", module_id=ENTRY_ID, decl_id=700001)
         first = table.enum_variants(handle)
         second = table.enum_variants(handle)
         assert first is second
@@ -1077,10 +1277,15 @@ class TestMemoization:
                 module_id=ENTRY_ID,
                 type_params=("T",),
                 fields=(("value", TypeVarType("T")),),
+                decl_node_id=700002,
             )
         )
-        int_handle = RecordType(name="Box", type_args=(IntType(),), module_id=ENTRY_ID)
-        text_handle = RecordType(name="Box", type_args=(TextType(),), module_id=ENTRY_ID)
+        int_handle = RecordType(
+            name="Box", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700002
+        )
+        text_handle = RecordType(
+            name="Box", type_args=(TextType(),), module_id=ENTRY_ID, decl_id=700002
+        )
         assert dict(table.record_fields(int_handle)) == {"value": IntType()}
         assert dict(table.record_fields(text_handle)) == {"value": TextType()}
         # Re-fetching the first handle still returns its own cached result.
@@ -1095,10 +1300,15 @@ class TestMemoization:
                 module_id=ENTRY_ID,
                 type_params=("T",),
                 variants=(("Just", (("value", TypeVarType("T")),)),),
+                decl_node_id=700019,
             )
         )
-        int_handle = EnumType(name="Maybe", type_args=(IntType(),), module_id=ENTRY_ID)
-        text_handle = EnumType(name="Maybe", type_args=(TextType(),), module_id=ENTRY_ID)
+        int_handle = EnumType(
+            name="Maybe", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700019
+        )
+        text_handle = EnumType(
+            name="Maybe", type_args=(TextType(),), module_id=ENTRY_ID, decl_id=700019
+        )
         assert {v: dict(f) for v, f in table.enum_variants(int_handle).items()} == {
             "Just": {"value": IntType()}
         }
@@ -1116,93 +1326,224 @@ class TestReRegistration:
     def test_identical_re_registration_is_a_no_op(self) -> None:
         table = TypeTable()
         typedef = TypeDef(
-            kind="record", name="Point", module_id=ENTRY_ID, fields=(("x", IntType()),)
+            kind="record",
+            name="Point",
+            module_id=ENTRY_ID,
+            fields=(("x", IntType()),),
+            decl_node_id=700000,
         )
         table.register(typedef)
         table.register(
-            TypeDef(kind="record", name="Point", module_id=ENTRY_ID, fields=(("x", IntType()),))
+            TypeDef(
+                kind="record",
+                name="Point",
+                module_id=ENTRY_ID,
+                fields=(("x", IntType()),),
+                decl_node_id=700000,
+            )
         )
         assert table.get(ENTRY_ID, "Point") == typedef
 
     def test_conflicting_re_registration_raises(self) -> None:
         table = TypeTable()
         table.register(
-            TypeDef(kind="record", name="Point", module_id=ENTRY_ID, fields=(("x", IntType()),))
+            TypeDef(
+                kind="record",
+                name="Point",
+                module_id=ENTRY_ID,
+                fields=(("x", IntType()),),
+                decl_node_id=700000,
+            )
         )
         with pytest.raises(AssertionError):
             table.register(
                 TypeDef(
-                    kind="record", name="Point", module_id=ENTRY_ID, fields=(("x", TextType()),)
+                    kind="record",
+                    name="Point",
+                    module_id=ENTRY_ID,
+                    fields=(("x", TextType()),),
+                    decl_node_id=700000,
                 )
             )
 
+    def test_register_rejects_a_def_with_no_declaration_identity(self) -> None:
+        table = TypeTable()
+        with pytest.raises(AssertionError, match="no declaration identity"):
+            table.register(
+                TypeDef(kind="record", name="X", module_id=ENTRY_ID, fields=(("a", IntType()),))
+            )
+
 
 # ---------------------------------------------------------------------------
-# unregister()
+# Declaration identity: two declarations can share one name path
 # ---------------------------------------------------------------------------
 
 
-class TestUnregister:
-    def test_unregister_removes_the_def(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(kind="record", name="Point", module_id=ENTRY_ID, fields=(("x", IntType()),))
-        )
-        table.unregister(ENTRY_ID, "Point")
-        assert table.get(ENTRY_ID, "Point") is None
+class TestSupersession:
+    """A name is a pointer to the newest declaration bearing it; an older
+    declaration is superseded, never removed — it stays registered, own
+    identity intact, for any handle that still names it."""
 
-    def test_unregister_missing_key_is_a_no_op(self) -> None:
+    def test_two_declarations_sharing_a_name_path_coexist_in_one_table(self) -> None:
         table = TypeTable()
-        table.unregister(ENTRY_ID, "Nope")  # must not raise
-        assert table.get(ENTRY_ID, "Nope") is None
-
-    def test_unregister_then_register_allows_a_different_shape(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(kind="record", name="Point", module_id=ENTRY_ID, fields=(("x", IntType()),))
+        old_def = TypeDef(
+            kind="record",
+            name="Point",
+            module_id=ENTRY_ID,
+            fields=(("x", IntType()),),
+            decl_node_id=700300,
         )
-        table.unregister(ENTRY_ID, "Point")
         new_def = TypeDef(
-            kind="record", name="Point", module_id=ENTRY_ID, fields=(("x", TextType()),)
+            kind="record",
+            name="Point",
+            module_id=ENTRY_ID,
+            fields=(("y", TextType()),),
+            decl_node_id=700301,
         )
-        table.register(new_def)  # would raise if the old entry were still present
+        table.register(old_def)
+        table.register(new_def)
+
+        # Both declarations remain retrievable by their own identity, with
+        # their own field shapes.
+        assert table.get_by_id(700300) == old_def
+        assert table.get_by_id(700301) == new_def
+        old_handle = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700300)
+        new_handle = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700301)
+        assert dict(table.record_fields(old_handle)) == {"x": IntType()}
+        assert dict(table.record_fields(new_handle)) == {"y": TextType()}
+
+        # The two handles name distinct declarations, so they compare unequal
+        # even though every other field matches.
+        assert old_handle != new_handle
+
+        # A name lookup answers with the newest declaration.
         assert table.get(ENTRY_ID, "Point") == new_def
 
-    def test_unregister_invalidates_cached_substitution(self) -> None:
+    def test_superseded_declaration_keeps_its_own_methods_and_exception_base_chain(self) -> None:
         table = TypeTable()
-        table.register(
-            TypeDef(kind="record", name="Point", module_id=ENTRY_ID, fields=(("x", IntType()),))
+        root_one = TypeDef(
+            kind="exception", name="RootOne", module_id=ENTRY_ID, abstract=True, decl_node_id=700302
         )
-        handle = RecordType(name="Point", module_id=ENTRY_ID)
-        assert dict(table.record_fields(handle)) == {"x": IntType()}
-
-        table.unregister(ENTRY_ID, "Point")
-        table.register(
-            TypeDef(kind="record", name="Point", module_id=ENTRY_ID, fields=(("x", TextType()),))
+        root_two = TypeDef(
+            kind="exception", name="RootTwo", module_id=ENTRY_ID, abstract=True, decl_node_id=700303
         )
-        assert dict(table.record_fields(handle)) == {"x": TextType()}
+        table.register(root_one)
+        table.register(root_two)
 
-    def test_unregister_invalidates_cached_enum_substitution(self) -> None:
+        old_fault = TypeDef(
+            kind="exception",
+            name="Fault",
+            module_id=ENTRY_ID,
+            base=700302,
+            decl_node_id=700304,
+        )
+        new_fault = TypeDef(
+            kind="exception",
+            name="Fault",
+            module_id=ENTRY_ID,
+            base=700303,
+            decl_node_id=700305,
+        )
+        table.register(old_fault)
+        table.register(new_fault)
+
+        old_handle = ExceptionType(name="Fault", module_id=ENTRY_ID, decl_id=700304)
+        new_handle = ExceptionType(name="Fault", module_id=ENTRY_ID, decl_id=700305)
+        describe = MethodDef(
+            module_id=ENTRY_ID,
+            scope_path=("Fault",),
+            name="describe",
+            decl_node_id=1,
+            signature=FunctionType(params=(old_handle,), result=TextType()),
+            receiver_type_param_arity=0,
+        )
+        explain = MethodDef(
+            module_id=ENTRY_ID,
+            scope_path=("Fault",),
+            name="explain",
+            decl_node_id=2,
+            signature=FunctionType(params=(new_handle,), result=TextType()),
+            receiver_type_param_arity=0,
+        )
+        table.register_method(old_handle, describe)
+        table.register_method(new_handle, explain)
+
+        # Each declaration owns only its own method...
+        assert table.lookup_method(old_handle, "describe") == describe
+        assert table.lookup_method(old_handle, "explain") is None
+        assert table.lookup_method(new_handle, "explain") == explain
+        assert table.lookup_method(new_handle, "describe") is None
+
+        # ...and its own exception base chain.
+        assert table.exception_def(old_handle).base == 700302
+        assert table.exception_def(new_handle).base == 700303
+
+    def test_exception_whose_base_is_superseded_keeps_inheriting_from_its_own_base(self) -> None:
         table = TypeTable()
-        table.register(
-            TypeDef(kind="enum", name="Color", module_id=ENTRY_ID, variants=(("Red", ()),))
+        old_root = TypeDef(
+            kind="exception",
+            name="Root",
+            module_id=ENTRY_ID,
+            fields=(("code", IntType()),),
+            abstract=True,
+            decl_node_id=700306,
         )
-        handle = EnumType(name="Color", module_id=ENTRY_ID)
-        assert {v: dict(f) for v, f in table.enum_variants(handle).items()} == {"Red": {}}
+        table.register(old_root)
+        child = TypeDef(
+            kind="exception",
+            name="Child",
+            module_id=ENTRY_ID,
+            base=700306,
+            decl_node_id=700307,
+        )
+        table.register(child)
 
-        table.unregister(ENTRY_ID, "Color")
-        table.register(
-            TypeDef(
-                kind="enum",
-                name="Color",
-                module_id=ENTRY_ID,
-                variants=(("Red", ()), ("Blue", ())),
-            )
+        # Redeclaring "Root" under a fresh identity supersedes the name, but
+        # Child's own base link still names the declaration it was built
+        # against.
+        new_root = TypeDef(
+            kind="exception",
+            name="Root",
+            module_id=ENTRY_ID,
+            fields=(("message", TextType()),),
+            abstract=True,
+            decl_node_id=700308,
         )
-        assert {v: dict(f) for v, f in table.enum_variants(handle).items()} == {
-            "Red": {},
-            "Blue": {},
-        }
+        table.register(new_root)
+
+        assert table.get(ENTRY_ID, "Root") == new_root
+        child_handle = ExceptionType(name="Child", module_id=ENTRY_ID, decl_id=700307)
+        assert dict(table.exception_fields(child_handle)) == {"code": IntType()}
+
+    def test_whole_table_fixpoint_answers_each_identity_from_its_own_body(self) -> None:
+        table = TypeTable()
+        old_def = TypeDef(
+            kind="record",
+            name="Box",
+            module_id=ENTRY_ID,
+            fields=(("slot", IntType()),),
+            decl_node_id=700310,
+        )
+        table.register(old_def)
+        old_handle = RecordType(name="Box", module_id=ENTRY_ID, decl_id=700310)
+        # Populate the cached non-data fixpoint before the redeclaration.
+        assert not table.nominal_reaches_non_data(old_handle)
+
+        new_def = TypeDef(
+            kind="record",
+            name="Box",
+            module_id=ENTRY_ID,
+            fields=(("slot", UnitType()),),
+            decl_node_id=700311,
+        )
+        table.register(new_def)
+        new_handle = RecordType(name="Box", module_id=ENTRY_ID, decl_id=700311)
+
+        # The registration invalidated the cached fixpoint, which now covers
+        # both declarations: each identity answers from its OWN body, rather
+        # than both collapsing onto whichever one the shared name resolves to.
+        assert table.nominal_reaches_non_data(new_handle)
+        assert not table.nominal_reaches_non_data(old_handle)
 
 
 # ---------------------------------------------------------------------------
@@ -1213,16 +1554,18 @@ class TestUnregister:
 class TestEntriesAndMerge:
     def test_entries_returns_all_registered_defs(self) -> None:
         table = TypeTable()
-        a = TypeDef(kind="record", name="A", module_id=ENTRY_ID, fields=())
-        b = TypeDef(kind="record", name="B", module_id=ENTRY_ID, fields=())
+        a = TypeDef(kind="record", name="A", module_id=ENTRY_ID, fields=(), decl_node_id=700014)
+        b = TypeDef(kind="record", name="B", module_id=ENTRY_ID, fields=(), decl_node_id=700015)
         table.register(a)
         table.register(b)
         assert set(table.entries()) == {a, b}
 
     def test_merge_from_copies_new_entries_and_skips_identical(self) -> None:
         source = TypeTable()
-        shared = TypeDef(kind="record", name="Shared", module_id=ENTRY_ID, fields=())
-        new = TypeDef(kind="record", name="New", module_id=ENTRY_ID, fields=())
+        shared = TypeDef(
+            kind="record", name="Shared", module_id=ENTRY_ID, fields=(), decl_node_id=700020
+        )
+        new = TypeDef(kind="record", name="New", module_id=ENTRY_ID, fields=(), decl_node_id=700021)
         source.register(shared)
         source.register(new)
 
@@ -1242,30 +1585,78 @@ class TestEntriesAndMerge:
         # persistent session table must adopt a later entry's redefinition of
         # a previously-declared name.
         source = TypeTable()
-        new_def = TypeDef(kind="record", name="X", module_id=ENTRY_ID, fields=(("a", IntType()),))
+        new_def = TypeDef(
+            kind="record",
+            name="X",
+            module_id=ENTRY_ID,
+            fields=(("a", IntType()),),
+            decl_node_id=700022,
+        )
         source.register(new_def)
 
         target = TypeTable()
         target.register(
-            TypeDef(kind="record", name="X", module_id=ENTRY_ID, fields=(("a", TextType()),))
+            TypeDef(
+                kind="record",
+                name="X",
+                module_id=ENTRY_ID,
+                fields=(("a", TextType()),),
+                decl_node_id=700022,
+            )
         )
 
         target.merge_from(source)
 
         assert target.get(ENTRY_ID, "X") == new_def
 
+    def test_merge_from_repoints_the_name_index_and_keeps_the_displaced_def(self) -> None:
+        # "Other wins" covers the name index as well as the def map: a source
+        # declaration under a name path this table already binds to a
+        # DIFFERENT identity takes the name over, while the identity it
+        # displaces stays registered under its own shape.
+        source = TypeTable()
+        incoming = TypeDef(
+            kind="record",
+            name="Point",
+            module_id=ENTRY_ID,
+            fields=(("y", TextType()),),
+            decl_node_id=700402,
+        )
+        source.register(incoming)
+
+        target = TypeTable()
+        displaced = TypeDef(
+            kind="record",
+            name="Point",
+            module_id=ENTRY_ID,
+            fields=(("x", IntType()),),
+            decl_node_id=700403,
+        )
+        target.register(displaced)
+
+        target.merge_from(source)
+
+        assert target.get(ENTRY_ID, "Point") == incoming
+        assert target.get_by_id(700403) == displaced
+        displaced_handle = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700403)
+        assert dict(target.record_fields(displaced_handle)) == {"x": IntType()}
+
     def test_merge_from_keeps_cached_substitution_when_entry_is_unchanged(self) -> None:
         # An identical incoming entry must not perturb an already-cached
         # substitution: the same handle keeps resolving to the same object.
         shared = TypeDef(
-            kind="record", name="Shared", module_id=ENTRY_ID, fields=(("a", IntType()),)
+            kind="record",
+            name="Shared",
+            module_id=ENTRY_ID,
+            fields=(("a", IntType()),),
+            decl_node_id=700020,
         )
         source = TypeTable()
         source.register(shared)
 
         target = TypeTable()
         target.register(shared)
-        handle = RecordType(name="Shared", module_id=ENTRY_ID)
+        handle = RecordType(name="Shared", module_id=ENTRY_ID, decl_id=700020)
         before = target.record_fields(handle)
 
         target.merge_from(source)
@@ -1275,19 +1666,62 @@ class TestEntriesAndMerge:
 
     def test_merge_from_invalidates_stale_cached_substitution(self) -> None:
         source = TypeTable()
-        new_def = TypeDef(kind="record", name="X", module_id=ENTRY_ID, fields=(("a", IntType()),))
+        new_def = TypeDef(
+            kind="record",
+            name="X",
+            module_id=ENTRY_ID,
+            fields=(("a", IntType()),),
+            decl_node_id=700022,
+        )
         source.register(new_def)
 
         target = TypeTable()
         target.register(
-            TypeDef(kind="record", name="X", module_id=ENTRY_ID, fields=(("a", TextType()),))
+            TypeDef(
+                kind="record",
+                name="X",
+                module_id=ENTRY_ID,
+                fields=(("a", TextType()),),
+                decl_node_id=700022,
+            )
         )
-        handle = RecordType(name="X", module_id=ENTRY_ID)
+        handle = RecordType(name="X", module_id=ENTRY_ID, decl_id=700022)
         assert dict(target.record_fields(handle)) == {"a": TextType()}
 
         target.merge_from(source)
 
         assert dict(target.record_fields(handle)) == {"a": IntType()}
+
+    def test_merge_from_invalidates_stale_cached_enum_substitution(self) -> None:
+        # The enum memo is bucketed by identity separately from the record
+        # one, so an authoritative overwrite has to drop it on its own.
+        source = TypeTable()
+        source.register(
+            TypeDef(
+                kind="enum",
+                name="Color",
+                module_id=ENTRY_ID,
+                variants=(("Red", ()), ("Blue", ())),
+                decl_node_id=700023,
+            )
+        )
+
+        target = TypeTable()
+        target.register(
+            TypeDef(
+                kind="enum",
+                name="Color",
+                module_id=ENTRY_ID,
+                variants=(("Red", ()),),
+                decl_node_id=700023,
+            )
+        )
+        handle = EnumType(name="Color", module_id=ENTRY_ID, decl_id=700023)
+        assert set(target.enum_variants(handle)) == {"Red"}
+
+        target.merge_from(source)
+
+        assert set(target.enum_variants(handle)) == {"Red", "Blue"}
 
 
 # ---------------------------------------------------------------------------
@@ -1299,14 +1733,14 @@ class TestBuiltinSeeding:
     def test_all_prelude_types_resolvable(self) -> None:
         table = create_seeded_type_table()
         for name, typ in BUILTIN_PRELUDE_TYPES.items():
-            typedef = table.get(PRELUDE_ID, name)
+            typedef = table.get(STD_CORE_ID, name)
             assert typedef is not None
             expected = BUILTIN_PRELUDE_TYPE_DEFS[name]
             if isinstance(typ, RecordType):
-                handle = RecordType(name=name, module_id=PRELUDE_ID)
+                handle = RecordType(name=name, module_id=STD_CORE_ID, decl_id=typedef.decl_node_id)
                 assert dict(table.record_fields(handle)) == dict(expected.fields)
             else:
-                handle = EnumType(name=name, module_id=PRELUDE_ID)
+                handle = EnumType(name=name, module_id=STD_CORE_ID, decl_id=typedef.decl_node_id)
                 result = table.enum_variants(handle)
                 assert {v: dict(f) for v, f in result.items()} == {
                     vname: dict(vfields) for vname, vfields in expected.variants
@@ -1317,7 +1751,12 @@ class TestBuiltinSeeding:
         typedef = table.get(STD_CORE_ID, "Option")
         assert typedef is not None
         assert typedef.type_params == ("T",)
-        handle = EnumType(name="Option", type_args=(TextType(),), module_id=STD_CORE_ID)
+        handle = EnumType(
+            name="Option",
+            type_args=(TextType(),),
+            module_id=STD_CORE_ID,
+            decl_id=typedef.decl_node_id,
+        )
         result = table.enum_variants(handle)
         assert {v: dict(f) for v, f in result.items()} == {
             "None": {},
@@ -1332,7 +1771,7 @@ class TestBuiltinSeeding:
 
 class TestEnvTypeHasMatchingTableDefSingleModule:
     """Every type registered in the env has a matching ``TypeDef`` in the
-    shared table (the only place shapes live now that handles carry none)."""
+    shared table (the only place shapes live, since handles carry none)."""
 
     def test_non_generic_record(self) -> None:
         checked = _check("record Point\n  x: int\n  y: int\nlet p = Point(x = 1, y = 2)\np")
@@ -1462,31 +1901,11 @@ class TestComparableTypesTableAware:
                 name="Point",
                 module_id=ENTRY_ID,
                 fields=(("x", IntType()), ("y", IntType())),
+                decl_node_id=700000,
             )
         )
-        handle = RecordType(name="Point", module_id=ENTRY_ID)
+        handle = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700000)
         assert comparable_types(handle, handle, table) is True
-
-    def test_generic_record_agent_field_via_instantiation_not_comparable(self) -> None:
-        # A generic record's field template is a bare type variable; only once
-        # a concrete handle instantiates it with an agent type does the field
-        # actually carry a no-equality type — record_fields substitutes
-        # type_args into the template to expose this.
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Box",
-                module_id=ENTRY_ID,
-                type_params=("T",),
-                fields=(("value", TypeVarType("T")),),
-            )
-        )
-        agent_handle = RecordType(name="Box", type_args=(AgentType(),), module_id=ENTRY_ID)
-        assert comparable_types(agent_handle, agent_handle, table) is False
-
-        int_handle = RecordType(name="Box", type_args=(IntType(),), module_id=ENTRY_ID)
-        assert comparable_types(int_handle, int_handle, table) is True
 
     def test_generic_enum_function_variant_via_instantiation_not_comparable(self) -> None:
         table = TypeTable()
@@ -1497,13 +1916,18 @@ class TestComparableTypesTableAware:
                 module_id=ENTRY_ID,
                 type_params=("T",),
                 variants=(("None", ()), ("Some", (("value", TypeVarType("T")),))),
+                decl_node_id=700023,
             )
         )
         fn_type = FunctionType(params=(IntType(),), result=IntType())
-        fn_handle = EnumType(name="Holder", type_args=(fn_type,), module_id=ENTRY_ID)
+        fn_handle = EnumType(
+            name="Holder", type_args=(fn_type,), module_id=ENTRY_ID, decl_id=700023
+        )
         assert comparable_types(fn_handle, fn_handle, table) is False
 
-        text_handle = EnumType(name="Holder", type_args=(TextType(),), module_id=ENTRY_ID)
+        text_handle = EnumType(
+            name="Holder", type_args=(TextType(),), module_id=ENTRY_ID, decl_id=700023
+        )
         assert comparable_types(text_handle, text_handle, table) is True
 
     def test_record_with_unit_nested_in_array_field_not_comparable(self) -> None:
@@ -1518,23 +1942,12 @@ class TestComparableTypesTableAware:
                 module_id=ENTRY_ID,
                 type_params=("T",),
                 fields=(("items", ArrayType(TypeVarType("T"))),),
+                decl_node_id=700024,
             )
         )
-        handle = RecordType(name="Wrapper", type_args=(UnitType(),), module_id=ENTRY_ID)
-        assert comparable_types(handle, handle, table) is False
-
-    def test_enum_variant_with_agent_nested_in_dict_field_not_comparable(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="enum",
-                name="Bag",
-                module_id=ENTRY_ID,
-                type_params=("T",),
-                variants=(("Full", (("byKey", DictType(TypeVarType("T"))),)),),
-            )
+        handle = RecordType(
+            name="Wrapper", type_args=(UnitType(),), module_id=ENTRY_ID, decl_id=700024
         )
-        handle = EnumType(name="Bag", type_args=(AgentType(),), module_id=ENTRY_ID)
         assert comparable_types(handle, handle, table) is False
 
     def test_exception_with_function_field_not_comparable(self) -> None:
@@ -1546,19 +1959,24 @@ class TestComparableTypesTableAware:
                 name="Failure",
                 module_id=ENTRY_ID,
                 fields=(("handler", handler_type),),
+                decl_node_id=700025,
             )
         )
-        exc = ExceptionType(name="Failure", module_id=ENTRY_ID)
+        exc = ExceptionType(name="Failure", module_id=ENTRY_ID, decl_id=700025)
         assert comparable_types(exc, exc, table) is False
 
     def test_exception_with_only_scalar_fields_comparable(self) -> None:
         table = TypeTable()
         table.register(
             TypeDef(
-                kind="exception", name="Failure", module_id=ENTRY_ID, fields=(("code", IntType()),)
+                kind="exception",
+                name="Failure",
+                module_id=ENTRY_ID,
+                fields=(("code", IntType()),),
+                decl_node_id=700025,
             )
         )
-        exc = ExceptionType(name="Failure", module_id=ENTRY_ID)
+        exc = ExceptionType(name="Failure", module_id=ENTRY_ID, decl_id=700025)
         assert comparable_types(exc, exc, table) is True
 
     def test_record_containing_exception_with_function_field_not_comparable(self) -> None:
@@ -1572,13 +1990,20 @@ class TestComparableTypesTableAware:
                 name="Failure",
                 module_id=ENTRY_ID,
                 fields=(("handler", handler_type),),
+                decl_node_id=700025,
             )
         )
-        exc = ExceptionType(name="Failure", module_id=ENTRY_ID)
+        exc = ExceptionType(name="Failure", module_id=ENTRY_ID, decl_id=700025)
         table.register(
-            TypeDef(kind="record", name="Report", module_id=ENTRY_ID, fields=(("cause", exc),))
+            TypeDef(
+                kind="record",
+                name="Report",
+                module_id=ENTRY_ID,
+                fields=(("cause", exc),),
+                decl_node_id=700026,
+            )
         )
-        handle = RecordType(name="Report", module_id=ENTRY_ID)
+        handle = RecordType(name="Report", module_id=ENTRY_ID, decl_id=700026)
         assert comparable_types(handle, handle, table) is False
 
     def test_record_referencing_already_flagged_record_not_comparable(self) -> None:
@@ -1589,17 +2014,24 @@ class TestComparableTypesTableAware:
         table = TypeTable()
         fn_type = FunctionType(params=(), result=IntType())
         table.register(
-            TypeDef(kind="record", name="X", module_id=ENTRY_ID, fields=(("fn", fn_type),))
+            TypeDef(
+                kind="record",
+                name="X",
+                module_id=ENTRY_ID,
+                fields=(("fn", fn_type),),
+                decl_node_id=700022,
+            )
         )
         table.register(
             TypeDef(
                 kind="record",
                 name="Y",
                 module_id=ENTRY_ID,
-                fields=(("x", RecordType(name="X", module_id=ENTRY_ID)),),
+                fields=(("x", RecordType(name="X", module_id=ENTRY_ID, decl_id=700022)),),
+                decl_node_id=700027,
             )
         )
-        handle = RecordType(name="Y", module_id=ENTRY_ID)
+        handle = RecordType(name="Y", module_id=ENTRY_ID, decl_id=700027)
         assert comparable_types(handle, handle, table) is False
 
     def test_dangling_field_reference_defaults_to_comparable(self) -> None:
@@ -1614,9 +2046,10 @@ class TestComparableTypesTableAware:
                 name="Y",
                 module_id=ENTRY_ID,
                 fields=(("ghost", RecordType(name="Ghost", module_id=ENTRY_ID)),),
+                decl_node_id=700027,
             )
         )
-        handle = RecordType(name="Y", module_id=ENTRY_ID)
+        handle = RecordType(name="Y", module_id=ENTRY_ID, decl_id=700027)
         assert comparable_types(handle, handle, table) is True
 
     def test_unregistered_handle_defaults_to_comparable(self) -> None:
@@ -1644,14 +2077,15 @@ class TestComparableTypesTableAware:
                         "Node",
                         (
                             ("value", IntType()),
-                            ("left", EnumType(name="Tree", module_id=ENTRY_ID)),
-                            ("right", EnumType(name="Tree", module_id=ENTRY_ID)),
+                            ("left", EnumType(name="Tree", module_id=ENTRY_ID, decl_id=700028)),
+                            ("right", EnumType(name="Tree", module_id=ENTRY_ID, decl_id=700028)),
                         ),
                     ),
                 ),
+                decl_node_id=700028,
             )
         )
-        handle = EnumType(name="Tree", module_id=ENTRY_ID)
+        handle = EnumType(name="Tree", module_id=ENTRY_ID, decl_id=700028)
         assert comparable_types(handle, handle, table) is True
 
     def test_recursive_type_with_function_field_at_depth_not_comparable(self) -> None:
@@ -1671,14 +2105,15 @@ class TestComparableTypesTableAware:
                     (
                         "Node",
                         (
-                            ("left", EnumType(name="Tree", module_id=ENTRY_ID)),
-                            ("right", EnumType(name="Tree", module_id=ENTRY_ID)),
+                            ("left", EnumType(name="Tree", module_id=ENTRY_ID, decl_id=700028)),
+                            ("right", EnumType(name="Tree", module_id=ENTRY_ID, decl_id=700028)),
                         ),
                     ),
                 ),
+                decl_node_id=700028,
             )
         )
-        handle = EnumType(name="Tree", module_id=ENTRY_ID)
+        handle = EnumType(name="Tree", module_id=ENTRY_ID, decl_id=700028)
         assert comparable_types(handle, handle, table) is False
 
     def test_mutually_recursive_records_are_comparable(self) -> None:
@@ -1693,8 +2128,9 @@ class TestComparableTypesTableAware:
                 module_id=ENTRY_ID,
                 fields=(
                     ("name", TextType()),
-                    ("bs", ArrayType(RecordType(name="B", module_id=ENTRY_ID))),
+                    ("bs", ArrayType(RecordType(name="B", module_id=ENTRY_ID, decl_id=700015))),
                 ),
+                decl_node_id=700014,
             )
         )
         table.register(
@@ -1702,11 +2138,12 @@ class TestComparableTypesTableAware:
                 kind="record",
                 name="B",
                 module_id=ENTRY_ID,
-                fields=(("a", RecordType(name="A", module_id=ENTRY_ID)),),
+                fields=(("a", RecordType(name="A", module_id=ENTRY_ID, decl_id=700014)),),
+                decl_node_id=700015,
             )
         )
-        a_handle = RecordType(name="A", module_id=ENTRY_ID)
-        b_handle = RecordType(name="B", module_id=ENTRY_ID)
+        a_handle = RecordType(name="A", module_id=ENTRY_ID, decl_id=700014)
+        b_handle = RecordType(name="B", module_id=ENTRY_ID, decl_id=700015)
         assert comparable_types(a_handle, a_handle, table) is True
         assert comparable_types(b_handle, b_handle, table) is True
 
@@ -1725,39 +2162,11 @@ class TestNominalReachesNonData:
                 name="Point",
                 module_id=ENTRY_ID,
                 fields=(("x", IntType()), ("y", IntType())),
+                decl_node_id=700000,
             )
         )
-        handle = RecordType(name="Point", module_id=ENTRY_ID)
+        handle = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700000)
         assert table.nominal_reaches_non_data(handle) is False
-
-    def test_record_with_agent_field_has_no_equality(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Bad",
-                module_id=ENTRY_ID,
-                fields=(("a", AgentType()), ("x", IntType())),
-            )
-        )
-        handle = RecordType(name="Bad", module_id=ENTRY_ID)
-        assert table.nominal_reaches_non_data(handle) is True
-
-    def test_generic_record_answer_follows_its_type_argument(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Box",
-                module_id=ENTRY_ID,
-                type_params=("T",),
-                fields=(("value", TypeVarType("T")),),
-            )
-        )
-        agent_handle = RecordType(name="Box", type_args=(AgentType(),), module_id=ENTRY_ID)
-        int_handle = RecordType(name="Box", type_args=(IntType(),), module_id=ENTRY_ID)
-        assert table.nominal_reaches_non_data(agent_handle) is True
-        assert table.nominal_reaches_non_data(int_handle) is False
 
 
 class TestNominalIsJsonConvertible:
@@ -1769,39 +2178,11 @@ class TestNominalIsJsonConvertible:
                 name="Point",
                 module_id=ENTRY_ID,
                 fields=(("x", IntType()), ("y", IntType())),
+                decl_node_id=700000,
             )
         )
-        handle = RecordType(name="Point", module_id=ENTRY_ID)
+        handle = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700000)
         assert table.nominal_is_json_convertible(handle) is True
-
-    def test_record_with_agent_field_is_not_convertible(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Bad",
-                module_id=ENTRY_ID,
-                fields=(("a", AgentType()), ("x", IntType())),
-            )
-        )
-        handle = RecordType(name="Bad", module_id=ENTRY_ID)
-        assert table.nominal_is_json_convertible(handle) is False
-
-    def test_generic_record_answer_follows_its_type_argument(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Box",
-                module_id=ENTRY_ID,
-                type_params=("T",),
-                fields=(("value", TypeVarType("T")),),
-            )
-        )
-        agent_handle = RecordType(name="Box", type_args=(AgentType(),), module_id=ENTRY_ID)
-        int_handle = RecordType(name="Box", type_args=(IntType(),), module_id=ENTRY_ID)
-        assert table.nominal_is_json_convertible(agent_handle) is False
-        assert table.nominal_is_json_convertible(int_handle) is True
 
 
 # ---------------------------------------------------------------------------
@@ -1810,18 +2191,25 @@ class TestNominalIsJsonConvertible:
 
 
 def _bad_record_table() -> TypeTable:
-    """A table with ``Bad(a: agent, x: int)`` and ``Good(x: int)``."""
+    """A table with one JSON-convertible and one non-convertible record."""
     table = TypeTable()
     table.register(
         TypeDef(
             kind="record",
             name="Bad",
             module_id=ENTRY_ID,
-            fields=(("a", AgentType()), ("x", IntType())),
+            fields=(("a", FunctionType(params=(), result=UnitType())), ("x", IntType())),
+            decl_node_id=700029,
         )
     )
     table.register(
-        TypeDef(kind="record", name="Good", module_id=ENTRY_ID, fields=(("x", IntType()),))
+        TypeDef(
+            kind="record",
+            name="Good",
+            module_id=ENTRY_ID,
+            fields=(("x", IntType()),),
+            decl_node_id=700030,
+        )
     )
     return table
 
@@ -1869,9 +2257,6 @@ class TestCastClassification:
     def test_unit_source_static_error(self) -> None:
         assert cast_classification(UnitType(), TextType(), TypeTable()) == CastKind.STATIC_ERROR
 
-    def test_agent_target_static_error(self) -> None:
-        assert cast_classification(TextType(), AgentType(), TypeTable()) == CastKind.STATIC_ERROR
-
     def test_array_of_scalars_to_json_total(self) -> None:
         # array[int] is JSON-shaped: not implicitly assignable to json (see
         # TestIsAssignable), but still convertible via an explicit cast.
@@ -1887,11 +2272,11 @@ class TestCastClassification:
         )
 
     def test_text_to_record_fallible(self) -> None:
-        r = RecordType(name="R")
+        r = RecordType(name="R", decl_id=700035)
         assert cast_classification(TextType(), r, TypeTable()) == CastKind.FALLIBLE
 
     def test_json_to_record_fallible(self) -> None:
-        r = RecordType(name="R")
+        r = RecordType(name="R", decl_id=700035)
         assert cast_classification(JsonType(), r, TypeTable()) == CastKind.FALLIBLE
 
     def test_exception_as_target_static_error(self) -> None:
@@ -1913,7 +2298,7 @@ class TestCastClassification:
 
     def test_record_to_json_total(self) -> None:
         table = _bad_record_table()
-        good = RecordType(name="Good", module_id=ENTRY_ID)
+        good = RecordType(name="Good", module_id=ENTRY_ID, decl_id=700030)
         assert cast_classification(good, JsonType(), table) == CastKind.TOTAL_JSON
 
     def test_enum_to_json_total(self) -> None:
@@ -1924,31 +2309,34 @@ class TestCastClassification:
                 name="E",
                 module_id=ENTRY_ID,
                 variants=(("A", ()), ("B", (("x", IntType()),))),
+                decl_node_id=700031,
             )
         )
         assert (
-            cast_classification(EnumType(name="E", module_id=ENTRY_ID), JsonType(), table)
+            cast_classification(
+                EnumType(name="E", module_id=ENTRY_ID, decl_id=700031), JsonType(), table
+            )
             == CastKind.TOTAL_JSON
         )
 
     def test_exception_to_json_total(self) -> None:
         table = create_seeded_type_table()
-        source = ExceptionType(name="Abort", module_id=PRELUDE_ID)
+        source = ExceptionType(name="Abort", module_id=STD_CORE_ID)
         assert cast_classification(source, JsonType(), table) == CastKind.TOTAL_JSON
 
     def test_array_of_record_to_json_total(self) -> None:
         table = _bad_record_table()
-        good = ArrayType(elem=RecordType(name="Good", module_id=ENTRY_ID))
+        good = ArrayType(elem=RecordType(name="Good", module_id=ENTRY_ID, decl_id=700030))
         assert cast_classification(good, JsonType(), table) == CastKind.TOTAL_JSON
 
     def test_record_with_agent_field_to_json_static_error(self) -> None:
         table = _bad_record_table()
-        bad = RecordType(name="Bad", module_id=ENTRY_ID)
+        bad = RecordType(name="Bad", module_id=ENTRY_ID, decl_id=700029)
         assert cast_classification(bad, JsonType(), table) == CastKind.STATIC_ERROR
 
     def test_array_of_record_with_agent_field_to_json_static_error(self) -> None:
         table = _bad_record_table()
-        bad = ArrayType(elem=RecordType(name="Bad", module_id=ENTRY_ID))
+        bad = ArrayType(elem=RecordType(name="Bad", module_id=ENTRY_ID, decl_id=700029))
         assert cast_classification(bad, JsonType(), table) == CastKind.STATIC_ERROR
 
 
@@ -1958,19 +2346,10 @@ class TestIsJsonConvertible:
         for scalar in (TextType(), JsonType(), BoolType(), IntType(), DecimalType()):
             assert is_json_convertible(scalar, table) is True
 
-    def test_non_data_types_do_not_convert(self) -> None:
-        table = TypeTable()
-        for non_data in (
-            UnitType(),
-            AgentType(),
-            FunctionType(params=(IntType(),), result=IntType()),
-        ):
-            assert is_json_convertible(non_data, table) is False
-
     def test_nested_containers_follow_their_element_type(self) -> None:
         table = _bad_record_table()
-        good = RecordType(name="Good", module_id=ENTRY_ID)
-        bad = RecordType(name="Bad", module_id=ENTRY_ID)
+        good = RecordType(name="Good", module_id=ENTRY_ID, decl_id=700030)
+        bad = RecordType(name="Bad", module_id=ENTRY_ID, decl_id=700029)
         assert is_json_convertible(ArrayType(elem=ArrayType(elem=good)), table) is True
         assert is_json_convertible(DictType(value=ArrayType(elem=good)), table) is True
         assert is_json_convertible(ArrayType(elem=ArrayType(elem=bad)), table) is False
@@ -1985,11 +2364,15 @@ class TestIsJsonConvertible:
                 module_id=ENTRY_ID,
                 fields=(
                     ("tag", IntType()),
-                    ("children", ArrayType(elem=RecordType(name="Node", module_id=ENTRY_ID))),
+                    (
+                        "children",
+                        ArrayType(elem=RecordType(name="Node", module_id=ENTRY_ID, decl_id=700032)),
+                    ),
                 ),
+                decl_node_id=700032,
             )
         )
-        node = RecordType(name="Node", module_id=ENTRY_ID)
+        node = RecordType(name="Node", module_id=ENTRY_ID, decl_id=700032)
         assert is_json_convertible(node, table) is True
 
     def test_free_type_variable_never_converts(self) -> None:
@@ -2001,32 +2384,18 @@ class TestIsJsonConvertible:
                 module_id=ENTRY_ID,
                 type_params=("T",),
                 fields=(("value", TypeVarType("T")),),
+                decl_node_id=700002,
             )
         )
         assert is_json_convertible(TypeVarType("T"), table) is False
         assert is_json_convertible(ArrayType(elem=TypeVarType("T")), table) is False
-        boxed = RecordType(name="Box", type_args=(TypeVarType("T"),), module_id=ENTRY_ID)
-        assert is_json_convertible(boxed, table) is False
-        concrete = RecordType(name="Box", type_args=(IntType(),), module_id=ENTRY_ID)
-        assert is_json_convertible(concrete, table) is True
-
-    def test_phantom_type_parameter_still_rejects_a_type_variable(self) -> None:
-        # The declaration itself never mentions T, so the fixpoint calls the
-        # parameter irrelevant — but the cast is compiled once with type
-        # arguments erased, so a free T at the use site is still refused.
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Phantom",
-                module_id=ENTRY_ID,
-                type_params=("T",),
-                fields=(("x", IntType()),),
-            )
+        boxed = RecordType(
+            name="Box", type_args=(TypeVarType("T"),), module_id=ENTRY_ID, decl_id=700002
         )
-        handle = RecordType(name="Phantom", type_args=(TypeVarType("T"),), module_id=ENTRY_ID)
-        assert is_json_convertible(handle, table) is False
-        concrete = RecordType(name="Phantom", type_args=(AgentType(),), module_id=ENTRY_ID)
+        assert is_json_convertible(boxed, table) is False
+        concrete = RecordType(
+            name="Box", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700002
+        )
         assert is_json_convertible(concrete, table) is True
 
 
@@ -2035,9 +2404,15 @@ class TestJsonCastHint:
 
     def test_container_and_nominal_into_json_are_hinted(self) -> None:
         table = _bad_record_table()
-        good = RecordType(name="Good", module_id=ENTRY_ID)
+        good = RecordType(name="Good", module_id=ENTRY_ID, decl_id=700030)
         for value_type in (ArrayType(elem=IntType()), DictType(value=IntType()), good):
             assert "as json" in json_cast_hint(value_type, JsonType(), table)
+
+    def test_nonconvertible_container_into_json_is_not_hinted(self) -> None:
+        """A cast hint is not offered when no JSON cast can make the value valid."""
+        table = _bad_record_table()
+        bad = RecordType(name="Bad", module_id=ENTRY_ID, decl_id=700029)
+        assert json_cast_hint(ArrayType(elem=bad), JsonType(), table) == ""
 
     def test_scalar_into_json_is_not_hinted(self) -> None:
         # A scalar is absorbed into a json slot implicitly, so naming the
@@ -2045,17 +2420,6 @@ class TestJsonCastHint:
         table = TypeTable()
         for scalar in (TextType(), BoolType(), IntType(), DecimalType(), JsonType()):
             assert json_cast_hint(scalar, JsonType(), table) == ""
-
-    def test_value_without_a_json_representation_is_not_hinted(self) -> None:
-        # `as json` does not accept these either, so the hint would be wrong.
-        table = _bad_record_table()
-        for non_data in (
-            UnitType(),
-            AgentType(),
-            FunctionType(params=(IntType(),), result=IntType()),
-            RecordType(name="Bad", module_id=ENTRY_ID),
-        ):
-            assert json_cast_hint(non_data, JsonType(), table) == ""
 
     def test_json_into_another_type_is_not_hinted(self) -> None:
         # The reverse direction: the fix is a cast to the target type, never
@@ -2068,29 +2432,14 @@ class TestJsonCastHint:
 class TestJsonRepresentationObstacle:
     def test_convertible_type_has_no_obstacle(self) -> None:
         table = _bad_record_table()
-        good = ArrayType(elem=RecordType(name="Good", module_id=ENTRY_ID))
+        good = ArrayType(elem=RecordType(name="Good", module_id=ENTRY_ID, decl_id=700030))
         assert table.json_representation_obstacle(good) is None
-
-    def test_structural_non_data_leaf_is_named(self) -> None:
-        table = TypeTable()
-        message = table.json_representation_obstacle(ArrayType(elem=AgentType()))
-        assert message is not None
-        assert "agent" in message
 
     def test_structural_non_data_leaf_through_a_dict_is_named(self) -> None:
         table = TypeTable()
         message = table.json_representation_obstacle(DictType(value=ArrayType(elem=UnitType())))
         assert message is not None
         assert "unit" in message
-
-    def test_declaration_field_is_named(self) -> None:
-        table = _bad_record_table()
-        bad = ArrayType(elem=RecordType(name="Bad", module_id=ENTRY_ID))
-        message = table.json_representation_obstacle(bad)
-        assert message is not None
-        assert "'a'" in message
-        assert "Bad" in message
-        assert "agent" in message
 
     def test_culprit_is_reported_through_a_nested_declaration(self) -> None:
         table = _bad_record_table()
@@ -2101,11 +2450,15 @@ class TestJsonRepresentationObstacle:
                 module_id=ENTRY_ID,
                 fields=(
                     ("label", TextType()),
-                    ("inner", ArrayType(elem=RecordType(name="Bad", module_id=ENTRY_ID))),
+                    (
+                        "inner",
+                        ArrayType(elem=RecordType(name="Bad", module_id=ENTRY_ID, decl_id=700029)),
+                    ),
                 ),
+                decl_node_id=700033,
             )
         )
-        outer = RecordType(name="Outer", module_id=ENTRY_ID)
+        outer = RecordType(name="Outer", module_id=ENTRY_ID, decl_id=700033)
         message = table.json_representation_obstacle(outer)
         assert message is not None
         assert "'a'" in message
@@ -2116,20 +2469,28 @@ class TestJsonRepresentationObstacle:
         # (a scalar and a convertible nominal) — the blame lies one hop
         # further on. The search must converge rather than re-expand Mid.
         table = _bad_record_table()
-        bad = RecordType(name="Bad", module_id=ENTRY_ID)
-        good = RecordType(name="Good", module_id=ENTRY_ID)
-        mid = RecordType(name="Mid", module_id=ENTRY_ID)
+        bad = RecordType(name="Bad", module_id=ENTRY_ID, decl_id=700029)
+        good = RecordType(name="Good", module_id=ENTRY_ID, decl_id=700030)
+        mid = RecordType(name="Mid", module_id=ENTRY_ID, decl_id=700009)
         table.register(
             TypeDef(
                 kind="record",
                 name="Mid",
                 module_id=ENTRY_ID,
                 fields=(("x", IntType()), ("ok", good), ("deep", bad)),
+                decl_node_id=700009,
             )
         )
-        for side in ("Left", "Right"):
+        side_ids = {"Left": 700040, "Right": 700041}
+        for side, side_id in side_ids.items():
             table.register(
-                TypeDef(kind="record", name=side, module_id=ENTRY_ID, fields=(("m", mid),))
+                TypeDef(
+                    kind="record",
+                    name=side,
+                    module_id=ENTRY_ID,
+                    fields=(("m", mid),),
+                    decl_node_id=side_id,
+                )
             )
         table.register(
             TypeDef(
@@ -2137,12 +2498,15 @@ class TestJsonRepresentationObstacle:
                 name="Top",
                 module_id=ENTRY_ID,
                 fields=(
-                    ("l", RecordType(name="Left", module_id=ENTRY_ID)),
-                    ("r", RecordType(name="Right", module_id=ENTRY_ID)),
+                    ("l", RecordType(name="Left", module_id=ENTRY_ID, decl_id=side_ids["Left"])),
+                    ("r", RecordType(name="Right", module_id=ENTRY_ID, decl_id=side_ids["Right"])),
                 ),
+                decl_node_id=700034,
             )
         )
-        message = table.json_representation_obstacle(RecordType(name="Top", module_id=ENTRY_ID))
+        message = table.json_representation_obstacle(
+            RecordType(name="Top", module_id=ENTRY_ID, decl_id=700034)
+        )
         assert message is not None
         assert "'a'" in message
         assert "Bad" in message
@@ -2158,9 +2522,10 @@ class TestJsonRepresentationObstacle:
                     ("Empty", ()),
                     ("Full", (("run", FunctionType(params=(), result=IntType())),)),
                 ),
+                decl_node_id=700023,
             )
         )
-        holder = EnumType(name="Holder", module_id=ENTRY_ID)
+        holder = EnumType(name="Holder", module_id=ENTRY_ID, decl_id=700023)
         message = table.json_representation_obstacle(holder)
         assert message is not None
         assert "'run'" in message
@@ -2168,10 +2533,13 @@ class TestJsonRepresentationObstacle:
 
     def test_exception_descendant_poisons_its_ancestor(self) -> None:
         table = TypeTable()
-        base_key = (ENTRY_ID, (), "Base")
         table.register(
             TypeDef(
-                kind="exception", name="Base", module_id=ENTRY_ID, fields=(("code", IntType()),)
+                kind="exception",
+                name="Base",
+                module_id=ENTRY_ID,
+                fields=(("code", IntType()),),
+                decl_node_id=700013,
             )
         )
         table.register(
@@ -2179,37 +2547,17 @@ class TestJsonRepresentationObstacle:
                 kind="exception",
                 name="Child",
                 module_id=ENTRY_ID,
-                base=base_key,
+                base=700013,
                 fields=(("handler", FunctionType(params=(IntType(),), result=IntType())),),
+                decl_node_id=700012,
             )
         )
-        base = ExceptionType(name="Base", module_id=ENTRY_ID)
+        base = ExceptionType(name="Base", module_id=ENTRY_ID, decl_id=700013)
         assert is_json_convertible(base, table) is False
         message = table.json_representation_obstacle(base)
         assert message is not None
         assert "'handler'" in message
         assert "Child" in message
-
-    def test_exception_inherits_its_base_field_problem(self) -> None:
-        table = TypeTable()
-        base_key = (ENTRY_ID, (), "Base")
-        table.register(
-            TypeDef(kind="exception", name="Base", module_id=ENTRY_ID, fields=(("a", AgentType()),))
-        )
-        table.register(
-            TypeDef(
-                kind="exception",
-                name="Child",
-                module_id=ENTRY_ID,
-                base=base_key,
-                fields=(("code", IntType()),),
-            )
-        )
-        child = ExceptionType(name="Child", module_id=ENTRY_ID)
-        message = table.json_representation_obstacle(child)
-        assert message is not None
-        assert "'a'" in message
-        assert "Base" in message
 
     def test_type_variable_is_named_when_nothing_else_is_to_blame(self) -> None:
         table = TypeTable()
@@ -2221,20 +2569,13 @@ class TestJsonRepresentationObstacle:
         table = TypeTable()
         assert table.json_representation_obstacle(ArrayType(elem=InferenceVarType(1))) is None
 
-    def test_imported_culprit_is_module_qualified(self) -> None:
-        other = ModuleId(("lib", "shapes"))
-        table = TypeTable()
-        table.register(
-            TypeDef(kind="record", name="Bad", module_id=other, fields=(("a", AgentType()),))
-        )
-        message = table.json_representation_obstacle(RecordType(name="Bad", module_id=other))
-        assert message is not None
-        assert "lib/shapes::Bad" in message
-
 
 # ---------------------------------------------------------------------------
 # Finiteness (instantiation-closure) analysis
 # ---------------------------------------------------------------------------
+
+
+_PAIR_DECL_ID = 700200
 
 
 def _pair_def(name: str = "Pair") -> TypeDef:
@@ -2245,6 +2586,7 @@ def _pair_def(name: str = "Pair") -> TypeDef:
         module_id=ENTRY_ID,
         type_params=("X", "Y"),
         fields=(("x", TypeVarType("X")), ("y", TypeVarType("Y"))),
+        decl_node_id=_PAIR_DECL_ID,
     )
 
 
@@ -2258,10 +2600,11 @@ class TestInhabitationAnalysis:
                 name="R",
                 module_id=ENTRY_ID,
                 fields=(("missing", RecordType("Missing", module_id=ENTRY_ID)),),
+                decl_node_id=700035,
             )
         )
 
-        assert compute_uninhabited(table) == frozenset({(ENTRY_ID, (), "R")})
+        assert compute_uninhabited(table) == frozenset({700035})
 
     def test_exception_with_missing_base_stays_uninhabited(self) -> None:
         """A malformed exception base link is not treated as constructible evidence."""
@@ -2271,18 +2614,19 @@ class TestInhabitationAnalysis:
                 kind="exception",
                 name="E",
                 module_id=ENTRY_ID,
-                base=(ENTRY_ID, "Missing"),
+                base=999_999_999,  # never registered: a dangling base identity
+                decl_node_id=700031,
             )
         )
 
-        assert compute_uninhabited(table) == frozenset({(ENTRY_ID, (), "E")})
+        assert compute_uninhabited(table) == frozenset({700031})
 
 
 class TestFiniteClosure:
     def test_nominal_references_walks_nested_type_shapes(self) -> None:
         exc = ExceptionType("Oops", module_id=ENTRY_ID)
         enum = EnumType("Choice", module_id=ENTRY_ID)
-        box = RecordType("Box", type_args=(enum,), module_id=ENTRY_ID)
+        box = RecordType("Box", type_args=(enum,), module_id=ENTRY_ID, decl_id=700002)
         typ = FunctionType(params=(ArrayType(exc),), result=DictType(box))
         assert list(nominal_references(typ)) == [exc, box, enum]
         assert list(nominal_references(BoolType())) == []
@@ -2303,10 +2647,16 @@ class TestFiniteClosure:
                     (
                         "children",
                         ArrayType(
-                            RecordType("Tree", type_args=(TypeVarType("T"),), module_id=ENTRY_ID)
+                            RecordType(
+                                "Tree",
+                                type_args=(TypeVarType("T"),),
+                                module_id=ENTRY_ID,
+                                decl_id=700028,
+                            )
                         ),
                     ),
                 ),
+                decl_node_id=700028,
             )
         )
         assert table.has_finite_closure(ENTRY_ID, "Tree") is True
@@ -2324,8 +2674,12 @@ class TestFiniteClosure:
                 type_params=("T",),
                 fields=(
                     ("value", TypeVarType("T")),
-                    ("constref", RecordType("R", type_args=(IntType(),), module_id=ENTRY_ID)),
+                    (
+                        "constref",
+                        RecordType("R", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700035),
+                    ),
                 ),
+                decl_node_id=700035,
             )
         )
         assert table.has_finite_closure(ENTRY_ID, "R") is True
@@ -2352,11 +2706,13 @@ class TestFiniteClosure:
                                     "Swap",
                                     type_args=(TypeVarType("B"), TypeVarType("A")),
                                     module_id=ENTRY_ID,
+                                    decl_id=700036,
                                 ),
                             ),
                         ),
                     ),
                 ),
+                decl_node_id=700036,
             )
         )
         assert table.has_finite_closure(ENTRY_ID, "Swap") is True
@@ -2384,12 +2740,15 @@ class TestFiniteClosure:
                                     "Pair",
                                     type_args=(TypeVarType("T"), TypeVarType("T")),
                                     module_id=ENTRY_ID,
+                                    decl_id=700200,
                                 ),
                             ),
                             module_id=ENTRY_ID,
+                            decl_id=700037,
                         ),
                     ),
                 ),
+                decl_node_id=700037,
             )
         )
         assert table.has_finite_closure(ENTRY_ID, "Perfect") is False
@@ -2411,10 +2770,14 @@ class TestFiniteClosure:
                     (
                         "next",
                         RecordType(
-                            "P", type_args=(ArrayType(TypeVarType("T")),), module_id=ENTRY_ID
+                            "P",
+                            type_args=(ArrayType(TypeVarType("T")),),
+                            module_id=ENTRY_ID,
+                            decl_id=700038,
                         ),
                     ),
                 ),
+                decl_node_id=700038,
             )
         )
         assert table.has_finite_closure(ENTRY_ID, "P") is False
@@ -2441,12 +2804,15 @@ class TestFiniteClosure:
                                     "Pair",
                                     type_args=(TypeVarType("T"), TypeVarType("T")),
                                     module_id=ENTRY_ID,
+                                    decl_id=700200,
                                 ),
                             ),
                             module_id=ENTRY_ID,
+                            decl_id=700015,
                         ),
                     ),
                 ),
+                decl_node_id=700014,
             )
         )
         table.register(
@@ -2457,8 +2823,14 @@ class TestFiniteClosure:
                 type_params=("T",),
                 fields=(
                     ("value", TypeVarType("T")),
-                    ("a", RecordType("A", type_args=(TypeVarType("T"),), module_id=ENTRY_ID)),
+                    (
+                        "a",
+                        RecordType(
+                            "A", type_args=(TypeVarType("T"),), module_id=ENTRY_ID, decl_id=700014
+                        ),
+                    ),
                 ),
+                decl_node_id=700015,
             )
         )
         assert table.has_finite_closure(ENTRY_ID, "A") is False
@@ -2478,8 +2850,14 @@ class TestFiniteClosure:
                 type_params=("T",),
                 fields=(
                     ("value", TypeVarType("T")),
-                    ("d", RecordType("D", type_args=(TypeVarType("T"),), module_id=ENTRY_ID)),
+                    (
+                        "d",
+                        RecordType(
+                            "D", type_args=(TypeVarType("T"),), module_id=ENTRY_ID, decl_id=700040
+                        ),
+                    ),
                 ),
+                decl_node_id=700039,
             )
         )
         table.register(
@@ -2499,12 +2877,15 @@ class TestFiniteClosure:
                                     "Pair",
                                     type_args=(TypeVarType("T"), TypeVarType("T")),
                                     module_id=ENTRY_ID,
+                                    decl_id=700200,
                                 ),
                             ),
                             module_id=ENTRY_ID,
+                            decl_id=700039,
                         ),
                     ),
                 ),
+                decl_node_id=700040,
             )
         )
         assert table.has_finite_closure(ENTRY_ID, "C") is False
@@ -2528,8 +2909,12 @@ class TestFiniteClosure:
                 module_id=ENTRY_ID,
                 fields=(
                     ("code", IntType()),
-                    ("causes", ArrayType(ExceptionType("Chain", module_id=ENTRY_ID))),
+                    (
+                        "causes",
+                        ArrayType(ExceptionType("Chain", module_id=ENTRY_ID, decl_id=700041)),
+                    ),
                 ),
+                decl_node_id=700041,
             )
         )
         assert table.has_finite_closure(ENTRY_ID, "Chain") is True
@@ -2561,12 +2946,15 @@ class TestFiniteClosure:
                                     "Pair",
                                     type_args=(TypeVarType("T"), TypeVarType("T")),
                                     module_id=ENTRY_ID,
+                                    decl_id=700200,
                                 ),
                             ),
                             module_id=ENTRY_ID,
+                            decl_id=700037,
                         ),
                     ),
                 ),
+                decl_node_id=700037,
             )
         )
         table.register(
@@ -2574,10 +2962,18 @@ class TestFiniteClosure:
                 kind="record",
                 name="Holder",
                 module_id=ENTRY_ID,
-                fields=(("p", RecordType("Perfect", type_args=(IntType(),), module_id=ENTRY_ID)),),
+                fields=(
+                    (
+                        "p",
+                        RecordType(
+                            "Perfect", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700037
+                        ),
+                    ),
+                ),
+                decl_node_id=700023,
             )
         )
-        holder = RecordType("Holder", module_id=ENTRY_ID)
+        holder = RecordType("Holder", module_id=ENTRY_ID, decl_id=700023)
         assert table.has_finite_schema(holder) is False
 
     def test_has_finite_schema_ignores_phantom_type_arguments(self) -> None:
@@ -2600,12 +2996,15 @@ class TestFiniteClosure:
                                     "Pair",
                                     type_args=(TypeVarType("T"), TypeVarType("T")),
                                     module_id=ENTRY_ID,
+                                    decl_id=700200,
                                 ),
                             ),
                             module_id=ENTRY_ID,
+                            decl_id=700037,
                         ),
                     ),
                 ),
+                decl_node_id=700037,
             )
         )
         table.register(
@@ -2615,12 +3014,16 @@ class TestFiniteClosure:
                 module_id=ENTRY_ID,
                 type_params=("T",),
                 fields=(),
+                decl_node_id=700042,
             )
         )
         phantom = RecordType(
             "Phantom",
-            type_args=(RecordType("Perfect", type_args=(IntType(),), module_id=ENTRY_ID),),
+            type_args=(
+                RecordType("Perfect", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700037),
+            ),
             module_id=ENTRY_ID,
+            decl_id=700042,
         )
         assert table.has_finite_schema(phantom) is True
 
@@ -2640,15 +3043,19 @@ class TestFiniteClosure:
                                 "R",
                                 type_args=(ArrayType(TypeVarType("T")),),
                                 module_id=ENTRY_ID,
+                                decl_id=700035,
                             )
                         ),
                     ),
                 ),
+                decl_node_id=700035,
             )
         )
         assert table.has_finite_closure(ENTRY_ID, "R") is True
         assert (
-            table.has_finite_schema(RecordType("R", type_args=(IntType(),), module_id=ENTRY_ID))
+            table.has_finite_schema(
+                RecordType("R", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700035)
+            )
             is True
         )
 
@@ -2661,6 +3068,7 @@ class TestFiniteClosure:
                 module_id=ENTRY_ID,
                 type_params=("T",),
                 fields=(),
+                decl_node_id=700042,
             )
         )
         table.register(
@@ -2683,20 +3091,25 @@ class TestFiniteClosure:
                                             "Phantom",
                                             type_args=(ArrayType(TypeVarType("T")),),
                                             module_id=ENTRY_ID,
+                                            decl_id=700042,
                                         ),
                                     ),
                                     module_id=ENTRY_ID,
+                                    decl_id=700031,
                                 ),
                             ),
                         ),
                     ),
                 ),
+                decl_node_id=700031,
             )
         )
 
         assert table.has_finite_closure(ENTRY_ID, "E") is True
         assert (
-            table.has_finite_schema(EnumType("E", type_args=(IntType(),), module_id=ENTRY_ID))
+            table.has_finite_schema(
+                EnumType("E", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700031)
+            )
             is True
         )
 
@@ -2722,9 +3135,11 @@ class TestFiniteClosure:
                                 ),
                             ),
                             module_id=ENTRY_ID,
+                            decl_id=700035,
                         ),
                     ),
                 ),
+                decl_node_id=700035,
             )
         )
         assert table.has_finite_closure(ENTRY_ID, "R") is False
@@ -2738,6 +3153,7 @@ class TestFiniteClosure:
                 module_id=ENTRY_ID,
                 type_params=("T",),
                 fields=(("value", TypeVarType("T")),),
+                decl_node_id=700002,
             )
         )
         table.register(
@@ -2757,12 +3173,15 @@ class TestFiniteClosure:
                                     "Box",
                                     type_args=(TypeVarType("T"), ArrayType(TypeVarType("T"))),
                                     module_id=ENTRY_ID,
+                                    decl_id=700002,
                                 ),
                             ),
                             module_id=ENTRY_ID,
+                            decl_id=700035,
                         ),
                     ),
                 ),
+                decl_node_id=700035,
             )
         )
         assert table.has_finite_closure(ENTRY_ID, "R") is False
@@ -2780,10 +3199,16 @@ class TestFiniteClosure:
                     (
                         "children",
                         ArrayType(
-                            RecordType("Tree", type_args=(TypeVarType("T"),), module_id=ENTRY_ID)
+                            RecordType(
+                                "Tree",
+                                type_args=(TypeVarType("T"),),
+                                module_id=ENTRY_ID,
+                                decl_id=700028,
+                            )
                         ),
                     ),
                 ),
+                decl_node_id=700028,
             )
         )
         table.register(
@@ -2791,10 +3216,18 @@ class TestFiniteClosure:
                 kind="record",
                 name="Holder",
                 module_id=ENTRY_ID,
-                fields=(("t", RecordType("Tree", type_args=(IntType(),), module_id=ENTRY_ID)),),
+                fields=(
+                    (
+                        "t",
+                        RecordType(
+                            "Tree", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700028
+                        ),
+                    ),
+                ),
+                decl_node_id=700023,
             )
         )
-        holder = RecordType("Holder", module_id=ENTRY_ID)
+        holder = RecordType("Holder", module_id=ENTRY_ID, decl_id=700023)
         assert table.has_finite_schema(holder) is True
 
     def test_has_finite_schema_true_for_scalar_root(self) -> None:
@@ -2826,26 +3259,31 @@ class TestFiniteClosure:
                                     "Pair",
                                     type_args=(TypeVarType("T"), TypeVarType("T")),
                                     module_id=ENTRY_ID,
+                                    decl_id=700200,
                                 ),
                             ),
                             module_id=ENTRY_ID,
+                            decl_id=700037,
                         ),
                     ),
                 ),
+                decl_node_id=700037,
             )
         )
         result = compute_finite_closure(table)
-        perfect_key = (ENTRY_ID, (), "Perfect")
-        assert perfect_key in result.infinite
-        assert result.successors[perfect_key] == frozenset(
-            {(ENTRY_ID, (), "Perfect"), (ENTRY_ID, (), "Pair")}
-        )
+        perfect_id = 700037
+        pair_id = 700200
+        assert perfect_id in result.infinite
+        assert result.successors[perfect_id] == frozenset({perfect_id, pair_id})
 
-    def test_caches_result_and_invalidates_on_register(self) -> None:
+    def test_caches_result_and_invalidates_on_a_new_declaration(self) -> None:
+        # A redeclaration always mints a fresh identity (the old one is
+        # retained, never mutated in place -- see ``TypeTable.register``), so
+        # the cache must be invalidated by an ordinary new registration, not
+        # merely by a change under an existing identity.
         table = TypeTable()
         table.register(_pair_def())
         assert table.has_finite_closure(ENTRY_ID, "Pair") is True
-        table.unregister(ENTRY_ID, "Pair")
         table.register(
             TypeDef(
                 kind="record",
@@ -2857,10 +3295,14 @@ class TestFiniteClosure:
                     (
                         "next",
                         RecordType(
-                            "Pair", type_args=(ArrayType(TypeVarType("T")),), module_id=ENTRY_ID
+                            "Pair",
+                            type_args=(ArrayType(TypeVarType("T")),),
+                            module_id=ENTRY_ID,
+                            decl_id=700201,
                         ),
                     ),
                 ),
+                decl_node_id=700201,
             )
         )
         assert table.has_finite_closure(ENTRY_ID, "Pair") is False
@@ -2880,10 +3322,14 @@ class TestFiniteClosure:
                     (
                         "next",
                         RecordType(
-                            "Q", type_args=(DictType(TypeVarType("T")),), module_id=ENTRY_ID
+                            "Q",
+                            type_args=(DictType(TypeVarType("T")),),
+                            module_id=ENTRY_ID,
+                            decl_id=700043,
                         ),
                     ),
                 ),
+                decl_node_id=700043,
             )
         )
         assert table.has_finite_closure(ENTRY_ID, "Q") is False
@@ -2908,9 +3354,11 @@ class TestFiniteClosure:
                                 FunctionType(params=(TypeVarType("T"),), result=TypeVarType("T")),
                             ),
                             module_id=ENTRY_ID,
+                            decl_id=700044,
                         ),
                     ),
                 ),
+                decl_node_id=700044,
             )
         )
         assert table.has_finite_closure(ENTRY_ID, "F") is False
@@ -2920,14 +3368,17 @@ class TestFiniteClosure:
         # exceptions are never generic, so it never contributes a
         # parameter-dependency node — the base chain stays finite.
         table = TypeTable()
-        table.register(TypeDef(kind="exception", name="Root", module_id=ENTRY_ID))
+        table.register(
+            TypeDef(kind="exception", name="Root", module_id=ENTRY_ID, decl_node_id=700008)
+        )
         table.register(
             TypeDef(
                 kind="exception",
                 name="Derived",
                 module_id=ENTRY_ID,
                 fields=(("code", IntType()),),
-                base=(ENTRY_ID, "Root"),
+                base=700008,
+                decl_node_id=700045,
             )
         )
         assert table.has_finite_closure(ENTRY_ID, "Root") is True
@@ -2945,6 +3396,7 @@ class TestFiniteClosure:
                 name="Y",
                 module_id=ENTRY_ID,
                 fields=(("ghost", RecordType("Ghost", module_id=ENTRY_ID)),),
+                decl_node_id=700027,
             )
         )
         assert table.has_finite_closure(ENTRY_ID, "Y") is True
@@ -2968,12 +3420,11 @@ class TestFiniteClosure:
                 module_id=ENTRY_ID,
                 type_params=("T",),
                 fields=(("value", TypeVarType("T")),),
+                decl_node_id=700046,
             )
         )
         weird = RecordType(
-            "Weird",
-            type_args=(IntType(), TextType()),
-            module_id=ENTRY_ID,
+            "Weird", type_args=(IntType(), TextType()), module_id=ENTRY_ID, decl_id=700046
         )
         assert table.canonical_schema_type(weird) == weird
         assert table.schema_relevant_type_args(weird) == (IntType(), TextType())
@@ -2997,12 +3448,11 @@ class TestFiniteClosure:
                     (
                         "b",
                         RecordType(
-                            "B",
-                            type_args=(TypeVarType("Q"),),
-                            module_id=ENTRY_ID,
+                            "B", type_args=(TypeVarType("Q"),), module_id=ENTRY_ID, decl_id=700015
                         ),
                     ),
                 ),
+                decl_node_id=700014,
             )
         )
         table.register(
@@ -3013,8 +3463,14 @@ class TestFiniteClosure:
                 type_params=("Q",),
                 fields=(
                     ("value", TypeVarType("Q")),
-                    ("a", RecordType("A", type_args=(TypeVarType("Q"),), module_id=ENTRY_ID)),
+                    (
+                        "a",
+                        RecordType(
+                            "A", type_args=(TypeVarType("Q"),), module_id=ENTRY_ID, decl_id=700014
+                        ),
+                    ),
                 ),
+                decl_node_id=700015,
             )
         )
         assert table.has_finite_closure(ENTRY_ID, "A") is True
@@ -3044,12 +3500,15 @@ class TestFiniteClosure:
                                     "Pair",
                                     type_args=(TypeVarType("T"), TypeVarType("T")),
                                     module_id=ENTRY_ID,
+                                    decl_id=700200,
                                 ),
                             ),
                             module_id=ENTRY_ID,
+                            decl_id=700037,
                         ),
                     ),
                 ),
+                decl_node_id=700037,
             )
         )
         table.register(
@@ -3059,12 +3518,16 @@ class TestFiniteClosure:
                 module_id=ENTRY_ID,
                 type_params=("T",),
                 fields=(("value", TypeVarType("T")),),
+                decl_node_id=700002,
             )
         )
         root = RecordType(
             "Box",
-            type_args=(RecordType("Perfect", type_args=(IntType(),), module_id=ENTRY_ID),),
+            type_args=(
+                RecordType("Perfect", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700037),
+            ),
             module_id=ENTRY_ID,
+            decl_id=700002,
         )
         assert table.has_finite_schema(root) is False
 
@@ -3090,17 +3553,22 @@ class TestFiniteClosure:
                                     "Pair",
                                     type_args=(TypeVarType("T"), TypeVarType("T")),
                                     module_id=ENTRY_ID,
+                                    decl_id=700200,
                                 ),
                             ),
                             module_id=ENTRY_ID,
+                            decl_id=700037,
                         ),
                     ),
                 ),
+                decl_node_id=700037,
             )
         )
         root = FunctionType(
             params=(IntType(),),
-            result=RecordType("Perfect", type_args=(IntType(),), module_id=ENTRY_ID),
+            result=RecordType(
+                "Perfect", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700037
+            ),
         )
         assert table.has_finite_schema(root) is False
 
@@ -3111,10 +3579,18 @@ class TestFiniteClosure:
         table = TypeTable()
         table.register(_pair_def())
         table.register(
-            TypeDef(kind="record", name="X", module_id=ENTRY_ID, fields=(("v", IntType()),))
+            TypeDef(
+                kind="record",
+                name="X",
+                module_id=ENTRY_ID,
+                fields=(("v", IntType()),),
+                decl_node_id=700022,
+            )
         )
-        x_handle = RecordType("X", module_id=ENTRY_ID)
-        root = RecordType("Pair", type_args=(x_handle, x_handle), module_id=ENTRY_ID)
+        x_handle = RecordType("X", module_id=ENTRY_ID, decl_id=700022)
+        root = RecordType(
+            "Pair", type_args=(x_handle, x_handle), module_id=ENTRY_ID, decl_id=700200
+        )
         assert table.has_finite_schema(root) is True
 
     # -----------------------------------------------------------------
@@ -3142,26 +3618,35 @@ class TestFiniteClosure:
                                     "Pair",
                                     type_args=(TypeVarType("T"), TypeVarType("T")),
                                     module_id=ENTRY_ID,
+                                    decl_id=700200,
                                 ),
                             ),
                             module_id=ENTRY_ID,
+                            decl_id=700037,
                         ),
                     ),
                 ),
+                decl_node_id=700037,
             )
         )
         return table
 
     def test_first_infinite_declaration_is_none_for_finite_root(self) -> None:
         table = self._perfect_table()
-        pair_int = RecordType("Pair", type_args=(IntType(), IntType()), module_id=ENTRY_ID)
+        pair_int = RecordType(
+            "Pair", type_args=(IntType(), IntType()), module_id=ENTRY_ID, decl_id=700200
+        )
         assert table.first_infinite_declaration(IntType()) is None
         assert table.first_infinite_declaration(pair_int) is None
 
     def test_first_infinite_declaration_names_root_itself(self) -> None:
         table = self._perfect_table()
-        perfect_int = RecordType("Perfect", type_args=(IntType(),), module_id=ENTRY_ID)
-        assert table.first_infinite_declaration(perfect_int) == (ENTRY_ID, (), "Perfect")
+        perfect_int = RecordType(
+            "Perfect", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700037
+        )
+        culprit = table.first_infinite_declaration(perfect_int)
+        assert culprit is not None
+        assert (culprit.module_id, culprit.scope_path, culprit.name) == (ENTRY_ID, (), "Perfect")
 
     def test_first_infinite_declaration_names_culprit_reached_through_field(self) -> None:
         table = self._perfect_table()
@@ -3170,20 +3655,34 @@ class TestFiniteClosure:
                 kind="record",
                 name="Holder",
                 module_id=ENTRY_ID,
-                fields=(("p", RecordType("Perfect", type_args=(IntType(),), module_id=ENTRY_ID)),),
+                fields=(
+                    (
+                        "p",
+                        RecordType(
+                            "Perfect", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700037
+                        ),
+                    ),
+                ),
+                decl_node_id=700023,
             )
         )
-        holder = RecordType("Holder", module_id=ENTRY_ID)
-        assert table.first_infinite_declaration(holder) == (ENTRY_ID, (), "Perfect")
+        holder = RecordType("Holder", module_id=ENTRY_ID, decl_id=700023)
+        culprit = table.first_infinite_declaration(holder)
+        assert culprit is not None
+        assert (culprit.module_id, culprit.scope_path, culprit.name) == (ENTRY_ID, (), "Perfect")
 
     def test_no_finite_schema_message_is_none_for_finite_type(self) -> None:
         table = self._perfect_table()
-        pair_int = RecordType("Pair", type_args=(IntType(), IntType()), module_id=ENTRY_ID)
+        pair_int = RecordType(
+            "Pair", type_args=(IntType(), IntType()), module_id=ENTRY_ID, decl_id=700200
+        )
         assert table.no_finite_schema_message(pair_int, use="a cast target") is None
 
     def test_no_finite_schema_message_names_root_when_root_is_the_culprit(self) -> None:
         table = self._perfect_table()
-        perfect_int = RecordType("Perfect", type_args=(IntType(),), module_id=ENTRY_ID)
+        perfect_int = RecordType(
+            "Perfect", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700037
+        )
         message = table.no_finite_schema_message(perfect_int, use="an agent output type")
         assert message is not None
         assert "Perfect[int]" in message
@@ -3197,10 +3696,18 @@ class TestFiniteClosure:
                 kind="record",
                 name="Holder",
                 module_id=ENTRY_ID,
-                fields=(("p", RecordType("Perfect", type_args=(IntType(),), module_id=ENTRY_ID)),),
+                fields=(
+                    (
+                        "p",
+                        RecordType(
+                            "Perfect", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700037
+                        ),
+                    ),
+                ),
+                decl_node_id=700023,
             )
         )
-        holder = RecordType("Holder", module_id=ENTRY_ID)
+        holder = RecordType("Holder", module_id=ENTRY_ID, decl_id=700023)
         message = table.no_finite_schema_message(holder, use="a parameter type")
         assert message is not None
         assert "Holder" in message
@@ -3233,12 +3740,15 @@ class TestFiniteClosure:
                                     "Pair",
                                     type_args=(TypeVarType("T"), TypeVarType("T")),
                                     module_id=ENTRY_ID,
+                                    decl_id=700200,
                                 ),
                             ),
                             module_id=mod,
+                            decl_id=700047,
                         ),
                     ),
                 ),
+                decl_node_id=700047,
             )
         )
         table.register(
@@ -3246,11 +3756,167 @@ class TestFiniteClosure:
                 kind="record",
                 name="Holder",
                 module_id=ENTRY_ID,
-                fields=(("p", RecordType("Perfect", type_args=(IntType(),), module_id=mod)),),
+                fields=(
+                    (
+                        "p",
+                        RecordType(
+                            "Perfect", type_args=(IntType(),), module_id=mod, decl_id=700047
+                        ),
+                    ),
+                ),
+                decl_node_id=700023,
             )
         )
-        holder = RecordType("Holder", module_id=ENTRY_ID)
+        holder = RecordType("Holder", module_id=ENTRY_ID, decl_id=700023)
         message = table.no_finite_schema_message(holder, use="a parameter type")
         assert message is not None
         assert "mod_a::Perfect" in message
         assert "a parameter type" in message
+
+
+# ---------------------------------------------------------------------------
+# Declaration-keyed identity: RecordType/EnumType/ExceptionType.decl_id and
+# TypeDef.decl_node_id
+# ---------------------------------------------------------------------------
+
+
+class TestDeclarationIdentity:
+    """An ordinary declaration's handle/``TypeDef`` adopt its own AST node id
+    as their declaration identity; the shipped standard library's own
+    declaration of a reserved host-known name instead adopts that name's
+    fixed reserved identity (see ``ir.reserved_nominals``)."""
+
+    def test_the_first_declaration_in_a_program_is_not_read_as_having_no_identity(self) -> None:
+        """A field-less declaration written as a program's very first item owns
+        the lowest AST node id there is, and still carries a real declaration
+        identity rather than the "no declaration identity" value."""
+        checked = _check("record R\n  *\nlet r = R()\n()")
+        record_def = next(
+            item
+            for item in checked.resolved.program.body.items
+            if isinstance(item, RecordDef) and item.name == "R"
+        )
+        assert record_def.node_id == 0
+        r = checked.type_env.get_type("R")
+        assert isinstance(r, RecordType)
+        assert r.decl_id != NO_DECL_ID
+        typedef = checked.type_env.type_table.get(r.module_id, "R")
+        assert typedef is not None
+        assert typedef.decl_node_id != NO_DECL_ID
+
+    def test_record_handle_and_typedef_adopt_the_declaration_node_id(self) -> None:
+        checked = _check("record Point\n  x: int\n  y: int\nlet p = Point(x = 1, y = 2)\np")
+        record_def = next(
+            item
+            for item in checked.resolved.program.body.items
+            if isinstance(item, RecordDef) and item.name == "Point"
+        )
+        point = checked.type_env.get_type("Point")
+        assert isinstance(point, RecordType)
+        assert point.decl_id == record_def.node_id
+        typedef = checked.type_env.type_table.get(point.module_id, "Point")
+        assert typedef is not None
+        assert typedef.decl_node_id == record_def.node_id
+
+    def test_enum_handle_and_typedef_adopt_the_declaration_node_id(self) -> None:
+        checked = _check("enum Color\n  | Red\n  | Green\n  | Blue\nlet c = Red\nc")
+        enum_def = next(
+            item
+            for item in checked.resolved.program.body.items
+            if isinstance(item, EnumDef) and item.name == "Color"
+        )
+        color = checked.type_env.get_type("Color")
+        assert isinstance(color, EnumType)
+        assert color.decl_id == enum_def.node_id
+        typedef = checked.type_env.type_table.get(color.module_id, "Color")
+        assert typedef is not None
+        assert typedef.decl_node_id == enum_def.node_id
+
+    def test_exception_handle_and_typedef_adopt_the_declaration_node_id(self) -> None:
+        checked = _check(
+            'exception Boom extends Exception\n  code: int\nBoom(code = 5, message = "m")'
+        )
+        exception_def = next(
+            item
+            for item in checked.resolved.program.body.items
+            if isinstance(item, ExceptionDef) and item.name == "Boom"
+        )
+        boom = checked.type_env.get_type("Boom")
+        assert isinstance(boom, ExceptionType)
+        assert boom.decl_id == exception_def.node_id
+        typedef = checked.type_env.type_table.get(boom.module_id, "Boom")
+        assert typedef is not None
+        assert typedef.decl_node_id == exception_def.node_id
+
+    def test_generic_record_instantiation_preserves_declaration_identity_across_arguments(
+        self,
+    ) -> None:
+        checked = _check(
+            "record Box[T]\n  value: T\n"
+            'let a: Box[int] = Box(value = 1)\nlet b: Box[text] = Box(value = "x")\n()'
+        )
+        a = _binding_value_type(checked, "a")
+        b = _binding_value_type(checked, "b")
+        assert isinstance(a, RecordType)
+        assert isinstance(b, RecordType)
+        assert a.decl_id != NO_DECL_ID
+        assert a.decl_id == b.decl_id
+
+    def test_generic_type_annotation_resolves_to_the_declarations_identity(self) -> None:
+        """Applying a generic declaration's type arguments in an annotation
+        instantiates its registered template, so the resolved handle names the
+        declaration rather than losing its identity."""
+        checked = _check("record Box[T]\n  value: T\ndef unwrap(b: Box[int]) -> int = b.value\n()")
+        record_def = next(
+            item
+            for item in checked.resolved.program.body.items
+            if isinstance(item, RecordDef) and item.name == "Box"
+        )
+        param_type = checked.function_signatures["unwrap"].params[0].type
+        assert isinstance(param_type, RecordType)
+        assert param_type.type_args == (IntType(),)
+        assert param_type.decl_id == record_def.node_id
+
+    def test_same_named_declarations_in_different_modules_have_different_identities(
+        self, tmp_path: Path
+    ) -> None:
+        """Declaration identity distinguishes two declarations that share a
+        bare name, which is what makes it an identity rather than a label."""
+        checked = _check_program(
+            tmp_path,
+            {
+                "mod_a": "record Point\n  x: int\n",
+                "mod_b": "record Point\n  x: int\n",
+                "entry": "import mod_a\nimport mod_b\n()\n",
+            },
+        )
+        decl_ids = [
+            handle.decl_id
+            for mid, module in checked.modules.items()
+            if not mid.is_entry and mid != STD_CORE_ID
+            for handle in [module.type_env.get_type("Point")]
+            if isinstance(handle, RecordType)
+        ]
+        assert len(decl_ids) == 2
+        assert decl_ids[0] != decl_ids[1]
+        assert all(decl_id != NO_DECL_ID for decl_id in decl_ids)
+
+    def test_stdlib_declarations_of_reserved_names_adopt_the_reserved_identity(
+        self, tmp_path: Path
+    ) -> None:
+        """Every reserved host-known name the shipped standard library declares
+        itself resolves, in ``std/core``'s own namespace, to the fixed reserved
+        identity — so a handle the host mints without any declaration in hand
+        names the same declaration a stdlib-loading program resolves."""
+        checked = _check_program(tmp_path, {"entry": "()"})
+        core = checked.modules[STD_CORE_ID]
+        generics = core.type_env.all_generic_types()
+        declared_reserved = set(RESERVED_NOMINAL_NAMES) - COMPATIBILITY_PRELUDE_TYPE_NAMES
+        assert "Option" in declared_reserved
+        for name in sorted(declared_reserved):
+            handle = core.type_env.get_type(name)
+            if handle is None:
+                # Generic declarations register a template, not a bare handle.
+                handle = generics[name].template
+            assert isinstance(handle, (RecordType, EnumType, ExceptionType))
+            assert handle.decl_id == reserved_nominal_id(name), name

@@ -1,7 +1,5 @@
 # An exception value converts to a JSON object of its own and inherited
-# fields, and a container of exceptions converts element by element. The
-# inherited `trace_id` is part of the encoding, so the shape is asserted by
-# fragment rather than pinned exactly.
+# fields, and a container of exceptions converts element by element.
 param code: int
 param note: text
 

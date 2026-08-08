@@ -10,8 +10,7 @@ enum Option[T]
   | none
   | some(value: T)
 
-agent picker
-
+let picker = AgentCommand("picker")
 # Qualified patterns on a generic enum; `value` is correctly typed `int`.
 def describe_option(o: Option[int]) -> text =
   case o of

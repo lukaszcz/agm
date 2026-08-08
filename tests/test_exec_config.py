@@ -1,4 +1,4 @@
-"""Tests for ExecConfig and load_exec_config."""
+"""Tests for exec configuration loading."""
 
 from __future__ import annotations
 
@@ -19,34 +19,40 @@ from agm.config.general import (
 class TestExecConfig:
     def test_explicit_values(self) -> None:
         cfg = ExecConfig(
-            runner=None,
             strict_json=False,
             default_loop_limit=5,
             timeout=None,
-            agents={},
+            log=False,
+            log_file=None,
+            runner="claude",
+        )
+        assert cfg.strict_json is False
+        assert cfg.default_loop_limit == 5
+        assert cfg.timeout is None
+        assert cfg.log is False
+        assert cfg.log_file is None
+        assert cfg.runner == "claude"
+
+    def test_runner_defaults_to_none(self) -> None:
+        cfg = ExecConfig(
+            strict_json=False,
+            default_loop_limit=5,
+            timeout=None,
             log=False,
             log_file=None,
         )
         assert cfg.runner is None
-        assert cfg.strict_json is False
-        assert cfg.default_loop_limit == 5
-        assert cfg.timeout is None
-        assert cfg.agents == {}
-        assert cfg.log is False
-        assert cfg.log_file is None
 
     def test_frozen(self) -> None:
         cfg = ExecConfig(
-            runner=None,
             strict_json=False,
             default_loop_limit=5,
             timeout=None,
-            agents={},
             log=False,
             log_file=None,
         )
         with pytest.raises((AttributeError, TypeError)):
-            cfg.runner = "something"
+            cfg.strict_json = True
 
 
 class TestLoadExecConfig:
@@ -54,217 +60,134 @@ class TestLoadExecConfig:
         home = tmp_path / "home"
         home.mkdir()
         cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
-        assert cfg.runner is None
         assert cfg.strict_json is False
-        # No [exec] max-iters → the valve is OFF (None), not a baked-in default.
         assert cfg.default_loop_limit is None
         assert cfg.timeout is None
-        assert cfg.agents == {}
         assert cfg.log is False
         assert cfg.log_file is None
+        assert cfg.runner is None
+
+    def test_runner_loaded_from_toml(self, tmp_path: Path) -> None:
+        home = tmp_path / "home"
+        config = home / ".agm" / "config.toml"
+        config.parent.mkdir(parents=True)
+        config.write_text('[exec]\nrunner = "claude"\n')
+        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
+        assert cfg.runner == "claude"
+
+    def test_blank_runner_is_none(self, tmp_path: Path) -> None:
+        home = tmp_path / "home"
+        config = home / ".agm" / "config.toml"
+        config.parent.mkdir(parents=True)
+        config.write_text('[exec]\nrunner = ""\n')
+        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
+        assert cfg.runner is None
+
+    def test_runner_is_not_a_program_table_override(self, tmp_path: Path) -> None:
+        """Unlike an engine key, ``runner`` never comes from ``[<program>]``."""
+        home = tmp_path / "home"
+        config = home / ".agm" / "config.toml"
+        config.parent.mkdir(parents=True)
+        config.write_text('[exec]\nrunner = "claude"\n\n[myprog]\nrunner = "codex"\n')
+        merged = load_merged_config(home=home, proj_dir=None, cwd=tmp_path)
+        cfg = exec_config_from_merged(
+            merged, program_table=program_config_from_merged(merged, "myprog")
+        )
+        assert cfg.runner == "claude"
 
     def test_load_exec_config_from_toml(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
-        home.mkdir()
-        (home / ".agm").mkdir()
-        (home / ".agm" / "config.toml").write_text(
-            "\n".join(
-                [
-                    "[exec]",
-                    'runner = "claude -p"',
-                    "strict-json = true",
-                    "max-iters = 10",
-                    'timeout = "30m"',
-                    "",
-                    "[exec.agents]",
-                    'reviewer = "claude -p"',
-                    'impl = "codex exec"',
-                ]
-            )
-        )
-
+        config = home / ".agm" / "config.toml"
+        config.parent.mkdir(parents=True)
+        config.write_text('[exec]\nstrict-json = true\nmax-iters = 10\ntimeout = "30m"\n')
         cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
-        assert cfg.runner == "claude -p"
         assert cfg.strict_json is True
         assert cfg.default_loop_limit == 10
         assert cfg.timeout == pytest.approx(1800.0)
-        assert cfg.agents == {"reviewer": "claude -p", "impl": "codex exec"}
 
     def test_project_config_overrides_home(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
-        home.mkdir()
-        (home / ".agm").mkdir()
-        (home / ".agm" / "config.toml").write_text(
-            "\n".join(
-                [
-                    "[exec]",
-                    'runner = "home-runner"',
-                    "max-iters = 3",
-                ]
-            )
-        )
-
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text("[exec]\nmax-iters = 3\n")
         proj_dir = tmp_path / "proj"
         (proj_dir / "config").mkdir(parents=True)
-        (proj_dir / "config" / "config.toml").write_text(
-            "\n".join(
-                [
-                    "[exec]",
-                    'runner = "proj-runner"',
-                ]
-            )
-        )
-
+        (proj_dir / "config" / "config.toml").write_text("[exec]\nmax-iters = 7\n")
         cfg = load_exec_config(home=home, proj_dir=proj_dir, cwd=tmp_path)
-        assert cfg.runner == "proj-runner"
-        # default_loop_limit comes from home config since project doesn't override
-        assert cfg.default_loop_limit == 3
+        assert cfg.default_loop_limit == 7
 
     def test_command_name_selects_sub_table(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
-        home.mkdir()
-        (home / ".agm").mkdir()
-        (home / ".agm" / "config.toml").write_text(
-            "\n".join(
-                [
-                    "[exec]",
-                    'runner = "default-runner"',
-                    "",
-                    "[exec.myflow]",
-                    'runner = "flow-runner"',
-                ]
-            )
-        )
-
+        config = home / ".agm" / "config.toml"
+        config.parent.mkdir(parents=True)
+        config.write_text("[exec]\nmax-iters = 3\n\n[exec.myflow]\nmax-iters = 7\n")
         cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path, command_name="myflow")
-        assert cfg.runner == "flow-runner"
+        assert cfg.default_loop_limit == 7
 
     def test_command_name_none_uses_base_table(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
-        home.mkdir()
-        (home / ".agm").mkdir()
-        (home / ".agm" / "config.toml").write_text(
-            "\n".join(
-                [
-                    "[exec]",
-                    'runner = "default-runner"',
-                    "",
-                    "[exec.myflow]",
-                    'runner = "flow-runner"',
-                ]
-            )
-        )
-
-        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path, command_name=None)
-        assert cfg.runner == "default-runner"
+        config = home / ".agm" / "config.toml"
+        config.parent.mkdir(parents=True)
+        config.write_text("[exec]\nmax-iters = 3\n\n[exec.myflow]\nmax-iters = 7\n")
+        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
+        assert cfg.default_loop_limit == 3
 
     def test_numeric_timeout(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
-        home.mkdir()
-        (home / ".agm").mkdir()
-        (home / ".agm" / "config.toml").write_text(
-            "\n".join(
-                [
-                    "[exec]",
-                    "timeout = 60",
-                ]
-            )
-        )
+        config = home / ".agm" / "config.toml"
+        config.parent.mkdir(parents=True)
+        config.write_text("[exec]\ntimeout = 60\n")
         cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
         assert cfg.timeout == pytest.approx(60.0)
 
-    def test_agents_command_name_does_not_merge_agents_as_scalar(self, tmp_path: Path) -> None:
-        """``command_name="agents"`` must not treat ``[exec.agents]`` as a per-command override.
-
-        The reserved ``[exec.agents]`` map must stay intact and must not be merged
-        into the base table as scalar config (which would, e.g., clobber ``runner``).
-        """
+    def test_log_settings_loaded_from_config(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
-        home.mkdir()
-        (home / ".agm").mkdir()
-        (home / ".agm" / "config.toml").write_text(
+        config = home / ".agm" / "config.toml"
+        config.parent.mkdir(parents=True)
+        log_path = tmp_path / "trace.jsonl"
+        config.write_text(f"[exec]\nlog = true\nlog-file = {str(log_path)!r}\n")
+        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
+        assert cfg.log is True
+        assert cfg.log_file == str(log_path)
+
+    def test_escaped_log_file_interpolation_is_not_reapplied(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("NAME", "expanded")
+        home = tmp_path / "home"
+        config_dir = home / ".agm"
+        literal_dir = config_dir / "%{NAME}"
+        literal_dir.mkdir(parents=True)
+        (literal_dir / "base.jsonl").touch()
+        (literal_dir / "nested.jsonl").touch()
+        (config_dir / "config.toml").write_text(
             "\n".join(
                 [
                     "[exec]",
-                    'runner = "default-runner"',
+                    'log-file = "\\\\%{NAME}/base.jsonl"',
                     "",
-                    "[exec.agents]",
-                    'reviewer = "claude -p"',
-                    'impl = "codex exec"',
+                    "[exec.myflow]",
+                    'log-file = "\\\\%{NAME}/nested.jsonl"',
                 ]
             )
         )
 
-        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path, command_name="agents")
-        # The base [exec] scalars are unchanged.
-        assert cfg.runner == "default-runner"
-        # The agents map is preserved intact, not merged in as scalar config.
-        assert cfg.agents == {"reviewer": "claude -p", "impl": "codex exec"}
+        base = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
+        nested = load_exec_config(home=home, proj_dir=None, cwd=tmp_path, command_name="myflow")
 
-    def test_empty_agent_value_skipped(self, tmp_path: Path) -> None:
-        """Agent entries with empty/blank values are ignored."""
-        home = tmp_path / "home"
-        home.mkdir()
-        (home / ".agm").mkdir()
-        (home / ".agm" / "config.toml").write_text(
-            "\n".join(
-                [
-                    "[exec.agents]",
-                    'good = "claude -p"',
-                    'bad = ""',
-                ]
-            )
-        )
-        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
-        assert "good" in cfg.agents
-        assert "bad" not in cfg.agents
-
-    def test_log_true_loaded_from_config(self, tmp_path: Path) -> None:
-        home = tmp_path / "home"
-        home.mkdir()
-        (home / ".agm").mkdir()
-        (home / ".agm" / "config.toml").write_text("[exec]\nlog = true\n")
-        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
-        assert cfg.log is True
-
-    def test_log_false_by_default(self, tmp_path: Path) -> None:
-        home = tmp_path / "home"
-        home.mkdir()
-        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
-        assert cfg.log is False
-
-    def test_log_file_loaded_from_config(self, tmp_path: Path) -> None:
-        home = tmp_path / "home"
-        home.mkdir()
-        (home / ".agm").mkdir()
-        log_path = tmp_path / "trace.jsonl"
-        (home / ".agm" / "config.toml").write_text(f"[exec]\nlog-file = {str(log_path)!r}\n")
-        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
-        assert cfg.log_file == str(log_path)
-
-    def test_log_file_none_by_default(self, tmp_path: Path) -> None:
-        home = tmp_path / "home"
-        home.mkdir()
-        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
-        assert cfg.log_file is None
+        assert base.log_file == str(literal_dir / "base.jsonl")
+        assert nested.log_file == str(literal_dir / "nested.jsonl")
 
 
 class TestProgramConfig:
     def test_load_program_config_from_toml(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
-        home.mkdir()
-        (home / ".agm").mkdir()
-        (home / ".agm" / "config.toml").write_text(
-            "\n".join(["[demo]", 'topic = "docs"', "count = 3"])
-        )
-
-        cfg = load_program_config(
-            "demo",
-            home=home,
-            proj_dir=None,
-            cwd=tmp_path,
-        )
-        assert cfg == {"topic": "docs", "count": 3}
+        config = home / ".agm" / "config.toml"
+        config.parent.mkdir(parents=True)
+        config.write_text('[demo]\ntopic = "docs"\ncount = 3\n')
+        assert load_program_config("demo", home=home, proj_dir=None, cwd=tmp_path) == {
+            "topic": "docs",
+            "count": 3,
+        }
 
     def test_program_config_from_merged_non_table_is_empty(self) -> None:
         assert program_config_from_merged({"demo": "not-a-table"}, "demo") == {}
@@ -274,64 +197,29 @@ class TestProgramConfig:
 
     def test_program_config_from_merged_returns_all_keys(self) -> None:
         merged = {"demo": {"topic": "docs", "timeout": "60s", "count": 3}}
-        cfg = program_config_from_merged(merged, "demo")
-        assert cfg == {"topic": "docs", "timeout": "60s", "count": 3}
+        assert program_config_from_merged(merged, "demo") == {
+            "topic": "docs",
+            "timeout": "60s",
+            "count": 3,
+        }
 
 
 class TestExecConfigProgramTableOverride:
     def test_program_table_overrides_exec_engine_keys(self, tmp_path: Path) -> None:
-        """[<program>] engine keys override the global [exec] values."""
         home = tmp_path / "home"
-        home.mkdir()
-        (home / ".agm").mkdir()
-        (home / ".agm" / "config.toml").write_text(
-            "\n".join(
-                [
-                    "[exec]",
-                    'runner = "global-runner"',
-                    "max-iters = 5",
-                    "",
-                    "[myprog]",
-                    'runner = "prog-runner"',
-                    "max-iters = 10",
-                ]
-            )
-        )
+        config = home / ".agm" / "config.toml"
+        config.parent.mkdir(parents=True)
+        config.write_text("[exec]\nmax-iters = 5\n\n[myprog]\nmax-iters = 10\n")
         merged = load_merged_config(home=home, proj_dir=None, cwd=tmp_path)
-        prog_table = program_config_from_merged(merged, "myprog")
-        cfg = exec_config_from_merged(merged, program_table=prog_table)
-        assert cfg.runner == "prog-runner"
+        cfg = exec_config_from_merged(
+            merged, program_table=program_config_from_merged(merged, "myprog")
+        )
         assert cfg.default_loop_limit == 10
 
     def test_program_table_partial_override(self, tmp_path: Path) -> None:
-        """[<program>] overrides only the keys it specifies; others fall back to [exec]."""
-        home = tmp_path / "home"
-        home.mkdir()
-        (home / ".agm").mkdir()
-        (home / ".agm" / "config.toml").write_text(
-            "\n".join(
-                [
-                    "[exec]",
-                    'runner = "global-runner"',
-                    "max-iters = 7",
-                    "",
-                    "[myprog]",
-                    'runner = "prog-runner"',
-                ]
-            )
+        merged = {"exec": {"max-iters": 7, "strict-json": False}, "myprog": {"strict-json": True}}
+        cfg = exec_config_from_merged(
+            merged, program_table=program_config_from_merged(merged, "myprog")
         )
-        merged = load_merged_config(home=home, proj_dir=None, cwd=tmp_path)
-        prog_table = program_config_from_merged(merged, "myprog")
-        cfg = exec_config_from_merged(merged, program_table=prog_table)
-        assert cfg.runner == "prog-runner"
-        assert cfg.default_loop_limit == 7  # from [exec], not overridden
-
-    def test_no_program_table_uses_exec_defaults(self, tmp_path: Path) -> None:
-        """Without a program table, exec_config_from_merged uses [exec] alone."""
-        home = tmp_path / "home"
-        home.mkdir()
-        (home / ".agm").mkdir()
-        (home / ".agm" / "config.toml").write_text("\n".join(["[exec]", 'runner = "exec-runner"']))
-        merged = load_merged_config(home=home, proj_dir=None, cwd=tmp_path)
-        cfg = exec_config_from_merged(merged)
-        assert cfg.runner == "exec-runner"
+        assert cfg.default_loop_limit == 7
+        assert cfg.strict_json is True

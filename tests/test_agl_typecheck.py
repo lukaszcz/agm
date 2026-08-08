@@ -26,7 +26,7 @@ import pytest
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.parser import parse_program
-from agm.agl.scope import AglScopeError, resolve_module
+from agm.agl.scope import AglScopeError
 from agm.agl.scope.symbols import BinderKind, BindingRef, ScopeNode
 from agm.agl.scope.symbols import ModuleResolution as _ModuleResolution
 from agm.agl.semantics.type_table import (
@@ -47,7 +47,6 @@ from agm.agl.semantics.types import (
     is_json_shaped,
 )
 from agm.agl.syntax.nodes import (
-    AgentDecl,
     ArrayLit,
     AsPattern,
     AssignStmt,
@@ -78,6 +77,7 @@ from agm.agl.syntax.nodes import (
     Program,
     Raise,
     Return,
+    ScopeRegion,
     StringLit,
     Try,
     TypeApply,
@@ -88,7 +88,6 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import (
-    AgentT,
     ArrayT,
     BoolT,
     DictT,
@@ -100,7 +99,6 @@ from agm.agl.syntax.types import (
     UnitT,
 )
 from agm.agl.typecheck import (
-    AgentType,
     AglTypeError,
     ArrayType,
     BoolType,
@@ -122,7 +120,6 @@ from agm.agl.typecheck import (
     TypeEnvironment,
     UnitType,
     assert_checked_module_closed,
-    check_module,
 )
 from agm.agl.typecheck.builder import _TypeBuilder
 from agm.agl.typecheck.env import (
@@ -132,7 +129,8 @@ from agm.agl.typecheck.env import (
     OutputContractSpec,
 )
 from agm.agl.typecheck.function_inference import resolve_function_header
-from tests._agl_helpers import all_node_ids
+from tests._agl_helpers import all_node_ids, strip_decl_ids
+from tests.agl.module_graph import check_resolved, resolve_and_check_entry, resolve_entry
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -141,8 +139,6 @@ from tests._agl_helpers import all_node_ids
 
 def default_capabilities() -> HostCapabilities:
     return HostCapabilities(
-        agent_names=frozenset(),
-        has_default_agent=True,
         supports_shell_exec=True,
         codec_kinds={
             "text": frozenset({"text"}),
@@ -155,16 +151,12 @@ def default_capabilities() -> HostCapabilities:
 
 def text_only_caps() -> HostCapabilities:
     return HostCapabilities(
-        agent_names=frozenset(),
-        has_default_agent=True,
         codec_kinds={"text": frozenset({"text"})},
     )
 
 
 def no_agent_caps() -> HostCapabilities:
     return HostCapabilities(
-        agent_names=frozenset(),
-        has_default_agent=False,
         supports_shell_exec=True,
         codec_kinds={
             "text": frozenset({"text"}),
@@ -177,35 +169,40 @@ def no_agent_caps() -> HostCapabilities:
 
 def no_exec_caps() -> HostCapabilities:
     return HostCapabilities(
-        agent_names=frozenset(),
-        has_default_agent=True,
         supports_shell_exec=False,
         codec_kinds={"text": frozenset({"text"})},
     )
 
 
-def parse_resolve_check(source: str, capabilities: HostCapabilities | None = None) -> CheckedModule:
+def parse_resolve_check(
+    source: str, capabilities: HostCapabilities | None = None, *, default_stdlib: bool = True
+) -> CheckedModule:
     if capabilities is None:
         capabilities = default_capabilities()
-    prog = parse_program(source)
-    return check_module(resolve_module(prog), capabilities)
+    return resolve_and_check_entry(source, capabilities, default_stdlib=default_stdlib)
 
 
-def accept_type(source: str, capabilities: HostCapabilities | None = None) -> CheckedModule:
-    return parse_resolve_check(source, capabilities)
+def accept_type(
+    source: str, capabilities: HostCapabilities | None = None, *, default_stdlib: bool = True
+) -> CheckedModule:
+    return parse_resolve_check(source, capabilities, default_stdlib=default_stdlib)
 
 
-def reject_type(source: str, capabilities: HostCapabilities | None = None) -> AglTypeError:
+def reject_type(
+    source: str, capabilities: HostCapabilities | None = None, *, default_stdlib: bool = True
+) -> AglTypeError:
     """Assert that the source is rejected with an AglTypeError."""
     with pytest.raises(AglTypeError) as exc_info:
-        parse_resolve_check(source, capabilities)
+        parse_resolve_check(source, capabilities, default_stdlib=default_stdlib)
     return exc_info.value
 
 
-def reject_any(source: str, capabilities: HostCapabilities | None = None) -> Exception:
+def reject_any(
+    source: str, capabilities: HostCapabilities | None = None, *, default_stdlib: bool = True
+) -> Exception:
     """Assert that the source is rejected with any kind of error."""
     with pytest.raises(Exception) as exc_info:
-        parse_resolve_check(source, capabilities)
+        parse_resolve_check(source, capabilities, default_stdlib=default_stdlib)
     return exc_info.value
 
 
@@ -270,10 +267,6 @@ class TestBottomType:
     def test_kind(self) -> None:
         assert BottomType().kind == "bottom"
 
-    def test_is_assignable_to_any(self) -> None:
-        for t in (TextType(), IntType(), BoolType(), UnitType(), AgentType(), JsonType()):
-            assert is_assignable(BottomType(), t)
-
     def test_not_json_shaped(self) -> None:
         assert not is_json_shaped(BottomType())
 
@@ -312,9 +305,6 @@ class TestIsJsonShaped:
     def test_dict_of_json_shaped(self) -> None:
         assert is_json_shaped(DictType(value=TextType()))
 
-    def test_dict_of_non_json(self) -> None:
-        assert not is_json_shaped(DictType(value=AgentType()))
-
     def test_record_not_json_shaped(self) -> None:
         rt = RecordType(name="R")
         assert not is_json_shaped(rt)
@@ -328,9 +318,6 @@ class TestIsJsonShaped:
 
     def test_unit_not_json_shaped(self) -> None:
         assert not is_json_shaped(UnitType())
-
-    def test_agent_not_json_shaped(self) -> None:
-        assert not is_json_shaped(AgentType())
 
     def test_function_not_json_shaped(self) -> None:
         assert not is_json_shaped(FunctionType(params=(IntType(),), result=IntType()))
@@ -369,9 +356,6 @@ class TestComparableTypes:
         assert comparable_types(IntType(), DecimalType(), _EMPTY_TABLE)
         assert comparable_types(DecimalType(), IntType(), _EMPTY_TABLE)
 
-    def test_agent_not_comparable(self) -> None:
-        assert not comparable_types(AgentType(), AgentType(), _EMPTY_TABLE)
-
     def test_function_not_comparable(self) -> None:
         ft = FunctionType(params=(), result=IntType())
         assert not comparable_types(ft, ft, _EMPTY_TABLE)
@@ -394,11 +378,6 @@ class TestComparableTypes:
         ft = FunctionType(params=(), result=IntType())
         assert not comparable_types(ArrayType(elem=ft), ArrayType(elem=ft), _EMPTY_TABLE)
 
-    def test_array_of_agent_not_comparable(self) -> None:
-        assert not comparable_types(
-            ArrayType(elem=AgentType()), ArrayType(elem=AgentType()), _EMPTY_TABLE
-        )
-
     def test_array_of_unit_not_comparable(self) -> None:
         assert not comparable_types(
             ArrayType(elem=UnitType()), ArrayType(elem=UnitType()), _EMPTY_TABLE
@@ -408,81 +387,47 @@ class TestComparableTypes:
         ft = FunctionType(params=(IntType(),), result=TextType())
         assert not comparable_types(DictType(value=ft), DictType(value=ft), _EMPTY_TABLE)
 
-    def test_record_with_agent_field_not_comparable(self) -> None:
-        rt = RecordType(name="R")
-        typedef = TypeDef(
-            kind="record", name="R", module_id=rt.module_id, fields=(("a", AgentType()),)
-        )
-        assert not comparable_types(rt, rt, _table_for(typedef))
-
     def test_record_with_function_field_not_comparable(self) -> None:
         ft = FunctionType(params=(), result=IntType())
-        rt = RecordType(name="R")
-        typedef = TypeDef(kind="record", name="R", module_id=rt.module_id, fields=(("f", ft),))
+        typedef = TypeDef(
+            kind="record", name="R", module_id=ENTRY_ID, fields=(("f", ft),), decl_node_id=1
+        )
+        rt = typedef.handle()
         assert not comparable_types(rt, rt, _table_for(typedef))
 
     def test_enum_with_function_field_not_comparable(self) -> None:
         ft = FunctionType(params=(), result=IntType())
-        et = EnumType(name="E")
         typedef = TypeDef(
-            kind="enum", name="E", module_id=et.module_id, variants=(("A", (("fn", ft),)),)
+            kind="enum",
+            name="E",
+            module_id=ENTRY_ID,
+            variants=(("A", (("fn", ft),)),),
+            decl_node_id=1,
         )
+        et = typedef.handle()
         assert not comparable_types(et, et, _table_for(typedef))
 
     def test_exception_with_function_field_not_comparable(self) -> None:
         ft = FunctionType(params=(), result=IntType())
-        et = ExceptionType(name="E")
         typedef = TypeDef(
-            kind="exception", name="E", module_id=et.module_id, fields=(("handler", ft),)
+            kind="exception",
+            name="E",
+            module_id=ENTRY_ID,
+            fields=(("handler", ft),),
+            decl_node_id=1,
         )
+        et = typedef.handle()
         assert not comparable_types(et, et, _table_for(typedef))
 
-    def test_exception_base_with_non_comparable_descendant_not_comparable(self) -> None:
-        base = ExceptionType(name="Base")
-        child = ExceptionType(name="Child")
-        table = _table_for(
-            TypeDef(kind="exception", name="Base", module_id=base.module_id),
-            TypeDef(
-                kind="exception",
-                name="Child",
-                module_id=child.module_id,
-                base=(base.module_id, base.name),
-                fields=(("assignee", AgentType()),),
-            ),
-        )
-        assert not comparable_types(base, base, table)
-
-    def test_exception_sibling_of_non_comparable_descendant_remains_comparable(self) -> None:
-        base = ExceptionType(name="Base")
-        bad = ExceptionType(name="Bad")
-        good = ExceptionType(name="Good")
-        table = _table_for(
-            TypeDef(kind="exception", name="Base", module_id=base.module_id),
-            TypeDef(
-                kind="exception",
-                name="Bad",
-                module_id=bad.module_id,
-                base=(base.module_id, base.name),
-                fields=(("assignee", AgentType()),),
-            ),
-            TypeDef(
-                kind="exception",
-                name="Good",
-                module_id=good.module_id,
-                base=(base.module_id, base.name),
-                fields=(("code", IntType()),),
-            ),
-        )
-        assert comparable_types(good, good, table)
-
     def test_record_with_only_scalars_comparable(self) -> None:
-        rt = RecordType(name="R")
         typedef = TypeDef(
             kind="record",
             name="R",
-            module_id=rt.module_id,
+            module_id=ENTRY_ID,
             fields=(("x", IntType()), ("y", TextType())),
+            decl_node_id=1,
         )
+        rt = typedef.handle()
         assert comparable_types(rt, rt, _table_for(typedef))
 
     def test_array_of_int_comparable(self) -> None:
@@ -512,12 +457,6 @@ class TestIsAssignable:
         assert is_assignable(DecimalType(), JsonType())
         assert is_assignable(JsonType(), JsonType())
 
-    def test_json_rejects_non_shaped(self) -> None:
-        rt = RecordType(name="R")
-        assert not is_assignable(rt, JsonType())
-        assert not is_assignable(UnitType(), JsonType())
-        assert not is_assignable(AgentType(), JsonType())
-
     def test_json_rejects_json_shaped_container(self) -> None:
         """An array/dict source is not implicitly absorbed into json — even one
         that is JSON-shaped (is_json_shaped stays True; only is_assignable
@@ -545,35 +484,14 @@ class TestIsAssignable:
 
 
 @pytest.mark.parametrize("type_ref", ("A::Missing", "A::Missing[int]"))
-def test_missing_type_under_recognized_local_scope_is_focused_without_module_graph(
-    type_ref: str,
-) -> None:
+def test_missing_type_under_recognized_local_scope_is_focused(type_ref: str) -> None:
+    """A locally-scoped-region lookup miss reports the scoped name, not a
+    generic "unknown module" diagnostic — a property of local ``scope``
+    regions, independent of whether a module graph or the standard library is
+    in scope."""
     source = f"scope A\ndef member() -> int = 1\nend A\ndef use(value: {type_ref}) -> int = 1"
-
-    with pytest.raises(AglTypeError, match="Unknown scoped type 'A::Missing'"):
-        parse_resolve_check(source)
-
-
-def test_opened_local_scope_type_resolves_without_module_graph() -> None:
-    parse_resolve_check(
-        "open Shapes\n"
-        "scope Shapes\n"
-        "record Point\n"
-        "  value: int\n"
-        "end Shapes\n"
-        "def identity(value: Point) -> Point = value"
-    )
-
-
-def test_opened_local_generic_type_resolves_without_module_graph() -> None:
-    parse_resolve_check(
-        "open Shapes using Box as Container\n"
-        "scope Shapes\n"
-        "record Box[T]\n"
-        "  value: T\n"
-        "end Shapes\n"
-        "def identity(value: Container[int]) -> Container[int] = value"
-    )
+    err = reject_type(source)
+    assert "Unknown scoped type 'A::Missing'" in str(err)
 
 
 # ---------------------------------------------------------------------------
@@ -721,11 +639,6 @@ class TestTypeEnvironment:
         env = TypeEnvironment()
         sp = mk_span()
         assert env.resolve_type_expr(UnitT(span=sp, node_id=1)) == UnitType()
-
-    def test_resolve_type_expr_agent(self) -> None:
-        env = TypeEnvironment()
-        sp = mk_span()
-        assert env.resolve_type_expr(AgentT(span=sp, node_id=1)) == AgentType()
 
     def test_resolve_array_type(self) -> None:
         env = TypeEnvironment()
@@ -940,7 +853,13 @@ class TestTypeEnvironment:
         previous = TypeEnvironment()
         restored = RecordType(name="Restored")
         previous.type_table.register(
-            TypeDef(kind="record", name="Restored", module_id=ENTRY_ID, fields=(("x", IntType()),))
+            TypeDef(
+                kind="record",
+                name="Restored",
+                module_id=ENTRY_ID,
+                fields=(("x", IntType()),),
+                decl_node_id=1,
+            )
         )
         previous.register_type("Restored", restored)
         previous.register_alias("Restored", IntT(span=mk_span(), node_id=1), type_params=("T",))
@@ -1040,13 +959,22 @@ class TestTypeEnvironment:
 
         env.unregister_name("Foo")
 
+        # The single-slot "what does this bare name mean now" tables drop
+        # Foo's entry: a redeclaration under this name owns the only answer
+        # they may ever give.
         assert env.get_type("Foo") is None
         assert env.get_alias_type_params("Foo") == ()
         assert env.get_generic_type("Foo") is None
-        assert env.get_constructor_signature("Foo", None) is None
-        assert env.get_constructor_signature("Foo", "Some") is None
-        assert env.get_constructor_field_kinds("Foo", None) is None
-        assert env.get_constructor_field_kinds("Foo", "Some") is None
+        # Constructor signatures and field kinds are untouched: they answer
+        # "what shape does this SPECIFIC owner/variant have", which stays
+        # correct for a retained value of Foo's superseded declaration even
+        # after the name "Foo" itself is redeclared — a key the redeclaration
+        # does define is overwritten by its own registration regardless (see
+        # ``TypeEnvironment.unregister_name``).
+        assert env.get_constructor_signature("Foo", None) is not None
+        assert env.get_constructor_signature("Foo", "Some") is not None
+        assert env.get_constructor_field_kinds("Foo", None) is not None
+        assert env.get_constructor_field_kinds("Foo", "Some") is not None
         assert env.get_constructor_signature("Bar", None) == bar_sig
         assert env.get_constructor_field_kinds("Bar", None) == ()
 
@@ -1336,6 +1264,735 @@ class TestAssignImmutability:
         assert r.resolved.program is not None
 
 
+class TestScopedBindingTypes:
+    """A scoped ``let``/``var``'s type is inferred from its initializer,
+    exactly as at the root, and checked against an explicit annotation on
+    either spelling. Visibility from inside the region, a nested region, a
+    qualified path outside, and after an ``open`` all resolve to the same
+    binding type via the node-id-keyed binding environment.
+    """
+
+    def test_type_inferred_from_initializer(self) -> None:
+        r = accept_type("scope Config\nlet retries = 3\nend Config\nConfig::retries")
+        region = r.resolved.program.body.items[0]
+        assert isinstance(region, ScopeRegion)
+        let_decl = next(item for item in region.items if isinstance(item, LetDecl))
+        assert r.type_env.get_binding_type(let_decl.pattern.node_id) == IntType()
+
+    def test_annotation_accepted_on_region_form(self) -> None:
+        r = accept_type("scope Config\nvar attempts: int = 0\nend Config\nConfig::attempts")
+        region = r.resolved.program.body.items[0]
+        assert isinstance(region, ScopeRegion)
+        var_decl = next(item for item in region.items if isinstance(item, VarDecl))
+        assert r.type_env.get_binding_type(var_decl.node_id) == IntType()
+
+    def test_annotation_accepted_on_shorthand_form(self) -> None:
+        r = accept_type("var Config::attempts: int = 0\nConfig::attempts")
+        var_decl = next(item for item in r.resolved.program.body.items if isinstance(item, VarDecl))
+        assert r.type_env.get_binding_type(var_decl.node_id) == IntType()
+
+    @pytest.mark.parametrize(
+        ("source", "line"),
+        (
+            ('scope Config\nvar attempts: int = "nope"\nend Config\n()', 2),
+            ('var Config::attempts: int = "nope"\n()', 1),
+        ),
+        ids=("region", "shorthand"),
+    )
+    def test_annotation_mismatch_reports_the_binders_span(self, source: str, line: int) -> None:
+        err = reject_type(source)
+        d = err.to_diagnostic()
+        assert d.line == line
+        assert "int" in d.message and "text" in d.message
+
+    def test_visible_from_nested_region_qualified_path_and_after_open(self) -> None:
+        r = accept_type(
+            "open Config\n"
+            "scope Config\n"
+            "let retries = 3\n"
+            "scope Inner\n"
+            "def read() -> int = retries\n"
+            "end Inner\n"
+            "end Config\n"
+            "let a = Config::retries\n"
+            "let b = retries\n"
+            "let c = Config::Inner::read()\n"
+            "()"
+        )
+        assert r.resolved.program is not None
+
+    def test_scoped_binding_holding_a_function_is_callable(self) -> None:
+        r = accept_type(
+            "scope Config\n"
+            "def helper() -> int = 5\n"
+            "let value_fn = helper\n"
+            "end Config\n"
+            "Config::value_fn()"
+        )
+        assert r.resolved.program is not None
+
+    def test_region_form_annotation_resolves_a_bare_sibling_record(self) -> None:
+        r = accept_type("scope A\nrecord R(v: int)\nlet x: R = R(v = 1)\nend A\nA::x.v")
+        assert r.resolved.program is not None
+
+    def test_region_form_var_annotation_resolves_a_bare_sibling_record(self) -> None:
+        r = accept_type("scope A\nrecord R(v: int)\nvar x: R = R(v = 1)\nend A\nA::x.v")
+        assert r.resolved.program is not None
+
+    def test_shorthand_form_annotation_resolves_a_bare_sibling_record(self) -> None:
+        r = accept_type("scope A\nrecord R(v: int)\nend A\nlet A::x: R = A::R(v = 1)\nA::x.v")
+        assert r.resolved.program is not None
+
+    def test_shorthand_form_var_annotation_resolves_a_bare_sibling_record(self) -> None:
+        r = accept_type("scope A\nrecord R(v: int)\nend A\nvar A::x: R = A::R(v = 1)\nA::x.v")
+        assert r.resolved.program is not None
+
+    def test_shorthand_pattern_binder_annotation_resolves_a_bare_sibling_record(self) -> None:
+        """The ``let A::r: R = A::R(v = 1)`` shorthand names both the binder and
+        its own type with the same bare sibling spelling."""
+        r = accept_type("scope A\nrecord R(v: int)\nend A\nlet A::r: R = A::R(v = 1)\nA::r.v")
+        assert r.resolved.program is not None
+
+    def test_region_form_annotation_resolves_a_generic_application(self) -> None:
+        r = accept_type(
+            "scope A\nrecord Box[T](value: T)\nlet b: Box[int] = Box(value = 1)\nend A\nA::b.value"
+        )
+        assert r.resolved.program is not None
+
+    def test_region_form_annotation_resolves_a_function_type(self) -> None:
+        r = accept_type(
+            "scope A\n"
+            "record R(v: int)\n"
+            "let f: (R) -> int = fn(r: R) -> int => r.v\n"
+            "end A\n"
+            "A::f(A::R(v = 1))"
+        )
+        assert r.resolved.program is not None
+
+    def test_region_form_cast_target_resolves_a_bare_sibling_record(self) -> None:
+        r = accept_type(
+            "scope A\n"
+            "record R(v: int)\n"
+            'let j: json = exec("ls", format = "json")\n'
+            "let r = j as R\n"
+            "end A\n"
+            "A::r.v"
+        )
+        assert r.resolved.program is not None
+
+    def test_region_form_exec_result_type_resolves_a_bare_sibling_record(self) -> None:
+        r = accept_type(
+            "scope A\n"
+            "record Out(value: int)\n"
+            'let o: Out = exec("run", format = "json")\n'
+            "end A\n"
+            "A::o.value"
+        )
+        assert r.resolved.program is not None
+
+    def test_region_form_annotation_resolves_a_bare_sibling_type_alias(self) -> None:
+        r = accept_type("scope A\ntype Alias = int\nlet x: Alias = 3\nend A\nA::x")
+        assert r.resolved.program is not None
+
+    def test_annotation_in_a_local_let_still_resolves_the_enclosing_defs_own_scope(self) -> None:
+        """A ``let`` local to a ``def`` body has no scope path of its own; its
+        annotation must still resolve against the enclosing ``def``'s scope,
+        not reset to the module root."""
+        r = accept_type(
+            "scope A\n"
+            "record R(v: int)\n"
+            "def f() -> int =\n"
+            "  let x: R = R(v = 1)\n"
+            "  x.v\n"
+            "end A\n"
+            "A::f()"
+        )
+        assert r.resolved.program is not None
+
+    def test_scoped_def_and_binding_cannot_share_a_name(self) -> None:
+        """Already enforced by the scope pass; pinned here so the collision is
+        confirmed not to reach typechecking as an unresolved-reference crash."""
+        with pytest.raises(AglScopeError):
+            parse_resolve_check("scope Config\ndef f() -> int = 0\nlet f = 1\nend Config\n()")
+
+
+class TestScopedParamTypes:
+    """A scoped `param`'s type is annotated, defaulted, or inferred exactly as
+    a root `param`, keyed by node id like every other binding.
+    """
+
+    def test_annotation_and_default_combine(self) -> None:
+        r = accept_type('scope Deploy\nparam region: text = "eu"\nend Deploy\nDeploy::region')
+        region = r.resolved.program.body.items[0]
+        assert isinstance(region, ScopeRegion)
+        (param_decl,) = [item for item in region.items if isinstance(item, ParamDecl)]
+        assert r.type_env.get_binding_type(param_decl.node_id) == TextType()
+
+    def test_type_inferred_from_default_without_annotation(self) -> None:
+        r = accept_type("scope Deploy\nparam replicas = 3\nend Deploy\nDeploy::replicas")
+        region = r.resolved.program.body.items[0]
+        assert isinstance(region, ScopeRegion)
+        (param_decl,) = [item for item in region.items if isinstance(item, ParamDecl)]
+        assert r.type_env.get_binding_type(param_decl.node_id) == IntType()
+
+    def test_defaults_to_text_without_annotation_or_default(self) -> None:
+        r = accept_type("scope Deploy\nparam region\nend Deploy\nDeploy::region")
+        region = r.resolved.program.body.items[0]
+        assert isinstance(region, ScopeRegion)
+        (param_decl,) = [item for item in region.items if isinstance(item, ParamDecl)]
+        assert r.type_env.get_binding_type(param_decl.node_id) == TextType()
+
+    def test_annotation_mismatch_reports_the_params_span(self) -> None:
+        err = reject_type('scope Deploy\nparam region: int = "eu"\nend Deploy\n()')
+        d = err.to_diagnostic()
+        assert d.line == 2
+        assert "int" in d.message and "text" in d.message
+
+    def test_annotation_resolves_a_bare_sibling_type_declared_in_the_same_region(self) -> None:
+        r = accept_type(
+            "scope Deploy\nrecord Target(name: text)\nparam target: Target\nend Deploy\n"
+            "Deploy::target"
+        )
+        assert r.resolved.program is not None
+
+    def test_scoped_param_and_def_cannot_share_a_name(self) -> None:
+        """Already enforced by the scope pass; pinned here so the collision is
+        confirmed not to reach typechecking as an unresolved-reference crash."""
+        with pytest.raises(AglScopeError):
+            parse_resolve_check("scope Deploy\ndef f() -> int = 0\nparam f\nend Deploy\n()")
+
+
+_EXEC_RESULT_FIELDS = "  stdout: text\n  exit_code: int\n  stderr: text\n  timed_out: bool\n"
+
+
+class TestScopedBuiltinTypes:
+    """A scoped ``builtin`` record/enum/exception keeps its declared scope
+    path as part of its nominal identity, following the same path-keyed
+    identity every other scoped type already has.
+    """
+
+    def test_scoped_builtin_record_constructs_and_passes_at_its_own_path(self) -> None:
+        """A single scoped ``builtin record`` keeps its declared scope path
+        as part of its nominal identity, the same path-keyed identity every
+        other scoped type already has."""
+        r = accept_type(
+            f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n"
+            "def use(value: A::ExecResult) -> int = value.exit_code\n"
+            'use(A::ExecResult(stdout = "a", exit_code = 1, stderr = "", timed_out = false))\n',
+            default_stdlib=False,
+        )
+        assert r.resolved.program is not None
+        handle = r.type_env.get_type("A::ExecResult")
+        assert isinstance(handle, RecordType)
+        assert handle.scope_path == ("A",)
+
+    def test_scoped_builtin_enum_matches_at_its_own_path(self) -> None:
+        r = accept_type(
+            "scope A\nbuiltin\nenum ParsePolicy =\n  | Abort\n  | Retry(n: int)\nend A\n"
+            "def classify(value: A::ParsePolicy) -> text =\n"
+            "  case value of\n"
+            '    | A::ParsePolicy::Abort => "abort"\n'
+            '    | A::ParsePolicy::Retry(n) => "retry"\n'
+            "classify(A::ParsePolicy::Retry(n = 3))\n",
+            default_stdlib=False,
+        )
+        assert r.resolved.program is not None
+        handle = r.type_env.get_type("A::ParsePolicy")
+        assert isinstance(handle, EnumType)
+        assert handle.scope_path == ("A",)
+
+    def test_method_declared_on_a_scoped_builtin_receiver_is_callable_qualified(self) -> None:
+        """A method's receiver may be a ``builtin`` type declared inside a
+        named scope region, spelled ``A::Type::method`` at the root — the
+        same declaration form ordinary scoped-type methods use, since the
+        receiver resolves to the canonical nominal regardless of where the
+        method itself is spelled."""
+        checked = accept_type(
+            f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n"
+            "def A::ExecResult::describe(self) -> text = self.stdout\n"
+            'A::ExecResult(stdout = "a", exit_code = 1, stderr = "", timed_out = false)'
+            ".describe()",
+            default_stdlib=False,
+        )
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == TextType()
+
+    def test_method_declared_on_a_scoped_builtin_receiver_is_callable_bare_in_region(
+        self,
+    ) -> None:
+        """The same method may instead be declared bare inside the region
+        that declares its ``builtin`` receiver."""
+        checked = accept_type(
+            "scope A\n"
+            f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
+            "def ExecResult::describe(self) -> text = self.stdout\n"
+            "end A\n"
+            'A::ExecResult(stdout = "a", exit_code = 1, stderr = "", timed_out = false)'
+            ".describe()",
+            default_stdlib=False,
+        )
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == TextType()
+
+    def test_scoped_builtin_exception_raises_and_catches_at_its_own_path(self) -> None:
+        r = accept_type(
+            "scope A\n"
+            "builtin exception RangeError extends Exception()\n"
+            "def trigger() -> text =\n"
+            "  try\n"
+            '    raise RangeError(message = "boom")\n'
+            "  catch RangeError as e =>\n"
+            "    e.message\n"
+            "end A\n"
+            "A::trigger()\n",
+            default_stdlib=False,
+        )
+        assert r.resolved.program is not None
+        handle = r.type_env.get_type("A::RangeError")
+        assert isinstance(handle, ExceptionType)
+        assert handle.scope_path == ("A",)
+
+    def test_scoped_builtin_record_unknown_bare_name_rejected(self) -> None:
+        """The canonical-name whitelist still applies to a scoped declaration."""
+        err = reject_type(
+            "scope A\nbuiltin\nrecord Bogus\n  x: int\nend A\n()", default_stdlib=False
+        )
+        assert "bogus" in err.to_diagnostic().message.lower()
+
+    def test_scoped_builtin_record_shape_mismatch_rejected(self) -> None:
+        """A scoped ``builtin`` declaration must still match the canonical shape."""
+        err = reject_type(
+            "scope A\nbuiltin\nrecord ExecResult\n  x: int\nend A\n()", default_stdlib=False
+        )
+        assert "ExecResult" in err.to_diagnostic().message
+
+    def test_root_generic_builtin_record_is_rejected_too(self) -> None:
+        """Regression: at the root, a generic ``builtin record`` was
+        previously silently ACCEPTED (the canonical prelude ``TypeDef``
+        masked the mismatch and the shape check never ran) rather than
+        crashing — a bug independent of scope regions, fixed alongside the
+        scoped case."""
+        err = reject_type("builtin record ExecResult[T]\n  x: T\n\n()", default_stdlib=False)
+        assert "ExecResult" in err.to_diagnostic().message
+
+    def test_scoped_generic_builtin_record_is_rejected_with_a_proper_diagnostic(self) -> None:
+        """No canonical builtin type is generic, so this must be rejected as an
+        invalid shape, not crash re-homing a handle to a bare ``TypeDef`` that
+        never gets registered under its scoped key."""
+        err = reject_type(
+            "scope A\nbuiltin record ExecResult[T]\n  x: T\nend A\n()", default_stdlib=False
+        )
+        assert "ExecResult" in err.to_diagnostic().message
+
+    def test_scoped_generic_builtin_enum_is_rejected_with_a_proper_diagnostic(self) -> None:
+        err = reject_type(
+            "scope A\nbuiltin\nenum ParsePolicy[T] =\n  | Abort\n  | Retry(n: T)\nend A\n()",
+            default_stdlib=False,
+        )
+        assert "ParsePolicy" in err.to_diagnostic().message
+
+    def test_builtin_shape_check_reports_a_proper_diagnostic_for_a_cross_kind_name(self) -> None:
+        """``RangeError`` is a valid builtin name, but only as an exception —
+        declaring it as a record must report a clean diagnostic, not an
+        internal ``AssertionError`` with no message."""
+        err = reject_type(
+            "scope A\nbuiltin\nrecord RangeError\n  x: int\nend A\n()", default_stdlib=False
+        )
+        assert "RangeError" in err.to_diagnostic().message
+
+    def test_builtin_shape_check_reports_a_proper_diagnostic_at_the_root_too(self) -> None:
+        err = reject_type("builtin\nrecord RangeError\n  x: int\n\n()", default_stdlib=False)
+        assert "RangeError" in err.to_diagnostic().message
+
+    def test_scoped_exception_hierarchy_with_a_scoped_base_typechecks(self) -> None:
+        """Both the root exception and its subclass are declared inside the
+        same region: the subclass's resolved ``extends`` key carries the
+        region's scope path, which must compare equal to the canonical
+        (path-``()``) hierarchy once re-rooted."""
+        r = accept_type(
+            "scope A\n"
+            "builtin\n"
+            "exception Exception\n"
+            "  *\n"
+            "  message: text\n"
+            "builtin exception Abort extends Exception()\n"
+            "end A\n"
+            "()\n",
+            default_stdlib=False,
+        )
+        assert r.resolved.program is not None
+
+    def test_builtin_exception_extending_an_out_of_region_same_named_base_is_rejected(self) -> None:
+        """Only a base that re-roots onto the canonical (``std/core``, path
+        ``()``) frame names the canonical hierarchy root. An unrelated
+        exception that merely shares the name ``Exception``, declared outside
+        the ``builtin`` declaration's own region, is a different type, so the
+        shape check must still reject it."""
+        err = reject_type(
+            "scope A\n"
+            "exception Exception\n"
+            "  *\n"
+            "  message: text\n"
+            "scope B\n"
+            "builtin exception Abort extends Exception()\n"
+            "end B\n"
+            "end A\n"
+            "()\n",
+            default_stdlib=False,
+        )
+        assert "Abort" in err.to_diagnostic().message
+
+    def test_scoped_builtin_record_field_naming_a_sibling_scoped_nominal_typechecks(self) -> None:
+        """A record field referencing another builtin type declared in the
+        same region resolves under that region's scope path too, and must
+        compare equal to the canonical shape once re-rooted."""
+        r = accept_type(
+            "scope A\n"
+            "builtin\n"
+            "record OutputContract\n"
+            "  target_type: text\n"
+            "  codec_name: text\n"
+            "  strict_json: json\n"
+            "  format_instructions: text\n"
+            "  json_schema: json\n"
+            "  structured_exec: bool\n"
+            "builtin\n"
+            "enum OutputContractOption =\n"
+            "  | None\n"
+            "  | Some(value: OutputContract)\n"
+            "end A\n"
+            "()\n",
+            default_stdlib=False,
+        )
+        assert r.resolved.program is not None
+
+    def test_scoped_builtin_def_signature_naming_a_scoped_sibling_type_typechecks(self) -> None:
+        """A ``builtin def``'s declared result type names a builtin type
+        declared in the same region: the resolved signature's result type
+        carries that region's scope path and must validate against the
+        canonical (path-``()``) signature once re-rooted."""
+        r = accept_type(
+            f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}"
+            "builtin def exec(command: text) -> ExecResult\nend A\n()\n",
+            default_stdlib=False,
+        )
+        assert r.resolved.program is not None
+
+    @pytest.mark.parametrize("method", ("ask", "ask-request"))
+    def test_builtin_agent_method_with_explicit_type_args_cannot_be_a_value(
+        self, method: str
+    ) -> None:
+        err = reject_type(
+            f'let worker = AgentCommand("worker")\nlet f = worker.{method}::[text]\nf\n'
+        )
+        assert "built-in" in err.to_diagnostic().message.lower()
+        assert "value" in err.to_diagnostic().message.lower()
+
+    def test_scoped_builtin_agent_method_reroots_its_receiver_and_sibling_types(self) -> None:
+        """A scoped Agent method validates after removing its enclosing scope.
+
+        The receiver belongs to ``A::Agent`` while ``ParsePolicy`` is its
+        sibling at ``A``.  Both must reroot to the canonical host signature.
+        """
+        r = accept_type(
+            "scope A\n"
+            "builtin enum Agent\n"
+            "  | AgentCommand(command: text)\n"
+            "  | AgentClaude(model: text, thinking: text)\n"
+            "  | AgentCodex(model: text, thinking: text)\n"
+            "  | AgentPi(provider: text, model: text, thinking: text)\n"
+            "builtin enum ParsePolicy\n"
+            "  | Abort\n"
+            "  | Retry(n: int)\n"
+            "builtin def Agent::ask[T](\n"
+            "  self,\n"
+            "  prompt: text,\n"
+            '  format: text = "",\n'
+            "  strict_json: bool = false,\n"
+            "  on_parse_error: ParsePolicy = ParsePolicy::Abort,\n"
+            ") -> T\n"
+            "end A\n"
+            "()\n",
+            default_stdlib=False,
+        )
+        assert r.resolved.program is not None
+
+    def test_scoped_builtin_def_signature_naming_a_type_at_the_wrong_path_rejected(self) -> None:
+        """The re-rooted comparison must still discriminate a genuine
+        mismatch: a ``builtin def`` in one region naming a builtin type
+        declared in a DIFFERENT region does not re-root to the canonical
+        shape and must be rejected."""
+        err = reject_type(
+            f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n"
+            "scope B\nbuiltin def exec(command: text) -> A::ExecResult\nend B\n"
+            "()\n",
+            default_stdlib=False,
+        )
+        assert "exec" in err.to_diagnostic().message
+
+
+class TestBuiltinDeclarationUniqueness:
+    """A builtin declaration is unique at its complete scoped name.
+
+    This lets a root builtin and a builtin method under a receiver type coexist,
+    while duplicate declarations at one scope path remain invalid.
+    """
+
+    def test_same_builtin_type_at_distinct_scoped_names_is_accepted(self) -> None:
+        r = accept_type(
+            f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n"
+            f"scope B\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end B\n"
+            "()\n",
+            default_stdlib=False,
+        )
+        assert r.resolved.program is not None
+
+    def test_same_builtin_function_at_distinct_scoped_names_is_accepted(self) -> None:
+        r = accept_type(
+            "scope A\nbuiltin def print[T](value: T) -> unit\nend A\n"
+            "scope B\nbuiltin def print[T](value: T) -> unit\nend B\n"
+            "()\n",
+            default_stdlib=False,
+        )
+        assert r.resolved.program is not None
+
+    def test_same_scoped_builtin_declaration_is_rejected(self) -> None:
+        with pytest.raises(AglScopeError, match="already declared"):
+            parse_resolve_check(
+                f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n"
+                f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n"
+                "()\n",
+                default_stdlib=False,
+            )
+
+
+class TestBuiltinTypeModuleIdentity:
+    """A ``builtin`` declaration is a declaration of its own, homed in the
+    module that writes it.
+
+    These root declarations use names already provided at the root by
+    ``std/core``, so they run with ``default_stdlib=False``. The shipped
+    standard library's declaration remains a distinct nominal rather than a
+    re-homed shared sentinel.
+    """
+
+    def test_root_builtin_record_carries_the_entry_modules_own_identity(self) -> None:
+        """An entry-module ``builtin record ExecResult`` is not std/core's.
+
+        Written with no standard library loaded because ``std/core`` already
+        declares this root name. The entry module's declaration is therefore
+        the only root ``ExecResult`` in scope here.
+        """
+        from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID
+
+        checked = accept_type(
+            f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}()", default_stdlib=False
+        )
+        handle = checked.type_env.get_type("ExecResult")
+        assert isinstance(handle, RecordType)
+        assert handle.module_id == ENTRY_ID
+        assert handle.module_id != STD_CORE_ID
+
+    def test_root_builtin_exception_hierarchy_declared_without_the_stdlib_typechecks(self) -> None:
+        """A program without the standard library may declare its own root
+        (unscoped) ``builtin exception Exception`` hierarchy from scratch.
+
+        The subclass's ``extends Exception`` resolves to the entry module's
+        own root declaration, not the shipped standard library's; the
+        canonical-shape comparison must re-root that reference onto its own
+        declaring module before it matches the canonical (``std/core``)
+        shape, so this passes builtin shape validation. It uses
+        ``default_stdlib=False`` because ``std/core`` already declares root
+        ``Exception``.
+        """
+        r = accept_type(
+            "builtin\n"
+            "exception Exception\n"
+            "  *\n"
+            "  message: text\n"
+            "builtin exception RangeError extends Exception()\n"
+            "()\n",
+            default_stdlib=False,
+        )
+        assert r.resolved.program is not None
+
+    def test_shipped_stdlib_builtin_record_type_spells_bare_in_diagnostics(self) -> None:
+        """A type-mismatch diagnostic spells a built-in record type bare.
+
+        ``ExecResult``'s canonical (seeded) identity carries the shipped
+        standard library's own module (``std/core``); the message must still
+        read the bare name a program never declared anything of its own for,
+        not ``std/core::ExecResult``.
+        """
+        err = reject_type('let r: ExecResult = exec("ls")\nlet n: int = r\nn')
+        message = err.to_diagnostic().message
+        assert "ExecResult" in message
+        assert "std/core" not in message
+
+    def test_shipped_stdlib_builtin_exception_type_spells_bare_in_diagnostics(self) -> None:
+        """A type-mismatch diagnostic spells a built-in exception type bare."""
+        err = reject_type(
+            "def f() -> int =\n  try\n    1\n  catch RangeError as e =>\n    e\nf()\n"
+        )
+        message = err.to_diagnostic().message
+        assert "RangeError" in message
+        assert "std/core" not in message
+
+
+class TestCaughtExceptionShadowedByBuiltinRedeclaration:
+    """A ``catch`` clause must name the declaration the host actually mints.
+
+    A program that declares its own ``builtin exception`` of a reserved name
+    shadows the standard declaration for that name everywhere the host might
+    raise it -- not only inside the declaration's own scope region. A
+    ``catch`` clause written OUTSIDE that region still resolves the bare name
+    by ordinary scope rules, which finds the standard (unshadowed)
+    declaration; without a dedicated check, that clause type-checks against a
+    declaration the host can never actually raise, so it can never match.
+    """
+
+    def test_catch_outside_declaring_scope_of_a_shadowing_builtin_is_rejected(self) -> None:
+        """Regression: the outside-the-region half of the identity mismatch.
+
+        ``scope A`` declares its own ``builtin exception ExecError``, so the
+        host mints ``A::ExecError`` under the bare name ``ExecError``
+        everywhere. The ``catch`` clause below sits OUTSIDE ``scope A``, so
+        the bare name resolves to the standard ``std/core::ExecError``
+        instead -- a declaration the host will never raise here -- and must
+        be rejected rather than silently accepted as a dead handler.
+        """
+        err = reject_type(
+            "scope A\n"
+            "builtin\n"
+            "exception ExecError extends Exception\n"
+            "  *\n"
+            "  command: text\n"
+            "  exit_code: int\n"
+            "  stdout: text\n"
+            "  stderr: text\n"
+            "  timed_out: bool\n"
+            "end A\n"
+            "def f() -> int =\n"
+            "  try\n"
+            "    1\n"
+            "  catch ExecError as e =>\n"
+            "    2\n"
+            "f()\n"
+        )
+        message = err.to_diagnostic().message
+        assert "ExecError" in message
+
+    def test_catch_inside_declaring_scope_of_a_shadowing_builtin_still_accepted(self) -> None:
+        """The in-scope half: a ``catch`` clause inside the declaring region
+        resolves the bare name to that region's own declaration -- exactly
+        the identity the host mints there -- so it is unaffected."""
+        r = accept_type(
+            "scope A\n"
+            "builtin\n"
+            "exception ExecError extends Exception\n"
+            "  *\n"
+            "  command: text\n"
+            "  exit_code: int\n"
+            "  stdout: text\n"
+            "  stderr: text\n"
+            "  timed_out: bool\n"
+            "def f() -> int =\n"
+            "  try\n"
+            "    1\n"
+            "  catch ExecError as e =>\n"
+            "    2\n"
+            "end A\n"
+            "A::f()\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_catch_with_no_redeclaration_still_matches_the_standard_declaration(self) -> None:
+        """Guard against over-rejection: with no program-declared ``builtin``
+        of the name at all, the standard declaration is not shadowed by
+        anything, so an ordinary ``catch`` still matches it."""
+        r = accept_type("def f() -> int =\n  try\n    1\n  catch ExecError as e =>\n    2\nf()\n")
+        assert r.resolved.program is not None
+
+    def test_catch_of_an_ordinary_exception_sharing_a_builtin_bare_name_is_accepted(self) -> None:
+        """Guard against over-rejection: an ordinary, non-``builtin`` exception
+        is raised only by the program itself, never by the host, so the
+        host-minting rule does not apply to it even when its bare name
+        collides with a built-in one."""
+        r = accept_type(
+            "scope A\n"
+            "exception ExecError extends Exception\n"
+            "  code: int\n"
+            "def f() -> int =\n"
+            "  try\n"
+            '    raise ExecError(message = "boom", code = 5)\n'
+            "  catch ExecError as e =>\n"
+            "    e.code\n"
+            "end A\n"
+            "A::f()\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_catch_without_stdlib_and_no_redeclaration_is_unaffected(self) -> None:
+        """Guard against over-rejection without the standard library: a
+        program loaded with ``default_stdlib=False`` that declares its own
+        whole exception hierarchy and never redeclares it a second time has
+        nothing shadowing it either, so ``catch`` still matches normally."""
+        r = accept_type(
+            "builtin\n"
+            "exception Exception\n"
+            "  *\n"
+            "  message: text\n"
+            "builtin\n"
+            "exception ExecError extends Exception\n"
+            "  *\n"
+            "  command: text\n"
+            "  exit_code: int\n"
+            "  stdout: text\n"
+            "  stderr: text\n"
+            "  timed_out: bool\n"
+            "def f() -> int =\n"
+            "  try\n"
+            "    1\n"
+            "  catch ExecError as e =>\n"
+            "    2\n"
+            "f()\n",
+            default_stdlib=False,
+        )
+        assert r.resolved.program is not None
+
+
+class TestBuiltinOptionShape:
+    """``Option`` is the generic prelude template (``OPTION_TYPE_DEF``,
+    ``semantics/type_table.py``), seeded separately from the non-generic
+    prelude records/enums but validated by the same ``builtin`` shape-check
+    machinery as every other reserved name."""
+
+    def test_builtin_option_wrong_shape_is_rejected(self) -> None:
+        err = reject_type(
+            "builtin\nenum Option[T] =\n  | None\n  | Some(value: T, extra: int)\n\n()",
+            default_stdlib=False,
+        )
+        assert "Option" in err.to_diagnostic().message
+
+    def test_builtin_option_renamed_variant_is_rejected(self) -> None:
+        err = reject_type(
+            "builtin\nenum Option[T] =\n  | None\n  | Just(value: T)\n\n()",
+            default_stdlib=False,
+        )
+        assert "Option" in err.to_diagnostic().message
+
+    def test_builtin_option_canonical_shape_typechecks(self) -> None:
+        r = accept_type(
+            "builtin\nenum Option[T] =\n  | None\n  | Some(value: T)\n\n"
+            "let x: Option[int] = Some(value = 1)\n"
+            "case x of\n"
+            '  | Option::None => "none"\n'
+            '  | Option::Some(value) => "some"\n',
+            default_stdlib=False,
+        )
+        assert r.resolved.program is not None
+
+
 class TestBlockTyping:
     def test_block_last_expr_is_block_type(self) -> None:
         r = accept_type("let x = 1\nx")
@@ -1384,11 +2041,6 @@ class TestBlockTyping:
         r = accept_type("param n: int\nn")
         assert r.resolved.program is not None
 
-    @pytest.mark.parametrize("annotation", ["unit", "agent", "(int) -> int"])
-    def test_param_rejects_non_wire_serializable_annotation(self, annotation: str) -> None:
-        err = reject_type(f"param x: {annotation}\nx")
-        assert "JSON" in str(err)
-
     def test_param_defaults_to_text(self) -> None:
         r = accept_type("param x\nx")
         prog = r.resolved.program
@@ -1426,13 +2078,6 @@ class TestUnitPropagation:
         let_decl = r.resolved.program.body.items[0]
         assert isinstance(let_decl, LetDecl)
         assert r.type_env.get_binding_type(let_decl.pattern.node_id) == UnitType()
-
-    def test_agent_decl_yields_agent_type(self) -> None:
-        r = accept_type("agent reviewer\nreviewer")
-        prog = r.resolved.program
-        agent_decl = prog.body.items[0]
-        assert isinstance(agent_decl, AgentDecl)
-        assert r.type_env.get_binding_type(agent_decl.node_id) == AgentType()
 
     def test_assign_is_valid_block_item(self) -> None:
         r = accept_type("var x = 1\nx := 2\n()")
@@ -1526,9 +2171,6 @@ class TestPrint:
 
     def test_print_function_accepted(self) -> None:
         accept_type("let f = fn(x: int) -> int => x\nprint(f)")
-
-    def test_print_agent_accepted(self) -> None:
-        accept_type("agent a\nprint(a)")
 
     def test_print_wrong_arg_count(self) -> None:
         err = reject_type("print(1, 2)")
@@ -1660,9 +2302,11 @@ class TestAsk:
         (value_field,) = nested.named
         assert isinstance(value_field.pattern, AsPattern)
 
-        assert checked.let_matched_types[let.node_id] == EnumType("Pair")
+        assert strip_decl_ids(checked.let_matched_types[let.node_id]) == EnumType("Pair")
         assert checked.type_env.get_binding_type(left.node_id) == IntType()
-        assert checked.type_env.get_binding_type(right.node_id) == EnumType("Option", (IntType(),))
+        assert strip_decl_ids(checked.type_env.get_binding_type(right.node_id)) == EnumType(
+            "Option", (IntType(),)
+        )
         assert checked.type_env.get_binding_type(value_field.pattern.node_id) == IntType()
         assert checked.pattern_binding_for(left.node_id).kind is BinderKind.let_binding
         assert checked.pattern_constructor_ref_for(pattern.node_id) is not None
@@ -1680,7 +2324,9 @@ class TestAsk:
         assert isinstance(let.pattern, ConstructorPattern)
         field = let.pattern.named[0].pattern
         assert isinstance(field, VarPattern)
-        assert checked.let_matched_types[let.node_id] == EnumType("Option", (IntType(),))
+        assert strip_decl_ids(checked.let_matched_types[let.node_id]) == EnumType(
+            "Option", (IntType(),)
+        )
         assert checked.type_env.get_binding_type(field.node_id) == IntType()
 
         reject_type("let _: array[int] = []")
@@ -1690,16 +2336,17 @@ class TestAsk:
         )
 
     def test_ask_with_explicit_agent(self) -> None:
-        r = accept_type('agent reviewer\nask("Q", agent = reviewer)')
+        r = accept_type('let reviewer = AgentCommand("reviewer")\nask("Q", agent = reviewer)')
         assert r.resolved.program is not None
 
-    def test_ask_no_default_agent_raises(self) -> None:
-        err = reject_type('ask("Q")', capabilities=no_agent_caps())
-        assert "agent" in str(err).lower() or "default" in str(err).lower()
+    def test_ask_default_agent_is_available_without_a_host_capability(self) -> None:
+        assert accept_type('ask("Q")', capabilities=no_agent_caps()).resolved.program is not None
 
-    def test_ask_non_text_no_default_agent_raises(self) -> None:
-        err = reject_type('let n: int = ask("Q")\nn', capabilities=no_agent_caps())
-        assert "agent" in str(err).lower() or "default" in str(err).lower()
+    def test_ask_uses_contextual_result_type_without_a_host_capability(self) -> None:
+        assert (
+            accept_type('let n: int = ask("Q")\nn', capabilities=no_agent_caps()).resolved.program
+            is not None
+        )
 
     def test_ask_no_prompt_raises(self) -> None:
         err = reject_type("ask()")
@@ -1839,10 +2486,9 @@ class TestAsk:
 
 
 class TestAskRequest:
-    """``ask-request`` is the side-effect-free twin of ``ask``: it builds the
-    ``AgentRequest`` that ``ask`` would dispatch, without invoking the agent."""
+    """``ask-request`` builds a first-attempt text request without dispatching."""
 
-    def test_default_target_is_text(self) -> None:
+    def test_builds_a_text_contract(self) -> None:
         r = accept_type('ask-request("Q")')
         call = r.resolved.program.body.items[0]
         assert isinstance(call, Call)
@@ -1850,121 +2496,155 @@ class TestAskRequest:
         assert spec.target_type == TextType()
         assert spec.codec_name == "text"
 
-    def test_explicit_type_arg_drives_contract(self) -> None:
-        r = accept_type('record R\n  x: int\nask-request::[R]("Q")')
-        call = r.resolved.program.body.items[1]
-        assert isinstance(call, Call)
-        spec = r.contract_specs[call.node_id]
-        assert spec.codec_name == "json"
-        assert spec.target_type == r.type_env.get_type("R")
-
-    def test_unit_target_has_no_contract(self) -> None:
-        r = accept_type('ask-request::[unit]("Q")')
-        call = r.resolved.program.body.items[0]
-        assert isinstance(call, Call)
-        assert call.node_id not in r.contract_specs
-        option_type = r.type_env.get_type("OutputContractOption")
-        assert isinstance(option_type, EnumType)
-        assert r.type_env.type_table.enum_variants(option_type) == {
-            "None": {},
-            "Some": {"value": r.type_env.get_type("OutputContract")},
-        }
-
-    @pytest.mark.parametrize(
-        "option",
-        ('format = "text"', "strict_json = true", "on_parse_error = Abort()"),
-    )
-    def test_unit_target_rejects_parse_options(self, option: str) -> None:
-        err = reject_type(f'ask-request::[unit]("Q", {option})')
-        assert "unit" in str(err)
-        assert "no output contract" in str(err)
-
     def test_returns_agent_request_type(self) -> None:
-        r = accept_type('let r = ask-request::[text]("Q")\nr')
+        r = accept_type('let r: AgentRequest = ask-request("Q")\nr')
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
         binding_type = r.type_env.get_binding_type(decl.pattern.node_id)
         assert binding_type == r.type_env.get_type("AgentRequest")
 
-    def test_contextual_expected_type_ignored(self) -> None:
-        # Unlike ``ask``, the target type is NOT inferred from context: a
-        # contextual ``AgentRequest`` annotation does NOT make ask-request target
-        # AgentRequest; the explicit ``::[int]`` drives the contract instead.
-        r = accept_type('let r: AgentRequest = ask-request::[int]("Q")\nr')
-        decl = r.resolved.program.body.items[0]
-        assert isinstance(decl, LetDecl)
-        call = decl.value
-        assert isinstance(call, Call)
-        spec = r.contract_specs[call.node_id]
-        assert spec.target_type == IntType()
-        assert spec.codec_name == "json"
-        assert r.node_types[call.node_id] == r.type_env.get_type("AgentRequest")
-
-    def test_no_prompt_raises(self) -> None:
-        err = reject_type("ask-request::[text]()")
-        assert "prompt" in str(err).lower() or "argument" in str(err).lower()
-
-    def test_too_many_positional_raises(self) -> None:
-        err = reject_type('ask-request::[text]("a", "b")')
-        assert "positional" in str(err).lower() or "argument" in str(err).lower()
-
-    def test_too_many_type_args_raises(self) -> None:
-        # ask-request with more than one explicit type argument is rejected.
-        err = reject_type('ask-request::[int, text]("Q")')
-        assert "type argument" in str(err).lower() or "got 2" in str(err)
-
-    def test_unknown_named_arg_raises(self) -> None:
-        err = reject_type('ask-request::[text]("Q", bogus = 1)')
-        assert "bogus" in str(err) or "argument" in str(err).lower()
-
-    def test_function_target_rejected(self) -> None:
-        err = reject_type('ask-request::[(int) -> int]("Q")')
-        assert "function" in str(err).lower() or "agent" in str(err).lower()
-
-    def test_agent_target_rejected(self) -> None:
-        err = reject_type('ask-request::[agent]("Q")')
-        assert "function" in str(err).lower() or "agent" in str(err).lower()
-
     def test_with_explicit_agent(self) -> None:
-        r = accept_type('agent reviewer\nask-request::[text]("Q", agent = reviewer)')
+        r = accept_type(
+            'let reviewer = AgentCommand("reviewer")\nask-request("Q", agent = reviewer)'
+        )
         assert r.resolved.program is not None
 
     def test_wrong_agent_type_raises(self) -> None:
-        err = reject_type('let x = "no"\nask-request::[text]("Q", agent = x)')
+        err = reject_type('let x = "no"\nask-request("Q", agent = x)')
         assert "agent" in str(err).lower()
 
-    def test_strict_json_option(self) -> None:
-        r = accept_type('ask-request::[int]("Q", format = "json", strict_json = true)')
-        call = r.resolved.program.body.items[0]
-        assert isinstance(call, Call)
-        spec = r.contract_specs[call.node_id]
-        assert spec.strict_json is True
+    def test_no_prompt_raises(self) -> None:
+        err = reject_type("ask-request()")
+        assert "prompt" in str(err).lower() or "argument" in str(err).lower()
 
-    def test_on_parse_error_policy_recorded(self) -> None:
-        r = accept_type('ask-request::[int]("Q", on_parse_error = Retry(n = 3))')
-        assert len(r.call_sites) == 1
-        cs = r.call_sites[0]
-        assert cs.callee == "ask-request"
-        assert cs.parse_policy == "retry[3]"
+    def test_too_many_positional_raises(self) -> None:
+        err = reject_type('ask-request("a", "b")')
+        assert "positional" in str(err).lower() or "argument" in str(err).lower()
+
+    def test_unknown_named_arg_raises(self) -> None:
+        err = reject_type('ask-request("Q", bogus = 1)')
+        assert "bogus" in str(err) or "argument" in str(err).lower()
+
+    @pytest.mark.parametrize(
+        "call",
+        (
+            'ask-request::[int]("Q")',
+            'ask-request("Q", format = "json")',
+            'ask-request("Q", strict_json = true)',
+            'ask-request("Q", on_parse_error = Retry(n = 1))',
+            'let agent = AgentCommand("worker")\nagent.ask-request::[int]("Q")',
+            'let agent = AgentCommand("worker")\nagent.ask-request("Q", strict_json = true)',
+        ),
+    )
+    def test_rejects_type_arguments_and_parse_options(self, call: str) -> None:
+        err = reject_type(call)
+        assert "ask-request" in str(err)
 
     def test_call_site_record(self) -> None:
-        r = accept_type('ask-request::[text]("Q")')
+        r = accept_type('ask-request("Q")')
         assert len(r.call_sites) == 1
         cs = r.call_sites[0]
         assert cs.callee == "ask-request"
+        assert cs.target_type == TextType()
+        assert cs.codec_name == "text"
         assert cs.parse_policy == "default"
-        assert cs.line == 1
-
-    def test_unknown_type_in_type_arg_raises(self) -> None:
-        err = reject_type('ask-request::[NoSuchType]("Q")')
-        assert "unknown type" in str(err).lower()
 
     def test_does_not_require_default_agent(self) -> None:
         # ask-request never dispatches, so it works without a default agent.
-        r = accept_type('ask-request::[text]("Q")', capabilities=no_agent_caps())
+        r = accept_type('ask-request("Q")', capabilities=no_agent_caps())
         call = r.resolved.program.body.items[0]
         assert isinstance(call, Call)
         assert r.contract_specs[call.node_id].target_type == TextType()
+
+    def test_resolves_agent_request_contract_exactly_once(self) -> None:
+        """A single ``ask-request`` call site must not pay the ``AgentRequest``
+        coherence walk twice: the checker resolves it once up front and
+        threads the result through the rest of the call's own validation."""
+        from unittest.mock import patch
+
+        from agm.agl.typecheck.builtins import BuiltinCallChecker
+
+        original = BuiltinCallChecker._resolve_host_record_contract
+        calls: list[str] = []
+
+        def counting(self: BuiltinCallChecker, name: str, *, span: SourceSpan) -> RecordType:
+            calls.append(name)
+            return original(self, name, span=span)
+
+        with patch.object(BuiltinCallChecker, "_resolve_host_record_contract", counting):
+            r = accept_type('ask-request("Q")')
+        assert r.resolved.program is not None
+        assert calls == ["AgentRequest"]
+
+
+# ---------------------------------------------------------------------------
+# built-in Agent methods (``a.ask`` / ``a.ask-request``) outside call position
+# ---------------------------------------------------------------------------
+
+# A user type declaring the two built-in method names itself: ``ask`` generic so
+# the ``::[T]`` spellings are available on it, ``ask-request`` monomorphic so the
+# un-specialized spellings are available without type-argument inference.
+_USER_ASK_METHODS = (
+    "record Greeter\n"
+    "  name: text\n"
+    "def Greeter::ask[T](self, prompt: T) -> T = prompt\n"
+    "def Greeter::ask-request(self, prompt: text) -> text = self.name\n"
+    'let g = Greeter(name = "g")\n'
+)
+
+
+class TestBuiltinAgentMethodSelection:
+    """A selected built-in Agent method is call-only: every non-call use of the
+    selection is a type error, in each spelling that would otherwise produce a
+    function value. A field-access callee whose field name matches
+    ``ask``/``ask-request`` is only a *speculative* builtin route (the resolver
+    cannot know which meaning it is until the checker selects a method), so an
+    ordinary user-declared method of the same name must still behave as a plain
+    method in every position, value and partial positions included."""
+
+    @pytest.mark.parametrize("method", ("ask", "ask-request"))
+    @pytest.mark.parametrize(
+        "use",
+        (
+            "let f = worker.{method}\nf",
+            "print(worker.{method})",
+            "worker.{method}(?)",
+            "worker.{method}::[text](?)",
+        ),
+        ids=("let-bound", "call-argument", "partial-call", "specialized-partial-call"),
+    )
+    def test_non_call_use_of_a_builtin_method_is_rejected(self, use: str, method: str) -> None:
+        err = reject_type(
+            'let worker = AgentCommand("worker")\n' + use.format(method=method) + "\n"
+        )
+        message = err.to_diagnostic().message.lower()
+        assert "built-in" in message
+        assert "value" in message
+
+    @pytest.mark.parametrize(
+        "use",
+        (
+            'g.ask("hi")',
+            'g.ask-request("hi")',
+            "g.ask::[int](1)",
+            "let f = g.ask::[int]\nf",
+            "let f = g.ask-request\nf",
+            "let f = g.ask::[int](?)\nf",
+            "let f = g.ask-request(?)\nf",
+        ),
+        ids=(
+            "call",
+            "call-request",
+            "specialized-call",
+            "specialized-value",
+            "value",
+            "specialized-partial-call",
+            "partial-call",
+        ),
+    )
+    def test_user_methods_named_after_a_builtin_stay_ordinary_methods(self, use: str) -> None:
+        r = accept_type(_USER_ASK_METHODS + use + "\n")
+        assert r.resolved.program is not None
 
 
 # ---------------------------------------------------------------------------
@@ -2189,8 +2869,11 @@ class TestRawTailTypingParity:
         )
 
     def test_ask_raw_payload_has_no_agent_slot(self) -> None:
-        reject_type("agent reviewer\nask! agent = reviewer", capabilities=no_agent_caps())
-        accept_type('agent reviewer\nask("prompt", agent = reviewer)', capabilities=no_agent_caps())
+        accept_type("ask! agent = reviewer", capabilities=no_agent_caps())
+        accept_type(
+            'let reviewer = AgentCommand("reviewer")\nask("prompt", agent = reviewer)',
+            capabilities=no_agent_caps(),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -3263,7 +3946,7 @@ class TestFuncDef:
             "recurse"
         )
 
-        assert checked.function_signatures["recurse"].result == EnumType("Node")
+        assert strip_decl_ids(checked.function_signatures["recurse"].result) == EnumType("Node")
 
     @pytest.mark.parametrize("body", ("recurse().value", "recurse()[0]"))
     def test_direct_recursive_unknown_shape_requires_annotation(self, body: str) -> None:
@@ -3453,21 +4136,6 @@ class TestFuncDef:
     @pytest.mark.parametrize(
         "source",
         [
-            "def f() = render(return 1)\nf",
-            'def f() = render("x", pretty = (return 1))\nf',
-            "def f() = ask(return 1)\nf",
-            'agent a\ndef f() = ask("x", agent = (return 1))\nf',
-        ],
-    )
-    def test_return_in_builtin_runtime_argument_does_not_make_call_bottom(
-        self, source: str
-    ) -> None:
-        err = reject_type(source)
-        assert "infer" in str(err).lower() or "mismatch" in str(err).lower()
-
-    @pytest.mark.parametrize(
-        "source",
-        [
             "def f() -> int =\n  for i in (return 1) to 3 do () done\nf",
             "def f() -> int =\n  for i in 1 to (return 1) do () done\nf",
             "def f() -> int =\n  for i in 1 to 3 by (return 1) do () done\nf",
@@ -3627,7 +4295,7 @@ class TestPartialDeclaredCalls:
             root_scope=ScopeNode(node_id=program.node_id),
         )
         with pytest.raises(AglTypeError, match="callee"):
-            check_module(resolved, default_capabilities())
+            check_resolved(resolved)
 
     def test_placeholder_on_non_function_value_call_uses_existing_callee_error(self) -> None:
         err = reject_type("let x = 1\nx(?)")
@@ -3645,7 +4313,7 @@ class TestPartialDeclaredCalls:
             root_scope=ScopeNode(node_id=program.node_id),
         )
         with pytest.raises(AssertionError, match="placeholder"):
-            check_module(resolved, default_capabilities())
+            check_resolved(resolved)
 
 
 class TestPartialConstructorAndValueCalls:
@@ -3808,10 +4476,10 @@ class TestPartialConstructorAndValueCalls:
             and isinstance(item.value, Call)
         }
         point_type = RecordType("Point", module_id=ModuleId.from_path("mylib"))
-        assert entry.node_types[calls["make"].node_id] == FunctionType(
+        assert strip_decl_ids(entry.node_types[calls["make"].node_id]) == FunctionType(
             params=(IntType(),), result=point_type
         )
-        assert entry.node_types[calls["make_open"].node_id] == FunctionType(
+        assert strip_decl_ids(entry.node_types[calls["make_open"].node_id]) == FunctionType(
             params=(IntType(),), result=point_type
         )
         box_text_type = RecordType(
@@ -3819,11 +4487,11 @@ class TestPartialConstructorAndValueCalls:
             type_args=(TextType(),),
             module_id=ModuleId.from_path("mylib"),
         )
-        assert entry.node_types[calls["make_box"].node_id] == FunctionType(
+        assert strip_decl_ids(entry.node_types[calls["make_box"].node_id]) == FunctionType(
             params=(TextType(),),
             result=box_text_type,
         )
-        assert entry.node_types[calls["make_box_open"].node_id] == FunctionType(
+        assert strip_decl_ids(entry.node_types[calls["make_box_open"].node_id]) == FunctionType(
             params=(TextType(),),
             result=box_text_type,
         )
@@ -4266,7 +4934,7 @@ class TestRaise:
             root_scope=ScopeNode(node_id=prog.node_id),
         )
         with pytest.raises(AglTypeError, match="return"):
-            check_module(resolved, default_capabilities())
+            check_resolved(resolved)
 
 
 # ---------------------------------------------------------------------------
@@ -4285,9 +4953,6 @@ class TestTemplate:
 
     def test_interpolated_function_accepted(self) -> None:
         accept_type('let f = fn(x: int) -> int => x\n"%{f}"')
-
-    def test_interpolated_agent_accepted(self) -> None:
-        accept_type('agent a\n"%{a}"')
 
     def test_interpolated_int_is_ok(self) -> None:
         r = accept_type('let n = 1\n"n is %{n}"')
@@ -4472,54 +5137,15 @@ class TestBinaryOps:
         )
         assert "equality" in str(err).lower()
 
-    def test_eq_array_of_agent_raises(self) -> None:
-        err = reject_type(
-            "agent reviewer\n"
-            "let as1: array[agent] = [reviewer]\n"
-            "let as2: array[agent] = [reviewer]\n"
-            "let r = (as1 == as2)\nr"
-        )
-        assert "equality" in str(err).lower()
-
     def test_eq_array_of_unit_raises(self) -> None:
         err = reject_type(
             "let us1: array[unit] = [()]\nlet us2: array[unit] = [()]\nlet r = (us1 == us2)\nr"
         )
         assert "equality" in str(err).lower()
 
-    def test_eq_record_with_agent_field_raises(self) -> None:
-        err = reject_type(
-            "agent reviewer\n"
-            "record Task\n  name: text\n  assignee: agent\n"
-            'let t1 = Task(name = "a", assignee = reviewer)\n'
-            'let t2 = Task(name = "b", assignee = reviewer)\n'
-            "let result = (t1 == t2)\nresult"
-        )
-        assert "equality" in str(err).lower()
-
-    def test_eq_wildcard_catch_binding_rejects_non_comparable_descendant(self) -> None:
-        err = reject_type(
-            "agent reviewer\n"
-            "exception Bad extends Exception\n  assignee: agent\n"
-            'try\n  raise Bad(message = "x", assignee = reviewer)\ncatch _ as e => e == e'
-        )
-        assert "equality" in str(err).lower()
-
-    def test_eq_base_catch_binding_rejects_non_comparable_descendant(self) -> None:
-        err = reject_type(
-            "agent reviewer\n"
-            "exception Bad extends Exception\n  assignee: agent\n"
-            'try\n  raise Bad(message = "x", assignee = reviewer)\ncatch Exception as e => e == e'
-        )
-        assert "equality" in str(err).lower()
-
     # Regression: bare function/agent/unit still rejected.
     def test_eq_bare_fn_raises(self) -> None:
         err = reject_type("def f(n: int) -> int = n\nlet r = (f == f)\nr")
-        assert "equality" in str(err).lower()
-
-    def test_eq_bare_agent_raises(self) -> None:
-        err = reject_type("agent reviewer\nlet r = (reviewer == reviewer)\nr")
         assert "equality" in str(err).lower()
 
     def test_eq_bare_unit_raises(self) -> None:
@@ -4711,6 +5337,17 @@ class TestFieldAccess:
         error = reject_type(source)
         assert "field" in str(error).lower() and "method" in str(error).lower()
 
+    def test_dotted_raw_tail_unknown_member_is_a_member_error(self) -> None:
+        error = reject_type('let value = AgentCommand("worker")\nvalue.exec! echo hello')
+        assert "field" in str(error).lower() and "method" in str(error).lower()
+        assert error.span is not None
+        assert (
+            error.span.start_line,
+            error.span.start_col,
+            error.span.end_line,
+            error.span.end_col,
+        ) == (2, 1, 2, 12)
+
     def test_member_access_on_bare_type_variable_still_raises(self) -> None:
         error = reject_type("def get[T](value: T) -> int = value.member")
         assert "type variable" in str(error).lower()
@@ -4725,7 +5362,9 @@ class TestFieldAccess:
         )
 
         result = checked.resolved.program.body.items[-1]
-        assert checked.node_types[result.node_id] == RecordType("Box", (DecimalType(),))
+        assert strip_decl_ids(checked.node_types[result.node_id]) == RecordType(
+            "Box", (DecimalType(),)
+        )
 
     def test_generic_method_value_type_apply_specializes_own_type_args(self) -> None:
         checked = accept_type(
@@ -4738,7 +5377,9 @@ class TestFieldAccess:
         )
 
         result = checked.resolved.program.body.items[-1]
-        assert checked.node_types[result.node_id] == RecordType("Box", (DecimalType(),))
+        assert strip_decl_ids(checked.node_types[result.node_id]) == RecordType(
+            "Box", (DecimalType(),)
+        )
 
     def test_generic_method_value_infers_own_type_args_from_expected_type(self) -> None:
         accept_type(
@@ -4803,7 +5444,9 @@ class TestFieldAccess:
         )
         convert_def = checked.resolved.program.body.items[-1]
         result = cast(FuncDef, convert_def).body
-        assert checked.node_types[result.node_id] == RecordType("Box", (TextType(),))
+        assert strip_decl_ids(checked.node_types[result.node_id]) == RecordType(
+            "Box", (TextType(),)
+        )
 
     def test_generic_method_renamed_caller_type_param_behaves_identically(self) -> None:
         """Renaming the caller's own type parameter must change nothing.
@@ -4819,7 +5462,9 @@ class TestFieldAccess:
         )
         convert_def = checked.resolved.program.body.items[-1]
         result = cast(FuncDef, convert_def).body
-        assert checked.node_types[result.node_id] == RecordType("Box", (TextType(),))
+        assert strip_decl_ids(checked.node_types[result.node_id]) == RecordType(
+            "Box", (TextType(),)
+        )
 
     def test_generic_method_explicit_type_args_accept_caller_type_param_sharing_name(
         self,
@@ -4833,7 +5478,9 @@ class TestFieldAccess:
         )
         convert_def = checked.resolved.program.body.items[-1]
         result = cast(FuncDef, convert_def).body
-        assert checked.node_types[result.node_id] == RecordType("Box", (TextType(),))
+        assert strip_decl_ids(checked.node_types[result.node_id]) == RecordType(
+            "Box", (TextType(),)
+        )
 
     def test_generic_method_qualified_and_member_spellings_agree(self) -> None:
         """``Box::map(b, g)`` and ``b.map(g)`` must specialize identically."""
@@ -4848,7 +5495,9 @@ class TestFieldAccess:
         member_def, qualified_def = checked.resolved.program.body.items[-2:]
         member_result = cast(FuncDef, member_def).body
         qualified_result = cast(FuncDef, qualified_def).body
-        assert checked.node_types[member_result.node_id] == RecordType("Box", (TextType(),))
+        assert strip_decl_ids(checked.node_types[member_result.node_id]) == RecordType(
+            "Box", (TextType(),)
+        )
         assert (
             checked.node_types[qualified_result.node_id]
             == checked.node_types[member_result.node_id]
@@ -5094,8 +5743,17 @@ class TestConstructors:
         err = reject_type("exception Bad extends Exception\n  code: int\n  code: text\n()\n")
         assert "duplicate" in str(err).lower()
 
-    def test_user_exception_cannot_declare_trace_id_field(self) -> None:
-        err = reject_type("exception Root\n  trace_id: int\n()\n")
+    def test_user_exception_may_declare_trace_id_field(self) -> None:
+        result = accept_type(
+            "exception Tagged extends Exception\n"
+            "  trace_id: int\n"
+            'let tagged = Tagged(message = "marked", trace_id = 7)\n'
+            "tagged.trace_id\n"
+        )
+        assert result.resolved.program is not None
+
+    def test_builtin_exception_has_no_trace_id_field(self) -> None:
+        err = reject_type('Abort(message = "stop").trace_id\n')
         assert "trace_id" in str(err)
 
     def test_unknown_constructor_raises(self) -> None:
@@ -5254,7 +5912,8 @@ class TestConstructorRefDispatch:
             "    on\n"
             "  | packet(_) => 0"
         )
-        resolved = resolve_module(parse_program(source))
+        checked = resolve_and_check_entry(source, default_capabilities())
+        resolved = checked.resolved
         case = resolved.program.body.items[-1]
         assert isinstance(case, Case)
         pattern = case.branches[0].pattern
@@ -5268,7 +5927,6 @@ class TestConstructorRefDispatch:
         assert resolved.resolution[assignment.node_id].kind is BinderKind.pattern_slot
         assert resolved.resolution[assignment.node_id].decl_node_id == field_pattern.node_id
 
-        checked = check_module(resolved, default_capabilities())
         outer_var = resolved.program.body.items[2]
         assert isinstance(outer_var, VarDecl)
         assert checked.binding_for(assignment.node_id).decl_node_id == outer_var.node_id
@@ -5287,7 +5945,8 @@ class TestConstructorRefDispatch:
             "    on[0]\n"
             "  | packet(_) => 0"
         )
-        resolved = resolve_module(parse_program(source))
+        checked = resolve_and_check_entry(source, default_capabilities())
+        resolved = checked.resolved
         case = resolved.program.body.items[-1]
         assert isinstance(case, Case)
         body = case.branches[0].body
@@ -5298,7 +5957,6 @@ class TestConstructorRefDispatch:
         outer_var = resolved.program.body.items[2]
         assert isinstance(outer_var, VarDecl)
 
-        checked = check_module(resolved, default_capabilities())
         # The indexed target's object expression is checked like any ordinary
         # read, so the field-directed restoration is keyed by its own node --
         # once the checker determines `on` selected the constructor pattern
@@ -5319,7 +5977,10 @@ class TestConstructorRefDispatch:
             "    0\n"
             "  | packet(_) => 0"
         )
-        resolved = resolve_module(parse_program(source))
+        # Checked via check_resolved (not resolve_and_check_entry) so this test
+        # can assert `resolved` itself — the exact object the failed check ran
+        # against — is untouched by the failure.
+        resolved = resolve_entry(source)
         case = resolved.program.body.items[-1]
         assert isinstance(case, Case)
         body = case.branches[0].body
@@ -5329,7 +5990,7 @@ class TestConstructorRefDispatch:
         provisional_ref = resolved.resolution[assignment.node_id]
 
         with pytest.raises(AglTypeError):
-            check_module(resolved, default_capabilities())
+            check_resolved(resolved)
 
         assert resolved.resolution[assignment.node_id] == provisional_ref
         assert assignment.node_id not in resolved.constructor_refs
@@ -5345,10 +6006,8 @@ class TestConstructorRefDispatch:
             "    0\n"
             "  | packet(_) => 0"
         )
-        resolved = resolve_module(parse_program(source))
-
         with pytest.raises(AglTypeError) as excinfo:
-            check_module(resolved, default_capabilities())
+            resolve_and_check_entry(source, default_capabilities())
 
         # The rejection names the actual binder kind, matching the wording the
         # scope pass uses for assignments it rejects itself.
@@ -5357,7 +6016,7 @@ class TestConstructorRefDispatch:
     def test_checker_has_no_scope_repair_state(self) -> None:
         from agm.agl.typecheck.checker import _Checker
 
-        resolved = resolve_module(parse_program("enum Flag\n  | on\non"))
+        resolved = resolve_entry("enum Flag\n  | on\non")
         checker = _Checker(TypeEnvironment(), resolved, default_capabilities())
 
         assert checker._resolved is resolved
@@ -5388,8 +6047,8 @@ class TestConstructorRefDispatch:
             "      | packet(_) => 0\n"
             "  | packet(_) => 0"
         )
-        resolved = resolve_module(parse_program(source))
-        checked = check_module(resolved, default_capabilities())
+        checked = resolve_and_check_entry(source, default_capabilities())
+        resolved = checked.resolved
         outer_var = resolved.program.body.items[2]
         assert isinstance(outer_var, VarDecl)
 
@@ -5417,13 +6076,14 @@ class TestConstructorRefDispatch:
             "  | box(_) => 0"
         )
 
-        assert check_module(resolve_module(parse_program(source)), default_capabilities())
+        assert resolve_and_check_entry(source, default_capabilities())
 
     def test_bare_pattern_rejects_missing_or_stale_constructor_candidates(self) -> None:
-        resolved = resolve_module(
-            parse_program(
-                "enum Choice\n  | none\nlet value: Choice = none\ncase value of | none => 0"
-            )
+        # The corrupted-candidate variants below are checked directly via
+        # check_resolved (not resolve_and_check_entry), since each is a
+        # deliberately mutated copy of `resolved` that checking must reject.
+        resolved = resolve_entry(
+            "enum Choice\n  | none\nlet value: Choice = none\ncase value of | none => 0",
         )
         case = resolved.program.body.items[-1]
         assert isinstance(case, Case)
@@ -5431,7 +6091,7 @@ class TestConstructorRefDispatch:
 
         missing_candidates = replace(resolved, pattern_constructor_candidates={})
         with pytest.raises(AglTypeError, match="does not belong"):
-            check_module(missing_candidates, default_capabilities())
+            check_resolved(missing_candidates)
 
         stale_pattern = replace(pattern, name="missing")
         stale_case = replace(
@@ -5447,7 +6107,7 @@ class TestConstructorRefDispatch:
         )
         stale_resolved = replace(resolved, program=stale_program)
         with pytest.raises(AglTypeError, match="does not belong"):
-            check_module(stale_resolved, default_capabilities())
+            check_resolved(stale_resolved)
 
         from agm.agl.scope.symbols import ConstructorRef
 
@@ -5462,7 +6122,7 @@ class TestConstructorRefDispatch:
             pattern_constructor_candidates={pattern.node_id: (stale_candidate,)},
         )
         with pytest.raises(AglTypeError, match="does not belong"):
-            check_module(malformed_candidates, default_capabilities())
+            check_resolved(malformed_candidates)
 
     def test_missing_field_still_errors(self) -> None:
         err = reject_type("record Box\n  value: int\nBox()")
@@ -5521,12 +6181,14 @@ class TestConstructorRefDispatch:
 
     def test_single_field_variant_positional(self) -> None:
         # Single-field enum variant with no markers → STANDARD zone → positional works.
-        r = accept_type("enum Opt\n  | Some(value: int)\n  | None\nSome(42)")
+        # Named "Item"/"Payload" (not "Option"/"Some") so the bare constructor is
+        # unambiguous against std/core's own Option::Some.
+        r = accept_type("enum Item\n  | Payload(value: int)\n  | Empty\nPayload(42)")
         assert r.resolved.program is not None
 
     def test_single_field_variant_named_still_works(self) -> None:
         # Single-field variant: named arg still works even though zone is STANDARD.
-        r = accept_type("enum Opt\n  | Some(value: int)\nSome(value = 5)")
+        r = accept_type("enum Item\n  | Payload(value: int)\nPayload(value = 5)")
         assert r.resolved.program is not None
 
     def test_std_record_positional(self) -> None:
@@ -5576,7 +6238,7 @@ class TestBareConstructorTypeApply:
         prog = r.resolved.program
         f_ref = prog.body.items[-1]
         assert isinstance(f_ref, VarRef)
-        assert r.node_types[f_ref.node_id] == FunctionType(
+        assert strip_decl_ids(r.node_types[f_ref.node_id]) == FunctionType(
             params=(IntType(),), result=EnumType("Option", type_args=(IntType(),))
         )
 
@@ -5585,7 +6247,9 @@ class TestBareConstructorTypeApply:
         prog = r.resolved.program
         z_ref = prog.body.items[-1]
         assert isinstance(z_ref, VarRef)
-        assert r.node_types[z_ref.node_id] == EnumType("Option", type_args=(IntType(),))
+        assert strip_decl_ids(r.node_types[z_ref.node_id]) == EnumType(
+            "Option", type_args=(IntType(),)
+        )
 
     def test_bare_payload_constructor_callable(self) -> None:
         # `some::[int]` applied positionally yields the constructed enum value.
@@ -5593,7 +6257,9 @@ class TestBareConstructorTypeApply:
         prog = r.resolved.program
         v_ref = prog.body.items[-1]
         assert isinstance(v_ref, VarRef)
-        assert r.node_types[v_ref.node_id] == EnumType("Option", type_args=(IntType(),))
+        assert strip_decl_ids(r.node_types[v_ref.node_id]) == EnumType(
+            "Option", type_args=(IntType(),)
+        )
 
     def test_bare_nullary_constructor_used_in_context(self) -> None:
         r = accept_type(self._OPT + "let z: Option[int] = none::[int]\nz")
@@ -5604,7 +6270,7 @@ class TestBareConstructorTypeApply:
         prog = r.resolved.program
         f_ref = prog.body.items[-1]
         assert isinstance(f_ref, VarRef)
-        assert r.node_types[f_ref.node_id] == FunctionType(
+        assert strip_decl_ids(r.node_types[f_ref.node_id]) == FunctionType(
             params=(IntType(),), result=EnumType("Option", type_args=(IntType(),))
         )
 
@@ -5613,7 +6279,9 @@ class TestBareConstructorTypeApply:
         prog = r.resolved.program
         z_ref = prog.body.items[-1]
         assert isinstance(z_ref, VarRef)
-        assert r.node_types[z_ref.node_id] == EnumType("Option", type_args=(IntType(),))
+        assert strip_decl_ids(r.node_types[z_ref.node_id]) == EnumType(
+            "Option", type_args=(IntType(),)
+        )
 
     def test_qualified_payload_constructor_callable(self) -> None:
         r = accept_type(self._OPT + "let v = (Option[int]::some)(7)\nv")
@@ -5641,7 +6309,7 @@ class TestBareConstructorTypeApply:
         prog = r.resolved.program
         f_ref = prog.body.items[-1]
         assert isinstance(f_ref, VarRef)
-        assert r.node_types[f_ref.node_id] == FunctionType(
+        assert strip_decl_ids(r.node_types[f_ref.node_id]) == FunctionType(
             params=(IntType(),), result=RecordType("Box", type_args=(IntType(),))
         )
 
@@ -5801,12 +6469,6 @@ class TestJsonCastHintDirectionality:
         err = reject_type("let j: json = 1\nlet ys: array[int] = [1, 2]\nj in ys")
         assert "as json" not in str(err).lower()
 
-    def test_value_without_json_representation_not_hinted(self) -> None:
-        # An `as json` cast does not accept an agent either, so naming it
-        # would send the user down a dead end.
-        err = reject_type("agent a\nlet j: json = a\nj")
-        assert "as json" not in str(err).lower()
-
     def test_in_operator_array_value_against_json_target_still_hinted(self) -> None:
         # The reverse direction at the same call site: an array value against
         # a json element target is exactly the case an explicit `as json`
@@ -5861,9 +6523,9 @@ class TestProvisionalContainerLiterals:
         assert isinstance(bundle, LetDecl)
         assert checked.type_env.get_binding_type(xs.pattern.node_id) == ArrayType(IntType())
         assert checked.type_env.get_binding_type(values.pattern.node_id) == DictType(IntType())
-        assert checked.type_env.get_binding_type(bundle.pattern.node_id) == RecordType(
-            "Bundle", (IntType(),)
-        )
+        assert strip_decl_ids(
+            checked.type_env.get_binding_type(bundle.pattern.node_id)
+        ) == RecordType("Bundle", (IntType(),))
         self._assert_finalized(checked)
 
     def test_empty_literals_are_solved_by_expected_container_types(self) -> None:
@@ -5902,8 +6564,12 @@ class TestProvisionalContainerLiterals:
         option_int = EnumType("Option", (IntType(),))
         assert isinstance(xs, LetDecl)
         assert isinstance(values, LetDecl)
-        assert checked.type_env.get_binding_type(xs.pattern.node_id) == ArrayType(option_int)
-        assert checked.type_env.get_binding_type(values.pattern.node_id) == DictType(option_int)
+        assert strip_decl_ids(checked.type_env.get_binding_type(xs.pattern.node_id)) == ArrayType(
+            option_int
+        )
+        assert strip_decl_ids(
+            checked.type_env.get_binding_type(values.pattern.node_id)
+        ) == DictType(option_int)
         self._assert_finalized(checked)
 
     def test_branches_unify_provisional_generic_values(self) -> None:
@@ -5915,7 +6581,9 @@ class TestProvisionalContainerLiterals:
             "if choose_none => none else => some(value = 1)"
         )
         branch = checked.resolved.program.body.items[-1]
-        assert checked.node_types[branch.node_id] == EnumType("Option", (IntType(),))
+        assert strip_decl_ids(checked.node_types[branch.node_id]) == EnumType(
+            "Option", (IntType(),)
+        )
         self._assert_finalized(checked)
 
     @pytest.mark.parametrize(
@@ -6015,7 +6683,7 @@ class TestTypeDeclarations:
         )
         value = checked.resolved.program.body.items[-2]
         assert isinstance(value, LetDecl)
-        assert checked.type_env.get_binding_type(value.pattern.node_id) == EnumType(
+        assert strip_decl_ids(checked.type_env.get_binding_type(value.pattern.node_id)) == EnumType(
             "Option", (IntType(),)
         )
 
@@ -6071,7 +6739,7 @@ class TestTypeDeclarations:
 
     def test_enum_duplicate_variant_is_rejected_during_scope_collection(self) -> None:
         with pytest.raises(AglScopeError):
-            resolve_module(parse_program("enum E\n  | A\n  | A\nA()"))
+            resolve_entry("enum E\n  | A\n  | A\nA()")
 
     def test_alias_cycle_raises(self) -> None:
         err = reject_type("type A = B\ntype B = A\n1")
@@ -6152,6 +6820,14 @@ class TestParsePolicy:
         err = reject_type('let n: int = ask("Q", on_parse_error = Retry())\nn')
         assert "on_parse_error" in str(err).lower() or "Retry" in str(err)
 
+    def test_on_parse_error_unrelated_unqualified_constructor_raises(self) -> None:
+        """An unqualified call to a real, resolvable constructor that is
+        simply not ``ParsePolicy::Abort``/``Retry`` is still rejected --
+        genuine constructor identity is required, not merely that SOME
+        constructor resolves."""
+        err = reject_type('record Foo()\nlet n: int = ask("Q", on_parse_error = Foo())\nn')
+        assert "on_parse_error" in str(err).lower() or "ParsePolicy" in str(err)
+
     def test_on_parse_error_wrong_qualifier_raises(self) -> None:
         # 'Other' is not a declared type name, so this fails at scope time.
         err = reject_any('let n: int = ask("Q", on_parse_error = Other::Abort())\nn')
@@ -6163,6 +6839,293 @@ class TestParsePolicy:
         assert len(r.warnings) == 1
         assert "on_parse_error" in r.warnings[0].message
 
+    def test_on_parse_error_qualifier_with_type_args_rejected(self) -> None:
+        """A qualifier segment carrying an explicit type argument
+        (``ParsePolicy[int]::``) is never an accepted ``on_parse_error``
+        spelling, regardless of what it would otherwise resolve to."""
+        err = reject_type('let n: int = ask("Q", on_parse_error = ParsePolicy[int]::Abort())\nn')
+        assert "on_parse_error" in str(err).lower() or "ParsePolicy" in str(err)
+
+
+# ---------------------------------------------------------------------------
+# Builtin identity for the host-contract nominals other than ``ExecResult``:
+# ``Agent`` (the agent an ``ask``/``ask-request`` dispatches to, supplied as
+# the ``agent`` argument or as the receiver), ``AgentRequest``
+# (``ask-request``'s result), the host-raised built-in exceptions carrying an
+# ``Agent``-typed field, and ``ParsePolicy`` (``on_parse_error``). Each
+# resolves against a program's own ``builtin`` declaration of the name, and
+# each host contract whose own fields are nominal must keep the standard
+# identity in them, since that is what the host fills them with.
+# ---------------------------------------------------------------------------
+
+_AGENT_VARIANTS_TC = (
+    "  | AgentCommand(command: text)\n"
+    "  | AgentClaude(model: text, thinking: text)\n"
+    "  | AgentCodex(model: text, thinking: text)\n"
+    "  | AgentPi(provider: text, model: text, thinking: text)\n"
+)
+
+_AGENT_REQUEST_FIELDS_TC = (
+    "  agent: Agent\n"
+    "  prompt: text\n"
+    "  target_type: Option[text]\n"
+    "  format_instructions: Option[text]\n"
+    "  json_schema: Option[json]\n"
+    "  attempt: int\n"
+    "  previous_error: Option[text]\n"
+    "  metadata: json\n"
+)
+
+_PARSE_POLICY_VARIANTS_TC = "  | Abort\n  | Retry(n: int)\n"
+
+
+class TestHostContractBuiltinIdentity:
+    def test_scoped_agent_value_rejected_as_ask_request_agent_argument(self) -> None:
+        """A value of the program's own scoped ``Agent`` is an ordinary
+        static type mismatch against ``AgentRequest``'s canonical ``agent``
+        field type (only ``Agent`` is redeclared here, not ``AgentRequest``,
+        so that field keeps its canonical static type)."""
+        err = reject_type(
+            f"scope A\nbuiltin enum Agent\n{_AGENT_VARIANTS_TC}end A\n"
+            'let g = A::Agent::AgentCommand("x")\n'
+            'ask-request("hi", agent = g)\n'
+        )
+        assert "A::Agent" in err.to_diagnostic().message
+
+    def test_unrelated_type_still_rejected_as_agent_argument_with_a_scoped_agent_live(
+        self,
+    ) -> None:
+        err = reject_type(
+            f"scope A\nbuiltin enum Agent\n{_AGENT_VARIANTS_TC}end A\n"
+            "enum NotAgent\n  | X\n"
+            'ask-request("hi", agent = NotAgent::X)\n'
+        )
+        assert "NotAgent" in err.to_diagnostic().message
+
+    def test_scoped_agent_request_result_type_names_the_scoped_declaration(self) -> None:
+        r = accept_type(
+            f"scope A\nbuiltin record AgentRequest\n{_AGENT_REQUEST_FIELDS_TC}"
+            'def make() -> A::AgentRequest = ask-request("hi")\n'
+            "end A\n()\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_agent_request_declared_without_stdlib_naming_its_own_option_rejected(self) -> None:
+        """Without the standard library, a program that declares its own
+        ``enum Option[T]`` and its own ``builtin record AgentRequest`` (whose
+        ``agent`` field resolves the canonical ``Agent`` -- nothing of its
+        own shadows that bare name here) is still rejected: ``target_type``
+        nests this program's own ``Option`` inside ``Option[text]``, and the
+        host always fills that field with the standard ``Option`` identity,
+        never this program's own declaration."""
+        err = reject_type(
+            "enum Option[T] =\n"
+            "  | None\n"
+            "  | Some(value: T)\n"
+            f"builtin record AgentRequest\n{_AGENT_REQUEST_FIELDS_TC}"
+            "builtin def ask-request(prompt: text, "
+            'agent: Agent = AgentCommand(command = "noop")) -> AgentRequest\n'
+            'ask-request("hi", agent = AgentCommand(command = "noop"))\n',
+            default_stdlib=False,
+        )
+        assert "target_type" in err.to_diagnostic().message
+        assert "Option" in err.to_diagnostic().message
+
+    def test_scoped_agent_request_naming_a_scoped_option_rejected(self) -> None:
+        """With the standard library loaded, a scoped ``AgentRequest`` whose
+        ``target_type``/``format_instructions``/``previous_error`` fields
+        resolve a SIBLING scoped ``Option`` (shadowing ``std/core::Option``
+        the same way a sibling scoped ``Agent`` shadows the canonical one)
+        is rejected the same way, even though its ``agent`` field -- nothing
+        shadows ``Agent`` here -- still resolves the canonical identity:
+        the coherence check recurses into a field type's own type
+        arguments, not just its own top-level nominal."""
+        err = reject_type(
+            "scope A\n"
+            "enum Option[T] =\n"
+            "  | None\n"
+            "  | Some(value: T)\n"
+            f"builtin record AgentRequest\n{_AGENT_REQUEST_FIELDS_TC}"
+            'let q = ask-request("hi")\n'
+            "end A\n()\n"
+        )
+        assert "target_type" in err.to_diagnostic().message
+        assert "Option" in err.to_diagnostic().message
+
+    def test_scoped_parse_policy_constructor_accepted_by_on_parse_error(self) -> None:
+        r = accept_type(
+            f"scope A\nbuiltin enum ParsePolicy =\n{_PARSE_POLICY_VARIANTS_TC}"
+            'let n: int = exec::[int]("ls", on_parse_error = A::ParsePolicy::Retry(n = 5))\n'
+            "end A\n()\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_scoped_parse_policy_abort_accepted_by_on_parse_error(self) -> None:
+        r = accept_type(
+            f"scope A\nbuiltin enum ParsePolicy =\n{_PARSE_POLICY_VARIANTS_TC}"
+            'let n: int = exec::[int]("ls", on_parse_error = A::ParsePolicy::Abort)\n'
+            "end A\n()\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_on_parse_error_rejects_unrelated_qualifier_with_a_scoped_parse_policy_live(
+        self,
+    ) -> None:
+        err = reject_type(
+            f"scope A\nbuiltin enum ParsePolicy =\n{_PARSE_POLICY_VARIANTS_TC}end A\n"
+            "enum NotPolicy\n  | Abort\n"
+            'let n: int = exec::[int]("ls", on_parse_error = NotPolicy::Abort())\n'
+        )
+        assert "on_parse_error" in str(err).lower() or "ParsePolicy" in str(err)
+
+    def test_scoped_builtin_ask_request_signature_mentioning_sibling_types_typechecks(
+        self,
+    ) -> None:
+        """A scoped ``builtin def ask-request`` whose signature mentions its
+        own sibling ``Agent``/``AgentRequest`` types validates once re-rooted
+        onto the canonical (root) contract -- the ask-request analogue of
+        ``test_scoped_builtin_def_signature_naming_a_scoped_sibling_type_typechecks``."""
+        r = accept_type(
+            "scope A\n"
+            f"builtin enum Agent\n{_AGENT_VARIANTS_TC}"
+            f"builtin record AgentRequest\n{_AGENT_REQUEST_FIELDS_TC}"
+            'builtin def ask-request(prompt: text, agent: Agent = AgentCommand(command = "x")) '
+            "-> AgentRequest\n"
+            "end A\n()\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_scoped_builtin_ask_request_with_wrong_result_type_rejected(self) -> None:
+        """The wrong-shape counterpart: a scoped ``builtin def ask-request``
+        whose result type does not match the canonical ``AgentRequest``
+        contract is still rejected."""
+        err = reject_type(
+            "scope A\n"
+            f"builtin enum Agent\n{_AGENT_VARIANTS_TC}"
+            f"builtin record AgentRequest\n{_AGENT_REQUEST_FIELDS_TC}"
+            'builtin def ask-request(prompt: text, agent: Agent = AgentCommand(command = "x")) '
+            "-> Agent\n"
+            "end A\n()\n"
+        )
+        assert "ask-request" in err.to_diagnostic().message
+
+    def test_scoped_agent_receiver_rejected_for_ask_request(self) -> None:
+        """The RECEIVER form supplies the value the host stores in
+        ``AgentRequest.agent`` exactly as the ``agent`` named argument does,
+        so a receiver of the program's own scoped ``Agent`` is rejected the
+        same way -- the host fills that field with the standard identity, so
+        accepting the receiver would mint a field whose value disagrees with
+        its static type."""
+        err = reject_type(
+            "scope A\n"
+            f"builtin enum Agent\n{_AGENT_VARIANTS_TC}"
+            "builtin def Agent::ask-request(self, prompt: text) -> AgentRequest\n"
+            'let g = Agent::AgentCommand("x")\n'
+            'let q = g.ask-request("hi")\n'
+            "end A\n()\n"
+        )
+        assert "A::Agent" in err.to_diagnostic().message
+
+    def test_scoped_agent_receiver_rejected_for_ask(self) -> None:
+        """The ``ask`` counterpart of the receiver form."""
+        err = reject_type(
+            "scope A\n"
+            f"builtin enum Agent\n{_AGENT_VARIANTS_TC}"
+            "builtin def Agent::ask[T](\n"
+            "  self,\n"
+            "  prompt: text,\n"
+            '  format: text = "",\n'
+            "  strict_json: bool = false,\n"
+            "  on_parse_error: ParsePolicy = ParsePolicy::Abort,\n"
+            ") -> T\n"
+            'let g = Agent::AgentCommand("x")\n'
+            'let r: text = g.ask("hi")\n'
+            "end A\n()\n"
+        )
+        assert "A::Agent" in err.to_diagnostic().message
+
+    def test_canonical_agent_receiver_still_accepted(self) -> None:
+        """Regression: the ordinary receiver form, with nothing redeclared,
+        is unaffected."""
+        r = accept_type('let r: text = AgentCommand("echo").ask("hi")\n()\n')
+        assert r.resolved.program is not None
+
+    def test_scoped_builtin_agent_call_error_naming_a_scoped_agent_rejected(self) -> None:
+        """A ``builtin exception`` the host RAISES is minted with host-fixed
+        field values exactly like a host-minted record, so its own nominal
+        field types face the same requirement: ``AgentCallError.agent`` is
+        always filled with the standard ``Agent``, and a sibling scoped
+        ``Agent`` naming that field makes the contract unusable at the
+        ``catch`` clause that types the caught value."""
+        err = reject_type(
+            "scope A\n"
+            f"builtin enum Agent\n{_AGENT_VARIANTS_TC}"
+            "builtin exception AgentCallError extends Exception\n"
+            "  *\n  agent: Agent\n  cause: text\n  metadata: json\n"
+            "def trigger() -> text =\n"
+            "  try\n"
+            '    ask("hi")\n'
+            "  catch AgentCallError as e =>\n"
+            "    render(e.agent)\n"
+            "end A\n()\n"
+        )
+        assert "AgentCallError" in err.to_diagnostic().message
+        assert "agent" in err.to_diagnostic().message
+
+    def test_scoped_builtin_exception_without_nominal_fields_still_caught(self) -> None:
+        """Regression: a ``builtin exception`` whose fields are all scalar
+        carries no identity requirement of its own and is still catchable at
+        its own scoped declaration."""
+        r = accept_type(
+            "scope A\n"
+            "builtin exception RangeError extends Exception()\n"
+            "def trigger(step: int) -> unit =\n"
+            "  try\n"
+            "    for i in 1 to 5 by step do\n"
+            "      ()\n"
+            "    done\n"
+            "  catch RangeError as e =>\n"
+            "    ()\n"
+            "end A\n()\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_scoped_builtin_agent_call_error_over_the_canonical_agent_still_caught(self) -> None:
+        """Regression: the same scoped ``builtin exception AgentCallError``
+        with nothing shadowing ``Agent`` keeps the standard identity in its
+        own ``agent`` field, so it stays catchable and its field stays
+        readable."""
+        r = accept_type(
+            "scope A\n"
+            "builtin exception AgentCallError extends Exception\n"
+            "  *\n  agent: Agent\n  cause: text\n  metadata: json\n"
+            "def trigger() -> text =\n"
+            "  try\n"
+            '    ask("hi")\n'
+            "  catch AgentCallError as e =>\n"
+            "    render(e.agent)\n"
+            "end A\n()\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_user_exception_naming_a_scoped_agent_is_not_a_host_contract(self) -> None:
+        """Regression: an ordinary (non-``builtin``) exception is never
+        host-minted, so a field of it may name any declaration the program
+        likes -- the requirement is on host contracts only."""
+        r = accept_type(
+            "scope A\n"
+            f"builtin enum Agent\n{_AGENT_VARIANTS_TC}"
+            "exception MyError extends Exception\n"
+            "  *\n  agent: Agent\n"
+            "def trigger() -> text =\n"
+            "  try\n"
+            '    raise MyError(message = "x", agent = Agent::AgentCommand("y"))\n'
+            "  catch MyError as e =>\n"
+            "    render(e.agent)\n"
+            "end A\n()\n"
+        )
+        assert r.resolved.program is not None
+
 
 # ---------------------------------------------------------------------------
 # Seed environment
@@ -6172,10 +7135,10 @@ class TestParsePolicy:
 class TestSeedEnv:
     def test_seed_env_shares_types(self) -> None:
         r1 = accept_type("let x: int = 1\nx")
-        prog2 = parse_program("x")
-        r2 = check_module(
-            resolve_module(prog2, parent_scope=r1.resolved.root_scope),
+        r2 = resolve_and_check_entry(
+            "x",
             default_capabilities(),
+            parent_scope=r1.resolved.root_scope,
             seed_env=r1.type_env,
         )
         assert r2.resolved.program is not None
@@ -6183,35 +7146,30 @@ class TestSeedEnv:
     def test_seed_env_shares_function_signatures(self) -> None:
         r1 = accept_type("def f(x: int) -> int = x\nf(1)")
         assert "f" in r1.function_signatures
-        prog2 = parse_program("f(2)")
-        r2 = check_module(
-            resolve_module(prog2, parent_scope=r1.resolved.root_scope),
+        r2 = resolve_and_check_entry(
+            "f(2)",
             default_capabilities(),
+            parent_scope=r1.resolved.root_scope,
             seed_env=r1.type_env,
         )
         assert r2.resolved.program is not None
 
     def test_seed_env_recursive_type_declared_earlier_is_usable_later(self) -> None:
-        # Single-module "REPL" pattern (two check_module() calls chained via
-        # seed_env): a recursive type declared in the first entry is
+        # Single-module "REPL" pattern (two resolve_and_check_entry() calls
+        # chained via seed_env): a recursive type declared in the first entry is
         # constructed and pattern-matched in a later one, re-validating the
         # accumulated table cheaply (idempotently) each time.
         r1 = accept_type(
             "enum Tree\n  | Leaf\n  | Node(value: int, left: Tree, right: Tree)\n"
             "Node(value = 1, left = Leaf(), right = Leaf())"
         )
-        prog2 = parse_program(
+        r2 = resolve_and_check_entry(
             "case Node(value = 2, left = Leaf(), right = Leaf()) of\n"
             "  | Leaf() => 0\n"
-            "  | Node(value, left, right) => value"
-        )
-        r2 = check_module(
-            resolve_module(
-                prog2,
-                parent_scope=r1.resolved.root_scope,
-                ambient_constructor_candidates=r1.resolved.constructor_candidates,
-            ),
+            "  | Node(value, left, right) => value",
             default_capabilities(),
+            parent_scope=r1.resolved.root_scope,
+            ambient_constructor_candidates=r1.resolved.constructor_candidates,
             seed_env=r1.type_env,
         )
         assert r2.resolved.program is not None
@@ -6250,15 +7208,14 @@ def test_nullary_candidate_defers_duplicate_pattern_binder_until_typecheck_selec
         )
     else:
         prior = accept_type("enum Mark\n  | mark\nmark()")
-        resolved = resolve_module(
-            parse_program(
-                _nullary_duplicate_pattern_source("mark", "Mark", "mark()", bare_first=bare_first)
-            ),
+        checked = resolve_and_check_entry(
+            _nullary_duplicate_pattern_source("mark", "Mark", "mark()", bare_first=bare_first),
+            default_capabilities(),
             parent_scope=prior.resolved.root_scope,
             ambient_constructor_candidates=prior.resolved.constructor_candidates,
             ambient_type_names=prior.resolved.declared_type_names,
+            seed_env=prior.type_env,
         )
-        checked = check_module(resolved, default_capabilities(), seed_env=prior.type_env)
 
     case = checked.resolved.program.body.items[-1]
     assert isinstance(case, Case)
@@ -6328,9 +7285,6 @@ class TestTypeReprAndKind:
     def test_unit_repr(self) -> None:
         assert repr(UnitType()) == "unit"
 
-    def test_agent_repr(self) -> None:
-        assert repr(AgentType()) == "agent"
-
     def test_bottom_repr(self) -> None:
         assert repr(BottomType()) == "bottom"
 
@@ -6380,9 +7334,6 @@ class TestTypeReprAndKind:
 
     def test_unit_kind(self) -> None:
         assert UnitType().kind == "unit"
-
-    def test_agent_kind(self) -> None:
-        assert AgentType().kind == "agent"
 
     def test_bottom_kind(self) -> None:
         assert BottomType().kind == "bottom"
@@ -6560,7 +7511,9 @@ class TestMisc:
         assert isinstance(record_pattern, AsPattern)
         assert isinstance(scalar_pattern, AsPattern)
         assert isinstance(checked.type_env.get_binding_type(enum_pattern.node_id), EnumType)
-        assert checked.type_env.get_binding_type(record_pattern.node_id) == RecordType("Point")
+        assert strip_decl_ids(
+            checked.type_env.get_binding_type(record_pattern.node_id)
+        ) == RecordType("Point")
         assert checked.type_env.get_binding_type(scalar_pattern.node_id) == IntType()
 
     def test_case_empty_branches_wildcard(self) -> None:
@@ -6641,12 +7594,6 @@ class TestMisc:
         spec = r.contract_specs[call.node_id]
         assert spec.structured_exec is True
 
-    def test_agent_decl_is_agent_type(self) -> None:
-        r = accept_type("agent a\na")
-        decl = r.resolved.program.body.items[0]
-        assert isinstance(decl, AgentDecl)
-        assert r.type_env.get_binding_type(decl.node_id) == AgentType()
-
     def test_builtin_prelude_type_names_coverage(self) -> None:
         assert len(BUILTIN_PRELUDE_TYPE_NAMES) > 0
         for name in BUILTIN_PRELUDE_TYPE_NAMES:
@@ -6657,8 +7604,14 @@ class TestMisc:
         assert r.resolved.program is not None
 
     def test_builtin_type_name_shadow_raises(self) -> None:
-        # ExecResult is a BUILTIN_PRELUDE_TYPE_NAMES — record shadows it
-        err = reject_type("record ExecResult\n  x: int\nExecResult(x = 1)")
+        # ExecResult is a BUILTIN_PRELUDE_TYPE_NAMES — a non-builtin record
+        # shadowing it is always rejected. With std/core in scope (the real
+        # configuration), std/core's own `builtin record ExecResult` makes the
+        # bare name ambiguous at scope-resolution time, before the type-level
+        # shadow check in _TypeBuilder ever runs — so this now raises
+        # AglScopeError, not AglTypeError; reject_any accepts either since
+        # both report the same underlying rejection.
+        err = reject_any("record ExecResult\n  x: int\nExecResult(x = 1)")
         assert "built-in" in str(err).lower() or "ExecResult" in str(err)
 
     def test_alias_to_record_field(self) -> None:
@@ -6905,7 +7858,7 @@ class TestIndexTypechecking:
             builtin_calls={},
             root_scope=ScopeNode(node_id=program.node_id),
         )
-        return check_module(resolved, default_capabilities())
+        return check_resolved(resolved)
 
     def _binding(
         self, name: str, type_ann: TypeExpr, value: Expr, sp: SourceSpan, *, mutable: bool
@@ -7241,7 +8194,7 @@ class TestDefensiveGuards:
         block = Block(items=(), span=sp, node_id=_mk_node_id())
         prog = Program(body=block, span=sp, node_id=_mk_node_id())
         resolved = self._mk_resolved(prog)
-        result = check_module(resolved, default_capabilities())
+        result = check_resolved(resolved)
         assert result is not None
 
     def test_empty_case_branches_fallback(self) -> None:
@@ -7253,7 +8206,7 @@ class TestDefensiveGuards:
         block = Block(items=(case_node,), span=sp, node_id=_mk_node_id())
         prog = Program(body=block, span=sp, node_id=_mk_node_id())
         resolved = self._mk_resolved(prog)
-        result = check_module(resolved, default_capabilities())
+        result = check_resolved(resolved)
         assert result is not None
 
     def test_duplicate_constructor_arg_rejected(self) -> None:
@@ -7281,7 +8234,7 @@ class TestDefensiveGuards:
         prog = Program(body=block, span=sp, node_id=_mk_node_id())
         resolved = self._mk_resolved(prog, declared_functions={"print": fd})
         with pytest.raises(AglTypeError, match="built-in function"):
-            check_module(resolved, default_capabilities())
+            check_resolved(resolved)
 
     def test_alias_seen_guard_in_ensure_referenced(self) -> None:
         err = reject_type("record Wrapper\n  value: A\ntype A = B\ntype B = A\n()")
@@ -7306,7 +8259,7 @@ class TestDefensiveGuards:
         prog = Program(body=block, span=sp, node_id=_mk_node_id())
         resolved = self._mk_resolved(prog, resolution={ref_nid: binding_ref})
         with pytest.raises(AssertionError, match="checker invariant"):
-            check_module(resolved, default_capabilities())
+            check_resolved(resolved)
 
     def test_declared_call_sig_none_fallback(self) -> None:
         # A function binding without a registered signature now reports a user-facing
@@ -7342,7 +8295,7 @@ class TestDefensiveGuards:
             declared_functions={"h": fd},
         )
         with pytest.raises(AglTypeError, match="Cannot infer return type"):
-            check_module(resolved, default_capabilities())
+            check_resolved(resolved)
 
     def test_function_value_without_registered_type_reports_inference_error(self) -> None:
         sp = mk_span()
@@ -7375,7 +8328,7 @@ class TestDefensiveGuards:
         )
 
         with pytest.raises(AglTypeError, match="Cannot infer return type"):
-            check_module(resolved, default_capabilities())
+            check_resolved(resolved)
 
     def test_builtin_funcdef_without_return_type_rejected_defensively(self) -> None:
         sp = mk_span()
@@ -7393,7 +8346,7 @@ class TestDefensiveGuards:
         resolved = self._mk_resolved(prog, declared_functions={"print": fd})
 
         with pytest.raises(AglTypeError, match="must declare a return type"):
-            check_module(resolved, default_capabilities())
+            check_resolved(resolved)
 
     def test_duplicate_named_arg_in_declared_call(self) -> None:
         # Exercises line 970: duplicate named arg check in _check_declared_name_call.
@@ -7448,7 +8401,7 @@ class TestDefensiveGuards:
             declared_functions={"g": fd},
         )
         with pytest.raises(AglTypeError, match="Duplicate argument"):
-            check_module(resolved, default_capabilities())
+            check_resolved(resolved)
 
     def test_duplicate_named_arg_in_constructor_rejected(self) -> None:
         # Exercises the duplicate named arg path in
@@ -7459,9 +8412,7 @@ class TestDefensiveGuards:
         sp = mk_span()
         # Build a record type that has field 'x'.
         record_source = "record Box\n  x: int\nBox(x = 1)"
-        prog_base = parse_program(record_source)
-        res_base = resolve_module(prog_base)
-        checked_base = check_module(res_base, default_capabilities())
+        checked_base = resolve_and_check_entry(record_source, default_capabilities())
         box_type = checked_base.type_env.get_type("Box")
         assert box_type is not None
 
@@ -7478,7 +8429,7 @@ class TestDefensiveGuards:
         prog_nid = _mk_node_id()
         prog = Program(body=block, span=sp, node_id=prog_nid)
         # Register a ConstructorRef for 'Box' and the callee VarRef.
-        box_decl_node_id = prog_base.body.items[0].node_id
+        box_decl_node_id = checked_base.resolved.program.body.items[0].node_id
         ctor_ref = ConstructorRef(
             owner_name="Box",
             variant="Box",
@@ -7503,7 +8454,48 @@ class TestDefensiveGuards:
             constructor_refs={callee_nid: ctor_ref},
         )
         with pytest.raises(AglTypeError, match="[Dd]uplicate"):
-            check_module(resolved, default_capabilities(), seed_env=checked_base.type_env)
+            check_resolved(resolved, seed_env=checked_base.type_env)
+
+    def test_constructor_ref_with_unresolvable_owner_raises_type_error(self) -> None:
+        # Exercises the fallback-also-fails branch of
+        # ConstructorChecker.resolve_constructor_owner (typecheck/constructors.py):
+        # a ConstructorRef whose owner is absent from both the shared
+        # whole-program type table and the unqualified local registry. The
+        # scope resolver never emits such a ref from real source (it only
+        # creates a ConstructorRef for a name it already resolved to a
+        # constructor candidate), so this hand-builds one directly.
+        from agm.agl.scope.symbols import ConstructorRef
+
+        sp = mk_span()
+        callee_nid = _mk_node_id()
+        callee = VarRef(name="Ghost", span=sp, node_id=callee_nid)
+        call = Call(callee=callee, args=(), named_args=(), span=sp, node_id=_mk_node_id())
+        block = Block(items=(call,), span=sp, node_id=_mk_node_id())
+        prog_nid = _mk_node_id()
+        prog = Program(body=block, span=sp, node_id=prog_nid)
+        ctor_ref = ConstructorRef(
+            owner_name="Ghost",
+            variant="Ghost",
+            owner_decl_node_id=-1,
+            type_params=(),
+        )
+        binding_ref = BindingRef(
+            name="Ghost",
+            mutable=False,
+            decl_span=sp,
+            decl_node_id=-1,
+            kind=BinderKind.constructor_binding,
+        )
+        root = ScopeNode(node_id=prog_nid)
+        resolved = _ModuleResolution(
+            program=prog,
+            resolution={callee_nid: binding_ref},
+            builtin_calls={},
+            root_scope=root,
+            constructor_refs={callee_nid: ctor_ref},
+        )
+        with pytest.raises(AglTypeError, match="not a known constructible type"):
+            check_resolved(resolved)
 
     def test_type_arg_on_qualified_constructor_rejected(self) -> None:
         err = reject_type("enum Status\n  | Pass\n  | Fail\nStatus[int]::Pass()\n()")
@@ -7614,7 +8606,7 @@ class TestAskUnknownArgs:
     def test_ask_valid_named_arg_combinations_still_accepted(self) -> None:
         # All four known named args together must be accepted.
         r = accept_type(
-            'agent a\nlet n: int = ask("Q", agent = a, format = "json",'
+            'let a = AgentCommand("a")\nlet n: int = ask("Q", agent = a, format = "json",'
             " strict_json = true, on_parse_error = Abort())\nn"
         )
         assert r.resolved.program is not None
@@ -7625,11 +8617,6 @@ class TestExecUnknownArgs:
         err = reject_type('exec("ls", bogus = 1)')
         assert "exec" in str(err).lower() or "unknown" in str(err).lower()
         assert "bogus" in str(err)
-
-    def test_exec_agent_named_arg_rejected(self) -> None:
-        # exec has no 'agent:' argument.
-        err = reject_type('agent a\nexec("ls", agent = a)')
-        assert "exec" in str(err).lower() or "unknown" in str(err).lower()
 
     def test_exec_extra_positional_rejected(self) -> None:
         err = reject_type('exec("ls", "extra")')
@@ -7698,9 +8685,11 @@ class TestExecStructured:
 # ---------------------------------------------------------------------------
 
 
-def _method_header(source: str) -> tuple[FuncDef, tuple[ParamSpec, ...]]:
+def _method_header(
+    source: str, *, origin_path: Path | None = None
+) -> tuple[FuncDef, tuple[ParamSpec, ...]]:
     """Resolve one classified method header through the shared function seam."""
-    resolved = resolve_module(parse_program(source), origin_path=Path("method.agl"))
+    resolved = resolve_entry(source, origin_path=origin_path or Path("method.agl"))
     function = next(item for item in resolved.program.body.items if isinstance(item, FuncDef))
     owner = resolved.method_declarations[(ENTRY_ID, ("Point",), function.name)]
     env = TypeEnvironment()
@@ -7723,9 +8712,8 @@ class TestMethodHeaders:
         )
         signature = checked.type_env.get_function_signature("radius", scope_path=("Point",))
         assert signature is not None
-        assert signature.params[0] == ParamSpec(
-            "self", RecordType("Point"), ParamKind.POSITIONAL_ONLY, False
-        )
+        receiver = replace(signature.params[0], type=strip_decl_ids(signature.params[0].type))
+        assert receiver == ParamSpec("self", RecordType("Point"), ParamKind.POSITIONAL_ONLY, False)
 
     def test_generic_owner_builds_receiver_from_leading_method_slot(self) -> None:
         checked = accept_type(
@@ -7736,7 +8724,7 @@ class TestMethodHeaders:
         )
         signature = checked.type_env.get_function_signature("get", scope_path=("Box",))
         assert signature is not None
-        assert signature.params[0].type == RecordType("Box", (TypeVarType("E"),))
+        assert strip_decl_ids(signature.params[0].type) == RecordType("Box", (TypeVarType("E"),))
         assert signature.params[0].kind is ParamKind.POSITIONAL_ONLY
 
     @pytest.mark.parametrize(
@@ -7779,9 +8767,11 @@ class TestMethodHeaders:
             "let outcome: Outcome[int, text] = Outcome::value(v = 1)\n"
             "Outcome::tag(outcome)"
         )
-        method = checked.type_env.type_table.lookup_method(
-            EnumType("Outcome", (IntType(), TextType())), "tag"
-        )
+        outcome_decl = checked.resolved.program.body.items[2]
+        assert isinstance(outcome_decl, LetDecl)
+        outcome_type = checked.type_env.get_binding_type(outcome_decl.pattern.node_id)
+        assert isinstance(outcome_type, EnumType)
+        method = checked.type_env.type_table.lookup_method(outcome_type, "tag")
         assert method is not None
         assert method.receiver_type_param_arity == 2
 
@@ -7799,15 +8789,24 @@ class TestMethodHeaders:
         "prefix",
         ("", "extern ", "builtin "),
     )
-    def test_all_function_declaration_forms_resolve_a_receiver(self, prefix: str) -> None:
+    def test_all_function_declaration_forms_resolve_a_receiver(
+        self, prefix: str, tmp_path: Path
+    ) -> None:
+        # An `extern def` is only accepted for an entry with a real backing file
+        # that has a companion `.py` sibling; the other forms need no such file.
+        origin_path = None
+        if prefix == "extern ":
+            origin_path = tmp_path / "method.agl"
+            origin_path.with_suffix(".py").write_text("")
         function, params = _method_header(
             "record Point\n"
             "  x: int\n"
-            f"{prefix}def Point::member(self) -> int" + (" = self.x" if not prefix else "")
+            f"{prefix}def Point::member(self) -> int" + (" = self.x" if not prefix else ""),
+            origin_path=origin_path,
         )
         assert function.params[0].name == "self"
         assert params[0].kind is ParamKind.POSITIONAL_ONLY
-        assert params[0].type == RecordType("Point")
+        assert strip_decl_ids(params[0].type) == RecordType("Point")
 
 
 # ---------------------------------------------------------------------------
@@ -7875,7 +8874,7 @@ class TestGenericTypeDef:
 
     def test_instantiate_nominal_record(self) -> None:
         env = TypeEnvironment()
-        template = RecordType("Box", type_args=(TypeVarType("T"),))
+        template = RecordType("Box", type_args=(TypeVarType("T"),), decl_id=1)
         gdef = GenericTypeDef(kind="record", type_params=("T",), template=template)
         env.register_generic_type("Box", gdef)
         env.type_table.register(
@@ -7885,6 +8884,7 @@ class TestGenericTypeDef:
                 module_id=template.module_id,
                 type_params=("T",),
                 fields=(("value", TypeVarType("T")),),
+                decl_node_id=1,
             )
         )
         result = env.instantiate_nominal("Box", (IntType(),))
@@ -7895,7 +8895,7 @@ class TestGenericTypeDef:
 
     def test_instantiate_nominal_enum(self) -> None:
         env = TypeEnvironment()
-        template = EnumType("Option", type_args=(TypeVarType("T"),))
+        template = EnumType("Option", type_args=(TypeVarType("T"),), decl_id=1)
         gdef = GenericTypeDef(kind="enum", type_params=("T",), template=template)
         env.register_generic_type("Option", gdef)
         env.type_table.register(
@@ -7905,6 +8905,7 @@ class TestGenericTypeDef:
                 module_id=template.module_id,
                 type_params=("T",),
                 variants=(("Some", (("value", TypeVarType("T")),)), ("None", ())),
+                decl_node_id=1,
             )
         )
         result = env.instantiate_nominal("Option", (TextType(),))
@@ -7924,10 +8925,12 @@ class TestGenericTypeDef:
 
     def test_instantiate_zero_field_record(self) -> None:
         env = TypeEnvironment()
-        template = RecordType("Marker")
+        template = RecordType("Marker", decl_id=1)
         gdef = GenericTypeDef(kind="record", type_params=(), template=template)
         env.register_generic_type("Marker", gdef)
-        env.type_table.register(TypeDef(kind="record", name="Marker", module_id=template.module_id))
+        env.type_table.register(
+            TypeDef(kind="record", name="Marker", module_id=template.module_id, decl_node_id=1)
+        )
         result = env.instantiate_nominal("Marker", ())
         assert isinstance(result, RecordType)
         assert env.type_table.record_fields(result) == {}
@@ -8082,7 +9085,7 @@ class TestResolveTypeExprTypeVars:
 
         env = TypeEnvironment()
         sp = mk_span()
-        template = RecordType("Box", type_args=(TypeVarType("T"),))
+        template = RecordType("Box", type_args=(TypeVarType("T"),), decl_id=1)
         gdef = GenericTypeDef(kind="record", type_params=("T",), template=template)
         env.register_generic_type("Box", gdef)
         env.type_table.register(
@@ -8092,6 +9095,7 @@ class TestResolveTypeExprTypeVars:
                 module_id=template.module_id,
                 type_params=("T",),
                 fields=(("value", TypeVarType("T")),),
+                decl_node_id=1,
             )
         )
         result = env.resolve_type_expr(
@@ -8366,9 +9370,9 @@ class TestGenericFunctionInferenceRegions:
         assert isinstance(nested, LetDecl)
         assert isinstance(values, LetDecl)
         assert checked.type_env.get_binding_type(nested.pattern.node_id) == IntType()
-        assert checked.type_env.get_binding_type(values.pattern.node_id) == RecordType(
-            "Duo", (IntType(), TextType())
-        )
+        assert strip_decl_ids(
+            checked.type_env.get_binding_type(values.pattern.node_id)
+        ) == RecordType("Duo", (IntType(), TextType()))
         self._assert_finalized(checked)
 
     def test_generic_body_can_solve_a_fresh_occurrence_to_a_rigid_variable(self) -> None:
@@ -8720,10 +9724,6 @@ class TestGenerics:
         err = reject_type('exec::[text, int]("ls")')
         assert "type argument" in str(err).lower()
 
-    def test_d3_ask_request_with_type_var_rejected(self) -> None:
-        err = reject_type("def req[T](p: text) -> AgentRequest = ask-request::[T](p)")
-        assert "type variable" in str(err).lower() or "cannot" in str(err).lower()
-
     def test_d3_ask_with_array_of_T_rejected(self) -> None:
         # array[T] as target also contains a type var
         err = reject_type("def fetch[T](p: text) -> array[T] = ask::[array[T]](p)")
@@ -8776,12 +9776,12 @@ class TestGenerics:
             "  request: AgentRequest\n"
             "def select[T](first: T, second: T) -> T = first\n"
             'let bundle = Bundle(answer = select(ask("answer"), 1), '
-            'request = ask-request::[int]("request"))\n'
+            'request = ask-request("request"))\n'
             "bundle"
         )
         assert [site.callee for site in result.call_sites] == ["ask", "ask-request"]
-        assert [site.target_type for site in result.call_sites] == [IntType(), IntType()]
-        assert [site.codec_name for site in result.call_sites] == ["json", "json"]
+        assert [site.target_type for site in result.call_sites] == [IntType(), TextType()]
+        assert [site.codec_name for site in result.call_sites] == ["json", "text"]
 
     def test_later_solved_builtin_target_rejects_unserializable_type(self) -> None:
         err = reject_type(
@@ -8802,9 +9802,7 @@ class TestGenerics:
         from agm.agl.typecheck.checker import _Checker, _InferenceRegion
         from agm.agl.typecheck.inference import InferenceEngine
 
-        checker = _Checker(
-            TypeEnvironment(), resolve_module(parse_program("()")), default_capabilities()
-        )
+        checker = _Checker(TypeEnvironment(), resolve_entry("()"), default_capabilities())
         engine = InferenceEngine()
         checker._inference_region = _InferenceRegion(engine, {}, {}, [])
         unresolved = engine.fresh("target")
@@ -8820,7 +9818,6 @@ class TestGenerics:
                     strict_json=None,
                     parse_policy="default",
                     parse_option_spans=(),
-                    has_agent_argument=False,
                 )
             )
 
@@ -9058,7 +10055,7 @@ class TestGenericTypeDecl:
 
     def test_generic_enum_duplicate_variant_is_rejected_during_scope_collection(self) -> None:
         with pytest.raises(AglScopeError):
-            resolve_module(parse_program("enum Bad[T]\n  | Foo\n  | Foo\nFoo()"))
+            resolve_entry("enum Bad[T]\n  | Foo\n  | Foo\nFoo()")
 
 
 class TestGenericConstructorInference:
@@ -9260,9 +10257,7 @@ class TestGenericConstructorInference:
         from agm.agl.typecheck.checker import _Checker, _InferenceRegion
         from agm.agl.typecheck.inference import InferenceEngine
 
-        checker = _Checker(
-            TypeEnvironment(), resolve_module(parse_program("()")), default_capabilities()
-        )
+        checker = _Checker(TypeEnvironment(), resolve_entry("()"), default_capabilities())
         concrete_owner = RecordType("Box", type_args=(IntType(),))
         assert checker._zonk_constructor_owner(concrete_owner) == concrete_owner
         engine = InferenceEngine()
@@ -9482,7 +10477,7 @@ class TestNonGenericConstructorsUnchanged:
         )
 
         with pytest.raises(AglTypeError):
-            check_module(resolved, default_capabilities())
+            check_resolved(resolved)
 
     def test_non_generic_type_arg_rejected(self) -> None:
         err = reject_type("record Point\n  x: int\n  y: int\nPoint::[int](x = 1, y = 2)")
@@ -10028,7 +11023,9 @@ class TestGenericRecursiveTypes:
         assert "uninhabitable" in str(err).lower()
 
     def test_generic_argument_reference_via_parameterized_alias_is_uninhabitable(self) -> None:
-        # type AL[X] = Box[X] aliases the same unguarded wrapper recursion as Box[A].
+        # type AL[X] = Box[X] aliases the same unguarded wrapper recursion as
+        # Box[A]; the whole-program inhabitation pre-pass rejects it before
+        # any module's body is individually checked.
         err = reject_type(
             "record Box[T]\n  value: T\ntype AL[X] = Box[X]\nrecord A\n  x: AL[A]\n()"
         )
@@ -10282,11 +11279,6 @@ class TestCast:
         err = reject_type("1 as bool")
         assert "cannot cast" in str(err).lower() or "int" in str(err).lower()
 
-    def test_agent_as_text_rejected(self) -> None:
-        """agent value as text is a static error."""
-        err = reject_type("agent myAgent\nmyAgent as text")
-        assert "cannot cast" in str(err).lower() or "agent" in str(err).lower()
-
     def test_record_as_json_accepted(self) -> None:
         """record as json is now TOTAL_JSON (explicit nominal→json cast)."""
         from agm.agl.semantics.types import CastKind
@@ -10389,6 +11381,12 @@ _TREE_SRC = "enum Tree\n  | Leaf\n  | Node(value: int, left: Tree, right: Tree)\
 _PHANTOM_GROWING_TYPE_SRC = "record R[T]\n  children: array[R[array[T]]]\n"
 
 
+class TestParameterWireTypes:
+    def test_agent_parameter_is_rejected_as_not_json_serializable(self) -> None:
+        err = reject_type("param value: unit\nvalue")
+        assert "json-serializable" in str(err).lower()
+
+
 class TestNoFiniteSchemaUseSites:
     def test_ask_growing_type_rejected(self) -> None:
         err = reject_type(_GROWING_TYPE_SRC + 'ask::[Perfect[int]]("Q")')
@@ -10396,12 +11394,6 @@ class TestNoFiniteSchemaUseSites:
         assert "perfect[int]" in msg
         assert "agent output type" in msg
         assert "no finite json schema" in msg
-
-    def test_ask_request_growing_type_rejected(self) -> None:
-        err = reject_type(_GROWING_TYPE_SRC + 'ask-request::[Perfect[int]]("Q")')
-        msg = str(err).lower()
-        assert "perfect[int]" in msg
-        assert "agent output type" in msg
 
     def test_exec_growing_type_rejected(self) -> None:
         err = reject_type(_GROWING_TYPE_SRC + 'exec::[Perfect[int]]("cmd")')
@@ -10411,8 +11403,6 @@ class TestNoFiniteSchemaUseSites:
 
     def test_custom_structured_codec_growing_type_accepted(self) -> None:
         caps = HostCapabilities(
-            agent_names=frozenset(),
-            has_default_agent=True,
             supports_shell_exec=True,
             codec_kinds={
                 "text": frozenset({"text"}),
@@ -10422,19 +11412,6 @@ class TestNoFiniteSchemaUseSites:
         checked = accept_type(
             _GROWING_TYPE_SRC + 'ask::[Perfect[int]]("Q", format = "custom")', caps
         )
-        assert checked.resolved.program is not None
-
-    def test_custom_structured_codec_non_json_shaped_type_accepted(self) -> None:
-        caps = HostCapabilities(
-            agent_names=frozenset(),
-            has_default_agent=True,
-            supports_shell_exec=True,
-            codec_kinds={
-                "text": frozenset({"text"}),
-                "custom": frozenset({"record", "enum", "array", "dict"}),
-            },
-        )
-        checked = accept_type('record Box\n  a: agent\nask::[Box]("Q", format = "custom")', caps)
         assert checked.resolved.program is not None
 
     def test_cast_growing_type_target_rejected(self) -> None:
@@ -10500,12 +11477,6 @@ class TestNoFiniteSchemaUseSites:
         assert "agent output type" in msg
         assert "json-serializable" in msg
 
-    def test_exec_record_with_nested_agent_field_rejected(self) -> None:
-        err = reject_type('record Holder\n  a: agent\nexec::[Holder]("cmd")')
-        msg = str(err).lower()
-        assert "exec output type" in msg
-        assert "json-serializable" in msg
-
     def test_cast_record_with_nested_function_field_rejected(self) -> None:
         err = reject_type('record Holder\n  f: int -> text\nlet raw: text = "{}"\nraw as Holder')
         msg = str(err).lower()
@@ -10542,7 +11513,7 @@ class TestNoFiniteSchemaUseSites:
         r = accept_type(_TREE_SRC + 'ask::[Tree]("Q")')
         call = r.resolved.program.body.items[-1]
         assert isinstance(call, Call)
-        assert r.contract_specs[call.node_id].target_type == EnumType(name="Tree")
+        assert strip_decl_ids(r.contract_specs[call.node_id].target_type) == EnumType(name="Tree")
 
     def test_exec_finite_recursive_type_accepted(self) -> None:
         r = accept_type(_TREE_SRC + 'exec::[Tree]("cmd")')
@@ -10647,27 +11618,34 @@ class TestCopyAndShallowCopyCall:
 
 
 class TestImportDeclTypecheck:
-    """Import declarations pass through the type-checker without errors."""
+    """Import declarations pass through the type-checker without errors.
+
+    Each import here targets ``std/core``/``std/config`` — real modules under
+    the configured roots — since a real module graph (unlike the old
+    per-module ``resolve_module``/``check_module`` bypass) resolves every
+    import against the module loader, which rejects a target that does not
+    exist on disk.
+    """
 
     def test_import_decl_does_not_raise(self) -> None:
         """A bare import declaration type-checks as unit."""
-        r = accept_type("open import foo/bar\n1")
+        r = accept_type("open import std/core\n1")
         assert r  # no exception
 
     def test_import_with_alias_does_not_raise(self) -> None:
-        r = accept_type("import foo as f\n1")
+        r = accept_type("import std/core as f\n1")
         assert r
 
     def test_import_wildcard_does_not_raise(self) -> None:
-        r = accept_type("import foo/*\n1")
+        r = accept_type("import std/*\n1")
         assert r
 
     def test_import_using_does_not_raise(self) -> None:
-        r = accept_type("import foo using bar\n1")
+        r = accept_type("import std/core using ExecResult\n1")
         assert r
 
     def test_import_hiding_does_not_raise(self) -> None:
-        r = accept_type("import foo hiding secret\n1")
+        r = accept_type("import std/core hiding ExecResult\n1")
         assert r
 
 
@@ -10685,7 +11663,7 @@ class TestSelfRefTypeInSingleModule:
         reject_type("def f() -> ::NoSuch = 1\nf()")
 
     def test_module_qualifier_in_single_module_rejected(self) -> None:
-        """'mylib::Point' in single-module (no graph) mode → type error."""
+        """'mylib::Point' with no 'mylib' import present → type error."""
         reject_type("def f() -> mylib::Point = 1\nf()")
 
 
@@ -10760,8 +11738,8 @@ class TestGenericNominalModuleId:
             "Both had module_id=ENTRY_ID before the fix."
         )
 
-    def test_generic_completion_respects_different_module_ids(self) -> None:
-        """Contextual generic completion respects nominal module identity."""
+    def test_generic_completion_respects_different_declarations(self) -> None:
+        """Contextual generic completion respects nominal declaration identity."""
         from agm.agl.modules.ids import ModuleId
         from agm.agl.typecheck.inference import ConstraintRole, InferenceEngine
 
@@ -10769,11 +11747,12 @@ class TestGenericNominalModuleId:
         lib_b = ModuleId.from_path("libB")
         engine = InferenceEngine()
         inferred = engine.instantiate(
-            ("T",), (RecordType("Box", type_args=(TypeVarType("T"),), module_id=lib_a),)
+            ("T",),
+            (RecordType("Box", type_args=(TypeVarType("T"),), module_id=lib_a, decl_id=1),),
         ).templates[0]
         engine.complete_from_context(
             inferred,
-            RecordType("Box", type_args=(IntType(),), module_id=lib_b),
+            RecordType("Box", type_args=(IntType(),), module_id=lib_b, decl_id=2),
             engine.origin(mk_span(), role=ConstraintRole.EXPECTED_RESULT, subject="Box"),
         )
         assert isinstance(inferred, RecordType)
@@ -10788,14 +11767,14 @@ class TestGenericNominalModuleId:
         from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.typecheck.env import GenericTypeDef
 
-        # In single-module mode the module_id is ENTRY_ID; verify the template
+        # For the entry module the module_id is ENTRY_ID; verify the template
         # also has ENTRY_ID (consistency check: it's at least not wrong).
         cp = parse_resolve_check("record Box[T]\n  value: T\nlet x: Box[int] = Box(value = 1)\nx")
         gdef = cp.type_env.get_generic_type("Box")
         assert gdef is not None
         assert isinstance(gdef, GenericTypeDef)
         assert gdef.template.module_id == ENTRY_ID, (
-            f"Template module_id must be ENTRY_ID in single-module mode, "
+            f"Template module_id must be ENTRY_ID for the entry module, "
             f"got {gdef.template.module_id!r}."
         )
 
@@ -10917,3 +11896,24 @@ class TestLambdaRequiredAfterDefaulted:
         """Named-only params are order-free: fn(*, x: int = 0, y: int) -> int => y is ok."""
         r = accept_type("fn(*, x: int = 0, y: int) -> int => y")
         assert r.resolved.program is not None
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "record agent()\nagent()",
+        "enum agent\n  | value\nvalue",
+        "type agent = int\nlet value: agent = 1\nvalue",
+        "def agent() -> int = 1\nagent()",
+    ],
+)
+def test_agent_is_an_ordinary_declaration_name(source: str) -> None:
+    """`agent` is legal for records, enums, aliases, and functions."""
+    checked = accept_type(source)
+    assert checked.resolved.program is not None
+
+
+def test_agent_enum_is_a_json_serializable_param_type() -> None:
+    """Agent values are ordinary enum data at the JSON parameter boundary."""
+    checked = accept_type("param selected: Agent\nselected")
+    assert checked.resolved.program is not None

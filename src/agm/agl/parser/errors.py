@@ -103,9 +103,10 @@ def _expects_identifier(expected: set[str]) -> bool:
 def _raw_tail_name_on_stack(exc: UnexpectedToken) -> str | None:
     """Name of the raw-tail form whose payload the parser is reading, if exposed.
 
-    The ``raw_callee`` subtree carrying the ``RAW_TAIL_NAME`` token is on the
-    parse stack for the whole payload, so the empty-payload diagnostic can name
-    the form the user wrote instead of re-deriving it from the source text.
+    The ``raw_callee`` or ``dotted_raw_head`` subtree carrying the
+    ``RAW_TAIL_NAME`` token is on the parse stack for the whole payload, so the
+    empty-payload diagnostic can name the form the user wrote instead of
+    re-deriving it from the source text.
     Returns ``None`` when the parser state is unavailable, exactly as
     :func:`_completed_rule` does.
     """
@@ -118,10 +119,12 @@ def _raw_tail_name_on_stack(exc: UnexpectedToken) -> str | None:
     for item in reversed(items):
         data: object = getattr(item, "data", None)
         children: object = getattr(item, "children", None)
-        if data != "raw_callee" or not isinstance(children, list):
+        if data not in {"raw_callee", "dotted_raw_head"} or not isinstance(children, list):
             continue
-        name = str(children[0])
-        return name if name in RAW_TAIL_NAMES else None
+        for child in children:
+            name = str(child)
+            if name in RAW_TAIL_NAMES:
+                return name
     return None
 
 

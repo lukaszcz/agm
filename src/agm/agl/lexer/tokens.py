@@ -76,7 +76,6 @@ KW_EXTERN = "extern"
 KW_EXTENDS = "extends"
 KW_PARAM = "param"
 KW_PROGRAM = "program"
-KW_AGENT = "agent"
 KW_LET = "let"
 KW_VAR = "var"
 KW_DEF = "def"  # function declaration keyword
@@ -128,7 +127,6 @@ KEYWORDS: frozenset[str] = frozenset(
         KW_EXTENDS,
         KW_PARAM,
         KW_PROGRAM,
-        KW_AGENT,
         KW_LET,
         KW_VAR,
         KW_DEF,

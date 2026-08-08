@@ -32,8 +32,10 @@ Algorithm
    c. **Inhabitation** — once every body is resolved, the whole-program
       inhabitation fixpoint
       (:func:`~agm.agl.semantics.analyses.compute_uninhabited`) rejects the
-      first declaration (across the whole program) that has no finite value,
-      consistent with the single-module ``_TypeBuilder`` check.
+      first declaration (across the whole program) that has no finite value.
+      This is the only inhabitation check the pipeline runs; the per-module
+      ``_TypeBuilder`` pass that resolves each declaration's body never
+      repeats it.
 
 2. **Program function headers** — resolve parameter and explicit return
    annotations for top-level ``FuncDef`` declarations in every module,
@@ -48,12 +50,6 @@ Algorithm
    recheck each module body with its module-aware
    :class:`~agm.agl.typecheck.env.TypeEnvironment`. This pass alone publishes
    checked node types, calls, contracts, bindings, and warnings.
-
-Single-module equivalence
--------------------------
-A single-module (entry-only) program checked via :func:`check_program` is
-equivalent to calling :func:`~agm.agl.typecheck.checker.check` directly on the
-entry's :class:`~agm.agl.scope.symbols.ModuleResolution`.
 """
 
 from __future__ import annotations
@@ -70,10 +66,12 @@ from agm.agl.scope.symbols import ModuleResolution
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.analyses import compute_uninhabited, uninhabitable_message
 from agm.agl.semantics.type_table import (
+    DeclId,
     DeclKey,
+    TypeDef,
     TypeTable,
     create_seeded_type_table,
-    decl_key_sort_key,
+    decl_def_sort_key,
 )
 from agm.agl.semantics.types import EnumType, ExceptionType, RecordType, Type
 from agm.agl.syntax.nodes import (
@@ -86,12 +84,16 @@ from agm.agl.syntax.nodes import (
     RecordDef,
     TypeAlias,
     static_function_items,
+    static_items,
     static_type_items,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.builder import _TypeBuilder
 from agm.agl.typecheck.checker import _check_prepared_module, prepare_module_headers
-from agm.agl.typecheck.declaration_validation import validate_method_declaration_collisions
+from agm.agl.typecheck.declaration_validation import (
+    validate_builtin_declaration_uniqueness,
+    validate_method_declaration_collisions,
+)
 from agm.agl.typecheck.env import (
     AglTypeError,
     CheckedModule,
@@ -327,7 +329,8 @@ def _collect_all_type_keys(
     never present here because ``_collect_shells_only`` rejects them earlier.
 
     This set is the fixed order in which Step C below resolves every
-    declaration's body (sorted by :func:`decl_key_sort_key`). It is LARGER
+    declaration's body (sorted by name path, see
+    :func:`~agm.agl.semantics.type_table.decl_def_sort_key`). It is LARGER
     than ``program_type_table`` during the shell-collection step because
     aliases are not yet resolved to shells there — the program table is only
     populated with record/enum shells and is updated with alias resolutions
@@ -352,8 +355,8 @@ def _find_type_decl_span(resolved: ResolvedProgram, key: DeclKey) -> SourceSpan 
     (see :func:`_build_program_type_table`): the resolved module ASTs are
     already in hand, so the span is a plain lookup rather than anything
     carried through the type table itself (a ``TypeDef`` has no span — it is
-    a pure semantic description, shared with standalone-module
-    building).
+    a pure semantic description, the same shape ``_TypeBuilder`` produces for
+    every module).
     """
     mid, _scope_path, _name = key
     rmod = resolved.modules.get(mid)
@@ -368,16 +371,20 @@ def _find_type_decl_span(resolved: ResolvedProgram, key: DeclKey) -> SourceSpan 
 
 
 def _raise_first_uninhabited(
-    uninhabited: frozenset[tuple[ModuleId, tuple[str, ...], str]],
+    uninhabited: frozenset[DeclId],
     type_table: TypeTable,
     resolved: ResolvedProgram,
 ) -> None:
-    """Raise ``AglTypeError`` for the first uninhabited key, sorted deterministically."""
-    mid, scope_path, name = sorted(uninhabited, key=decl_key_sort_key)[0]
-    typedef = type_table.get(mid, name, scope_path)
-    assert typedef is not None
-    span = _find_type_decl_span(resolved, (mid, scope_path, name))
-    raise AglTypeError(uninhabitable_message(typedef.kind, name), span=span)
+    """Raise ``AglTypeError`` for the first uninhabited declaration, sorted deterministically."""
+    typedefs: list[TypeDef] = []
+    for decl_id in uninhabited:
+        typedef = type_table.get_by_id(decl_id)
+        assert typedef is not None
+        typedefs.append(typedef)
+    typedef = sorted(typedefs, key=decl_def_sort_key)[0]
+    key = (typedef.module_id, typedef.scope_path, typedef.name)
+    span = _find_type_decl_span(resolved, key)
+    raise AglTypeError(uninhabitable_message(typedef.kind, typedef.name), span=span)
 
 
 def _build_program_type_table(
@@ -420,7 +427,9 @@ def _build_program_type_table(
     Step C: Once every body is resolved, run the inhabitation fixpoint
             (:func:`~agm.agl.semantics.analyses.compute_uninhabited`) over the
             whole shared table and reject the first uninhabited declaration
-            (sorted by :func:`decl_key_sort_key`), at its declaration span.
+            (sorted by declaration name, see
+            :func:`~agm.agl.semantics.type_table.decl_def_sort_key`), at its
+            declaration span.
 
     Cross-module type cycles are allowed (a cycle may span any modules, the
     same as same-module mutual recursion) as long as the declarations
@@ -593,10 +602,9 @@ def _build_program_type_table(
 
     # Step C: every body is now resolved, so the inhabitation fixpoint can
     # run over the whole shared table (this program's declarations plus the
-    # builtin/prelude defs, all trivially inhabited). The authoritative
-    # per-module check in Phase 4 skips its own inhabitation pass
-    # (``check_inhabitation=False``) precisely because this whole-program check
-    # has already run.
+    # builtin/prelude defs, all trivially inhabited). This is the only
+    # inhabitation check the pipeline runs; Phase 4's per-module re-check
+    # never repeats it.
     uninhabited = compute_uninhabited(shared_type_table)
     if uninhabited:
         _raise_first_uninhabited(uninhabited, shared_type_table, resolved)
@@ -719,7 +727,7 @@ def _build_program_builtin_var_table(
 
     result: dict[int, Type] = {}
     for _mid, loaded in resolved.modules.items():
-        for item in loaded.resolved.program.body.items:
+        for item in static_items(loaded.resolved.program.body.items):
             if isinstance(item, BuiltinVarDecl):
                 key_type = get_engine_key_type(item.name)
                 if key_type is not None:
@@ -802,8 +810,13 @@ def _prepare_module_environment(
     # Seed from the REPL session type env first (for the entry module in REPL
     # program context).  Program tables override on collision, so the entry's own types
     # and function signatures always shadow any session binding with the same name.
+    # ``type_table`` here is the SAME shared instance the type pre-pass
+    # (``_build_program_type_table``) already seeded from this same
+    # ``entry_seed_env`` and then advanced with this entry's own declarations,
+    # so re-merging its name index now would regress it onto a name this
+    # entry just redeclared (see ``TypeEnvironment.seed_from``).
     if mid.is_entry and entry_seed_env is not None:
-        env.seed_from(entry_seed_env)
+        env.seed_from(entry_seed_env, merge_type_table=False)
 
     # Seed env with the module's own fully-resolved types so they're
     # accessible by bare name (no qualifier needed within the module).
@@ -950,13 +963,11 @@ def check_program(
             capabilities,
             env=module_envs[mid],
             module_id=mid,
-            check_inhabitation=False,
         )
 
-    validate_method_declaration_collisions(
-        {module_id: module.resolved for module_id, module in resolved.modules.items()},
-        shared_type_table,
-    )
+    program_modules = {module_id: module.resolved for module_id, module in resolved.modules.items()}
+    validate_builtin_declaration_uniqueness(program_modules)
+    validate_method_declaration_collisions(program_modules, shared_type_table)
 
     # Candidate discovery follows the preserved reverse-topological import SCC
     # sequence. A cycle is one cross-module function graph; a dependency SCC's
@@ -994,7 +1005,6 @@ def check_program(
             capabilities,
             env=module_envs[mid],
             module_id=mid,
-            check_inhabitation=False,
             prepare_headers=False,
             infer_candidates=False,
             candidate_records=candidate_records,

@@ -1,0 +1,3 @@
+scope Geo
+export libf using greet
+end Geo

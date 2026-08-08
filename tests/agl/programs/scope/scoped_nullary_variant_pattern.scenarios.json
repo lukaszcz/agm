@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "name": "default",
+      "expect": {
+        "stdout": "0\n7\n"
+      }
+    }
+  ]
+}

@@ -2,8 +2,7 @@
 # annotations, typed agent targets for every built-in.
 param payload: json
 
-agent source
-
+let source = AgentCommand("source")
 let empty_array: array[text] = []
 let empty_map: dict[text, json] = {}
 print empty_array

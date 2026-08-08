@@ -7,7 +7,10 @@ fragments and `%{…}` interpolation holes. A template evaluates to `text`.
 The lexical forms — single- and triple-quoted strings, escapes, and the
 triple-quoted dedent rule — are specified in
 [Lexical structure](lexical-structure.md). This chapter specifies what
-interpolation *means*.
+interpolation *means*. AgL text literals have their own full lexical escape
+table, including `\n`, `\t`, `\"`, and `\%`; the `%{name}` interpolation hole
+— whether written directly in a string literal or evaluated by
+`std/text::interp` — instead uses only `\%{` to write a literal hole marker.
 
 ## Interpolation
 
@@ -22,6 +25,31 @@ regardless of whether the template appears in an `ask` prompt, a `print`
 argument, an `exec` command, or any other position. A percent sign not
 followed by `{` is literal; `\%` produces a literal percent sign.
 
+## Runtime interpolation
+
+`std/text` provides `interp`, which interpolates a template from an explicit
+`dict[text, text]` at runtime:
+
+```agl
+import std/text
+
+let vars = {"name": "Ada"}
+print std/text::interp("Hello, \%{name}!", vars)  # Hello, Ada!
+```
+
+Runtime holes are **name-only**: `%{name}` names a single AgL identifier and
+looks it up in the dictionary. In contrast, a string-literal `%{expr}` hole
+is a compile-time template hole containing an arbitrary expression. The two
+forms follow identical rules for splicing text into a hole at runtime: the
+same `%{...}` delimiters, the same `\%{` escape for a literal hole marker,
+and the same error on an unterminated hole.
+Use `\%{` in a runtime template for a literal `%{`; because a normal AgL
+string is itself a compile-time template, write `\\\%{` in source to pass that
+escape to `interp`.
+
+A missing dictionary key, an invalid runtime name, or an unterminated runtime
+hole raises a catchable `ExternError` from `std/text::interp`.
+
 ## Uniform rendering rules
 
 | Value type | Rendered as |
@@ -33,7 +61,7 @@ followed by `{` is literal; `\%` produces a literal percent sign.
 | `dict[text, V]` | `{"k1": value1, "k2": value2}` — AgL dict syntax; keys always quoted |
 | record | `TypeName(f1 = value1, f2 = value2)` — AgL constructor form; fields in declaration order |
 | enum | `TypeName::Variant(f1 = value1, …)` — qualified; nullary variant as `TypeName::Variant` (no parens) |
-| exception | `TypeName(f1 = value1, …)` — record-style with all fields including `trace_id`, in declaration order |
+| exception | `TypeName(f1 = value1, …)` — record-style with all fields in declaration order |
 
 AgL structured values (`array`, `dict`, record, enum, exception) always render on
 a **single line** — no injected newlines. A `json` value renders as **compact**
@@ -82,7 +110,7 @@ print render(r as json, pretty = true)   # → {
 
 ## Opaque values in interpolation
 
-Function values and agent values render as opaque handles in templates:
+Function values render as opaque handles in templates:
 
 ```agl
 let f = fn(x: int) => x
@@ -90,7 +118,8 @@ print "function is %{f}"   # function is <function: int -> int>
 ```
 
 They still cannot be stored in a `json` slot or used where a JSON-shaped value
-is required.
+is required. `Agent` values are ordinary enum data and render like other enum
+values.
 
 ## Templates in `exec` commands
 

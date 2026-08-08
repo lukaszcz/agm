@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "name": "agent_values_round_trip_as_nested_json_data",
+      "expect": {
+        "stdout": "true\ntrue\ntrue\ntrue\n"
+      }
+    }
+  ]
+}

@@ -18,6 +18,7 @@ class _InstallArgs(Protocol):
 class InstallUserConfigResult:
     installed: list[Path]
     skipped: list[Path]
+    pruned: list[Path]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -43,6 +44,25 @@ def _install_file(*, source: Path, destination: Path, force: bool) -> bool:
     return True
 
 
+def _path_depth(path: Path) -> int:
+    """Return *path*'s depth (its number of components), for deepest-first sorting."""
+    return len(path.parts)
+
+
+def _prepare_managed_destination(destination_dir: Path) -> None:
+    """Create *destination_dir*, refusing trees that contain symlinks."""
+    if destination_dir.is_symlink():
+        raise RuntimeError(f"Refusing to refresh symlinked directory: {destination_dir}")
+
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    symlink = next(
+        (path for path in destination_dir.rglob("*") if path.is_symlink()),
+        None,
+    )
+    if symlink is not None:
+        raise RuntimeError(f"Refusing to refresh directory containing symlink: {symlink}")
+
+
 def _install_tree_files(
     *,
     source_dir: Path,
@@ -50,17 +70,51 @@ def _install_tree_files(
     force: bool,
     installed: list[Path],
     skipped: list[Path],
+    pruned: list[Path] | None = None,
 ) -> None:
+    """Copy every file under *source_dir* into *destination_dir*.
+
+    When *pruned* is given, *destination_dir* is additionally made an exact
+    mirror of *source_dir*: any file under *destination_dir* with no
+    corresponding file under *source_dir* is removed (appended to *pruned*),
+    followed by any directory left empty as a result. Both the copy and the
+    prune walk are confined strictly to *destination_dir* — nothing outside
+    it is ever touched. Used for managed-artifact trees (the stdlib) that
+    AGM owns outright, as opposed to user-editable config the caller may
+    have customized.
+    """
+    source_relatives: set[Path] = set()
     for source in sorted(source_dir.rglob("*")):
         if not source.is_file():
             continue
         relative = source.relative_to(source_dir)
+        source_relatives.add(relative)
         destination = destination_dir / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         if _install_file(source=source, destination=destination, force=force):
             installed.append(destination)
         else:
             skipped.append(destination)
+
+    if pruned is None:
+        return
+
+    for destination in sorted(destination_dir.rglob("*")):
+        if not destination.is_file():
+            continue
+        stale = destination.relative_to(destination_dir) not in source_relatives
+        if stale:
+            destination.unlink()
+            pruned.append(destination)
+
+    # Remove directories left empty by pruning, deepest first.
+    stale_dirs = [d for d in destination_dir.rglob("*") if d.is_dir()]
+    stale_dirs.sort(key=_path_depth, reverse=True)
+    for directory in stale_dirs:
+        try:
+            directory.rmdir()
+        except OSError:
+            pass  # not empty (still holds files that were never pruned)
 
 
 def install_user_config(
@@ -76,10 +130,10 @@ def install_user_config(
     micro_syntax_dir = install_root / ".config" / "micro" / "syntax"
     sandbox_dir.mkdir(parents=True, exist_ok=True)
     prompts_dir.mkdir(parents=True, exist_ok=True)
-    stdlib_dir.mkdir(parents=True, exist_ok=True)
 
     installed: list[Path] = []
     skipped: list[Path] = []
+    pruned: list[Path] = []
 
     config_source = repo_root / "config" / "config.toml"
     config_destination = agm_config_dir / "config.toml"
@@ -106,12 +160,19 @@ def install_user_config(
         else:
             skipped.append(prompt_destination)
 
+    # The stdlib is a managed artifact AGM owns outright, not user-editable
+    # configuration: it is always force-refreshed (regardless of the caller's
+    # `force`) and pruned to an exact mirror of the shipped tree, so a stale
+    # destination file can never survive to satisfy the STDLIB_CONTRACT gate
+    # in `agm.config.module_roots.resolve_stdlib_root` with old sources.
+    _prepare_managed_destination(stdlib_dir)
     _install_tree_files(
         source_dir=repo_root / "stdlib",
         destination_dir=stdlib_dir,
-        force=force,
+        force=True,
         installed=installed,
         skipped=skipped,
+        pruned=pruned,
     )
 
     micro_source_dir = repo_root / "config" / "micro"
@@ -124,7 +185,7 @@ def install_user_config(
             skipped=skipped,
         )
 
-    return InstallUserConfigResult(installed=installed, skipped=skipped)
+    return InstallUserConfigResult(installed=installed, skipped=skipped, pruned=pruned)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -138,6 +199,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Installed {path}")
     for path in result.skipped:
         print(f"Skipped {path}")
+    for path in result.pruned:
+        print(f"Removed {path}")
     return 0
 
 

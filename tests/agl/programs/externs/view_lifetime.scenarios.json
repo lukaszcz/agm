@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "stashed_view_is_usable_during_its_call",
+      "params": {"mode": "within_call"},
+      "expect": {"stdout": "[1, 7]\n"}
+    },
+    {
+      "name": "stashed_view_is_usable_from_a_later_call",
+      "params": {"mode": "across_calls"},
+      "expect": {"stdout": "[1, 9]\n"}
+    }
+  ]
+}

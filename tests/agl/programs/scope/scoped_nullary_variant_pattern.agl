@@ -1,0 +1,17 @@
+# A bare nullary enum variant pattern inside the region that declares it,
+# alongside a field-bearing sibling variant. The owner nominal's scope path
+# must reach match compilation intact for the nullary spelling, exactly as
+# it already does for the field-bearing one.
+scope C
+enum Status
+  | Idle
+  | Busy(n: int)
+
+def label(s: Status) -> int =
+  case s of
+  | Idle => 0
+  | Busy(n) => n
+end C
+
+print("%{C::label(C::Status::Idle)}")
+print("%{C::label(C::Status::Busy(n = 7))}")

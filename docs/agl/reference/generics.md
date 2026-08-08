@@ -339,6 +339,11 @@ the body cannot branch on the actual type. (Once a type parameter is *applied*
 inside a known constructor — e.g. a `Box[T]` value — the surrounding structure
 is fully usable; only the bare `T` payload is opaque.)
 
+This language-internal guarantee does not extend to a Python companion behind
+`extern def`. The FFI passes the ordinary runtime representation at a generic
+position and trusts the companion to preserve parametricity; see [Python
+FFI](ffi.md#generics-and-trust).
+
 ## Invariance
 
 Type arguments are **invariant**: an applied type matches another only when
@@ -429,21 +434,27 @@ generic function called at different type arguments; see
 Every use in-language works uniformly across recursive generic types, whether
 uniform (`Tree[T]` referencing `Tree[T]`), a permutation (`Swap[B, A]`
 referencing `Swap[A, B]`), argument-constant (`R[int]` referencing `R[T]`), or
-growing (`Perfect[T]` referencing `Perfect[Pair[T, T]]`, as above). Three
-positions, however, need a **finite JSON Schema** for the concrete type in
-hand: an `ask`/`exec` response type ([Agent calls](agent-calls.md)), an
-`as`/`as?` cast target ([Expressions](expressions.md#casts-as-and-as)), and a
-non-`text` host `param` declaration ([Host environment](host-environment.md#params)).
-Deriving that schema means expanding every concrete instantiation the type's
-declaration can reach; for a uniform, permutation, or argument-constant
-reference this expansion always closes (finitely many distinct concrete
-shapes), but a growing self-reference like `Perfect[T]`'s can produce
-infinitely many distinct shapes (`Perfect[int]`, `Perfect[Pair[int, int]]`,
-`Perfect[Pair[Pair[int, int], Pair[int, int]]]`, …) — there is no finite
-schema to derive.
+growing (`Perfect[T]` referencing `Perfect[Pair[T, T]]`, as above). Four
+positions require schema-relevant instantiations to close finitely: a
+JSON-decoded `ask`/`exec` response type ([Agent calls](agent-calls.md)), the
+target of a fallible `as` or `as?` cast
+([Expressions](expressions.md#casts-as-and-as)), a non-`text` host `param`
+declaration ([Host environment](host-environment.md#params)), and an `extern
+def` parameter or result ([Python FFI](ffi.md)). The first three derive a
+**finite JSON Schema**; the FFI requires the same finite closure without
+deriving any schema, since values cross the boundary by their runtime
+representation rather than a derived artifact.
 
-A concrete instantiation whose reachable declarations are all finite-closing
-may cross any schema boundary; one that reaches a non-closing declaration is
+Derivation expands the schema-relevant concrete instantiations reachable from
+the type. Uniform, permutation, and argument-constant recursion do not by
+themselves prevent closure; when all reachable declarations use only those
+forms, there are finitely many such shapes. A growing self-reference like
+`Perfect[T]`'s can instead produce infinitely many (`Perfect[int]`,
+`Perfect[Pair[int, int]]`, `Perfect[Pair[Pair[int, int], Pair[int, int]]]`,
+…) and has no finite schema.
+
+A concrete instantiation whose reachable declarations all have finite closures
+may cross a schema boundary; one that reaches a non-closing declaration is
 rejected with a static error at that specific use site:
 
 <!-- agl-check: error -->
@@ -459,13 +470,12 @@ let also_bad = some_json as Perfect[int]
 Nothing else about `Perfect[int]` is restricted: it can still be
 constructed, matched, compared, passed to and returned from ordinary
 functions, and rendered — only the schema-needing boundaries reject it.
-A non-generic recursive type, and every uniform/permutation/argument-constant
-generic recursive type, always has a finite schema and crosses these
-boundaries normally — the [derived JSON Schema](agent-calls.md#derived-json-schema)
-for a recursive type uses `$defs`/`$ref` exactly as for a non-generic one, one
-entry per recursive concrete instantiation reachable from the target
-(`Tree[int]` and `Tree[text]` get distinct entries, since they are different
-concrete shapes).
+A non-generic recursive type, or a generic recursive type whose reachable
+instantiations close, crosses these boundaries normally. The [derived JSON
+Schema](agent-calls.md#derived-json-schema) for a recursive type uses
+`$defs`/`$ref`, with one entry per recursive schema-relevant instantiation
+reachable from the target (`Tree[int]` and `Tree[text]` are distinct concrete
+shapes).
 
 ## Unqualified variant ambiguity
 

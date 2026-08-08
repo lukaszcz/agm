@@ -5,19 +5,16 @@ from pathlib import Path
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.lower import lower_module
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.loader import load_graph
 from agm.agl.modules.roots import RootSet
-from agm.agl.parser import parse_program
-from agm.agl.scope import AglScopeError, resolve_module
+from agm.agl.scope import AglScopeError
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import BUILTIN_CALL_NAMES
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPES,
     COMPATIBILITY_PRELUDE_TYPE_NAMES,
-    AgentType,
     BoolType,
     EnumType,
     IntType,
@@ -27,7 +24,6 @@ from agm.agl.semantics.types import (
     TypeVarType,
 )
 from agm.agl.syntax.nodes import ParamKind
-from agm.agl.typecheck import check_module
 from agm.agl.typecheck.checker import (
     _builtin_function_signature,
     _builtin_function_signature_alternates,
@@ -35,6 +31,7 @@ from agm.agl.typecheck.checker import (
 )
 from agm.agl.typecheck.env import AglTypeError, FunctionSignature, ParamSpec
 from agm.agl.typecheck.program import check_program
+from tests._agl_helpers import strip_decl_ids
 
 _ROOTS = RootSet(frozenset({Path(__file__).resolve().parents[1] / "stdlib"}))
 _CAPS = HostCapabilities()
@@ -62,16 +59,25 @@ def test_no_stdlib_disables_default_open_import() -> None:
         resolve_program(graph)
 
 
+def test_no_stdlib_reports_bare_print_as_undefined() -> None:
+    """A bare built-in call has no reachable declaration once the standard
+    library is switched off — it is an ordinary undefined-name error, not a
+    silently-accepted host dispatch."""
+    graph = load_graph(
+        'print("hi")\n',
+        entry_path=None,
+        roots=_ROOTS,
+        default_stdlib=False,
+    )
+    with pytest.raises(AglScopeError, match="'print' is not defined"):
+        resolve_program(graph)
+
+
 def test_no_stdlib_still_allows_explicit_std_core_import() -> None:
     _check(
         "open import std/core\nlet x: Option[int] = Some(value = 1)\nx\n",
         default_stdlib=False,
     )
-
-
-def test_shipped_stdlib_modules_load_without_the_default_prelude() -> None:
-    """A shipped module may not lean on the prelude the user is free to switch off."""
-    _check("import std/config\nprint(std/config::runner)\n", default_stdlib=False)
 
 
 def test_unknown_builtin_function_is_rejected() -> None:
@@ -96,7 +102,12 @@ def test_stdlib_ask_signature_is_context_inferred_with_optional_arguments() -> N
     assert ask_sig.result == TypeVarType("T")
     params = ask_sig.params
     assert params[0].name == "prompt" and params[0].type == TextType() and not params[0].has_default
-    assert params[1].name == "agent" and params[1].type == AgentType() and params[1].has_default
+    assert (
+        params[1].name == "agent"
+        and strip_decl_ids(params[1].type)
+        == EnumType("Agent", module_id=ModuleId.from_path("std/core"))
+        and params[1].has_default
+    )
     assert params[2].name == "format" and params[2].type == TextType() and params[2].has_default
     assert (
         params[3].name == "strict_json" and params[3].type == BoolType() and params[3].has_default
@@ -106,6 +117,23 @@ def test_stdlib_ask_signature_is_context_inferred_with_optional_arguments() -> N
     assert isinstance(p4.type, EnumType)
     assert p4.type.name == "ParsePolicy"
     assert p4.has_default is True
+
+
+def test_canonical_builtin_signatures_name_the_shared_prelude_handles() -> None:
+    """Every nominal in a canonical builtin contract is the shared prelude
+    handle for that name, so it carries the same owning module and declaration
+    identity the rest of the pipeline resolves that name to."""
+    ask = _builtin_function_signature("ask")
+    assert ask is not None
+    ask_params = {param.name: param.type for param in ask.params}
+    assert ask_params["agent"] == BUILTIN_PRELUDE_TYPES["Agent"]
+    assert ask_params["on_parse_error"] == BUILTIN_PRELUDE_TYPES["ParsePolicy"]
+    ask_request = _builtin_function_signature("ask-request")
+    assert ask_request is not None
+    assert ask_request.result == BUILTIN_PRELUDE_TYPES["AgentRequest"]
+    exec_sig = _builtin_function_signature("exec")
+    assert exec_sig is not None
+    assert exec_sig.result == BUILTIN_PRELUDE_TYPES["ExecResult"]
 
 
 def test_builtin_function_signature_mismatches_are_rejected() -> None:
@@ -184,7 +212,11 @@ def test_std_core_declares_every_public_builtin() -> None:
         item.name for item in program.body.items if isinstance(item, FuncDef) and item.is_builtin
     }
 
-    public_prelude = set(BUILTIN_PRELUDE_TYPES) - set(COMPATIBILITY_PRELUDE_TYPE_NAMES)
+    # ``Option`` is validated against its own canonical generic template
+    # (``semantics.type_table.OPTION_TYPE_DEF``), registered separately from
+    # ``BUILTIN_PRELUDE_TYPES`` (see ``create_seeded_type_table``), so it is
+    # declared ``builtin`` in ``std/core`` without appearing in that table.
+    public_prelude = set(BUILTIN_PRELUDE_TYPES) - set(COMPATIBILITY_PRELUDE_TYPE_NAMES) | {"Option"}
     assert records | enums == public_prelude
     assert exceptions == set(BUILTIN_EXCEPTIONS)
     assert functions == set(BUILTIN_CALL_NAMES)
@@ -200,6 +232,11 @@ def test_builtin_type_shape_must_match() -> None:
         _check("builtin record ExecResult\n  stdout: text\n()\n")
 
 
+def test_builtin_option_shape_must_match() -> None:
+    with pytest.raises(AglTypeError, match="Builtin type 'Option' has an invalid definition"):
+        _check("builtin\nenum Option[T] =\n  | None\n  | Some(value: T, extra: int)\n()\n")
+
+
 def test_builtin_exception_shape_must_match() -> None:
     with pytest.raises(AglTypeError, match="Builtin type 'ExecError' has an invalid definition"):
         _check(
@@ -207,7 +244,6 @@ def test_builtin_exception_shape_must_match() -> None:
             "exception Exception\n"
             "  *\n"
             "  message: text\n"
-            "  trace_id: text\n"
             "builtin\n"
             "exception ExecError extends Exception\n"
             "  command: text\n"
@@ -272,30 +308,31 @@ def test_exception_extends_cycle_is_uninhabitable() -> None:
         _check("exception A extends B\n  a: int\nexception B extends A\n  b: int\n()\n")
 
 
-def test_single_module_exception_extends_cycle_is_uninhabitable() -> None:
-    source = "exception A extends B\n  a: int\nexception B extends A\n  b: int\n()\n"
-    with pytest.raises(AglTypeError, match="uninhabitable"):
-        check_module(resolve_module(parse_program(source)), _CAPS)
-
-
-def test_single_module_lowerer_skips_builtin_function_definitions() -> None:
-    from tests.agl.ir_harness import _compiled_checked
+def test_lowerer_skips_builtin_function_definitions() -> None:
+    from tests.agl.ir_harness import lower_ir
 
     source = "builtin def print[T](value: T) -> unit\n()\n"
-    checked = check_module(resolve_module(parse_program(source)), _CAPS)
-    lower_module(_compiled_checked(checked), source_text=source, source_label="<test>")
+    lower_ir(source, caps=_CAPS, default_stdlib=False)
 
 
 def test_source_declared_builtin_function_call_is_classified() -> None:
-    _check('builtin def parse_json(value: text) -> json\nparse_json("{}")\n')
+    """A program's own ``parse_json`` declaration is a duplicate of
+    ``std/core``'s while the standard library is loaded, so this checks the
+    entry module's declaration alone, without it."""
+    _check('builtin def parse_json(value: text) -> json\nparse_json("{}")\n', default_stdlib=False)
 
 
 def test_copy_and_shallow_copy_source_declared_calls_are_classified() -> None:
+    """Runs without the standard library: ``copy``/``shallow_copy`` are
+    ``std/core``'s own built-in names too, so declaring them again while it
+    is loaded would be a duplicate rather than exercising this call-site
+    classification."""
     _check(
         "builtin def copy[T](value: T) -> T\n"
         "builtin def shallow_copy[T](value: T) -> T\n"
         "let _ = copy(1)\n"
-        "shallow_copy(1)\n"
+        "shallow_copy(1)\n",
+        default_stdlib=False,
     )
 
 
@@ -303,5 +340,17 @@ def test_builtin_named_value_call_is_not_classified_as_builtin() -> None:
     _check("enum E\n  | print\nlet x: E = print()\nx\n")
 
 
-def test_source_defined_exception_extends_base_and_trace_id_is_optional() -> None:
+def test_source_defined_exception_extends_base_with_message() -> None:
     _check('raise Abort(message = "stop")\n')
+
+
+def test_builtin_exception_constructor_resolves_without_the_standard_library() -> None:
+    """``Abort`` is a host builtin identity available whether or not
+    ``std/core`` is loaded — the scope resolver seeds its constructor
+    candidate ambiently (module id ``std/core``) regardless. With the
+    standard library switched off, that candidate's owner has no entry in
+    the shared whole-program type table (built only from each module's own,
+    non-builtin declarations), so resolving it must fall back to the local
+    always-seeded builtin registry instead of assuming the whole-program
+    pre-pass always populated it."""
+    _check('raise Abort(message = "stop")\n', default_stdlib=False)

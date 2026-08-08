@@ -26,8 +26,8 @@ reach that bottom.
 
 Non-data reachability
 ---------------------
-The *non-data* types are exactly ``unit``, ``agent``, and function types:
-opaque handles rather than data. Two independent language rules turn on
+The *non-data* types are exactly ``unit`` and function types. Two
+independent language rules turn on
 whether one of them is reachable from a type — ``=``/``!=`` are undefined for
 such a value (and for anything that transitively contains one), and there is
 no JSON representation for one either — so the underlying fact is computed
@@ -80,9 +80,14 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import assert_never
 
-from agm.agl.semantics.type_table import DeclKey, TypeDef, TypeDefKind, TypeTable, decl_key_sort_key
+from agm.agl.semantics.type_table import (
+    DeclId,
+    TypeDef,
+    TypeDefKind,
+    TypeTable,
+    decl_id_sort_key,
+)
 from agm.agl.semantics.types import (
-    AgentType,
     ArrayType,
     BoolType,
     BottomType,
@@ -104,7 +109,7 @@ from agm.agl.semantics.types import (
 from agm.util.graph import sccs
 
 TypeEnv = Mapping[str, Type]
-InstantiationKey = tuple[DeclKey, tuple[Type, ...]]
+InstantiationKey = tuple[DeclId, tuple[Type, ...]]
 
 
 # ---------------------------------------------------------------------------
@@ -112,8 +117,8 @@ InstantiationKey = tuple[DeclKey, tuple[Type, ...]]
 # ---------------------------------------------------------------------------
 
 
-def compute_uninhabited(table: TypeTable) -> frozenset[DeclKey]:
-    """Return every registered declaration key that has no finite value.
+def compute_uninhabited(table: TypeTable) -> frozenset[DeclId]:
+    """Return every registered declaration identity that has no finite value.
 
     Least fixpoint over the whole table: every declaration starts
     uninhabited, and is promoted to inhabited as soon as its own body
@@ -129,16 +134,16 @@ def compute_uninhabited(table: TypeTable) -> frozenset[DeclKey]:
     the wrapper's body is evaluated with that argument substituted, so it does
     not hide unguarded recursion.
     """
-    defs = _all_defs(table)
-    inhabited: set[DeclKey] = set()
+    defs = table.defs
+    inhabited: set[DeclId] = set()
     changed = True
     while changed:
         changed = False
-        for key, typedef in defs.items():
-            if key in inhabited:
+        for decl_id, typedef in defs.items():
+            if decl_id in inhabited:
                 continue
             if _decl_inhabited(typedef, inhabited, defs):
-                inhabited.add(key)
+                inhabited.add(decl_id)
                 changed = True
     return frozenset(defs) - inhabited
 
@@ -155,8 +160,8 @@ def uninhabitable_message(kind: TypeDefKind, name: str) -> str:
 
 def _decl_inhabited(
     typedef: TypeDef,
-    inhabited: set[DeclKey],
-    defs: Mapping[DeclKey, TypeDef],
+    inhabited: set[DeclId],
+    defs: Mapping[DeclId, TypeDef],
 ) -> bool:
     args = tuple(TypeVarType(param) for param in typedef.type_params)
     return _body_inhabited(
@@ -164,15 +169,15 @@ def _decl_inhabited(
         {},
         inhabited,
         defs,
-        stack=frozenset({((typedef.module_id, typedef.scope_path, typedef.name), args)}),
+        stack=frozenset({(typedef.decl_node_id, args)}),
     )
 
 
 def _body_inhabited(
     typedef: TypeDef,
     env: TypeEnv,
-    inhabited: set[DeclKey],
-    defs: Mapping[DeclKey, TypeDef],
+    inhabited: set[DeclId],
+    defs: Mapping[DeclId, TypeDef],
     *,
     stack: frozenset[InstantiationKey],
 ) -> bool:
@@ -191,16 +196,16 @@ def _body_inhabited(
 def _exception_decl_inhabited(
     typedef: TypeDef,
     env: TypeEnv,
-    inhabited: set[DeclKey],
-    defs: Mapping[DeclKey, TypeDef],
+    inhabited: set[DeclId],
+    defs: Mapping[DeclId, TypeDef],
     *,
     stack: frozenset[InstantiationKey],
 ) -> bool:
-    key = (typedef.module_id, typedef.scope_path, typedef.name)
+    decl_id = typedef.decl_node_id
     if typedef.abstract:
         return any(
-            child.kind == "exception" and child.base == key and child_key in inhabited
-            for child_key, child in defs.items()
+            child.kind == "exception" and child.base == decl_id and child_id in inhabited
+            for child_id, child in defs.items()
         )
     return _exception_fields_inhabited(
         typedef,
@@ -208,18 +213,18 @@ def _exception_decl_inhabited(
         inhabited,
         defs,
         stack=stack,
-        extends_stack=frozenset({key}),
+        extends_stack=frozenset({decl_id}),
     )
 
 
 def _exception_fields_inhabited(
     typedef: TypeDef,
     env: TypeEnv,
-    inhabited: set[DeclKey],
-    defs: Mapping[DeclKey, TypeDef],
+    inhabited: set[DeclId],
+    defs: Mapping[DeclId, TypeDef],
     *,
     stack: frozenset[InstantiationKey],
-    extends_stack: frozenset[DeclKey],
+    extends_stack: frozenset[DeclId],
 ) -> bool:
     own_ok = all(
         _template_inhabited(t, env, inhabited, defs, stack=stack) for _fname, t in typedef.fields
@@ -246,8 +251,8 @@ def _exception_fields_inhabited(
 def _template_inhabited(
     t: Type,
     env: TypeEnv,
-    inhabited: set[DeclKey],
-    defs: Mapping[DeclKey, TypeDef],
+    inhabited: set[DeclId],
+    defs: Mapping[DeclId, TypeDef],
     *,
     stack: frozenset[InstantiationKey],
 ) -> bool:
@@ -260,14 +265,14 @@ def _template_inhabited(
         case InferenceVarType():
             return True
         case RecordType() | EnumType():
-            key = (t.module_id, t.scope_path, t.name)
-            if any(stack_key == key for stack_key, _args in stack):
+            decl_id = t.decl_id
+            if any(stack_id == decl_id for stack_id, _args in stack):
                 return False
-            target = defs.get(key)
+            target = defs.get(decl_id)
             if target is None:
-                return key in inhabited
+                return decl_id in inhabited
             args = tuple(substitute(arg, env) for arg in t.type_args)
-            instantiation = (key, args)
+            instantiation = (decl_id, args)
             target_env = dict(zip(target.type_params, args))
             return _body_inhabited(
                 target,
@@ -277,10 +282,10 @@ def _template_inhabited(
                 stack=stack | frozenset({instantiation}),
             )
         case ExceptionType():
-            key = (t.module_id, t.scope_path, t.name)
-            if any(stack_key == key for stack_key, _args in stack):
+            decl_id = t.decl_id
+            if any(stack_id == decl_id for stack_id, _args in stack):
                 return False
-            return key in inhabited
+            return decl_id in inhabited
         case ArrayType() | DictType():
             # The empty collection is always a value, regardless of the
             # element/value type — this is exactly what "guards" recursion.
@@ -296,7 +301,6 @@ def _template_inhabited(
             | IntType()
             | DecimalType()
             | UnitType()
-            | AgentType()
             | BottomType()
         ):
             return True
@@ -314,15 +318,15 @@ class NonDataReachability:
     """Whole-table non-data-reachability fixpoint result.
 
     ``reaches_non_data`` — declarations that unconditionally reach a non-data
-    type (their body contains a function/agent/unit type, or reaches a
+    type (their body contains a function/unit type, or reaches a
     declaration that does, outside of a type-variable position).
     ``relevant_params`` — for every declaration, the subset of its own type
     parameters whose instantiation can affect that answer (see
     :func:`compute_non_data_reachability`).
     """
 
-    reaches_non_data: frozenset[DeclKey]
-    relevant_params: Mapping[DeclKey, frozenset[str]]
+    reaches_non_data: frozenset[DeclId]
+    relevant_params: Mapping[DeclId, frozenset[str]]
 
 
 def compute_non_data_reachability(table: TypeTable) -> NonDataReachability:
@@ -331,7 +335,7 @@ def compute_non_data_reachability(table: TypeTable) -> NonDataReachability:
     Two facts are grown together to a least fixpoint, per declaration:
 
     - ``reaches_non_data`` (an unconditional, argument-independent fact): true
-      iff some field/variant-field template contains a function/agent/unit
+      iff some field/variant-field template contains a function/unit
       type, or references a declaration whose own ``reaches_non_data`` is
       already true — at any depth, but never through a bare type-variable
       position (a parameter standing for "whatever the caller instantiates" is
@@ -357,23 +361,23 @@ def compute_non_data_reachability(table: TypeTable) -> NonDataReachability:
     ``relevant_params`` — reproducing the substitute-then-walk answer exactly,
     without ever expanding an instantiation.
     """
-    defs = _all_defs(table)
-    exception_children: dict[DeclKey, set[DeclKey]] = {key: set() for key in defs}
-    for key, typedef in defs.items():
+    defs = table.defs
+    exception_children: dict[DeclId, set[DeclId]] = {decl_id: set() for decl_id in defs}
+    for decl_id, typedef in defs.items():
         if typedef.kind == "exception" and typedef.base in exception_children:
-            exception_children[typedef.base].add(key)
+            exception_children[typedef.base].add(decl_id)
 
     # ``field_non_data`` is the exact-value/inherited-field fact for
     # exceptions. ``non_data`` additionally includes affected descendants,
     # which should poison ancestor catch/base types but must not flow back
     # down to siblings.
-    field_non_data: set[DeclKey] = set()
-    non_data: set[DeclKey] = set()
-    relevant: dict[DeclKey, set[str]] = {key: set() for key in defs}
+    field_non_data: set[DeclId] = set()
+    non_data: set[DeclId] = set()
+    relevant: dict[DeclId, set[str]] = {decl_id: set() for decl_id in defs}
     changed = True
     while changed:
         changed = False
-        for key, typedef in defs.items():
+        for decl_id, typedef in defs.items():
             own_params = frozenset(typedef.type_params)
             templates = tuple(t for _fname, t in field_templates(typedef))
             template_bad = any(
@@ -384,28 +388,28 @@ def compute_non_data_reachability(table: TypeTable) -> NonDataReachability:
                 and typedef.base is not None
                 and typedef.base in field_non_data
             )
-            exact_bad = key in field_non_data or template_bad or inherited_field_bad
-            if exact_bad and key not in field_non_data:
-                field_non_data.add(key)
+            exact_bad = decl_id in field_non_data or template_bad or inherited_field_bad
+            if exact_bad and decl_id not in field_non_data:
+                field_non_data.add(decl_id)
                 changed = True
 
             descendant_bad = typedef.kind == "exception" and any(
-                child_key in non_data for child_key in exception_children[key]
+                child_id in non_data for child_id in exception_children[decl_id]
             )
             bad = exact_bad or descendant_bad
-            if bad and key not in non_data:
-                non_data.add(key)
+            if bad and decl_id not in non_data:
+                non_data.add(decl_id)
                 changed = True
 
             gained: set[str] = set()
             for t in templates:
                 gained |= _template_relevant_params(t, own_params, relevant, defs)
-            if not gained <= relevant[key]:
-                relevant[key] |= gained
+            if not gained <= relevant[decl_id]:
+                relevant[decl_id] |= gained
                 changed = True
     return NonDataReachability(
         reaches_non_data=frozenset(non_data),
-        relevant_params={key: frozenset(params) for key, params in relevant.items()},
+        relevant_params={decl_id: frozenset(params) for decl_id, params in relevant.items()},
     )
 
 
@@ -415,7 +419,7 @@ def field_templates(typedef: TypeDef) -> list[tuple[str, Type]]:
     Unlike :func:`_decl_inhabited`'s enum handling (which groups fields by
     variant, since only ONE variant needs to be fully inhabited), both the
     non-data-reachability and reference-edge fixpoints look at every field of
-    every variant flat: a function/agent/unit anywhere is reachable from some
+    every variant flat: a function/unit anywhere is reachable from some
     value of the declaration, and a reference to another declaration matters,
     regardless of which variant carries it. Names are carried alongside so a
     use-site diagnostic can point at the field responsible.
@@ -427,27 +431,27 @@ def field_templates(typedef: TypeDef) -> list[tuple[str, Type]]:
 
 def _template_reaches_non_data(
     t: Type,
-    non_data: set[DeclKey],
-    relevant: Mapping[DeclKey, set[str]],
-    defs: Mapping[DeclKey, TypeDef],
+    non_data: set[DeclId],
+    relevant: Mapping[DeclId, set[str]],
+    defs: Mapping[DeclId, TypeDef],
 ) -> bool:
     match t:
-        case FunctionType() | AgentType() | UnitType():
+        case FunctionType() | UnitType():
             return True
         case ArrayType():
             return _template_reaches_non_data(t.elem, non_data, relevant, defs)
         case DictType():
             return _template_reaches_non_data(t.value, non_data, relevant, defs)
         case ExceptionType():
-            return (t.module_id, t.scope_path, t.name) in non_data
+            return t.decl_id in non_data
         case RecordType() | EnumType():
-            key = (t.module_id, t.scope_path, t.name)
-            if key in non_data:
+            decl_id = t.decl_id
+            if decl_id in non_data:
                 return True
-            target = defs.get(key)
+            target = defs.get(decl_id)
             if target is None:
                 return False
-            own_relevant = relevant.get(key, set())
+            own_relevant = relevant.get(decl_id, set())
             return any(
                 _template_reaches_non_data(arg, non_data, relevant, defs)
                 for pname, arg in zip(target.type_params, t.type_args)
@@ -471,8 +475,8 @@ def _template_reaches_non_data(
 def _template_relevant_params(
     t: Type,
     own_params: frozenset[str],
-    relevant: Mapping[DeclKey, set[str]],
-    defs: Mapping[DeclKey, TypeDef],
+    relevant: Mapping[DeclId, set[str]],
+    defs: Mapping[DeclId, TypeDef],
 ) -> set[str]:
     match t:
         case TypeVarType():
@@ -490,11 +494,11 @@ def _template_relevant_params(
             result |= _template_relevant_params(t.result, own_params, relevant, defs)
             return result
         case RecordType() | EnumType():
-            key = (t.module_id, t.scope_path, t.name)
-            target = defs.get(key)
+            decl_id = t.decl_id
+            target = defs.get(decl_id)
             if target is None:
                 return set()
-            own_relevant = relevant.get(key, set())
+            own_relevant = relevant.get(decl_id, set())
             result = set()
             for pname, arg in zip(target.type_params, t.type_args):
                 if pname in own_relevant:
@@ -502,7 +506,6 @@ def _template_relevant_params(
             return result
         case (
             ExceptionType()
-            | AgentType()
             | UnitType()
             | TextType()
             | JsonType()
@@ -521,10 +524,10 @@ def _template_relevant_params(
 # Finiteness (instantiation-closure) analysis
 # ---------------------------------------------------------------------------
 
-# A parameter of a declaration, identified by the declaration's key and the
-# parameter's own name — a node in the small per-SCC parameter-dependency
+# A parameter of a declaration, identified by the declaration's identity and
+# the parameter's own name — a node in the small per-SCC parameter-dependency
 # graph.
-ParamKey = tuple[DeclKey, str]
+ParamKey = tuple[DeclId, str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -537,7 +540,7 @@ class _RefEdge:
     e.g. an exception or its ``extends`` base).
     """
 
-    target: DeclKey
+    target: DeclId
     arg_templates: tuple[Type, ...]
 
 
@@ -559,9 +562,9 @@ class FiniteClosure:
     Phantom parameters are intentionally absent.
     """
 
-    infinite: frozenset[DeclKey]
-    successors: Mapping[DeclKey, frozenset[DeclKey]]
-    relevant_params: Mapping[DeclKey, frozenset[str]]
+    infinite: frozenset[DeclId]
+    successors: Mapping[DeclId, frozenset[DeclId]]
+    relevant_params: Mapping[DeclId, frozenset[str]]
 
 
 def compute_finite_closure(table: TypeTable) -> FiniteClosure:
@@ -584,17 +587,17 @@ def compute_finite_closure(table: TypeTable) -> FiniteClosure:
     records/enums, recursive exceptions) is always finite — matching the
     inhabitation-checked recursion that is already unconditionally legal.
     """
-    defs = _all_defs(table)
+    defs = table.defs
     relevant = _compute_schema_relevant_params(defs)
     edges = _reference_edges(defs, relevant)
-    successors: dict[DeclKey, frozenset[DeclKey]] = {
-        key: frozenset(edge.target for edge in refs) for key, refs in edges.items()
+    successors: dict[DeclId, frozenset[DeclId]] = {
+        decl_id: frozenset(edge.target for edge in refs) for decl_id, refs in edges.items()
     }
-    adjacency: dict[DeclKey, tuple[DeclKey, ...]] = {
-        key: tuple(targets) for key, targets in successors.items()
+    adjacency: dict[DeclId, tuple[DeclId, ...]] = {
+        decl_id: tuple(targets) for decl_id, targets in successors.items()
     }
-    components = sccs(adjacency, key=decl_key_sort_key)
-    infinite: set[DeclKey] = set()
+    components = sccs(adjacency, key=lambda decl_id: decl_id_sort_key(defs, decl_id))
+    infinite: set[DeclId] = set()
     for component in components:
         members = frozenset(component)
         if _scc_has_growing_cycle(members, edges, defs, relevant):
@@ -602,7 +605,7 @@ def compute_finite_closure(table: TypeTable) -> FiniteClosure:
     return FiniteClosure(
         infinite=frozenset(infinite),
         successors=successors,
-        relevant_params={key: frozenset(params) for key, params in relevant.items()},
+        relevant_params={decl_id: frozenset(params) for decl_id, params in relevant.items()},
     )
 
 
@@ -637,7 +640,6 @@ def nominal_references(t: Type) -> Iterator[RecordType | EnumType | ExceptionTyp
             | IntType()
             | DecimalType()
             | UnitType()
-            | AgentType()
             | BottomType()
             | TypeVarType()
             | InferenceVarType()
@@ -649,8 +651,8 @@ def nominal_references(t: Type) -> Iterator[RecordType | EnumType | ExceptionTyp
 
 def nominal_references_for_schema(
     t: Type,
-    defs: Mapping[DeclKey, TypeDef],
-    relevant_params: Mapping[DeclKey, frozenset[str]],
+    defs: Mapping[DeclId, TypeDef],
+    relevant_params: Mapping[DeclId, frozenset[str]],
 ) -> Iterator[RecordType | EnumType | ExceptionType]:
     """Yield nominal references that can affect *t*'s finite schema.
 
@@ -662,11 +664,10 @@ def nominal_references_for_schema(
     match t:
         case RecordType() | EnumType():
             yield t
-            key = (t.module_id, t.scope_path, t.name)
-            typedef = defs.get(key)
+            typedef = defs.get(t.decl_id)
             if typedef is None:
                 return
-            relevant = relevant_params.get(key, frozenset())
+            relevant = relevant_params.get(t.decl_id, frozenset())
             for pname, arg in zip(typedef.type_params, t.type_args):
                 if pname in relevant:
                     yield from nominal_references_for_schema(arg, defs, relevant_params)
@@ -687,7 +688,6 @@ def nominal_references_for_schema(
             | IntType()
             | DecimalType()
             | UnitType()
-            | AgentType()
             | BottomType()
             | TypeVarType()
             | InferenceVarType()
@@ -698,77 +698,76 @@ def nominal_references_for_schema(
 
 
 def _compute_schema_relevant_params(
-    defs: Mapping[DeclKey, TypeDef],
-) -> dict[DeclKey, set[str]]:
+    defs: Mapping[DeclId, TypeDef],
+) -> dict[DeclId, set[str]]:
     """Return params whose instantiation can affect schema reachability."""
-    relevant: dict[DeclKey, set[str]] = {key: set() for key in defs}
+    relevant: dict[DeclId, set[str]] = {decl_id: set() for decl_id in defs}
     changed = True
     while changed:
         changed = False
-        for key, typedef in defs.items():
+        for decl_id, typedef in defs.items():
             own_params = frozenset(typedef.type_params)
             gained: set[str] = set()
             for _fname, template in field_templates(typedef):
                 gained |= _template_relevant_params(template, own_params, relevant, defs)
-            if not gained <= relevant[key]:
-                relevant[key] |= gained
+            if not gained <= relevant[decl_id]:
+                relevant[decl_id] |= gained
                 changed = True
     return relevant
 
 
 def _reference_edges(
-    defs: Mapping[DeclKey, TypeDef],
-    relevant_params: Mapping[DeclKey, set[str]],
-) -> dict[DeclKey, tuple[_RefEdge, ...]]:
+    defs: Mapping[DeclId, TypeDef],
+    relevant_params: Mapping[DeclId, set[str]],
+) -> dict[DeclId, tuple[_RefEdge, ...]]:
     """Return every declaration's schema-relevant outgoing reference edge."""
-    frozen_relevant = {key: frozenset(params) for key, params in relevant_params.items()}
-    result: dict[DeclKey, tuple[_RefEdge, ...]] = {}
-    for key, typedef in defs.items():
+    frozen_relevant = {decl_id: frozenset(params) for decl_id, params in relevant_params.items()}
+    result: dict[DeclId, tuple[_RefEdge, ...]] = {}
+    for decl_id, typedef in defs.items():
         found: list[_RefEdge] = []
         for _fname, template in field_templates(typedef):
             for ref in nominal_references_for_schema(template, defs, frozen_relevant):
-                target = (ref.module_id, ref.scope_path, ref.name)
                 arg_templates = ref.type_args if isinstance(ref, (RecordType, EnumType)) else ()
-                found.append(_RefEdge(target=target, arg_templates=arg_templates))
+                found.append(_RefEdge(target=ref.decl_id, arg_templates=arg_templates))
         if typedef.kind == "exception" and typedef.base is not None:
             found.append(_RefEdge(target=typedef.base, arg_templates=()))
-        result[key] = tuple(found)
+        result[decl_id] = tuple(found)
     return result
 
 
 def _scc_has_growing_cycle(
-    members: frozenset[DeclKey],
-    edges: Mapping[DeclKey, tuple[_RefEdge, ...]],
-    defs: Mapping[DeclKey, TypeDef],
-    relevant_params: Mapping[DeclKey, set[str]],
+    members: frozenset[DeclId],
+    edges: Mapping[DeclId, tuple[_RefEdge, ...]],
+    defs: Mapping[DeclId, TypeDef],
+    relevant_params: Mapping[DeclId, set[str]],
 ) -> bool:
     """Return ``True`` if *members*'s parameter-dependency graph has a growing cycle."""
     adjacency: dict[ParamKey, list[ParamKey]] = {}
     growing_edges: set[tuple[ParamKey, ParamKey]] = set()
-    for source_key in members:
+    for source_id in members:
         # A member of an SCC is normally a registered declaration, but a
         # dangling reference (a field naming a declaration that was never
         # registered — an internal-invariant violation, defensively handled
         # the same way as the non-data-reachability fixpoint) can surface here
         # as its own singleton SCC; treat it as contributing no edges rather
         # than crashing.
-        source_def = defs.get(source_key)
+        source_def = defs.get(source_id)
         if source_def is None:
             continue
-        for ref_edge in edges.get(source_key, ()):
-            target_key = ref_edge.target
-            if target_key not in members:
+        for ref_edge in edges.get(source_id, ()):
+            target_id = ref_edge.target
+            if target_id not in members:
                 continue
-            target_def = defs.get(target_key)
+            target_def = defs.get(target_id)
             if target_def is None:  # pragma: no cover
                 # Unreachable by construction: a dangling (never-registered)
                 # target has no outgoing edges of its own, so it can only
                 # ever form its own singleton SCC — never share "members"
-                # with a distinct source_key that has an edge into it. Kept
+                # with a distinct source_id that has an edge into it. Kept
                 # as a defensive guard, matching the dangling-source check
                 # above, in case that invariant ever stops holding.
                 continue
-            target_relevant = relevant_params.get(target_key, set())
+            target_relevant = relevant_params.get(target_id, set())
             for param_name, arg_template in zip(target_def.type_params, ref_edge.arg_templates):
                 if param_name not in target_relevant:
                     continue
@@ -781,14 +780,14 @@ def _scc_has_growing_cycle(
                 for source_param, growing in occurrences.items():
                     if source_param not in source_def.type_params:
                         continue
-                    src: ParamKey = (source_key, source_param)
-                    dst: ParamKey = (target_key, param_name)
+                    src: ParamKey = (source_id, source_param)
+                    dst: ParamKey = (target_id, param_name)
                     adjacency.setdefault(src, []).append(dst)
                     if growing:
                         growing_edges.add((src, dst))
     if not adjacency:
         return False
-    param_components = sccs(adjacency, key=lambda n: (n[0][0].segments, n[0][1], n[1]))
+    param_components = sccs(adjacency, key=lambda n: (*decl_id_sort_key(defs, n[0]), n[1]))
     for component in param_components:
         # A growing self-loop within a singleton SCC ``{node}`` is the pair
         # ``(node, node)``; the same membership test catches it, so singletons
@@ -803,8 +802,8 @@ def _param_occurrences(
     t: Type,
     *,
     growing: bool,
-    defs: Mapping[DeclKey, TypeDef],
-    relevant_params: Mapping[DeclKey, set[str]],
+    defs: Mapping[DeclId, TypeDef],
+    relevant_params: Mapping[DeclId, set[str]],
 ) -> dict[str, bool]:
     """Return type-variable occurrences in *t* that affect schema identity.
 
@@ -844,12 +843,11 @@ def _param_occurrences(
             )
             return merged
         case RecordType() | EnumType():
-            key = (t.module_id, t.scope_path, t.name)
-            target = defs.get(key)
+            target = defs.get(t.decl_id)
             if target is None:
                 relevant_args = t.type_args
             else:
-                target_relevant = relevant_params.get(key, set())
+                target_relevant = relevant_params.get(t.decl_id, set())
                 relevant_args = tuple(
                     arg
                     for pname, arg in zip(target.type_params, t.type_args)
@@ -868,7 +866,6 @@ def _param_occurrences(
             return merged
         case (
             ExceptionType()
-            | AgentType()
             | UnitType()
             | TextType()
             | JsonType()
@@ -888,16 +885,3 @@ def _merge_growing(a: dict[str, bool], b: dict[str, bool]) -> dict[str, bool]:
     for name, growing in b.items():
         result[name] = result.get(name, False) or growing
     return result
-
-
-# ---------------------------------------------------------------------------
-# Shared helpers
-# ---------------------------------------------------------------------------
-
-
-def _all_defs(table: TypeTable) -> dict[DeclKey, TypeDef]:
-    """Return every registered ``TypeDef`` in *table*, keyed by its identity."""
-    return {
-        (typedef.module_id, typedef.scope_path, typedef.name): typedef
-        for typedef in table.entries()
-    }

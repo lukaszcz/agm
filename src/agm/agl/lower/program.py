@@ -26,13 +26,13 @@ from agm.agl.lower.lowerer import (
     _contract_has_schema,
     _LinkState,
     _Lowerer,
-    _static_items,
+    builtin_nominals_from_declarations,
 )
 from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.types import ExceptionType, RecordType
-from agm.agl.syntax.nodes import AgentDecl, FuncDef
+from agm.agl.syntax.nodes import BuiltinVarDecl, static_items
 from agm.util.text import normalize_newlines
 
 __all__ = ["lower_program"]
@@ -45,7 +45,6 @@ def lower_program(
     _already_linked: frozenset[ModuleId] = frozenset(),
     _entry_source_text: str | None = None,
     contract_payloads: Mapping[int, ContractPayload] | None = None,
-    _eager_scoped_agents: bool = False,
 ) -> ExecutableProgram:
     """Lower a whole-program match-compiled artifact to an
     :class:`~agm.agl.ir.program.ExecutableProgram`.
@@ -61,6 +60,16 @@ def lower_program(
     # Every per-module TypeEnvironment shares one TypeTable instance (built
     # during checking); pick the entry module's env to reach it.
     type_table = checked.modules[checked.entry_id].type_env.type_table
+
+    # Rebuilt from scratch rather than folded into the link's prior table: the
+    # shared ``TypeTable`` is itself what accumulates across REPL entries (a
+    # new entry's type environment is seeded from the session's, merging in
+    # every prior entry's declarations and its orphan set -- see
+    # ``TypeEnvironment.seed_from``/``TypeTable.merge_from``), so rebuilding
+    # from it on every lowering already keeps an earlier entry's ``builtin``
+    # declaration live for a later entry that does not redeclare it, while
+    # automatically dropping one an entry never promoted.
+    link.builtin_nominals = builtin_nominals_from_declarations(type_table)
 
     # Step 1: Register a SourceFile for every module.
     module_source_ids: dict[ModuleId, SourceId] = {}
@@ -84,37 +93,54 @@ def lower_program(
 
     # Step 2: Build nominals from the authoritative TypeTable declarations.
     # Aliases do not have a TypeDef, so this also excludes their transparent
-    # source spellings without comparing concatenated scope names.
+    # source spellings without comparing concatenated scope names. ``entries()``
+    # yields every declaration the table retains -- including a superseded one
+    # and one from an unpromoted REPL entry -- so each descriptor also records
+    # whether its identity currently bears its own name path, via the same
+    # name index ``TypeTable.get`` itself resolves through: an authoritative,
+    # order-independent answer to "which declaration does this name mean now?"
+    # that the extern boundary later uses to resolve a companion's bare/dotted
+    # nominal lookup.
     for typedef in type_table.entries():
-        nominal = NominalId(typedef.module_id, typedef.name, typedef.scope_path)
-        display_name = "::".join((*typedef.scope_path, typedef.name))
+        nominal = NominalId(typedef.decl_node_id)
+        bears_name_path = type_table.is_current(typedef)
         if typedef.kind == "record":
             link.nominals[nominal] = NominalDescriptor(
                 nominal=nominal,
-                display_name=display_name,
+                module_id=typedef.module_id,
+                scope_path=typedef.scope_path,
+                declared_name=typedef.name,
                 kind=NominalKind.RECORD,
                 fields=tuple(name for name, _ in typedef.fields),
                 variants=(),
+                bears_name_path=bears_name_path,
             )
         elif typedef.kind == "enum":
             link.nominals[nominal] = NominalDescriptor(
                 nominal=nominal,
-                display_name=display_name,
+                module_id=typedef.module_id,
+                scope_path=typedef.scope_path,
+                declared_name=typedef.name,
                 kind=NominalKind.ENUM,
                 fields=(),
                 variants=tuple(
                     VariantDescriptor(name, tuple(field for field, _ in fields))
                     for name, fields in typedef.variants
                 ),
+                bears_name_path=bears_name_path,
             )
         else:
-            handle = ExceptionType(typedef.name, typedef.module_id, scope_path=typedef.scope_path)
+            handle = typedef.handle()
+            assert isinstance(handle, ExceptionType)  # typedef.kind == "exception" guarantees this
             link.nominals[nominal] = NominalDescriptor(
                 nominal=nominal,
-                display_name=display_name,
+                module_id=typedef.module_id,
+                scope_path=typedef.scope_path,
+                declared_name=typedef.name,
                 kind=NominalKind.EXCEPTION,
                 fields=tuple(type_table.exception_fields(handle).keys()),
                 variants=(),
+                bears_name_path=bears_name_path,
             )
 
     _add_builtin_nominals(link.nominals, type_table)
@@ -123,30 +149,41 @@ def lower_program(
     # identity erases type arguments, so register each generic template once.
     # Field/variant NAMES are read directly off the registered TypeDef (never
     # instantiated — a generic template has no concrete type_args).
+    # ``bears_name_path`` compares the identity being registered against the
+    # one ``generic_typedef``'s NAME lookup landed on, which is exactly the
+    # name-index answer ``TypeTable.is_current`` gives for a non-generic
+    # declaration above.
     for cm in checked.modules.values():
         for name, generic in cm.type_env.all_generic_types().items():
             typ = generic.template
-            nominal = NominalId(typ.module_id, typ.name, typ.scope_path)
+            nominal = NominalId(typ.decl_id)
             generic_typedef = type_table.get(typ.module_id, typ.name, typ.scope_path)
             assert generic_typedef is not None, (
                 f"compiler bug: generic type {name!r} has no TypeDef registered"
             )
+            bears_name_path = generic_typedef.decl_node_id == typ.decl_id
             if isinstance(typ, RecordType):
                 link.nominals[nominal] = NominalDescriptor(
                     nominal=nominal,
-                    display_name="::".join((*typ.scope_path, typ.name)),
+                    module_id=typ.module_id,
+                    scope_path=typ.scope_path,
+                    declared_name=typ.name,
                     kind=NominalKind.RECORD,
                     fields=tuple(fname for fname, _ in generic_typedef.fields),
+                    bears_name_path=bears_name_path,
                 )
             else:
                 link.nominals[nominal] = NominalDescriptor(
                     nominal=nominal,
-                    display_name="::".join((*typ.scope_path, typ.name)),
+                    module_id=typ.module_id,
+                    scope_path=typ.scope_path,
+                    declared_name=typ.name,
                     kind=NominalKind.ENUM,
                     variants=tuple(
                         VariantDescriptor(vname, tuple(fname for fname, _ in vfields))
                         for vname, vfields in generic_typedef.variants
                     ),
+                    bears_name_path=bears_name_path,
                 )
 
     # Step 3: Phase 1 — pre-allocate FunctionId + symbol for every static
@@ -169,22 +206,7 @@ def lower_program(
             contract_payloads=contract_payloads,
         )
         module_lowerers[mid] = lowerer
-        body = cm.resolved.program.body
-        for item in _static_items(body.items):
-            if isinstance(item, FuncDef) and not item.is_builtin:
-                lowerer._prealloc_funcdef(item)
-            elif isinstance(item, AgentDecl) and (
-                _eager_scoped_agents
-                or not item.scope_path
-                or lowerer._scoped_agent_is_referenced(item)
-            ):
-                lowerer._alloc_sym(
-                    item.node_id,
-                    name=item.name,
-                    mutable=False,
-                    public=mid.is_entry,
-                    owner=mid,
-                )
+        lowerer.prealloc_static_symbols(cm.resolved.program.body, public=mid.is_entry)
 
     # Step 4: Phase 2 — lower bodies.
     # Library modules first, entry last, so the insertion order of
@@ -204,12 +226,20 @@ def lower_program(
             body,
             top_level=mid.is_entry,
             handles_only=not mid.is_entry,
-            eager_scoped_agents=_eager_scoped_agents,
         )
         executable_modules[mid] = ExecutableModule(
             module_id=mid,
             initializers=initializers,
         )
+
+    # Lower declared engine defaults separately from program initializers. They
+    # are constant expressions evaluated only while an interpreter is seeded.
+    builtin_setting_defaults = {
+        item.name: lowerer.lower_expr(item.default)
+        for mid, lowerer in module_lowerers.items()
+        for item in static_items(checked.modules[mid].resolved.program.body.items)
+        if isinstance(item, BuiltinVarDecl) and item.default is not None
+    }
 
     # Collect entry-module params (only the entry module contributes params).
     entry_lowerer = module_lowerers[checked.entry_id]
@@ -242,6 +272,8 @@ def lower_program(
         params=tuple(entry_lowerer._params),
         contracts=dict(link.contracts),
         dry_run_inventory=dry_run_inventory,
+        builtin_nominals=link.builtin_nominals,
+        builtin_setting_defaults=builtin_setting_defaults,
     )
     if self_validation_enabled():
         validate_ir(program, deep=True)

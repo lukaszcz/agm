@@ -9,7 +9,6 @@ import pytest
 from agm.agl.eval.arith import contains, div, order, value_eq
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.operations import CmpOp, ContainsKind
-from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.runtime.contract import materialize_contract
 from agm.agl.runtime.params import convert_param_value
 from agm.agl.runtime.render import render_value
@@ -50,7 +49,7 @@ def test_arithmetic_mixed_and_defensive_edges() -> None:
 
 
 def test_runtime_value_notimplemented_and_unhashable_edges() -> None:
-    nominal = NominalId(ENTRY_ID, "Thing")
+    nominal = NominalId(1)
     values = [
         ArrayValue([IntValue(1)]),
         DictValue({"x": IntValue(1)}),
@@ -72,7 +71,7 @@ def test_json_value_helper_edges() -> None:
 
 
 def test_constructor_render_and_serialization_edges() -> None:
-    nominal = NominalId(ENTRY_ID, "Thing")
+    nominal = NominalId(1)
     record = ConstructorValue(nominal, "Thing", None)
     variant = ConstructorValue(nominal, "Thing", "Case")
     assert render_value(record) == "<constructor Thing>"

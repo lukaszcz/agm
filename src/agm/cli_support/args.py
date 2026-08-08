@@ -214,7 +214,6 @@ class TmuxLayoutArgs:
 class ExecArgs:
     file: str | None
     strict_json: bool | None
-    runner: str | None
     no_log: bool
     log_file: str | None
     param_tokens: list[str] = field(default_factory=list)
@@ -228,12 +227,13 @@ class ExecArgs:
     timeout: str | None = None
     no_timeout: bool = False
     no_log_file: bool = False
+    # An AgL ``Agent`` literal used to seed std/config::default-agent.
+    agent: str | None = None
 
 
 @dataclass(slots=True)
 class ReplArgs:
     strict_json: bool | None
-    runner: str | None
     confirm_agents: bool
     quiet: bool
     no_log: bool
@@ -243,3 +243,5 @@ class ReplArgs:
     # Optional recursion call-depth override (None = no override).
     max_call_depth: int | None = None
     no_stdlib: bool = False
+    # An AgL ``Agent`` literal used to seed std/config::default-agent.
+    agent: str | None = None

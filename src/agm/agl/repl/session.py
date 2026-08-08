@@ -31,17 +31,18 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
     from pathlib import Path
 
-    from agm.agl.ir.ids import AgentId, SymbolId
+    from agm.agl.eval.ir_interpreter import IrInterpreter
+    from agm.agl.ir.ids import SymbolId
     from agm.agl.modules.ids import ModuleId
     from agm.agl.modules.loader import LoadedModule
     from agm.agl.modules.roots import RootSet
     from agm.agl.runtime.agents import AgentFn
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.host_settings import HostSettingsPolicy
-    from agm.agl.runtime.types import HostEnvironment
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import EnumValue, Frame, Value
+    from agm.agl.setting_overrides import SettingOverride
     from agm.agl.syntax.nodes import (
         ImportDecl,
         InfixAssoc,
@@ -110,9 +111,7 @@ class ReplSession:
     """Persistent incremental AgL evaluation session (UI-free core).
 
     Constructor parameters mirror ``PipelineDriver`` so a host can wire the same
-    agent backing.  Registration (``register_agent``/``register_codec``) is
-    delegated to an internal ``PipelineDriver`` so the reserved-name / duplicate
-    validation and host-environment assembly are shared rather than duplicated.
+    value-driven agent dispatcher and codec backing.
 
     Each entry is incrementally linked and executed against a persistent IR base
     frame. Completed effects survive a later runtime failure in the same entry.
@@ -124,11 +123,12 @@ class ReplSession:
         default_strict_json: bool = False,
         default_loop_limit: int | None = None,
         default_call_depth_limit: int | None = None,
-        default_agent: "AgentFn | None" = None,
+        agent_dispatcher: "AgentFn | None" = None,
         shell_exec_timeout: float | None = None,
         trace_path: "Path | None" = None,
         params_config_loader: "Callable[[str], dict[str, object]] | None" = None,
         engine_base: "Mapping[str, Value] | None" = None,
+        setting_overrides: "Mapping[str, SettingOverride] | None" = None,
         host_settings_policy: "HostSettingsPolicy | None" = None,
         cwd: "Path | None" = None,
         stdlib_root: "Path | None" = None,
@@ -137,33 +137,74 @@ class ReplSession:
         extra_cli_roots: "Iterable[str]" = (),
         default_stdlib: bool = True,
     ) -> None:
-        from pathlib import Path
-
         from agm.agl.lower import LinkImage
         from agm.agl.pipeline import PipelineDriver
+        from agm.agl.runtime.option import some_value
         from agm.agl.scope.symbols import ScopeNode
+        from agm.agl.semantics.values import IntValue, TextValue
         from agm.agl.typecheck.env import TypeEnvironment
-        from agm.config.module_roots import resolve_stdlib_root
+        from agm.core.parse import format_timeout
 
-        self._default_strict_json = default_strict_json
-        self._default_loop_limit = default_loop_limit
         self._default_stdlib = default_stdlib
-        self._shell_exec_timeout = shell_exec_timeout
-        # Capture initial engine defaults for :reset to restore.
-        self._initial_loop_limit = default_loop_limit
-        self._initial_strict_json = default_strict_json
-        self._initial_shell_exec_timeout = shell_exec_timeout
-        # The [exec] engine base for all six engine keys, provided by the host
-        # command (commands/repl.py).  Supplies the runner/log/log-file base
-        # values (the three host-consumed keys) for the session register seed.
-        self._engine_base: dict[str, Value] = dict(engine_base) if engine_base is not None else {}
-        # Persisted register values for the host-consumed engine settings
-        # (runner/log/log-file).  Seeded from the engine defaults overlaid with
-        # ``_engine_base``, threaded into every entry's interpreter, and read
-        # back after a successful entry so a ``std/config::KEY := VALUE`` write
-        # persists.
-        self._persisted_host_settings: dict[str, Value] = self._build_host_settings_base()
-        self._persisted_timeout_setting = self._build_timeout_setting_base()
+        # ``strict-json`` is the one engine key whose host argument cannot be
+        # folded into the seed map below: it is a plain ``bool`` with no way to
+        # spell "the host did not specify a value", so an unseeded ``False``
+        # would be indistinguishable from an explicit host control and would
+        # permanently block a later ``std/config`` declared default from ever
+        # taking effect (see the ``_default_strict_json`` property). It is
+        # instead kept as the lowest-priority floor, consulted only when
+        # neither a host seed nor a declared default exists for the key.
+        self._strict_json_floor = default_strict_json
+        # ONE seed map for all six engine keys: this session's constructor- and
+        # :reset-time baseline. A host control -- an explicit ``engine_base``
+        # entry, or ``default_loop_limit``/``shell_exec_timeout`` folded in
+        # below -- is set once here and never changes; a ``std/config``
+        # declared default is recorded at most once, the first time an entry
+        # loads it (see :meth:`_record_declared_engine_defaults`), and never
+        # overwrites an existing entry, so a host control always wins. Adding
+        # an engine key touches only this map and its ``Value`` conversion in
+        # :meth:`_engine_snapshot`.
+        self._engine_seed: dict[str, Value] = dict(engine_base) if engine_base is not None else {}
+        # Host-supplied AgL source overrides (currently only ``default-agent``
+        # from ``--agent``/``[exec] default-agent``) spliced into the module
+        # graph the FIRST time it loads ``std/config`` (see
+        # ``EntryPipeline.eval_entry``), so the override is resolved,
+        # type-checked, and constant-checked by that entry's own compilation
+        # rather than a separate one run before the session exists.
+        self._setting_overrides: dict[str, SettingOverride] = (
+            dict(setting_overrides) if setting_overrides is not None else {}
+        )
+        if "max-iters" not in self._engine_seed and default_loop_limit is not None:
+            self._engine_seed["max-iters"] = IntValue(default_loop_limit)
+        if "timeout" not in self._engine_seed and shell_exec_timeout is not None:
+            self._engine_seed["timeout"] = some_value(TextValue(format_timeout(shell_exec_timeout)))
+        # max-iters and shell-exec-timeout are each backed by a plain scalar
+        # rather than derived on every read from ``_current`` (unlike
+        # ``_default_strict_json`` below): max-iters because a host-seeded
+        # ``0`` (an explicit "cap disabled" control) must read back as literal
+        # ``0`` right after construction/:reset, while a completed entry's own
+        # resolved cap is already ``None``-normalized by the interpreter (see
+        # ``IrInterpreter._apply_config_effect``) -- collapsing both through
+        # the same read would lose that distinction; shell-exec-timeout
+        # because the interpreter already parses its own authoritative float
+        # from the identical source text (``IrInterpreter.shell_exec_timeout``,
+        # kept in lockstep with the ``timeout`` register it writes alongside),
+        # so re-deriving it independently here would just be a second, and
+        # possibly diverging, parse of the same text.  :meth:`_seeded_loop_limit`
+        # / :meth:`_seeded_timeout_seconds` resolve the seed-derived values at
+        # construction and :reset; :meth:`_update_engine_settings` overwrites
+        # both from a completed entry's own resolved state.
+        self._default_loop_limit: int | None = self._seeded_loop_limit()
+        self._shell_exec_timeout: float | None = self._seeded_timeout_seconds()
+        # ONE current-value map for the five keys with a ``Value`` register
+        # (strict-json, timeout, log, log-file, default-agent): the live
+        # setting each entry's interpreter is built with and reads back after
+        # a write. Starts equal to the seed -- nothing has run yet -- is
+        # overwritten from a completed entry's own resolved state afterward
+        # (:meth:`_update_engine_settings`), and is restored to the seed by
+        # :meth:`reset`. ``_default_strict_json`` is a read-only view onto
+        # this map rather than a separately stored copy.
+        self._current: dict[str, Value] = self._current_from_seed()
         self._host_settings_policy = host_settings_policy
         # Trace destination: when set, each evaluated entry opens a fresh
         # ``TraceStore`` (its own ``run_id``) appending JSONL records to this one
@@ -175,19 +216,18 @@ class ReplSession:
         self._params_config_loader = params_config_loader
 
         # Internal runtime owns the registrations + host-environment assembly.
+        # It never runs an entry on the session's behalf, so it is given none
+        # of the three live engine settings: the session owns those (above) and
+        # threads them into each per-entry interpreter directly (see
+        # :mod:`agm.agl.repl.entry_pipeline`).
         self._runtime = PipelineDriver(
-            default_strict_json=default_strict_json,
-            default_loop_limit=default_loop_limit,
             default_call_depth_limit=default_call_depth_limit,
-            default_agent=default_agent,
-            shell_exec_timeout=shell_exec_timeout,
+            agent_dispatcher=agent_dispatcher,
         )
         # Reuse the driver's resolved (default-applied) limit for the per-entry
         # interpreters this session builds directly, so the canonical default
         # lives in exactly one place.
         self._default_call_depth_limit = self._runtime.default_call_depth_limit
-        self._has_default_agent = default_agent is not None
-
         # Persistent session environment.
         self._session_scope: ScopeNode = ScopeNode(node_id=-1, parent=None)
         self._session_scope_nodes: dict[tuple[str, ...], ScopeNode] = {(): self._session_scope}
@@ -195,26 +235,17 @@ class ReplSession:
         # None for a nominal type.
         self._session_type_paths: dict[tuple[str, ...], str | None] = {}
         self._type_env: TypeEnvironment = TypeEnvironment()
-        # Ambient agents injected by the scope pass carry a synthetic decl_node_id
-        # of -1 (no real AST declaration).  Pre-register AgentType() for this
-        # sentinel so the checker can resolve their binding type when they appear
-        # as call callees or in expressions.  This is seeded into every entry's
-        # fresh TypeEnvironment via seed_from, so it is always available.
-        self._type_env.set_binding_type(-1, self._make_agent_type())
         self._type_env.seal()
         self._link_image = LinkImage()
         self._ir_base_frame: Frame = {}
         self._next_node_id: int = 0
         self._program_name: str | None = None
         self._active_config: dict[str, object] = {}
-        self._declared_params: dict[str, Type] = {}
+        # Keyed by external key (full path spelling for a scoped param, bare
+        # name for a root param); value is (declared type, declaration node id).
+        self._declared_params: dict[str, tuple[Type, int]] = {}
         # Source log of successfully-promoted entries (for dump_source / :save).
         self._source_log: list[str] = []
-        # Agents declared by source in prior promoted entries, keyed by their
-        # complete structured identity. Root declarations become ambient names;
-        # scoped declarations remain available through retained scope members.
-        # Declarations from a failed/rolled-back entry never land here.
-        self._declared_agents: set[AgentId] = set()
         # Constructor candidates from prior promoted entries, keyed by constructor
         # name → ordered tuple of ConstructorRef.  Passed to resolve() as ambient
         # so that subsequent entries can reference constructors from prior entries.
@@ -226,9 +257,15 @@ class ReplSession:
         # Module roots configuration.
         # These are stored so _ensure_roots() can assemble the RootSet lazily.
         self._cwd: Path | None = cwd
-        self._stdlib_root: Path | None = (
-            resolve_stdlib_root(home=Path.home()) if stdlib_root is None else stdlib_root
-        )
+        # Left unresolved when not given explicitly: resolving it here would
+        # let a stale on-disk stdlib's ``StaleStdlibError`` (see
+        # :func:`agm.config.module_roots.resolve_stdlib_root`) escape the
+        # constructor, which must stay total -- many callers construct a
+        # session with no surrounding try/except. :meth:`_ensure_roots`
+        # resolves it lazily on first use instead, inside the same try/except
+        # every other module-loading failure already goes through
+        # (:meth:`open`, :meth:`eval_entry`).
+        self._stdlib_root: Path | None = stdlib_root
         self._lib_root: Path | None = lib_root
         self._configured_roots: tuple[tuple[str, Path], ...] = tuple(configured_roots)
         self._extra_cli_roots: tuple[str, ...] = tuple(extra_cli_roots)
@@ -242,7 +279,7 @@ class ReplSession:
         # generation replace earlier ones; the rest are prepended in program
         # context for reuse. Scope opens use the same entry retention model.
         self._accumulated_imports: list[tuple["ImportDecl", ...]] = []
-        self._accumulated_opens: list[tuple["OpenDecl | ScopeRegion", ...]] = []
+        self._accumulated_opens: list[tuple["OpenDecl | ImportDecl | ScopeRegion", ...]] = []
         # Resolved user infix fixity declared in prior promoted entries
         # (operator name → ``(priority, associativity)``). Passed to the parser
         # as ambient fixity so an ``infixl``/``infixr`` declaration made in one
@@ -251,42 +288,11 @@ class ReplSession:
         self._entry_pipeline = EntryPipeline(self)
 
     @staticmethod
-    def _make_agent_type() -> "Type":
-        """Return an ``AgentType`` instance (deferred import, used at init and reset)."""
-        from agm.agl.semantics.types import AgentType
-
-        return AgentType()
-
-    @staticmethod
-    def _type_mentions_entry_nominal(
-        typ: "Type", identities: frozenset[tuple[tuple[str, ...], str]]
-    ) -> bool:
-        """Return whether *typ* contains an entry nominal with one of *identities*."""
-        from agm.agl.semantics.types import iter_nominal_types
-
-        return any(
-            nominal.module_id.is_entry and (nominal.scope_path, nominal.name) in identities
-            for nominal in iter_nominal_types(typ)
-        )
-
-    @staticmethod
     def _assert_checked_state_closed(checked: "CheckedModule") -> None:
         """Assert that a checked entry satisfies the shared lowering boundary."""
         from agm.agl.typecheck.env import assert_checked_module_closed
 
         assert_checked_module_closed(checked)
-
-    # ------------------------------------------------------------------
-    # Registration (delegated to the internal runtime — shared validation)
-    # ------------------------------------------------------------------
-
-    def register_agent(self, name: str, fn: "AgentFn") -> None:
-        """Register a root agent (shares ``PipelineDriver`` validation)."""
-        self._runtime.register_agent(name, fn)
-
-    def register_scoped_agent(self, scope_path: tuple[str, ...], name: str, fn: "AgentFn") -> None:
-        """Register an agent for one exact named-scope path."""
-        self._runtime.register_scoped_agent(scope_path, name, fn)
 
     def register_codec(self, codec: "OutputCodec") -> None:
         """Register a custom output codec (shares ``PipelineDriver`` validation)."""
@@ -297,14 +303,30 @@ class ReplSession:
     # ------------------------------------------------------------------
 
     def _ensure_roots(self) -> "RootSet":
-        """Build the ``RootSet`` lazily on first import use."""
+        """Build the ``RootSet`` lazily on first import use.
+
+        Resolves ``_stdlib_root`` here too when the constructor was not given
+        one explicitly, using the same AGM-home seam ``commands/repl.py`` uses
+        (:func:`agm.config.context.current_config_context`) rather than a
+        hardcoded ``Path.home()``, so a relocated ``AGM_HOME`` is honored the
+        same way here as everywhere else. A stale on-disk stdlib's
+        ``StaleStdlibError`` therefore surfaces from inside the caller's own
+        try/except (:meth:`open`, :meth:`eval_entry`) instead of from
+        construction. The resolved path is cached back onto ``_stdlib_root``
+        once found, so a later :reset -- which only clears ``_roots`` -- reuses
+        it rather than re-resolving.
+        """
         if self._roots is not None:
             return self._roots
         from pathlib import Path
 
         from agm.agl.modules.roots import assemble_roots
+        from agm.config.context import current_config_context
+        from agm.config.module_roots import resolve_stdlib_root
 
         cwd = self._cwd if self._cwd is not None else Path.cwd()
+        if self._stdlib_root is None:
+            self._stdlib_root = resolve_stdlib_root(home=current_config_context(cwd=cwd).home)
         self._roots = assemble_roots(
             invocation_root=cwd,
             stdlib_root=self._stdlib_root,
@@ -314,6 +336,82 @@ class ReplSession:
             cwd=cwd,
         )
         return self._roots
+
+    # ------------------------------------------------------------------
+    # Session bootstrap
+    # ------------------------------------------------------------------
+
+    def open(self) -> tuple[Diagnostic, ...]:
+        """Load the session's initial library image before any entry runs.
+
+        Builds the module graph a first entry would build (honoring
+        ``default_stdlib``), splicing any host-supplied ``setting_overrides``
+        into ``std/config`` the first time it loads, then resolves and
+        type-checks the result. A rejected override — an unparseable literal,
+        the wrong type, a non-constant expression, or an unknown engine key —
+        is reported here rather than deferred to whichever entry happens to
+        load ``std/config`` first. A graph with no loaded ``std/config`` (e.g.
+        ``--no-stdlib`` with no explicit import) is likewise reported here,
+        but only for a ``required`` override (e.g. ``--agent``): an explicit
+        per-run request the host cannot silently drop, validated up front
+        (``load_and_check_program``'s ``validate_missing_std_config=True``)
+        rather than deferred to a later entry that may never come. A
+        non-``required`` override (ambient configuration) is simply inert in
+        that same situation — no diagnostic.
+
+        On success, the loaded library modules, the node-id counter, and the
+        session's type environment are promoted into the session's caches
+        the same way a successful entry promotes its own ``new_modules`` (see
+        ``EntryPipeline._evaluate_ir_program``), so the first real entry finds
+        them already cached rather than recompiling them — this method never
+        lowers or evaluates anything, so a module is marked ``linked`` (and
+        the standard-library companion, if any, imported) only once an entry
+        actually executes, exactly as today.
+
+        Returns the rejection diagnostics, or an empty tuple on success.
+        Never raises: a host calls this once, right after constructing the
+        session and before it accepts any entry or prints a banner. Every
+        checked frontend failure ``load_and_check_program`` can raise -- a
+        syntax, module-loading, scope, or type error -- is a subclass of
+        ``AglError`` (:class:`OverrideRejected` is the sole exception,
+        carrying its diagnostics directly); a bare ``except Exception``
+        beneath those two also adapts an unchecked failure reading a module
+        file (a permission error, invalid UTF-8) or resolving the default
+        stdlib root (:class:`~agm.config.module_roots.StaleStdlibError`, raised
+        lazily by :meth:`_ensure_roots` the first time it runs) -- exactly as
+        :meth:`EntryPipeline.eval_entry` adapts the same raises for an
+        ordinary entry.
+        """
+        from agm.agl.diagnostics import AglError
+        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.parser import parse_program_seeded
+        from agm.agl.repl.entry_pipeline import OverrideRejected
+
+        host_env = self._runtime.host_environment()
+        # A throwaway unit expression: side-effect-free and never a Binder or
+        # Declaration, so it never becomes a scope member. Its own node ids
+        # are consumed from the counter like any other entry's and never
+        # referenced again once ``_next_node_id`` moves past them.
+        program, next_start_id = parse_program_seeded("()", start_id=self._next_node_id)
+
+        try:
+            loaded = self._entry_pipeline.load_and_check_program(
+                pipeline_program=program,
+                host_env=host_env,
+                next_start_id=next_start_id,
+                validate_missing_std_config=True,
+            )
+        except OverrideRejected as exc:
+            return tuple(exc.diagnostics)
+        except AglError as exc:
+            return (exc.to_diagnostic(),)
+        except Exception as exc:
+            return (Diagnostic(message=str(exc), line=1),)
+
+        self._loaded_lib_modules.update(loaded.new_modules)
+        self._next_node_id = loaded.new_next_id
+        self._type_env = loaded.checked_program.modules[ENTRY_ID].type_env
+        return ()
 
     # ------------------------------------------------------------------
     # Core evaluation
@@ -351,9 +449,9 @@ class ReplSession:
         so the caller keeps the original failure result.
 
         This is a REPL-only convenience (the language is unchanged): typing a
-        type is not a value expression, so previously it surfaced ``'X' is not
-        defined.``.  Like :meth:`type_of`, this never evaluates, promotes,
-        advances the node-id counter, or mutates session state.  The parse uses
+        type is not a value expression, so without it the entry would surface
+        ``'X' is not defined.``.  Like :meth:`type_of`, this never evaluates,
+        promotes, advances the node-id counter, or mutates session state.  The parse uses
         throwaway node ids; only the resolved :class:`Type` or generic type
         definition display is kept.
         """
@@ -508,18 +606,6 @@ class ReplSession:
             spaced_qualifiers=spaced_qualifiers,
         )
 
-    def _ambient_agents(self, host_env: "HostEnvironment") -> frozenset[str]:
-        """Agent names valid WITHOUT an in-entry ``agent`` declaration.
-
-        In the REPL, host registration both declares and backs an agent, so the
-        authoritative set of host-registered names (``capabilities.agent_names``,
-        which excludes the ``ask``/``exec`` built-ins) is ambient, unioned with
-        agents declared by ``agent X`` statements in prior promoted entries.
-        """
-        return host_env.capabilities.agent_names | frozenset(
-            agent_id.declared_name for agent_id in self._declared_agents if not agent_id.scope_path
-        )
-
     def _fail(self, diagnostics: list[Diagnostic], warnings: list[Diagnostic]) -> EntryResult:
         """Build a clean pre-execution failure result (no promotion)."""
         return EntryResult(
@@ -533,57 +619,177 @@ class ReplSession:
             ok=False,
         )
 
-    def _build_host_settings_base(self) -> "dict[str, Value]":
-        """Seed the host-consumed register values for a fresh session.
+    @property
+    def _default_strict_json(self) -> bool:
+        """The live strict-json setting: the current register, else the floor.
 
-        Starts from the engine defaults and overlays the session's
-        ``_engine_base`` values where present.  Unlike the runtime-live keys
-        (which persist through ``_update_engine_settings``), the host-consumed
-        keys carry no live interpreter field, so the session persists their
-        register values across entries in ``_persisted_host_settings``.
+        A read-only view onto :attr:`_current` rather than a separately
+        stored copy: the register is absent exactly when neither a host seed
+        nor a declared default has been established yet (construction with
+        neither, or an entry that has not touched ``std/config``), which is
+        precisely when the floor (:attr:`_strict_json_floor`) is the right
+        answer.
         """
-        from agm.agl.runtime.params import build_engine_config_base
+        seed = self._current.get("strict-json")
+        if seed is None:
+            return self._strict_json_floor
+        from agm.agl.semantics.values import BoolValue
 
-        defaults = build_engine_config_base({})
-        return {key: self._engine_base.get(key, defaults[key]) for key in HOST_CONSUMED_ENGINE_KEYS}
+        assert isinstance(seed, BoolValue)
+        return seed.value
 
-    def _build_timeout_setting_base(self) -> "EnumValue":
-        """Seed the readable timeout register from host input or engine data."""
-        from agm.agl.runtime.params import build_engine_config_base
+    @property
+    def _persisted_host_settings(self) -> "dict[str, Value]":
+        """The current register, filtered to the three host-consumed keys.
+
+        Exposed for introspection (tests, ``EntryPipeline``): ``_current`` also
+        carries ``strict-json``/``timeout``, which have no host-consumed
+        register of their own and must never appear here.
+        """
+        return {
+            key: value for key, value in self._current.items() if key in HOST_CONSUMED_ENGINE_KEYS
+        }
+
+    @staticmethod
+    def _resolve_timeout_seconds(seed: "EnumValue | None") -> float | None:
+        """Unwrap a ``timeout`` register value (``Option[text]``) into seconds, or ``None``.
+
+        ``None`` covers both an absent register and an explicit ``None``
+        variant (a host or declared "no timeout" control).
+        """
+        from agm.agl.runtime.option import option_text
+        from agm.core.parse import parse_timeout
+
+        raw = None if seed is None else option_text(seed)
+        return None if raw is None else parse_timeout(raw)
+
+    def _current_from_seed(self) -> dict[str, Value]:
+        """Return the live setting map the unified seed implies.
+
+        ``max-iters`` is excluded: it is not a live readable register, and is
+        carried by ``_default_loop_limit`` instead (:meth:`_seeded_loop_limit`).
+        Shared by construction and :meth:`reset`, like the two seeded scalars
+        beside it, so the exclusion rule is stated once.
+        """
+        return {key: value for key, value in self._engine_seed.items() if key != "max-iters"}
+
+    def _seeded_loop_limit(self) -> int | None:
+        """Return the max-iters cap the unified seed map implies, or ``None``.
+
+        Reads ``_engine_seed`` directly -- a host control set at construction,
+        or (once :meth:`_record_declared_engine_defaults` has run) a learned
+        ``std/config`` declared default, whichever is present; a host control
+        always wins, since it is written first and a declared default is only
+        ever added via ``setdefault``. Shared by construction and :meth:`reset`.
+        """
+        from agm.agl.semantics.values import IntValue
+
+        seed = self._engine_seed.get("max-iters")
+        if seed is None:
+            return None
+        assert isinstance(seed, IntValue)
+        return seed.value
+
+    def _seeded_timeout_seconds(self) -> float | None:
+        """Return the shell-exec timeout the unified seed map implies, in seconds.
+
+        Reads ``_engine_seed`` directly, the same way :meth:`_seeded_loop_limit`
+        does for max-iters. Shared by construction and :meth:`reset`; a
+        completed entry instead overwrites the field with the interpreter's
+        own already-parsed value (:meth:`_update_engine_settings`).
+        """
         from agm.agl.semantics.values import EnumValue
-        from agm.core.parse import format_timeout
 
-        raw = (
-            {}
-            if self._initial_shell_exec_timeout is None
-            else {"timeout": format_timeout(self._initial_shell_exec_timeout)}
-        )
-        defaults = build_engine_config_base(raw)
-        timeout = self._engine_base.get("timeout", defaults["timeout"])
-        assert isinstance(timeout, EnumValue)
-        return timeout
+        seed = self._engine_seed.get("timeout")
+        assert seed is None or isinstance(seed, EnumValue)
+        return self._resolve_timeout_seconds(seed)
 
-    def _update_engine_settings(
-        self,
-        *,
-        strict_json: bool,
-        loop_limit: int | None,
-        shell_exec_timeout: float | None,
-    ) -> None:
-        """Persist the three live engine settings after a successful entry.
+    @staticmethod
+    def _engine_snapshot(interp: "IrInterpreter") -> "dict[str, Value]":
+        """Return *interp*'s current effective value for every engine key, as a ``Value``.
 
-        Updates the session's persisted defaults AND the internal
-        ``PipelineDriver`` so that subsequent entries start with these values.
-        Agent/codec registrations on the driver are preserved.
+        Shared by :meth:`_record_declared_engine_defaults` (called before
+        ``interp.run()``, so this reflects the interpreter's bootstrap state)
+        and :meth:`_update_engine_settings` (called after, so this reflects
+        whatever the entry wrote too) -- the one place that converts the
+        interpreter's own native-typed fields into the ``Value`` shape the
+        seed and current-value maps share.
         """
-        self._default_strict_json = strict_json
-        self._default_loop_limit = loop_limit
-        self._shell_exec_timeout = shell_exec_timeout
-        self._runtime.update_defaults(
-            strict_json=strict_json,
-            loop_limit=loop_limit,
-            shell_exec_timeout=shell_exec_timeout,
-        )
+        from agm.agl.semantics.values import BoolValue, IntValue
+
+        return {
+            **interp.builtin_host_settings,
+            "strict-json": BoolValue(interp.strict_json),
+            "max-iters": IntValue(interp.loop_limit or 0),
+            "timeout": interp.timeout_setting,
+        }
+
+    def _record_declared_engine_defaults(
+        self, declared_keys: frozenset[str], interp: "IrInterpreter"
+    ) -> None:
+        """Remember unseeded declared defaults before an entry can write them.
+
+        The REPL creates a fresh interpreter for each entry.  Its constructor
+        is the one place that evaluates a ``builtin var`` initializer, so the
+        entry pipeline calls this with *interp* right after construction,
+        before ``interp.run()``.  A key already in ``_engine_seed`` (a host
+        control, or a declared default a prior entry already recorded) is left
+        untouched, so a declared default is recorded at most once and never
+        outranks a host control -- the same precedence :meth:`reset` reapplies
+        by reading ``_engine_seed`` directly.
+
+        ``max-iters``'s declared value of exactly ``0`` is skipped rather than
+        recorded: it means "unlimited", the same outcome an absent seed
+        already produces via :meth:`_seeded_loop_limit`, so recording it would
+        add a second representation of the same "no cap" state instead of
+        genuinely seeding anything.  A HOST-seeded ``0`` is unaffected -- it is
+        written directly by the constructor, never through this method.
+        """
+        if not declared_keys:
+            return
+        from agm.agl.semantics.values import IntValue
+
+        snapshot = self._engine_snapshot(interp)
+        for key in declared_keys:
+            if key in self._engine_seed:
+                continue
+            value = snapshot[key]
+            if key == "max-iters":
+                assert isinstance(value, IntValue)
+                if value.value == 0:
+                    continue
+            self._engine_seed[key] = value
+
+    def _update_engine_settings(self, interp: "IrInterpreter") -> None:
+        """Persist the engine settings an entry ended with into the current-value map.
+
+        Setting writes are non-transactional, so a failed or cancelled entry
+        persists the writes it completed. The host-consumed keys are
+        replaced unconditionally from ``interp.builtin_host_settings`` --
+        already the session's own prior register re-merged with any fresh
+        declared default this entry's own compilation introduced (see
+        ``IrInterpreter.__init__``), so it is always the correct next value,
+        and a key genuinely never seeded or declared (``default-agent`` has no
+        host-side floor) is correctly left absent rather than fabricated.
+        Timeout is likewise replaced unconditionally, since it always has a
+        host-side floor and so is always present. Strict-json is replaced only
+        once its register is already meaningful (an established current
+        value, or a seed recorded by :meth:`_record_declared_engine_defaults`
+        earlier in this same entry): otherwise ``interp.strict_json`` may be
+        nothing more than the floor, and recording it as a register would
+        wrongly stop a LATER entry that is the first to declare
+        ``std/config`` from ever discovering its real default. Max-iters and
+        shell-exec-timeout are backed by scalar fields rather than the
+        current-value map, so they are set straight from the interpreter's
+        own already-resolved values rather than re-derived here.
+        """
+        snapshot = self._engine_snapshot(interp)
+        self._current.update(interp.builtin_host_settings)
+        self._current["timeout"] = snapshot["timeout"]
+        if "strict-json" in self._current or "strict-json" in self._engine_seed:
+            self._current["strict-json"] = snapshot["strict-json"]
+        self._default_loop_limit = interp.loop_limit
+        self._shell_exec_timeout = interp.shell_exec_timeout
 
     def _pre_eval_param_check(
         self,
@@ -593,7 +799,7 @@ class ReplSession:
     ) -> tuple[EntryResult | None, dict[str, Value], str | None, dict[str, object]]:
         """Validate and convert config-backed params without mutating session state."""
         from agm.agl.runtime.params import convert_param_value
-        from agm.agl.syntax.nodes import ParamDecl, ProgramDecl
+        from agm.agl.syntax.nodes import ParamDecl, ProgramDecl, scoped_public_name, static_items
 
         def reject(message: str, span: "SourceSpan") -> EntryResult:
             return self._fail([diagnostic_from_span(message, span)], warnings)
@@ -602,7 +808,7 @@ class ReplSession:
         entry_program_name: str | None = None
         effective_config = self._active_config
 
-        for item in program.body.items:
+        for item in static_items(program.body.items):
             if isinstance(item, ProgramDecl):
                 if self._program_name is not None and self._program_name != item.name:
                     return (
@@ -623,18 +829,19 @@ class ReplSession:
                         else {}
                     )
             elif isinstance(item, ParamDecl):
-                raw_config = effective_config.get(item.name)
+                external_name = scoped_public_name(item.scope_path, item.name)
+                raw_config = effective_config.get(external_name)
                 if raw_config is not None:
                     declared_type = checked.type_env.get_binding_type(item.node_id)
                     assert declared_type is not None
                     try:
-                        param_values[item.name] = convert_param_value(
-                            item.name, raw_config, declared_type, checked.type_env.type_table
+                        param_values[external_name] = convert_param_value(
+                            external_name, raw_config, declared_type, checked.type_env.type_table
                         )
                     except (TypeError, ValueError) as exc:
                         return (
                             reject(
-                                f"Config value for param {item.name!r} is invalid: {exc}",
+                                f"Config value for param {external_name!r} is invalid: {exc}",
                                 item.span,
                             ),
                             {},
@@ -650,7 +857,7 @@ class ReplSession:
                     )
                     return (
                         reject(
-                            f"Missing required param {item.name!r}: provide it"
+                            f"Missing required param {external_name!r}: provide it"
                             f"{prog_hint} or a default expression.",
                             item.span,
                         ),
@@ -687,6 +894,10 @@ class ReplSession:
             type_table=checked.type_env.type_table,
         )
 
+    def _advance_node_ids(self, next_start_id: int) -> None:
+        """Consume node ids for an entry that failed after lowering began."""
+        self._next_node_id = next_start_id
+
     def _promote_ir_state(
         self,
         *,
@@ -703,7 +914,6 @@ class ReplSession:
         from agm.agl.parser import resolve_infix_fixity
         from agm.agl.scope.symbols import ScopeNode
         from agm.agl.syntax.nodes import (
-            AgentDecl,
             EnumDef,
             ExceptionDef,
             FuncDef,
@@ -712,30 +922,21 @@ class ReplSession:
             ParamDecl,
             ProgramDecl,
             RecordDef,
-            ScopeRegion,
             TypeAlias,
             VarDecl,
-            is_scoped_declaration,
             pattern_binder_candidates,
+            resolved_public_name,
+            scoped_public_name,
+            static_items,
         )
         from agm.agl.syntax.types import render_type_expr
         from agm.agl.typecheck.env import TypeEnvironment
 
-        def declarations(items: tuple[object, ...]) -> list[object]:
-            result: list[object] = []
-            for item in items:
-                if isinstance(item, ScopeRegion):
-                    result.extend(declarations(item.items))
-                else:
-                    result.append(item)
-            return result
-
-        entry_declarations = declarations(program.body.items)
+        entry_declarations = tuple(static_items(program.body.items))
         if self_validation_enabled():
             self._assert_checked_state_closed(checked)
         entry_root = checked.resolved.root_scope
         named_declarations = (
-            AgentDecl,
             EnumDef,
             ExceptionDef,
             FuncDef,
@@ -746,35 +947,51 @@ class ReplSession:
             TypeAlias,
             VarDecl,
         )
-        binding_items = (AgentDecl, FuncDef, ParamDecl, VarDecl)
+        binding_items = (FuncDef, ParamDecl, VarDecl)
         promotion_bindings = {
             item.name: entry_root.bindings[item.name]
             for item in program.body.items
             if isinstance(item, binding_items)
-            and not is_scoped_declaration(item)
+            and not item.scope_path
             and item.name in entry_root.bindings
         }
         promotion_bindings.update(
             (binding.name, binding)
             for item in program.body.items
-            if isinstance(item, LetDecl)
+            if isinstance(item, LetDecl) and not item.scope_path
             for candidate in pattern_binder_candidates(item.pattern)
             if (binding := checked.pattern_binding_for(candidate.node_id)) is not None
         )
         entry_binding_node_ids = {ref.decl_node_id for ref in promotion_bindings.values()}
         promoted_binding_node_ids = entry_binding_node_ids & promoted_declaration_ids
 
+        # A region-form ``let``'s scope-member ref keys on its binder
+        # candidate node id (not the ``LetDecl`` node's own id), same as at
+        # the root. Only root binders feed ``promotion_bindings`` — a scoped
+        # one must not, since that also drives the root-only
+        # ``self._session_scope.bindings`` update below — so its candidate
+        # ids are collected separately and only fed into
+        # ``entry_declaration_node_ids``.
+        scoped_binder_node_ids = {
+            candidate.node_id
+            for item in static_items(program.body.items)
+            if isinstance(item, LetDecl)
+            for candidate in pattern_binder_candidates(item.pattern)
+        }
+
         # Declarations this entry introduces, at the root and in its scope
         # regions. Anything outside this set is retained session state, which a
         # partial entry never demotes.
-        entry_declaration_node_ids = {
-            item.node_id for item in entry_declarations if isinstance(item, named_declarations)
-        } | entry_binding_node_ids
+        entry_declaration_node_ids = (
+            {item.node_id for item in entry_declarations if isinstance(item, named_declarations)}
+            | entry_binding_node_ids
+            | scoped_binder_node_ids
+        )
 
         def _is_promoted(node_id: int) -> bool:
             return node_id not in entry_declaration_node_ids or node_id in promoted_declaration_ids
 
-        def type_identity(
+        def type_name_path(
             item: RecordDef | EnumDef | ExceptionDef | TypeAlias,
         ) -> tuple[tuple[str, ...], str]:
             return tuple(segment.name for segment in item.scope_path), item.name
@@ -784,56 +1001,28 @@ class ReplSession:
             for item in entry_declarations
             if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
         )
-        entry_type_identities = frozenset(type_identity(item) for item in entry_type_items)
-        promoted_type_identities = frozenset(
-            type_identity(item)
+        entry_type_name_paths = frozenset(type_name_path(item) for item in entry_type_items)
+        promoted_type_name_paths = frozenset(
+            type_name_path(item)
             for item in entry_type_items
             if item.node_id in promoted_declaration_ids
         )
-        unpromoted_type_identities = entry_type_identities - promoted_type_identities
+        unpromoted_type_name_paths = entry_type_name_paths - promoted_type_name_paths
         unpromoted_type_names = {
-            "::".join((*path, name)) for path, name in unpromoted_type_identities
+            "::".join((*path, name)) for path, name in unpromoted_type_name_paths
         }
-        stale_binding_names: set[str] = set()
-        stale_binding_node_ids: set[int] = set()
-        if promoted_type_identities:
-            for name, ref in self._session_scope.bindings.items():
-                typ = self._type_env.resolve_binding(ref)
-                if typ is not None and self._type_mentions_entry_nominal(
-                    typ, promoted_type_identities
-                ):
-                    stale_binding_names.add(name)
-                    stale_binding_node_ids.add(ref.decl_node_id)
-            for name in stale_binding_names:
-                self._session_scope.bindings.pop(name, None)
-            # A redefined type can also be mentioned by a retained named-scope
-            # member (e.g. ``A::make() -> A::R``), not just a root binding;
-            # walk every session scope node's members the same way so a stale
-            # scoped value/function is invalidated rather than surviving with a
-            # runtime layout that no longer matches its (new) static type.
-            for path, node in self._session_scope_nodes.items():
-                if not path:
-                    continue
-                stale_member_names: set[str] = set()
-                for name, ref in node.members.items():
-                    typ = self._type_env.resolve_binding(ref)
-                    if typ is not None and self._type_mentions_entry_nominal(
-                        typ, promoted_type_identities
-                    ):
-                        stale_member_names.add(name)
-                        stale_binding_node_ids.add(ref.decl_node_id)
-                for name in stale_member_names:
-                    node.members.pop(name, None)
-            self._declared_params = {
-                name: typ
-                for name, typ in self._declared_params.items()
-                if not self._type_mentions_entry_nominal(typ, promoted_type_identities)
-            }
+        if promoted_type_name_paths:
+            # A promoted type declaration supersedes any earlier ambient
+            # constructor candidate sharing its name path: retained bindings
+            # and scope members keep resolving through their own (possibly
+            # superseded) declaration identity, so only the ambient bare-name
+            # candidate table -- which drives how a FRESH constructor
+            # reference resolves -- needs to move onto the newest owner here.
             self._ambient_constructor_candidates = {
                 cname: tuple(
                     ref
                     for ref in crefs
-                    if (ref.owner_path, ref.owner_name) not in promoted_type_identities
+                    if (ref.owner_path, ref.owner_name) not in promoted_type_name_paths
                 )
                 for cname, crefs in self._ambient_constructor_candidates.items()
             }
@@ -843,9 +1032,18 @@ class ReplSession:
                 if crefs
             }
 
+        # External keys of params this entry's promotions displace (a `let` /
+        # `var` / `def` / `agent` binding that shares a param's public name
+        # takes over that name, so the param must stop being a declared
+        # param); populated by both the root-binding loop here and the
+        # scoped-member loop below, then applied to ``_declared_params`` in
+        # one pass.
+        displaced_param_keys: set[str] = set()
+
         for name, ref in promotion_bindings.items():
             if ref.decl_node_id not in promoted_binding_node_ids:
                 continue
+            displaced_param_keys.add(name)
             self._session_scope.bindings[name] = ref
         installed = (
             self._installed_report(
@@ -853,7 +1051,7 @@ class ReplSession:
                 checked,
                 promoted_binding_node_ids=promoted_binding_node_ids,
                 promoted_type_names=frozenset(
-                    name for path, name in promoted_type_identities if not path
+                    name for path, name in promoted_type_name_paths if not path
                 ),
             )
             if partial
@@ -866,37 +1064,35 @@ class ReplSession:
         for path, node in checked.resolved.scope_nodes.items():
             if not path or path in self._session_scope_nodes:
                 continue
-            if path in {(*scope_path, name) for scope_path, name in unpromoted_type_identities}:
+            if path in {(*scope_path, name) for scope_path, name in unpromoted_type_name_paths}:
                 continue
             self._session_scope_nodes[path] = ScopeNode(
                 node_id=node.node_id,
                 parent=self._session_scope_nodes[path[:-1]],
                 scope_path=path,
             )
-        for path, name in promoted_type_identities:
-            self._session_scope_nodes[(*path, name)].members.clear()
         for path, node in checked.resolved.scope_nodes.items():
             session_node = self._session_scope_nodes.get(path)
             if session_node is None:
                 continue
             for name, ref in node.members.items():
-                if (
-                    (ref.scope_path, ref.name) not in unpromoted_type_identities
-                    and ref.decl_node_id not in stale_binding_node_ids
-                    and _is_promoted(ref.decl_node_id)
+                if (ref.scope_path, ref.name) not in unpromoted_type_name_paths and _is_promoted(
+                    ref.decl_node_id
                 ):
-                    session_node.members[name] = ref
+                    if ref.decl_node_id in entry_declaration_node_ids:
+                        displaced_param_keys.add(resolved_public_name(path, name))
+                    session_node.register_member(name, ref)
         alias_targets = {
-            type_identity(item): render_type_expr(item.type_expr)
+            type_name_path(item): render_type_expr(item.type_expr)
             for item in entry_type_items
             if isinstance(item, TypeAlias) and item.node_id in promoted_declaration_ids
         }
         self._session_type_paths.update(
             ((*path, name), alias_targets.get((path, name)))
-            for path, name in promoted_type_identities
+            for path, name in promoted_type_name_paths
         )
 
-        if not partial and not stale_binding_node_ids:
+        if not partial:
             # The checked environment already includes the prior sealed session
             # state and is itself sealed at the checked-output boundary. Reuse it
             # directly instead of copying the accumulated session a second time.
@@ -908,37 +1104,28 @@ class ReplSession:
             # leaves the session's still-sealed ``self._type_env`` untouched.
             new_type_env = TypeEnvironment()
             new_type_env.seed_from(checked.type_env)
-            if partial and unpromoted_type_names:
+            if unpromoted_type_names:
                 new_type_env.restore_type_names_from(previous_type_env, unpromoted_type_names)
-            if partial:
-                unpromoted_function_names = (
-                    item.name
-                    for item in entry_declarations
-                    if isinstance(item, FuncDef) and item.node_id not in promoted_declaration_ids
-                )
-                new_type_env.restore_binding_metadata_from(
-                    previous_type_env,
-                    entry_binding_node_ids - promoted_binding_node_ids,
-                    unpromoted_function_names,
-                )
-            new_type_env.remove_binding_types(stale_binding_node_ids)
+            unpromoted_function_names = (
+                item.name
+                for item in entry_declarations
+                if isinstance(item, FuncDef) and item.node_id not in promoted_declaration_ids
+            )
+            new_type_env.restore_binding_metadata_from(
+                previous_type_env,
+                entry_binding_node_ids - promoted_binding_node_ids,
+                unpromoted_function_names,
+            )
             new_type_env.seal()
             self._type_env = new_type_env
 
-        from agm.agl.ir.ids import AgentId
-
-        self._declared_agents.update(
-            AgentId(name, scope_path)
-            for (scope_path, name), declaration in checked.resolved.declared_agents.items()
-            if _is_promoted(declaration.node_id)
-        )
-        if promoted_type_identities:
+        if promoted_type_name_paths:
             promoted_candidates: dict[str, tuple[ConstructorRef, ...]] = {}
             for (_path, cname), crefs in checked.resolved.constructor_candidates_by_path.items():
                 selected = tuple(
                     ref
                     for ref in crefs
-                    if (ref.owner_path, ref.owner_name) in promoted_type_identities
+                    if (ref.owner_path, ref.owner_name) in promoted_type_name_paths
                 )
                 if selected:
                     promoted_candidates[cname] = (*promoted_candidates.get(cname, ()), *selected)
@@ -948,13 +1135,18 @@ class ReplSession:
                     *crefs,
                 )
             self._ambient_type_names |= frozenset(
-                name for path, name in promoted_type_identities if not path
+                name for path, name in promoted_type_name_paths if not path
             )
-        for item in program.body.items:
-            if isinstance(item, ParamDecl) and item.node_id in promoted_binding_node_ids:
+        for key in displaced_param_keys:
+            self._declared_params.pop(key, None)
+        for item in static_items(program.body.items):
+            if isinstance(item, ParamDecl) and _is_promoted(item.node_id):
                 typ = checked.type_env.get_binding_type(item.node_id)
                 assert typ is not None
-                self._declared_params[item.name] = typ
+                self._declared_params[scoped_public_name(item.scope_path, item.name)] = (
+                    typ,
+                    item.node_id,
+                )
         if entry_program_name is not None and not partial:
             self._program_name = entry_program_name
             self._active_config = entry_active_config
@@ -987,7 +1179,6 @@ class ReplSession:
         names are never listed separately, only the enum's own declared name.
         """
         from agm.agl.syntax.nodes import (
-            AgentDecl,
             EnumDef,
             ExceptionDef,
             FuncDef,
@@ -999,7 +1190,7 @@ class ReplSession:
             pattern_binder_candidates,
         )
 
-        binding_items = (AgentDecl, FuncDef, ParamDecl, VarDecl)
+        binding_items = (FuncDef, ParamDecl, VarDecl)
         type_items = (RecordDef, EnumDef, ExceptionDef, TypeAlias)
         installed: list[str] = []
         for item in program.body.items:
@@ -1056,7 +1247,6 @@ class ReplSession:
         """Classify the entry by its last item; return (kind, name)."""
         from agm.agl.modules.ids import spell_scope_path
         from agm.agl.syntax.nodes import (
-            AgentDecl,
             AssignStmt,
             Binder,
             Declaration,
@@ -1071,6 +1261,7 @@ class ReplSession:
             TypeAlias,
             VarDecl,
             is_scoped_declaration,
+            scoped_public_name,
             simple_let_pattern_name,
         )
 
@@ -1082,13 +1273,17 @@ class ReplSession:
             return "expression", None
         if isinstance(last, LetDecl):
             name = simple_let_pattern_name(last.pattern)
+            if name is None:
+                return "binding", None
             if name == "_":
                 return "statement", None
-            return "binding", name
+            # A shorthand binder path names the member it declares, so the
+            # echo shows the member the way its scope makes it reachable.
+            return "binding", scoped_public_name(last.scope_path, name)
         if isinstance(last, VarDecl):
             if last.name == "_":
                 return "statement", None
-            return "binding", last.name
+            return "binding", scoped_public_name(last.scope_path, last.name)
         if isinstance(
             last,
             (
@@ -1099,14 +1294,12 @@ class ReplSession:
                 ParamDecl,
                 ProgramDecl,
                 FuncDef,
-                AgentDecl,
             ),
         ):
             # A shorthand declaration path names the member it declares, so the
             # echo shows the member the way its scope makes it reachable.
             if is_scoped_declaration(last):
-                path = tuple(segment.name for segment in last.scope_path)
-                return "declaration", spell_scope_path((*path, last.name))
+                return "declaration", scoped_public_name(last.scope_path, last.name)
             return "declaration", last.name
         if isinstance(last, ScopeRegion):
             return "declaration", spell_scope_path(_region_path(last))
@@ -1240,23 +1433,15 @@ class ReplSession:
             result.append((name, typ, value))
         return result
 
-    def agents(self) -> list[str]:
-        """Return the names of available agents.
-
-        Registered named agents plus ``"ask"`` when a default agent is
-        configured.
-        """
-        host_env = self._runtime.host_environment()
-        names = sorted(host_env.registry.agent_names)
-        if self._has_default_agent:
-            names.append("ask")
-        return names
-
     def declared_params(self) -> list[tuple[str, "Type", "Value"]]:
-        """Return declared params as (name, type, resolved value)."""
+        """Return declared params as (external key, type, resolved value).
+
+        A scoped param's key is its full path spelling, matching how it is
+        supplied from the CLI and config; a root param's key is its bare name.
+        """
         result: list[tuple[str, Type, Value]] = []
-        for name, typ in self._declared_params.items():
-            value = self._declaration_value(self._session_scope.bindings[name].decl_node_id)
+        for name, (typ, decl_node_id) in self._declared_params.items():
+            value = self._declaration_value(decl_node_id)
             assert value is not None
             result.append((name, typ, value))
         return result
@@ -1297,8 +1482,6 @@ class ReplSession:
         self._session_scope_nodes = {(): self._session_scope}
         self._session_type_paths = {}
         self._type_env = TypeEnvironment()
-        # Re-seed the sentinel AgentType for ambient agents (see __init__).
-        self._type_env.set_binding_type(-1, self._make_agent_type())
         self._type_env.seal()
         self._link_image = LinkImage()
         self._ir_base_frame = {}
@@ -1307,28 +1490,20 @@ class ReplSession:
         self._active_config = {}
         self._declared_params = {}
         self._source_log = []
-        self._declared_agents = set()
         self._ambient_constructor_candidates = {}
         self._ambient_type_names = frozenset()
-        # Re-seed the host-consumed registers so a prior ``std/config::runner``
-        # (etc.) write does not bleed past :reset.
-        self._persisted_host_settings = self._build_host_settings_base()
-        self._persisted_timeout_setting = self._build_timeout_setting_base()
+        # Restore the current-value map to the seed, so a prior
+        # ``std/config::KEY := VALUE`` write does not bleed past :reset.
+        # ``_engine_seed`` is now populated with any declared default learned
+        # while ``std/config`` was loaded (see
+        # :meth:`_record_declared_engine_defaults`), so this lands on a host
+        # control where one exists and a declared default otherwise -- the
+        # same precedence construction applies, since a declared default is
+        # only ever added via ``setdefault`` and never outranks a host seed.
+        self._current = self._current_from_seed()
+        self._default_loop_limit = self._seeded_loop_limit()
+        self._shell_exec_timeout = self._seeded_timeout_seconds()
         self._trace_path = self._initial_trace_path
-        if self._host_settings_policy is not None:
-            from agm.agl.semantics.values import TextValue
-
-            runner = self._persisted_host_settings["runner"]
-            assert isinstance(runner, TextValue)
-            registry = self._runtime.host_environment().registry
-            registry.set_default_agent(self._host_settings_policy.build_runner(runner.value))
-        # Restore live engine settings to the session's initial defaults so that
-        # promoted ``std/config`` effects from prior entries do not bleed past :reset.
-        self._update_engine_settings(
-            strict_json=self._initial_strict_json,
-            loop_limit=self._initial_loop_limit,
-            shell_exec_timeout=self._initial_shell_exec_timeout,
-        )
         # Clear module state.
         self._roots = None
         self._loaded_lib_modules = {}

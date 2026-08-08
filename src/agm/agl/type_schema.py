@@ -22,15 +22,6 @@ validated JSON without holding checker ``Type`` references.
 :func:`derive_schema_and_decode` derives both from one shared recursion plan
 for call sites that need both back-to-back.
 
-:func:`build_extern_contract` compiles an extern's checked
-``FunctionSignature`` into a typeless
-:class:`~agm.agl.ir.contracts.ExternContract` describing the shape of every
-value crossing the Python FFI boundary — the argument/return type mapping
-mirrors :func:`build_decode_schema`'s recursion, with two boundary-specific
-differences: ``unit`` compiles (it crosses as Python ``None``, needed for
-extern returns) and type-variable positions compile to a
-``BoundarySealVar`` leaf instead of being rejected.
-
 Derivation rules:
 - ``text``    → ``{"type": "string"}``
 - ``int``     → ``{"type": "integer"}``
@@ -79,23 +70,10 @@ from typing import assert_never
 
 from agm.agl.ir.contracts import (
     ArrayDecode,
-    BoundaryArray,
-    BoundaryDict,
-    BoundaryEnum,
-    BoundaryException,
-    BoundaryRecord,
-    BoundaryRef,
-    BoundaryScalar,
-    BoundarySchema,
-    BoundarySealVar,
-    BoundaryUnit,
-    BoundaryVariantShape,
     DecodePlan,
     DecodeSchema,
     DictDecode,
     EnumDecode,
-    ExternContract,
-    ExternParamSchema,
     ParamDecoder,
     RecordDecode,
     RefDecode,
@@ -106,7 +84,6 @@ from agm.agl.ir.contracts import (
 from agm.agl.ir.ids import NominalId
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import (
-    AgentType,
     ArrayType,
     BoolType,
     BottomType,
@@ -124,7 +101,6 @@ from agm.agl.semantics.types import (
     TypeVarType,
     UnitType,
 )
-from agm.agl.typecheck.env import FunctionSignature
 from agm.util.graph import sccs
 
 # A concrete nominal instantiation — a graph node in the instantiation graph
@@ -168,10 +144,10 @@ def _require_finite_schema(typ: Type, type_table: TypeTable, action: str) -> Non
     Shared guard for :func:`derive_schema`, :func:`build_decode_schema`, and
     :func:`derive_schema_and_decode`: a type whose recursive instantiations
     never close has no finite schema/decode walk to derive at all. Callers
-    are expected to reject such types at the use site (agent output target,
-    cast target, parameter type — see ``typecheck/checker.py`` and
-    ``typecheck/builtins.py``), so reaching this guard is an
-    internal-invariant violation, not a normal user-facing error path.
+    are expected to reject such types at the use site (JSON-decoded agent
+    output target, fallible cast target, parameter type, extern signature — see
+    ``typecheck/checker.py`` and ``typecheck/builtins.py``), so reaching this
+    guard is an internal-invariant violation, not a normal user-facing error path.
     """
     if not type_table.has_finite_schema(typ):
         raise TypeError(
@@ -259,8 +235,6 @@ def _emit_body(typ: Type, type_table: TypeTable, plan: _SchemaPlan) -> dict[str,
         )
     if isinstance(typ, UnitType):
         raise TypeError("UnitType has no JSON Schema; unit is not wire-serialised.")
-    if isinstance(typ, AgentType):
-        raise TypeError("AgentType has no JSON Schema; agent values are not wire-serialised.")
     if isinstance(typ, FunctionType):
         raise TypeError("FunctionType has no JSON Schema; function values are not wire-serialised.")
     if isinstance(typ, BottomType):
@@ -431,13 +405,21 @@ def _direct_neighbours(handle: Instantiation, type_table: TypeTable) -> frozense
 
 
 def _instantiation_sort_key(handle: Instantiation) -> tuple[object, ...]:
-    """Deterministic sort key for :func:`~agm.util.graph.sccs` — never Python object identity."""
+    """Deterministic sort key for :func:`~agm.util.graph.sccs` — never Python object identity.
+
+    Ends in ``decl_id``: two distinct declarations can share every other
+    component (a REPL redeclaration mints a fresh identity for the same name
+    path), and without a final tiebreak their relative order would fall back
+    to a frozenset's hash-randomized iteration order — nondeterministic
+    across process runs, unlike every other component here.
+    """
     type_args = handle.type_args if isinstance(handle, (RecordType, EnumType)) else ()
     return (
         handle.module_id.segments,
         handle.scope_path,
         handle.name,
         tuple(repr(arg) for arg in type_args),
+        handle.decl_id,
     )
 
 
@@ -569,7 +551,7 @@ def _emit_decode_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -> 
     if isinstance(typ, RecordType):
         fields = type_table.record_fields(typ)
         return RecordDecode(
-            nominal=NominalId(typ.module_id, typ.name, typ.scope_path),
+            nominal=NominalId(typ.decl_id),
             display_name="::".join((*typ.scope_path, typ.name)),
             fields=tuple(
                 (fname, _emit_decode(ftype, type_table, plan)) for fname, ftype in fields.items()
@@ -578,7 +560,7 @@ def _emit_decode_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -> 
     if isinstance(typ, EnumType):
         variants = type_table.enum_variants(typ)
         return EnumDecode(
-            nominal=NominalId(typ.module_id, typ.name, typ.scope_path),
+            nominal=NominalId(typ.decl_id),
             display_name="::".join((*typ.scope_path, typ.name)),
             variants=tuple(
                 VariantDecode(
@@ -591,7 +573,7 @@ def _emit_decode_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -> 
                 for vname, vfields in variants.items()
             ),
         )
-    # Non-data targets (unit/agent/function/exception/bottom/typevar) are not
+    # Non-data targets (unit/function/exception/bottom/typevar) are not
     # decodable from JSON and are rejected by the checker before lowering.
     raise AssertionError(  # pragma: no cover
         f"build_decode_schema: undecodable type {typ!r}"
@@ -609,7 +591,7 @@ def build_param_decoder(typ: Type, type_table: TypeTable) -> ParamDecoder:
     boundary (``derive_schema`` for validation, ``build_decode_schema`` for the
     typeless decode walk).  *type_table* resolves record/enum shapes.
 
-    :raises TypeError: if *typ* has no wire schema (unit/agent/exception/…);
+    :raises TypeError: if *typ* has no wire schema (unit/exception/…);
         :func:`derive_schema` rejects such types.
     """
     schema, decode_plan = derive_schema_and_decode(typ, type_table)
@@ -633,135 +615,3 @@ def build_format_instructions(schema: dict[str, object]) -> str:
         "\n"
         f"```json\n{schema_text}\n```"
     )
-
-
-def build_extern_contract(sig: FunctionSignature, type_table: TypeTable) -> ExternContract:
-    """Compile a checked extern's ``FunctionSignature`` into a typeless ``ExternContract``.
-
-    Walks every parameter type and the result type with :func:`_emit_boundary`,
-    recursing through already-instantiated generic nominals exactly as
-    :func:`build_decode_schema` does (checker types carry substituted field/variant
-    types at the use site, so no separate substitution step is needed here).
-    All parameter types and the result type share ONE recursion plan (the same
-    :func:`_plan_types` machinery that backs the JSON-schema/decode derivations),
-    so a recursive instantiation crosses the boundary as a finite graph of
-    ``BoundaryRef`` leaves resolving into :attr:`ExternContract.defs`.
-
-    :raises TypeError: if a function or agent type occurs anywhere in the
-        signature, or if any parameter/result type has no finite schema; the
-        checker statically rejects both at the extern use site, so these are
-        unreachable from source and only exercised by direct invocation.
-    """
-    boundary_types = (*(param.type for param in sig.params), sig.result)
-    for typ in boundary_types:
-        _require_finite_schema(typ, type_table, "build an extern contract")
-    plan = _plan_types(boundary_types, type_table)
-    params = tuple(
-        ExternParamSchema(schema=_emit_boundary(param.type, type_table, plan))
-        for param in sig.params
-    )
-    defs = tuple(
-        (plan.keys[handle], _emit_boundary_body(handle, type_table, plan)) for handle in plan.order
-    )
-    return ExternContract(
-        params=params,
-        result=_emit_boundary(sig.result, type_table, plan),
-        type_params=sig.type_params,
-        defs=defs,
-    )
-
-
-def _emit_boundary(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -> BoundarySchema:
-    """Emit *typ*'s boundary schema, ``BoundaryRef``-ing it out if it is recursive.
-
-    Mirrors :func:`_emit_decode`: a recursive record/enum/exception instantiation becomes
-    a ``BoundaryRef`` into the shared ``defs`` table; everything else is emitted
-    inline by :func:`_emit_boundary_body`.
-    """
-    schema_type = type_table.canonical_schema_type(typ)
-    if (
-        isinstance(schema_type, (RecordType, EnumType, ExceptionType))
-        and schema_type in plan.recursive
-    ):
-        return BoundaryRef(plan.keys[schema_type])
-    return _emit_boundary_body(schema_type, type_table, plan)
-
-
-def _emit_boundary_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -> BoundarySchema:
-    """Emit *typ*'s own boundary schema body, never ``BoundaryRef``-ing *typ* itself.
-
-    Mirrors :func:`build_decode_schema`'s recursion over data types, plus two
-    boundary-specific leaves: ``unit`` (crosses as ``None``) and ``TypeVarType``
-    (crosses as a sealed opaque handle).  Nested fields route back through
-    :func:`_emit_boundary`, so a recursive instantiation's OWN fields are
-    ``BoundaryRef``'d exactly like any other occurrence.  Used both for an
-    ordinary (non-recursive) type and for a recursive instantiation's own
-    ``defs`` entry.
-    """
-    if isinstance(typ, TextType):
-        return BoundaryScalar(ScalarKind.TEXT)
-    if isinstance(typ, IntType):
-        return BoundaryScalar(ScalarKind.INT)
-    if isinstance(typ, DecimalType):
-        return BoundaryScalar(ScalarKind.DECIMAL)
-    if isinstance(typ, BoolType):
-        return BoundaryScalar(ScalarKind.BOOL)
-    if isinstance(typ, JsonType):
-        return BoundaryScalar(ScalarKind.JSON)
-    if isinstance(typ, UnitType):
-        return BoundaryUnit()
-    if isinstance(typ, ArrayType):
-        return BoundaryArray(_emit_boundary(typ.elem, type_table, plan))
-    if isinstance(typ, DictType):
-        return BoundaryDict(_emit_boundary(typ.value, type_table, plan))
-    if isinstance(typ, RecordType):
-        return BoundaryRecord(
-            nominal=NominalId(typ.module_id, typ.name, typ.scope_path),
-            display_name="::".join((*typ.scope_path, typ.name)),
-            fields=tuple(
-                (fname, _emit_boundary(ftype, type_table, plan))
-                for fname, ftype in type_table.record_fields(typ).items()
-            ),
-        )
-    if isinstance(typ, EnumType):
-        return BoundaryEnum(
-            nominal=NominalId(typ.module_id, typ.name, typ.scope_path),
-            display_name="::".join((*typ.scope_path, typ.name)),
-            variants=tuple(
-                BoundaryVariantShape(
-                    name=vname,
-                    fields=tuple(
-                        (fname, _emit_boundary(ftype, type_table, plan))
-                        for fname, ftype in vfields.items()
-                    ),
-                )
-                for vname, vfields in type_table.enum_variants(typ).items()
-            ),
-        )
-    if isinstance(typ, ExceptionType):
-        # Built-in exceptions resolve under PRELUDE_ID and user exceptions under
-        # their declaring module, exactly as the lowerer keys exception nominals
-        # (``NominalId(typ.module_id, typ.name)``).
-        return BoundaryException(
-            nominal=NominalId(typ.module_id, typ.name, typ.scope_path),
-            display_name="::".join((*typ.scope_path, typ.name)),
-            fields=tuple(
-                (fname, _emit_boundary(ftype, type_table, plan))
-                for fname, ftype in type_table.exception_fields(typ).items()
-            ),
-        )
-    if isinstance(typ, TypeVarType):
-        return BoundarySealVar(typ.name)
-    if isinstance(typ, InferenceVarType):
-        raise TypeError("InferenceVarType is internal and cannot cross the extern boundary.")
-    if isinstance(typ, AgentType):
-        raise TypeError("AgentType cannot cross the extern boundary; banned in extern signatures.")
-    if isinstance(typ, FunctionType):
-        raise TypeError(
-            "FunctionType cannot cross the extern boundary; banned in extern signatures."
-        )
-    if isinstance(typ, BottomType):  # pragma: no cover
-        # Never assignable to a declared param/result type; unreachable from a
-        # checked FunctionSignature.
-        raise TypeError("BottomType cannot cross the extern boundary.")
-    assert_never(typ)  # pragma: no cover

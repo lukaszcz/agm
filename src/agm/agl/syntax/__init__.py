@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from agm.agl.syntax.nodes import (
     ELSE,
-    AgentDecl,
     ArrayLit,
     AsPattern,
     AssignStmt,
@@ -108,7 +107,6 @@ from agm.agl.syntax.nodes import (
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import (
     BUILTIN_TYPE_NAMES,
-    AgentT,
     AppliedT,
     ArrayT,
     BoolT,
@@ -140,7 +138,6 @@ __all__ = [
     "ArrayT",
     "DictT",
     "UnitT",
-    "AgentT",
     "FuncT",
     "TypeExpr",
     "render_type_expr",
@@ -167,7 +164,6 @@ __all__ = [
     "TypeAlias",
     "ParamDecl",
     "ProgramDecl",
-    "AgentDecl",
     "VariantDef",
     "BuiltinVarDecl",
     "InfixAssoc",

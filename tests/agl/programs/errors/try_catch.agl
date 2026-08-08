@@ -1,13 +1,12 @@
 # try/catch ordering: first matching clause wins; the wildcard binds the abstract
-# Exception base (message/trace_id only).
+# Exception base (message only).
 enum Review
   | Pass
   | Fail(issues: array[text])
 
 param mode
 
-agent reviewer
-
+let reviewer = AgentCommand("reviewer")
 try
   if
     | mode == "abort" =>

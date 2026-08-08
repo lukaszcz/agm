@@ -11,52 +11,132 @@ from pathlib import Path
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.eval.ir_interpreter import IrInterpreter
-from agm.agl.ir.ids import AgentId, SymbolId
+from agm.agl.ir.ids import NominalId, SymbolId
 from agm.agl.ir.program import ExecutableProgram, ExternFunctionBody
-from agm.agl.lower import lower_module
 from agm.agl.lower.program import lower_program
-from agm.agl.matchcompile import (
-    MatchCompiledModule,
-    MatchCompiledProgram,
-    compile_module_matches,
-    compile_program_matches,
-)
-from agm.agl.modules.ids import ModuleId
+from agm.agl.matchcompile import MatchCompiledModule, MatchCompiledProgram, compile_program_matches
+from agm.agl.matchcompile.stage import _compile_owner_sites
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.loader import ModuleGraph, load_graph
 from agm.agl.modules.roots import RootSet
-from agm.agl.parser import parse_program
-from agm.agl.runtime.agents import AgentFn, AgentRegistry
+from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.runtime.request import AgentRequest, AgentResponse
-from agm.agl.scope import resolve_module
 from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.exceptions import AglRaise
-from agm.agl.semantics.values import ExceptionValue, Value
-from agm.agl.typecheck import check_module
+from agm.agl.semantics.values import ExceptionValue, TextValue, Value
+from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram, check_program
 from agm.core.process import ProcessCaptureResult
+from tests.agl.module_graph import build_module_graph as _build_module_graph
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parents[2] / "stdlib"
 
 
-def _compiled_program(source: str, *, caps: HostCapabilities | None = None) -> MatchCompiledModule:
-    checked = check_module(resolve_module(parse_program(source)), caps or base_caps())
-    result = compile_module_matches(checked)
-    assert isinstance(result.compiled, MatchCompiledModule)
-    return result.compiled
+def _checked_program(
+    source: str,
+    *,
+    caps: HostCapabilities | None = None,
+    default_stdlib: bool = True,
+    origin_path: Path | None = None,
+) -> CheckedProgram:
+    """Resolve and check *source* through a real module graph.
+
+    Reuses :func:`tests.agl.module_graph._build_graph` (entry plus a
+    process-cached ``std/core`` unless *default_stdlib* is ``False``) so this
+    pays the same one-parse-per-process cost as the scope/typecheck unit
+    helpers, then runs the real whole-program passes -- the configuration
+    production always runs, and the only one under which the module
+    loader's own checks (e.g. an extern's missing companion file) fire.
+    """
+    graph, _import_node_id = _build_module_graph(
+        source, origin_path=origin_path, default_stdlib=default_stdlib
+    )
+    resolved_program = resolve_program(graph)
+    return check_program(resolved_program, caps or base_caps())
 
 
-def _compiled_checked(checked: object) -> MatchCompiledModule | MatchCompiledProgram:
-    from agm.agl.typecheck import CheckedModule
-
-    if isinstance(checked, CheckedModule):
-        result = compile_module_matches(checked)
-        assert isinstance(result.compiled, MatchCompiledModule)
-        return result.compiled
-    assert isinstance(checked, CheckedProgram)
+def _compiled_program(
+    source: str,
+    *,
+    caps: HostCapabilities | None = None,
+    default_stdlib: bool = True,
+    origin_path: Path | None = None,
+) -> MatchCompiledProgram:
+    checked = _checked_program(
+        source, caps=caps, default_stdlib=default_stdlib, origin_path=origin_path
+    )
     result = compile_program_matches(checked)
     assert isinstance(result.compiled, MatchCompiledProgram)
     return result.compiled
+
+
+def _compiled_checked(checked: CheckedProgram) -> MatchCompiledProgram:
+    result = compile_program_matches(checked)
+    assert isinstance(result.compiled, MatchCompiledProgram)
+    return result.compiled
+
+
+def compile_checked_module(checked: CheckedModule) -> MatchCompiledModule:
+    """Reimplement the deleted ``compile_module_matches`` for tests that need a
+    per-module compiled artifact from a hand-resolved or virtual-path
+    ``CheckedModule`` with no real module graph behind it (see
+    :func:`~tests.agl.module_graph.resolve_and_check_program_ast`).
+
+    Production only ever compiles a whole program
+    (:func:`~agm.agl.matchcompile.compile_program_matches`), so there is no
+    surviving public per-module entry point; this reuses the same
+    ``_compile_owner_sites`` building block that function calls once per
+    module. Callers that need a rejected (non-exhaustive/refutable) result
+    should call :func:`~agm.agl.matchcompile.stage._compile_owner_sites`
+    themselves instead -- this helper asserts every site compiled cleanly.
+    """
+    sites, issues = _compile_owner_sites(checked)
+    assert not issues
+    return MatchCompiledModule(checked=checked, sites=sites)
+
+
+def lower_compiled_module(compiled: MatchCompiledModule, *, source_text: str) -> ExecutableProgram:
+    """Lower a hand-built single-module artifact through ``lower_program``.
+
+    This test seam is for checked modules with no loadable source graph, such
+    as deliberately corrupt artifacts used by IR validation tests. It wraps
+    the module in the smallest whole-program artifact rather than retaining a
+    second lowering entry point.
+    """
+    checked = compiled.checked
+    checked_program = CheckedProgram(
+        modules={ENTRY_ID: checked},
+        entry_id=ENTRY_ID,
+        program_type_table={},
+        warnings=(),
+    )
+    program = MatchCompiledProgram(
+        checked=checked_program,
+        sites_by_module={ENTRY_ID: compiled.sites},
+    )
+    return lower_program(program, _entry_source_text=source_text)
+
+
+def nominal_id_for(program: ExecutableProgram, display_name: str) -> NominalId:
+    """Return the ``NominalId`` a lowered *program* uses for *display_name*.
+
+    Nominal identity is an opaque per-declaration handle (see
+    ``agm.agl.ir.ids.NominalId``), so a test asserting against lowered IR
+    output cannot construct the expected id from a name and scope path: it
+    looks the identity up from the program's own ``nominals`` table by the
+    declaration's scoped source spelling (``NominalDescriptor.display_name``).
+    Raises ``AssertionError`` if no descriptor carries that spelling, or if
+    more than one does (ambiguous).
+    """
+    matches = [
+        nominal for nominal, desc in program.nominals.items() if desc.display_name == display_name
+    ]
+    assert matches, f"no nominal with display_name {display_name!r} in program.nominals"
+    assert len(matches) == 1, (
+        f"ambiguous display_name {display_name!r}: {len(matches)} nominals match"
+    )
+    return matches[0]
 
 
 def _roots(*paths: Path) -> RootSet:
@@ -86,36 +166,76 @@ def _build_ir_param_values(
     return {by_name[name]: value for name, value in param_values.items()}
 
 
+def lower_ir(
+    source: str,
+    *,
+    caps: HostCapabilities | None = None,
+    default_stdlib: bool = True,
+    origin_path: Path | None = None,
+) -> ExecutableProgram:
+    """Resolve, check, compile, and lower *source* through the real
+    program-level pipeline (entry plus ``std/core`` unless *default_stdlib*
+    is ``False``), returning the linked ``ExecutableProgram`` without running
+    it.
+
+    Shared by every "golden lowering" test that inspects IR node shape
+    directly rather than executed values -- ``lower_program`` (not the
+    per-module ``lower_module``) is the pipeline production always runs, so
+    this is what a source-level IR test should lower through too.
+    """
+    compiled = _compiled_program(
+        source, caps=caps, default_stdlib=default_stdlib, origin_path=origin_path
+    )
+    return lower_program(compiled, _entry_source_text=source)
+
+
 def _run_ir(
     source: str,
     param_values: dict[str, Value] | None = None,
     *,
     caps: HostCapabilities | None = None,
-    registry: AgentRegistry | None = None,
+    agent_dispatcher: AgentFn | None = None,
+    default_stdlib: bool = True,
 ) -> tuple[dict[str, Value], str]:
-    compiled = _compiled_program(source, caps=caps)
-    executable = lower_module(compiled, source_text=source, source_label="<ir-test>")
+    executable = lower_ir(source, caps=caps, default_stdlib=default_stdlib)
     params = _build_ir_param_values(executable, param_values) if param_values else None
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
-        result = IrInterpreter(executable, registry=registry, param_values=params).run()
+        result = IrInterpreter(
+            executable, agent_dispatcher=agent_dispatcher, param_values=params
+        ).run()
     return result, output.getvalue()
 
 
-def evaluate_ir(source: str, param_values: dict[str, Value] | None = None) -> dict[str, Value]:
-    result, _ = _run_ir(source, param_values)
+def evaluate_ir(
+    source: str,
+    param_values: dict[str, Value] | None = None,
+    *,
+    default_stdlib: bool = True,
+) -> dict[str, Value]:
+    result, _ = _run_ir(source, param_values, default_stdlib=default_stdlib)
     return result
 
 
-def evaluate_ir_output(source: str, param_values: dict[str, Value] | None = None) -> str:
+def evaluate_ir_output(
+    source: str,
+    param_values: dict[str, Value] | None = None,
+    *,
+    default_stdlib: bool = True,
+) -> str:
     """Run the program through the IR pipeline and return its captured stdout."""
-    _, output = _run_ir(source, param_values)
+    _, output = _run_ir(source, param_values, default_stdlib=default_stdlib)
     return output
 
 
-def evaluate_ir_raises(source: str, param_values: dict[str, Value] | None = None) -> ExceptionValue:
+def evaluate_ir_raises(
+    source: str,
+    param_values: dict[str, Value] | None = None,
+    *,
+    default_stdlib: bool = True,
+) -> ExceptionValue:
     try:
-        _run_ir(source, param_values)
+        _run_ir(source, param_values, default_stdlib=default_stdlib)
     except AglRaise as exc:
         return exc.exc
     raise AssertionError("IR pipeline did not raise AglRaise")
@@ -148,27 +268,25 @@ def _prepare_extern_program(
     *,
     caps: HostCapabilities | None = None,
 ) -> tuple[ExecutableProgram, ExternRegistry]:
-    """Resolve + check + lower a single-module extern-declaring *source*.
+    """Resolve + check + lower an extern-declaring *source* through a real module graph.
 
     Writes *source* and *companion_source* as real sibling files on disk (an
     extern def needs a resolvable origin path, and the registry needs a real
-    file to import), then builds an ``ExternRegistry`` populated the same way
-    the pipeline wires one before evaluation — one ``load_companion`` per
-    declaring module, mirroring ``pipeline._wire_extern_registry``.
+    file to import) and resolves *source* at that real path -- the entry's
+    real origin, so the module loader's own missing-companion check runs
+    exactly as it does in production -- then builds an ``ExternRegistry``
+    populated the same way the pipeline wires one before evaluation -- one
+    ``load_companion`` per declaring module, mirroring
+    ``pipeline._wire_extern_registry``.
     """
     entry_path = tmp_path / "entry.agl"
     entry_path.write_text(source)
     companion_path = tmp_path / "entry.py"
     companion_path.write_text(companion_source)
 
-    resolved = resolve_module(parse_program(source), origin_path=entry_path)
-    checked = check_module(resolved, caps or extern_caps())
-    executable = lower_module(
-        _compiled_checked(checked),
-        source_text=source,
-        source_label="<extern-ir-test>",
-    )
+    executable = lower_ir(source, caps=caps or extern_caps(), origin_path=entry_path)
     registry = ExternRegistry()
+    registry.set_nominals(executable.nominals)
     loaded: set[ModuleId] = set()
     for desc in executable.functions.values():
         if not isinstance(desc.impl, ExternFunctionBody) or desc.module_id in loaded:
@@ -213,11 +331,15 @@ def evaluate_ir_raises_with_externs(
     raise AssertionError("IR extern program did not raise AglRaise")
 
 
-def make_graph_from_files(tmp_path: Path, modules: dict[str, str]) -> ModuleGraph:
+def make_graph_from_files(
+    tmp_path: Path, modules: dict[str, str], *, default_stdlib: bool = True
+) -> ModuleGraph:
     """Build a ModuleGraph via ``load_graph`` from a ``{name: source}`` dict.
 
     The key ``'entry'`` is used as the entry source; all other keys are written
-    as ``.agl`` module files under a temp root.
+    as ``.agl`` module files under a temp root. ``default_stdlib`` threads
+    through to ``load_graph`` for a caller that needs a program without the
+    shipped standard library.
     """
     root = tmp_path / "root"
     root.mkdir(parents=True, exist_ok=True)
@@ -226,7 +348,9 @@ def make_graph_from_files(tmp_path: Path, modules: dict[str, str]) -> ModuleGrap
         if module_path == "entry":
             continue
         write_module_file(root, module_path, source)
-    return load_graph(entry_source, entry_path=None, roots=_roots(root))
+    return load_graph(
+        entry_source, entry_path=None, roots=_roots(root), default_stdlib=default_stdlib
+    )
 
 
 def _checked(entry_source: str, modules: dict[str, str], tmp_path: Path) -> CheckedProgram:
@@ -259,13 +383,9 @@ def evaluate_ir_graph_raises(
     raise AssertionError("IR graph did not raise AglRaise")
 
 
-def agent_caps(agent_names: frozenset[str], *, has_default: bool = False) -> HostCapabilities:
+def agent_caps() -> HostCapabilities:
     base = base_caps()
-    return HostCapabilities(
-        agent_names=agent_names,
-        has_default_agent=has_default,
-        codec_kinds=base.codec_kinds,
-    )
+    return HostCapabilities(codec_kinds=base.codec_kinds)
 
 
 def _make_scripted_registry(
@@ -273,7 +393,7 @@ def _make_scripted_registry(
     *,
     default_responses: list[str] | None = None,
     call_log: list[tuple[str, str]] | None = None,
-) -> AgentRegistry:
+) -> AgentFn:
     def make_agent(name: str, responses: list[str]) -> AgentFn:
         remaining = iter(responses)
 
@@ -284,11 +404,20 @@ def _make_scripted_registry(
 
         return agent
 
-    named = {AgentId(name): make_agent(name, responses) for name, responses in scripts.items()}
+    named = {name: make_agent(name, responses) for name, responses in scripts.items()}
     default = (
         make_agent("__default__", default_responses) if default_responses is not None else None
     )
-    return AgentRegistry(named=named, default_agent=default)
+
+    def dispatch(request: AgentRequest) -> AgentResponse:
+        if request.agent.variant != "AgentCommand":
+            assert default is not None
+            return default(request)
+        command = request.agent.fields["command"]
+        assert isinstance(command, TextValue)
+        return named[command.value](request)
+
+    return dispatch
 
 
 def evaluate_ir_with_agents(
@@ -296,12 +425,10 @@ def evaluate_ir_with_agents(
     scripts: dict[str, list[str]],
     *,
     default_responses: list[str] | None = None,
-    agent_names: frozenset[str] | None = None,
-    has_default: bool = False,
 ) -> dict[str, Value]:
-    caps = agent_caps(agent_names or frozenset(scripts), has_default=has_default)
-    registry = _make_scripted_registry(scripts, default_responses=default_responses)
-    result, _ = _run_ir(source, caps=caps, registry=registry)
+    caps = agent_caps()
+    agent_dispatcher = _make_scripted_registry(scripts, default_responses=default_responses)
+    result, _ = _run_ir(source, caps=caps, agent_dispatcher=agent_dispatcher)
     return result
 
 
@@ -310,28 +437,19 @@ def evaluate_ir_raises_with_agents(
     scripts: dict[str, list[str]],
     *,
     default_responses: list[str] | None = None,
-    agent_names: frozenset[str] | None = None,
-    has_default: bool = False,
 ) -> ExceptionValue:
-    caps = agent_caps(agent_names or frozenset(scripts), has_default=has_default)
-    registry = _make_scripted_registry(scripts, default_responses=default_responses)
+    caps = agent_caps()
+    agent_dispatcher = _make_scripted_registry(scripts, default_responses=default_responses)
     try:
-        _run_ir(source, caps=caps, registry=registry)
+        _run_ir(source, caps=caps, agent_dispatcher=agent_dispatcher)
     except AglRaise as exc:
         return exc.exc
     raise AssertionError("IR agent program did not raise AglRaise")
 
 
-def shell_caps(
-    *, agent_names: frozenset[str] = frozenset(), has_default: bool = False
-) -> HostCapabilities:
+def shell_caps() -> HostCapabilities:
     base = base_caps()
-    return HostCapabilities(
-        agent_names=agent_names,
-        has_default_agent=has_default,
-        supports_shell_exec=True,
-        codec_kinds=base.codec_kinds,
-    )
+    return HostCapabilities(supports_shell_exec=True, codec_kinds=base.codec_kinds)
 
 
 def _scripted_shell(

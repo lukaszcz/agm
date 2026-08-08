@@ -2,21 +2,42 @@
   "scenarios": [
     {
       "name": "single_response",
-      "agents": {"impl": ["from impl"]},
+      "agents": {
+        "impl": [
+          "from impl"
+        ]
+      },
       "expect": {
         "stdout": "from impl\n5\n",
-        "calls": {"impl": 1},
+        "calls": {
+          "impl": 1
+        },
         "prompts": [
-          {"agent": "impl", "call": 0, "contains": ["Do it"]}
+          {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "impl"
+            },
+            "call": 0,
+            "contains": [
+              "Do it"
+            ]
+          }
         ]
       }
     },
     {
       "name": "different_response",
-      "agents": {"impl": ["another reply"]},
+      "agents": {
+        "impl": [
+          "another reply"
+        ]
+      },
       "expect": {
         "stdout": "another reply\n5\n",
-        "calls": {"impl": 1}
+        "calls": {
+          "impl": 1
+        }
       }
     }
   ]

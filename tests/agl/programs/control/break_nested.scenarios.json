@@ -2,13 +2,21 @@
   "scenarios": [
     {
       "name": "one_outer_iteration",
-      "params": {"n": 1},
-      "expect": {"stdout": "1\n2\n"}
+      "params": {
+        "n": 1
+      },
+      "expect": {
+        "stdout": "1\n2\n"
+      }
     },
     {
       "name": "three_outer_iterations",
-      "params": {"n": 3},
-      "expect": {"stdout": "3\n6\n"}
+      "params": {
+        "n": 3
+      },
+      "expect": {
+        "stdout": "3\n6\n"
+      }
     }
   ]
 }

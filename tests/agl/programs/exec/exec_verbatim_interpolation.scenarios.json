@@ -2,10 +2,19 @@
   "scenarios": [
     {
       "name": "simple_arg_printed",
-      "params": {"arg": "hello", "k": 4},
+      "params": {
+        "arg": "hello",
+        "k": 4
+      },
       "shell": [
-        {"command": "printf '%s|' hello", "stdout": "hello|"},
-        {"command": "printf '%s' 4", "stdout": "4"}
+        {
+          "command": "printf '%s|' hello",
+          "stdout": "hello|"
+        },
+        {
+          "command": "printf '%s' 4",
+          "stdout": "4"
+        }
       ],
       "expect": {
         "stdout": "hello|\n4\n"
@@ -13,10 +22,19 @@
     },
     {
       "name": "negative_int",
-      "params": {"arg": "test", "k": -12},
+      "params": {
+        "arg": "test",
+        "k": -12
+      },
       "shell": [
-        {"command": "printf '%s|' test", "stdout": "test|"},
-        {"command": "printf '%s' -12", "stdout": "-12"}
+        {
+          "command": "printf '%s|' test",
+          "stdout": "test|"
+        },
+        {
+          "command": "printf '%s' -12",
+          "stdout": "-12"
+        }
       ],
       "expect": {
         "stdout": "test|\n-12\n"
@@ -24,10 +42,19 @@
     },
     {
       "name": "space_causes_word_split",
-      "params": {"arg": "a b", "k": 0},
+      "params": {
+        "arg": "a b",
+        "k": 0
+      },
       "shell": [
-        {"command": "printf '%s|' a b", "stdout": "a|b|"},
-        {"command": "printf '%s' 0", "stdout": "0"}
+        {
+          "command": "printf '%s|' a b",
+          "stdout": "a|b|"
+        },
+        {
+          "command": "printf '%s' 0",
+          "stdout": "0"
+        }
       ],
       "expect": {
         "stdout": "a|b|\n0\n"

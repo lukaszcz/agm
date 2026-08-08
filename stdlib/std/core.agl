@@ -1,3 +1,6 @@
+import std/config
+
+builtin
 enum Option[T] =
   | None
   | Some(value: T)
@@ -15,8 +18,15 @@ enum ParsePolicy =
   | Retry(n: int)
 
 builtin
+enum Agent
+  | AgentCommand(command: text)
+  | AgentClaude(model: text, thinking: text)
+  | AgentCodex(model: text, thinking: text)
+  | AgentPi(provider: text, model: text, thinking: text)
+
+builtin
 record AgentRequest
-  agent: text
+  agent: Agent
   prompt: text
   target_type: Option[text]
   format_instructions: Option[text]
@@ -29,19 +39,18 @@ builtin
 exception Exception
   *
   message: text
-  trace_id: text
 
 builtin
 exception AgentCallError extends Exception
   *
-  agent: text
+  agent: Agent
   cause: text
   metadata: json
 
 builtin
 exception AgentParseError extends Exception
   *
-  agent: text
+  agent: Agent
   target_type: text
   expected_schema: json
   raw: text
@@ -142,10 +151,21 @@ builtin def shallow_copy[T](value: T) -> T
 builtin def parse_json(value: text) -> json
 builtin def ask[T](
   prompt: text,
-  agent: agent = null,
+  agent: Agent = std/config::default-agent,
   format: text = "",
   strict_json: bool = false,
   on_parse_error: ParsePolicy = ParsePolicy::Abort,
 ) -> T
-builtin def ask-request(prompt: text) -> AgentRequest
+builtin def Agent::ask[T](
+  self,
+  prompt: text,
+  format: text = "",
+  strict_json: bool = false,
+  on_parse_error: ParsePolicy = ParsePolicy::Abort,
+) -> T
+builtin def ask-request(
+  prompt: text,
+  agent: Agent = std/config::default-agent,
+) -> AgentRequest
+builtin def Agent::ask-request(self, prompt: text) -> AgentRequest
 builtin def exec(command: text) -> ExecResult

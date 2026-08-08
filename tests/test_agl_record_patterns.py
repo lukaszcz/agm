@@ -9,18 +9,16 @@ import pytest
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID
-from agm.agl.parser import parse_program
-from agm.agl.scope import resolve_module
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import BinderKind
 from agm.agl.semantics.types import EnumType, IntType, RecordType
 from agm.agl.syntax.nodes import AsPattern, Case, ConstructorPattern, FuncDef, LetDecl, VarPattern
-from agm.agl.typecheck import AglTypeError, CheckedProgram, check_module, check_program
+from agm.agl.typecheck import AglTypeError, CheckedProgram, check_program
+from tests._agl_helpers import strip_decl_ids
 from tests.agl.ir_harness import make_graph_from_files
+from tests.agl.module_graph import resolve_and_check_entry
 
 _CAPS = HostCapabilities(
-    agent_names=frozenset(),
-    has_default_agent=True,
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
@@ -30,7 +28,7 @@ _CAPS = HostCapabilities(
 
 
 def accept(source: str):
-    return check_module(resolve_module(parse_program(source)), _CAPS)
+    return resolve_and_check_entry(source, _CAPS)
 
 
 def reject(source: str) -> None:
@@ -72,7 +70,7 @@ def test_record_patterns_bind_positional_named_named_only_nested_and_as_in_case_
     assert isinstance(label, VarPattern)
     assert checked.type_env.get_binding_type(first.node_id) == IntType()
     assert checked.type_env.get_binding_type(label.node_id).kind == "text"
-    assert checked.type_env.get_binding_type(nested.node_id) == RecordType("Inner")
+    assert strip_decl_ids(checked.type_env.get_binding_type(nested.node_id)) == RecordType("Inner")
     assert checked.pattern_binding_for(first.node_id).kind is BinderKind.let_binding
     assert checked.pattern_constructor_ref_for(let.pattern.node_id) is not None
 
@@ -106,7 +104,11 @@ def test_generic_record_alias_pattern_uses_concrete_field_type_and_selected_cons
     constructor = checked.pattern_constructor_ref_for(let.pattern.node_id)
     assert constructor is not None
     assert constructor.owner_name == "Alias"
-    assert checked.pattern_constructor_owner_for(let.pattern.node_id) == NominalId(ENTRY_ID, "Box")
+    box_typedef = checked.type_env.type_table.get(ENTRY_ID, "Box")
+    assert box_typedef is not None
+    assert checked.pattern_constructor_owner_for(let.pattern.node_id) == NominalId(
+        box_typedef.decl_node_id
+    )
 
 
 def test_generic_record_patterns_publish_owner_without_type_arguments() -> None:
@@ -125,9 +127,12 @@ def test_generic_record_patterns_publish_owner_without_type_arguments() -> None:
         if isinstance(item, LetDecl) and isinstance(item.pattern, ConstructorPattern)
     ]
     assert len(pattern_lets) == 2
+    box_typedef = checked.type_env.type_table.get(ENTRY_ID, "Box")
+    assert box_typedef is not None
+    expected = NominalId(box_typedef.decl_node_id)
     assert [checked.pattern_constructor_owner_for(let.pattern.node_id) for let in pattern_lets] == [
-        NominalId(ENTRY_ID, "Box"),
-        NominalId(ENTRY_ID, "Box"),
+        expected,
+        expected,
     ]
 
 
@@ -137,7 +142,7 @@ def test_simple_let_name_binds_even_when_it_matches_a_nullary_constructor() -> N
     assert isinstance(let, LetDecl)
     assert isinstance(let.pattern, VarPattern)
     assert checked.pattern_classifications[let.pattern.node_id] is None
-    assert checked.type_env.get_binding_type(let.pattern.node_id) == EnumType("Opt")
+    assert strip_decl_ids(checked.type_env.get_binding_type(let.pattern.node_id)) == EnumType("Opt")
 
 
 def test_record_patterns_support_imported_and_qualified_alias_spellings(tmp_path: Path) -> None:
@@ -300,6 +305,41 @@ def test_scoped_record_pattern_selects_its_scope_member() -> None:
     assert (selected.owner_path, selected.owner_name) == (("A",), "Point")
 
 
+def test_unqualified_pattern_selects_a_nominal_declared_in_the_same_scope() -> None:
+    """An unqualified pattern still selects its own scope's record.
+
+    The pattern-to-nominal ownership check must key on the structured scope
+    path, not just the bare spelling: ``Bounds(low, high)`` inside
+    ``scope Config`` selects ``Config::Bounds``, in both a ``case`` arm and a
+    destructuring ``let``, exactly as the qualified spelling would.
+    """
+    checked = accept(
+        "scope Config\n"
+        "record Bounds(low: int, high: int)\n"
+        "def pick(b: Bounds) -> int =\n"
+        "  case b of\n"
+        "  | Bounds(low, high) => low\n"
+        "def unpick(b: Bounds) -> int =\n"
+        "  let Bounds(low, high) = b\n"
+        "  high\n"
+        "end Config\n"
+        "()\n"
+    )
+    region = checked.resolved.program.body.items[0]
+    pick, unpick = (item for item in region.items if isinstance(item, FuncDef))
+    case = pick.body.items[0]
+    assert isinstance(case, Case)
+    case_pattern = case.branches[0].pattern
+    assert isinstance(case_pattern, ConstructorPattern)
+    let_decl = unpick.body.items[0]
+    assert isinstance(let_decl, LetDecl)
+    assert isinstance(let_decl.pattern, ConstructorPattern)
+    for pattern in (case_pattern, let_decl.pattern):
+        selected = checked.pattern_constructor_ref_for(pattern.node_id)
+        assert selected is not None
+        assert (selected.owner_path, selected.owner_name) == (("Config",), "Bounds")
+
+
 def test_scoped_record_pattern_rejects_a_same_named_root_record() -> None:
     reject(
         "record Point\n"
@@ -310,6 +350,28 @@ def test_scoped_record_pattern_rejects_a_same_named_root_record() -> None:
         "end A\n"
         "let p = Point(x = 1)\n"
         "case p of | A::Point(label) => 0 | _ => 1\n"
+    )
+
+
+def test_bare_pattern_in_a_region_is_shadowed_by_its_own_scoped_variant() -> None:
+    """A same-named scoped variant shadows a root nominal for a bare pattern.
+
+    Nearest-layer precedence is deliberate and deterministic: inside
+    ``scope A``, a bare ``Point`` pattern selects ``A``'s own ``E::Point``
+    variant candidate, never falling outward to the root ``Point`` record,
+    so matching it against a root-typed scrutinee is a genuine mismatch.
+    """
+    reject(
+        "record Point\n"
+        "  x: int\n"
+        "scope A\n"
+        "enum E\n"
+        "  | Point(label: text)\n"
+        "def from_root(p: Point) -> int =\n"
+        "  case p of\n"
+        "  | Point(x) => x\n"
+        "end A\n"
+        "A::from_root(Point(x = 1))\n"
     )
 
 

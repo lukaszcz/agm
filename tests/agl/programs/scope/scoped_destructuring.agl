@@ -1,0 +1,68 @@
+# Destructuring inside a named scope: a region-local record, a root-declared
+# record destructured inside a region, an enum variant, an exception caught
+# and read by field, and both `case` and `let` forms of an unqualified
+# constructor pattern matching a nominal declared in the same scope, plus a
+# qualified-root-level destructuring `let` for a record and an enum variant.
+# `mode` drives every destructured value, so each scenario's output
+# genuinely differs across every printed line, not just the trailing mode
+# line.
+param mode: text
+
+record Bounds(low: int, high: int)
+
+let offset = if | mode == "verbose" => 100 | else => 0
+let reason = if | mode == "verbose" => "loud" | else => "quiet"
+
+scope A
+record Point(x: int, y: int)
+let Point(x, y) = Point(x = 1 + offset, y = 2 + offset)
+end A
+
+scope B
+let Bounds(low, high) = Bounds(low = 10 + offset, high = 20 + offset)
+end B
+
+scope C
+enum Status
+  | Idle(reason: text)
+let Idle(reason) = Status::Idle(reason = reason)
+end C
+
+scope D
+exception Oops extends Exception
+  code: int
+def use() -> int =
+  try
+    raise Oops(message = "boom", code = 5 + offset)
+  catch Oops as e =>
+    e.code
+end D
+
+scope E
+record Range(low: int, high: int)
+
+def pick(r: Range) -> int =
+  case r of
+  | Range(low, high) => low + high
+
+def unqualified_let_destructure(r: Range) -> int =
+  let Range(low, high) = r
+  low - high
+end E
+
+let A::Point(x = _ as qx, y = _ as qy) = A::Point(x = 4 + offset, y = 5 + offset)
+let C::Status::Idle(reason = _ as qreason) = C::Status::Idle(reason = reason)
+
+print("%{A::x} %{A::y}")
+print("%{B::low} %{B::high}")
+print("%{C::reason}")
+print("%{D::use()}")
+print("%{E::pick(E::Range(low = 1 + offset, high = 2 + offset))}")
+print("%{E::unqualified_let_destructure(E::Range(low = 5 + offset, high = 2 + offset))}")
+print("%{qx} %{qy}")
+print("%{qreason}")
+
+if mode == "verbose" =>
+  print("mode: verbose")
+else =>
+  print("mode: quiet")

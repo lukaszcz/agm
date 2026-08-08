@@ -1,12 +1,18 @@
 """Shared nominal type-declaration table for AgL.
 
 ``RecordType``/``EnumType``/``ExceptionType`` (see ``semantics.types``) are
-lightweight handles — ``(module_id, scope_path, name, type_args)`` for
-records/enums, ``(module_id, scope_path, name)`` for exceptions (never generic)
-— carrying no field/variant data of their own. This module holds the single
-source of truth for their shapes: a table of ``TypeDef`` templates keyed by
-``(module_id, scope_path, name)``,
-populated by the type builder as each declaration is resolved.
+lightweight handles — identified by the declaration they name (``decl_id``),
+with ``(module_id, scope_path, name, type_args)`` for records/enums and
+``(module_id, scope_path, name)`` for exceptions (never generic) as
+resolution/display metadata — carrying no field/variant data of their own.
+This module holds the single source of truth for their shapes: a table of
+``TypeDef`` templates keyed by declaration identity (``DeclId``), populated by
+the type builder as each declaration is resolved. A separate name index maps
+each ``(module_id, scope_path, name)`` path (``DeclKey``) to the identity of
+the newest declaration registered under it, so two declarations of the same
+name path can coexist in the table — a name is a pointer to the newest
+declaration bearing it, and an existing reference to a superseded declaration
+keeps resolving to that declaration's own shape.
 
 ``TypeDef`` stores field/variant type *templates*: finite ``Type`` trees that
 may reference the declaration's own type parameters via ``TypeVarType`` nodes
@@ -17,7 +23,7 @@ representation shared by records, enums, and exceptions.
 ``type_args`` into those templates and memoize the result per handle;
 ``TypeTable.exception_fields`` has no ``type_args`` to substitute but instead
 flattens the ``extends`` base chain into one field mapping. The table also
-keeps plain ``MethodDef`` data keyed by nominal owner; exception method lookup
+keeps plain ``MethodDef`` data keyed by nominal owner identity; exception method lookup
 uses the same base-chain flattening and cache discipline as exception fields.
 
 ``comparable_types``/``_reaches_non_data`` live here rather than in
@@ -48,13 +54,15 @@ diagnostic (agent output target, cast target, parameter type).
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, assert_never, cast
 
-from agm.agl.modules.ids import PRELUDE_ID, STD_CORE_ID, ModuleId
+from agm.agl.ir.reserved_nominals import NO_DECL_ID
+from agm.agl.ir.reserved_nominals import require_reserved_nominal_id as _reserved_id
+from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.types import (
-    AgentType,
     ArrayType,
     BoolType,
     BottomType,
@@ -76,6 +84,7 @@ from agm.agl.semantics.types import (
     free_type_vars,
     is_assignable,
     is_scalar_json_shaped,
+    spells_bare,
     substitute,
     type_children,
 )
@@ -85,7 +94,15 @@ if TYPE_CHECKING:
     from agm.agl.semantics.analyses import FiniteClosure, NonDataReachability
 
 TypeDefKind = Literal["record", "enum", "exception"]
+#: A declaration's name path — ``(module_id, scope_path, name)``. Used only
+#: for name resolution (the ``TypeTable`` name index, ``get``); it is not a
+#: declaration's identity (see :data:`DeclId`), since more than one
+#: declaration may share a name path over a table's lifetime.
 DeclKey = tuple[ModuleId, tuple[str, ...], str]
+#: A declaration's identity: an AST node id, a reserved id (see
+#: ``ir.reserved_nominals``), or ``NO_DECL_ID`` when none is attached. This is
+#: the ``TypeTable``'s real key — see the module docstring.
+DeclId = int
 NominalOwner = RecordType | EnumType | ExceptionType
 
 
@@ -95,8 +112,8 @@ class MethodDef:
 
     ``module_id``/``scope_path``/``name`` and ``decl_node_id`` identify the
     declared function, not its owner: a root ``Point`` method ``Point::move``
-    has declaration scope ``("Point",)`` while its owner key is
-    ``(module_id, (), "Point")``.
+    has declaration scope ``("Point",)``, while the table files it under the
+    ``Point`` DECLARATION's own identity (see :meth:`TypeTable.register_method`).
     ``signature`` is the method's ordinary function type, including its
     receiver as the first parameter. ``receiver_type_param_arity`` records how
     many leading method type parameters belong to the receiver type.
@@ -109,6 +126,7 @@ class MethodDef:
     signature: FunctionType
     receiver_type_param_arity: int
     type_params: tuple[str, ...] = ()
+    is_builtin: bool = False
 
 
 # ``ParamKind.value`` strings (``"positional_only"``/``"standard"``/
@@ -137,9 +155,9 @@ class TypeDef:
     ``abstract`` — exception metadata: ``True`` for the hierarchy root
                    (catchable but not constructible); unused for
                    records/enums.
-    ``base``     — exception metadata: the resolved ``(module_id, scope_path, name)`` key
-                   of the ``extends`` target, or ``None`` for the root;
-                   unused for records/enums.
+    ``base``     — exception metadata: the resolved declaration identity
+                   (``DeclId``) of the ``extends`` target, or ``None`` for the
+                   root; unused for records/enums.
     ``field_kinds`` — exception metadata: the OWN parameter kind (positional-
                    only/standard/named-only, from the declaration's ``@pos``/
                    ``@std``/``@named`` markers) for each entry of ``fields``,
@@ -152,6 +170,23 @@ class TypeDef:
                    ``TypeEnvironment`` registry instead. See
                    :meth:`TypeTable.exception_field_kinds`, which flattens
                    this alongside the base chain.
+    ``is_builtin`` — ``True`` when this entry came from a source ``builtin``
+                   declaration, at whatever path it was written. It is
+                   metadata about the declaration, not part of its shape, so
+                   it is excluded from equality/hashing (``compare=False``):
+                   :meth:`_TypeBuilder._validate_builtin_shape` compares a
+                   ``builtin`` declaration's whole ``TypeDef`` against a
+                   seeded canonical literal, which never sets this flag.
+    ``decl_node_id`` — the identity of the declaration this ``TypeDef``
+                   describes (an AST node id, or a reserved id for a
+                   host-known built-in name — see ``ir.reserved_nominals``),
+                   or ``NO_DECL_ID`` when none is attached. Like
+                   ``is_builtin``, it is metadata about the declaration
+                   rather than part of its shape, so it too is excluded from
+                   equality/hashing (``compare=False``) for the same reason:
+                   :meth:`_TypeBuilder._validate_builtin_shape`'s comparison
+                   against a seeded canonical literal must not fail merely
+                   because the two carry different declaration identities.
     """
 
     kind: TypeDefKind
@@ -162,62 +197,92 @@ class TypeDef:
     fields: tuple[tuple[str, Type], ...] = ()
     variants: tuple[tuple[str, tuple[tuple[str, Type], ...]], ...] = ()
     abstract: bool = False
-    base: DeclKey | None = None
+    base: DeclId | None = None
     field_kinds: tuple[str, ...] = ()
+    is_builtin: bool = field(default=False, compare=False)
+    decl_node_id: int = field(default=NO_DECL_ID, compare=False)
 
-    def handle(self, type_args: tuple[Type, ...] = ()) -> RecordType | EnumType:
-        """Return the ``RecordType``/``EnumType`` handle naming this ``TypeDef``.
+    def handle(self, type_args: tuple[Type, ...] = ()) -> RecordType | EnumType | ExceptionType:
+        """Return the ``RecordType``/``EnumType``/``ExceptionType`` handle naming this ``TypeDef``.
 
         Convenience for call sites that hold a ``TypeDef`` and need the
         corresponding handle (e.g. to register a value, or to pass to
-        :meth:`TypeTable.record_fields`/:meth:`TypeTable.enum_variants`).
-        *type_args* defaults to ``()`` for non-generic defs.
+        :meth:`TypeTable.record_fields`/:meth:`TypeTable.enum_variants`/
+        :meth:`TypeTable.exception_fields`). *type_args* defaults to ``()``
+        for non-generic defs and must be empty for an exception (exceptions
+        are never generic) — passing a non-empty tuple for one raises
+        ``ValueError``. The returned handle's ``decl_id`` is stamped from
+        ``self.decl_node_id``.
         """
-        if self.kind == "record":
-            return RecordType(
-                name=self.name,
-                type_args=type_args,
-                module_id=self.module_id,
-                scope_path=self.scope_path,
-            )
-        if self.kind == "enum":
-            return EnumType(
-                name=self.name,
-                type_args=type_args,
-                module_id=self.module_id,
-                scope_path=self.scope_path,
-            )
-        raise ValueError(f"TypeDef.handle() does not support kind {self.kind!r}")
+        match self.kind:
+            case "record":
+                return RecordType(
+                    name=self.name,
+                    type_args=type_args,
+                    module_id=self.module_id,
+                    scope_path=self.scope_path,
+                    decl_id=self.decl_node_id,
+                )
+            case "enum":
+                return EnumType(
+                    name=self.name,
+                    type_args=type_args,
+                    module_id=self.module_id,
+                    scope_path=self.scope_path,
+                    decl_id=self.decl_node_id,
+                )
+            case "exception":
+                if type_args:
+                    raise ValueError("TypeDef.handle() does not accept type_args for an exception")
+                return ExceptionType(
+                    name=self.name,
+                    module_id=self.module_id,
+                    scope_path=self.scope_path,
+                    decl_id=self.decl_node_id,
+                )
+            case _ as unreachable:  # pragma: no cover
+                assert_never(unreachable)
 
 
 class TypeTable:
-    """Mutable registry of ``TypeDef``s keyed by ``(module_id, scope_path, name)``.
+    """Mutable registry of ``TypeDef``s keyed by declaration identity (``DeclId``).
 
-    Populated by the type builder as each declaration's body is resolved;
-    a single instance is shared
-    across a module graph's per-module environments so every module's
-    declarations land in the same table.
+    Populated by the type builder as each declaration's body is resolved; a
+    single instance is shared across a module graph's per-module environments
+    so every module's declarations land in the same table. A name index maps
+    each ``(module_id, scope_path, name)`` path to the identity of the newest
+    declaration registered under it (see :meth:`register`), so a name lookup
+    (:meth:`get`) always answers with the newest declaration while an older
+    declaration remains retrievable by identity (:meth:`get_by_id`) — a
+    superseded declaration is retained, never removed.
     """
 
     def __init__(self) -> None:
-        self._defs: dict[DeclKey, TypeDef] = {}
-        self._record_fields_cache: dict[DeclKey, dict[RecordType, Mapping[str, Type]]] = {}
+        self._defs: dict[DeclId, TypeDef] = {}
+        # Name path -> the identity of the newest declaration registered
+        # under it. A name lookup (get) always resolves through this index.
+        self._name_index: dict[DeclKey, DeclId] = {}
+        # Identities of declarations that never took effect (see :meth:`orphan`).
+        # Retained in ``_defs`` so their linked descriptors stay derivable, but
+        # excluded from every query about what the session actually declares.
+        self._orphaned: set[DeclId] = set()
+        self._record_fields_cache: dict[DeclId, dict[RecordType, Mapping[str, Type]]] = {}
         self._enum_variants_cache: dict[
-            DeclKey, dict[EnumType, Mapping[str, Mapping[str, Type]]]
+            DeclId, dict[EnumType, Mapping[str, Mapping[str, Type]]]
         ] = {}
         # Exceptions are non-generic, so (unlike record_fields/enum_variants)
         # there is no type_args substitution — the memo is keyed directly by
-        # (module_id, scope_path, name), one entry per exception.
-        self._exception_fields_cache: dict[DeclKey, Mapping[str, Type]] = {}
+        # declaration identity, one entry per exception.
+        self._exception_fields_cache: dict[DeclId, Mapping[str, Type]] = {}
         # Memo for exception_field_kinds — same keying convention as
         # _exception_fields_cache above.
-        self._exception_field_kinds_cache: dict[DeclKey, tuple[tuple[str, str], ...]] = {}
+        self._exception_field_kinds_cache: dict[DeclId, tuple[tuple[str, str], ...]] = {}
         # Methods are independent plain declaration data, keyed by their
-        # nominal owner rather than by an import environment. Exception
-        # method maps flatten inherited entries and therefore need the same
-        # whole-cache invalidation as exception fields.
-        self._methods: dict[DeclKey, dict[str, MethodDef]] = {}
-        self._exception_methods_cache: dict[DeclKey, Mapping[str, MethodDef]] = {}
+        # nominal owner's identity rather than by an import environment.
+        # Exception method maps flatten inherited entries and therefore need
+        # the same whole-cache invalidation as exception fields.
+        self._methods: dict[DeclId, dict[str, MethodDef]] = {}
+        self._exception_methods_cache: dict[DeclId, Mapping[str, MethodDef]] = {}
         # Whole-table non-data-reachability fixpoint (see
         # :meth:`nominal_reaches_non_data`), computed lazily on first use and
         # invalidated (set back to ``None``) whenever a declaration is added,
@@ -228,64 +293,128 @@ class TypeTable:
         self._finite_closure: FiniteClosure | None = None
 
     def register(self, typedef: TypeDef) -> None:
-        """Register *typedef*, idempotent under identical re-registration.
+        """Register *typedef* under its own declaration identity.
+
+        A registered declaration always carries an identity: when
+        self-validation is enabled, a *typedef* whose ``decl_node_id`` is
+        ``NO_DECL_ID`` is rejected outright — an unregistered identity would
+        otherwise silently pass ``TypeTable.register`` and leave every later
+        identity-keyed lookup for it (including a fresh, unrelated caller
+        that also forgot to stamp one) irretrievable.
 
         Registering a *different* definition under an already-registered
-        ``(module_id, scope_path, name)`` key is an internal invariant violation — every
-        declaration is built exactly once per module, so, when self-validation is
-        enabled, this raises ``AssertionError`` rather than a user-facing
-        diagnostic. Re-checking the identical declaration again (e.g. the REPL
-        re-checking a promoted entry against a fresh environment, or the program
-        pre-pass and the per-module check both building the same module) is
-        expected and is silently accepted. With self-validation disabled (the
-        production path), a re-registration under an existing key is always
-        silently accepted, matching declaration reuse rather than re-verifying it.
+        identity is an internal invariant violation — every declaration is
+        built exactly once, so, when self-validation is enabled, this raises
+        ``AssertionError`` rather than a user-facing diagnostic. Re-checking
+        the identical declaration again (e.g. the REPL re-checking a promoted
+        entry against a fresh environment, or the program pre-pass and the
+        per-module check both building the same module) is expected and is
+        silently accepted. With self-validation disabled (the production
+        path), a re-registration under an existing identity is always
+        silently accepted, matching declaration reuse rather than
+        re-verifying it.
+
+        Registering a new identity under a name path that another identity
+        already occupies does not remove the older declaration — it stays
+        registered, and retrievable by its own identity — but repoints the
+        name index (:meth:`get`) at the registered one: a name is a pointer
+        to the declaration that most recently claimed it, not the
+        declaration itself. Registering an already-registered identity
+        reclaims its name path the same way, which is how a caller restores
+        a name to a declaration that a since-discarded one took over.
         """
-        if typedef.base is not None and len(typedef.base) == 2:
-            typedef = replace(typedef, base=(typedef.base[0], (), typedef.base[1]))
-        key = (typedef.module_id, typedef.scope_path, typedef.name)
-        existing = self._defs.get(key)
+        if self_validation_enabled() and typedef.decl_node_id == NO_DECL_ID:
+            raise AssertionError(
+                f"cannot register a TypeDef with no declaration identity: {typedef!r}"
+            )
+        decl_id = typedef.decl_node_id
+        existing = self._defs.get(decl_id)
+        self._name_index[(typedef.module_id, typedef.scope_path, typedef.name)] = decl_id
         if existing is None:
-            self._defs[key] = typedef
+            self._defs[decl_id] = typedef
             self._non_data_caps = None
             self._finite_closure = None
             return
         if self_validation_enabled() and existing != typedef:
             raise AssertionError(
-                f"conflicting TypeDef registration for {key!r}: "
+                f"conflicting TypeDef registration for identity {decl_id!r}: "
                 f"{existing!r} is already registered, got {typedef!r}"
             )
 
     def get(
         self, module_id: ModuleId, name: str, scope_path: tuple[str, ...] = ()
     ) -> TypeDef | None:
-        """Return the registered ``TypeDef`` for its structured nominal identity."""
-        return self._defs.get((module_id, scope_path, name))
+        """Return the newest registered ``TypeDef`` for a name path, via the name index."""
+        decl_id = self._name_index.get((module_id, scope_path, name))
+        return None if decl_id is None else self._defs.get(decl_id)
 
-    def unregister(self, module_id: ModuleId, name: str, scope_path: tuple[str, ...] = ()) -> None:
-        """Remove any registered def for ``(module_id, scope_path, name)``, if present.
+    def get_by_id(self, decl_id: DeclId) -> TypeDef | None:
+        """Return the registered ``TypeDef`` for *decl_id*, or ``None`` if unregistered.
 
-        Used when a declaration is about to be redefined (e.g. an incremental
-        REPL entry redeclaring an earlier record under the same name with a
-        different shape): dropping the stale entry first means the new
-        declaration's :meth:`register` call is always a fresh registration,
-        never a conflicting one. Also drops any cached substitutions for
-        handles under this key, since they were computed from the def being
-        removed.
+        Unlike :meth:`get`, this reaches a superseded declaration directly by
+        its own identity, independent of whichever declaration the name index
+        currently points a shared name path at.
         """
-        key = (module_id, scope_path, name)
-        self._defs.pop(key, None)
-        self._methods.pop(key, None)
-        self._invalidate_cache_for(key)
+        return self._defs.get(decl_id)
 
-    def _put_method(self, key: DeclKey, method: MethodDef) -> None:
-        """Write *method* into *key*'s direct map, invalidating caches on change.
+    def orphan(self, decl_id: DeclId) -> None:
+        """Record that *decl_id*'s declaration never took effect, and release its name.
+
+        For a declaration an incremental entry failed before promoting (see
+        :meth:`~agm.agl.typecheck.env.TypeEnvironment.restore_type_names_from`).
+        No value of one can exist — a later item of the same entry could not
+        have promoted either — so nothing may resolve to it and no
+        whole-table query about what the session declares may answer with it
+        (:meth:`builtin_declaration`, and the exception descendant scan behind
+        member-conflict diagnostics).
+
+        This is emphatically NOT what a redeclaration does: a SUPERSEDED
+        declaration stays live here, because values built from it survive and
+        its own members still constrain what may be declared around it. Only
+        a caller that knows a declaration never took effect may orphan it.
+
+        The declaration itself stays registered under its own identity. The
+        link image's nominal descriptors are DERIVED from this table on every
+        lowering (``lower.program``), so a declaration that vanished outright
+        would strand the descriptor the failed entry already linked, leaving
+        it claiming a name path it no longer holds. Releasing the name
+        instead lets the next lowering correct that descriptor.
+
+        *decl_id* must be registered.
+        """
+        typedef = self._defs[decl_id]
+        self._orphaned.add(decl_id)
+        key = (typedef.module_id, typedef.scope_path, typedef.name)
+        if self._name_index.get(key) == decl_id:
+            del self._name_index[key]
+        self._invalidate_cache_for(decl_id)
+
+    def is_orphaned(self, decl_id: DeclId) -> bool:
+        """Return whether *decl_id* was orphaned (see :meth:`orphan`)."""
+        return decl_id in self._orphaned
+
+    def is_current(self, typedef: TypeDef) -> bool:
+        """Return whether *typedef*'s identity is the one its name path currently resolves to.
+
+        Answers "does this identity currently bear its name path?" via the
+        name index (see the class and module docstrings) rather than via
+        insertion order: a superseded declaration and a declaration from an
+        unpromoted REPL entry both remain registered under their own
+        identity (:meth:`get_by_id` still reaches them), but neither one is
+        what :meth:`get` resolves their shared name path to any more, so
+        this returns ``False`` for both.
+        """
+        key = (typedef.module_id, typedef.scope_path, typedef.name)
+        return self._name_index.get(key) == typedef.decl_node_id
+
+    def _put_method(self, decl_id: DeclId, method: MethodDef) -> None:
+        """Write *method* into *decl_id*'s direct map, invalidating caches on change.
 
         A repeated registration of the same declaration is a no-op, while a
         redeclaration replaces the previous entry so REPL state cannot retain a
         stale method.
         """
-        methods = self._methods.setdefault(key, {})
+        methods = self._methods.setdefault(decl_id, {})
         if methods.get(method.name) == method:
             return
         methods[method.name] = method
@@ -298,21 +427,7 @@ class TypeTable:
         receiver and typecheck resolves its header before calling this table;
         neither frontend package is imported here.
         """
-        self._put_method((owner.module_id, owner.scope_path, owner.name), method)
-
-    def restore_methods_from(
-        self,
-        other: "TypeTable",
-        module_id: ModuleId,
-        name: str,
-        scope_path: tuple[str, ...] = (),
-    ) -> None:
-        """Restore one nominal owner's direct method map from *other*."""
-        key = (module_id, scope_path, name)
-        methods = other._methods.get(key)
-        if methods is not None:
-            self._methods[key] = dict(methods)
-            self._exception_methods_cache.clear()
+        self._put_method(owner.decl_id, method)
 
     def methods_for(self, owner: NominalOwner) -> Mapping[str, MethodDef]:
         """Return methods available on *owner*, including exception bases.
@@ -322,38 +437,38 @@ class TypeTable:
         the typecheck pass owns the later no-overriding diagnostic, so a direct
         entry wins if invalid data reaches this low-level registry.
         """
-        key = (owner.module_id, owner.scope_path, owner.name)
+        decl_id = owner.decl_id
         if not isinstance(owner, ExceptionType):
-            return self._methods.get(key, {})
-        cached = self._exception_methods_cache.get(key)
+            return self._methods.get(decl_id, {})
+        cached = self._exception_methods_cache.get(decl_id)
         if cached is not None:
             return cached
-        result = self._flatten_exception_methods(key)
-        self._exception_methods_cache[key] = result
+        result = self._flatten_exception_methods(decl_id)
+        self._exception_methods_cache[decl_id] = result
         return result
 
     def lookup_method(self, owner: NominalOwner, name: str) -> MethodDef | None:
         """Return the available method named *name*, or ``None`` on a miss."""
         return self.methods_for(owner).get(name)
 
-    def declared_methods(self, key: DeclKey) -> Mapping[str, MethodDef]:
-        """Return only the methods declared directly on *key*, never inherited ones.
+    def declared_methods(self, owner_id: DeclId) -> Mapping[str, MethodDef]:
+        """Return only the methods declared directly on *owner_id*, never inherited ones.
 
         Declaration-level rules attribute a member to the type that declares it,
         which the inheritance-flattening :meth:`methods_for` cannot answer.
         """
-        return self._methods.get(key, {})
+        return self._methods.get(owner_id, {})
 
-    def _exception_chain(self, key: DeclKey, *, caller: str) -> list[tuple[DeclKey, TypeDef]]:
-        """Return *key*'s base chain, base first, rejecting a cyclic base link.
+    def _exception_chain(self, decl_id: DeclId, *, caller: str) -> list[tuple[DeclId, TypeDef]]:
+        """Return *decl_id*'s base chain, base first, rejecting a cyclic base link.
 
         Every flattened exception accessor inherits base-first declaration order
         from this one walk, so ``caller`` only selects the ``KeyError``/
         ``AssertionError`` label of the accessor that asked.
         """
-        chain: list[tuple[DeclKey, TypeDef]] = []
-        visited: set[DeclKey] = set()
-        current: DeclKey | None = key
+        chain: list[tuple[DeclId, TypeDef]] = []
+        visited: set[DeclId] = set()
+        current: DeclId | None = decl_id
         while current is not None:
             if current in visited:
                 raise AssertionError(f"cyclic exception base chain detected at {current!r}")
@@ -364,99 +479,98 @@ class TypeTable:
         chain.reverse()
         return chain
 
-    def ancestor_defs(self, key: DeclKey) -> tuple[TypeDef, ...]:
-        """Return *key*'s exception ancestors, nearest first.
+    def ancestor_defs(self, decl_id: DeclId) -> tuple[TypeDef, ...]:
+        """Return *decl_id*'s exception ancestors, nearest first.
 
         Empty for a hierarchy root and for any non-exception declaration, so a
         caller checking inherited members needs no base-chain walk of its own.
         """
-        typedef = self.get(key[0], key[2], key[1])
-        assert typedef is not None, f"no TypeDef registered for {key!r}"
+        typedef = self._defs.get(decl_id)
+        assert typedef is not None, f"no TypeDef registered for identity {decl_id!r}"
         if typedef.kind != "exception" or typedef.base is None:
             return ()
         chain = self._exception_chain(typedef.base, caller="ancestor_defs")
-        return tuple(base_def for _base_key, base_def in reversed(chain))
+        return tuple(base_def for _base_id, base_def in reversed(chain))
 
-    def _flatten_exception_methods(self, key: DeclKey) -> Mapping[str, MethodDef]:
+    def _flatten_exception_methods(self, decl_id: DeclId) -> Mapping[str, MethodDef]:
         methods: dict[str, MethodDef] = {}
-        for chain_key, _typedef in self._exception_chain(key, caller="methods_for"):
-            methods.update(self._methods.get(chain_key, {}))
+        for chain_id, _typedef in self._exception_chain(decl_id, caller="methods_for"):
+            methods.update(self._methods.get(chain_id, {}))
         return methods
 
-    def _invalidate_cache_for(self, key: DeclKey) -> None:
-        self._record_fields_cache.pop(key, None)
-        self._enum_variants_cache.pop(key, None)
+    def _invalidate_cache_for(self, decl_id: DeclId) -> None:
+        self._record_fields_cache.pop(decl_id, None)
+        self._enum_variants_cache.pop(decl_id, None)
         # Exception field accessors flatten inherited base chains, so changing
         # one exception can invalidate cached descendants as well as the changed
-        # key. Clear the exception caches wholesale rather than trying to
+        # identity. Clear the exception caches wholesale rather than trying to
         # maintain a reverse-inheritance index.
         self._exception_fields_cache.clear()
         self._exception_field_kinds_cache.clear()
         self._exception_methods_cache.clear()
         # The non-data-reachability and finiteness fixpoints are whole-table
         # (any declaration's flag can in principle depend on any other's), so
-        # a single changed key invalidates the whole cached result rather
-        # than just this key.
+        # a single changed identity invalidates the whole cached result rather
+        # than just this one.
         self._non_data_caps = None
         self._finite_closure = None
 
     def record_fields(self, handle: RecordType) -> Mapping[str, Type]:
         """Return *handle*'s field types with its ``type_args`` substituted in.
 
-        Memoized per handle: ``RecordType`` equality/hash exclude ``fields``
-        (identity is ``(module_id, name, type_args)``), so the same handle
-        always maps to the same substituted mapping object. The memo is
-        bucketed by ``(module_id, scope_path, name)`` so a single key's invalidation
-        (:meth:`unregister`, :meth:`merge_from`) never has to scan entries for
-        other keys.
+        Memoized per handle: ``RecordType`` equality/hash cover ``decl_id``
+        and ``type_args``, so the same handle always maps to the same
+        substituted mapping object. The memo is bucketed by ``decl_id`` so a single
+        identity's invalidation (:meth:`merge_from`) never has to scan entries
+        for other identities.
 
         Raises ``KeyError`` if no ``TypeDef`` is registered for the handle's
-        ``(module_id, scope_path, name)`` — every valid handle is expected to have one.
+        ``decl_id`` — every valid handle is expected to have one.
         Raises ``AssertionError`` if the registered def's ``kind`` is not
         ``"record"`` — an internal-invariant violation, since a ``RecordType``
         handle only ever names a record declaration.
         """
-        key = (handle.module_id, handle.scope_path, handle.name)
-        bucket = self._record_fields_cache.get(key)
+        decl_id = handle.decl_id
+        bucket = self._record_fields_cache.get(decl_id)
         if bucket is not None:
             cached = bucket.get(handle)
             if cached is not None:
                 return cached
-        typedef = self._defs.get(key)
+        typedef = self._defs.get(decl_id)
         if typedef is None:
-            raise KeyError(f"no TypeDef registered for record {key!r}")
+            raise KeyError(f"no TypeDef registered for record {handle!r}")
         if typedef.kind != "record":
             raise AssertionError(
-                f"record_fields called for {key!r}, which is registered as kind "
+                f"record_fields called for {handle!r}, which is registered as kind "
                 f"{typedef.kind!r}, not 'record'"
             )
         subst = dict(zip(typedef.type_params, handle.type_args))
         result: Mapping[str, Type] = {
             fname: substitute(ftype, subst) for fname, ftype in typedef.fields
         }
-        self._record_fields_cache.setdefault(key, {})[handle] = result
+        self._record_fields_cache.setdefault(decl_id, {})[handle] = result
         return result
 
     def enum_variants(self, handle: EnumType) -> Mapping[str, Mapping[str, Type]]:
         """Return *handle*'s variant field types with its ``type_args`` substituted in.
 
-        Memoized per handle, bucketed by ``(module_id, scope_path, name)`` (see
-        :meth:`record_fields`). Raises ``KeyError`` if no ``TypeDef`` is
-        registered for the handle's ``(module_id, scope_path, name)``, or
-        ``AssertionError`` if the registered def's ``kind`` is not ``"enum"``.
+        Memoized per handle, bucketed by ``decl_id`` (see :meth:`record_fields`).
+        Raises ``KeyError`` if no ``TypeDef`` is registered for the handle's
+        ``decl_id``, or ``AssertionError`` if the registered def's ``kind`` is
+        not ``"enum"``.
         """
-        key = (handle.module_id, handle.scope_path, handle.name)
-        bucket = self._enum_variants_cache.get(key)
+        decl_id = handle.decl_id
+        bucket = self._enum_variants_cache.get(decl_id)
         if bucket is not None:
             cached = bucket.get(handle)
             if cached is not None:
                 return cached
-        typedef = self._defs.get(key)
+        typedef = self._defs.get(decl_id)
         if typedef is None:
-            raise KeyError(f"no TypeDef registered for enum {key!r}")
+            raise KeyError(f"no TypeDef registered for enum {handle!r}")
         if typedef.kind != "enum":
             raise AssertionError(
-                f"enum_variants called for {key!r}, which is registered as kind "
+                f"enum_variants called for {handle!r}, which is registered as kind "
                 f"{typedef.kind!r}, not 'enum'"
             )
         subst = dict(zip(typedef.type_params, handle.type_args))
@@ -464,7 +578,7 @@ class TypeTable:
             vname: {fname: substitute(ftype, subst) for fname, ftype in vfields}
             for vname, vfields in typedef.variants
         }
-        self._enum_variants_cache.setdefault(key, {})[handle] = result
+        self._enum_variants_cache.setdefault(decl_id, {})[handle] = result
         return result
 
     def exception_fields(self, handle: ExceptionType) -> Mapping[str, Type]:
@@ -472,30 +586,29 @@ class TypeTable:
 
         Exceptions are non-generic, so unlike :meth:`record_fields`/
         :meth:`enum_variants` there is no ``type_args`` substitution — the
-        result is memoized directly per ``(module_id, scope_path, name)`` key. Base
-        fields come first (the root contributes ``message``/``trace_id``),
-        followed by the exception's own fields, matching declaration order.
+        result is memoized directly per ``decl_id``. Base fields come first
+        (the root contributes ``message``), followed by the
+        exception's own fields, matching declaration order.
 
         Raises ``KeyError`` if no ``TypeDef`` is registered for the handle's
-        ``(module_id, scope_path, name)``. Raises ``AssertionError`` if the registered
-        def's ``kind`` is not ``"exception"``, or if the base chain contains
-        a cycle — an internal-invariant violation, since the inhabitation
-        check (single-module builder post-pass or program pre-pass) rejects
-        ``extends`` cycles as uninhabitable before this can fire in
-        production; this guard is for internal robustness, not a user
-        diagnostic.
+        ``decl_id``. Raises ``AssertionError`` if the registered def's
+        ``kind`` is not ``"exception"``, or if the base chain contains a
+        cycle — an internal-invariant violation, since the whole-program
+        inhabitation pre-pass rejects ``extends`` cycles as uninhabitable
+        before this can fire in production; this guard is for internal
+        robustness, not a user diagnostic.
         """
-        key = (handle.module_id, handle.scope_path, handle.name)
-        cached = self._exception_fields_cache.get(key)
+        decl_id = handle.decl_id
+        cached = self._exception_fields_cache.get(decl_id)
         if cached is not None:
             return cached
-        result = self._flatten_exception_fields(key)
-        self._exception_fields_cache[key] = result
+        result = self._flatten_exception_fields(decl_id)
+        self._exception_fields_cache[decl_id] = result
         return result
 
-    def _flatten_exception_fields(self, key: DeclKey) -> Mapping[str, Type]:
+    def _flatten_exception_fields(self, decl_id: DeclId) -> Mapping[str, Type]:
         fields: dict[str, Type] = {}
-        for _chain_key, typedef in self._exception_chain(key, caller="exception_fields"):
+        for _chain_id, typedef in self._exception_chain(decl_id, caller="exception_fields"):
             fields.update(typedef.fields)
         return fields
 
@@ -508,8 +621,6 @@ class TypeTable:
         exception's OWN fields honor their declared ``@pos``/``@std``/
         ``@named`` marker exactly like a record's fields do (see
         ``TypeDef.field_kinds``); only inheritance is exception-specific.
-        ``trace_id`` (present only on the hierarchy root) is excluded: it is
-        auto-filled at construction time, never supplied by the caller.
 
         Each kind is a ``ParamKind.value`` string, not the enum itself (see
         the module-level comment on ``TypeDef.field_kinds``); the caller
@@ -518,41 +629,38 @@ class TypeTable:
         Raises ``KeyError``/``AssertionError`` under the same conditions as
         :meth:`exception_fields`.
         """
-        key = (handle.module_id, handle.scope_path, handle.name)
-        cached = self._exception_field_kinds_cache.get(key)
+        decl_id = handle.decl_id
+        cached = self._exception_field_kinds_cache.get(decl_id)
         if cached is not None:
             return cached
-        result = self._flatten_exception_field_kinds(key)
-        self._exception_field_kinds_cache[key] = result
+        result = self._flatten_exception_field_kinds(decl_id)
+        self._exception_field_kinds_cache[decl_id] = result
         return result
 
-    def _flatten_exception_field_kinds(self, key: DeclKey) -> tuple[tuple[str, str], ...]:
+    def _flatten_exception_field_kinds(self, decl_id: DeclId) -> tuple[tuple[str, str], ...]:
         return tuple(
             (fname, kind)
-            for _chain_key, typedef in self._exception_chain(key, caller="exception_field_kinds")
+            for _chain_id, typedef in self._exception_chain(decl_id, caller="exception_field_kinds")
             for (fname, _ftype), kind in zip(typedef.fields, typedef.field_kinds, strict=True)
-            if fname != "trace_id"
         )
 
     def exception_def(self, handle: ExceptionType) -> TypeDef:
         """Return the registered ``TypeDef`` for *handle*.
 
-        Used to read exception hierarchy metadata (``abstract``, ``base``)
-        that ``ExceptionType`` itself no longer carries. Raises ``KeyError``/
-        ``AssertionError`` under the same conditions as
+        Used to read exception hierarchy metadata (``abstract``, ``base``),
+        which lives here rather than on the ``ExceptionType`` handle. Raises
+        ``KeyError``/``AssertionError`` under the same conditions as
         :meth:`exception_fields`.
         """
-        return self._require_exception_def(
-            (handle.module_id, handle.scope_path, handle.name), caller="exception_def"
-        )
+        return self._require_exception_def(handle.decl_id, caller="exception_def")
 
-    def _require_exception_def(self, key: DeclKey, *, caller: str) -> TypeDef:
-        typedef = self._defs.get(key)
+    def _require_exception_def(self, decl_id: DeclId, *, caller: str) -> TypeDef:
+        typedef = self._defs.get(decl_id)
         if typedef is None:
-            raise KeyError(f"no TypeDef registered for exception {key!r}")
+            raise KeyError(f"no TypeDef registered for exception identity {decl_id!r}")
         if typedef.kind != "exception":
             raise AssertionError(
-                f"{caller} called for {key!r}, which is registered as kind "
+                f"{caller} called for identity {decl_id!r}, which is registered as kind "
                 f"{typedef.kind!r}, not 'exception'"
             )
         return typedef
@@ -560,6 +668,59 @@ class TypeTable:
     def entries(self) -> tuple[TypeDef, ...]:
         """Return all registered ``TypeDef``s (used for REPL and program table sharing)."""
         return tuple(self._defs.values())
+
+    @property
+    def defs(self) -> Mapping[DeclId, TypeDef]:
+        """Every registered ``TypeDef``, keyed by its identity, as a read-only view.
+
+        Includes every declaration the table has ever registered, superseded
+        or not: a still-registered declaration's field/base references are
+        handles naming a specific identity, and a reference to a superseded
+        declaration must still resolve to that declaration's own shape.
+        """
+        return MappingProxyType(self._defs)
+
+    def builtin_declaration(self, name: str) -> TypeDef | None:
+        """Return the live registered ``builtin`` declaration named *name*, if any.
+
+        Returns ``None`` for a program that declares no ``builtin`` of that
+        name — the caller falls back to the seeded canonical shape, which is
+        not itself a declaration.
+
+        Builtin declarations are unique by complete scoped name, so a compile
+        unit may contain several paths with this bare name. This bare-name
+        lookup is used only by host contracts that have one matching builtin
+        type; the last registered declaration is the current contract
+        declaration. REPL accumulation can likewise retain older paths;
+        ``_defs`` never moves an existing entry, so a forward scan's last
+        match is the newest one. An orphaned declaration (:meth:`orphan`) is
+        skipped: it never took effect, so it must not become the contract a
+        later entry's host call is typed against.
+        """
+        result: TypeDef | None = None
+        for decl_id, typedef in self._defs.items():
+            if typedef.is_builtin and typedef.name == name and decl_id not in self._orphaned:
+                result = typedef
+        return result
+
+    def builtin_declarations(self) -> Mapping[str, TypeDef]:
+        """Return every bare name's currently live registered ``builtin`` declaration.
+
+        The all-names counterpart of :meth:`builtin_declaration`: for each
+        bare name that has at least one registered, non-orphaned ``builtin``
+        declaration, the entry is the exact same declaration
+        :meth:`builtin_declaration` would return for that name alone (same
+        forward-scan, last-match-wins tie-break; same orphan skip). Building
+        the host's minting table from this instead of an independent scan is
+        how the host and the checker are kept from ever disagreeing about
+        which declaration a built-in name denotes (see
+        ``lower.lowerer.builtin_nominals_from_declarations``).
+        """
+        result: dict[str, TypeDef] = {}
+        for decl_id, typedef in self._defs.items():
+            if typedef.is_builtin and decl_id not in self._orphaned:
+                result[typedef.name] = typedef
+        return result
 
     def nominal_reaches_non_data(self, handle: RecordType | EnumType | ExceptionType) -> bool:
         """Return ``True`` if a non-data type is reachable from *handle* (cycle-safe).
@@ -575,15 +736,15 @@ class TypeTable:
         applies to them.
         """
         caps = self._non_data_reachability()
-        key = (handle.module_id, handle.scope_path, handle.name)
-        if key in caps.reaches_non_data:
+        decl_id = handle.decl_id
+        if decl_id in caps.reaches_non_data:
             return True
         if isinstance(handle, ExceptionType):
             return False
-        typedef = self._defs.get(key)
+        typedef = self._defs.get(decl_id)
         if typedef is None:
             return False
-        relevant = caps.relevant_params.get(key, frozenset())
+        relevant = caps.relevant_params.get(decl_id, frozenset())
         return any(
             _reaches_non_data(arg, self)
             for pname, arg in zip(typedef.type_params, handle.type_args)
@@ -610,15 +771,19 @@ class TypeTable:
     def has_finite_closure(
         self, module_id: ModuleId, name: str, scope_path: tuple[str, ...] = ()
     ) -> bool:
-        """Return whether the structured declaration key has a finite closure.
+        """Return whether the named declaration has a finite closure.
 
         Declaration-level only (no ``type_args``): see
         :func:`~agm.agl.semantics.analyses.compute_finite_closure` for what
-        "finite closure" means and how it is decided. A declaration key that
-        is not registered at all defaults to ``True`` (finite), matching the
+        "finite closure" means and how it is decided. Resolves *name* through
+        the name index to the newest declaration bearing it; a name that is
+        not registered at all defaults to ``True`` (finite), matching the
         defensive default of every other declaration-level query here.
         """
-        return (module_id, scope_path, name) not in self._finite_closure_result().infinite
+        decl_id = self._name_index.get((module_id, scope_path, name))
+        if decl_id is None:
+            return True
+        return decl_id not in self._finite_closure_result().infinite
 
     def has_finite_schema(self, t: Type) -> bool:
         """Return ``True`` if every declaration reachable from *t* has a finite closure.
@@ -628,7 +793,7 @@ class TypeTable:
         """
         return self.first_infinite_declaration(t) is None
 
-    def first_infinite_declaration(self, t: Type) -> DeclKey | None:
+    def first_infinite_declaration(self, t: Type) -> TypeDef | None:
         """Return the first infinite declaration reachable from *t*, or ``None``.
 
         Walks *t*'s own (finite) type tree for nominal references
@@ -639,23 +804,26 @@ class TypeTable:
         concrete instantiation, so it terminates regardless of how *t*'s
         declarations recurse. Breadth-first (rather than depth-first) and
         ordered deterministically (*t*'s own nominal references in tree
-        order, then each further hop sorted by declaration key) so that, when
-        *t* itself names an infinite declaration, that declaration — the most
-        useful "culprit" for a use-site diagnostic — is reported before any
-        declaration reachable only through a nested field.
+        order, then each further hop sorted by declaration name — never by
+        identity, so the reported "culprit" never depends on declaration
+        numbering) so that, when *t* itself names an infinite declaration,
+        that declaration — the most useful "culprit" for a use-site
+        diagnostic — is reported before any declaration reachable only
+        through a nested field.
         """
         from agm.agl.semantics.analyses import nominal_references_for_schema
 
         caps = self._finite_closure_result()
-        return bfs_first(
+        result_id = bfs_first(
             (
-                (ref.module_id, ref.scope_path, ref.name)
+                ref.decl_id
                 for ref in nominal_references_for_schema(t, self._defs, caps.relevant_params)
             ),
-            lambda key: caps.successors.get(key, frozenset()),
-            lambda key: key if key in caps.infinite else None,
-            key=decl_key_sort_key,
+            lambda decl_id: caps.successors.get(decl_id, frozenset()),
+            lambda decl_id: decl_id if decl_id in caps.infinite else None,
+            key=self._decl_id_sort_key,
         )
+        return None if result_id is None else self._defs.get(result_id)
 
     def canonical_schema_type(self, t: Type) -> Type:
         """Return *t* with schema-irrelevant nominal type arguments canonicalized.
@@ -668,7 +836,7 @@ class TypeTable:
         return self._canonical_schema_type(t, self._finite_closure_result().relevant_params)
 
     def _canonical_schema_type(
-        self, t: Type, relevant_params: Mapping[DeclKey, frozenset[str]]
+        self, t: Type, relevant_params: Mapping[DeclId, frozenset[str]]
     ) -> Type:
         match t:
             case RecordType():
@@ -677,6 +845,7 @@ class TypeTable:
                     type_args=self._canonical_schema_args(t, relevant_params),
                     module_id=t.module_id,
                     scope_path=t.scope_path,
+                    decl_id=t.decl_id,
                 )
             case EnumType():
                 return EnumType(
@@ -684,6 +853,7 @@ class TypeTable:
                     type_args=self._canonical_schema_args(t, relevant_params),
                     module_id=t.module_id,
                     scope_path=t.scope_path,
+                    decl_id=t.decl_id,
                 )
             case ArrayType(elem=elem):
                 return ArrayType(self._canonical_schema_type(elem, relevant_params))
@@ -696,7 +866,6 @@ class TypeTable:
                 )
             case (
                 ExceptionType()
-                | AgentType()
                 | UnitType()
                 | TextType()
                 | JsonType()
@@ -714,13 +883,12 @@ class TypeTable:
     def _canonical_schema_args(
         self,
         t: RecordType | EnumType,
-        relevant_params: Mapping[DeclKey, frozenset[str]],
+        relevant_params: Mapping[DeclId, frozenset[str]],
     ) -> tuple[Type, ...]:
-        key = (t.module_id, t.scope_path, t.name)
-        typedef = self._defs.get(key)
+        typedef = self._defs.get(t.decl_id)
         if typedef is None:
             return tuple(self._canonical_schema_type(arg, relevant_params) for arg in t.type_args)
-        relevant = relevant_params.get(key, frozenset())
+        relevant = relevant_params.get(t.decl_id, frozenset())
         result: list[Type] = []
         for pname, arg in zip(typedef.type_params, t.type_args):
             if pname in relevant:
@@ -740,10 +908,10 @@ class TypeTable:
         canonical = self._canonical_schema_type(t, caps.relevant_params)
         if not isinstance(canonical, (RecordType, EnumType)):  # pragma: no cover
             raise AssertionError(f"canonicalized nominal handle became {canonical!r}")
-        typedef = self._defs.get((t.module_id, t.scope_path, t.name))
+        typedef = self._defs.get(t.decl_id)
         if typedef is None:
             return canonical.type_args
-        relevant = caps.relevant_params.get((t.module_id, t.scope_path, t.name), frozenset())
+        relevant = caps.relevant_params.get(t.decl_id, frozenset())
         result = [
             arg for pname, arg in zip(typedef.type_params, canonical.type_args) if pname in relevant
         ]
@@ -782,12 +950,7 @@ class TypeTable:
             return None
         is_own_declaration = (
             isinstance(t, (RecordType, EnumType, ExceptionType))
-            and (
-                t.module_id,
-                t.scope_path,
-                t.name,
-            )
-            == culprit
+            and t.decl_id == culprit.decl_node_id
         )
         if is_own_declaration:
             return (
@@ -819,9 +982,9 @@ class TypeTable:
             return f"'{leaf!r}' has no JSON representation"
         culprit = self.first_non_data_field(t)
         if culprit is not None:
-            key, field_name, field_type = culprit
+            typedef, field_name, field_type = culprit
             return (
-                f"field '{field_name}' of '{qualified_decl_name(key)}' has type "
+                f"field '{field_name}' of '{qualified_decl_name(typedef)}' has type "
                 f"'{field_type!r}', which has no JSON representation"
             )
         type_vars = sorted(free_type_vars(t))
@@ -831,10 +994,10 @@ class TypeTable:
             )
         return None
 
-    def first_non_data_field(self, t: Type) -> tuple[DeclKey, str, Type] | None:
+    def first_non_data_field(self, t: Type) -> tuple[TypeDef, str, Type] | None:
         """Return the declaration field that costs *t* its JSON representation.
 
-        The result is ``(declaration key, field name, that field's declared
+        The result is ``(declaration, field name, that field's declared
         type)``. Breadth-first from *t*'s own nominal references, so the
         shallowest declaration carrying a non-data field is reported — the
         most useful culprit for a use-site diagnostic — before one reachable
@@ -847,31 +1010,27 @@ class TypeTable:
         """
         from agm.agl.semantics.analyses import nominal_references
 
-        def culprit(key: DeclKey) -> tuple[DeclKey, str, Type] | None:
-            typedef = self._defs.get(key)
+        def culprit(decl_id: DeclId) -> tuple[TypeDef, str, Type] | None:
+            typedef = self._defs.get(decl_id)
             if typedef is None:  # pragma: no cover
-                # Unreachable by construction: every key enqueued was first
-                # confirmed to reach a non-data type, which a dangling
+                # Unreachable by construction: every identity enqueued was
+                # first confirmed to reach a non-data type, which a dangling
                 # (never-registered) declaration never does. Kept as a
                 # defensive guard, matching the dangling-reference handling in
                 # the fixpoints themselves, in case that ever stops holding.
                 return None
             direct = self._own_non_data_field(typedef)
-            return None if direct is None else (key, *direct)
+            return None if direct is None else (typedef, *direct)
 
-        def successors(key: DeclKey) -> set[DeclKey]:
-            typedef = self._defs.get(key)
-            return set() if typedef is None else self._affected_successors(key, typedef)
+        def successors(decl_id: DeclId) -> set[DeclId]:
+            typedef = self._defs.get(decl_id)
+            return set() if typedef is None else self._affected_successors(decl_id, typedef)
 
         return bfs_first(
-            (
-                (ref.module_id, ref.scope_path, ref.name)
-                for ref in nominal_references(t)
-                if self.nominal_reaches_non_data(ref)
-            ),
+            (ref.decl_id for ref in nominal_references(t) if self.nominal_reaches_non_data(ref)),
             successors,
             culprit,
-            key=decl_key_sort_key,
+            key=self._decl_id_sort_key,
         )
 
     def _own_non_data_field(self, typedef: TypeDef) -> tuple[str, Type] | None:
@@ -883,34 +1042,38 @@ class TypeTable:
                 return field_name, template
         return None
 
-    def _affected_successors(self, key: DeclKey, typedef: TypeDef) -> set[DeclKey]:
+    def _affected_successors(self, decl_id: DeclId, typedef: TypeDef) -> set[DeclId]:
         """Return the declarations *typedef* reaches non-data through.
 
         A field reference is a HANDLE, so it is tested with
         :meth:`nominal_reaches_non_data`, which also consults the concrete
         type arguments — ``Box[agent]`` is affected while ``Box`` itself is
         not. An exception's ``extends`` base and its descendants are bare
-        declaration keys carrying no arguments, so for them the
+        declaration identities carrying no arguments, so for them the
         declaration-level ``flags`` set is the whole answer. The two idioms
         below are therefore not interchangeable.
         """
         from agm.agl.semantics.analyses import field_templates, nominal_references
 
         flags = self._non_data_reachability().reaches_non_data
-        result: set[DeclKey] = set()
+        result: set[DeclId] = set()
         for _field_name, template in field_templates(typedef):
             for ref in nominal_references(template):
                 if self.nominal_reaches_non_data(ref):
-                    result.add((ref.module_id, ref.scope_path, ref.name))
+                    result.add(ref.decl_id)
         if typedef.kind == "exception":
             if typedef.base is not None and typedef.base in flags:
                 result.add(typedef.base)
             result.update(
-                child_key
-                for child_key, child in self._defs.items()
-                if child.kind == "exception" and child.base == key and child_key in flags
+                child_id
+                for child_id, child in self._defs.items()
+                if child.kind == "exception" and child.base == decl_id and child_id in flags
             )
         return result
+
+    def _decl_id_sort_key(self, decl_id: DeclId) -> tuple[tuple[str, ...], tuple[str, ...], str]:
+        """Resolve *decl_id* against this table for :func:`decl_id_sort_key`."""
+        return decl_id_sort_key(self._defs, decl_id)
 
     def _finite_closure_result(self) -> "FiniteClosure":
         if self._finite_closure is None:
@@ -920,49 +1083,87 @@ class TypeTable:
         return self._finite_closure
 
     def merge_from(self, other: "TypeTable") -> None:
-        """Copy every entry from *other* into this table.
+        """Copy every entry and name-index mapping from *other* into this table.
 
         Used to carry accumulated declarations across REPL entries (and to
         seed a fresh per-entry environment from the session's persisted
-        state). *other* is treated as authoritative: an entry already present
-        under the same key is overwritten, mirroring the last-write-wins
+        state). *other* is treated as authoritative: a def already present
+        under the same identity is overwritten, and *other*'s name index
+        entries overwrite this table's own — mirroring the last-write-wins
         semantics already used to seed the embedded type dict (``_types``).
-        A name redeclared with a different shape in the environment being
-        seeded is always subsequently rebuilt by the type builder's
-        unregister-then-rebuild dance, so a transient overwrite here is never
-        left stale in a way that affects final behavior.
+        Callers that seed the SAME live table from the SAME source more than
+        once within one check (see
+        :meth:`~agm.agl.typecheck.env.TypeEnvironment.seed_from`'s
+        ``merge_type_table``) must skip a second, now-stale call instead of
+        relying on this method to detect it — a later declaration under a
+        name path this table already binds to a different identity is
+        expected to take the name over unconditionally, so there is no
+        general way to tell that apart from a stale re-seed here.
 
         Skips the write (and the resulting cache invalidation) entirely when
         the incoming def is identical to the one already registered under
-        that key, since no cached substitution can be stale in that case.
+        that identity, since no cached substitution can be stale in that case.
         """
-        for key, typedef in other._defs.items():
-            if self._defs.get(key) == typedef:
+        for decl_id, typedef in other._defs.items():
+            if self._defs.get(decl_id) == typedef:
                 continue
-            self._defs[key] = typedef
-            self._methods.pop(key, None)
-            self._invalidate_cache_for(key)
-        for key, methods in other._methods.items():
+            self._defs[decl_id] = typedef
+            self._methods.pop(decl_id, None)
+            self._invalidate_cache_for(decl_id)
+        for name_key, decl_id in other._name_index.items():
+            self._name_index[name_key] = decl_id
+        # Orphan status travels with the declaration: a session seeds a fresh
+        # table from its accumulated one on every entry, so a declaration
+        # orphaned once must stay orphaned for the rest of the session.
+        self._orphaned |= other._orphaned
+        for decl_id, methods in other._methods.items():
             for method in methods.values():
-                self._put_method(key, method)
+                self._put_method(decl_id, method)
 
 
-def decl_key_sort_key(key: DeclKey) -> tuple[tuple[str, ...], tuple[str, ...], str]:
-    """Deterministic sort key for a declaration key (module, scope path, then name)."""
-    return (key[0].segments, key[1], key[2])
+def decl_def_sort_key(typedef: TypeDef) -> tuple[tuple[str, ...], tuple[str, ...], str]:
+    """Deterministic sort key for a ``TypeDef`` (module, scope path, then name).
+
+    Name-based, never identity-based, so a "first"/"culprit" declaration
+    chosen by sorting a set of ``TypeDef``s never depends on declaration
+    numbering (AST node id order).
+    """
+    return (typedef.module_id.segments, typedef.scope_path, typedef.name)
 
 
-def qualified_decl_name(key: DeclKey) -> str:
-    """Return *key*'s user-facing name, module-qualified where a reader needs it.
+def decl_id_sort_key(
+    defs: Mapping[DeclId, TypeDef], decl_id: DeclId
+) -> tuple[tuple[str, ...], tuple[str, ...], str]:
+    """Deterministic sort key for *decl_id*, resolved to its declaration in *defs*.
+
+    Every SCC/BFS traversal that has to order declaration identities sorts by
+    declaration name (:func:`decl_def_sort_key`) rather than by identity, so a
+    "first"/"culprit" declaration chosen from a fixpoint never depends on
+    declaration numbering. A *decl_id* absent from *defs* (a dangling
+    reference — an internal-invariant violation the fixpoints handle
+    defensively rather than assume away) sorts after every named declaration,
+    using the raw identity only to keep multiple dangling entries mutually
+    ordered.
+    """
+    typedef = defs.get(decl_id)
+    if typedef is None:  # pragma: no cover
+        return ((), (), f"￿<dangling:{decl_id}>")
+    return decl_def_sort_key(typedef)
+
+
+def qualified_decl_name(typedef: TypeDef) -> str:
+    """Return *typedef*'s user-facing name, module-qualified where a reader needs it.
 
     Bare names from an imported module can otherwise be ambiguous; the
     ``module::name`` convention matches ``RecordType``/``EnumType``'s own
-    ``__repr__``. Entry-module and prelude declarations are spelled bare
+    ``__repr__``, and shares the same bare/qualified decision
+    (:func:`~agm.agl.semantics.types.spells_bare`): entry-module declarations
+    and the shipped standard library's own built-in names are spelled bare
     because that is how every reader writes them.
     """
-    module, scope_path, name = key
+    module, scope_path, name = typedef.module_id, typedef.scope_path, typedef.name
     scoped = "::".join((*scope_path, name))
-    if module.is_entry or module.is_prelude:
+    if spells_bare(module, name):
         return scoped
     return f"{module.display()}::{scoped}"
 
@@ -974,7 +1175,7 @@ def _first_non_data_leaf(t: Type) -> Type | None:
     handle, whose own fields are a declaration-level question answered by
     :meth:`TypeTable.first_non_data_field` instead.
     """
-    if isinstance(t, (UnitType, AgentType, FunctionType)):
+    if isinstance(t, (UnitType, FunctionType)):
         return t
     if isinstance(t, (RecordType, EnumType, ExceptionType)):
         return None
@@ -988,7 +1189,7 @@ def _first_non_data_leaf(t: Type) -> Type | None:
 def _reaches_non_data(t: Type, table: TypeTable) -> bool:
     """True if ``t`` is, or transitively contains, a non-data type.
 
-    The non-data types are function, agent, and ``unit``: function and agent
+    The non-data types are function and ``unit``: function and agent
     values are opaque / identity-only, and ``unit`` has a single value carrying
     nothing.  An array, dict, record, enum, or exception that transitively
     holds one is therefore itself affected.  ``t`` is always a finite tree
@@ -1000,7 +1201,7 @@ def _reaches_non_data(t: Type, table: TypeTable) -> bool:
     recursive, but this function never re-enters them.
     """
     match t:
-        case FunctionType() | AgentType() | UnitType():
+        case FunctionType() | UnitType():
             return True
         case ArrayType():
             return _reaches_non_data(t.elem, table)
@@ -1033,15 +1234,14 @@ def comparable_types(left: Type, right: Type, table: TypeTable) -> bool:
     non-``json`` type is a static error.  Records/enums/exceptions compare only
     with their own exact type.
 
-    ``AgentType``, ``FunctionType``, and ``UnitType`` operands are
-    NON-comparable — using ``=``/``!=``/``<`` on them is a static error. Agents
-    have no equality in AgL; function values are opaque.
+    ``FunctionType`` and ``UnitType`` operands are
+    NON-comparable — using ``=``/``!=``/``<`` on them is a static error.
     This rule is **transitive**: an ``array``, ``dict``, ``record``, ``enum``, or
-    ``exception`` that (at any depth) contains a function, agent, or ``unit``
+    ``exception`` that (at any depth) contains a function or ``unit``
     value likewise has no equality and cannot be compared with ``=``/``!=``.
     ``table`` resolves record/enum field shapes for that transitive walk.
     """
-    # Function/agent/unit values — and any container/record/enum that transitively
+    # Function/unit values — and any container/record/enum that transitively
     # holds one — have no value equality.
     if _reaches_non_data(left, table) or _reaches_non_data(right, table):
         return False
@@ -1101,14 +1301,7 @@ def is_json_convertible(t: Type, table: TypeTable) -> bool:
             return table.nominal_is_json_convertible(t) and not any(
                 contains_type_var(arg) for arg in t.type_args
             )
-        case (
-            UnitType()
-            | AgentType()
-            | FunctionType()
-            | BottomType()
-            | TypeVarType()
-            | InferenceVarType()
-        ):
+        case UnitType() | FunctionType() | BottomType() | TypeVarType() | InferenceVarType():
             return False
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
@@ -1144,8 +1337,8 @@ def cast_classification(source: Type, target: Type, table: TypeTable) -> CastKin
     """
     # Bottom is a valid source because a raise expression never reaches the
     # conversion. Other non-data sources and all non-data targets are invalid.
-    if isinstance(source, (UnitType, AgentType, FunctionType)) or isinstance(
-        target, (UnitType, AgentType, FunctionType, BottomType)
+    if isinstance(source, (UnitType, FunctionType)) or isinstance(
+        target, (UnitType, FunctionType, BottomType)
     ):
         return CastKind.STATIC_ERROR
     # ExceptionType as target is not in the matrix
@@ -1170,7 +1363,7 @@ def cast_classification(source: Type, target: Type, table: TypeTable) -> CastKin
     _text_or_json = (TextType, JsonType)
 
     if isinstance(target, TextType):
-        # Every data value renders to text. Non-data sources (unit/agent/function)
+        # Every data value renders to text. Non-data sources (unit/function)
         # are filtered at the top, and json-shaped/exact-type sources are handled by
         # the is_assignable block above, so any source reaching here is a renderable
         # data type (json/bool/int/decimal/array/dict/record/enum/exception).
@@ -1205,7 +1398,7 @@ def cast_classification(source: Type, target: Type, table: TypeTable) -> CastKin
 # Prelude type shapes — the single source of truth for built-in nominal types
 #
 # These ``TypeDef`` literals are the canonical shapes for AgL's built-in
-# prelude types (``ExecResult``, ``ParsePolicy``, ``OutputContract``,
+# prelude types (``ExecResult``, ``ParsePolicy``, ``Agent``, ``OutputContract``,
 # ``OutputContractOption``, ``AgentRequest``) and the generic ``Option``
 # template.  ``create_seeded_type_table``, the scope resolver's builtin
 # constructor-candidate seeding, ``TypeEnvironment`` init seeding, and builtin
@@ -1213,11 +1406,25 @@ def cast_classification(source: Type, target: Type, table: TypeTable) -> CastKin
 # is exactly one definition of each prelude shape.
 # ---------------------------------------------------------------------------
 
-BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = {
+
+def _with_reserved_ids(defs: Mapping[str, TypeDef]) -> Mapping[str, TypeDef]:
+    """Stamp each canonical entry with the reserved identity its own key names.
+
+    A prelude shape is keyed by the built-in name it defines, so its
+    declaration identity is implied by that key; deriving it here rather than
+    repeating ``_reserved_id("Name")`` in every entry keeps a shape from ever
+    carrying another name's identity.
+    """
+    return {
+        name: replace(typedef, decl_node_id=_reserved_id(name)) for name, typedef in defs.items()
+    }
+
+
+_PRELUDE_SHAPES: Mapping[str, TypeDef] = {
     "ExecResult": TypeDef(
         kind="record",
         name="ExecResult",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(
             ("stdout", TextType()),
             ("exit_code", IntType()),
@@ -1228,16 +1435,30 @@ BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = {
     "ParsePolicy": TypeDef(
         kind="enum",
         name="ParsePolicy",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         variants=(
             ("Abort", ()),
             ("Retry", (("n", IntType()),)),
         ),
     ),
+    "Agent": TypeDef(
+        kind="enum",
+        name="Agent",
+        module_id=STD_CORE_ID,
+        variants=(
+            ("AgentCommand", (("command", TextType()),)),
+            ("AgentClaude", (("model", TextType()), ("thinking", TextType()))),
+            ("AgentCodex", (("model", TextType()), ("thinking", TextType()))),
+            (
+                "AgentPi",
+                (("provider", TextType()), ("model", TextType()), ("thinking", TextType())),
+            ),
+        ),
+    ),
     "OutputContract": TypeDef(
         kind="record",
         name="OutputContract",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(
             ("target_type", TextType()),
             ("codec_name", TextType()),
@@ -1250,45 +1471,82 @@ BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = {
     "OutputContractOption": TypeDef(
         kind="enum",
         name="OutputContractOption",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         variants=(
             ("None", ()),
-            ("Some", (("value", RecordType(name="OutputContract", module_id=PRELUDE_ID)),)),
+            (
+                "Some",
+                (
+                    (
+                        "value",
+                        RecordType(
+                            name="OutputContract",
+                            module_id=STD_CORE_ID,
+                            decl_id=_reserved_id("OutputContract"),
+                        ),
+                    ),
+                ),
+            ),
         ),
     ),
     "AgentRequest": TypeDef(
         kind="record",
         name="AgentRequest",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(
-            ("agent", TextType()),
+            (
+                "agent",
+                EnumType(name="Agent", module_id=STD_CORE_ID, decl_id=_reserved_id("Agent")),
+            ),
             ("prompt", TextType()),
             (
                 "target_type",
-                EnumType(name="Option", type_args=(TextType(),), module_id=STD_CORE_ID),
+                EnumType(
+                    name="Option",
+                    type_args=(TextType(),),
+                    module_id=STD_CORE_ID,
+                    decl_id=_reserved_id("Option"),
+                ),
             ),
             (
                 "format_instructions",
-                EnumType(name="Option", type_args=(TextType(),), module_id=STD_CORE_ID),
+                EnumType(
+                    name="Option",
+                    type_args=(TextType(),),
+                    module_id=STD_CORE_ID,
+                    decl_id=_reserved_id("Option"),
+                ),
             ),
             (
                 "json_schema",
-                EnumType(name="Option", type_args=(JsonType(),), module_id=STD_CORE_ID),
+                EnumType(
+                    name="Option",
+                    type_args=(JsonType(),),
+                    module_id=STD_CORE_ID,
+                    decl_id=_reserved_id("Option"),
+                ),
             ),
             ("attempt", IntType()),
             (
                 "previous_error",
-                EnumType(name="Option", type_args=(TextType(),), module_id=STD_CORE_ID),
+                EnumType(
+                    name="Option",
+                    type_args=(TextType(),),
+                    module_id=STD_CORE_ID,
+                    decl_id=_reserved_id("Option"),
+                ),
             ),
             ("metadata", JsonType()),
         ),
     ),
 }
 
+BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = _with_reserved_ids(_PRELUDE_SHAPES)
+
 # Generic ``Option`` template under ``STD_CORE_ID`` (type parameter ``T``,
 # variants ``None``/``Some(value: T)``), matching the shape of the concrete
-# ``Option[text]``/``Option[json]`` prelude constants, so single-module runs
-# without the stdlib module graph can still resolve ``enum_variants`` on
+# ``Option[text]``/``Option[json]`` prelude constants, so a program loaded
+# without the standard library can still resolve ``enum_variants`` on
 # ``Option`` handles.
 OPTION_TYPE_DEF = TypeDef(
     kind="enum",
@@ -1299,12 +1557,13 @@ OPTION_TYPE_DEF = TypeDef(
         ("None", ()),
         ("Some", (("value", TypeVarType("T")),)),
     ),
+    decl_node_id=_reserved_id("Option"),
 )
 
 # ---------------------------------------------------------------------------
 # Built-in exception shapes — the single source of truth for every entry of
 # ``semantics.types.BUILTIN_EXCEPTIONS``.  ``fields`` holds each exception's
-# OWN fields only (the root's ``message``/``trace_id`` are NOT repeated on
+# OWN fields only (the root's ``message`` is NOT repeated on
 # every concrete exception — see :meth:`TypeTable.exception_fields`, which
 # flattens the ``base`` chain on demand).  ``field_kinds`` is likewise own-
 # fields-only; every built-in exception field is NAMED_ONLY (there is no
@@ -1312,7 +1571,7 @@ OPTION_TYPE_DEF = TypeDef(
 # :meth:`TypeTable.exception_field_kinds`.
 # ---------------------------------------------------------------------------
 
-_EXCEPTION_ROOT_KEY: DeclKey = (PRELUDE_ID, (), "Exception")
+_EXCEPTION_ROOT_ID: DeclId = _reserved_id("Exception")
 
 
 def _named_only(count: int) -> tuple[str, ...]:
@@ -1320,29 +1579,39 @@ def _named_only(count: int) -> tuple[str, ...]:
     return ("named_only",) * count
 
 
-BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
+_EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
     "Exception": TypeDef(
         kind="exception",
         name="Exception",
-        module_id=PRELUDE_ID,
-        fields=(("message", TextType()), ("trace_id", TextType())),
+        module_id=STD_CORE_ID,
+        fields=(("message", TextType()),),
         abstract=True,
-        field_kinds=_named_only(2),
+        field_kinds=_named_only(1),
     ),
     "AgentCallError": TypeDef(
         kind="exception",
         name="AgentCallError",
-        module_id=PRELUDE_ID,
-        fields=(("agent", TextType()), ("cause", TextType()), ("metadata", JsonType())),
-        base=_EXCEPTION_ROOT_KEY,
+        module_id=STD_CORE_ID,
+        fields=(
+            (
+                "agent",
+                EnumType(name="Agent", module_id=STD_CORE_ID, decl_id=_reserved_id("Agent")),
+            ),
+            ("cause", TextType()),
+            ("metadata", JsonType()),
+        ),
+        base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(3),
     ),
     "AgentParseError": TypeDef(
         kind="exception",
         name="AgentParseError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(
-            ("agent", TextType()),
+            (
+                "agent",
+                EnumType(name="Agent", module_id=STD_CORE_ID, decl_id=_reserved_id("Agent")),
+            ),
             ("target_type", TextType()),
             ("expected_schema", JsonType()),
             ("raw", TextType()),
@@ -1351,13 +1620,13 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
             ("attempts", IntType()),
             ("metadata", JsonType()),
         ),
-        base=_EXCEPTION_ROOT_KEY,
+        base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(8),
     ),
     "ExecError": TypeDef(
         kind="exception",
         name="ExecError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(
             ("command", TextType()),
             ("exit_code", IntType()),
@@ -1365,7 +1634,7 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
             ("stderr", TextType()),
             ("timed_out", BoolType()),
         ),
-        base=_EXCEPTION_ROOT_KEY,
+        base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(5),
     ),
     # ``python_type`` is the raising Python exception's class name, or empty for
@@ -1373,60 +1642,60 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
     "ExternError": TypeDef(
         kind="exception",
         name="ExternError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(("function", TextType()), ("python_type", TextType())),
-        base=_EXCEPTION_ROOT_KEY,
+        base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(2),
     ),
     "MaxIterationsExceeded": TypeDef(
         kind="exception",
         name="MaxIterationsExceeded",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(
             ("limit", IntType()),
             ("condition", TextType()),
             ("last_condition_value", BoolType()),
             ("metadata", JsonType()),
         ),
-        base=_EXCEPTION_ROOT_KEY,
+        base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(4),
     ),
     "MatchError": TypeDef(
         kind="exception",
         name="MatchError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(("scrutinee_type", TextType()), ("scrutinee", JsonType())),
-        base=_EXCEPTION_ROOT_KEY,
+        base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(2),
     ),
     "IndexError": TypeDef(
         kind="exception",
         name="IndexError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(("index", IntType()), ("length", IntType())),
-        base=_EXCEPTION_ROOT_KEY,
+        base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(2),
     ),
     "KeyError": TypeDef(
         kind="exception",
         name="KeyError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(("key", TextType()),),
-        base=_EXCEPTION_ROOT_KEY,
+        base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(1),
     ),
     "TypeError": TypeDef(
         kind="exception",
         name="TypeError",
-        module_id=PRELUDE_ID,
-        base=_EXCEPTION_ROOT_KEY,
+        module_id=STD_CORE_ID,
+        base=_EXCEPTION_ROOT_ID,
     ),
     "ArithmeticError": TypeDef(
         kind="exception",
         name="ArithmeticError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(("operation", TextType()),),
-        base=_EXCEPTION_ROOT_KEY,
+        base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(1),
     ),
     # Statically prevented by scope/typecheck (assignment to immutable bindings
@@ -1435,74 +1704,76 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
     "UndefinedVariableError": TypeDef(
         kind="exception",
         name="UndefinedVariableError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(("name", TextType()),),
-        base=_EXCEPTION_ROOT_KEY,
+        base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(1),
     ),
     "ImmutableBindingError": TypeDef(
         kind="exception",
         name="ImmutableBindingError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(("name", TextType()), ("operation", TextType())),
-        base=_EXCEPTION_ROOT_KEY,
+        base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(2),
     ),
     "Abort": TypeDef(
         kind="exception",
         name="Abort",
-        module_id=PRELUDE_ID,
-        base=_EXCEPTION_ROOT_KEY,
+        module_id=STD_CORE_ID,
+        base=_EXCEPTION_ROOT_ID,
     ),
     # AgL: RecursionError raised when the call-depth limit is exceeded.
     "RecursionError": TypeDef(
         kind="exception",
         name="RecursionError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(("limit", IntType()),),
-        base=_EXCEPTION_ROOT_KEY,
+        base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(1),
     ),
     "CastError": TypeDef(
         kind="exception",
         name="CastError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(
             ("source_type", TextType()),
             ("target_type", TextType()),
             ("raw", TextType()),
         ),
-        base=_EXCEPTION_ROOT_KEY,
+        base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(3),
     ),
     "JsonParseError": TypeDef(
         kind="exception",
         name="JsonParseError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(("raw", TextType()),),
-        base=_EXCEPTION_ROOT_KEY,
+        base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(1),
     ),
     "RangeError": TypeDef(
         kind="exception",
         name="RangeError",
-        module_id=PRELUDE_ID,
-        base=_EXCEPTION_ROOT_KEY,
+        module_id=STD_CORE_ID,
+        base=_EXCEPTION_ROOT_ID,
     ),
     "CyclicValueError": TypeDef(
         kind="exception",
         name="CyclicValueError",
-        module_id=PRELUDE_ID,
-        base=_EXCEPTION_ROOT_KEY,
+        module_id=STD_CORE_ID,
+        base=_EXCEPTION_ROOT_ID,
     ),
 }
+
+BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = _with_reserved_ids(_EXCEPTION_SHAPES)
 
 
 def create_seeded_type_table() -> TypeTable:
     """Return a fresh ``TypeTable`` pre-populated with built-in defs.
 
     Registers ``BUILTIN_PRELUDE_TYPE_DEFS`` (``ExecResult``, ``ParsePolicy``,
-    ``OutputContract``, ``OutputContractOption``, ``AgentRequest``), the
+    ``Agent``, ``OutputContract``, ``OutputContractOption``, ``AgentRequest``), the
     generic ``OPTION_TYPE_DEF``, and ``BUILTIN_EXCEPTION_TYPE_DEFS`` (every
     entry of ``semantics.types.BUILTIN_EXCEPTIONS``).
     """

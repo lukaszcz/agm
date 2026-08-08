@@ -12,10 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from agm.agl.modules.ids import ModuleId
-
 __all__ = [
-    "AgentId",
     "ContractId",
     "FunctionId",
     "Location",
@@ -77,36 +74,20 @@ class ContractId:
 
 
 @dataclass(frozen=True, slots=True)
-class AgentId:
-    """Structured identity of an agent declaration within the entry module.
-
-    The empty scope path denotes a root agent.  ``display_name`` is only for
-    user-facing labels; runtime lookup always uses this structured value.
-    """
-
-    declared_name: str
-    scope_path: tuple[str, ...] = ()
-
-    @property
-    def display_name(self) -> str:
-        """Return the source spelling for diagnostics and host-facing requests."""
-        return "::".join((*self.scope_path, self.declared_name))
-
-
-@dataclass(frozen=True, slots=True)
 class NominalId:
-    """Identity key for a named nominal type (record, enum, or exception).
+    """Opaque identity key for a named nominal type (record, enum, or exception).
 
-    Allocated by the linker.  Equality and hash are by field values
-    (``module_id`` + ``scope_path`` + ``declared_name``), making two
-    descriptors from the same declaration path structurally equal. Scope paths
-    remain tuples rather than encoded name strings.
-
+    ``value`` is the identity of the declaration that introduced the type —
+    an AST node id, or a reserved id for a host-known type with no source
+    declaration (see ``ir.reserved_nominals``). It carries no spelling or
+    module of its own: a nominal's declaring module, scope path, and declared
+    name live on its ``NominalDescriptor`` (``ir.program``), and a runtime
+    value carries its own display spelling directly (``RecordValue``/
+    ``EnumValue``/``ExceptionValue.display_name``) rather than deriving it
+    from this id.
     """
 
-    module_id: ModuleId
-    declared_name: str
-    scope_path: tuple[str, ...] = ()
+    value: int
 
 
 # ---------------------------------------------------------------------------

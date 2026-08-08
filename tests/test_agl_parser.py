@@ -43,7 +43,6 @@ from agm.agl.parser import (
 )
 from agm.agl.parser.errors import syntax_error_from_lark
 from agm.agl.syntax import (
-    AgentDecl,
     ArrayLit,
     AsPattern,
     AssignStmt,
@@ -63,10 +62,12 @@ from agm.agl.syntax import (
     Do,
     EnumDef,
     ExceptionDef,
+    ExportDecl,
     FieldAccess,
     FuncDef,
     If,
     IfBranch,
+    ImportDecl,
     IndexAccess,
     IndexTarget,
     InfixAssoc,
@@ -107,7 +108,6 @@ from agm.agl.syntax import (
 )
 from agm.agl.syntax.nodes import ELSE
 from agm.agl.syntax.types import (
-    AgentT,
     AppliedT,
     ArrayT,
     BoolT,
@@ -466,8 +466,11 @@ class TestBinders:
             parse(source)
 
     def test_type_qualified_assignment_target_rejected(self) -> None:
+        """A type-argument-applied qualifier segment names a generic constructor
+        path (``Option[Type]::some``), never a mutable binding, so it is
+        rejected on sight rather than deferred to resolution."""
         with pytest.raises(AglSyntaxError, match="assignment target"):
-            parse("std/config::NoSuchType::max-iters := 3")
+            parse("Option[int]::some::x := 3")
 
     def test_module_qualified_assignment_target_preserved(self) -> None:
         assignment = first(parse("std/config::max-iters := 3"))
@@ -475,6 +478,15 @@ class TestBinders:
         assert isinstance(assignment.target, NameTarget)
         assert assignment.target.qualifier is not None
         assert assignment.target.qualifier.route_segments == ("std", "config")
+
+    def test_multi_segment_qualified_assignment_target_preserved(self) -> None:
+        """A multi-segment qualifier -- a local scope path such as
+        ``A::B::count`` -- is preserved for resolution to judge."""
+        assignment = first(parse("A::B::count := 1"))
+        assert isinstance(assignment, AssignStmt)
+        assert isinstance(assignment.target, NameTarget)
+        assert assignment.target.qualifier is not None
+        assert assignment.target.qualifier.route_segments == ("A", "B")
 
     @pytest.mark.parametrize(
         "source",
@@ -578,11 +590,6 @@ class TestTypeExpressions:
         let = first(parse("let u: unit = ()"))
         assert isinstance(let, LetDecl)
         assert isinstance(let.type_ann, UnitT)
-
-    def test_agent_type(self) -> None:
-        let = first(parse("let a: agent = rev"))
-        assert isinstance(let, LetDecl)
-        assert isinstance(let.type_ann, AgentT)
 
     def test_func_type_one_param(self) -> None:
         let = first(parse("let f: (int) -> text = classify"))
@@ -742,17 +749,6 @@ class TestDeclarations:
         assert isinstance(inp, ParamDecl)
         assert isinstance(inp.annotation, IntT)
 
-    def test_agent_decl_bare(self) -> None:
-        ag = first(parse("agent reviewer"))
-        assert isinstance(ag, AgentDecl)
-        assert ag.name == "reviewer"
-        assert ag.runner is None
-
-    def test_agent_decl_with_runner(self) -> None:
-        ag = first(parse('agent planner = "claude -p \\%{PROMPT_FILE}"'))
-        assert isinstance(ag, AgentDecl)
-        assert ag.runner == "claude -p %{PROMPT_FILE}"
-
     def test_exception_def_simple(self) -> None:
         exc = first(parse("exception MyErr(msg: text)"))
         assert isinstance(exc, ExceptionDef)
@@ -901,31 +897,65 @@ class TestScopeRegions:
         (
             "1",
             "1 + 2",
-            "let value = 1",
-            "var value = 1",
+            "value := 1",
             "infixl %%",
-            "import package",
-            "export package",
             "program app",
-            "param value",
-            "builtin def native() -> int",
         ),
         ids=(
             "expression",
             "infix-expression",
-            "let",
-            "var",
+            "assignment",
             "infix",
-            "import",
-            "export",
             "program",
-            "param",
-            "builtin-declaration",
         ),
     )
     def test_region_rejects_non_declaration_items(self, item: str) -> None:
         with pytest.raises(AglSyntaxError, match="scope regions"):
             parse(f"scope Point\n{item}\nend Point")
+
+    @pytest.mark.parametrize(
+        "item",
+        (
+            "builtin def native() -> int",
+            "builtin\nrecord Payload\n  x: int",
+            "builtin\nenum Status\n  | ok",
+            "builtin\nexception Failure(message: text)",
+            "builtin var setting: int",
+        ),
+        ids=("def", "record", "enum", "exception", "var"),
+    )
+    def test_region_admits_builtin_forms(self, item: str) -> None:
+        region = first(parse(f"scope Point\n{item}\nend Point"))
+
+        assert isinstance(region, ScopeRegion)
+        (member,) = region.items
+        assert [segment.name for segment in member.scope_path] == ["Point"]
+
+    @pytest.mark.parametrize("item", ("import package", "open import package", "export package"))
+    def test_region_admits_import_and_export(self, item: str) -> None:
+        region = first(parse(f"scope Point\n{item}\nend Point"))
+
+        assert isinstance(region, ScopeRegion)
+        (member,) = region.items
+        assert isinstance(member, (ImportDecl, ExportDecl))
+        assert [segment.name for segment in member.scope_path] == ["Point"]
+
+    @pytest.mark.parametrize("item", ("let value = 1", "var value = 1"))
+    def test_region_admits_let_and_var(self, item: str) -> None:
+        region = first(parse(f"scope Point\n{item}\nend Point"))
+
+        assert isinstance(region, ScopeRegion)
+        (member,) = region.items
+        assert isinstance(member, (LetDecl, VarDecl))
+        assert [segment.name for segment in member.scope_path] == ["Point"]
+
+    def test_region_admits_param(self) -> None:
+        region = first(parse("scope Point\nparam value\nend Point"))
+
+        assert isinstance(region, ScopeRegion)
+        (member,) = region.items
+        assert isinstance(member, ParamDecl)
+        assert [segment.name for segment in member.scope_path] == ["Point"]
 
     def test_region_preserves_end_identifiers_in_declaration_suites(self) -> None:
         region = first(
@@ -1039,12 +1069,6 @@ class TestParseTypeExpr:
         result = parse_type_expr("unit")
         assert isinstance(result, UnitT)
 
-    def test_agent_type(self) -> None:
-        from agm.agl.syntax.types import AgentT
-
-        result = parse_type_expr("agent")
-        assert isinstance(result, AgentT)
-
     def test_qualified_named_type(self) -> None:
         from agm.agl.syntax.types import AppliedT
 
@@ -1082,9 +1106,9 @@ class TestProgramDeclScopeSideTables:
     """Parse a 'program NAME' source and assert the side tables on ModuleResolution."""
 
     def _parse_and_resolve(self, source: str) -> object:
-        from agm.agl.scope import resolve_module
+        from tests.agl.module_graph import resolve_entry
 
-        return resolve_module(parse_program(source))
+        return resolve_entry(source)
 
     def test_program_name_set_in_resolved_program(self) -> None:
         """Parsing 'program myapp' sets program_name on ModuleResolution."""
@@ -1797,10 +1821,10 @@ class TestTypedCalls:
     """``callee::[Type](args)`` desugars to a Call with static type_args."""
 
     def test_typed_call_basic(self) -> None:
-        call = first(parse('ask-request::[Review]("p")'))
+        call = first(parse('ask::[Review]("p")'))
         assert isinstance(call, Call)
         assert isinstance(call.callee, VarRef)
-        assert call.callee.name == "ask-request"
+        assert call.callee.name == "ask"
         assert len(call.args) == 1
         assert call.named_args == ()
         assert len(call.type_args) == 1
@@ -1808,12 +1832,12 @@ class TestTypedCalls:
         assert call.type_args[0].name == "Review"
 
     def test_typed_call_type_brackets_survive_index_bracket_remap(self) -> None:
-        call = first(parse('ask-request::[Review]("p")'))
+        call = first(parse('ask::[Review]("p")'))
         assert isinstance(call, Call)
         assert isinstance(call.type_args[0], NameT)
         assert call.type_args[0].name == "Review"
 
-        generic = first(parse('ask-request::[array[Review]]("p")'))
+        generic = first(parse('ask::[array[Review]]("p")'))
         assert isinstance(generic, Call)
         assert isinstance(generic.type_args[0], ArrayT)
         assert isinstance(generic.type_args[0].elem, NameT)
@@ -1826,31 +1850,26 @@ class TestTypedCalls:
         assert call.type_args == ()
 
     def test_typed_call_primitive_type(self) -> None:
-        call = first(parse('ask-request::[text]("p")'))
+        call = first(parse('ask::[text]("p")'))
         assert isinstance(call, Call)
         assert isinstance(call.type_args[0], TextT)
 
-    def test_typed_call_agent_type(self) -> None:
-        call = first(parse('ask-request::[agent]("p")'))
-        assert isinstance(call, Call)
-        assert isinstance(call.type_args[0], AgentT)
-
     def test_typed_call_generic_type(self) -> None:
-        call = first(parse('ask-request::[array[Review]]("p")'))
+        call = first(parse('ask::[array[Review]]("p")'))
         assert isinstance(call, Call)
         assert isinstance(call.type_args[0], ArrayT)
         assert isinstance(call.type_args[0].elem, NameT)
         assert call.type_args[0].elem.name == "Review"
 
     def test_typed_call_dict_type(self) -> None:
-        call = first(parse('ask-request::[dict[text, Review]]("p")'))
+        call = first(parse('ask::[dict[text, Review]]("p")'))
         assert isinstance(call, Call)
         assert isinstance(call.type_args[0], DictT)
         assert isinstance(call.type_args[0].value, NameT)
         assert call.type_args[0].value.name == "Review"
 
     def test_typed_call_with_named_args(self) -> None:
-        call = first(parse('ask-request::[Review]("p", agent = reviewer)'))
+        call = first(parse('ask::[Review]("p", agent = reviewer)'))
         assert isinstance(call, Call)
         assert len(call.named_args) == 1
         assert call.named_args[0].name == "agent"
@@ -1858,13 +1877,13 @@ class TestTypedCalls:
 
     def test_typed_call_no_args(self) -> None:
         # An empty arg list is syntactically valid (the checker rejects it).
-        call = first(parse("ask-request::[Review]()"))
+        call = first(parse("ask::[Review]()"))
         assert isinstance(call, Call)
         assert call.args == ()
         assert len(call.type_args) == 1
 
     def test_typed_call_trailing_comma(self) -> None:
-        call = first(parse('ask-request::[Review]("p",)'))
+        call = first(parse('ask::[Review]("p",)'))
         assert isinstance(call, Call)
         assert len(call.args) == 1
 
@@ -1921,9 +1940,9 @@ class TestTypedCalls:
         assert isinstance(expr.type_args[0], IntT)
 
     def test_dcolon_without_type_brackets_is_not_a_call(self) -> None:
-        # ``ask-request::`` with no ``[...]`` is rejected.
+        # ``ask::`` with no ``[...]`` is rejected.
         with pytest.raises(AglSyntaxError):
-            parse('ask-request::"p"')
+            parse('ask::"p"')
 
 
 # ---------------------------------------------------------------------------
@@ -2570,6 +2589,103 @@ class TestPatterns:
         assert pat.qualifier is not None
         assert pat.qualifier.route_segments == ("Review",)
 
+    # -----------------------------------------------------------------
+    # Qualified pattern parsing: constructor-match shape in `case`, and its
+    # `let`-only reinterpretation as a scoped binding.
+    # -----------------------------------------------------------------
+
+    @staticmethod
+    def _first_case_pattern(source: str) -> object:
+        expr = first(parse(source))
+        assert isinstance(expr, Case)
+        return expr.branches[0].pattern
+
+    @staticmethod
+    def _let_decl(source: str) -> LetDecl:
+        decl = first(parse(source))
+        assert isinstance(decl, LetDecl)
+        return decl
+
+    def test_bare_qualified_pattern_in_a_case_branch(self) -> None:
+        pat = self._first_case_pattern("case r of | Review::Pass => ok")
+        assert isinstance(pat, ConstructorPattern)
+        assert pat.qualifier is not None
+        assert pat.qualifier.route_segments == ("Review",)
+        assert pat.positional == ()
+        assert pat.named == ()
+
+    def test_qualified_nullary_pattern_with_parens_in_a_case_branch(self) -> None:
+        pat = self._first_case_pattern("case r of | Review::Pass() => ok")
+        assert isinstance(pat, ConstructorPattern)
+        assert pat.qualifier is not None
+        assert pat.qualifier.route_segments == ("Review",)
+        assert pat.positional == ()
+        assert pat.named == ()
+
+    def test_qualified_pattern_with_fields_in_a_case_branch(self) -> None:
+        pat = self._first_case_pattern("case r of | Issue::Fail(issues) => ok")
+        assert isinstance(pat, ConstructorPattern)
+        assert pat.qualifier is not None
+        assert len(pat.positional) == 1
+        assert isinstance(pat.positional[0], VarPattern)
+        assert pat.positional[0].name == "issues"
+
+    def test_bare_qualified_pattern_nested_in_a_field(self) -> None:
+        pat = self._first_case_pattern("case r of | Outer(inner = Review::Pass) => ok")
+        assert isinstance(pat, ConstructorPattern)
+        nested = pat.named[0].pattern
+        assert isinstance(nested, ConstructorPattern)
+        assert nested.qualifier is not None
+        assert nested.positional == ()
+        assert nested.named == ()
+
+    def test_bare_qualified_pattern_under_an_as_binder(self) -> None:
+        pat = self._first_case_pattern("case r of | Review::Pass as p => p")
+        assert isinstance(pat, AsPattern)
+        assert isinstance(pat.pattern, ConstructorPattern)
+        assert pat.pattern.qualifier is not None
+
+    def test_bare_qualified_let_pattern_is_a_scoped_binding(self) -> None:
+        let = self._let_decl("let A::x = 1")
+        assert [segment.name for segment in let.scope_path] == ["A"]
+        assert isinstance(let.pattern, VarPattern)
+        assert let.pattern.name == "x"
+
+    def test_qualified_let_pattern_with_parens_keeps_constructor_match_meaning(self) -> None:
+        let = self._let_decl("let A::x() = 1")
+        assert let.scope_path == ()
+        assert isinstance(let.pattern, ConstructorPattern)
+        assert let.pattern.qualifier is not None
+        assert let.pattern.qualifier.member == "x"
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "let ::x = 1",
+            "let std/config::x = 1",
+            "let Box[int]::x = 1",
+        ),
+        ids=("root-anchored", "module-routed", "type-argument-applied"),
+    )
+    def test_let_pattern_not_spellable_as_a_declaration_head_keeps_constructor_match_meaning(
+        self, source: str
+    ) -> None:
+        let = self._let_decl(source)
+        assert let.scope_path == ()
+        assert isinstance(let.pattern, ConstructorPattern)
+
+    def test_deeper_qualified_let_pattern_is_a_scoped_binding_with_every_segment(self) -> None:
+        let = self._let_decl("let A::B::x = 1")
+        assert [segment.name for segment in let.scope_path] == ["A", "B"]
+        assert isinstance(let.pattern, VarPattern)
+        assert let.pattern.name == "x"
+
+    def test_let_bare_and_parenthesized_qualified_forms_differ_in_meaning(self) -> None:
+        bare = self._let_decl("let A::x = 1")
+        parenthesized = self._let_decl("let A::x() = 1")
+        assert bare.scope_path != parenthesized.scope_path
+        assert type(bare.pattern) is not type(parenthesized.pattern)
+
 
 # ---------------------------------------------------------------------------
 # Template / string interpolation
@@ -2593,10 +2709,6 @@ class TestTemplates:
         assert isinstance(t, Template)
         interps = [s for s in t.segments if isinstance(s, InterpSegment)]
         assert len(interps) == 2
-
-    def test_interpolated_agent_runner_raises(self) -> None:
-        with pytest.raises(AglSyntaxError, match="literal string"):
-            parse('agent reviewer = "runner %{x}"')
 
     def test_pattern_interpolated_string_raises(self) -> None:
         with pytest.raises(AglSyntaxError, match="interpolation"):
@@ -2768,26 +2880,6 @@ class TestFullPrograms:
         assert isinstance(body, Block)
         assert len(body.items) == 3
 
-    def test_agent_and_ask_program(self) -> None:
-        src = (
-            "agent reviewer\n"
-            "agent planner\n"
-            'let s = ask "Hello?"\n'
-            'let r = ask("Review", agent = reviewer)\n'
-            "print r"
-        )
-        prog = parse(src)
-        assert len(items(prog)) == 5
-        assert isinstance(items(prog)[0], AgentDecl)
-        assert isinstance(items(prog)[2], LetDecl)
-        # 4th item: ask with named arg
-        let_r = items(prog)[3]
-        assert isinstance(let_r, LetDecl)
-        call = let_r.value
-        assert isinstance(call, Call)
-        assert len(call.named_args) == 1
-        assert call.named_args[0].name == "agent"
-
     def test_factorial_recursion(self) -> None:
         src = "def fact(n: int) -> int =\n  if n <= 1 => 1\n  | else => n"
         prog = parse(src)
@@ -2804,14 +2896,6 @@ class TestFullPrograms:
         src = 'let res = exec "ls -la"\nprint(res.stdout)\nif res.exit_code != 0 => print(x)'
         prog = parse(src)
         assert len(items(prog)) == 3
-
-    def test_agent_as_type_field(self) -> None:
-        """agent as field name in a record."""
-        prog = parse("record AgentRef\n  agent: agent")
-        rec = first(prog)
-        assert isinstance(rec, RecordDef)
-        assert rec.fields[0].name == "agent"
-        assert isinstance(rec.fields[0].type_expr, AgentT)
 
 
 # ---------------------------------------------------------------------------
@@ -3135,7 +3219,7 @@ class TestSyntaxErrorFromLarkDirect:
         assert "cannot be empty" in str(err)
 
     def test_empty_raw_tail_falls_back_when_stack_has_no_raw_callee(self) -> None:
-        """A parse stack without a ``raw_callee`` subtree yields the generic name."""
+        """A parse stack without a raw-tail name yields the generic name."""
         import types
 
         from lark.exceptions import UnexpectedToken
@@ -3145,7 +3229,13 @@ class TestSyntaxErrorFromLarkDirect:
         token = Token("RAW_TAIL_END", "", start_pos=5, line=1, column=6)
         exc = UnexpectedToken(token, expected={"RAW_FRAGMENT"})
         exc.interactive_parser = types.SimpleNamespace(
-            parser_state=types.SimpleNamespace(value_stack=[])
+            parser_state=types.SimpleNamespace(
+                value_stack=[
+                    types.SimpleNamespace(
+                        data="dotted_raw_head", children=[Token("NAME", "receiver")]
+                    )
+                ]
+            )
         )
         err = syntax_error_from_lark(exc)
         assert "raw-tail form" in str(err)
@@ -4195,6 +4285,49 @@ class TestRawTailCalls:
     def test_desugars_to_equivalent_call(self, raw_source: str, call_source: str) -> None:
         assert first(parse(raw_source)) == first(parse(call_source))
 
+    @pytest.mark.parametrize(
+        ("raw_source", "call_source"),
+        (
+            ("ag.ask! Summarize %{subject}", 'ag.ask("Summarize %{subject}")'),
+            (
+                "ag.ask!\n  Review %{subject} carefully",
+                'ag.ask("""Review %{subject} carefully""")',
+            ),
+            (
+                "ag.ask!::[Review] Summarize %{subject}",
+                'ag.ask::[Review]("Summarize %{subject}")',
+            ),
+            (
+                "agents[0].ask! Continue %{subject}",
+                'agents[0].ask("Continue %{subject}")',
+            ),
+            (
+                "print agents[0].ask! Continue %{subject}",
+                'print agents[0].ask("Continue %{subject}")',
+            ),
+            (
+                "print make_agent().ask! Continue %{subject}",
+                'print make_agent().ask("Continue %{subject}")',
+            ),
+            (
+                "print fleet.current[0].ask! Continue %{subject}",
+                'print fleet.current[0].ask("Continue %{subject}")',
+            ),
+            (
+                "print ag.ask! Summarize %{subject}",
+                'print ag.ask("Summarize %{subject}")',
+            ),
+            (
+                "print ag.ask!::[Review]\n  Review %{subject} carefully",
+                'print ag.ask::[Review]("""Review %{subject} carefully""")',
+            ),
+        ),
+    )
+    def test_dotted_raw_tail_desugars_to_equivalent_method_call(
+        self, raw_source: str, call_source: str
+    ) -> None:
+        assert first(parse(raw_source)) == first(parse(call_source))
+
     def test_is_allowed_at_each_line_final_position(self) -> None:
         source = """\
 exec! true
@@ -4260,6 +4393,8 @@ print exec! true
         (
             ("1 + exec!", (1, 5, 1, 10)),
             ("1 + exec! true", (1, 5, 1, 10)),
+            ("1 + ag.ask! true", (1, 8, 1, 12)),
+            ("1 + print ag.ask! true", (1, 14, 1, 18)),
             ("if true => exec! date | else => 0", (1, 12, 1, 17)),
             ("case true of true => exec! date | false => 0", (1, 22, 1, 27)),
             ("try exec! date catch _ => 0", (1, 5, 1, 10)),
@@ -4280,38 +4415,6 @@ print exec! true
             exc_info.value.span.end_line,
             exc_info.value.span.end_col,
         ) == expected_span
-
-    @pytest.mark.parametrize(
-        "source",
-        (
-            "let exec! = 1",
-            "var ask! = 1",
-            "param exec!",
-            "def ask!() -> int = 1",
-            "agent ask!",
-            "record exec! value: int",
-            "record R\n  exec!: int",
-            "enum ask! = Variant",
-            "enum E = ask!",
-            "exception exec! value: int",
-            "exception X\n  ask!: int",
-            "type ask! = int",
-            "program exec!",
-            "for exec! in [] do 1 done",
-            "case x of value as ask! => 1",
-            "case x of ask! => 1",
-            "::ask!",
-            "let x = ::ask!",
-            "module::exec!",
-            "Type[int]::exec!",
-            "module::Type[int]::ask!",
-            "value.ask!",
-        ),
-    )
-    def test_reserved_raw_name_has_a_frontend_diagnostic(self, source: str) -> None:
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse(source)
-        assert_raw_tail_name_span(exc_info.value, source)
 
     @pytest.mark.parametrize(
         "source",
@@ -4341,6 +4444,11 @@ print exec! true
             parse_program("let x: array[int] = exec!::[array[int]]\nnext")
         assert "exec!" in str(exc_info.value)
 
+    def test_empty_dotted_raw_tail_names_its_member(self) -> None:
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("agent.ask!")
+        assert "ask!" in str(exc_info.value)
+
     @pytest.mark.parametrize(
         "source",
         ("let x = 1\n  exec! echo hi", "print 1\n  exec! echo hi"),
@@ -4365,13 +4473,44 @@ print exec! true
 
     @pytest.mark.parametrize("declaration", ("record", "exception"))
     @pytest.mark.parametrize("marker", ("/", "*", "@named"))
-    def test_nominal_marker_preserves_raw_field_reservation(
+    def test_nominal_marker_rejects_raw_tail_as_a_field_definition(
         self, declaration: str, marker: str
     ) -> None:
         source = f"{declaration} R\n  x: int\n  {marker}\n  exec!: int"
         with pytest.raises(AglSyntaxError) as exc_info:
             parse(source)
         assert_raw_tail_name_span(exc_info.value, source)
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            pytest.param("let exec! = 1", id="let_binder"),
+            pytest.param("var exec! = 1", id="var_binder"),
+            pytest.param("record R\n  exec!: int", id="record_field_name"),
+            pytest.param("enum E\n  | ask!", id="enum_variant_name"),
+            pytest.param("program exec!\n()", id="program_name"),
+            pytest.param("for exec! in [] do 1 done", id="for_binder"),
+            pytest.param("type exec! = int", id="type_name"),
+        ),
+    )
+    def test_reserved_raw_name_in_a_name_slot_names_the_spelling(self, source: str) -> None:
+        # A raw-tail spelling used where the grammar expects an identifier (a
+        # binder, a field/variant/program/type name) cannot be a call, so the
+        # diagnostic must say the spelling is reserved rather than suggesting
+        # the call-form / block-form remedies that apply to expression misuse.
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(source)
+        assert_raw_tail_name_span(exc_info.value, source)
+
+    def test_expression_position_raw_tail_keeps_the_positional_message(self) -> None:
+        # A raw-tail spelling used mid-expression (not in a name slot) is a
+        # genuine misplaced call, so it keeps the positional guidance instead
+        # of the "reserved" wording used for name slots.
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse("let command = 1 + exec! true")
+        message = str(exc_info.value)
+        assert "reserved" not in message
+        assert "call form" in message and "block form" in message
 
     def test_raw_tail_in_unsupported_lambda_suite_is_rejected_at_its_location(self) -> None:
         source = "let f = fn() =>\n  exec! date"
@@ -4418,6 +4557,62 @@ print exec! true
         assert isinstance(raw_call.callee, VarRef)
         assert isinstance(raw_call.args[0], StringLit)
         assert raw_call.callee.node_id < raw_call.args[0].node_id < raw_call.node_id
+
+    def test_dotted_raw_tail_member_span_and_node_ids_precede_its_payload(self) -> None:
+        raw_call = first(parse("ag.ask!::[Review] payload"))
+        assert isinstance(raw_call, Call)
+        assert isinstance(raw_call.callee, FieldAccess)
+        assert isinstance(raw_call.args[0], StringLit)
+        member = raw_call.callee
+        assert (
+            member.span.start_line,
+            member.span.start_col,
+            member.span.end_line,
+            member.span.end_col,
+            member.span.start_offset,
+            member.span.end_offset,
+        ) == (1, 1, 1, 8, 0, 7)
+        assert member.obj.node_id < member.node_id < raw_call.type_args[0].node_id
+        assert raw_call.type_args[0].node_id < raw_call.args[0].node_id < raw_call.node_id
+
+    def test_juxtaposed_dotted_raw_tail_preserves_postfix_component_spans_and_ids(self) -> None:
+        print_call = first(parse("print a.b().c[0].ask! x"))
+        assert isinstance(print_call, Call)
+        raw_call = print_call.args[0]
+        assert isinstance(raw_call, Call)
+        assert isinstance(raw_call.callee, FieldAccess)
+        assert isinstance(raw_call.args[0], StringLit)
+        ask = raw_call.callee
+        assert isinstance(ask.obj, IndexAccess)
+        indexed = ask.obj
+        assert isinstance(indexed.obj, FieldAccess)
+        member_c = indexed.obj
+        assert isinstance(member_c.obj, Call)
+        call_b = member_c.obj
+        assert isinstance(call_b.callee, FieldAccess)
+        member_b = call_b.callee
+        assert isinstance(member_b.obj, VarRef)
+        root = member_b.obj
+        assert isinstance(indexed.index, IntLit)
+
+        assert [
+            (node.span.start_offset, node.span.end_offset)
+            for node in (root, member_b, call_b, member_c, indexed.index, indexed, ask)
+        ] == [(6, 7), (6, 9), (6, 11), (6, 13), (14, 15), (6, 16), (6, 21)]
+        node_ids = [
+            root.node_id,
+            member_b.node_id,
+            call_b.node_id,
+            member_c.node_id,
+            indexed.index.node_id,
+            indexed.node_id,
+            ask.node_id,
+            raw_call.args[0].node_id,
+            raw_call.node_id,
+            print_call.node_id,
+        ]
+        assert node_ids == sorted(node_ids)
+        assert len(node_ids) == len(set(node_ids))
 
     def test_interpolated_raw_text_precedes_its_interpolation_node_ids(self) -> None:
         raw_call = first(parse("exec! before %{value}"))

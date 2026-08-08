@@ -17,7 +17,7 @@ Design
 - **Declaration-only enforcement**: non-entry modules may only contain
   declarations (``def``, ``record``, ``enum``, ``type``, ``infixl``/``infixr``,
   ``import``).
-- **Entry-only enforcement**: ``agent``, ``param``, ``program`` only in entry.
+- **Entry-only enforcement**: ``param`` and ``program`` only in entry.
 - **Header-only imports** (non-entry): imports must appear before any
   declaration.
 - **``::name`` self-reference**: resolved to the current module's own scope.
@@ -28,7 +28,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.loader import ModuleGraph
 from agm.agl.scope.imports import (
@@ -45,7 +44,6 @@ from agm.agl.scope.imports import (
 )
 from agm.agl.scope.resolver import _Resolver
 from agm.agl.scope.symbols import (
-    AgentKey,
     AglScopeError,
     BinderKind,
     ConstructorRef,
@@ -54,8 +52,8 @@ from agm.agl.scope.symbols import (
     ScopePath,
     alias_denotes_constructible_type,
 )
+from agm.agl.scope.symbols import to_bare_atom as _atom
 from agm.agl.syntax.nodes import (
-    AgentDecl,
     BuiltinVarDecl,
     EnumDef,
     ExceptionDef,
@@ -66,8 +64,8 @@ from agm.agl.syntax.nodes import (
     Program,
     QualifierChain,
     RecordDef,
-    ScopeRegion,
     TypeAlias,
+    static_items,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import AppliedT, ImportMode, NameT
@@ -90,7 +88,7 @@ class ResolvedModule:
         The :class:`~agm.agl.modules.ids.ModuleId` of this module.
     ``resolved``
         The per-module scope resolution output (resolution tables, declared
-        agents, functions, etc.).
+        functions and related resolution data).
     ``import_env``
         The import environment computed from this module's import declarations.
     ``exports``
@@ -123,23 +121,16 @@ class ResolvedProgram:
     ``all_public_types``
         Whole-program pre-pass table mapping ``(ModuleId, name)`` to the
         type declaration node (``RecordDef | EnumDef | TypeAlias``).
-    ``entry_agents``
-        Agent declarations from the entry module
-        (``(scope_path, name)`` → ``AgentDecl``).
     ``import_sccs``
         Loader-computed import strongly-connected components, retained in their
         deterministic reverse-topological order for downstream program passes.
-    ``warnings``
-        Collected non-fatal scope-pass diagnostics from all modules.
     """
 
     modules: dict[ModuleId, ResolvedModule]
     entry_id: ModuleId
     all_public_funcs: dict[QName, FuncDef]
     all_public_types: dict[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias]
-    entry_agents: dict[AgentKey, AgentDecl]
     import_sccs: tuple[tuple[ModuleId, ...], ...]
-    warnings: tuple[Diagnostic, ...]
 
 
 # ---------------------------------------------------------------------------
@@ -245,30 +236,16 @@ def _build_cross_module_constructor_candidates(
     )
 
 
-def _atom(path: PathAtom) -> NameAtom:
-    """Keep root atoms compatible while representing scoped atoms structurally."""
-    return path[0] if len(path) == 1 else path
-
-
-def _declaration_items(items: tuple[object, ...]) -> tuple[object, ...]:
-    """Flatten static scope regions into their normalized declaration members."""
-    result: list[object] = []
-    for item in items:
-        if isinstance(item, ScopeRegion):
-            result.extend(_declaration_items(item.items))
-        else:
-            result.append(item)
-    return tuple(result)
-
-
-def _item_atom(item: FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias) -> NameAtom:
+def _item_atom(
+    item: FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias | BuiltinVarDecl,
+) -> NameAtom:
     return _atom((*tuple(segment.name for segment in item.scope_path), item.name))
 
 
 def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[NameAtom, QName]:
     """Compute declaration paths, including members below named scopes."""
     result: dict[NameAtom, QName] = {}
-    for item in _declaration_items(program.body.items):
+    for item in static_items(program.body.items):
         if isinstance(item, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias)):
             atom = _item_atom(item)
             result[atom] = (self_id, atom)
@@ -283,7 +260,8 @@ def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[NameAtom
                     )
                     result[variant_atom] = (self_id, variant_atom)
         elif isinstance(item, BuiltinVarDecl):
-            result[item.name] = (self_id, item.name)
+            atom = _item_atom(item)
+            result[atom] = (self_id, atom)
     return result
 
 
@@ -393,8 +371,11 @@ def _compute_reexport_additions(
 
     Returns a dict of ``exposed_name → origin_qname``.  This is called once
     per (module, export-decl, target-module) triple during the fixed-point.
+    A region-scoped ``decl`` re-roots every forwarded atom under its own
+    scope path, exactly as a ``using … as`` rename re-roots a selected atom.
     """
     result: dict[NameAtom, QName] = {}
+    region_prefix = tuple(segment.name for segment in decl.scope_path)
 
     def item_path(item: ExportItem) -> PathAtom:
         return (*tuple(segment.name for segment in item.scope_path), item.name)
@@ -435,11 +416,13 @@ def _compute_reexport_additions(
                     routed = (item.rename, *source_path[len(prefix) :])
                     exposed = routed[0] if len(routed) == 1 else routed
                     break
+        exposed_path = (exposed,) if isinstance(exposed, str) else exposed
+        rooted = _atom(region_prefix + exposed_path) if region_prefix else exposed
         origin = target_exports[source]
-        existing = result.get(exposed)
+        existing = result.get(rooted)
         if existing is not None and existing != origin:
-            _raise_reexport_conflict(exposed, existing, origin, decl)
-        result[exposed] = origin
+            _raise_reexport_conflict(rooted, existing, origin, decl)
+        result[rooted] = origin
     return result
 
 
@@ -481,7 +464,6 @@ _DeclInfo = dict[QName, tuple[int, SourceSpan, BinderKind]]
 def resolve_program(
     graph: ModuleGraph,
     *,
-    ambient_agents: frozenset[str] = frozenset(),
     entry_ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
     entry_ambient_type_names: frozenset[str] = frozenset(),
     entry_parent_scope: ScopeNode | None = None,
@@ -495,9 +477,6 @@ def resolve_program(
     ----------
     graph:
         A loaded module graph from :func:`~agm.agl.modules.loader.load_graph`.
-    ambient_agents:
-        Agent names the host already backs (passed through to the entry
-        resolver; non-entry modules never declare agents).
     entry_ambient_constructor_candidates:
         Constructor candidates from prior REPL entries.  These are merged with
         open-imported constructor candidates for the entry module.
@@ -577,7 +556,7 @@ def resolve_program(
     decl_info: _DeclInfo = {}
 
     for mid, loaded in graph.modules.items():
-        for item in _declaration_items(loaded.program.body.items):
+        for item in static_items(loaded.program.body.items):
             if isinstance(item, FuncDef):
                 key = (mid, _item_atom(item))
                 all_public_funcs[key] = item
@@ -593,7 +572,7 @@ def resolve_program(
                 )
                 decl_info[key] = (item.node_id, item.span, kind)
             elif isinstance(item, BuiltinVarDecl):
-                key = (mid, item.name)
+                key = (mid, _item_atom(item))
                 decl_info[key] = (item.node_id, item.span, BinderKind.builtin_var_binding)
 
     cross_module_constructor_refs = _cross_module_constructor_refs(all_public_types)
@@ -607,8 +586,6 @@ def resolve_program(
     # Step 6: Resolve each module's bodies.
     # ------------------------------------------------------------------
     resolved_modules: dict[ModuleId, ResolvedModule] = {}
-    all_warnings: list[Diagnostic] = []
-    entry_agents: dict[AgentKey, AgentDecl] = {}
 
     for mid, loaded in graph.modules.items():
         is_entry = mid.is_entry
@@ -643,11 +620,9 @@ def resolve_program(
         resolved = resolver.run(
             loaded.program,
             parent_scope=entry_parent_scope if is_entry else None,
-            ambient_agents=ambient_agents if is_entry else frozenset(),
             ambient_constructor_candidates=constructor_candidates or None,
             ambient_type_names=type_names,
         )
-        all_warnings.extend(resolved.warnings)
         resolved_modules[mid] = ResolvedModule(
             module_id=mid,
             resolved=resolved,
@@ -655,15 +630,11 @@ def resolve_program(
             exports=export_maps[mid],
             source_text=graph.modules[mid].source_text,
         )
-        if is_entry:
-            entry_agents = dict(resolved.declared_agents)
 
     return ResolvedProgram(
         modules=resolved_modules,
         entry_id=graph.entry_id,
         all_public_funcs=all_public_funcs,
         all_public_types=all_public_types,
-        entry_agents=entry_agents,
         import_sccs=graph.sccs,
-        warnings=tuple(all_warnings),
     )

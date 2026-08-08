@@ -1,0 +1,24 @@
+# `scope A` declares its own `builtin exception ExecError`, so the host
+# mints `A::ExecError` under the bare name `ExecError` everywhere -- not only
+# inside `scope A`. This `catch` clause sits OUTSIDE `scope A`, so the bare
+# name resolves by ordinary scope rules to the standard `std/core::ExecError`
+# instead, a declaration the host can never actually raise here.
+scope A
+builtin
+exception ExecError extends Exception
+  *
+  command: text
+  exit_code: int
+  stdout: text
+  stderr: text
+  timed_out: bool
+end A
+
+def run() -> text =
+  try
+    let out: text = exec("false")
+    "no-error"
+  catch ExecError as e =>
+    "caught: %{e.exit_code}"
+
+print(run())

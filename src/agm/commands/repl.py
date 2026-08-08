@@ -1,12 +1,12 @@
 """Implementation of the ``agm repl`` command.
 
 Launches an interactive read-eval-print loop for the AgL workflow language.
-The REPL shares ``agm exec``'s ``[exec]`` configuration (runner / agents /
+The REPL shares ``agm exec``'s ``[exec]`` configuration (default-agent and
 timeout), so an interactive session evaluates entries with the same agent
-backing a batch ``agm exec`` run would use.
+dispatch backing a batch ``agm exec`` run would use.
 
 The command itself is thin: it resolves configuration the same way ``exec``
-does, builds a runner-backed agent wrapped in a confirming wrapper, constructs a
+does, builds a value-driven dispatcher wrapped in a confirming wrapper, constructs a
 :class:`ReplSession`, and hands control to
 :func:`agm.agl.repl.console.run_console`.  All the interactive logic lives in
 :mod:`agm.agl.repl`.
@@ -26,17 +26,14 @@ from __future__ import annotations
 
 import sys
 
-from agm.agent.config import default_agent_runner
-from agm.agent.runner import parse_command, split_command
+from agm.agl.diagnostics import format_diagnostic
 from agm.agl.repl import ReplSession
 from agm.agl.repl.agentmode import AgentMode
 from agm.agl.repl.agents import ConfirmingAgent
-from agm.agl.runtime.agents import AgentFn, runner_backed_agent_factory
+from agm.agl.runtime.agents import value_driven_agent_factory
 from agm.agl.runtime.host_settings import HostSettingsPolicy
-from agm.agl.runtime.params import build_engine_config_base, raw_option_str
-from agm.agl.semantics.values import Value
 from agm.cli_support.args import ReplArgs
-from agm.commands.exec import check_max_iters
+from agm.cli_support.engine_seeds import build_host_engine_seeds, check_max_iters
 from agm.config.context import current_config_context
 from agm.config.general import (
     agm_home_dir,
@@ -46,7 +43,12 @@ from agm.config.general import (
     load_repl_config,
     save_repl_theme,
 )
-from agm.config.module_roots import load_module_roots, resolve_lib_root, resolve_stdlib_root
+from agm.config.module_roots import (
+    StaleStdlibError,
+    load_module_roots,
+    resolve_lib_root,
+    resolve_stdlib_root,
+)
 from agm.core import dry_run
 from agm.core.log import (
     LiveTracePathResolver,
@@ -76,13 +78,6 @@ def run(args: ReplArgs) -> None:
         args.max_call_depth if args.max_call_depth is not None else config.max_call_depth
     )
 
-    # Resolve the runner command: CLI flag > [exec] config > shared default,
-    # exactly as ``agm exec`` does (the REPL shares the exec agent backing).
-    runner_cmd = args.runner or config.runner or default_agent_runner()
-    # Validate the resolved runner eagerly (malformed quoting / empty value
-    # surface here as a clean error before the loop starts).
-    split_command(runner_cmd, kind="runner")
-
     # Resolve the CLI > config logging decision ONCE: it both drives the trace
     # file prepared here and seeds the readable ``log``/``log-file`` registers
     # below, exactly as ``agm exec`` does.
@@ -104,11 +99,7 @@ def run(args: ReplArgs) -> None:
         else prepare_trace_log_from_decision(log_decision, command_name="repl")
     )
 
-    runner_agent = runner_backed_agent_factory(
-        default_runner_cmd=runner_cmd,
-        per_agent_cmds=config.agents,
-        idle_timeout=config.timeout,
-    )
+    runner_agent = value_driven_agent_factory(idle_timeout=config.timeout)
 
     # ONE shared agent-mode holder: passed to BOTH the confirming wrapper and the
     # console, so ``:agent``/``always`` and the wrapper observe the same mode.
@@ -122,17 +113,7 @@ def run(args: ReplArgs) -> None:
     confirm_agent_call = make_console_confirm()
     confirming_agent = ConfirmingAgent(runner_agent, agent_mode, confirm=confirm_agent_call)
 
-    def _build_runner(command: str) -> AgentFn:
-        parse_command(command, kind="runner")
-        rebuilt = runner_backed_agent_factory(
-            default_runner_cmd=command,
-            per_agent_cmds=config.agents,
-            idle_timeout=config.timeout,
-        )
-        return ConfirmingAgent(rebuilt, agent_mode, confirm=confirm_agent_call)
-
     host_settings_policy = HostSettingsPolicy(
-        build_runner=_build_runner,
         resolve_trace_path=LiveTracePathResolver(command_name="repl", auto_path=trace_path),
     )
 
@@ -140,40 +121,47 @@ def run(args: ReplArgs) -> None:
         return load_program_config(program_name, home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
 
     mod_roots_cfg = load_module_roots(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
-    stdlib_root = resolve_stdlib_root(home=ctx.home)
+    try:
+        stdlib_root = resolve_stdlib_root(home=ctx.home)
+    except StaleStdlibError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
     lib_root = resolve_lib_root(mod_roots_cfg, home=ctx.home)
 
-    # Build the [exec] engine base for all six engine keys.  The session seeds
-    # its host-consumed registers (runner, log, log-file) from these values; the
-    # remaining keys complete the dict for any consumer that reads all six.
-    #
-    # The raw timeout string is read from the TOML table via raw_option_str so
-    # the value holds the original written string (e.g. "30s") rather than a
-    # parsed float (e.g. "30.0").
-    exec_raw_table = toml_dict(merged_config.get("exec"))
-    raw_timeout_str = raw_option_str(exec_raw_table, {}, "timeout")
-    # An absent host limit leaves the valve off; the builtin register exposes
-    # that state as zero.
-    repl_base_raw: dict[str, object] = {
-        "strict-json": strict_json,
-        "runner": runner_cmd,
-        "log": log_decision.enabled,
-        "timeout": raw_timeout_str,
-        "log-file": log_decision.explicit_path,
-    }
-    if loop_limit is not None:
-        repl_base_raw["max-iters"] = loop_limit
-    engine_base: dict[str, Value] = build_engine_config_base(repl_base_raw)
+    # Seed only explicit CLI/config controls.  Trace-service fallbacks remain
+    # absent so a ``builtin var`` initializer can provide the setting default.
+    # The raw timeout preserves its configured spelling.  An AgL agent literal
+    # (``--agent``/``[exec] default-agent``) becomes an override spliced into
+    # the session's own first-loaded ``std/config`` rather than a seed value.
+    cli_values: dict[str, object | None] = {}
+    if args.strict_json is not None:
+        cli_values["strict-json"] = args.strict_json
+    if args.max_iters is not None:
+        cli_values["max-iters"] = args.max_iters
+    if args.no_log:
+        cli_values["log"] = False
+    elif args.log:
+        cli_values["log"] = True
+    if args.log_file is not None:
+        cli_values["log-file"] = args.log_file
+
+    engine_seeds = build_host_engine_seeds(
+        config=config,
+        primary_table=toml_dict(merged_config.get("exec")),
+        cli_values=cli_values,
+        agent=args.agent,
+    )
 
     session = ReplSession(
         default_strict_json=strict_json,
         default_loop_limit=loop_limit,
         default_call_depth_limit=call_depth_limit,
-        default_agent=confirming_agent,
+        agent_dispatcher=confirming_agent,
         shell_exec_timeout=config.timeout,
         trace_path=trace_path,
         params_config_loader=_params_config_loader,
-        engine_base=engine_base,
+        engine_base=engine_seeds.values,
+        setting_overrides=engine_seeds.overrides,
         host_settings_policy=host_settings_policy,
         cwd=ctx.cwd,
         stdlib_root=stdlib_root,
@@ -181,6 +169,17 @@ def run(args: ReplArgs) -> None:
         configured_roots=mod_roots_cfg.extra,
         default_stdlib=not args.no_stdlib,
     )
+
+    # Load and check the session's initial library image now, so a rejected
+    # ``--agent``/``[exec] default-agent`` override (or any other startup
+    # failure loading the standard library) exits before the console opens
+    # and prints its banner, rather than surfacing only once the first entry
+    # happens to load ``std/config``.
+    open_diagnostics = session.open()
+    if open_diagnostics:
+        for diagnostic in open_diagnostics:
+            print(f"Error: {format_diagnostic(diagnostic)}", file=sys.stderr)
+        raise SystemExit(1)
 
     history_path = agm_home_dir(home=ctx.home) / "repl_history"
     history_path.parent.mkdir(parents=True, exist_ok=True)

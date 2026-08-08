@@ -21,29 +21,6 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def test_leaf_tags_importable_from_values_module() -> None:
-    """All leaf value tags are importable directly from agm.agl.semantics.values."""
-    import agm.agl.semantics.values as vals
-
-    # Verify all expected names exist on the module.
-    expected = [
-        "TextValue",
-        "IntValue",
-        "DecimalValue",
-        "BoolValue",
-        "JsonValue",
-        "UnitValue",
-        "UNIT_VALUE",
-        "VOID_VALUE",
-        "AgentValue",
-        "Value",
-        "_json_eq",
-        "_json_hash",
-    ]
-    for name in expected:
-        assert hasattr(vals, name), f"agm.agl.semantics.values missing {name!r}"
-
-
 def test_values_module_has_correct_name() -> None:
     """The module's __name__ is as expected."""
     import agm.agl.semantics.values as vals
@@ -114,23 +91,6 @@ def test_void_unit_equals_printable_unit() -> None:
     assert UnitValue(printable_in_repl=True) == UnitValue(printable_in_repl=False)
     assert UNIT_VALUE.printable_in_repl is True
     assert VOID_VALUE.printable_in_repl is False
-
-
-def test_primitive_values_constructible() -> None:
-    """Primitive value tags can be constructed and hold their payload."""
-    from agm.agl.semantics.values import (
-        AgentValue,
-        BoolValue,
-        DecimalValue,
-        IntValue,
-        TextValue,
-    )
-
-    assert TextValue("hello").value == "hello"
-    assert IntValue(42).value == 42
-    assert DecimalValue(decimal.Decimal("3.14")).value == decimal.Decimal("3.14")
-    assert BoolValue(True).value is True
-    assert AgentValue("gpt4").name == "gpt4"
 
 
 # ---------------------------------------------------------------------------
@@ -257,9 +217,9 @@ def test_values_equal_diamond_short_circuit_bounded_calls(
     fails fast rather than hanging even if the fast path regresses.
     """
     import agm.agl.semantics.values as values_module
-    from agm.agl.semantics.values import IntValue, RecordValue, Value
+    from agm.agl.semantics.values import IntValue, NominalId, RecordValue, Value
 
-    nominal = _make_nominal("mod/example", "diamond")
+    nominal = NominalId(1)
     depth = 32
     node: RecordValue = RecordValue(nominal=nominal, display_name="T", fields={"tag": IntValue(0)})
     for i in range(1, depth + 1):
@@ -309,63 +269,49 @@ def test_dict_value_eq_terminates_on_cyclic_dicts() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_nominal(module_slash_path: str, name: str) -> "object":
-    from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import ModuleId
-
-    return NominalId(ModuleId.from_path(module_slash_path), name)
-
-
 def test_record_value_eq() -> None:
     """RecordValue equality considers nominal identity and fields.
 
     Two records with same nominal+fields but different display_name are equal;
-    same declared_name in different modules are NOT equal.
+    a record naming a different declaration is NOT equal, whether or not the
+    two declarations are displayed under the same spelling.
     """
-    from agm.agl.modules.ids import ModuleId
     from agm.agl.semantics.values import IntValue, NominalId, RecordValue
 
-    mod_a = ModuleId.from_path("mymod")
-    mod_b = ModuleId.from_path("other")
-    nom_foo_a = NominalId(mod_a, "Foo")
-    nom_foo_b = NominalId(mod_b, "Foo")
-    nom_bar_a = NominalId(mod_a, "Bar")
+    nom_a = NominalId(1)
+    nom_b = NominalId(2)
+    nom_c = NominalId(3)
 
-    r1 = RecordValue(nominal=nom_foo_a, display_name="Foo", fields={"x": IntValue(1)})
-    r2 = RecordValue(nominal=nom_foo_a, display_name="Foo", fields={"x": IntValue(1)})
+    r1 = RecordValue(nominal=nom_a, display_name="Foo", fields={"x": IntValue(1)})
+    r2 = RecordValue(nominal=nom_a, display_name="Foo", fields={"x": IntValue(1)})
     # Same nominal + fields, different display_name → still equal (display_name excluded from eq).
-    r_diff_display = RecordValue(
-        nominal=nom_foo_a, display_name="AliasName", fields={"x": IntValue(1)}
-    )
-    # Different module → not equal.
-    r3 = RecordValue(nominal=nom_foo_b, display_name="Foo", fields={"x": IntValue(1)})
-    # Different name → not equal.
-    r4 = RecordValue(nominal=nom_bar_a, display_name="Bar", fields={"x": IntValue(1)})
+    r_diff_display = RecordValue(nominal=nom_a, display_name="AliasName", fields={"x": IntValue(1)})
+    # Another declaration displayed under the same spelling → not equal.
+    r3 = RecordValue(nominal=nom_b, display_name="Foo", fields={"x": IntValue(1)})
+    # Another declaration displayed under a different spelling → not equal.
+    r4 = RecordValue(nominal=nom_c, display_name="Bar", fields={"x": IntValue(1)})
     # Same nominal, different fields → not equal.
-    r5 = RecordValue(nominal=nom_foo_a, display_name="Foo", fields={"x": IntValue(2)})
+    r5 = RecordValue(nominal=nom_a, display_name="Foo", fields={"x": IntValue(2)})
 
     assert r1 == r2
     assert r1 == r_diff_display  # display_name excluded from eq
-    assert r1 != r3  # different module
-    assert r1 != r4  # different name
+    assert r1 != r3  # different declaration, same spelling
+    assert r1 != r4  # different declaration, different spelling
     assert r1 != r5  # different fields
 
 
 def test_constructor_value_eq_and_hash() -> None:
     """ConstructorValue equality considers nominal+variant; display_name excluded."""
-    from agm.agl.modules.ids import ModuleId
     from agm.agl.semantics.values import ConstructorValue, NominalId
 
-    mod_a = ModuleId.from_path("mymod")
-    mod_b = ModuleId.from_path("other")
-    nom_a = NominalId(mod_a, "Box")
-    nom_b = NominalId(mod_b, "Box")
+    nom_a = NominalId(1)
+    nom_b = NominalId(2)
 
     c1 = ConstructorValue(nominal=nom_a, display_name="Box", variant=None)
     c2 = ConstructorValue(nominal=nom_a, display_name="Box", variant=None)
     # Same nominal + variant, different display_name → still equal.
     c_diff_display = ConstructorValue(nominal=nom_a, display_name="Alias", variant=None)
-    # Different module → not equal.
+    # Another declaration displayed under the same spelling → not equal.
     c3 = ConstructorValue(nominal=nom_b, display_name="Box", variant=None)
     # Different variant → not equal.
     c4 = ConstructorValue(nominal=nom_a, display_name="Box", variant="Wrap")
@@ -373,16 +319,15 @@ def test_constructor_value_eq_and_hash() -> None:
     assert c1 == c2
     assert hash(c1) == hash(c2)
     assert c1 == c_diff_display  # display_name excluded from eq
-    assert c1 != c3  # different module
+    assert c1 != c3  # different declaration
     assert c1 != c4  # different variant
 
 
 def test_record_value_eq_with_json_payload() -> None:
     """RecordValue equality is consistent with JsonValue eq (numerically equal payloads)."""
-    from agm.agl.modules.ids import ModuleId
     from agm.agl.semantics.values import JsonValue, NominalId, RecordValue
 
-    nom = NominalId(ModuleId.from_path("m"), "R")
+    nom = NominalId(1)
     r1 = RecordValue(nominal=nom, display_name="R", fields={"v": JsonValue(1)})
     r2 = RecordValue(nominal=nom, display_name="R", fields={"v": JsonValue(decimal.Decimal("1"))})
     # JsonValue(1) == JsonValue(Decimal("1")), so records are equal.
@@ -399,14 +344,11 @@ def test_enum_value_eq() -> None:
 
     display_name is excluded from eq.
     """
-    from agm.agl.modules.ids import ModuleId
     from agm.agl.semantics.values import EnumValue, NominalId
 
-    mod = ModuleId.from_path("m")
-    mod2 = ModuleId.from_path("other")
-    nom_color = NominalId(mod, "Color")
-    nom_shape = NominalId(mod, "Shape")
-    nom_color_other = NominalId(mod2, "Color")
+    nom_color = NominalId(1)
+    nom_shape = NominalId(2)
+    nom_color_other = NominalId(3)
 
     e1 = EnumValue(nominal=nom_color, display_name="Color", variant="Red", fields={})
     e2 = EnumValue(nominal=nom_color, display_name="Color", variant="Red", fields={})
@@ -414,9 +356,9 @@ def test_enum_value_eq() -> None:
     e_diff_disp = EnumValue(nominal=nom_color, display_name="MyColor", variant="Red", fields={})
     # Different variant → not equal.
     e3 = EnumValue(nominal=nom_color, display_name="Color", variant="Blue", fields={})
-    # Different name → not equal.
+    # Another declaration displayed under a different spelling → not equal.
     e4 = EnumValue(nominal=nom_shape, display_name="Shape", variant="Red", fields={})
-    # Different module → not equal.
+    # Another declaration displayed under the same spelling → not equal.
     e5 = EnumValue(nominal=nom_color_other, display_name="Color", variant="Red", fields={})
 
     assert e1 == e2
@@ -434,14 +376,13 @@ def test_enum_value_eq() -> None:
 def test_exception_value_eq() -> None:
     """ExceptionValue equality considers nominal identity and fields.
 
-    display_name is excluded from eq. Built-in exceptions use PRELUDE_ID.
+    display_name is excluded from eq.
     """
-    from agm.agl.modules.ids import PRELUDE_ID, ModuleId
     from agm.agl.semantics.values import ExceptionValue, NominalId, TextValue
 
-    nom_err = NominalId(PRELUDE_ID, "Err")
-    nom_err2 = NominalId(PRELUDE_ID, "Err2")
-    nom_err_other = NominalId(ModuleId.from_path("mymod"), "Err")
+    nom_err = NominalId(1)
+    nom_err2 = NominalId(2)
+    nom_err_other = NominalId(3)
 
     ex1 = ExceptionValue(nominal=nom_err, display_name="Err", fields={"message": TextValue("oops")})
     ex2 = ExceptionValue(nominal=nom_err, display_name="Err", fields={"message": TextValue("oops")})
@@ -449,11 +390,11 @@ def test_exception_value_eq() -> None:
     ex_diff_disp = ExceptionValue(
         nominal=nom_err, display_name="ErrAlias", fields={"message": TextValue("oops")}
     )
-    # Different declared_name → not equal.
+    # Another declaration displayed under a different spelling → not equal.
     ex3 = ExceptionValue(
         nominal=nom_err2, display_name="Err2", fields={"message": TextValue("oops")}
     )
-    # Same name but different module → not equal.
+    # Another declaration displayed under the same spelling → not equal.
     ex4 = ExceptionValue(
         nominal=nom_err_other, display_name="Err", fields={"message": TextValue("oops")}
     )
@@ -464,18 +405,17 @@ def test_exception_value_eq() -> None:
     assert ex1 != ex4
 
 
-def test_builtin_exception_value_uses_prelude_id() -> None:
-    """Built-in exception values carry NominalId(PRELUDE_ID, name)."""
-    from agm.agl.modules.ids import PRELUDE_ID
+def test_builtin_exception_value_uses_std_core_id() -> None:
+    """Built-in exception values carry the reserved NominalId for their name."""
+    from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
     from agm.agl.semantics.values import ExceptionValue, NominalId, TextValue
 
     exc = ExceptionValue(
-        nominal=NominalId(PRELUDE_ID, "AgentParseError"),
+        nominal=NominalId(require_reserved_nominal_id("AgentParseError")),
         display_name="AgentParseError",
-        fields={"message": TextValue("fail"), "trace_id": TextValue("")},
+        fields={"message": TextValue("fail")},
     )
-    assert exc.nominal.module_id is PRELUDE_ID
-    assert exc.nominal.declared_name == "AgentParseError"
+    assert exc.nominal == NominalId(require_reserved_nominal_id("AgentParseError"))
     assert exc.display_name == "AgentParseError"
 
 
@@ -537,7 +477,6 @@ def test_array_dict_record_enum_exception_are_genuinely_unhashable() -> None:
 
 def test_array_dict_record_enum_exception_hash_raises() -> None:
     """Every mutable-payload value type raises TypeError on hash() — never a stable hash."""
-    from agm.agl.modules.ids import PRELUDE_ID, ModuleId
     from agm.agl.semantics.values import (
         ArrayValue,
         DictValue,
@@ -549,14 +488,14 @@ def test_array_dict_record_enum_exception_hash_raises() -> None:
         TextValue,
     )
 
-    nom = NominalId(ModuleId.from_path("m"), "Foo")
+    nom = NominalId(1)
     values: tuple[object, ...] = (
         ArrayValue(elements=[IntValue(1)]),
         DictValue(entries={"a": IntValue(1)}),
         RecordValue(nominal=nom, display_name="Foo", fields={"x": IntValue(1)}),
         EnumValue(nominal=nom, display_name="Foo", variant="Bar", fields={}),
         ExceptionValue(
-            nominal=NominalId(PRELUDE_ID, "Err"),
+            nominal=NominalId(2),
             display_name="Err",
             fields={"message": TextValue("oops")},
         ),
@@ -598,31 +537,6 @@ def test_semantics_values_includes_frame_model() -> None:
 # ---------------------------------------------------------------------------
 # Unified value module exports all expected names
 # ---------------------------------------------------------------------------
-
-
-def test_semantics_values_exports_all_leaf_tags() -> None:
-    """agm.agl.semantics.values exports all leaf primitive value tags."""
-    from agm.agl.semantics.values import (
-        UNIT_VALUE,
-        VOID_VALUE,
-        AgentValue,
-        BoolValue,
-        DecimalValue,
-        IntValue,
-        JsonValue,
-        TextValue,
-        UnitValue,
-    )
-
-    assert TextValue is not None
-    assert IntValue is not None
-    assert DecimalValue is not None
-    assert BoolValue is not None
-    assert JsonValue is not None
-    assert UnitValue is not None
-    assert UNIT_VALUE is not None
-    assert VOID_VALUE is not None
-    assert AgentValue is not None
 
 
 def test_broad_value_includes_ir_callable_forms() -> None:

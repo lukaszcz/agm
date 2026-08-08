@@ -1,8 +1,7 @@
 """Per-module lowerer for the AgL typeless execution IR.
 
-Transforms a successful match-compiled program artifact into an
-``ExecutableProgram`` for the supported node subset. Every implicit coercion is
-inserted explicitly at compile time via
+Lowers one checked module as a worker of whole-program linking. Every implicit
+coercion is inserted explicitly at compile time via
 ``compile_coercion``; the evaluator switches only on pre-resolved ``Coercion``
 descriptors and never inspects value types at runtime.
 
@@ -130,9 +129,6 @@ from agm.agl.ir.operations import (
     UnaryOp,
 )
 from agm.agl.ir.program import (
-    DryRunEntry,
-    ExecutableModule,
-    ExecutableProgram,
     ExternFunctionBody,
     FunctionDescriptor,
     IrFunctionBody,
@@ -3462,105 +3458,6 @@ class _Lowerer:
     # Top-level entry point
     # ------------------------------------------------------------------
 
-    def _build_nominals(self) -> None:
-        """Populate ``self._link.nominals`` with all user-declared and built-in nominals.
-
-        Adds:
-        - All user-declared record/enum/exception nominals from the entry
-          module's type env.
-        - All built-in prelude record/enum and exception descriptors keyed by
-          their reserved identity (see ``ir.reserved_nominals``) — the shipped
-          standard library's own identity for each built-in name.
-
-        Field, variant, and exception-field names are resolved through the
-        shared ``TypeTable`` rather than any embedded map on the handle.
-        """
-        table = self._type_table
-        # User-declared nominals for this lowering unit.
-        for name, typ in self._checked.type_env.non_builtin_type_items():
-            if isinstance(typ, RecordType):
-                nominal = NominalId(typ.decl_id)
-                self._link.nominals[nominal] = NominalDescriptor(
-                    nominal=nominal,
-                    module_id=typ.module_id,
-                    scope_path=typ.scope_path,
-                    declared_name=typ.name,
-                    kind=NominalKind.RECORD,
-                    fields=tuple(table.record_fields(typ).keys()),
-                    variants=(),
-                )
-            elif isinstance(typ, EnumType):
-                nominal = NominalId(typ.decl_id)
-                variants = tuple(
-                    VariantDescriptor(name=vname, fields=tuple(vfields.keys()))
-                    for vname, vfields in table.enum_variants(typ).items()
-                )
-                self._link.nominals[nominal] = NominalDescriptor(
-                    nominal=nominal,
-                    module_id=typ.module_id,
-                    scope_path=typ.scope_path,
-                    declared_name=typ.name,
-                    kind=NominalKind.ENUM,
-                    fields=(),
-                    variants=variants,
-                )
-            elif isinstance(typ, ExceptionType):
-                nominal = NominalId(typ.decl_id)
-                self._link.nominals[nominal] = NominalDescriptor(
-                    nominal=nominal,
-                    module_id=typ.module_id,
-                    scope_path=typ.scope_path,
-                    declared_name=typ.name,
-                    kind=NominalKind.EXCEPTION,
-                    fields=tuple(table.exception_fields(typ).keys()),
-                    variants=(),
-                )
-            else:  # pragma: no cover
-                # non_builtin_type_items() only ever yields Record/Enum/Exception
-                # handles for a non-generic user declaration (generics live in a
-                # separate table, aliases are never registered into _types).
-                raise AssertionError(
-                    f"compiler bug: non-nominal type {typ!r} for {name!r} in "
-                    "non_builtin_type_items()"
-                )
-
-        # Generic definitions are stored separately from the ordinary type
-        # namespace. Runtime nominal identity erases type arguments, so one
-        # descriptor per generic declaration is sufficient for every instance.
-        # Field/variant NAMES are read directly off the registered TypeDef
-        # template (never instantiated — a generic template has no concrete
-        # type_args to substitute).
-        for name, generic in self._checked.type_env.all_generic_types().items():
-            typ = generic.template
-            nominal = NominalId(typ.decl_id)
-            typedef = table.get(typ.module_id, typ.name, typ.scope_path)
-            assert typedef is not None, (
-                f"compiler bug: generic type {name!r} has no TypeDef registered"
-            )
-            if isinstance(typ, RecordType):
-                self._link.nominals[nominal] = NominalDescriptor(
-                    nominal=nominal,
-                    module_id=typ.module_id,
-                    scope_path=typ.scope_path,
-                    declared_name=typ.name,
-                    kind=NominalKind.RECORD,
-                    fields=tuple(fname for fname, _ in typedef.fields),
-                )
-            else:
-                self._link.nominals[nominal] = NominalDescriptor(
-                    nominal=nominal,
-                    module_id=typ.module_id,
-                    scope_path=typ.scope_path,
-                    declared_name=typ.name,
-                    kind=NominalKind.ENUM,
-                    variants=tuple(
-                        VariantDescriptor(vname, tuple(fname for fname, _ in vfields))
-                        for vname, vfields in typedef.variants
-                    ),
-                )
-
-        _add_builtin_nominals(self._link.nominals, table)
-
     def prealloc_static_symbols(self, body: Block, *, public: bool) -> None:
         """Pre-allocate static function symbols before lowering module bodies."""
         for item in static_items(body.items):
@@ -3608,49 +3505,3 @@ class _Lowerer:
         initializers = tuple((*function_initializers, *other_initializers))
         self._link.initializer_origins[self._module_id] = tuple((*function_origins, *other_origins))
         return initializers
-
-    def lower(self) -> ExecutableProgram:
-        """Lower this validated program payload to an ``ExecutableProgram``."""
-        self._build_nominals()
-
-        body = self._checked.resolved.program.body
-
-        # Phase 1: pre-allocate static function symbols and IDs for mutual
-        # recursion before bodies are lowered.
-        self.prealloc_static_symbols(body, public=True)
-
-        # Phase 2: lower all items
-        initializers = self.lower_initializers(body, top_level=True)
-
-        entry_mod = ExecutableModule(
-            module_id=self._module_id,
-            initializers=initializers,
-        )
-
-        dry_run_inventory = tuple(
-            DryRunEntry(
-                callee=csr.callee,
-                codec_name=csr.codec_name,
-                target_type_label=repr(csr.target_type),
-                has_schema=_contract_has_schema(
-                    self._checked.contract_specs.get(csr.node_id),
-                    self._contract_payloads.get(csr.node_id),
-                ),
-                parse_policy=csr.parse_policy,
-                line=csr.line,
-                col=csr.col,
-            )
-            for csr in self._checked.call_sites
-        )
-        return ExecutableProgram(
-            entry_module=self._module_id,
-            modules={self._module_id: entry_mod},
-            symbols=dict(self._link.symbols),
-            nominals=dict(self._link.nominals),
-            sources=dict(self._link.sources),
-            functions=dict(self._link.functions),
-            params=tuple(self._params),
-            contracts=dict(self._link.contracts),
-            dry_run_inventory=dry_run_inventory,
-            builtin_nominals=self._link.builtin_nominals,
-        )

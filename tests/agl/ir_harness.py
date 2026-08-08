@@ -11,10 +11,8 @@ from pathlib import Path
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.eval.ir_interpreter import IrInterpreter
-from agm.agl.ir.ids import NominalId, SourceId, SymbolId
-from agm.agl.ir.program import ExecutableProgram, ExternFunctionBody, SourceFile
-from agm.agl.ir.validate import validate_ir
-from agm.agl.lower.lowerer import _LinkState, _Lowerer, builtin_nominals_from_declarations
+from agm.agl.ir.ids import NominalId, SymbolId
+from agm.agl.ir.program import ExecutableProgram, ExternFunctionBody
 from agm.agl.lower.program import lower_program
 from agm.agl.matchcompile import MatchCompiledModule, MatchCompiledProgram, compile_program_matches
 from agm.agl.matchcompile.stage import _compile_owner_sites
@@ -25,13 +23,11 @@ from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.scope.program import resolve_program
-from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import ExceptionValue, TextValue, Value
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram, check_program
 from agm.core.process import ProcessCaptureResult
-from agm.util.text import normalize_newlines
 from tests.agl.module_graph import build_module_graph as _build_module_graph
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parents[2] / "stdlib"
@@ -100,29 +96,26 @@ def compile_checked_module(checked: CheckedModule) -> MatchCompiledModule:
     return MatchCompiledModule(checked=checked, sites=sites)
 
 
-def lower_compiled_module(
-    compiled: MatchCompiledModule, *, source_text: str, source_label: str
-) -> ExecutableProgram:
-    """Reimplement the deleted ``lower_module`` for the same seam as
-    :func:`compile_checked_module`: a per-module lowering, with no real
-    module graph, for a test that needs to isolate the lowerer's own shape
-    from ``lower_program``'s whole-program linking (or, forging a corrupt
-    artifact, from ``lower_program``'s own module set).
+def lower_compiled_module(compiled: MatchCompiledModule, *, source_text: str) -> ExecutableProgram:
+    """Lower a hand-built single-module artifact through ``lower_program``.
+
+    This test seam is for checked modules with no loadable source graph, such
+    as deliberately corrupt artifacts used by IR validation tests. It wraps
+    the module in the smallest whole-program artifact rather than retaining a
+    second lowering entry point.
     """
     checked = compiled.checked
-    link = _LinkState(
-        builtin_nominals=builtin_nominals_from_declarations(checked.type_env.type_table)
+    checked_program = CheckedProgram(
+        modules={ENTRY_ID: checked},
+        entry_id=ENTRY_ID,
+        program_type_table={},
+        warnings=(),
     )
-    source_id = SourceId(link.next_source)
-    link.next_source += 1
-    link.sources[source_id] = SourceFile(
-        display_name=source_label, normalized_text=normalize_newlines(source_text)
+    program = MatchCompiledProgram(
+        checked=checked_program,
+        sites_by_module={ENTRY_ID: compiled.sites},
     )
-    lowerer = _Lowerer(checked, link, ENTRY_ID, source_id, source_text, compiled.sites)
-    program = lowerer.lower()
-    if self_validation_enabled():
-        validate_ir(program)
-    return program
+    return lower_program(program, _entry_source_text=source_text)
 
 
 def nominal_id_for(program: ExecutableProgram, display_name: str) -> NominalId:

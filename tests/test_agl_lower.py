@@ -263,11 +263,7 @@ def test_lower_repl_trailing_scope_region_has_no_expression_marker() -> None:
 def _lower(source: str, *, default_stdlib: bool = True) -> ExecutableProgram:
     """Parse → check → lower the source; return ExecutableProgram."""
     checked = _check(source, default_stdlib=default_stdlib)
-    return lower_compiled_module(
-        compile_checked_module(checked),
-        source_text=source,
-        source_label="<test>",
-    )
+    return lower_compiled_module(compile_checked_module(checked), source_text=source)
 
 
 def test_scoped_only_function_has_no_public_name() -> None:
@@ -320,8 +316,8 @@ def test_lowering_registers_a_generic_enum_nominal_with_enum_kind() -> None:
     """A generic enum's own nominal registers with ``NominalKind.ENUM``.
 
     The test above covers a generic *record* (``Box[T]``); this covers the
-    sibling ``else`` branch of the same generic-type loop in
-    ``_Lowerer._build_nominals`` for a generic *enum* -- ``all_generic_types()``
+    sibling ``else`` branch of ``lower_program``'s generic-type loop for a
+    generic *enum* -- ``all_generic_types()``
     otherwise only ever yields a record in this file's other fixtures.
     """
     from agm.agl.ir.program import NominalKind
@@ -1087,7 +1083,7 @@ class TestSourcesTable:
     def test_source_display_name(self) -> None:
         prog = _lower("()")
         (src_id,) = prog.sources
-        assert prog.sources[src_id].display_name == "<test>"
+        assert prog.sources[src_id].display_name == "<entry>"
 
     def test_source_normalized_text(self) -> None:
         src = "()"
@@ -1130,8 +1126,8 @@ class TestNominalsEmpty:
     def test_user_exception_nominal_stamped_with_declaring_module_id(self) -> None:
         """A user-declared exception's nominal is stamped with its real module_id.
 
-        Declares the exception before a record so ``_build_nominals``' loop
-        continues past the exception branch onto another declaration.
+        Declares the exception before a record so ``lower_program``'s nominal
+        loop continues past the exception branch onto another declaration.
         """
         from agm.agl.ir.program import NominalKind
         from tests.agl.ir_harness import nominal_id_for

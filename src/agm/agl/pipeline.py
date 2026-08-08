@@ -537,32 +537,52 @@ class PipelineDriver:
         parse.  Non-raising: an ``AglSyntaxError`` is captured into
         :attr:`ParsedEntry.diagnostics` with ``program`` left ``None``.
         """
-        from agm.agl.lexer import spaced_qualifier_collector, tab_warning_collector
+        from agm.agl.lexer import tab_warning_collector
+        from agm.agl.modules.loader import EntryParseSyntaxError, parse_entry_module
         from agm.agl.parser import AglSyntaxError
-        from agm.agl.parser.parser import parse_program_seeded
         from agm.agl.syntax.nodes import ProgramDecl
-        from agm.agl.syntax.spans import SourceId
 
-        canonical_entry_path = entry_path.resolve() if entry_path is not None else None
-        label = str(canonical_entry_path) if canonical_entry_path is not None else "<command>"
-        entry_source_id = SourceId(label=label)
-
-        with tab_warning_collector() as tab_sink, spaced_qualifier_collector() as spaced_sink:
+        with tab_warning_collector() as tab_sink:
             try:
-                program, next_id = parse_program_seeded(
-                    entry_source, start_id=0, source=entry_source_id
-                )
+                parsed_module = parse_entry_module(entry_source, entry_path=entry_path)
             except AglSyntaxError as exc:
+                spaced_qualifiers = (
+                    exc.spaced_qualifiers if isinstance(exc, EntryParseSyntaxError) else ()
+                )
                 return ParsedEntry(
                     source=entry_source,
                     entry_path=entry_path,
                     program=None,
                     next_id=0,
                     program_name=None,
-                    spaced_qualifiers=tuple(spaced_sink),
+                    spaced_qualifiers=spaced_qualifiers,
                     diagnostics=(exc.to_diagnostic(),),
                     warnings=tuple(tab_sink),
                 )
+            except AglError as exc:
+                return ParsedEntry(
+                    source=entry_source,
+                    entry_path=entry_path,
+                    program=None,
+                    next_id=0,
+                    program_name=None,
+                    spaced_qualifiers=(),
+                    diagnostics=(exc.to_diagnostic(),),
+                    warnings=tuple(tab_sink),
+                )
+            except Exception as exc:
+                return ParsedEntry(
+                    source=entry_source,
+                    entry_path=entry_path,
+                    program=None,
+                    next_id=0,
+                    program_name=None,
+                    spaced_qualifiers=(),
+                    diagnostics=(Diagnostic(message=str(exc), line=1),),
+                    warnings=tuple(tab_sink),
+                )
+        program = parsed_module.program
+        next_id = parsed_module.next_id
 
         program_name: str | None = None
         for item in program.body.items:
@@ -576,7 +596,7 @@ class PipelineDriver:
             program=program,
             next_id=next_id,
             program_name=program_name,
-            spaced_qualifiers=tuple(spaced_sink),
+            spaced_qualifiers=parsed_module.spaced_qualifiers,
             diagnostics=(),
             warnings=tuple(tab_sink),
         )

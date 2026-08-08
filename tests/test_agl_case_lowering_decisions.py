@@ -50,11 +50,7 @@ def _lower(source: str) -> ExecutableProgram:
     )
     checked = resolve_and_check_entry(source, capabilities)
     compiled = compile_checked_module(checked)
-    return lower_compiled_module(
-        compiled,
-        source_text=source,
-        source_label="<test>",
-    )
+    return lower_compiled_module(compiled, source_text=source)
 
 
 def _public_binding(program: ExecutableProgram, name: str) -> IrBind:
@@ -105,7 +101,7 @@ def test_lowering_rejects_a_forged_failed_decision(self_validation_disabled: Non
         sites={**compiled.sites, case_id: replace(compiled_case, root=DecisionFail())},
     )
     with pytest.raises(AssertionError):
-        lower_compiled_module(forged, source_text=source, source_label="<test>")
+        lower_compiled_module(forged, source_text=source)
 
 
 def test_lowering_rejects_a_forged_record_switch(self_validation_disabled: None) -> None:
@@ -134,7 +130,7 @@ def test_lowering_rejects_a_forged_record_switch(self_validation_disabled: None)
         },
     )
     with pytest.raises(AssertionError):
-        lower_compiled_module(forged, source_text=source, source_label="<test>")
+        lower_compiled_module(forged, source_text=source)
 
 
 def test_wildcard_case_still_binds_root_subject_before_leaf() -> None:

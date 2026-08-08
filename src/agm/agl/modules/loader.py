@@ -32,6 +32,7 @@ from agm.agl.modules.errors import ImportEntryError, MissingExternCompanion
 from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 from agm.agl.modules.resolver import expand_wildcard, resolve_module
 from agm.agl.modules.roots import RootSet
+from agm.agl.parser import AglSyntaxError
 from agm.agl.parser.parser import parse_program_seeded
 from agm.agl.syntax.advisories import SpacedQualifier
 from agm.agl.syntax.nodes import ExportDecl, FuncDef, ImportDecl, static_items
@@ -87,6 +88,27 @@ class LoadedModule:
     source_text: str
     spaced_qualifiers: tuple[SpacedQualifier, ...]
     companion_path: Path | None
+
+
+class EntryParseSyntaxError(AglSyntaxError):
+    """An entry parse failure retaining lexical advisories emitted before it."""
+
+    def __init__(
+        self, error: AglSyntaxError, spaced_qualifiers: tuple[SpacedQualifier, ...]
+    ) -> None:
+        super().__init__(str(error), span=error.source_span)
+        self.spaced_qualifiers = spaced_qualifiers
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedEntryModule:
+    """The parsed entry and metadata shared by entry-loading paths."""
+
+    program: syntax.Program
+    next_id: int
+    canonical_path: Path | None
+    source_id: SourceId
+    spaced_qualifiers: tuple[SpacedQualifier, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -361,6 +383,46 @@ def _load_into_graph(
     return graph, next_id, newly_loaded
 
 
+def entry_source_id(
+    entry_path: Path | None,
+    *,
+    default_label: str = "<command>",
+) -> tuple[Path | None, SourceId]:
+    """Return an entry's canonical path and the source id its label implies.
+
+    A source without a backing file uses *default_label*; every entry-loading
+    path derives its diagnostic identity here.
+    """
+    canonical_path = entry_path.resolve() if entry_path is not None else None
+    label = str(canonical_path) if canonical_path is not None else default_label
+    return canonical_path, SourceId(label=label)
+
+
+def parse_entry_module(
+    entry_source: str,
+    *,
+    entry_path: Path | None,
+) -> ParsedEntryModule:
+    """Parse an entry source and collect its lexical advisories.
+
+    Syntax failures intentionally propagate to let callers choose their own
+    raising or diagnostic-capturing policy.
+    """
+    canonical_path, source_id = entry_source_id(entry_path)
+    with spaced_qualifier_collector() as spaced_sink:
+        try:
+            program, next_id = parse_program_seeded(entry_source, start_id=0, source=source_id)
+        except AglSyntaxError as error:
+            raise EntryParseSyntaxError(error, tuple(spaced_sink)) from error
+    return ParsedEntryModule(
+        program=program,
+        next_id=next_id,
+        canonical_path=canonical_path,
+        source_id=source_id,
+        spaced_qualifiers=tuple(spaced_sink),
+    )
+
+
 def _build_entry_loaded_module(
     program: syntax.Program,
     next_id: int,
@@ -436,31 +498,21 @@ def load_graph(
     agm.agl.parser.errors.AglSyntaxError
         When any module's source text fails to parse.
     """
-    # Canonical entry path for rejection checks.
-    canonical_entry_path: Path | None = entry_path.resolve() if entry_path is not None else None
-    label = str(canonical_entry_path) if canonical_entry_path is not None else "<command>"
-    entry_source_id = SourceId(label=label)
-
-    with spaced_qualifier_collector() as entry_spaced_sink:
-        entry_program, next_id = parse_program_seeded(
-            entry_source,
-            start_id=0,
-            source=entry_source_id,
-        )
+    parsed_entry = parse_entry_module(entry_source, entry_path=entry_path)
     entry_loaded, next_id = _build_entry_loaded_module(
-        entry_program,
-        next_id,
-        canonical_entry_path=canonical_entry_path,
-        entry_source_id=entry_source_id,
+        parsed_entry.program,
+        parsed_entry.next_id,
+        canonical_entry_path=parsed_entry.canonical_path,
+        entry_source_id=parsed_entry.source_id,
         default_stdlib=default_stdlib,
-        spaced_qualifiers=tuple(entry_spaced_sink),
+        spaced_qualifiers=parsed_entry.spaced_qualifiers,
         source_text=normalize_newlines(entry_source),
     )
 
     graph, _next_id, _newly_loaded = _load_into_graph(
         entry_loaded,
         roots=roots,
-        canonical_entry_path=canonical_entry_path,
+        canonical_entry_path=parsed_entry.canonical_path,
         seed_modules={},
         start_id=next_id,
         default_stdlib=default_stdlib,
@@ -528,16 +580,14 @@ def build_repl_graph(
         - The updated ``next_start_id`` after loading any new modules.
         - A dict of newly-loaded modules (not in *cached*) for promotion.
     """
-    canonical_entry_path: Path | None = path.resolve() if path is not None else None
-    label = str(canonical_entry_path) if canonical_entry_path is not None else default_label
-    entry_source_id = SourceId(label=label)
+    canonical_entry_path, source_id = entry_source_id(path, default_label=default_label)
 
     seed_modules = dict(cached)
     entry_loaded, next_start_id = _build_entry_loaded_module(
         program,
         next_start_id,
         canonical_entry_path=canonical_entry_path,
-        entry_source_id=entry_source_id,
+        entry_source_id=source_id,
         default_stdlib=default_stdlib,
         spaced_qualifiers=spaced_qualifiers,
         source_text=source_text,

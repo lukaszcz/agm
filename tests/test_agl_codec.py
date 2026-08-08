@@ -316,9 +316,7 @@ def _run_with_json_codec(
     text_codec = TextCodec()
     json_codec = JsonCodec()
     codecs: dict[str, OutputCodec] = {text_codec.name: text_codec, json_codec.name: json_codec}
-    executable = lower_compiled_module(
-        compile_checked_module(checked), source_text="<direct-ast>", source_label="<test>"
-    )
+    executable = lower_compiled_module(compile_checked_module(checked), source_text="<direct-ast>")
     contracts, errors = _materialize_ir_contracts(executable, codecs)
     assert errors == []
     return _Bindings(

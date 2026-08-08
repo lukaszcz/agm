@@ -17,8 +17,11 @@ from typing import TYPE_CHECKING, TypeVar
 if TYPE_CHECKING:
     from _typeshed import SupportsRichComparison
 
+    K = TypeVar("K", bound=SupportsRichComparison)
+else:
+    K = TypeVar("K")
+
 T = TypeVar("T")
-K = TypeVar("K", bound="SupportsRichComparison")
 R = TypeVar("R")
 
 __all__ = ["GraphCycleError", "bfs_first", "sccs", "toposort"]

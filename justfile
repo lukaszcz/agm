@@ -24,12 +24,16 @@ lint:
     uv run ruff check src/ tests/
     uv run ruff format --check src/ tests/
 
+# Check for dead code in the application package
+vulture:
+    uv run vulture src/agm/ --min-confidence 80
+
 # Type-check with mypy
 typecheck:
     MYPYPATH=src:stubs uv run mypy src/agm/ --strict --python-version 3.12
 
-# Run linting, tests, and type-checking
-check: lint test typecheck
+# Run linting, dead-code checks, tests, and type-checking
+check: lint vulture test typecheck
 
 # Install the agm CLI into an isolated environment
 install-agm:

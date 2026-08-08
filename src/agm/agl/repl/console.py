@@ -694,7 +694,7 @@ def make_console_confirm(
     read: PromptReader = reader if reader is not None else input
     write: Callable[[str], None] = printer if printer is not None else print
 
-    def confirm(callee: str, prompt: str) -> "ConfirmDecision":
+    def confirm(callee: str, prompt: str) -> ConfirmDecision:
         write(f"Agent call to {callee!r}:")
         write(_preview_prompt(prompt))
         while True:

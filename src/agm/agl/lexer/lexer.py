@@ -690,7 +690,7 @@ def _mark_typearg_lsqb(tokens: list[Token]) -> list[Token]:
 class AglLexer(Lexer):
     """Custom Lark lexer for AgL.
 
-    Accepted by the Lark parser via ``lexer=AglLexer``; ``lexer_conf`` is
+    Accepted by the Lark parser via ``lexer=AglLexer``; its configuration is
     received but not used (the grammar's terminal regex patterns are not needed
     because we generate all tokens ourselves).
 
@@ -702,8 +702,8 @@ class AglLexer(Lexer):
 
     __future_interface__ = 1
 
-    def __init__(self, lexer_conf: object) -> None:
-        # lexer_conf is accepted but unused; the scanner handles all tokenization.
+    def __init__(self, _lexer_conf: object) -> None:
+        # The scanner handles all tokenization.
         pass
 
     def lex(self, lexer_state: LexerState, parser_state: object) -> Iterator[Token]:

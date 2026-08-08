@@ -59,4 +59,5 @@ dev = [
     "pytest-xdist>=3.0",
     "mypy>=1.10",
     "ruff>=0.11",
+    "vulture>=2.16",
 ]

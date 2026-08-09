@@ -109,6 +109,30 @@ class MissingExternCompanion(AglError):
         self.companion_path = companion_path
 
 
+class PackageImportVisibilityError(AglError):
+    """A package module imports a package it did not declare.
+
+    ``importer`` and ``target`` identify the mounted packages on either side
+    of the rejected edge. ``target`` is the required key in the importer's
+    manifest ``[dependencies]`` table.
+    """
+
+    def __init__(
+        self,
+        importer: str,
+        target: str,
+        *,
+        span: SourceSpan | None = None,
+    ) -> None:
+        super().__init__(
+            f"package {importer!r} imports package {target!r} without a "
+            f"[dependencies] entry for {target!r}",
+            span=span,
+        )
+        self.importer = importer
+        self.target = target
+
+
 class ImportEntryError(AglError):
     """An import declaration resolves to the entry file's canonical identity.
 

@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from agm.agl.modules.roots import RootSet, assemble_roots
+from agm.packages.manifest import load_manifest
+from agm.packages.model import PackageInfo
 
 
 class TestRootSet:
@@ -80,6 +82,51 @@ class TestAssembleRoots:
             cwd=tmp_path,
         )
         assert stdlib.resolve() in rs.roots
+        assert rs.stdlib_roots == frozenset({stdlib.resolve()})
+        assert rs.is_standard_library_path(stdlib / "std" / "core.agl")
+
+    def test_includes_package_root_and_preserves_its_ownership_metadata(
+        self, tmp_path: Path
+    ) -> None:
+        invocation_root = tmp_path / "inv"
+        invocation_root.mkdir()
+        package_root = tmp_path / "package"
+        (package_root / "demo").mkdir(parents=True)
+        (package_root / "package.toml").write_text('[package]\nname = "demo"\nversion = "1.0.0"\n')
+        package = PackageInfo(package_root, load_manifest(package_root / "package.toml"))
+
+        roots = assemble_roots(
+            invocation_root=invocation_root,
+            lib_root=None,
+            configured=[],
+            cli=[],
+            cwd=tmp_path,
+            package_roots=(package,),
+        )
+
+        assert package.root in roots.roots
+        assert roots.packages == (package,)
+
+    def test_missing_package_root_is_not_mounted(self, tmp_path: Path) -> None:
+        invocation_root = tmp_path / "inv"
+        invocation_root.mkdir()
+        manifest_root = tmp_path / "manifest"
+        manifest_root.mkdir()
+        manifest_path = manifest_root / "package.toml"
+        manifest_path.write_text('[package]\nname = "demo"\nversion = "1.0.0"\n')
+        package = PackageInfo(tmp_path / "missing", load_manifest(manifest_path))
+
+        roots = assemble_roots(
+            invocation_root=invocation_root,
+            lib_root=None,
+            configured=[],
+            cli=[],
+            cwd=tmp_path,
+            package_roots=(package,),
+        )
+
+        assert package.root not in roots.roots
+        assert roots.packages == ()
 
     def test_none_lib_root_not_included(self, tmp_path: Path) -> None:
         inv_root = tmp_path / "inv"

@@ -1412,6 +1412,25 @@ class TestExecCommandShellComplete:
 
         assert "--settings::max-iters" not in result
 
+    def test_path_dependency_param_options_are_offered(self, tmp_path: Path) -> None:
+        bravo = tmp_path / "bravo"
+        (bravo / "bravo").mkdir(parents=True)
+        (bravo / "package.toml").write_text('[package]\nname = "bravo"\nversion = "1.0.0"\n')
+        (bravo / "bravo" / "settings.agl").write_text("param region: text\n")
+        alpha = tmp_path / "alpha"
+        (alpha / "alpha").mkdir(parents=True)
+        (alpha / "package.toml").write_text(
+            '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
+            "[dependencies]\n"
+            'bravo = { version = "1", path = "../bravo" }\n'
+        )
+        entry = alpha / "alpha" / "main.agl"
+        entry.write_text("import bravo/settings\nprogram def main() -> unit = ()\n")
+
+        result = self._complete(["exec", "--no-stdlib", str(entry)], "--")
+
+        assert "--region" in result
+
     def test_file_with_ask_offers_param_options(self, tmp_path: Path) -> None:
         """Completion discovers params for normal exec programs using ``ask``."""
         agl_file = tmp_path / "prog.agl"

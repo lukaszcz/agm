@@ -56,6 +56,7 @@ from agm.core.log import (
     resolve_log_decision,
 )
 from agm.core.toml import toml_dict
+from agm.packages.development import discover_development_packages
 
 if TYPE_CHECKING:
     from agm.agl.ir.program import IrParam
@@ -128,6 +129,11 @@ def run(args: ReplArgs) -> None:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
     lib_root = resolve_lib_root(mod_roots_cfg, home=ctx.home)
+    try:
+        package_roots = discover_development_packages(ctx.cwd)
+    except ValueError as exc:
+        print(f"Error: invalid development package: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
 
     # Seed only explicit CLI/config controls.  Trace-service fallbacks remain
     # absent so a ``builtin var`` initializer can provide the setting default.
@@ -179,6 +185,7 @@ def run(args: ReplArgs) -> None:
         stdlib_root=stdlib_root,
         lib_root=lib_root,
         configured_roots=mod_roots_cfg.extra,
+        package_roots=package_roots,
         default_stdlib=not args.no_stdlib,
         params_config_loader=imported_param_config,
     )

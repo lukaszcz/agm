@@ -16,12 +16,15 @@ from agm.agl.modules.errors import (
     ImportEntryError,
     MissingExternCompanion,
     ModuleNotFound,
+    PackageImportVisibilityError,
 )
 from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 from agm.agl.modules.loader import LoadedModule, ModuleGraph, build_repl_graph, load_graph
-from agm.agl.modules.roots import RootSet
+from agm.agl.modules.roots import RootSet, assemble_roots
 from agm.agl.syntax.nodes import ImportDecl
 from agm.agl.syntax.spans import SourceId
+from agm.packages.manifest import load_manifest
+from agm.packages.model import PackageInfo
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -51,6 +54,37 @@ def _write_module(root: Path, module_path: str, source: str = _MINIMAL) -> Path:
     p = _module_path(root, module_path)
     _write_agl(p, source)
     return p
+
+
+def _package(tmp_path: Path, name: str, *, dependencies: tuple[str, ...] = ()) -> PackageInfo:
+    root = tmp_path / name
+    root.mkdir()
+    dependency_table = "".join(f'{dependency} = "1"\n' for dependency in dependencies)
+    (root / "package.toml").write_text(
+        f'[package]\nname = "{name}"\nversion = "1.0.0"\n'
+        + (f"\n[dependencies]\n{dependency_table}" if dependencies else "")
+    )
+    (root / name).mkdir()
+    return PackageInfo(root, load_manifest(root / "package.toml"))
+
+
+def _package_roots(
+    tmp_path: Path,
+    *packages: PackageInfo,
+    loose_roots: tuple[Path, ...] = (),
+    stdlib_root: Path | None = None,
+) -> RootSet:
+    invocation = tmp_path / "invocation"
+    invocation.mkdir(exist_ok=True)
+    return assemble_roots(
+        invocation_root=invocation,
+        stdlib_root=stdlib_root,
+        lib_root=None,
+        configured=[],
+        cli=(str(root) for root in loose_roots),
+        cwd=tmp_path,
+        package_roots=packages,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -398,6 +432,129 @@ class TestCanonicalDedup:
         )
         lib_id = ModuleId.from_path("lib")
         assert list(graph.modules.keys()).count(lib_id) == 1
+
+
+# ---------------------------------------------------------------------------
+# Package roots and import visibility
+# ---------------------------------------------------------------------------
+
+
+class TestPackageRootsAndVisibility:
+    def test_package_modules_mount_by_package_name_and_collide_with_loose_modules(
+        self, tmp_path: Path
+    ) -> None:
+        package = _package(tmp_path, "demo")
+        _write_module(package.root, "demo/main")
+        loose = tmp_path / "loose"
+        loose.mkdir()
+        _write_module(loose, "demo/main")
+        roots = _package_roots(tmp_path, package, loose_roots=(loose,))
+
+        with pytest.raises(AmbiguousModule):
+            load_graph("import demo/main", entry_path=None, roots=roots, default_stdlib=False)
+
+    def test_package_module_can_import_itself_and_declared_dependency(self, tmp_path: Path) -> None:
+        alpha = _package(tmp_path, "alpha", dependencies=("bravo",))
+        bravo = _package(tmp_path, "bravo")
+        _write_module(alpha.root, "alpha/main", "import alpha/local\nimport bravo/shared")
+        _write_module(alpha.root, "alpha/local")
+        _write_module(bravo.root, "bravo/shared")
+
+        graph = load_graph(
+            "import alpha/main",
+            entry_path=None,
+            roots=_package_roots(tmp_path, alpha, bravo),
+            default_stdlib=False,
+        )
+
+        assert ModuleId.from_path("alpha/local") in graph.modules
+        assert ModuleId.from_path("bravo/shared") in graph.modules
+
+    def test_package_module_allows_the_installed_stdlib_and_declared_dependencies(
+        self, tmp_path: Path
+    ) -> None:
+        alpha = _package(tmp_path, "alpha", dependencies=("bravo",))
+        bravo = _package(tmp_path, "bravo")
+        _write_module(alpha.root, "alpha/main", "import std/config\nimport bravo/shared")
+        _write_module(bravo.root, "bravo/shared")
+
+        graph = load_graph(
+            "import alpha/main",
+            entry_path=None,
+            roots=_package_roots(tmp_path, alpha, bravo, stdlib_root=_REPO_STDLIB_ROOT),
+        )
+
+        assert ModuleId.from_path("std/config") in graph.modules
+        assert ModuleId.from_path("bravo/shared") in graph.modules
+
+    def test_package_module_rejects_undeclared_cross_package_import(self, tmp_path: Path) -> None:
+        alpha = _package(tmp_path, "alpha")
+        bravo = _package(tmp_path, "bravo")
+        _write_module(alpha.root, "alpha/main", "import bravo/shared")
+        _write_module(bravo.root, "bravo/shared")
+
+        with pytest.raises(PackageImportVisibilityError) as exc_info:
+            load_graph(
+                "import alpha/main",
+                entry_path=None,
+                roots=_package_roots(tmp_path, alpha, bravo),
+                default_stdlib=False,
+            )
+
+        assert "[dependencies]" in str(exc_info.value)
+        assert "bravo" in str(exc_info.value)
+
+    def test_package_module_rejects_undeclared_loose_import(self, tmp_path: Path) -> None:
+        alpha = _package(tmp_path, "alpha")
+        _write_module(alpha.root, "alpha/main", "import loose")
+        loose = tmp_path / "loose"
+        loose.mkdir()
+        _write_module(loose, "loose")
+
+        with pytest.raises(PackageImportVisibilityError) as exc_info:
+            load_graph(
+                "import alpha/main",
+                entry_path=None,
+                roots=_package_roots(tmp_path, alpha, loose_roots=(loose,)),
+                default_stdlib=False,
+            )
+
+        assert "loose" in str(exc_info.value)
+
+    def test_declared_dependency_does_not_authorize_an_unowned_loose_target(
+        self, tmp_path: Path
+    ) -> None:
+        alpha = _package(tmp_path, "alpha", dependencies=("bravo",))
+        _write_module(alpha.root, "alpha/main", "import bravo/shared")
+        loose = tmp_path / "loose"
+        loose.mkdir()
+        _write_module(loose, "bravo/shared")
+
+        with pytest.raises(PackageImportVisibilityError) as exc_info:
+            load_graph(
+                "import alpha/main",
+                entry_path=None,
+                roots=_package_roots(tmp_path, alpha, loose_roots=(loose,)),
+                default_stdlib=False,
+            )
+
+        assert "bravo" in str(exc_info.value)
+
+    def test_ad_hoc_modules_can_import_any_mounted_package(self, tmp_path: Path) -> None:
+        alpha = _package(tmp_path, "alpha")
+        bravo = _package(tmp_path, "bravo")
+        _write_module(alpha.root, "alpha/main")
+        _write_module(bravo.root, "bravo/shared")
+
+        graph = load_graph(
+            "import alpha/main\nimport bravo/shared",
+            entry_path=None,
+            roots=_package_roots(tmp_path, alpha, bravo),
+            default_stdlib=False,
+        )
+
+        assert ModuleId.from_path("alpha/main") in graph.modules
+        assert ModuleId.from_path("bravo/shared") in graph.modules
 
 
 # ---------------------------------------------------------------------------

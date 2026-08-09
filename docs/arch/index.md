@@ -12,7 +12,7 @@ AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-c
 - **Command layer** — one module per command/command-group; each orchestrates domain logic but holds little of its own.
 - **Domain layer** — project/workspace layout, packages, git integration, sandboxing, tmux, configuration, and agent invocation.
 - **Primitive layer** — process execution, environment handling, filesystem and TOML I/O, and a cross-cutting dry-run facility, plus pure generic utility helpers.
-- **AgL subsystem** — a complete language implementation (lexer → parser → AST → scope → typecheck → match compilation → lower → IR eval) plus its host runtime, lazily imported so non-AgL commands stay fast to start.
+- **AgL subsystem** — a complete language implementation (lexer → parser → AST → scope → typecheck → match compilation → lower → IR eval) plus its host runtime. Its public façade exports the execution stack lazily, so package and other lower domains can use AgL leaves without loading it.
 
 ## Architecture and Design Decisions
 
@@ -29,7 +29,7 @@ AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-c
 - Read [core.md](core.md) for the shared process, environment, filesystem, TOML, and dry-run primitives, and the pure utility helpers.
 - Read [config.md](config.md) for configuration loading, layering precedence, and command/sandbox config sections.
 - Read [workspaces.md](workspaces.md) for project layout, git worktrees, dependencies, sync, and tmux — the project-management half of AGM.
-- Read [packages.md](packages.md) for package manifests, ownership, and validation discipline.
+- Read [packages.md](packages.md) for package manifests, mounted roots, ownership-based import visibility, and validation discipline.
 - Read [sandbox.md](sandbox.md) for `agm run`, the SRT sandbox, and resource limits.
 - Read [agents.md](agents.md) for the agent runner and the loop/review/revise/refine workflows.
 - Read [agl/index.md](agl/index.md) first for any AgL language task; it links to the AgL frontend, execution, modules, and REPL documents.

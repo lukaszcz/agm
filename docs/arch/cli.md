@@ -16,7 +16,7 @@ Two global concerns are handled at the CLI boundary: a `--dry-run` flag, stored 
 
 ## Help and Completion
 
-Help text and the command overview live in `parser.py`, separate from the wiring in `cli.py`, and are resolved by command path. Shell completion lives in `completion.py`: it discovers dynamic completion values — branch names, dependency names, project paths, tmux sessions, and AgL program parameters — by consulting git, the project layout, and AgL source rather than hard-coding lists.
+Help text and the command overview live in `parser.py`, separate from the wiring in `cli.py`, and are resolved by command path. Shell completion lives in `completion.py`: it discovers dynamic completion values — branch names, dependency names, project paths, tmux sessions, and AgL program parameters — by consulting git, the project layout, and AgL source rather than hard-coding lists. `exec` parameter help and completion use its effective module roots, including the containing development package and path-sourced dependencies.
 
 ## Code Entry Points
 

@@ -6,6 +6,10 @@ import os
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from agm.packages.model import PackageInfo
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,10 +25,17 @@ class RootSet:
     """
 
     roots: frozenset[Path]
+    packages: tuple[PackageInfo, ...] = ()
+    stdlib_roots: frozenset[Path] = frozenset()
 
     def sorted_roots(self) -> tuple[Path, ...]:
         """Return roots sorted lexicographically for deterministic diagnostics."""
         return tuple(sorted(self.roots))
+
+    def is_standard_library_path(self, path: Path) -> bool:
+        """Return whether *path* belongs to a host-selected standard-library root."""
+        canonical_path = path.resolve()
+        return any(canonical_path.is_relative_to(stdlib_root) for stdlib_root in self.stdlib_roots)
 
 
 def _canonicalize(path: Path) -> Path:
@@ -41,6 +52,7 @@ def assemble_roots(
     configured: Iterable[tuple[str, Path]],
     cli: Iterable[str],
     cwd: Path,
+    package_roots: Iterable[PackageInfo] = (),
 ) -> RootSet:
     """Assemble a :class:`RootSet` from all root sources.
 
@@ -65,6 +77,11 @@ def assemble_roots(
         paths are resolved against *cwd*.
     cwd:
         Current working directory; used to resolve relative CLI paths.
+    package_roots:
+        Mounted packages, regardless of whether their roots come from a
+        development directory or a future package store. Each package root is
+        searched like every other root while its manifest remains available
+        for package import visibility.
 
     All roots are user-expanded, made absolute, and canonicalized before
     de-duplication.  Non-existent roots are dropped silently (resolution
@@ -72,17 +89,23 @@ def assemble_roots(
     """
     canonical_roots: set[Path] = set()
 
-    def _add(path: Path) -> None:
-        canon = _canonicalize(path)
-        if canon.exists():
-            canonical_roots.add(canon)
+    def _add(path: Path) -> Path | None:
+        canonical_path = _canonicalize(path)
+        if canonical_path.exists():
+            canonical_roots.add(canonical_path)
+            return canonical_path
+        return None
 
     # 1. Invocation root
     _add(invocation_root)
 
-    # 2. Standard library root
+    # 2. Standard library root. Keep its distinct identity so package
+    # visibility can admit host-provided modules without admitting loose roots.
+    stdlib_roots: set[Path] = set()
     if stdlib_root is not None:
-        _add(stdlib_root)
+        canonical_stdlib_root = _add(stdlib_root)
+        if canonical_stdlib_root is not None:
+            stdlib_roots.add(canonical_stdlib_root)
 
     # 3. Global library root
     if lib_root is not None:
@@ -104,4 +127,17 @@ def assemble_roots(
         else:
             _add(cwd / raw_path)
 
-    return RootSet(roots=frozenset(canonical_roots))
+    # 6. Package roots. Keep the package metadata only when its root is
+    # mounted, so ownership policy and resolver see the same selection.
+    mounted_packages: list[PackageInfo] = []
+    for package in package_roots:
+        package_root = _canonicalize(package.root)
+        if package_root.exists():
+            canonical_roots.add(package_root)
+            mounted_packages.append(package)
+
+    return RootSet(
+        roots=frozenset(canonical_roots),
+        packages=tuple(mounted_packages),
+        stdlib_roots=frozenset(stdlib_roots),
+    )

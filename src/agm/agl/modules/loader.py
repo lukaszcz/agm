@@ -28,7 +28,11 @@ from pathlib import Path
 
 import agm.agl.syntax as syntax
 from agm.agl.lexer import spaced_qualifier_collector
-from agm.agl.modules.errors import ImportEntryError, MissingExternCompanion
+from agm.agl.modules.errors import (
+    ImportEntryError,
+    MissingExternCompanion,
+    PackageImportVisibilityError,
+)
 from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 from agm.agl.modules.resolver import expand_wildcard, resolve_module
 from agm.agl.modules.roots import RootSet
@@ -39,6 +43,7 @@ from agm.agl.syntax.nodes import ExportDecl, FuncDef, ImportDecl, static_items
 from agm.agl.syntax.spans import SourceId, SourceSpan
 from agm.agl.syntax.types import ImportMode
 from agm.core import fs
+from agm.packages.model import owning_package
 from agm.util.graph import sccs as _compute_sccs
 from agm.util.text import normalize_newlines
 
@@ -247,9 +252,46 @@ def _mid_sort_key(mid: ModuleId) -> tuple[str, ...]:
 _ModuleDependencyDecl = ImportDecl | ExportDecl
 
 
-def _pair_sort_key(pair: tuple[ModuleId, _ModuleDependencyDecl]) -> tuple[str, ...]:
-    """Key function for sorting ``(ModuleId, decl)`` pairs by module id."""
+_ResolvedDependency = tuple[ModuleId, _ModuleDependencyDecl, Path]
+
+
+def _pair_sort_key(pair: _ResolvedDependency) -> tuple[str, ...]:
+    """Key function for sorting resolved dependency triples by module id."""
     return pair[0].segments
+
+
+def _check_package_import_visibility(
+    source_path: Path | None,
+    target_path: Path,
+    target_id: ModuleId,
+    *,
+    roots: RootSet,
+    span: SourceSpan,
+) -> None:
+    """Reject package-to-package edges missing a manifest dependency.
+
+    Canonical paths establish ownership, keeping ad-hoc entry and loose-root
+    modules open even when they import mounted packages. A dependency key is
+    not enough: the resolved target must actually be owned by its mounted
+    package, so a loose module cannot borrow package visibility by sharing a
+    declared dependency's leading path segment.
+    """
+    if source_path is None:
+        return
+    source_package = owning_package(source_path, roots.packages)
+    if source_package is None:
+        return
+    if roots.is_standard_library_path(target_path):
+        return
+    target_package = owning_package(target_path, roots.packages)
+    if target_package == source_package:
+        return
+    target_name = (
+        target_package.manifest.name if target_package is not None else target_id.segments[0]
+    )
+    if target_package is not None and target_name in source_package.manifest.dependencies:
+        return
+    raise PackageImportVisibilityError(source_package.manifest.name, target_name, span=span)
 
 
 def _tarjan_sccs(
@@ -306,11 +348,11 @@ def _load_into_graph(
     adj: dict[ModuleId, list[ModuleId]] = {}
     next_id = start_id
 
-    # BFS queue: (module id, the import/export decl that discovered it).  We sort each
+    # BFS queue: (module id, dependency decl, canonical target path). We sort each
     # batch of newly-discovered ids before enqueuing so the traversal order —
     # and therefore the start_id seed assignments — are stable regardless of
     # dict/set ordering.
-    queue: deque[tuple[ModuleId, _ModuleDependencyDecl]] = deque()
+    queue: deque[_ResolvedDependency] = deque()
 
     def _resolve_dependencies(
         source: ModuleId,
@@ -318,17 +360,21 @@ def _load_into_graph(
     ) -> None:
         """Record *source*'s module dependencies in ``adj`` and enqueue new ones."""
         targets: list[ModuleId] = []
-        new_pairs: list[tuple[ModuleId, _ModuleDependencyDecl]] = []
+        new_pairs: list[_ResolvedDependency] = []
+        source_path = modules[source].path
         for decl in decls:
             if decl.wildcard:
-                matched = expand_wildcard(tuple(decl.module_path), roots, span=decl.span)
-                target_ids: list[ModuleId] = list(matched)
+                targets_by_id = expand_wildcard(tuple(decl.module_path), roots, span=decl.span)
             else:
-                target_ids = [ModuleId(segments=tuple(decl.module_path))]
-            for mid in target_ids:
+                target_id = ModuleId(segments=tuple(decl.module_path))
+                targets_by_id = {target_id: resolve_module(target_id, roots, span=decl.span)}
+            for mid, target_path in targets_by_id.items():
+                _check_package_import_visibility(
+                    source_path, target_path, mid, roots=roots, span=decl.span
+                )
                 targets.append(mid)
                 if mid not in modules:
-                    new_pairs.append((mid, decl))
+                    new_pairs.append((mid, decl, target_path))
         adj[source] = targets
         new_pairs.sort(key=_pair_sort_key)
         queue.extend(new_pairs)
@@ -336,13 +382,11 @@ def _load_into_graph(
     _resolve_dependencies(ENTRY_ID, (*entry_loaded.imports, *entry_loaded.export_decls))
 
     while queue:
-        mid, decl = queue.popleft()
+        mid, decl, canon_path = queue.popleft()
 
         # Already loaded (cycle, shared dep, or cached) — terminate this branch.
         if mid in modules:
             continue
-
-        canon_path = resolve_module(mid, roots, span=decl.span)
 
         # Reject any import that resolves to the entry file.
         if canonical_entry_path is not None and canon_path == canonical_entry_path:

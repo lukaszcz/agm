@@ -362,6 +362,28 @@ class TestExecDynamicHelp:
 
         assert "--region" in capsys.readouterr().out
 
+    def test_exec_help_discovers_params_from_path_dependencies(
+        self, tmp_path: Path, runner: CliRunner
+    ) -> None:
+        bravo = tmp_path / "bravo"
+        (bravo / "bravo").mkdir(parents=True)
+        (bravo / "package.toml").write_text('[package]\nname = "bravo"\nversion = "1.0.0"\n')
+        (bravo / "bravo" / "settings.agl").write_text('param region: text = "eu"\n')
+        alpha = tmp_path / "alpha"
+        (alpha / "alpha").mkdir(parents=True)
+        (alpha / "package.toml").write_text(
+            '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
+            "[dependencies]\n"
+            'bravo = { version = "1", path = "../bravo" }\n'
+        )
+        entry = alpha / "alpha" / "main.agl"
+        entry.write_text("import bravo/settings\nprogram def main() -> unit = ()\n")
+
+        result = invoke(runner, ["exec", "--no-stdlib", str(entry), "--help"])
+
+        assert result.exit_code == 0
+        assert "--region" in result.output
+
     def test_exec_help_for_source_without_params_has_no_param_section(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -3589,3 +3611,27 @@ class TestProgramLogFilePathResolution:
         assert isinstance(log_file_val, str)
         assert Path(log_file_val).is_absolute()
         assert log_file_val.endswith("my.log")
+
+
+class TestExecDevelopmentPackages:
+    def test_exec_mounts_the_containing_package_and_its_path_dependencies(
+        self, tmp_path: Path
+    ) -> None:
+        bravo = tmp_path / "bravo"
+        (bravo / "bravo").mkdir(parents=True)
+        (bravo / "package.toml").write_text('[package]\nname = "bravo"\nversion = "1.0.0"\n')
+        (bravo / "bravo" / "shared.agl").write_text("def answer() -> int = 42\n")
+
+        alpha = tmp_path / "alpha"
+        (alpha / "alpha").mkdir(parents=True)
+        (alpha / "package.toml").write_text(
+            '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
+            "[dependencies]\n"
+            'bravo = { version = "1", path = "../bravo" }\n'
+        )
+        entry = alpha / "alpha" / "main.agl"
+        entry.write_text(
+            "import bravo/shared\nprogram def main() -> unit =\n  let _ = bravo/shared::answer()\n"
+        )
+
+        assert exec_command.run(_exec_args_no_log(entry, no_stdlib=True)) is None

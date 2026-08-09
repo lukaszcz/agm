@@ -1,9 +1,11 @@
 # Packages
 
-The package domain defines the portable package boundary independently of module-root
-assembly, installation, and CLI dispatch. A package directory has a `package.toml` manifest
-and a module tree named after the package; the domain validates that shape before later
-layers mount or install it.
+The package domain defines the portable package boundary independently of installation and
+CLI dispatch. A package directory has a `package.toml` manifest and a module tree named after
+the package; its `PackageInfo` is the source-agnostic input module-root assembly mounts for
+development directories now and installed packages later. `agm exec` discovers the package
+containing its file (or its current directory for inline source), while `agm repl` discovers
+one at its current directory; each mounts its explicitly path-sourced dependency closure.
 
 ## Manifest and Identity
 
@@ -13,7 +15,9 @@ Package versions are complete SemVer; dependency minimum versions may omit trail
 patch components and are normalized through the `semver` runtime library, preserving SemVer
 precedence. The model
 in `packages/model.py` pairs a manifest with a canonical package root and identifies which
-package owns a canonical path inside a module tree.
+package owns a canonical path inside a module tree. The AgL loader uses that ownership map at
+its dependency edge seam: package modules may import their own modules, declared dependencies,
+and the host-selected standard library, while ad-hoc modules retain open visibility.
 
 ## Discipline
 
@@ -26,6 +30,8 @@ package names and command registrations cannot claim AGM's command namespace.
 
 - `src/agm/packages/manifest.py` — manifest schema and SemVer parsing.
 - `src/agm/packages/model.py` — package-root identity and canonical module ownership.
+- `src/agm/packages/development.py` — containing development-package and path-dependency discovery.
+- `src/agm/agl/modules/roots.py` and `loader.py` — root mounting and ownership-based import visibility.
 - `src/agm/packages/discipline.py` — directory and command/program validation.
 - `tests/test_packages_manifest.py`, `tests/test_packages_discipline.py`, and
   `tests/agl/packages/` — focused validation tests and reusable package fixtures.

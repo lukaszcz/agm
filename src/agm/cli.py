@@ -992,7 +992,11 @@ def new(
 
 
 def _exec_print_help(
-    *, file: str | None, command: str | None, module_paths: list[str] | None = None
+    *,
+    file: str | None,
+    command: str | None,
+    module_paths: list[str] | None = None,
+    no_stdlib: bool = False,
 ) -> None:
     """Print exec help, optionally with program param section, then exit 0.
 
@@ -1021,6 +1025,7 @@ def _exec_print_help(
         try:
             from agm.cli_support.exec_roots import effective_exec_roots
             from agm.config.context import current_config_context
+            from agm.packages.development import discover_development_packages
 
             context = current_config_context()
             entry_path = None if file is None else Path(file)
@@ -1030,12 +1035,14 @@ def _exec_print_help(
                 cwd=context.cwd,
                 home=context.home,
                 proj_dir=context.proj_dir,
+                package_roots=discover_development_packages(entry_path or context.cwd),
             )
             params = discover_params_from_source(
                 source,
                 inline_source=command is not None,
                 entry_path=entry_path,
                 roots=roots,
+                default_stdlib=not no_stdlib,
             )
         except (Exception, SystemExit):
             params = ()
@@ -1167,7 +1174,12 @@ def exec_cmd(
     if file in ("--help", "-h") or "--help" in ctx.args or "-h" in ctx.args:
         # When the help flag was misassigned to ``file``, treat ``file`` as absent.
         effective_file = None if file in ("--help", "-h") else file
-        _exec_print_help(file=effective_file, command=command, module_paths=module_paths)
+        _exec_print_help(
+            file=effective_file,
+            command=command,
+            module_paths=module_paths,
+            no_stdlib=no_stdlib,
+        )
     del _dry_run
     # Under ``ignore_unknown_options``, Click binds the first unrecognised token to the
     # positional FILE argument.  When a program ``--param`` option is placed BEFORE the

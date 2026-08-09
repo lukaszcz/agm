@@ -14,7 +14,7 @@ types).  This module is the top-of-stack host façade that depends on both
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, TypeVar
 
@@ -55,6 +55,7 @@ if TYPE_CHECKING:
     from agm.agl.syntax.nodes import Program
     from agm.agl.typecheck.env import OutputContractSpec
     from agm.agl.typecheck.program import CheckedProgram
+    from agm.packages.model import PackageInfo
 
 _ResultT = TypeVar("_ResultT")
 
@@ -577,6 +578,7 @@ class PipelineDriver:
         parsed: ParsedEntry,
         *,
         roots: "RootSet | None" = None,
+        package_roots: "Iterable[PackageInfo]" = (),
         default_stdlib: bool = True,
         setting_overrides: "Mapping[str, SettingOverride] | None" = None,
     ) -> PreparedProgram:
@@ -651,6 +653,7 @@ class PipelineDriver:
                 configured=(),
                 cli=(),
                 cwd=cwd,
+                package_roots=package_roots,
             )
 
         if parsed.program is None:
@@ -763,6 +766,7 @@ class PipelineDriver:
         *,
         entry_path: "Path | None" = None,
         roots: "RootSet | None" = None,
+        package_roots: "Iterable[PackageInfo]" = (),
         default_stdlib: bool = True,
         setting_overrides: "Mapping[str, SettingOverride] | None" = None,
     ) -> PreparedProgram:
@@ -789,6 +793,7 @@ class PipelineDriver:
         return PipelineDriver.prepare_parsed_entry(
             parsed,
             roots=roots,
+            package_roots=package_roots,
             default_stdlib=default_stdlib,
             setting_overrides=setting_overrides,
         )
@@ -802,12 +807,17 @@ class PipelineDriver:
         log_file: "Path | None" = None,
         entry_path: "Path | None" = None,
         roots: "RootSet | None" = None,
+        package_roots: "Iterable[PackageInfo]" = (),
         default_stdlib: bool = True,
     ) -> RunResult:
         """Compile and run a program with the standard module roots by default."""
         return self.run_prepared(
             self.prepare_program(
-                source, entry_path=entry_path, roots=roots, default_stdlib=default_stdlib
+                source,
+                entry_path=entry_path,
+                roots=roots,
+                package_roots=package_roots,
+                default_stdlib=default_stdlib,
             ),
             param_values=param_values,
             check_only=check_only,

@@ -7907,6 +7907,25 @@ class TestDepListCommand:
         assert result.stdout == ""
 
 
+def _write_development_package_pair(parent: Path) -> tuple[Path, Path]:
+    """Create a package and a path-sourced dependency for AgL host tests."""
+    bravo = parent / "bravo"
+    (bravo / "bravo").mkdir(parents=True)
+    (bravo / "package.toml").write_text('[package]\nname = "bravo"\nversion = "1.0.0"\n')
+    (bravo / "bravo" / "shared.agl").write_text("def answer() -> int = 42\n")
+
+    alpha = parent / "alpha"
+    (alpha / "alpha").mkdir(parents=True)
+    (alpha / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
+        "[dependencies]\n"
+        'bravo = { version = "1", path = "../bravo" }\n'
+    )
+    module = alpha / "alpha" / "main.agl"
+    module.write_text("import bravo/shared\ndef value() -> int = bravo/shared::answer()\n")
+    return alpha, module
+
+
 class TestExecCommand:
     """agm exec: run an AgL workflow program through the installed CLI."""
 
@@ -7922,6 +7941,19 @@ class TestExecCommand:
 
         assert result.returncode == 0
         assert result.stdout.strip() == "hello from agl"
+
+    def test_exec_mounts_a_development_package_path_dependency(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        alpha, module = _write_development_package_pair(tmp_path)
+        module.write_text(
+            "import std/config\nimport bravo/shared\n"
+            "program def main() -> unit =\n  let _ = bravo/shared::answer()\n"
+        )
+
+        result = run_agm(["exec", str(module)], env=env, cwd=alpha)
+
+        assert result.returncode == 0
 
     def test_exec_command_flag_runs_inline_program(
         self, tmp_path: Path, env: dict[str, str]
@@ -8147,6 +8179,21 @@ class TestReplCommand:
         assert result.returncode == 0
         # The evaluated expression yields exactly 3 on a standalone output line.
         assert any(line.split()[-1:] == ["3"] for line in result.stdout.splitlines())
+
+    def test_repl_mounts_a_development_package_path_dependency(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        alpha, _module = _write_development_package_pair(tmp_path)
+
+        result = run_agm(
+            ["repl", "--no-stdlib"],
+            env=env,
+            cwd=alpha,
+            input="import alpha/main\nalpha/main::value()\n:quit\n",
+        )
+
+        assert result.returncode == 0
+        assert any(line.split()[-1:] == ["42"] for line in result.stdout.splitlines())
 
     def test_repl_help_lists_meta_commands(self, tmp_path: Path, env: dict[str, str]) -> None:
         work = tmp_path / "work"

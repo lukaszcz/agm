@@ -87,6 +87,7 @@ from agm.core.log import (
 )
 from agm.core.parse import parse_timeout
 from agm.core.toml import toml_dict
+from agm.packages.development import discover_development_packages
 from agm.parser import exit_with_usage_error
 
 
@@ -286,6 +287,7 @@ def run(args: ExecArgs) -> None:
             cwd=ctx.cwd,
             home=ctx.home,
             proj_dir=ctx.proj_dir,
+            package_roots=discover_development_packages(entry_path or ctx.cwd),
         )
     except (StaleStdlibError, ValueError) as exc:
         print(f"Error: invalid module roots configuration: {exc}", file=sys.stderr)

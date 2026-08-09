@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from agm.agl.modules.roots import RootSet, assemble_roots
+
+if TYPE_CHECKING:
+    from agm.packages.model import PackageInfo
 from agm.config.module_roots import (
     load_module_roots,
     resolve_lib_root,
@@ -19,6 +24,7 @@ def effective_exec_roots(
     cwd: Path,
     home: Path,
     proj_dir: Path | None,
+    package_roots: Iterable[PackageInfo] = (),
 ) -> RootSet:
     """Build exactly the root set an ``agm exec`` invocation uses."""
     module_config = load_module_roots(home=home, proj_dir=proj_dir, cwd=cwd)
@@ -29,4 +35,5 @@ def effective_exec_roots(
         configured=module_config.extra,
         cli=module_paths,
         cwd=cwd,
+        package_roots=package_roots,
     )

@@ -215,6 +215,21 @@ class TestReplRun:
         assert call["history_path"] == home / ".agm" / "repl_history"
         assert (home / ".agm").is_dir()
 
+    def test_invalid_development_package_exits_before_opening_the_console(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        _isolated_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "package.toml").write_text("not valid TOML")
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit):
+            repl_command.run(_args())
+
+        assert fake_console == []
+
     def test_imported_param_resolves_from_qualified_config(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -283,6 +298,40 @@ class TestReplRun:
         result = session.eval_entry("import nested/settings\nsettings::read()")
 
         assert not result.ok
+
+    def test_repl_mounts_the_current_package_and_its_path_dependencies(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        from agm.agl.semantics.values import IntValue
+
+        _isolated_home(monkeypatch, tmp_path / "home")
+        bravo = tmp_path / "bravo"
+        (bravo / "bravo").mkdir(parents=True)
+        (bravo / "package.toml").write_text('[package]\nname = "bravo"\nversion = "1.0.0"\n')
+        (bravo / "bravo" / "shared.agl").write_text("def answer() -> int = 42\n")
+
+        alpha = tmp_path / "alpha"
+        alpha.mkdir()
+        (alpha / "alpha").mkdir()
+        (alpha / "package.toml").write_text(
+            '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
+            "[dependencies]\n"
+            'bravo = { version = "1", path = "../bravo" }\n'
+        )
+        (alpha / "alpha" / "main.agl").write_text(
+            "import bravo/shared\ndef value() -> int = bravo/shared::answer()\n"
+        )
+        monkeypatch.chdir(alpha)
+
+        repl_command.run(_args(no_stdlib=True))
+        session: ReplSession = fake_console[0]["session"]
+        result = session.eval_entry("import alpha/main\nalpha/main::value()")
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(42)
 
     def test_separate_import_entries_validate_the_full_param_inventory(
         self,

@@ -54,6 +54,7 @@ if TYPE_CHECKING:
     )
     from agm.agl.syntax.types import TypeExpr
     from agm.agl.typecheck.env import CheckedModule, TypeEnvironment
+    from agm.packages.model import PackageInfo
 
 
 # Layout-only token types that carry no statement to evaluate.
@@ -139,6 +140,7 @@ class ReplSession:
         lib_root: "Path | None" = None,
         configured_roots: "Iterable[tuple[str, Path]]" = (),
         extra_cli_roots: "Iterable[str]" = (),
+        package_roots: "Iterable[PackageInfo]" = (),
         default_stdlib: bool = True,
         params_config_loader: "Callable[[tuple[IrParam, ...]], Mapping[str, object]] | None" = None,
     ) -> None:
@@ -274,6 +276,7 @@ class ReplSession:
         self._lib_root: Path | None = lib_root
         self._configured_roots: tuple[tuple[str, Path], ...] = tuple(configured_roots)
         self._extra_cli_roots: tuple[str, ...] = tuple(extra_cli_roots)
+        self._package_roots: tuple[PackageInfo, ...] = tuple(package_roots)
         # Lazily assembled RootSet (set directly in tests via s._roots = ...).
         self._roots: RootSet | None = None
         # Cached lib modules from prior REPL program entries.
@@ -343,6 +346,7 @@ class ReplSession:
             configured=self._configured_roots,
             cli=self._extra_cli_roots,
             cwd=cwd,
+            package_roots=self._package_roots,
         )
         return self._roots
 

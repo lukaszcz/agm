@@ -394,6 +394,7 @@ def _exec_param_completion_items(
     inline_source: bool = False,
     entry_path: Path | None = None,
     roots: "RootSet | None" = None,
+    default_stdlib: bool = True,
 ) -> list[CompletionItem]:
     """Return ``CompletionItem`` objects for ``--<param>`` flags discovered in *source*.
 
@@ -406,7 +407,11 @@ def _exec_param_completion_items(
         CompletionItem(flag)
         for flag in param_option_flags(
             discover_params_from_source(
-                source, inline_source=inline_source, entry_path=entry_path, roots=roots
+                source,
+                inline_source=inline_source,
+                entry_path=entry_path,
+                roots=roots,
+                default_stdlib=default_stdlib,
             )
         )
         if flag.startswith(incomplete)
@@ -446,6 +451,7 @@ class ExecCommand(TyperCommand):
             if source is None:
                 return base
             from agm.cli_support.exec_roots import effective_exec_roots
+            from agm.packages.development import discover_development_packages
 
             context = current_config_context()
             raw_module_paths = params.get("module_paths")
@@ -460,6 +466,7 @@ class ExecCommand(TyperCommand):
                 cwd=context.cwd,
                 home=context.home,
                 proj_dir=context.proj_dir,
+                package_roots=discover_development_packages(entry_path or context.cwd),
             )
             extra = _exec_param_completion_items(
                 source,
@@ -467,6 +474,7 @@ class ExecCommand(TyperCommand):
                 inline_source=inline_source,
                 entry_path=entry_path,
                 roots=roots,
+                default_stdlib=not bool(params.get("no_stdlib")),
             )
         except (Exception, SystemExit):
             return base

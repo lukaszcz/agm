@@ -7308,6 +7308,21 @@ class TestPackageCheck:
         assert result.stderr
         assert "Traceback" not in result.stderr
 
+    def test_rejects_a_package_module_with_a_missing_resource(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        package = _write_store_test_package(tmp_path / "source", "alpha", "1.0.0")
+        (package / "alpha" / "main.agl").write_text(
+            'let prompt = resource("prompts/missing.md")\nprogram def main() -> unit = ()\n',
+            encoding="utf-8",
+        )
+
+        result = run_agm(["pkg", "check", str(package)], env=env, cwd=tmp_path, check=False)
+
+        assert result.returncode == 1
+        assert result.stderr
+        assert "Traceback" not in result.stderr
+
     def test_group_and_command_help_are_available(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -7324,6 +7339,29 @@ class TestPackageCheck:
 
 
 class TestPackageInstall:
+    def test_create_rejects_a_resource_excluded_from_the_portable_archive(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        package = _write_store_test_package(tmp_path / "source", "alpha", "1.0.0")
+        (package / "prompts").mkdir()
+        (package / "prompts" / "review.md").write_text("prompt", encoding="utf-8")
+        (package / ".gitignore").write_text("prompts/review.md\n", encoding="utf-8")
+        (package / "alpha" / "main.agl").write_text(
+            'let prompt = resource("prompts/review.md")\nprogram def main() -> unit = ()\n',
+            encoding="utf-8",
+        )
+        archive = tmp_path / "alpha.agmpkg"
+
+        result = run_agm(
+            ["pkg", "create", str(package), "-o", str(archive)],
+            env=env,
+            cwd=tmp_path,
+            check=False,
+        )
+
+        assert result.returncode == 1
+        assert not archive.exists()
+
     def test_install_import_uninstall_and_inspect_package(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

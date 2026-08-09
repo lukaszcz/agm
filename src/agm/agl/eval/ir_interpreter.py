@@ -99,6 +99,7 @@ from agm.agl.ir.nodes import (
     IrRaise,
     IrRenderTemplate,
     IrRenderValue,
+    IrResource,
     IrReturn,
     IrSequence,
     IrTemplateText,
@@ -1050,6 +1051,9 @@ class IrInterpreter:
 
             case IrConstText(value=v):
                 return TextValue(v)
+
+            case IrResource(path=path):
+                return TextValue(path)
 
             case IrConstUnit():
                 return UNIT_VALUE

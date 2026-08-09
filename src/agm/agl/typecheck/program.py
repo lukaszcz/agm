@@ -54,7 +54,8 @@ Algorithm
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Generic, Mapping, TypeVar, cast
 
 from agm.agl.capabilities import HostCapabilities
@@ -170,6 +171,7 @@ class CheckedProgram:
     warnings: tuple[Diagnostic, ...]
     capabilities: HostCapabilities | None = None
     import_sccs: tuple[tuple[ModuleId, ...], ...] = ()
+    resource_roots: Mapping[ModuleId, Path | None] = field(default_factory=dict)
 
 
 def _assert_checked_module_closed(module: CheckedModule) -> None:
@@ -1037,6 +1039,7 @@ def check_program(
         ),
         capabilities=capabilities,
         import_sccs=resolved.import_sccs,
+        resource_roots={mid: resolved.graph.resource_root_for(mid) for mid in presentation_order},
     )
     if self_validation_enabled():
         assert_checked_program_closed(checked)

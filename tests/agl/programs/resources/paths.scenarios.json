@@ -1,0 +1,13 @@
+{
+  "scenarios": [
+    {
+      "name": "resolves_file_and_directory_resources_from_the_program_directory",
+      "expect": {
+        "stdout_contains": [
+          "tests/agl/programs/resources/prompt.md",
+          "tests/agl/programs/resources"
+        ]
+      }
+    }
+  ]
+}

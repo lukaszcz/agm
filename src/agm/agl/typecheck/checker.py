@@ -383,6 +383,10 @@ def _builtin_function_signature(name: str, *, is_method: bool = False) -> Functi
             return FunctionSignature(params=(_std_param("value", t),), result=t, type_params=("T",))
         case "parse_json":
             return FunctionSignature(params=(_std_param("value", TextType()),), result=JsonType())
+        case "resource":
+            return FunctionSignature(params=(_std_param("path", TextType()),), result=TextType())
+        case "resource-dir":
+            return FunctionSignature(params=(), result=TextType())
         case "ask":
             return FunctionSignature(
                 params=(
@@ -935,6 +939,10 @@ class _Checker:
             if static_root and not is_constant_expression(
                 item.value,
                 is_constructor=lambda node_id: self._constructor_ref_for(node_id) is not None,
+                is_constant_builtin=lambda node_id: (
+                    self._resolved.builtin_calls.get(node_id)
+                    in {BuiltinKind.RESOURCE, BuiltinKind.RESOURCE_DIR}
+                ),
             ):
                 raise AglTypeError(
                     "Root let and var initializers must be constant expressions "
@@ -1201,6 +1209,10 @@ class _Checker:
             if not is_constant_expression(
                 node.default,
                 is_constructor=lambda node_id: self._constructor_ref_for(node_id) is not None,
+                is_constant_builtin=lambda node_id: (
+                    self._resolved.builtin_calls.get(node_id)
+                    in {BuiltinKind.RESOURCE, BuiltinKind.RESOURCE_DIR}
+                ),
             ):
                 raise AglTypeError(
                     "builtin var initializer must be a constant expression "
@@ -2668,6 +2680,10 @@ class _Checker:
                 return self._builtins.check_ask_request(node)
             if kind == BuiltinKind.PARSE_JSON:
                 return self._builtins.check_parse_json(node)
+            if kind == BuiltinKind.RESOURCE:
+                return self._builtins.check_resource(node)
+            if kind == BuiltinKind.RESOURCE_DIR:
+                return self._builtins.check_resource_dir(node)
             # EXEC
             return self._builtins.check_exec(node, expected=expected)
 

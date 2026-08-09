@@ -50,6 +50,7 @@ PROGRAMS_DIR = AGL_DIR / "programs"
 REJECTIONS_DIR = AGL_DIR / "rejections"
 REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 EXTERNS_PROGRAMS_DIR = PROGRAMS_DIR / "externs"
+RESOURCE_PROGRAMS_DIR = PROGRAMS_DIR / "resources"
 
 
 def _load_json(path: Path) -> Any:
@@ -179,7 +180,9 @@ def _run_program(
             prepared = PipelineDriver.prepare_program(
                 source, entry_path=None, roots=roots, default_stdlib=default_stdlib
             )
-        elif program.is_relative_to(EXTERNS_PROGRAMS_DIR):
+        elif program.is_relative_to(EXTERNS_PROGRAMS_DIR) or program.is_relative_to(
+            RESOURCE_PROGRAMS_DIR
+        ):
             from agm.agl.modules.roots import RootSet
 
             roots = RootSet(roots=frozenset({program.parent.resolve(), REPO_STDLIB_ROOT}))

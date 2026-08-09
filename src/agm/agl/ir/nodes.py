@@ -67,6 +67,7 @@ __all__ = [
     "IrConstInt",
     "IrConstJsonNull",
     "IrConstText",
+    "IrResource",
     "IrConstUnit",
     "IrContains",
     "IrContinue",
@@ -155,6 +156,14 @@ class IrConstText:
 
     location: Location
     value: str
+
+
+@dataclass(frozen=True, slots=True)
+class IrResource:
+    """IR resource path resolved to an absolute filesystem location at link time."""
+
+    location: Location
+    path: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -1134,6 +1143,7 @@ IrExpr = (
     | IrConstDecimal
     | IrConstBool
     | IrConstText
+    | IrResource
     | IrConstUnit
     | IrConstJsonNull
     | IrMakeArray

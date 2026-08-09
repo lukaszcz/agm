@@ -415,7 +415,7 @@ with `key` and `message` fields.
 
 All calls use the same uniform parenthesized syntax. This applies equally to
 user `def`s, built-in functions (`ask`, `exec`, `print`, `render`, `parse_json`,
-`copy`, `shallow_copy`), and
+`copy`, `shallow_copy`, `resource`, `resource-dir`), and
 function values stored in bindings:
 
 ```ebnf
@@ -550,6 +550,27 @@ catch JsonParseError as e =>
 
 `parse_json` cannot be bound as a function value (`let f = parse_json` is a
 static error, because built-ins are only valid in call position).
+
+## `resource` and `resource-dir`
+
+`resource(path: text) -> text` returns the absolute path of an existing packaged
+or adjacent resource. Its only argument must be a text literal using a relative,
+forward-slash path with no `..` segment; it cannot be computed or passed through a
+binding. `resource-dir() -> text` returns the same absolute resource anchor.
+
+Resources in a loose module are anchored at that module's directory. Resources in a
+package-owned module are anchored at the package root, so they remain stable when the
+module is imported from another project. Both calls are constant expressions and may
+initialize root bindings and `builtin var` defaults. They resolve during linking; a
+missing target is a static error. Package checks and package creation verify each
+literal resource target. AgL intentionally exposes paths only: it has no filesystem
+read/write API.
+
+<!-- agl-check: fragment -->
+```agl
+let prompt_path = resource("prompts/review.md")
+let package_root = resource-dir()
+```
 
 ## `copy` and `shallow_copy`
 

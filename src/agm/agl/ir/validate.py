@@ -47,6 +47,7 @@ future change without a validator arm produces a mypy exhaustiveness error.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import TypeVar, assert_never
 
 from agm.agl.ir.contracts import (
@@ -120,6 +121,7 @@ from agm.agl.ir.nodes import (
     IrRaise,
     IrRenderTemplate,
     IrRenderValue,
+    IrResource,
     IrReturn,
     IrSequence,
     IrTemplateText,
@@ -650,6 +652,11 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
 
         case IrConstText():
             _validate_location(node.location, ctx)
+
+        case IrResource(path=path):
+            _validate_location(node.location, ctx)
+            if not Path(path).is_absolute():
+                raise InvalidIrError("resource paths must be absolute")
 
         case IrConstUnit():
             _validate_location(node.location, ctx)

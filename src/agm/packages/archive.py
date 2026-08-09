@@ -110,20 +110,38 @@ def write_archive(package_root: Path, destination: Path) -> ArchiveMetadata:
     try:
         _reject_source_links(root)
         _validate_destination(root, destination)
-        try:
-            source_manifest = load_manifest(root / _MANIFEST_NAME)
-        except ManifestError as exc:
-            raise ArchiveError(f"cannot load package manifest from {root}: {exc}") from exc
-        manifest = distribution_manifest(source_manifest)
-        prefix = _entry_prefix(manifest)
-        _archive_path(prefix + _MANIFEST_NAME)
-        contents = _archive_contents(root, manifest)
-        _validate_content_paths(prefix, contents)
+        manifest, prefix, contents = _archive_distribution(root)
         metadata = _metadata(manifest, contents)
         _write_archive_in_open_parent(source_root, destination, prefix, contents)
         return metadata
     finally:
         os.close(source_root.fd)
+
+
+def validate_archive_source(package_root: Path) -> PackageManifest:
+    """Validate the portable archive view of a package without writing it.
+
+    This applies package discipline to the files selected for an archive, so
+    ignored or otherwise excluded resources cannot pass source-tree validation
+    and then disappear from the distribution.
+    """
+
+    root = _package_root(package_root)
+    _reject_source_links(root)
+    manifest, _, contents = _archive_distribution(root)
+    # Import lazily so ordinary archive creation stays independent of the AgL
+    # parser; callers that request package creation explicitly need discipline.
+    from agm.packages.discipline import DisciplineError, validate_archive_package
+
+    try:
+        validate_archive_package(
+            manifest,
+            archive_paths=contents,
+            read_module=lambda path: contents[path].decode(),
+        )
+    except DisciplineError as exc:
+        raise ArchiveError(f"archive package violates discipline: {exc}") from exc
+    return manifest
 
 
 def _directory_publication_supported() -> bool:
@@ -506,6 +524,20 @@ def _validate_destination(root: Path, destination: Path) -> None:
             == destination_identity
         ):
             raise ArchiveError(f"package archive destination aliases package source {source}")
+
+
+def _archive_distribution(root: Path) -> tuple[PackageManifest, str, dict[str, bytes]]:
+    """Build the manifest and selected content set for a portable archive."""
+    try:
+        source_manifest = load_manifest(root / _MANIFEST_NAME)
+    except ManifestError as exc:
+        raise ArchiveError(f"cannot load package manifest from {root}: {exc}") from exc
+    manifest = distribution_manifest(source_manifest)
+    prefix = _entry_prefix(manifest)
+    _archive_path(prefix + _MANIFEST_NAME)
+    contents = _archive_contents(root, manifest)
+    _validate_content_paths(prefix, contents)
+    return manifest, prefix, contents
 
 
 def _archive_contents(root: Path, manifest: PackageManifest) -> dict[str, bytes]:

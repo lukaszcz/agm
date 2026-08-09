@@ -149,6 +149,8 @@ builtin def render[T](value: T) -> text
 builtin def copy[T](value: T) -> T
 builtin def shallow_copy[T](value: T) -> T
 builtin def parse_json(value: text) -> json
+builtin def resource(path: text) -> text
+builtin def resource-dir() -> text
 builtin def ask[T](
   prompt: text,
   agent: Agent = std/config::default-agent,

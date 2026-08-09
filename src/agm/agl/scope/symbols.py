@@ -108,6 +108,8 @@ class BuiltinKind(enum.Enum):
     PARSE_JSON = "PARSE_JSON"
     COPY = "COPY"
     SHALLOW_COPY = "SHALLOW_COPY"
+    RESOURCE = "RESOURCE"
+    RESOURCE_DIR = "RESOURCE_DIR"
 
 
 # The single source of truth for the built-in call names and their kinds.
@@ -122,6 +124,8 @@ BUILTIN_CALL_NAMES: dict[str, BuiltinKind] = {
     "parse_json": BuiltinKind.PARSE_JSON,
     "copy": BuiltinKind.COPY,
     "shallow_copy": BuiltinKind.SHALLOW_COPY,
+    "resource": BuiltinKind.RESOURCE,
+    "resource-dir": BuiltinKind.RESOURCE_DIR,
 }
 
 

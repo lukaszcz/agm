@@ -32,6 +32,7 @@ import json
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import assert_never, cast
 
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals, DeclaredNominal
@@ -104,6 +105,7 @@ from agm.agl.ir.nodes import (
     IrRaise,
     IrRenderTemplate,
     IrRenderValue,
+    IrResource,
     IrReturn,
     IrSequence,
     IrTemplateText,
@@ -246,6 +248,7 @@ from agm.agl.syntax.nodes import (
     simple_let_pattern_name,
     static_items,
 )
+from agm.agl.syntax.resources import ResourceError, resolve_resource, resource_path
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import (
     build_format_instructions,
@@ -415,6 +418,7 @@ class _Lowerer:
         source_id: SourceId,
         source_text: str,
         sites: Mapping[int, CompiledMatchSite],
+        resource_root: Path | None = None,
         *,
         contract_payloads: Mapping[int, ContractPayload] | None = None,
     ) -> None:
@@ -424,6 +428,7 @@ class _Lowerer:
         self._source_id = source_id
         self._source_text = normalize_newlines(source_text)
         self._compiled_sites = sites
+        self._resource_root = resource_root
         self._params: list[IrParam] = []
         # Shared TypeTable built during checking; resolves record/enum field
         # and variant shapes for constructor lowering, nominal descriptors,
@@ -2123,6 +2128,14 @@ class _Lowerer:
                 # parse_json(text) — arg is statically text; lower without coercion.
                 arg_ir = self.lower_expr(call_node.args[0])
                 return IrParseJson(location=loc, value=arg_ir)
+
+            case BuiltinKind.RESOURCE | BuiltinKind.RESOURCE_DIR:
+                try:
+                    path = resource_path(call_node, is_directory=kind is BuiltinKind.RESOURCE_DIR)
+                    resolved = resolve_resource(self._resource_root, path)
+                except ResourceError as exc:
+                    raise ResourceError(str(exc), span=span) from exc
+                return IrResource(location=loc, path=str(resolved))
 
             case BuiltinKind.COPY | BuiltinKind.SHALLOW_COPY:
                 # copy(value) / shallow_copy(value) — identity in the checker's own

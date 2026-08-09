@@ -8,7 +8,9 @@ from typing import TypeVar
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.parser import AglSyntaxError, parse_program
-from agm.agl.syntax.nodes import static_function_items
+from agm.agl.syntax.nodes import Call, VarRef, static_function_items
+from agm.agl.syntax.resources import ResourceError, resolve_resource, resource_path
+from agm.agl.syntax.visitor import walk
 from agm.command_catalog import RESERVED_COMMAND_NAMES
 from agm.core import fs
 from agm.packages.manifest import PackageManifest
@@ -28,6 +30,11 @@ def validate_package(package: PackageInfo) -> None:
     _validate_package_name(package.manifest.name)
     modules = _module_files(package)
     _validate_commands(package.manifest, modules, fs.read_text)
+    _validate_resources(
+        modules,
+        fs.read_text,
+        exists=lambda relative: _resource_exists(package.root, relative),
+    )
 
 
 def validate_archive_package(
@@ -53,6 +60,61 @@ def validate_archive_package(
             raise DisciplineError(f"invalid module path {path.removesuffix('.agl')!r}") from exc
         modules[module_id] = path
     _validate_commands(manifest, modules, read_module)
+    path_set = frozenset(paths)
+    _validate_resources(
+        modules,
+        read_module,
+        exists=lambda relative: _archive_resource_exists(relative, path_set),
+    )
+
+
+def _archive_resource_exists(relative: str, paths: frozenset[str]) -> bool:
+    """Return whether a package-root-relative archive resource is present."""
+    normalized = PurePosixPath(relative).as_posix()
+    return normalized == "." or normalized in paths
+
+
+def _resource_exists(root: Path, relative: str) -> bool:
+    """Return whether a resource exists without leaving a package root."""
+    try:
+        resolve_resource(root, relative)
+    except ResourceError:
+        return False
+    return True
+
+
+def _validate_resources(
+    modules: Mapping[ModuleId, T],
+    read_module: Callable[[T], str],
+    *,
+    exists: Callable[[str], bool],
+) -> None:
+    """Verify that every literal resource target in package modules is present."""
+    for module_path in modules.values():
+        try:
+            program = parse_program(read_module(module_path))
+        except (AglSyntaxError, OSError, UnicodeDecodeError) as exc:
+            raise DisciplineError(f"cannot parse package module {module_path}: {exc}") from exc
+        calls: list[tuple[Call, bool]] = []
+
+        def collect_resource_call(node: object) -> None:
+            if (
+                isinstance(node, Call)
+                and isinstance(node.callee, VarRef)
+                and node.callee.name in {"resource", "resource-dir"}
+            ):
+                calls.append((node, node.callee.name == "resource-dir"))
+
+        walk(program, collect_resource_call)
+        for call, is_directory in calls:
+            try:
+                relative = resource_path(call, is_directory=is_directory)
+            except ResourceError as exc:
+                raise DisciplineError(f"invalid resource call in {module_path}: {exc}") from exc
+            if relative is not None and not exists(relative):
+                raise DisciplineError(
+                    f"resource {relative!r} referenced by {module_path} does not exist"
+                )
 
 
 def _validate_package_name(name: str) -> None:

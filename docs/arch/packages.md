@@ -53,8 +53,7 @@ outside a source tree that another same-user writer can rename, nor prevent a wr
 after any snapshot. Concurrent source or namespace mutation is therefore unsupported. An existing
 destination must be hard-linkable within that parent for detected-race rollback; platforms without the
 required directory-relative operations fail before publication rather than using a pathname fallback.
-`agm pkg check` exposes the validation boundary without modifying or installing a package: it resolves
-requirements store-first, then through local paths, while URL sources remain deferred. `agm pkg create`
+`agm pkg check` exposes the validation boundary without modifying or installing a package: every package module is parsed to verify literal `resource(...)` targets remain inside the package and exist, and `agm pkg create` applies the same check to its selected portable archive contents, rejecting resources removed by archive filtering before publication. It resolves requirements store-first, then through local paths, while URL sources remain deferred. `agm pkg create`
 checks the portable distribution view instead, so stripped local paths cannot make an archive's requirements
 unsatisfiable. `agm exec` discovers the package
 containing its file (or its current directory for inline source), while `agm repl` discovers

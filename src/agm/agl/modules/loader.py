@@ -23,7 +23,7 @@ for the entry plus a :class:`~agm.agl.modules.ids.ModuleId` per library module.
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import agm.agl.syntax as syntax
@@ -142,6 +142,15 @@ class ModuleGraph:
     entry_id: ModuleId
     sccs: tuple[tuple[ModuleId, ...], ...]
     adjacency: dict[ModuleId, tuple[ModuleId, ...]]
+    roots: RootSet = field(default_factory=lambda: RootSet(roots=frozenset()))
+
+    def resource_root_for(self, module_id: ModuleId) -> Path | None:
+        """Return the filesystem anchor used by a module's resource calls."""
+        path = self.modules[module_id].path
+        if path is None:
+            return None
+        package = owning_package(path, self.roots.packages)
+        return package.root if package is not None else path.parent
 
 
 # ---------------------------------------------------------------------------
@@ -431,6 +440,7 @@ def _load_into_graph(
         entry_id=ENTRY_ID,
         sccs=sccs,
         adjacency={mid: tuple(targets) for mid, targets in adj.items()},
+        roots=roots,
     )
     return graph, next_id, newly_loaded
 

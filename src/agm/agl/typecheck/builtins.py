@@ -44,6 +44,7 @@ from agm.agl.syntax.nodes import (
     StringLit,
     VarRef,
 )
+from agm.agl.syntax.resources import ResourceError, resource_path
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.env import (
     AglTypeError,
@@ -244,6 +245,22 @@ class BuiltinCallChecker:
         arg_type = self._ctx._check_expr(arg_expr, expected=explicit)
         self._ctx._assert_assignable_from(arg_type, explicit, arg_expr.span, arg_expr)
         return explicit
+
+    # --- resources ---
+
+    def check_resource(self, node: Call) -> Type:
+        try:
+            resource_path(node, is_directory=False)
+        except ResourceError as exc:
+            raise AglTypeError(str(exc), span=node.span) from exc
+        return TextType()
+
+    def check_resource_dir(self, node: Call) -> Type:
+        try:
+            resource_path(node, is_directory=True)
+        except ResourceError as exc:
+            raise AglTypeError(str(exc), span=node.span) from exc
+        return TextType()
 
     # --- parse_json ---
 

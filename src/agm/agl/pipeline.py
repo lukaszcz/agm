@@ -1162,8 +1162,25 @@ class PipelineDriver:
 
         if executable is None:
             from agm.agl.lower import lower_program
+            from agm.agl.syntax.resources import ResourceError
 
-            executable = lower_program(compiled, contract_payloads=contract_payloads)
+            try:
+                executable = lower_program(compiled, contract_payloads=contract_payloads)
+            except ResourceError as exc:
+                diagnostic = (
+                    diagnostic_from_span(str(exc), exc.span)
+                    if exc.span is not None
+                    else Diagnostic(message=str(exc), line=1)
+                )
+                return (
+                    RunResult(
+                        ok=False,
+                        diagnostics=[diagnostic],
+                        error=None,
+                        warnings=list(warnings),
+                    ),
+                    None,
+                )
 
         if not check_only:
             # Extern (Python FFI) companions: import and resolve every declared

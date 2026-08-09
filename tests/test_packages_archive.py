@@ -18,7 +18,9 @@ from agm.packages.archive import (
     ArchiveError,
     read_archive_manifest,
     read_archive_metadata,
+    validate_archive_source,
     verify_archive,
+    verify_archive_discipline,
     write_archive,
 )
 from agm.packages.record import RecordEntry, serialize_record
@@ -83,6 +85,24 @@ def test_write_archive_excludes_private_vcs_cache_archive_and_ignored_files(tmp_
         "review_tools-1.2.3/package.toml",
         "review_tools-1.2.3/review_tools/main.agl",
     ]
+
+
+def test_archive_discipline_resolves_resources_relative_to_the_package_root(
+    tmp_path: Path,
+) -> None:
+    root = _package_tree(tmp_path)
+    (root / "prompts").mkdir()
+    (root / "prompts" / "review.md").write_text("prompt", encoding="utf-8")
+    (root / "review_tools" / "main.agl").write_text(
+        'let prompt = resource("prompts/review.md")\nprogram def main() -> unit = ()\n',
+        encoding="utf-8",
+    )
+    archive_path = tmp_path / "package.agmpkg"
+
+    metadata = write_archive(root, archive_path)
+
+    assert validate_archive_source(root) == metadata.manifest
+    assert verify_archive_discipline(archive_path) == metadata
 
 
 def test_write_archive_refuses_symlinks_and_casefolding_collisions(tmp_path: Path) -> None:

@@ -1,0 +1,7 @@
+# Resource paths are anchored to this program file's directory.
+let prompt = resource("prompt.md")
+let root = resource-dir()
+
+program def main() -> unit =
+  print prompt
+  print root

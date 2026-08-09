@@ -9,14 +9,16 @@
 | `agm pkg list` | List immutable installed versions and active editable packages |
 | `agm pkg info NAME` | Show active package details and dependency status |
 
-`agm pkg check` validates the `package.toml` manifest, module-tree naming discipline, and
-program references used by manifest command registrations. It also checks dependencies without
-modifying packages: a matching stored version is used first, then a declared local `path`; a URL
-with its required hash is a deferred satisfiable source and is not fetched. `DIR` defaults to the
-current directory.
+`agm pkg check` validates the `package.toml` manifest, module-tree naming discipline, program
+references used by manifest command registrations, and literal resource targets. It also checks
+dependencies without modifying packages: a matching stored version is used first, then a declared
+local `path`; a URL with its required hash is a deferred satisfiable source and is not fetched.
+`DIR` defaults to the current directory.
 
-`agm pkg create` runs the same manifest and package-discipline validation, then checks the
-*distribution* dependencies before writing a deterministic `<name>-<version>.agmpkg` archive.
+`agm pkg create` validates the selected portable archive contents, including literal resource
+targets, then checks the *distribution* dependencies before writing a deterministic
+`<name>-<version>.agmpkg` archive. A resource excluded by archive filtering causes creation to fail
+rather than producing a broken package.
 `DIR` defaults to the current directory; without `-o`, the archive is written beside `DIR`. The
 archived manifest removes local `path` dependency sources while leaving the development manifest
 unchanged, so a package that relies only on a local path must have a matching stored version (or a

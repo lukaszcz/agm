@@ -12,7 +12,7 @@ The environment module owns construction and resolution of process environments:
 
 ## Filesystem, TOML, and Dotenv I/O
 
-Filesystem mutations (mkdir, write, chmod, remove, glob) and TOML/dotenv reads and writes are wrapped so they participate in dry-run and present a consistent interface. TOML handling uses round-trip parsing so that updating a single key preserves the rest of a config file. Dotenv helpers upsert individual `.env` lines.
+Filesystem mutations (mkdir, write, copy files or trees, chmod, remove, glob) and TOML/dotenv reads and writes are wrapped so they participate in dry-run and present a consistent interface. Copy helpers preserve file metadata; tree copies preserve descendant links rather than dereferencing them and refuse linked roots or destinations, so install-like flows do not need package-local `shutil` calls. TOML handling uses round-trip parsing so that updating a single key preserves the rest of a config file. Dotenv helpers upsert individual `.env` lines.
 
 ## Dry Run
 

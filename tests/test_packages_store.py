@@ -1,0 +1,45 @@
+"""Tests for the package-store directory layout."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import cast
+
+import pytest
+import semver
+
+from agm.packages.store import StorePathError, package_store_path, store_root
+
+
+def test_store_paths_use_the_agm_home_override(tmp_path: Path, env: dict[str, str]) -> None:
+    agm_home = tmp_path / "isolated-agm-home"
+    env["AGM_HOME"] = str(agm_home)
+
+    assert store_root(home=Path(env["HOME"]), env=env) == agm_home / "packages"
+    assert package_store_path(
+        "review-tools", semver.Version.parse("1.2.3"), home=Path(env["HOME"]), env=env
+    ) == (agm_home / "packages" / "review-tools" / "1.2.3")
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["", ".", "..", "../outside", "name/version", r"name\version", "/outside", r"C:\outside"],
+)
+def test_package_store_path_rejects_names_that_could_escape_the_store(
+    tmp_path: Path, env: dict[str, str], name: str
+) -> None:
+    with pytest.raises(StorePathError):
+        package_store_path(name, semver.Version.parse("1.2.3"), home=Path(env["HOME"]), env=env)
+
+
+@pytest.mark.parametrize("version", ["", ".", "..", "../outside", "1.2.3/extra", r"1.2.3\extra"])
+def test_package_store_path_rejects_versions_that_could_escape_the_store(
+    tmp_path: Path, env: dict[str, str], version: str
+) -> None:
+    with pytest.raises(StorePathError):
+        package_store_path(
+            "review-tools",
+            cast(semver.Version, version),
+            home=Path(env["HOME"]),
+            env=env,
+        )

@@ -3,8 +3,13 @@
 The package domain defines the portable package boundary independently of installation and
 CLI dispatch. A package directory has a `package.toml` manifest and a module tree named after
 the package; its `PackageInfo` is the source-agnostic input module-root assembly mounts for
-development directories now and installed packages later. `agm pkg check` exposes the current
-validation boundary without modifying or installing a package. `agm exec` discovers the package
+development directories now and installed packages later. The versioned store layout helpers
+place extracted package trees under `<AGM home>/packages/<name>/<version>/`, rejecting path
+components that could leave the AGM home; activation and installation flows build on this layout
+without changing the package model. `RECORD` helpers write and verify the complete relative file
+set with SHA-256 digests while refusing linked package trees, providing the integrity and removal
+manifest for installed trees. `agm pkg check` exposes the current validation boundary
+without modifying or installing a package. `agm exec` discovers the package
 containing its file (or its current directory for inline source), while `agm repl` discovers
 one at its current directory; each mounts its explicitly path-sourced dependency closure.
 
@@ -32,6 +37,8 @@ package names and command registrations cannot claim AGM's command namespace.
 - `src/agm/packages/manifest.py` — manifest schema and SemVer parsing.
 - `src/agm/packages/model.py` — package-root identity and canonical module ownership.
 - `src/agm/packages/development.py` — containing development-package and path-dependency discovery.
+- `src/agm/packages/store.py` — AGM-home-relative versioned store paths.
+- `src/agm/packages/record.py` — deterministic SHA-256 `RECORD` writing and verification.
 - `src/agm/agl/modules/roots.py` and `loader.py` — root mounting and ownership-based import visibility.
 - `src/agm/packages/discipline.py` — directory and command/program validation.
 - `src/agm/commands/pkg/check.py` — CLI-facing manifest and discipline validation.

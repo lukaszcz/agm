@@ -123,6 +123,41 @@ def append_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
         handle.write(content)
 
 
+def copy_file(source: Path, destination: Path) -> None:
+    """Copy a file with its metadata unless dry-run is enabled."""
+
+    if dry_run.enabled():
+        dry_run.print_operation("copy-file", f"{display_path(source)} {display_path(destination)}")
+        return
+    shutil.copy2(source, destination)
+
+
+def copy_tree(source: Path, destination: Path, *, dirs_exist_ok: bool = False) -> None:
+    """Copy a tree, preserving source links and refusing linked roots or destinations.
+
+    Descendant symbolic links are copied as links rather than dereferenced. A linked
+    source root does not designate a tree, and linked destination paths or ancestors
+    could redirect a merge outside its requested destination, so both are rejected.
+    """
+
+    if dry_run.enabled():
+        dry_run.print_operation("copy-tree", f"{display_path(source)} {display_path(destination)}")
+        return
+    if source.is_symlink():
+        raise ValueError(f"cannot copy symbolic-link tree root {source}")
+    destination_path = Path.cwd() / destination
+    for path in (*destination_path.parents, destination_path, *destination.rglob("*")):
+        if path.is_symlink():
+            raise ValueError(f"cannot copy tree into symbolic-link destination path {path}")
+    shutil.copytree(
+        source,
+        destination,
+        copy_function=shutil.copy2,
+        dirs_exist_ok=dirs_exist_ok,
+        symlinks=True,
+    )
+
+
 def rmtree(path: Path) -> None:
     """Remove a directory tree unless dry-run is enabled."""
 

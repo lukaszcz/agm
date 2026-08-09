@@ -7,8 +7,14 @@ development directories now and installed packages later. The versioned store la
 place extracted package trees under `<AGM home>/packages/<name>/<version>/`, rejecting path
 components that could leave the AGM home and resolving every install/removal/info path before it can
 follow an ancestor link outside the canonical store. Its activation index selects one store version per
-package (or records an editable root), is deterministically rebuildable from installed manifests,
-and validates every selected package's direct minimum-version requirements after development
+package (or records an editable root) and caches manifest-declared command registrations. Command
+priority is instead durable package-local provenance: each immutable tree has a sibling store sidecar
+that records its activation order and `--shadow` intent, outside the tree and therefore outside its
+immutable `RECORD` payload. Rebuild reads those sidecars before reconciling command owners, so an
+index loss retains temporal shadow precedence rather than inventing an order from manifests. Missing
+legacy provenance is tolerated only when no command collision needs it; malformed or contradictory
+provenance, or a collision with missing provenance, stops rebuilding. Editable selections remain
+index-only and cannot be recovered from the store. It validates every selected package's direct minimum-version requirements after development
 roots exclude same-name active or pinned selections before store resolution. Non-editable selections
 must canonically remain within the store root, including when a store path traverses a link. Project
 package pins override global versions before
@@ -72,15 +78,20 @@ and the host-selected standard library, while ad-hoc modules retain open visibil
 `packages/discipline.py` validates package naming, module-tree naming, manifest command
 paths, and that each registered command names an actual `program def` in the package. It
 uses the existing AgL module and identifier rules plus the built-in command catalog, so
-package names and command registrations cannot claim AGM's command namespace.
+package names and command registrations cannot claim AGM's command namespace. Activation
+merges valid manifest commands in `packages/activation.py`; conflicts with every active manifest,
+including an owner displaced by an earlier shadow, refuse an install unless its `--shadow` request
+replaces them. Reconciliation restores a remaining active owner when a winner is removed and records
+only current owners. Install and list render the resulting shadow relationships explicitly. Command
+dispatch remains a CLI concern.
 
 ## Code Entry Points
 
 - `src/agm/packages/manifest.py` — manifest schema, SemVer parsing, and the non-mutating distribution-manifest view.
 - `src/agm/packages/model.py` — package-root identity and canonical module ownership.
 - `src/agm/packages/development.py` — containing development-package and path-dependency discovery.
-- `src/agm/packages/store.py` — AGM-home-relative versioned store paths.
-- `src/agm/packages/activation.py` — activation index, project pins, requirement validation, and store-root selection.
+- `src/agm/packages/store.py` — AGM-home-relative versioned store and provenance-sidecar paths.
+- `src/agm/packages/activation.py` — activation index, durable command provenance, project pins, requirement validation, and store-root selection.
 - `src/agm/packages/record.py` — deterministic SHA-256 `RECORD` writing, verification, and content identity.
 - `src/agm/packages/dependencies.py` — non-mutating store/path/URL dependency satisfiability checks.
 - `src/agm/packages/archive.py` — deterministic `.agmpkg` writing, bounded metadata reads, streaming integrity and dry-run discipline verification, and safe private-tree extraction.

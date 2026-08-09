@@ -20,7 +20,13 @@ from agm.cli_support.args import (
     PkgUninstallArgs,
 )
 from agm.config.context import ConfigContext
-from agm.packages.activation import ActivationIndex, ActivePackage, PackageActivationError
+from agm.packages.activation import (
+    ActivationIndex,
+    ActivePackage,
+    CommandRegistration,
+    CommandShadow,
+    PackageActivationError,
+)
 from agm.packages.archive import ArchiveError
 from agm.packages.install import PackageInstallError
 from agm.packages.manifest import CommandSpec, DependencySpec, PackageManifest
@@ -103,7 +109,7 @@ def test_install_command_delegates_and_renders_result(
     monkeypatch.setattr(install_command, "current_config_context", lambda: _context(tmp_path))
     monkeypatch.setattr(install_command, "install_directory", lambda *args, **kwargs: package)
 
-    install_command.run(PkgInstallArgs("source", editable=False, shadow=True))
+    install_command.run(PkgInstallArgs("source", editable=False, shadow=False))
 
     assert "installed alpha 1.0.0" in capsys.readouterr().out
 
@@ -118,6 +124,39 @@ def test_install_command_routes_an_archive_to_the_archive_installer(
     monkeypatch.setattr(install_command, "install_archive", lambda *args, **kwargs: package)
 
     install_command.run(PkgInstallArgs(str(archive), editable=False, shadow=True))
+
+
+def test_shadow_install_reports_unavailable_shadow_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = _package(tmp_path)
+    monkeypatch.setattr(install_command, "current_config_context", lambda: _context(tmp_path))
+    monkeypatch.setattr(install_command, "install_directory", lambda *args, **kwargs: package)
+
+    def fail_index(**_: object) -> ActivationIndex:
+        raise PackageActivationError("broken")
+
+    monkeypatch.setattr(install_command, "load_activation_index", fail_index)
+    with pytest.raises(SystemExit):
+        install_command.run(PkgInstallArgs("source", editable=False, shadow=True))
+
+
+def test_shadow_install_renders_displaced_command_owners(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    package = _package(tmp_path)
+    monkeypatch.setattr(install_command, "current_config_context", lambda: _context(tmp_path))
+    monkeypatch.setattr(install_command, "install_directory", lambda *args, **kwargs: package)
+    monkeypatch.setattr(install_command, "load_activation_index", lambda **_: ActivationIndex())
+    monkeypatch.setattr(
+        install_command,
+        "command_shadow_diagnostics",
+        lambda *args, **kwargs: {"alpha": (CommandShadow("launch", ("bravo",)),)},
+    )
+
+    install_command.run(PkgInstallArgs("source", editable=False, shadow=True))
+
+    assert "shadowed command launch from bravo" in capsys.readouterr().out
 
 
 def test_install_command_reports_domain_error(
@@ -149,26 +188,46 @@ def test_uninstall_command_delegates_and_reports_error(
         uninstall_command.run(PkgUninstallArgs("alpha"))
 
 
-def test_list_command_renders_store_and_editable_selections(
+def test_list_command_prints_commands_only_below_their_active_or_editable_owner(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    alpha = _package(tmp_path, "alpha")
+    alpha_old = PackageInfo(
+        tmp_path / "alpha-old",
+        PackageManifest(name="alpha", version=semver.Version.parse("1.0.0")),
+    )
+    alpha = PackageInfo(
+        tmp_path / "alpha-current",
+        PackageManifest(name="alpha", version=semver.Version.parse("2.0.0")),
+    )
     bravo = _package(tmp_path, "bravo")
     index = ActivationIndex(
         {
             "alpha": ActivePackage(alpha.manifest.version),
             "bravo": ActivePackage(bravo.manifest.version, editable=bravo.root),
-        }
+        },
+        {
+            "launch": CommandRegistration("alpha", "alpha/main::main"),
+            "bravo run": CommandRegistration("bravo", "bravo/main::main"),
+        },
     )
     monkeypatch.setattr(list_command, "current_config_context", lambda: _context(tmp_path))
     monkeypatch.setattr(list_command, "load_activation_index", lambda **_: index)
-    monkeypatch.setattr(list_command, "installed_packages", lambda **_: (alpha,))
+    monkeypatch.setattr(list_command, "installed_packages", lambda **_: (alpha_old, alpha))
+    monkeypatch.setattr(
+        list_command,
+        "command_shadow_diagnostics",
+        lambda *args, **kwargs: {"alpha": (CommandShadow("launch", ("bravo",)),)},
+    )
 
     list_command.run(PkgListArgs())
 
-    output = capsys.readouterr().out
-    assert "alpha 1.0.0 active" in output
-    assert "bravo 1.0.0 editable" in output
+    assert capsys.readouterr().out.splitlines() == [
+        "alpha 1.0.0 installed",
+        "alpha 2.0.0 active",
+        "  command launch (shadows bravo)",
+        "bravo 1.0.0 editable",
+        "  command bravo run",
+    ]
 
 
 @pytest.mark.parametrize("error", [PackageActivationError("bad"), PackageInstallError("bad")])

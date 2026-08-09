@@ -50,6 +50,16 @@ class TestPackageDiscipline:
         with pytest.raises(DisciplineError):
             validate_package(_package(fixture))
 
+    @pytest.mark.parametrize("alias", ("wsp", "wt", "cp", "copy"))
+    def test_rejects_command_path_starting_with_a_builtin_alias(
+        self, tmp_path: Path, alias: str
+    ) -> None:
+        package = _custom_package(tmp_path, command_path=f"{alias} launch")
+        (package.module_root / "main.agl").write_text("program def main() -> unit = ()\n")
+
+        with pytest.raises(DisciplineError):
+            validate_package(package)
+
     @pytest.mark.parametrize(
         "reference",
         (

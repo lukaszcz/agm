@@ -914,8 +914,9 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         agm pkg install [--editable] [--shadow] SRC
 
         Install a package directory or .agmpkg archive into AGM's versioned store and activate its
-        version. --editable mounts a directory SRC directly. --shadow is retained for command
-        registration. URL dependencies are fetched with their declared SHA-256 hash before install.
+        version. --editable mounts a directory SRC directly. Conflicting registered commands refuse
+        installation unless --shadow replaces the existing registration. URL dependencies are
+        fetched with their declared SHA-256 hash before install.
     """),
     ("pkg", "uninstall"): textwrap.dedent("""\
         agm pkg uninstall NAME
@@ -926,7 +927,8 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
     ("pkg", "list"): textwrap.dedent("""\
         agm pkg list
 
-        List immutable installed versions and active editable packages.
+        List immutable installed versions and active editable packages, including their registered
+        commands and any command-shadow diagnostics.
     """),
     ("pkg", "info"): textwrap.dedent("""\
         agm pkg info NAME

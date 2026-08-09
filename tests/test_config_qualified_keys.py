@@ -90,7 +90,9 @@ class TestQualifiedConfigKeys:
 
         assert '["review-tools/judge"].review' in str(exc_info.value)
 
-    @pytest.mark.parametrize("reserved_name", ("exec", "modules", "params"))
+    @pytest.mark.parametrize(
+        "reserved_name", ("exec", "wsp", "wt", "cp", "copy", "modules", "params")
+    )
     def test_reserved_sections_are_not_config_module_prefixes(self, reserved_name: str) -> None:
         key = QualifiedConfigKey((reserved_name,), ("review",), "max-tries")
         config = {reserved_name: {"review": {"max-tries": 1}}}

@@ -12,13 +12,18 @@ import semver
 from tomlkit.exceptions import TOMLKitError
 
 from agm.agl.modules.ids import ModuleId
+from agm.command_catalog import RESERVED_COMMAND_NAMES
 from agm.config.general import load_merged_config
 from agm.core import dry_run
 from agm.core.fs import mkdir, write_text
 from agm.core.toml import TomlDict, load_toml_file, toml_dict
 from agm.packages.manifest import ManifestError, PackageManifest, load_manifest
 from agm.packages.model import PackageInfo
-from agm.packages.store import canonical_package_store_path, store_root
+from agm.packages.store import (
+    canonical_package_provenance_path,
+    canonical_package_store_path,
+    store_root,
+)
 
 
 class PackageActivationError(ValueError):
@@ -29,14 +34,15 @@ class PackageActivationError(ValueError):
 class ActivePackage:
     """One globally active package selection.
 
-    ``editable`` names a live package root.  Otherwise ``version`` identifies
-    an immutable tree in the versioned package store.  ``shadow`` is retained
-    in activation state for registered-command handling, which is added later.
+    ``editable`` names a live package root. Otherwise ``version`` identifies
+    an immutable tree in the versioned package store. ``registration_order``
+    records when this package last claimed its manifest commands.
     """
 
     version: semver.Version
     editable: Path | None = None
     shadow: bool = False
+    registration_order: int = 0
 
     def __post_init__(self) -> None:
         if self.editable is not None:
@@ -44,10 +50,36 @@ class ActivePackage:
 
 
 @dataclass(frozen=True, slots=True)
+class CommandRegistration:
+    """One installed package command recorded in the activation index."""
+
+    package: str
+    program: str
+    description: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PackageProvenance:
+    """Durable command-priority metadata stored beside an immutable package tree."""
+
+    registration_order: int
+    shadow: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CommandShadow:
+    """A winning package command and the active package owners it displaces."""
+
+    path_name: str
+    displaced_packages: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ActivationIndex:
-    """The rebuildable global package selection stored under AGM home."""
+    """The global package selection and cached command registry."""
 
     packages: dict[str, ActivePackage] = field(default_factory=dict)
+    commands: dict[str, CommandRegistration] = field(default_factory=dict)
 
 
 def activation_index_path(*, home: Path, env: Mapping[str, str] | None = None) -> Path:
@@ -77,7 +109,7 @@ def write_activation_index(
     path = activation_index_path(home=home, env=env)
     lines: list[str] = []
     for name, active in sorted(index.packages.items()):
-        _validate_package_name(name)
+        _validate_active_package(name, active)
         lines.extend(
             (
                 f"[packages.{name}]",
@@ -88,6 +120,19 @@ def write_activation_index(
             lines.append(f"editable = {_toml_string(str(active.editable))}")
         if active.shadow:
             lines.append("shadow = true")
+        lines.append(f"registration-order = {active.registration_order}")
+        lines.append("")
+    for path_name, command in sorted(index.commands.items()):
+        _validate_command_registration(path_name, command, index.packages)
+        lines.extend(
+            (
+                f"[commands.{_toml_string(path_name)}]",
+                f"package = {_toml_string(command.package)}",
+                f"program = {_toml_string(command.program)}",
+            )
+        )
+        if command.description is not None:
+            lines.append(f"description = {_toml_string(command.description)}")
         lines.append("")
     content = "\n".join(lines)
     try:
@@ -109,6 +154,72 @@ def write_activation_index(
     return path
 
 
+def package_provenance_path(
+    name: str, version: semver.Version, *, home: Path, env: Mapping[str, str] | None = None
+) -> Path:
+    """Return the canonical sidecar path for one immutable package version."""
+
+    try:
+        return canonical_package_provenance_path(name, version, home=home, env=env)
+    except ValueError as exc:
+        raise PackageActivationError(
+            f"package provenance for {name!r} resolves outside the package store root"
+        ) from exc
+
+
+def load_package_provenance(
+    name: str, version: semver.Version, *, home: Path, env: Mapping[str, str] | None = None
+) -> PackageProvenance | None:
+    """Load one immutable package's optional command-priority sidecar."""
+
+    path = package_provenance_path(name, version, home=home, env=env)
+    if not path.exists():
+        return None
+    try:
+        raw = load_toml_file(path)
+    except (OSError, TOMLKitError, UnicodeDecodeError) as exc:
+        raise PackageActivationError(f"cannot load package provenance {path}: {exc}") from exc
+    return _parse_package_provenance(raw, path)
+
+
+def write_package_provenance(
+    name: str,
+    active: ActivePackage,
+    *,
+    home: Path,
+    env: Mapping[str, str] | None = None,
+) -> Path:
+    """Atomically persist activation priority outside the immutable package payload."""
+
+    _validate_active_package(name, active)
+    if active.editable is not None:
+        raise PackageActivationError(f"editable package {name!r} has no store provenance")
+    path = package_provenance_path(name, active.version, home=home, env=env)
+    content = "\n".join(
+        (
+            "[activation]",
+            f"registration-order = {active.registration_order}",
+            f"shadow = {'true' if active.shadow else 'false'}",
+            "",
+        )
+    )
+    try:
+        mkdir(path.parent, parents=True, exist_ok=True)
+        if dry_run.enabled():
+            write_text(path, content)
+            return path
+        temporary_path = path.parent / f".{path.name}.{uuid4().hex}.tmp"
+        try:
+            with temporary_path.open("x", encoding="utf-8") as temporary:
+                temporary.write(content)
+            temporary_path.replace(path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
+    except OSError as exc:
+        raise PackageActivationError(f"cannot write package provenance {path}: {exc}") from exc
+    return path
+
+
 def validate_activation_index(
     index: ActivationIndex,
     *,
@@ -122,6 +233,7 @@ def validate_activation_index(
     that an install has planned but not yet written to the immutable store.
     """
 
+    _validate_commands(index)
     _validate_requirements(
         _packages_from_index(
             index,
@@ -138,10 +250,12 @@ def rebuild_activation_index(
     """Build the deterministic installed-package selection from store manifests.
 
     Store versions are side-by-side, so the highest semantic version for each
-    package is active after a rebuild.  Editable and command-shadow metadata
-    is intentionally not inferable from immutable installed manifests.
+    package is active after a rebuild. Package-local provenance sidecars retain
+    command priority independently of package-name iteration. Editable
+    selections are not inferable from the immutable store.
     """
 
+    previous = load_activation_index(home=home, env=env)
     root = store_root(home=home, env=env)
     if not root.is_dir():
         return ActivationIndex()
@@ -163,9 +277,42 @@ def rebuild_activation_index(
             if selected is None or manifest.version > selected.version:
                 active[manifest.name] = ActivePackage(manifest.version)
 
-    index = ActivationIndex(packages=active)
-    _validate_requirements(_packages_from_index(index, home=home, env=env))
-    return index
+    provenance = {
+        name: load_package_provenance(name, package.version, home=home, env=env)
+        for name, package in active.items()
+    }
+    _validate_rebuild_provenance(provenance)
+    next_order = max(
+        (package.registration_order for package in previous.packages.values()), default=0
+    )
+    rebuilt: dict[str, ActivePackage] = {}
+    for name, package in sorted(active.items()):
+        persisted = provenance[name]
+        previous_package = previous.packages.get(name)
+        if persisted is not None:
+            rebuilt[name] = ActivePackage(
+                package.version,
+                shadow=persisted.shadow,
+                registration_order=persisted.registration_order,
+            )
+        elif (
+            previous_package is not None
+            and previous_package.editable is None
+            and previous_package.version == package.version
+        ):
+            rebuilt[name] = ActivePackage(
+                package.version,
+                shadow=previous_package.shadow,
+                registration_order=previous_package.registration_order,
+            )
+        else:
+            next_order += 1
+            rebuilt[name] = ActivePackage(package.version, registration_order=next_order)
+    index = ActivationIndex(packages=rebuilt)
+    packages = _packages_from_index(index, home=home, env=env)
+    _validate_requirements(packages)
+    _validate_rebuild_command_provenance(packages, provenance)
+    return _reconciled_commands(index, packages)
 
 
 def load_package_pins(
@@ -268,8 +415,211 @@ def _selected_active_packages(
     return _packages_from_index(ActivationIndex(selections), home=home, env=env)
 
 
+def validate_package_command_conflicts(
+    index: ActivationIndex,
+    manifest: PackageManifest,
+    *,
+    shadow: bool,
+    home: Path,
+    env: Mapping[str, str] | None = None,
+    transient_packages: Mapping[str, PackageInfo] | None = None,
+) -> None:
+    """Reject a candidate's conflicts with every other active manifest.
+
+    The active command registry contains only each command's winner. Looking
+    at manifests instead retains owners previously displaced by ``--shadow``
+    when their winner is updated.
+    """
+
+    if shadow:
+        return
+    packages = _packages_from_index(
+        index, home=home, env=env, transient_packages=transient_packages
+    )
+    candidate_paths = set(manifest.commands)
+    for package in packages:
+        if package.manifest.name == manifest.name:
+            continue
+        conflicts = sorted(candidate_paths.intersection(package.manifest.commands))
+        if conflicts:
+            path_name = conflicts[0]
+            raise PackageActivationError(
+                f"command {path_name!r} from package {manifest.name!r} conflicts with "
+                f"package {package.manifest.name!r}; install with --shadow to replace it"
+            )
+
+
+def merge_package_commands(
+    index: ActivationIndex, manifest: PackageManifest, *, shadow: bool
+) -> ActivationIndex:
+    """Replace a package's registrations, rejecting conflicting ownership.
+
+    A package update removes its former registrations before merging its current
+    manifest. ``shadow`` permits it to replace a command owned by another
+    active package. The complete registry is reconciled from active manifests
+    before an activation is written.
+    """
+
+    commands = {
+        path_name: registration
+        for path_name, registration in index.commands.items()
+        if registration.package != manifest.name
+    }
+    for path_name, spec in sorted(manifest.commands.items()):
+        existing = commands.get(path_name)
+        if existing is not None and existing.package != manifest.name and not shadow:
+            raise PackageActivationError(
+                f"command {path_name!r} from package {manifest.name!r} conflicts with "
+                f"package {existing.package!r}; install with --shadow to replace it"
+            )
+        commands[path_name] = CommandRegistration(
+            package=manifest.name,
+            program=spec.program,
+            description=spec.description,
+        )
+    updated = ActivationIndex(dict(index.packages), commands)
+    _validate_commands(updated)
+    return updated
+
+
+def reconcile_package_commands(
+    index: ActivationIndex,
+    *,
+    home: Path,
+    env: Mapping[str, str] | None = None,
+    transient_packages: Mapping[str, PackageInfo] | None = None,
+) -> ActivationIndex:
+    """Derive current command owners from the active package manifests."""
+
+    packages = _packages_from_index(
+        index,
+        home=home,
+        env=env,
+        transient_packages=transient_packages,
+    )
+    return _reconciled_commands(index, packages)
+
+
+def _reconciled_commands(
+    index: ActivationIndex, packages: Iterable[PackageInfo]
+) -> ActivationIndex:
+    def registration_key(package: PackageInfo) -> tuple[int, str]:
+        return index.packages[package.manifest.name].registration_order, package.manifest.name
+
+    commands: dict[str, CommandRegistration] = {}
+    for package in sorted(packages, key=registration_key):
+        for path_name, spec in sorted(package.manifest.commands.items()):
+            commands[path_name] = CommandRegistration(
+                package.manifest.name,
+                spec.program,
+                spec.description,
+            )
+    reconciled = ActivationIndex(dict(index.packages), commands)
+    _validate_commands(reconciled)
+    return reconciled
+
+
+def command_shadow_diagnostics(
+    index: ActivationIndex,
+    *,
+    home: Path,
+    env: Mapping[str, str] | None = None,
+) -> dict[str, tuple[CommandShadow, ...]]:
+    """Return active winners and the package owners each one shadows."""
+
+    packages = _packages_from_index(index, home=home, env=env)
+    by_path: dict[str, list[PackageInfo]] = {}
+    for package in packages:
+        for path_name in package.manifest.commands:
+            by_path.setdefault(path_name, []).append(package)
+    diagnostics: dict[str, list[CommandShadow]] = {}
+    for path_name, owners in by_path.items():
+        if len(owners) < 2:
+            continue
+        winner = owners[0]
+        for owner in owners[1:]:
+            if _command_registration_key(index, owner) > _command_registration_key(index, winner):
+                winner = owner
+        displaced = tuple(
+            sorted(package.manifest.name for package in owners if package is not winner)
+        )
+        diagnostics.setdefault(winner.manifest.name, []).append(CommandShadow(path_name, displaced))
+    return {
+        package: tuple(sorted(shadows, key=_command_shadow_path))
+        for package, shadows in diagnostics.items()
+    }
+
+
+def _command_registration_key(index: ActivationIndex, package: PackageInfo) -> tuple[int, str]:
+    active = index.packages[package.manifest.name]
+    return active.registration_order, package.manifest.name
+
+
+def _command_shadow_path(shadow: CommandShadow) -> str:
+    return shadow.path_name
+
+
+def _parse_package_provenance(raw: TomlDict, path: Path) -> PackageProvenance:
+    if set(raw) != {"activation"}:
+        raise PackageActivationError(f"package provenance {path} has unsupported sections")
+    activation = raw.get("activation")
+    if not isinstance(activation, dict):
+        raise PackageActivationError(f"package provenance {path} has an invalid activation table")
+    table = toml_dict(activation)
+    if set(table) != {"registration-order", "shadow"}:
+        raise PackageActivationError(f"package provenance {path} has unsupported fields")
+    registration_order = table.get("registration-order")
+    shadow = table.get("shadow")
+    if (
+        not isinstance(registration_order, int)
+        or isinstance(registration_order, bool)
+        or registration_order < 1
+        or not isinstance(shadow, bool)
+    ):
+        raise PackageActivationError(f"package provenance {path} has invalid activation metadata")
+    return PackageProvenance(registration_order, shadow)
+
+
+def _validate_rebuild_provenance(provenance: Mapping[str, PackageProvenance | None]) -> None:
+    orders = [item.registration_order for item in provenance.values() if item is not None]
+    if len(orders) != len(set(orders)):
+        raise PackageActivationError("package provenance has duplicate registration order")
+
+
+def _validate_rebuild_command_provenance(
+    packages: Iterable[PackageInfo], provenance: Mapping[str, PackageProvenance | None]
+) -> None:
+    """Reject command collisions without a coherent durable shadow history."""
+
+    owners: dict[str, list[str]] = {}
+    for package in packages:
+        for path_name in package.manifest.commands:
+            owners.setdefault(path_name, []).append(package.manifest.name)
+    for path_name, names in owners.items():
+        if len(names) < 2:
+            continue
+        registered_owners: list[tuple[str, PackageProvenance]] = []
+        for name in names:
+            metadata = provenance[name]
+            if metadata is None:
+                raise PackageActivationError(
+                    f"cannot rebuild command {path_name!r}: its installed provenance is missing"
+                )
+            registered_owners.append((name, metadata))
+        for name, metadata in sorted(registered_owners, key=_rebuild_provenance_order)[1:]:
+            if not metadata.shadow:
+                raise PackageActivationError(
+                    f"cannot rebuild command {path_name!r}: later registration from "
+                    f"package {name!r} lacks shadow intent"
+                )
+
+
+def _rebuild_provenance_order(owner: tuple[str, PackageProvenance]) -> int:
+    return owner[1].registration_order
+
+
 def _parse_activation_index(raw: TomlDict) -> ActivationIndex:
-    unexpected = set(raw).difference({"packages"})
+    unexpected = set(raw).difference({"packages", "commands"})
     if unexpected:
         names = ", ".join(sorted(unexpected))
         raise PackageActivationError(f"package activation index has unsupported sections: {names}")
@@ -283,7 +633,7 @@ def _parse_activation_index(raw: TomlDict) -> ActivationIndex:
         if not isinstance(value, dict):
             raise PackageActivationError(f"activation for package {name!r} must be a table")
         table = toml_dict(value)
-        if set(table).difference({"version", "editable", "shadow"}):
+        if set(table).difference({"version", "editable", "shadow", "registration-order"}):
             raise PackageActivationError(f"activation for package {name!r} has unsupported fields")
         version = _complete_version(table.get("version"), f"activation for package {name!r}")
         editable_raw = table.get("editable")
@@ -300,12 +650,91 @@ def _parse_activation_index(raw: TomlDict) -> ActivationIndex:
             raise PackageActivationError(
                 f"activation shadow marker for package {name!r} must be boolean"
             )
+        registration_order = table.get("registration-order", 0)
+        if (
+            not isinstance(registration_order, int)
+            or isinstance(registration_order, bool)
+            or registration_order < 0
+        ):
+            raise PackageActivationError(
+                f"activation registration order for package {name!r} must be a non-negative integer"
+            )
         packages[name] = ActivePackage(
             version,
             editable=None if editable_raw is None else Path(editable_raw),
             shadow=shadow,
+            registration_order=registration_order,
         )
-    return ActivationIndex(packages)
+    commands_raw = raw.get("commands", {})
+    if not isinstance(commands_raw, dict):
+        raise PackageActivationError("package activation index [commands] must be a table")
+    commands: dict[str, CommandRegistration] = {}
+    for path_name, value in toml_dict(commands_raw).items():
+        if not isinstance(value, dict):
+            raise PackageActivationError(f"command registration {path_name!r} must be a table")
+        table = toml_dict(value)
+        if set(table).difference({"package", "program", "description"}):
+            raise PackageActivationError(
+                f"command registration {path_name!r} has unsupported fields"
+            )
+        package = table.get("package")
+        program = table.get("program")
+        description = table.get("description")
+        if (
+            not isinstance(package, str)
+            or not isinstance(program, str)
+            or not package
+            or not program
+        ):
+            raise PackageActivationError(
+                f"command registration {path_name!r} requires non-empty package and program strings"
+            )
+        if description is not None and (not isinstance(description, str) or not description):
+            raise PackageActivationError(
+                f"command registration {path_name!r} has invalid description"
+            )
+        commands[path_name] = CommandRegistration(package, program, description)
+    index = ActivationIndex(packages, commands)
+    _validate_commands(index)
+    return index
+
+
+def _validate_active_package(name: str, active: ActivePackage) -> None:
+    _validate_package_name(name)
+    if (
+        not isinstance(active.registration_order, int)
+        or isinstance(active.registration_order, bool)
+        or active.registration_order < 0
+    ):
+        raise PackageActivationError(
+            f"activation registration order for package {name!r} must be a non-negative integer"
+        )
+
+
+def _validate_commands(index: ActivationIndex) -> None:
+    for path_name, command in index.commands.items():
+        _validate_command_registration(path_name, command, index.packages)
+
+
+def _validate_command_registration(
+    path_name: str, command: CommandRegistration, packages: Mapping[str, ActivePackage]
+) -> None:
+    words = path_name.split()
+    if not words or " ".join(words) != path_name:
+        raise PackageActivationError(f"command path {path_name!r} must be space-separated words")
+    if words[0] in RESERVED_COMMAND_NAMES:
+        raise PackageActivationError(
+            f"command path {path_name!r} begins with a reserved AGM command"
+        )
+    _validate_package_name(command.package)
+    if command.package not in packages:
+        raise PackageActivationError(
+            f"command path {path_name!r} names inactive package {command.package!r}"
+        )
+    if not command.program:
+        raise PackageActivationError(f"command path {path_name!r} requires a program reference")
+    if command.description is not None and not command.description:
+        raise PackageActivationError(f"command path {path_name!r} has an invalid description")
 
 
 def _packages_from_index(

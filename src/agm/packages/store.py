@@ -32,6 +32,33 @@ def package_store_path(
     )
 
 
+def package_provenance_path(
+    name: str, version: semver.Version, *, home: Path, env: Mapping[str, str] | None = None
+) -> Path:
+    """Return the package-local sidecar path for activation provenance.
+
+    The sidecar is a sibling of the immutable installed tree, keeping mutable
+    activation history out of the payload covered by ``RECORD``.
+    """
+
+    package_path = package_store_path(name, version, home=home, env=env)
+    return package_path.parent / f"{package_path.name}.provenance.toml"
+
+
+def canonical_package_provenance_path(
+    name: str, version: semver.Version, *, home: Path, env: Mapping[str, str] | None = None
+) -> Path:
+    """Return a provenance sidecar path only when it remains within the store."""
+
+    canonical_store_root = store_root(home=home, env=env).resolve()
+    candidate = package_provenance_path(name, version, home=home, env=env).resolve()
+    if not candidate.is_relative_to(canonical_store_root):
+        raise StorePathError(
+            f"package provenance path resolves outside the store root: {candidate}"
+        )
+    return candidate
+
+
 def canonical_package_store_path(
     name: str, version: semver.Version, *, home: Path, env: Mapping[str, str] | None = None
 ) -> Path:

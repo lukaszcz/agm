@@ -178,6 +178,21 @@ class TestPackageCheck:
         assert missing.exit_code == 1
         assert missing.stderr
 
+    @pytest.mark.parametrize("command_path", ("exec launch", "wsp launch"))
+    def test_pkg_check_refuses_builtin_and_alias_command_prefixes(
+        self, runner: CliRunner, tmp_path: Path, command_path: str
+    ) -> None:
+        package = tmp_path / "demo"
+        module_root = package / "demo"
+        module_root.mkdir(parents=True)
+        (module_root / "main.agl").write_text("program def main() -> unit = ()\n")
+        (package / "package.toml").write_text(
+            '[package]\nname = "demo"\nversion = "1.0.0"\n\n'
+            f'[commands]\n"{command_path}" = {{ program = "demo/main::main" }}\n'
+        )
+
+        assert invoke(runner, ["pkg", "check", str(package)]).exit_code == 1
+
     def test_pkg_create_refuses_a_package_that_fails_check(
         self, runner: CliRunner, tmp_path: Path
     ) -> None:

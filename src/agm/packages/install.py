@@ -13,8 +13,14 @@ from agm.packages.activation import (
     ActivePackage,
     PackageActivationError,
     load_activation_index,
+    load_package_provenance,
+    merge_package_commands,
+    package_provenance_path,
+    reconcile_package_commands,
     validate_activation_index,
+    validate_package_command_conflicts,
     write_activation_index,
+    write_package_provenance,
 )
 from agm.packages.archive import (
     ArchiveError,
@@ -64,11 +70,7 @@ def install_directory(
     is fetched, hash-verified, and installed.
     """
 
-    try:
-        index = load_activation_index(home=home, env=env)
-    except PackageActivationError as exc:
-        raise PackageInstallError(f"cannot load package activation: {exc}") from exc
-    state = _InstallState(home=home, env=env, index=index)
+    state = _InstallState(home=home, env=env, index=_load_install_index(home=home, env=env))
     try:
         package = _install_directory(source, state=state, editable=editable, shadow=shadow)
         _commit_activation(
@@ -92,11 +94,7 @@ def install_archive(
 ) -> PackageInfo:
     """Verify, atomically extract, and activate a portable package archive."""
 
-    try:
-        index = load_activation_index(home=home, env=env)
-    except PackageActivationError as exc:
-        raise PackageInstallError(f"cannot load package activation: {exc}") from exc
-    state = _InstallState(home=home, env=env, index=index)
+    state = _InstallState(home=home, env=env, index=_load_install_index(home=home, env=env))
     try:
         package = _install_archive(archive, state=state, shadow=shadow)
         _commit_activation(
@@ -140,6 +138,14 @@ def uninstall_package(name: str, *, home: Path, env: Mapping[str, str] | None = 
     _commit_activation(ActivationIndex(packages), home=home, env=env)
     if root is not None:
         _remove_recorded_tree(root, entries)
+        try:
+            fs.unlink(
+                package_provenance_path(name, active.version, home=home, env=env), missing_ok=True
+            )
+        except (OSError, PackageActivationError) as exc:
+            raise PackageInstallError(
+                f"cannot remove package provenance for {name!r}: {exc}"
+            ) from exc
 
 
 def installed_packages(
@@ -225,13 +231,26 @@ def _install_directory(
             fs.mkdir(destination.parent, parents=True, exist_ok=True)
             fs.copy_tree(root, destination)
 
+    try:
+        validate_package_command_conflicts(
+            state.index,
+            package.manifest,
+            shadow=shadow,
+            home=state.home,
+            env=state.env,
+            transient_packages=state.transient_packages,
+        )
+    except PackageActivationError as exc:
+        raise PackageInstallError(f"cannot register package commands: {exc}") from exc
     packages = dict(state.index.packages)
     packages[package.manifest.name] = ActivePackage(
         package.manifest.version,
         editable=root if editable else None,
         shadow=shadow,
+        registration_order=_next_registration_order(state.index),
     )
-    state.index = ActivationIndex(packages)
+    state.index = ActivationIndex(packages, state.index.commands)
+    state.index = merge_package_commands(state.index, package.manifest, shadow=shadow)
     state.transient_packages[package.manifest.name] = installed
     return installed
 
@@ -289,9 +308,25 @@ def _install_archive(archive: Path, *, state: _InstallState, shadow: bool) -> Pa
             _resolve_dependencies(installed, state)
         finally:
             state.installing.remove(archive_path)
+        try:
+            validate_package_command_conflicts(
+                state.index,
+                installed.manifest,
+                shadow=shadow,
+                home=state.home,
+                env=state.env,
+                transient_packages=state.transient_packages,
+            )
+        except PackageActivationError as exc:
+            raise PackageInstallError(f"cannot register package commands: {exc}") from exc
         packages = dict(state.index.packages)
-        packages[installed.manifest.name] = ActivePackage(installed.manifest.version, shadow=shadow)
-        state.index = ActivationIndex(packages)
+        packages[installed.manifest.name] = ActivePackage(
+            installed.manifest.version,
+            shadow=shadow,
+            registration_order=_next_registration_order(state.index),
+        )
+        state.index = ActivationIndex(packages, state.index.commands)
+        state.index = merge_package_commands(state.index, installed.manifest, shadow=shadow)
         state.transient_packages[installed.manifest.name] = installed
         return installed
     except (DisciplineError, PackageInstallError, ValueError) as exc:
@@ -321,9 +356,30 @@ def _resolve_dependencies(package: PackageInfo, state: _InstallState) -> None:
             raise PackageInstallError(
                 f"unsatisfied package requirement {name!r} >= {requirement.version}"
             )
-        packages = dict(state.index.packages)
-        packages[name] = ActivePackage(selected.manifest.version)
-        state.index = ActivationIndex(packages)
+        current = state.index.packages.get(name)
+        if (
+            current is None
+            or current.editable is not None
+            or current.version != selected.manifest.version
+        ):
+            try:
+                validate_package_command_conflicts(
+                    state.index,
+                    selected.manifest,
+                    shadow=False,
+                    home=state.home,
+                    env=state.env,
+                    transient_packages=state.transient_packages,
+                )
+            except PackageActivationError as exc:
+                raise PackageInstallError(f"cannot register package commands: {exc}") from exc
+            packages = dict(state.index.packages)
+            packages[name] = ActivePackage(
+                selected.manifest.version,
+                registration_order=_next_registration_order(state.index),
+            )
+            state.index = ActivationIndex(packages, state.index.commands)
+            state.index = merge_package_commands(state.index, selected.manifest, shadow=False)
         state.transient_packages[name] = selected
 
 
@@ -416,6 +472,21 @@ def _verify_existing_install(
         ) from exc
 
 
+def _load_install_index(*, home: Path, env: Mapping[str, str] | None) -> ActivationIndex:
+    try:
+        index = load_activation_index(home=home, env=env)
+        for name, active in index.packages.items():
+            if active.editable is None:
+                load_package_provenance(name, active.version, home=home, env=env)
+        return reconcile_package_commands(index, home=home, env=env)
+    except PackageActivationError as exc:
+        raise PackageInstallError(f"cannot load package activation: {exc}") from exc
+
+
+def _next_registration_order(index: ActivationIndex) -> int:
+    return max((package.registration_order for package in index.packages.values()), default=0) + 1
+
+
 def _commit_activation(
     index: ActivationIndex,
     *,
@@ -426,15 +497,45 @@ def _commit_activation(
     """Validate and atomically publish a complete activation selection."""
 
     try:
+        reconciled = _assign_missing_registration_orders(
+            reconcile_package_commands(
+                index,
+                home=home,
+                env=env,
+                transient_packages=transient_packages,
+            )
+        )
         validate_activation_index(
-            index,
+            reconciled,
             home=home,
             env=env,
             transient_packages=transient_packages,
         )
-        write_activation_index(index, home=home, env=env)
+        for name, active in reconciled.packages.items():
+            if active.editable is None:
+                write_package_provenance(name, active, home=home, env=env)
+        write_activation_index(reconciled, home=home, env=env)
     except PackageActivationError as exc:
         raise PackageInstallError(f"cannot write package activation: {exc}") from exc
+
+
+def _assign_missing_registration_orders(index: ActivationIndex) -> ActivationIndex:
+    """Give legacy selections without provenance unique durable priorities."""
+
+    next_order = max((active.registration_order for active in index.packages.values()), default=0)
+    packages: dict[str, ActivePackage] = {}
+    for name, active in sorted(index.packages.items()):
+        if active.registration_order == 0:
+            next_order += 1
+            packages[name] = ActivePackage(
+                active.version,
+                editable=active.editable,
+                shadow=active.shadow,
+                registration_order=next_order,
+            )
+        else:
+            packages[name] = active
+    return ActivationIndex(packages, dict(index.commands))
 
 
 def _rollback_created_trees(state: _InstallState) -> None:

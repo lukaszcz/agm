@@ -7348,6 +7348,40 @@ class TestPackageInstall:
         assert missing_import.returncode == 1
         assert unknown.returncode == 1
 
+    def test_registered_commands_restore_the_remaining_active_owner(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["AGM_HOME"] = str(tmp_path / "agm-home")
+        alpha = _write_store_test_package(tmp_path / "alpha-source", "alpha", "1.0.0")
+        bravo = _write_store_test_package(tmp_path / "bravo-source", "bravo", "1.0.0")
+        (alpha / "package.toml").write_text(
+            '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
+            '[commands]\nlaunch = { program = "alpha/main::main", description = "Launch alpha" }\n',
+            encoding="utf-8",
+        )
+        (bravo / "package.toml").write_text(
+            '[package]\nname = "bravo"\nversion = "1.0.0"\n\n'
+            '[commands]\nlaunch = { program = "bravo/main::main" }\n',
+            encoding="utf-8",
+        )
+
+        installed_alpha = run_agm(["pkg", "install", str(alpha)], env=env, cwd=tmp_path)
+        listed_alpha = run_agm(["pkg", "list"], env=env, cwd=tmp_path)
+        refused = run_agm(["pkg", "install", str(bravo)], env=env, cwd=tmp_path, check=False)
+        shadowed = run_agm(["pkg", "install", "--shadow", str(bravo)], env=env, cwd=tmp_path)
+        listed_shadow = run_agm(["pkg", "list"], env=env, cwd=tmp_path)
+        uninstalled = run_agm(["pkg", "uninstall", "bravo"], env=env, cwd=tmp_path)
+        listed_uninstalled = run_agm(["pkg", "list"], env=env, cwd=tmp_path)
+
+        assert installed_alpha.returncode == 0
+        assert "launch" in listed_alpha.stdout
+        assert refused.returncode == 1
+        assert shadowed.returncode == 0
+        assert "shadowed command launch from alpha" in shadowed.stdout
+        assert "bravo 1.0.0 active\n  command launch (shadows alpha)" in listed_shadow.stdout
+        assert uninstalled.returncode == 0
+        assert "alpha 1.0.0 active\n  command launch" in listed_uninstalled.stdout
+
     def test_create_archive_install_and_url_dependency_install_are_hermetic(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

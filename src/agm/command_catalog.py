@@ -34,3 +34,10 @@ COMMAND_OVERVIEW: tuple[tuple[str, str], ...] = (
 
 # All top-level command names, in catalog order.
 COMMAND_NAMES: tuple[str, ...] = tuple(name for name, _ in COMMAND_OVERVIEW)
+
+# Built-in command aliases.  These are not command-overview entries, but they
+# reserve the same package-command and config-routing namespace as commands.
+COMMAND_ALIASES: tuple[str, ...] = ("wsp", "wt", "cp", "copy")
+
+# Every name reserved by AGM's built-in command surface.
+RESERVED_COMMAND_NAMES: frozenset[str] = frozenset(COMMAND_NAMES) | frozenset(COMMAND_ALIASES)

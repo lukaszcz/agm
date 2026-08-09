@@ -10,7 +10,15 @@ import pytest
 import agm.packages.archive as package_archive
 import agm.packages.install as package_install
 from agm.core import dry_run
-from agm.packages.activation import PackageActivationError, load_activation_index
+from agm.packages.activation import (
+    ActivationIndex,
+    ActivePackage,
+    CommandRegistration,
+    PackageActivationError,
+    load_activation_index,
+    rebuild_activation_index,
+    write_activation_index,
+)
 from agm.packages.archive import write_archive
 from agm.packages.install import (
     PackageInstallError,
@@ -49,9 +57,205 @@ def test_install_copies_package_writes_record_and_activates_it(tmp_path: Path) -
 
     assert installed.root == home / ".agm" / "packages" / "alpha" / "1.0.0"
     assert (installed.root / "alpha" / "main.agl").is_file()
+    assert (installed.root.parent / "1.0.0.provenance.toml").is_file()
     assert verify_record(installed.root)
     active = load_activation_index(home=home, env={}).packages["alpha"]
     assert active.version == installed.manifest.version
+
+
+def test_uninstall_tolerates_an_absent_legacy_provenance_sidecar(tmp_path: Path) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    home = tmp_path / "home"
+    installed = install_directory(source, home=home, env={})
+    (installed.root.parent / "1.0.0.provenance.toml").unlink()
+
+    uninstall_package("alpha", home=home, env={})
+
+    assert not installed.root.exists()
+    assert "alpha" not in load_activation_index(home=home, env={}).packages
+
+
+def test_uninstall_reports_a_provenance_cleanup_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    home = tmp_path / "home"
+    install_directory(source, home=home, env={})
+    original_unlink = package_install.fs.unlink
+
+    def fail_provenance_unlink(path: Path, *, missing_ok: bool = False) -> None:
+        if path.name.endswith(".provenance.toml"):
+            raise OSError("blocked")
+        original_unlink(path)
+
+    monkeypatch.setattr(package_install.fs, "unlink", fail_provenance_unlink)
+    with pytest.raises(PackageInstallError, match="provenance"):
+        uninstall_package("alpha", home=home, env={})
+
+
+def test_legacy_activation_orders_are_assigned_when_an_editable_package_is_present(
+    tmp_path: Path,
+) -> None:
+    alpha = _package(tmp_path / "alpha", "alpha", "1.0.0")
+    bravo = _package(tmp_path / "bravo", "bravo", "1.0.0")
+    home = tmp_path / "home"
+    install_directory(alpha, home=home, env={}, editable=True)
+    active_alpha = load_activation_index(home=home, env={}).packages["alpha"]
+    write_activation_index(
+        ActivationIndex({"alpha": ActivePackage(active_alpha.version, editable=alpha)}),
+        home=home,
+        env={},
+    )
+    install_directory(bravo, home=home, env={})
+
+    index = load_activation_index(home=home, env={})
+    assert index.packages["alpha"].registration_order > 0
+
+
+def test_install_merges_commands_and_unregisters_them_on_uninstall(
+    tmp_path: Path,
+) -> None:
+    source = _package(
+        tmp_path / "source",
+        "alpha",
+        "1.0.0",
+        '\n[commands]\nlaunch = { program = "alpha/main::main", description = "Launch alpha" }\n',
+    )
+    home = tmp_path / "home"
+
+    install_directory(source, home=home, env={})
+
+    index = load_activation_index(home=home, env={})
+    assert index.commands == {
+        "launch": CommandRegistration("alpha", "alpha/main::main", "Launch alpha")
+    }
+
+    uninstall_package("alpha", home=home, env={})
+
+    assert load_activation_index(home=home, env={}).commands == {}
+
+
+@pytest.mark.parametrize("command_path", ("exec launch", "wsp launch"))
+def test_install_refuses_builtin_and_alias_command_prefixes(
+    tmp_path: Path, command_path: str
+) -> None:
+    source = _package(
+        tmp_path / "source",
+        "alpha",
+        "1.0.0",
+        f'\n[commands]\n"{command_path}" = {{ program = "alpha/main::main" }}\n',
+    )
+
+    with pytest.raises(PackageInstallError, match="reserved"):
+        install_directory(source, home=tmp_path / "home", env={})
+
+
+def test_shadowed_command_is_restored_when_the_winning_package_is_uninstalled(
+    tmp_path: Path,
+) -> None:
+    alpha = _package(
+        tmp_path / "alpha",
+        "alpha",
+        "1.0.0",
+        '\n[commands]\nlaunch = { program = "alpha/main::main" }\n',
+    )
+    bravo = _package(
+        tmp_path / "bravo",
+        "bravo",
+        "1.0.0",
+        '\n[commands]\nlaunch = { program = "bravo/main::main" }\n',
+    )
+    home = tmp_path / "home"
+    install_directory(alpha, home=home, env={})
+
+    with pytest.raises(PackageInstallError, match="launch"):
+        install_directory(bravo, home=home, env={})
+
+    install_directory(bravo, home=home, env={}, shadow=True)
+
+    assert load_activation_index(home=home, env={}).commands == {
+        "launch": CommandRegistration("bravo", "bravo/main::main")
+    }
+
+    uninstall_package("bravo", home=home, env={})
+
+    assert load_activation_index(home=home, env={}).commands == {
+        "launch": CommandRegistration("alpha", "alpha/main::main")
+    }
+
+
+def test_rebuild_after_index_loss_preserves_a_shadow_winner_installed_in_reverse_name_order(
+    tmp_path: Path,
+) -> None:
+    bravo = _package(
+        tmp_path / "bravo",
+        "bravo",
+        "1.0.0",
+        '\n[commands]\nlaunch = { program = "bravo/main::main" }\n',
+    )
+    alpha = _package(
+        tmp_path / "alpha",
+        "alpha",
+        "1.0.0",
+        '\n[commands]\nlaunch = { program = "alpha/main::main" }\n',
+    )
+    home = tmp_path / "home"
+    install_directory(bravo, home=home, env={})
+    install_directory(alpha, home=home, env={}, shadow=True)
+
+    index_path = home / ".agm" / "packages" / "index.toml"
+    index_path.unlink()
+
+    rebuilt = rebuild_activation_index(home=home, env={})
+
+    assert rebuilt.commands == {"launch": CommandRegistration("alpha", "alpha/main::main")}
+
+
+def test_rebuild_after_index_loss_refuses_corrupt_command_provenance(tmp_path: Path) -> None:
+    source = _package(
+        tmp_path / "source",
+        "alpha",
+        "1.0.0",
+        '\n[commands]\nlaunch = { program = "alpha/main::main" }\n',
+    )
+    home = tmp_path / "home"
+    install_directory(source, home=home, env={})
+    (home / ".agm" / "packages" / "index.toml").unlink()
+    (home / ".agm" / "packages" / "alpha" / "1.0.0.provenance.toml").write_text(
+        "not valid = [", encoding="utf-8"
+    )
+
+    with pytest.raises(PackageActivationError, match="provenance"):
+        rebuild_activation_index(home=home, env={})
+
+
+def test_package_update_retains_a_displaced_owner_conflict_without_shadow(tmp_path: Path) -> None:
+    alpha = _package(
+        tmp_path / "alpha",
+        "alpha",
+        "1.0.0",
+        '\n[commands]\nlaunch = { program = "alpha/main::main" }\n',
+    )
+    bravo = _package(
+        tmp_path / "bravo",
+        "bravo",
+        "1.0.0",
+        '\n[commands]\nlaunch = { program = "bravo/main::main" }\n',
+    )
+    bravo_update = _package(
+        tmp_path / "bravo-update",
+        "bravo",
+        "2.0.0",
+        '\n[commands]\nlaunch = { program = "bravo/main::main" }\n',
+    )
+    home = tmp_path / "home"
+    install_directory(alpha, home=home, env={})
+    install_directory(bravo, home=home, env={}, shadow=True)
+
+    with pytest.raises(PackageInstallError, match="launch"):
+        install_directory(bravo_update, home=home, env={})
+
+    install_directory(bravo_update, home=home, env={}, shadow=True)
 
 
 def test_install_resolves_path_dependencies_before_activation(tmp_path: Path) -> None:
@@ -73,6 +277,60 @@ def test_install_resolves_path_dependencies_before_activation(tmp_path: Path) ->
         home / ".agm" / "packages" / "bravo" / "1.2.0"
     )
     assert bravo.is_dir()
+
+
+def test_install_activates_an_installed_dependency_missing_from_the_index(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    bravo = _package(
+        tmp_path / "bravo",
+        "bravo",
+        "1.0.0",
+        '\n[commands]\ninspect = { program = "bravo/main::main" }\n',
+    )
+    install_directory(bravo, home=home, env={})
+    write_activation_index(ActivationIndex(), home=home, env={})
+    alpha = _package(
+        tmp_path / "alpha",
+        "alpha",
+        "1.0.0",
+        '\n[dependencies]\nbravo = "1"\n',
+    )
+
+    install_directory(alpha, home=home, env={})
+
+    assert load_activation_index(home=home, env={}).commands == {
+        "inspect": CommandRegistration("bravo", "bravo/main::main")
+    }
+
+
+def test_install_rejects_an_inactive_dependency_command_conflicting_with_an_active_owner(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    bravo = _package(
+        tmp_path / "bravo",
+        "bravo",
+        "1.0.0",
+        '\n[commands]\nlaunch = { program = "bravo/main::main" }\n',
+    )
+    install_directory(bravo, home=home, env={})
+    write_activation_index(ActivationIndex(), home=home, env={})
+    charlie = _package(
+        tmp_path / "charlie",
+        "charlie",
+        "1.0.0",
+        '\n[commands]\nlaunch = { program = "charlie/main::main" }\n',
+    )
+    install_directory(charlie, home=home, env={})
+    alpha = _package(
+        tmp_path / "alpha",
+        "alpha",
+        "1.0.0",
+        '\n[dependencies]\nbravo = "1"\n',
+    )
+
+    with pytest.raises(PackageInstallError, match="launch"):
+        install_directory(alpha, home=home, env={})
 
 
 def test_install_uses_an_installed_satisfying_dependency_before_path_source(tmp_path: Path) -> None:
@@ -215,6 +473,7 @@ def test_install_and_uninstall_refuse_store_paths_redirected_outside_the_store(
     installed = install_directory(source, home=home, env={})
     external_version = external / "1.0.0"
     installed.root.rename(external_version)
+    (store / "alpha" / "1.0.0.provenance.toml").unlink()
     (store / "alpha").rmdir()
     (store / "alpha").symlink_to(external, target_is_directory=True)
 
@@ -306,6 +565,69 @@ def test_install_archive_verifies_extracts_records_and_activates_it(tmp_path: Pa
     assert load_activation_index(home=tmp_path / "home", env={}).packages["alpha"].version == (
         installed.manifest.version
     )
+
+
+def test_archive_command_lifecycle_restores_the_remaining_owner(tmp_path: Path) -> None:
+    alpha = _package(
+        tmp_path / "alpha-source",
+        "alpha",
+        "1.0.0",
+        '\n[commands]\nlaunch = { program = "alpha/main::main" }\n',
+    )
+    bravo = _package(
+        tmp_path / "bravo-source",
+        "bravo",
+        "1.0.0",
+        '\n[commands]\nlaunch = { program = "bravo/main::main" }\n',
+    )
+    alpha_archive = tmp_path / "alpha.agmpkg"
+    bravo_archive = tmp_path / "bravo.agmpkg"
+    write_archive(alpha, alpha_archive)
+    write_archive(bravo, bravo_archive)
+    home = tmp_path / "home"
+    install_archive(alpha_archive, home=home, env={})
+
+    with pytest.raises(PackageInstallError, match="launch"):
+        install_archive(bravo_archive, home=home, env={})
+
+    install_archive(bravo_archive, home=home, env={}, shadow=True)
+    assert load_activation_index(home=home, env={}).commands == {
+        "launch": CommandRegistration("bravo", "bravo/main::main")
+    }
+
+    uninstall_package("bravo", home=home, env={})
+    assert load_activation_index(home=home, env={}).commands == {
+        "launch": CommandRegistration("alpha", "alpha/main::main")
+    }
+
+
+def test_editable_command_lifecycle_restores_the_remaining_owner(tmp_path: Path) -> None:
+    alpha = _package(
+        tmp_path / "alpha",
+        "alpha",
+        "1.0.0",
+        '\n[commands]\nlaunch = { program = "alpha/main::main" }\n',
+    )
+    bravo = _package(
+        tmp_path / "bravo",
+        "bravo",
+        "1.0.0",
+        '\n[commands]\nlaunch = { program = "bravo/main::main" }\n',
+    )
+    home = tmp_path / "home"
+    install_directory(alpha, home=home, env={})
+    install_directory(bravo, home=home, env={}, editable=True, shadow=True)
+
+    assert load_activation_index(home=home, env={}).commands == {
+        "launch": CommandRegistration("bravo", "bravo/main::main")
+    }
+
+    uninstall_package("bravo", home=home, env={})
+
+    assert bravo.exists()
+    assert load_activation_index(home=home, env={}).commands == {
+        "launch": CommandRegistration("alpha", "alpha/main::main")
+    }
 
 
 def test_install_archive_reuses_an_existing_verified_tree(tmp_path: Path) -> None:

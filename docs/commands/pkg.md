@@ -37,12 +37,18 @@ the downloaded archive's normalized manifest and `RECORD` are verified before at
 activation.
 
 `--editable` activates the source directory directly, so its edits are visible immediately and
-no immutable copy or `RECORD` is created. `--shadow` is accepted now and recorded for future
-package-command registration.
+no immutable copy or `RECORD` is created. Manifest `[commands]` registrations are merged into the
+activation index. A command path cannot begin with an AGM built-in command or alias (`wsp`, `wt`,
+`cp`, or `copy`). A conflicting registration refuses installation unless `--shadow` is supplied;
+the replacing package becomes the active command owner, and successful shadow installs identify the
+displaced command owners. Command precedence is persisted in a sidecar beside each immutable store
+tree, never in the `RECORD`-covered payload, so rebuilding a lost activation index preserves it.
 
 `agm pkg uninstall` verifies the active immutable package's `RECORD`, validates the remaining
-activation selection, then clears activation before removing every recorded file. It refuses any
-store path whose resolved ancestors leave the canonical store root. For an editable package it
-only clears activation. `agm pkg list` shows every immutable installed version as `active` or
-`installed`, plus active editable packages; `agm pkg info` shows package design metadata, command
-registrations, and whether each direct requirement is active, unsatisfied, or missing.
+activation selection, then clears activation before removing every recorded file. Remaining
+active manifests are reconciled so their command owners are restored. It refuses any store path
+whose resolved ancestors leave the canonical store root. For an editable package it only clears
+activation. `agm pkg list` shows every immutable installed version as `active` or `installed`,
+plus active editable packages and commands only beneath their active owner, annotating commands
+that shadow another active package; `agm pkg info` shows package design metadata, command registrations, and whether each direct requirement is active,
+unsatisfied, or missing.

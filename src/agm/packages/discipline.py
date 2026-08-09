@@ -9,14 +9,11 @@ from typing import TypeVar
 from agm.agl.modules.ids import ModuleId
 from agm.agl.parser import AglSyntaxError, parse_program
 from agm.agl.syntax.nodes import static_function_items
-from agm.command_catalog import COMMAND_NAMES
+from agm.command_catalog import RESERVED_COMMAND_NAMES
 from agm.core import fs
 from agm.packages.manifest import PackageManifest
 from agm.packages.model import PackageInfo
 from agm.util.ident import is_identifier
-
-# These are the command-tree aliases that do not appear in COMMAND_NAMES.
-_RESERVED_COMMAND_NAMES = frozenset(COMMAND_NAMES) | frozenset({"wsp", "wt", "cp", "copy"})
 
 T = TypeVar("T")
 
@@ -59,7 +56,7 @@ def validate_archive_package(
 
 
 def _validate_package_name(name: str) -> None:
-    if name in _RESERVED_COMMAND_NAMES:
+    if name in RESERVED_COMMAND_NAMES:
         raise DisciplineError(f"package name {name!r} is reserved by AGM")
 
 
@@ -95,7 +92,7 @@ def _validate_command_path(command_path: str) -> None:
     words = command_path.split()
     if not words or " ".join(words) != command_path:
         raise DisciplineError(f"command path {command_path!r} must be space-separated words")
-    if words[0] in _RESERVED_COMMAND_NAMES:
+    if words[0] in RESERVED_COMMAND_NAMES:
         raise DisciplineError(f"command path {command_path!r} begins with a reserved AGM command")
 
 

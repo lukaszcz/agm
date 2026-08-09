@@ -1588,7 +1588,7 @@ def pkg_install(
         None, metavar="SRC", autocompletion=completion.complete_dir_argument
     ),
     editable: bool = typer.Option(False, "--editable", help="Activate a live package directory."),
-    shadow: bool = typer.Option(False, "--shadow", help="Record a command-shadow preference."),
+    shadow: bool = typer.Option(False, "--shadow", help="Replace conflicting package commands."),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:

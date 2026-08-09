@@ -223,7 +223,9 @@ class RunResult:
     ``bindings``
         Entry-module public bindings after a successful run (name → Value); a
         scoped binding or agent appears under its full path spelling
-        (``A::x``).  Empty for failed runs.
+        (``A::x``). An explicitly selected synthetic inline ``main`` also
+        contributes its direct bindings; an explicit file entry does not.
+        Empty for failed runs.
     ``call_sites``
         Static call-site inventory populated when ``check_only=True``
         (``agm exec --dry-run``).  One entry per agent-call/exec site in

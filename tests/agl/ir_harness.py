@@ -17,7 +17,7 @@ from agm.agl.lower.program import lower_program
 from agm.agl.matchcompile import MatchCompiledModule, MatchCompiledProgram, compile_program_matches
 from agm.agl.matchcompile.stage import _compile_owner_sites
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.modules.loader import ModuleGraph, load_graph
+from agm.agl.modules.loader import ModuleGraph, build_repl_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.externs import ExternRegistry
@@ -28,7 +28,8 @@ from agm.agl.semantics.values import ExceptionValue, TextValue, Value
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram, check_program
 from agm.core.process import ProcessCaptureResult
-from tests.agl.module_graph import build_module_graph as _build_module_graph
+from tests._agl_helpers import wrap_statement_source
+from tests.agl.module_graph import build_module_graph_from_program
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parents[2] / "stdlib"
 
@@ -49,8 +50,12 @@ def _checked_program(
     production always runs, and the only one under which the module
     loader's own checks (e.g. an extern's missing companion file) fire.
     """
-    graph, _import_node_id = _build_module_graph(
-        source, origin_path=origin_path, default_stdlib=default_stdlib
+    program, next_node_id, _wrapped = wrap_statement_source(source)
+    graph, _import_node_id = build_module_graph_from_program(
+        program,
+        next_node_id=next_node_id,
+        origin_path=origin_path,
+        default_stdlib=default_stdlib,
     )
     resolved_program = resolve_program(graph)
     return check_program(resolved_program, caps or base_caps())
@@ -203,7 +208,7 @@ def _run_ir(
     with contextlib.redirect_stdout(output):
         result = IrInterpreter(
             executable, agent_dispatcher=agent_dispatcher, param_values=params
-        ).run()
+        ).run(program_symbol=executable.synthetic_main_symbol)
     return result, output.getvalue()
 
 
@@ -312,7 +317,9 @@ def evaluate_ir_with_externs(
     params = _build_ir_param_values(executable, param_values) if param_values else None
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
-        result = IrInterpreter(executable, param_values=params, extern_registry=registry).run()
+        result = IrInterpreter(executable, param_values=params, extern_registry=registry).run(
+            program_symbol=executable.synthetic_main_symbol
+        )
     return result, output.getvalue()
 
 
@@ -325,7 +332,9 @@ def evaluate_ir_raises_with_externs(
 ) -> ExceptionValue:
     executable, registry = _prepare_extern_program(source, companion_source, tmp_path, caps=caps)
     try:
-        IrInterpreter(executable, extern_registry=registry).run()
+        IrInterpreter(executable, extern_registry=registry).run(
+            program_symbol=executable.synthetic_main_symbol
+        )
     except AglRaise as exc:
         return exc.exc
     raise AssertionError("IR extern program did not raise AglRaise")
@@ -348,9 +357,17 @@ def make_graph_from_files(
         if module_path == "entry":
             continue
         write_module_file(root, module_path, source)
-    return load_graph(
-        entry_source, entry_path=None, roots=_roots(root), default_stdlib=default_stdlib
+    program, next_node_id, _wrapped = wrap_statement_source(entry_source)
+    graph, _next_id, _new_modules = build_repl_graph(
+        program,
+        next_node_id,
+        path=None,
+        cached={},
+        roots=_roots(root),
+        default_stdlib=default_stdlib,
+        source_text=entry_source,
     )
+    return graph
 
 
 def _checked(entry_source: str, modules: dict[str, str], tmp_path: Path) -> CheckedProgram:
@@ -358,7 +375,15 @@ def _checked(entry_source: str, modules: dict[str, str], tmp_path: Path) -> Chec
     root.mkdir(parents=True, exist_ok=True)
     for module_path, source in modules.items():
         write_module_file(root, module_path, source)
-    graph = load_graph(entry_source, entry_path=None, roots=_roots(root))
+    program, next_node_id, _wrapped = wrap_statement_source(entry_source)
+    graph, _next_id, _new_modules = build_repl_graph(
+        program,
+        next_node_id,
+        path=None,
+        cached={},
+        roots=_roots(root),
+        source_text=entry_source,
+    )
     return check_program(resolve_program(graph), base_caps())
 
 
@@ -367,7 +392,7 @@ def evaluate_ir_graph(
 ) -> dict[str, Value]:
     checked = _checked(entry_source, modules, tmp_path)
     executable = lower_program(_compiled_checked(checked))
-    result = IrInterpreter(executable).run()
+    result = IrInterpreter(executable).run(program_symbol=executable.synthetic_main_symbol)
     return result
 
 
@@ -377,7 +402,7 @@ def evaluate_ir_graph_raises(
     checked = _checked(entry_source, modules, tmp_path)
     executable = lower_program(_compiled_checked(checked))
     try:
-        IrInterpreter(executable).run()
+        IrInterpreter(executable).run(program_symbol=executable.synthetic_main_symbol)
     except AglRaise as exc:
         return exc.exc
     raise AssertionError("IR graph did not raise AglRaise")

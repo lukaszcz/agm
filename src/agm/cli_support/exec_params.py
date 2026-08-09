@@ -82,20 +82,33 @@ def negative_param_flag(name: str) -> str:
     return f"--no-{name}"
 
 
-def discover_params_from_source(source: str) -> tuple[ParamDeclInfo, ...]:
+def discover_params_from_source(
+    source: str, *, inline_source: bool = False
+) -> tuple[ParamDeclInfo, ...]:
     """Discover declared params from AgL *source*, degrading to ``()`` on error.
 
     Shared by the help and shell-completion paths, which both need only the
-    discovered params and must tolerate unreadable/unparsable sources.
+    discovered params and must tolerate unreadable/unparsable sources. Inline
+    sources receive the same pure synthetic-main wrapper as ``agm exec -c``;
+    file sources retain their ordinary unwrapped behavior.
     """
     try:
+        from dataclasses import replace
+
         from agm.agl import PipelineDriver
 
-        prepared = PipelineDriver.prepare_program(source)
-        discovery = PipelineDriver(
-            agent_dispatcher=lambda request: AgentResponse(content="")
-        ).discover_params(prepared)
-        return discovery.params
+        runtime = PipelineDriver(agent_dispatcher=lambda request: AgentResponse(content=""))
+        if inline_source:
+            parsed = runtime.parse_entry(source)
+            if parsed.program is not None:
+                from agm.agl.parser import wrap_inline_program
+
+                program, next_id = wrap_inline_program(parsed.program, next_node_id=parsed.next_id)
+                parsed = replace(parsed, program=program, next_id=next_id)
+            prepared = runtime.prepare_parsed_entry(parsed)
+        else:
+            prepared = runtime.prepare_program(source)
+        return runtime.discover_params(prepared).params
     except (Exception, SystemExit):
         return ()
 

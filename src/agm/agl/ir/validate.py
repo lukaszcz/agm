@@ -33,7 +33,9 @@ Two tiers (validate_ir runs ONLY when explicitly called):
        its projected field (on at least one enum payload shape for enums).
     10. ``program_symbols`` and ``program_functions`` form a one-to-one,
         bidirectional index of linked ``program def`` entries with registered
-        symbols and zero-argument ``IrFunctionBody`` functions.
+        symbols and zero-argument ``IrFunctionBody`` functions; when present,
+        ``synthetic_main_symbol`` resolves through ``program_functions`` to
+        exactly one marked synthetic ``FunctionDescriptor``.
 
 The expression dispatcher uses a closed structural ``match`` with a final
 ``assert_never(node)`` arm so that adding an ``IrExpr`` variant in a
@@ -1118,6 +1120,34 @@ def _validate_program_tables(ctx: _Context) -> None:
             raise InvalidIrError(
                 f"program_symbols entry for declaration_id={declaration_id!r} references"
                 f" symbol_id={symbol!r} which has no program_functions entry"
+            )
+
+    synthetic_main_functions = tuple(
+        function for function in program.functions.values() if function.is_synthetic_main
+    )
+    if program.synthetic_main_symbol is None:
+        if synthetic_main_functions:
+            raise InvalidIrError("synthetic main function exists without synthetic_main_symbol")
+    elif (
+        len(synthetic_main_functions) != 1
+        or synthetic_main_functions[0].function_symbol != program.synthetic_main_symbol
+    ):
+        raise InvalidIrError(
+            "synthetic_main_symbol must identify the sole marked synthetic main function"
+        )
+    elif program.synthetic_main_symbol not in program_entry_symbols:
+        raise InvalidIrError("synthetic_main_symbol must be a linked program entry")
+    else:
+        synthetic_function_id = program.program_functions.get(program.synthetic_main_symbol)
+        synthetic_function = (
+            program.functions.get(synthetic_function_id)
+            if synthetic_function_id is not None
+            else None
+        )
+        if synthetic_function is None or not synthetic_function.is_synthetic_main:
+            raise InvalidIrError(
+                "synthetic_main_symbol must resolve through program_functions "
+                "to its marked synthetic main descriptor"
             )
 
     for symbol, function_id in program.program_functions.items():

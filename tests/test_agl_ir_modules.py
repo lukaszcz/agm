@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from agm.agl.eval.ir_interpreter import IrInterpreter
 from agm.agl.ir.ids import FunctionId
-from agm.agl.ir.nodes import IrDirectCall, IrPrint
-from agm.agl.ir.validate import validate_ir
+from agm.agl.ir.nodes import IrBlock, IrConstUnit, IrDirectCall, IrPrint
+from agm.agl.ir.program import IrFunctionBody
+from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.lower.program import lower_program
 from agm.agl.modules.ids import STD_CONFIG_ID, ModuleId
 from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, RecordValue, TextValue
@@ -23,6 +27,85 @@ from tests.agl.ir_harness import (
     lower_ir,
     nominal_id_for,
 )
+
+
+def test_wrap_mode_captures_synthetic_main_locals() -> None:
+    """Statement-style harness sources execute through the synthetic main."""
+    result = evaluate_ir(
+        "scope Static\n"
+        "let constant = 1\n"
+        "end Static\n"
+        "let first = Static::constant\n"
+        "var second = first + 1\n"
+        "second := second + 1\n"
+    )
+
+    assert result == {
+        "Static::constant": IntValue(1),
+        "first": IntValue(1),
+        "second": IntValue(3),
+    }
+
+
+def test_synthetic_main_runs_only_when_explicitly_selected() -> None:
+    executable = lower_ir("print 1")
+    synthetic_main = executable.synthetic_main_symbol
+    assert synthetic_main is not None
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        IrInterpreter(executable).run()
+    assert output.getvalue() == ""
+
+    with contextlib.redirect_stdout(output):
+        IrInterpreter(executable).run(program_symbol=synthetic_main)
+    assert output.getvalue() == "1\n"
+
+
+def test_empty_synthetic_main_lowers_and_runs_as_unit() -> None:
+    executable = lower_ir("def helper() -> unit = ()")
+    synthetic_main = executable.synthetic_main_symbol
+    assert synthetic_main is not None
+
+    assert IrInterpreter(executable).run(program_symbol=synthetic_main) == {}
+
+
+def test_synthetic_main_discards_a_non_unit_body_result() -> None:
+    executable = lower_ir("1")
+    synthetic_main = executable.synthetic_main_symbol
+    assert synthetic_main is not None
+    main = executable.functions[executable.program_functions[synthetic_main]]
+    assert isinstance(main.impl, IrFunctionBody)
+    assert isinstance(main.impl.body, IrBlock)
+    assert isinstance(main.impl.body.items[-1], IrConstUnit)
+
+
+def test_validation_rejects_an_invalid_synthetic_main_symbol() -> None:
+    wrapped = lower_ir("let value = 1")
+    missing_symbol = replace(wrapped, synthetic_main_symbol=None)
+    file_program = lower_ir("program def main() -> unit = ()")
+    (main_symbol,) = file_program.program_functions
+    unmarked_symbol = replace(file_program, synthetic_main_symbol=main_symbol)
+
+    for invalid in (missing_symbol, unmarked_symbol):
+        with pytest.raises(InvalidIrError, match="synthetic main"):
+            validate_ir(invalid, deep=True)
+
+
+def test_file_mode_excludes_function_bindings() -> None:
+    source = """\
+let constant = 1
+def helper() -> int = constant + 1
+program def main() -> unit =
+  let local = helper()
+  print local
+"""
+    executable = lower_ir(source)
+    (main_symbol,) = executable.program_functions
+
+    result = IrInterpreter(executable).run(program_symbol=main_symbol)
+
+    assert result == {"constant": IntValue(1)}
 
 
 def test_library_const_captured_by_library_function(
@@ -137,9 +220,13 @@ def test_scoped_linked_calls_use_function_handles_and_validate(tmp_path: Path) -
     executable = lower_program(_compiled_checked(checked))
 
     validate_ir(executable, deep=True)
+    assert executable.synthetic_main_symbol is not None
+    main = executable.functions[executable.program_functions[executable.synthetic_main_symbol]]
+    assert isinstance(main.impl, IrFunctionBody)
+    assert isinstance(main.impl.body, IrBlock)
     calls = [
         initializer.value
-        for initializer in executable.modules[executable.entry_module].initializers
+        for initializer in main.impl.body.items
         if isinstance(initializer, IrPrint) and isinstance(initializer.value, IrDirectCall)
     ]
     assert len(calls) == 2

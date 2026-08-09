@@ -383,7 +383,9 @@ def complete_agl_file(ctx: click.Context, args: list[str], incomplete: str) -> l
         return []
 
 
-def _exec_param_completion_items(source: str, incomplete: str) -> list[CompletionItem]:
+def _exec_param_completion_items(
+    source: str, incomplete: str, *, inline_source: bool = False
+) -> list[CompletionItem]:
     """Return ``CompletionItem`` objects for ``--<param>`` flags discovered in *source*.
 
     Used by :class:`ExecCommand` to augment the standard shell_complete results.
@@ -397,7 +399,7 @@ def _exec_param_completion_items(source: str, incomplete: str) -> list[Completio
     )
 
     items: list[CompletionItem] = []
-    for param in discover_params_from_source(source):
+    for param in discover_params_from_source(source, inline_source=inline_source):
         flag = param_flag(param.name)
         if flag.startswith(incomplete):
             items.append(CompletionItem(flag))
@@ -424,9 +426,11 @@ class ExecCommand(TyperCommand):
         try:
             params = cast(dict[str, object], ctx.params)
             source: str | None = None
+            inline_source = False
             raw_command = params.get("command")
             if isinstance(raw_command, str):
                 source = raw_command
+                inline_source = True
             else:
                 raw_file = params.get("file")
                 if isinstance(raw_file, str):
@@ -436,7 +440,7 @@ class ExecCommand(TyperCommand):
                         source = None
             if source is None:
                 return base
-            extra = _exec_param_completion_items(source, incomplete)
+            extra = _exec_param_completion_items(source, incomplete, inline_source=inline_source)
         except (Exception, SystemExit):
             return base
         return base + extra

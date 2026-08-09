@@ -60,6 +60,7 @@ def wrap_inline_program(program: Program, *, next_node_id: int) -> tuple[Program
         span=program.span,
         node_id=next_node_id + 2,
         is_program=True,
+        is_synthetic=True,
     )
     body = replace(program.body, items=(*root_items, main))
     return replace(program, body=body), next_node_id + 3

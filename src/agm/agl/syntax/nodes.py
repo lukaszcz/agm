@@ -502,6 +502,7 @@ class FuncDef(GenericDeclaration):
     is_builtin: bool = False
     is_extern: bool = False
     is_program: bool = False
+    is_synthetic: bool = False
     scope_path: tuple[ScopeSegment, ...] = ()
 
 

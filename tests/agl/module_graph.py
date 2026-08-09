@@ -124,17 +124,31 @@ def build_module_graph(
     origin_path: Path | None,
     default_stdlib: bool,
 ) -> tuple[ModuleGraph, int | None]:
-    """Build the real module graph for *source*.
-
-    Returns the graph plus the node id ``build_repl_graph`` assigned to the
-    synthetic ``std/core`` import it injected into the entry, or ``None``
-    when *default_stdlib* is ``False`` (nothing was injected).
-    """
+    """Build the real module graph for parsed *source*."""
     entry_program, entry_next_id = parse_program_seeded(source, start_id=0)
+    return build_module_graph_from_program(
+        entry_program,
+        next_node_id=entry_next_id,
+        origin_path=origin_path,
+        default_stdlib=default_stdlib,
+    )
+
+
+def build_module_graph_from_program(
+    entry_program: Program,
+    *,
+    next_node_id: int,
+    origin_path: Path | None,
+    default_stdlib: bool,
+) -> tuple[ModuleGraph, int | None]:
+    """Build a graph from an already parsed entry program.
+
+    The IR harness uses this seam after applying the inline-source AST wrap.
+    """
     if default_stdlib:
         cached, next_start_id = _cached_std_core()
     else:
-        cached, next_start_id = {}, entry_next_id
+        cached, next_start_id = {}, next_node_id
     import_node_id = next_start_id if default_stdlib else None
     graph, _next_start_id, _new_modules = build_repl_graph(
         entry_program,

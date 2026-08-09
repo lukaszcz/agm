@@ -878,7 +878,17 @@ class _Lowerer:
             self._return_context(sig.result),
             self._checked.type_env.type_scope(declaration_scope_path),
         ):
-            body_ir = self.lower_coerced(funcdef.body, sig.result)
+            body_ir: IrExpr
+            if funcdef.is_synthetic:
+                assert isinstance(funcdef.body, Block)
+                body_ir = self._lower_block(
+                    funcdef.body.items,
+                    funcdef.body.span,
+                    top_level=True,
+                    force_unit_result=True,
+                )
+            else:
+                body_ir = self.lower_coerced(funcdef.body, sig.result)
 
         desc = FunctionDescriptor(
             function_id=fn_id,
@@ -888,6 +898,7 @@ class _Lowerer:
             impl=IrFunctionBody(body=body_ir),
             param_labels=param_labels,
             result_label=result_label,
+            is_synthetic_main=funcdef.is_synthetic,
         )
         self._link.functions[fn_id] = desc
 
@@ -2708,27 +2719,35 @@ class _Lowerer:
         self,
         items: tuple[Item, ...],
         span: SourceSpan,
+        *,
+        top_level: bool = False,
+        force_unit_result: bool = False,
     ) -> IrBlock:
         """Lower a ``Block``'s items to an ``IrBlock``.
 
-        All items inside a block body are lowered as **nested** (``top_level=False``),
-        so any ``let``/``var`` binders they declare are allocated with
-        ``public=False`` and do not appear in ``_collect_results``.  Only the
-        top-level module-initializer driver passes ``top_level=True``.  Scope
-        rejects static declarations in ordinary blocks, so every reachable item
-        must lower to a runtime expression.
+        Items are normally lowered as **nested** (``top_level=False``), so their
+        ``let``/``var`` binders are private. The synthesized inline ``main`` is
+        the one exception: its direct body items use ``top_level=True`` so the
+        evaluator can report its final locals. ``force_unit_result`` discards
+        that generated entry's final expression value after preserving its
+        effects. Scope rejects static declarations in ordinary blocks, so every
+        reachable item must lower to a runtime expression.
         """
         real: list[IrExpr] = []
         for item in items:
-            ir = self.lower_item(item, top_level=False)
+            ir = self.lower_item(item, top_level=top_level)
             assert ir is not None, "compiler bug: non-runtime item in nested block"
             real.append(ir)
             if self._item_is_bottom(item):
                 break
-        assert real, "compiler bug: lowered block has no runtime items"
-        last = items[-1]
-        if isinstance(last, (LetDecl, VarDecl)) and not self._item_is_bottom(last):
-            real.append(IrConstUnit(location=self._loc(last.span)))
+        if not real:
+            real.append(IrConstUnit(location=self._loc(span)))
+        else:
+            last = items[-1]
+            if (
+                force_unit_result or isinstance(last, (LetDecl, VarDecl))
+            ) and not self._item_is_bottom(last):
+                real.append(IrConstUnit(location=self._loc(last.span)))
         return IrBlock(location=self._loc(span), items=tuple(real))
 
     # ------------------------------------------------------------------

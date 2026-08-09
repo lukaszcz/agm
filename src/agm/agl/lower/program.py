@@ -292,6 +292,16 @@ def lower_program(
             for item in static_items(checked_module.resolved.program.body.items)
             if isinstance(item, FuncDef) and item.is_program
         },
+        synthetic_main_symbol=next(
+            (
+                link.fn_node_to_sym[item.node_id]
+                for item in static_items(
+                    checked.modules[checked.entry_id].resolved.program.body.items
+                )
+                if isinstance(item, FuncDef) and item.is_synthetic
+            ),
+            None,
+        ),
         params=tuple(entry_lowerer._params),
         contracts=dict(link.contracts),
         dry_run_inventory=dry_run_inventory,

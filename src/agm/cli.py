@@ -1016,7 +1016,7 @@ def _exec_print_help(*, file: str | None, command: str | None) -> None:
             source = None
 
     if source is not None:
-        params = discover_params_from_source(source)
+        params = discover_params_from_source(source, inline_source=command is not None)
         if params:
             print(render_param_help_section(params), end="")
 

@@ -85,6 +85,7 @@ print value
     assert isinstance(main, FuncDef)
     assert main.name == "main"
     assert main.is_program is True
+    assert main.is_synthetic is True
     assert main.params == ()
     assert main.type_param_slots == ()
     assert isinstance(main.return_type, UnitT)
@@ -93,6 +94,20 @@ print value
     assert all(actual is expected for actual, expected in zip(main.body.items, original_items[12:]))
     assert all(isinstance(item, (LetDecl, VarDecl, AssignStmt)) for item in main.body.items[:3])
     assert isinstance(main.body.items[3], Call)
+    assert transformed_next_node_id == next_node_id + 3
+
+
+def test_wrap_inline_program_wraps_an_empty_declaration_only_source() -> None:
+    program, next_node_id = parse_program_seeded("def helper() -> unit = ()", start_id=0)
+
+    wrapped, transformed_next_node_id = wrap_inline_program(program, next_node_id=next_node_id)
+
+    (helper, main) = wrapped.body.items
+    assert isinstance(helper, FuncDef)
+    assert isinstance(main, FuncDef)
+    assert main.is_synthetic
+    assert isinstance(main.body, Block)
+    assert main.body.items == ()
     assert transformed_next_node_id == next_node_id + 3
 
 

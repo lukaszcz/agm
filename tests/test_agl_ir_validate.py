@@ -156,6 +156,7 @@ def _make_program(
     functions: "dict[FunctionId, FunctionDescriptor] | None" = None,
     program_symbols: dict[int, SymbolId] | None = None,
     program_functions: dict[SymbolId, FunctionId] | None = None,
+    synthetic_main_symbol: SymbolId | None = None,
 ) -> ExecutableProgram:
     """Build a valid base program; callers override individual tables."""
     nom_desc = NominalDescriptor(
@@ -176,6 +177,7 @@ def _make_program(
         functions=functions or {},
         program_symbols={} if program_symbols is None else program_symbols,
         program_functions={} if program_functions is None else program_functions,
+        synthetic_main_symbol=synthetic_main_symbol,
     )
 
 
@@ -1496,6 +1498,53 @@ class TestProgramEntryMaps:
         )
 
         validate_ir(prog)
+
+    def test_synthetic_main_must_resolve_to_the_marked_descriptor(self) -> None:
+        marked = FunctionDescriptor(
+            function_id=FN0,
+            function_symbol=SYM0,
+            module_id=MOD_A,
+            params=(),
+            impl=IrFunctionBody(body=IrConstInt(location=LOC, value=42)),
+            is_synthetic_main=True,
+        )
+        alias = _make_fn_desc(fn_id=FunctionId(1), fn_sym=SYM0)
+        prog = _make_program(
+            functions={FN0: marked, FunctionId(1): alias},
+            program_symbols={10: SYM0},
+            program_functions={SYM0: FunctionId(1)},
+            synthetic_main_symbol=SYM0,
+        )
+
+        with pytest.raises(InvalidIrError, match="synthetic_main_symbol"):
+            validate_ir(prog)
+
+    def test_synthetic_main_requires_exactly_one_marked_descriptor(self) -> None:
+        marked = FunctionDescriptor(
+            function_id=FN0,
+            function_symbol=SYM0,
+            module_id=MOD_A,
+            params=(),
+            impl=IrFunctionBody(body=IrConstInt(location=LOC, value=42)),
+            is_synthetic_main=True,
+        )
+        duplicate_marked = FunctionDescriptor(
+            function_id=FunctionId(1),
+            function_symbol=SYM0,
+            module_id=MOD_A,
+            params=(),
+            impl=IrFunctionBody(body=IrConstInt(location=LOC, value=42)),
+            is_synthetic_main=True,
+        )
+        prog = _make_program(
+            functions={FN0: marked, FunctionId(1): duplicate_marked},
+            program_symbols={10: SYM0},
+            program_functions={SYM0: FN0},
+            synthetic_main_symbol=SYM0,
+        )
+
+        with pytest.raises(InvalidIrError, match="sole marked"):
+            validate_ir(prog)
 
     def test_program_entry_cannot_target_extern_function(self) -> None:
         extern = FunctionDescriptor(

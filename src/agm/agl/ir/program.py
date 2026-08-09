@@ -202,6 +202,7 @@ class FunctionDescriptor:
     impl: FunctionImpl
     param_labels: tuple[str, ...] = ()
     result_label: str = "?"
+    is_synthetic_main: bool = False
 
     @property
     def is_extern(self) -> bool:
@@ -317,6 +318,11 @@ class ExecutableProgram:
         body-backed function id, used by the host invocation entry point. Its
         keys are exactly the ``program_symbols`` values, making the two tables
         a bidirectional index.
+      ``synthetic_main_symbol`` — the synthesized inline-source ``main`` entry,
+        when this program was wrapped. Its ``program_functions`` entry resolves
+        to the sole function descriptor marked ``is_synthetic_main``; file programs
+        leave this ``None``. When a
+        host explicitly invokes it, its final frame supplements reported bindings.
       ``builtin_nominals`` — bare built-in type name -> the ``NominalId`` a
         host mints for it (see ``agm.agl.ir.builtin_nominals``), built during
         lowering from the program's ``builtin`` declarations. Defaults to
@@ -338,6 +344,7 @@ class ExecutableProgram:
     functions: dict[FunctionId, FunctionDescriptor] = field(default_factory=dict)
     program_symbols: dict[int, SymbolId] = field(default_factory=dict)
     program_functions: dict[SymbolId, FunctionId] = field(default_factory=dict)
+    synthetic_main_symbol: SymbolId | None = None
     params: tuple[IrParam, ...] = ()
     contracts: dict["ContractId", "ContractRequest"] = field(default_factory=dict)
     dry_run_inventory: "tuple[DryRunEntry, ...]" = ()

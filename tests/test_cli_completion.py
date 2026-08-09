@@ -1404,7 +1404,9 @@ class TestExecCommandShellComplete:
     def test_file_with_ask_offers_param_options(self, tmp_path: Path) -> None:
         """Completion discovers params for normal exec programs using ``ask``."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('param topic: text\nlet answer = ask "About %{topic}"\nanswer\n')
+        agl_file.write_text(
+            'param topic: text\nprogram def main() -> unit =\n  let answer = ask "About %{topic}"\n'
+        )
 
         result = self._complete(["exec", str(agl_file)], "--")
         assert "--topic" in result
@@ -1429,7 +1431,7 @@ class TestExecCommandShellComplete:
 
     def test_command_flag_source_offers_param_options(self) -> None:
         """``agm exec -c 'param ...' --<TAB>`` discovers params from inline source."""
-        result = self._complete(["exec", "-c", "param count: int"], "--")
+        result = self._complete(["exec", "-c", "param count: int\nprint count"], "--")
         assert "--count" in result
 
     def test_nonexistent_file_degrades_to_base_completion(self) -> None:

@@ -407,8 +407,8 @@ class IrInterpreter:
     iterations allocate additional frames as needed.
 
     ``run()`` executes the entry module's initializers in order and returns
-    ``{public_name: Value}`` for every top-level binding that has a
-    ``public_name`` and is owned by the entry module.
+    its public non-function bindings. When explicitly invoked, a synthetic
+    inline ``main`` also contributes its direct public bindings.
     """
 
     DEFAULT_MAX_CALL_DEPTH: int = 256
@@ -435,6 +435,7 @@ class IrInterpreter:
         self.initializer_values: list[Value] = []
         self.module_initializer_values: dict[ModuleId, list[Value]] = {}
         self.entry_param_symbols_installed: set[SymbolId] = set()
+        self._synthetic_main_frame: Frame | None = None
         self._call_depth: int = 0
         self._trace: TraceStore = trace if trace is not None else noop_trace()
         self._max_call_depth: int = max_call_depth
@@ -683,6 +684,8 @@ class IrInterpreter:
         body: IrExpr,
         closure_val: IrClosureValue,
         bound_values: list[Value],
+        *,
+        retain_frame: bool = False,
     ) -> Value:
         """Build a call frame, push it, evaluate the function body, pop the frame, return result.
 
@@ -704,6 +707,8 @@ class IrInterpreter:
                 result = signal.value
         finally:
             self._call_depth -= 1
+            if retain_frame:
+                self._synthetic_main_frame = call_frame
             self._frames.pop()
 
         return result
@@ -775,6 +780,8 @@ class IrInterpreter:
         fn_id: FunctionId,
         arguments: "tuple[IrExpr | UseDefault, ...]",
         location: Location | None,
+        *,
+        retain_frame: bool = False,
     ) -> Value:
         """Execute a direct call to a named user function or an extern.
 
@@ -809,7 +816,9 @@ class IrInterpreter:
                     )
                     bound_values.append(val)
 
-                return self._bind_and_invoke(desc, body, closure_val, bound_values)
+                return self._bind_and_invoke(
+                    desc, body, closure_val, bound_values, retain_frame=retain_frame
+                )
             case other:  # pragma: no cover
                 assert_never(other)
 
@@ -913,7 +922,12 @@ class IrInterpreter:
         """Invoke a selected linked ``program def`` with an entry-point error span."""
         location = self._program_entry_location(symbol)
         try:
-            return self._execute_direct_call(self._program.program_functions[symbol], (), location)
+            return self._execute_direct_call(
+                self._program.program_functions[symbol],
+                (),
+                location,
+                retain_frame=symbol == self._program.synthetic_main_symbol,
+            )
         except AglRaise as exc:
             if exc.span is None:
                 exc.span = location
@@ -1786,27 +1800,31 @@ class IrInterpreter:
     # ------------------------------------------------------------------
 
     def _collect_results(self) -> dict[str, Value]:
-        """Return ``{public_name: Value}`` for symbols in the entry module frame.
+        """Return file constants and, for wrapped input, final main locals.
 
-        Only symbols that:
-        1. Have a non-``None`` ``public_name`` in their ``SymbolDescriptor``.
-        2. Are owned by the entry module.
-        3. Are currently bound in the frame (``IrBind`` was executed for them).
-
-        Cells are unwrapped; let-slots are returned directly.
+        A file run exposes entry-module bindings other than function closures.
+        Wrapped input additionally exposes the synthesized ``main`` frame
+        retained at return time.
         """
         entry_id: ModuleId = self._program.entry_module
+        function_symbols = {
+            function.function_symbol for function in self._program.functions.values()
+        }
         results: dict[str, Value] = {}
-        for sym_id, desc in self._program.symbols.items():
-            if desc.public_name is None:
-                continue
-            if desc.owner != entry_id:
-                continue
-            slot = self._frame.get(sym_id)
-            if slot is None:
-                continue
-            if isinstance(slot, Cell):
-                results[desc.public_name] = slot.value
-            else:
-                results[desc.public_name] = slot
+
+        def collect(frame: Frame, *, module_only: bool) -> None:
+            for sym_id, desc in self._program.symbols.items():
+                if (
+                    desc.public_name is None
+                    or sym_id in function_symbols
+                    or (module_only and desc.owner != entry_id)
+                ):
+                    continue
+                slot = frame.get(sym_id)
+                if slot is not None:
+                    results[desc.public_name] = slot.value if isinstance(slot, Cell) else slot
+
+        collect(self._frames[0], module_only=True)
+        if self._synthetic_main_frame is not None:
+            collect(self._synthetic_main_frame, module_only=False)
         return results

@@ -38,6 +38,16 @@ class TestSourceDiscovery:
 
         assert [param.name for param in params] == ["selected"]
 
+    def test_inline_source_wraps_before_discovering_params(self) -> None:
+        from agm.cli_support.exec_params import discover_params_from_source
+
+        params = discover_params_from_source(
+            "param count: int = 1\nlet next = count + 1\nprint next",
+            inline_source=True,
+        )
+
+        assert [param.name for param in params] == ["count"]
+
     def test_scoped_param_discovers_under_its_full_path_spelling(self) -> None:
         """A scoped param's external key is its full path, e.g. 'Deploy::region'."""
         from agm.cli_support.exec_params import discover_params_from_source

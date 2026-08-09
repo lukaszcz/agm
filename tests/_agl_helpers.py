@@ -45,14 +45,31 @@ from agm.agl.ir.ids import NominalId
 from agm.agl.ir.nodes import IrBind, IrExpr, IrSequence
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, require_reserved_nominal_id
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.parser import parse_program_seeded, wrap_inline_program
 from agm.agl.semantics.type_table import TypeDef, TypeTable, create_seeded_type_table
 from agm.agl.semantics.types import EnumType, ExceptionType, RecordType, Type, transform_type
 from agm.agl.semantics.values import EnumValue, TextValue
+from agm.agl.syntax.nodes import Program
 
 # Declaration identities for ad-hoc test TypeDefs, distinct from real AST node
 # ids (which start at 0) and from every reserved identity (<= -2, see
 # ir.reserved_nominals) so an ad-hoc type never collides with either.
 _decl_ids = itertools.count(900_000)
+
+
+def wrap_statement_source(source: str) -> tuple[Program, int, bool]:
+    """Parse *source* and apply the inline wrapper when it lacks a program.
+
+    Returns the transformed program, its next node id, and whether the source
+    became a synthetic-main program. IR/eval helpers use this so statement-style
+    fixtures retain their historical value-binding assertions.
+    """
+    program, next_node_id = parse_program_seeded(source, start_id=0)
+    wrapped, next_node_id = wrap_inline_program(program, next_node_id=next_node_id)
+    if wrapped is program:
+        return wrapped, next_node_id, False
+
+    return wrapped, next_node_id, True
 
 
 def next_decl_id() -> int:

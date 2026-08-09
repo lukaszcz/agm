@@ -299,7 +299,7 @@ class TestExecDynamicHelp:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('program demo\nparam msg: text = "hi"\nprint msg\n')
+        agl_file.write_text('param msg: text = "hi"\nprogram def main() -> unit = print msg\n')
 
         with pytest.raises(SystemExit) as exc_info:
             cli._exec_print_help(file=str(agl_file), command=None)
@@ -313,7 +313,10 @@ class TestExecDynamicHelp:
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         with pytest.raises(SystemExit) as exc_info:
-            cli._exec_print_help(file=None, command="param count: int = 1\nprint count")
+            cli._exec_print_help(
+                file=None,
+                command="param count: int = 1\nlet next = count + 1\nprint next",
+            )
 
         assert exc_info.value.code == 0
         assert "--count" in capsys.readouterr().out

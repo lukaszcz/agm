@@ -1028,9 +1028,11 @@ class _Checker:
             # Check body against declared return type.
             assert node.body is not None
             with self._return_context(sig.result):
-                body_type = self._check_expr(node.body, expected=sig.result)
+                body_type = self._check_expr(
+                    node.body, expected=None if node.is_synthetic else sig.result
+                )
                 return_targets = self._current_return_extern_targets()
-            if not isinstance(body_type, BottomType):
+            if not node.is_synthetic and not isinstance(body_type, BottomType):
                 self._assert_assignable_from(body_type, sig.result, node.span, node.body)
             targets = (
                 self._merge_extern_targets(
@@ -1652,7 +1654,7 @@ class _Checker:
                 owner=owner, variant=ctor_ref.variant, span=node.span
             )
         ref = self._binding_for(node.node_id)
-        if ref.kind is BinderKind.param_binding and not ref.module_id.is_entry:
+        if ref.is_module_param and not ref.module_id.is_entry:
             raise AglTypeError(
                 "Parameters declared in library modules are not available at runtime during M2.",
                 span=node.span,

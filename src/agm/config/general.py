@@ -175,8 +175,14 @@ def resolve_default_prompt_file(filename: str, *, home: Path) -> Path:
     return resolve_agm_path(home=home, relative_path=Path("prompts") / filename)
 
 
-def config_file_candidates(*, home: Path, proj_dir: Path | None, cwd: Path) -> list[Path]:
-    candidates = agm_path_candidates(home=home, relative_path=Path("config.toml"))
+def config_file_candidates(
+    *,
+    home: Path,
+    proj_dir: Path | None,
+    cwd: Path,
+    env: Mapping[str, str] | None = None,
+) -> list[Path]:
+    candidates = agm_path_candidates(home=home, relative_path=Path("config.toml"), env=env)
     if proj_dir is not None:
         candidates.append(project_config_dir(proj_dir) / "config.toml")
     candidates.append(cwd / ".agm" / "config.toml")
@@ -359,25 +365,37 @@ def _resolve_config_file_paths(config: TomlDict, config_dir: Path, cwd: Path) ->
     return resolved
 
 
-def load_general_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> GeneralConfig:
+def load_general_config(
+    *,
+    home: Path,
+    proj_dir: Path | None,
+    cwd: Path,
+    env: Mapping[str, str] | None = None,
+) -> GeneralConfig:
     """Load path-normalized config layers and their conventional merged view."""
 
     layers: list[TomlDict] = []
-    for path in config_file_candidates(home=home, proj_dir=proj_dir, cwd=cwd):
+    for path in config_file_candidates(home=home, proj_dir=proj_dir, cwd=cwd, env=env):
         if path.is_file():
             raw = load_toml_file(path)
             layers.append(_resolve_config_file_paths(raw, config_dir=path.parent, cwd=cwd))
     return GeneralConfig.from_layers(layers)
 
 
-def load_merged_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> TomlDict:
+def load_merged_config(
+    *,
+    home: Path,
+    proj_dir: Path | None,
+    cwd: Path,
+    env: Mapping[str, str] | None = None,
+) -> TomlDict:
     """Load the conventional merged config view.
 
     Kept for readers that do not need per-file provenance. Qualified config
     consumers must use :func:`load_general_config` and retain its layers.
     """
 
-    return load_general_config(home=home, proj_dir=proj_dir, cwd=cwd).merged
+    return load_general_config(home=home, proj_dir=proj_dir, cwd=cwd, env=env).merged
 
 
 def load_run_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> RunConfig:

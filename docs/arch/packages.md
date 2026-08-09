@@ -5,13 +5,20 @@ CLI dispatch. A package directory has a `package.toml` manifest and a module tre
 the package; its `PackageInfo` is the source-agnostic input module-root assembly mounts for
 development directories now and installed packages later. The versioned store layout helpers
 place extracted package trees under `<AGM home>/packages/<name>/<version>/`, rejecting path
-components that could leave the AGM home; activation and installation flows build on this layout
-without changing the package model. `RECORD` helpers write and verify the complete relative file
-set with SHA-256 digests while refusing linked package trees, providing the integrity and removal
+components that could leave the AGM home. Its activation index selects one store version per
+package (or records an editable root), is deterministically rebuildable from installed manifests,
+and validates every selected package's direct minimum-version requirements after development
+roots exclude same-name active or pinned selections before store resolution. Non-editable selections
+must canonically remain within the store root,
+including when a store path traverses a link. Project package pins override global versions before
+the selected packages are passed through the existing root seam.
+`RECORD` helpers write and verify the complete relative file set with SHA-256 digests while refusing
+linked package trees, providing the integrity and removal
 manifest for installed trees. `agm pkg check` exposes the current validation boundary
 without modifying or installing a package. `agm exec` discovers the package
 containing its file (or its current directory for inline source), while `agm repl` discovers
-one at its current directory; each mounts its explicitly path-sourced dependency closure.
+one at its current directory; each gives that explicitly path-sourced dependency closure
+precedence over the selected active roots.
 
 ## Manifest and Identity
 
@@ -38,6 +45,7 @@ package names and command registrations cannot claim AGM's command namespace.
 - `src/agm/packages/model.py` — package-root identity and canonical module ownership.
 - `src/agm/packages/development.py` — containing development-package and path-dependency discovery.
 - `src/agm/packages/store.py` — AGM-home-relative versioned store paths.
+- `src/agm/packages/activation.py` — activation index, project pins, requirement validation, and store-root selection.
 - `src/agm/packages/record.py` — deterministic SHA-256 `RECORD` writing and verification.
 - `src/agm/agl/modules/roots.py` and `loader.py` — root mounting and ownership-based import visibility.
 - `src/agm/packages/discipline.py` — directory and command/program validation.

@@ -25,7 +25,7 @@ Later layers override earlier ones; table-valued sections merge by key rather th
 
 ## Sections and Per-Command Overrides
 
-Configuration is organized into sections consumed by specific features — for example loop, run, exec, and module-root settings. Some commands additionally support per-command override sections (such as a per-command review or revise table) that merge over the base section, so a default can be set once and specialized for a particular command.
+Configuration is organized into sections consumed by specific features — for example loop, run, exec, module-root, and package-pin settings. `[packages]` maps package names to exact semantic versions; its merged pins override the global package activation selection for that invocation, and malformed pins fail when package roots are selected without making unrelated sections strict. Some commands additionally support per-command override sections (such as a per-command review or revise table) that merge over the base section, so a default can be set once and specialized for a particular command.
 
 For AgL execution, four sources combine with a defined precedence:
 
@@ -49,5 +49,6 @@ Sandbox settings for `agm run` follow their own discovery and merge chain across
 - `src/agm/config/engine_keys.py` is the pure data-leaf catalog of engine keys: each key's name, value kind, config accessor, host default, and consuming side (runtime-live — backed by a live interpreter field — versus host-consumed registers). Shared with host seed/default resolution, the AgL engine-key type registry that maps each kind to an AgL type, and the evaluator/REPL, which route a write by its consuming side. Its named trace-register projection and trace coupling helper keep the `log`/`log-file` pair explicit; `default-agent` remains a register-only `Agent` value with no host default.
 - `src/agm/config/qualified_keys.py` is the pure qualified AgL config-key resolver. It consumes the retained general-config layers so qualified aliases retain their file provenance, enforcing unambiguous suffixes while keeping AGM sections out of module matching.
 - `src/agm/config/module_roots.py` resolves AgL module search roots from the `[modules]` config.
+- `src/agm/config/general.py` retains `[packages]` through the conventional merged view; `packages/activation.py` consumes its exact-version pins when selecting installed package roots.
 - `src/agm/config/sandbox/` discovers and merges SRT sandbox settings.
 - `config/` (repository root) holds the default config templates installed into `~/.agm/`.

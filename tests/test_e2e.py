@@ -8016,6 +8016,30 @@ class TestDepListCommand:
         assert result.stdout == ""
 
 
+def _write_pinned_package_project(parent: Path) -> tuple[Path, Path, Path]:
+    """Create an isolated store with a project pin differing from its activation."""
+    home = parent / "agm-home"
+    for version, answer in (("1.0.0", 1), ("2.0.0", 2)):
+        package = home / "packages" / "alpha" / version
+        (package / "alpha").mkdir(parents=True)
+        (package / "package.toml").write_text(
+            f'[package]\nname = "alpha"\nversion = "{version}"\n', encoding="utf-8"
+        )
+        (package / "alpha" / "value.agl").write_text(f"def answer() -> int = {answer}\n")
+    (home / "packages" / "index.toml").write_text(
+        '[packages.alpha]\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+
+    project = parent / "project"
+    (project / "config").mkdir(parents=True)
+    (project / "config" / "config.toml").write_text(
+        '[packages]\nalpha = "2.0.0"\n', encoding="utf-8"
+    )
+    work = project / "work"
+    work.mkdir()
+    return home, project, work
+
+
 def _write_development_package_pair(parent: Path) -> tuple[Path, Path]:
     """Create a package and a path-sourced dependency for AgL host tests."""
     bravo = parent / "bravo"
@@ -8050,6 +8074,22 @@ class TestExecCommand:
 
         assert result.returncode == 0
         assert result.stdout.strip() == "hello from agl"
+
+    def test_exec_uses_project_pin_from_an_isolated_package_store(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        home, project, work = _write_pinned_package_project(tmp_path)
+        env["AGM_HOME"] = str(home)
+        env["PROJ_DIR"] = str(project)
+        program = work / "entry.agl"
+        program.write_text(
+            "import alpha/value\nprogram def main() -> unit =\n  print alpha/value::answer()\n"
+        )
+
+        result = run_agm(["exec", str(program)], env=env, cwd=work)
+
+        assert result.returncode == 0
+        assert result.stdout.strip() == "2"
 
     def test_exec_mounts_a_development_package_path_dependency(
         self, tmp_path: Path, env: dict[str, str]
@@ -8288,6 +8328,23 @@ class TestReplCommand:
         assert result.returncode == 0
         # The evaluated expression yields exactly 3 on a standalone output line.
         assert any(line.split()[-1:] == ["3"] for line in result.stdout.splitlines())
+
+    def test_repl_uses_project_pin_from_an_isolated_package_store(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        home, project, work = _write_pinned_package_project(tmp_path)
+        env["AGM_HOME"] = str(home)
+        env["PROJ_DIR"] = str(project)
+
+        result = run_agm(
+            ["repl"],
+            env=env,
+            cwd=work,
+            input="import alpha/value\nalpha/value::answer()\n:quit\n",
+        )
+
+        assert result.returncode == 0
+        assert any(line.split()[-1:] == ["2"] for line in result.stdout.splitlines())
 
     def test_repl_mounts_a_development_package_path_dependency(
         self, tmp_path: Path, env: dict[str, str]

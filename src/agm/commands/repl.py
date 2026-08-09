@@ -56,6 +56,7 @@ from agm.core.log import (
     resolve_log_decision,
 )
 from agm.core.toml import toml_dict
+from agm.packages.activation import select_package_roots
 from agm.packages.development import discover_development_packages
 
 if TYPE_CHECKING:
@@ -130,9 +131,14 @@ def run(args: ReplArgs) -> None:
         raise SystemExit(1) from exc
     lib_root = resolve_lib_root(mod_roots_cfg, home=ctx.home)
     try:
-        package_roots = discover_development_packages(ctx.cwd)
+        package_roots = select_package_roots(
+            home=ctx.home,
+            proj_dir=ctx.proj_dir,
+            cwd=ctx.cwd,
+            development_packages=discover_development_packages(ctx.cwd),
+        )
     except ValueError as exc:
-        print(f"Error: invalid development package: {exc}", file=sys.stderr)
+        print(f"Error: invalid package roots: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
     # Seed only explicit CLI/config controls.  Trace-service fallbacks remain

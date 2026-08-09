@@ -15,6 +15,7 @@ from agm.config.module_roots import (
     resolve_lib_root,
     resolve_stdlib_root,
 )
+from agm.packages.activation import select_package_roots
 
 
 def effective_exec_roots(
@@ -28,6 +29,12 @@ def effective_exec_roots(
 ) -> RootSet:
     """Build exactly the root set an ``agm exec`` invocation uses."""
     module_config = load_module_roots(home=home, proj_dir=proj_dir, cwd=cwd)
+    selected_packages = select_package_roots(
+        home=home,
+        proj_dir=proj_dir,
+        cwd=cwd,
+        development_packages=package_roots,
+    )
     return assemble_roots(
         invocation_root=entry_path.parent if entry_path is not None else cwd,
         stdlib_root=resolve_stdlib_root(home=home),
@@ -35,5 +42,5 @@ def effective_exec_roots(
         configured=module_config.extra,
         cli=module_paths,
         cwd=cwd,
-        package_roots=package_roots,
+        package_roots=selected_packages,
     )

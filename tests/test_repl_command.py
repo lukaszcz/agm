@@ -215,6 +215,100 @@ class TestReplRun:
         assert call["history_path"] == home / ".agm" / "repl_history"
         assert (home / ".agm").is_dir()
 
+    def test_imported_param_resolves_from_qualified_config(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        from agm.agl.semantics.values import TextValue
+
+        home = _isolated_home(monkeypatch, tmp_path)
+        config_dir = home / ".agm"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text(
+            f'[modules]\nroots = ["{tmp_path}"]\n\n[settings]\nregion = "configured"\n'
+        )
+        (tmp_path / "settings.agl").write_text("param region: text\ndef read() -> text = region\n")
+
+        repl_command.run(_args())
+        session: ReplSession = fake_console[0]["session"]
+        result = session.eval_entry("import settings\nsettings::read()")
+
+        assert result.ok, result.diagnostics
+        assert result.value == TextValue("configured")
+        local_result = session.eval_entry('param region: text = "local"\nregion')
+        assert local_result.ok, local_result.diagnostics
+        assert local_result.value == TextValue("local")
+
+    def test_imported_param_config_value_must_match_its_type(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        home = _isolated_home(monkeypatch, tmp_path)
+        config_dir = home / ".agm"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text(
+            f'[modules]\nroots = ["{tmp_path}"]\n\n[settings]\ncount = "not-an-int"\n'
+        )
+        (tmp_path / "settings.agl").write_text("param count: int\ndef read() -> int = count\n")
+
+        repl_command.run(_args())
+        session: ReplSession = fake_console[0]["session"]
+        result = session.eval_entry("import settings\nsettings::read()")
+
+        assert not result.ok
+
+    def test_conflicting_imported_param_config_is_an_entry_diagnostic(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        home = _isolated_home(monkeypatch, tmp_path)
+        config_dir = home / ".agm"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text(
+            f'[modules]\nroots = ["{tmp_path}"]\n\n[settings]\nregion = "short"\n'
+            '["nested/settings"]\nregion = "exact"\n'
+        )
+        nested = tmp_path / "nested"
+        nested.mkdir()
+        (nested / "settings.agl").write_text("param region: text\ndef read() -> text = region\n")
+
+        repl_command.run(_args())
+        session: ReplSession = fake_console[0]["session"]
+        result = session.eval_entry("import nested/settings\nsettings::read()")
+
+        assert not result.ok
+
+    def test_separate_import_entries_validate_the_full_param_inventory(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        home = _isolated_home(monkeypatch, tmp_path)
+        config_dir = home / ".agm"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text(
+            f'[modules]\nroots = ["{tmp_path}"]\n\n[settings]\nregion = "configured"\n'
+        )
+        for parent in ("first", "second"):
+            module_dir = tmp_path / parent
+            module_dir.mkdir()
+            (module_dir / "settings.agl").write_text("param region: text\n")
+
+        repl_command.run(_args())
+        session: ReplSession = fake_console[0]["session"]
+        assert session.eval_entry("import first/settings\n()").ok
+
+        result = session.eval_entry("import second/settings\n()")
+
+        assert not result.ok
+
     def test_cli_agent_seeds_and_repl_write_persists(
         self,
         monkeypatch: pytest.MonkeyPatch,

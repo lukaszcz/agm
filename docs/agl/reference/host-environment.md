@@ -123,9 +123,8 @@ is omitted. The `Option[text]` settings (`log-file`, `timeout`) take a
 `agm exec` resolves initial values as:
 
 ```
-setting X:       source (std/config::X := e)  >  CLI --X  >  [<program>].X  >  [exec].X  >  declared default
-entry param Y:   CLI --Y                       >  [<program>].Y  >  source default (param Y = e) >  required error
-imported param Y: CLI --Y                       >  source default (param Y = e) >  required error
+setting X:       source (std/config::X := e)  >  CLI --X  >  qualified program table  >  [exec].X  >  declared default
+param Y:         CLI --Y / --module::Y         >  qualified config table  >  source default (param Y = e) > required error
 ```
 
 The CLI flag and config-file layers supply a setting's **initial** value; a
@@ -134,19 +133,19 @@ A program that never writes a setting keeps the value chosen by the CLI/config
 layers.
 
 `agm repl` resolves engine settings as source writes > CLI > `[exec]` > declared
-default. It has no per-param CLI options or per-program config table. REPL
-parameters therefore require source defaults.
+default. It has no per-param CLI options; imported-module params may resolve
+from qualified config, while prompt-local params require source defaults.
 
 ### Config-file schema
 
 `[exec]` holds global engine defaults with kebab field names (`strict-json`,
-`max-iters`, `log-file`). For `agm exec`, a `[<program>]` top-level section is
-keyed by the `.agl` file stem and overrides engine settings and params declared
-by the entry file. When its key names an entry param and an engine setting, it
-supplies the param. Params declared in imported modules receive a CLI value or a
-source default. Inline `-c` source has no per-program config section.
+`max-iters`, `log-file`). Qualified tables use a module suffix and declaration
+scope path. The selected entry program's engine settings use its qualified
+program table; every discovered param uses its declaring module path. A longer
+suffix, including an exact quoted module route, disambiguates same-leaf modules.
+Inline `-c` params are CLI-only.
 
-`agm repl` does not read `[<program>]` tables. They never override REPL engine
+`agm repl` reads qualified config for imported-module params, never for engine
 settings.
 
 ### Positional effect
@@ -169,13 +168,13 @@ of the run without rolling back the assigned `log` or `log-file` value.
 
 ### Error surface for `timeout`
 
-- A bad `--timeout`, `[<program>].timeout`, or `[exec].timeout` value is caught
+- A bad `--timeout`, qualified program-table timeout, or `[exec].timeout` value is caught
   before execution (exit 1 pre-execution error).
 - A bad duration in `std/config::timeout := Some("…")` is evaluated at runtime;
   a bad value raises the catchable `TypeError`
   ([Exceptions](exceptions.md#typeerror)), terminating the run (exit 2) when
   uncaught.
-- A CLI, `[<program>]`, or `[exec]` timeout initially seeds both shell execution
+- A CLI, qualified program table, or `[exec]` timeout initially seeds both shell execution
   and agent idle timeout. A source write to the `timeout` setting changes only
   the **shell-exec** timeout; agent idle timeout cannot be changed mid-program.
 - Reading `timeout` returns the exact `Option[text]` value assigned or supplied

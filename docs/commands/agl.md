@@ -19,11 +19,13 @@ accumulates bindings, types, and declarations across entries, so earlier results
 available and agent calls fire exactly once.
 
 The REPL reuses `[exec]` settings for `default-agent`, the max-iters valve,
-call-depth limit, JSON strictness, and timeout. Like `agm exec`, each typed
+call-depth limit, JSON strictness, and timeout. Imported-module params resolve from
+their qualified config tables; params declared directly at the prompt use only source
+defaults (or are required). Like `agm exec`, each typed
 `Agent` value selects its own backend command; settings do not select it. Like
 `agm exec`, `--agent` combined with `--no-stdlib` still fails — at session-open
 time, before the prompt appears — if the session never loads `std/config`;
-`[<program>]`/`[exec] default-agent` is simply inert in that same situation.
+`[exec] default-agent` is simply inert in that same situation.
 
 Like `agm exec`, the REPL automatically opens `std/core` throughout each loaded
 program, so standard-library names such as `Option`, `Some`, and `None` are available

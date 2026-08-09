@@ -1,7 +1,7 @@
 """Canonical schema of AGM's AgL engine config keys.
 
 Pure data leaf (no ``agm`` imports) shared by the config layer — which reads
-these keys from the ``[exec]`` / ``[<program>]`` TOML tables — AgL semantics,
+these keys from ``[exec]`` and qualified program TOML tables — AgL semantics,
 which maps each key to a concrete type, deep IR validation, and the AgL
 evaluator/REPL, which route a key's write by its consuming side. Keeping the
 catalog here lets all consumers depend on one definition without coupling.

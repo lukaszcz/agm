@@ -1401,7 +1401,7 @@ class TestExecCommandShellComplete:
         # Built-in exec options are still offered alongside param options.
         assert "--agent" in result
 
-    def test_module_root_params_offer_only_valid_qualified_completion(self, tmp_path: Path) -> None:
+    def test_module_root_engine_key_param_is_not_offered(self, tmp_path: Path) -> None:
         module_root = tmp_path / "modules"
         module_root.mkdir()
         (module_root / "settings.agl").write_text("param max-iters: int\n")
@@ -1410,10 +1410,7 @@ class TestExecCommandShellComplete:
 
         result = self._complete(["exec", "-I", str(module_root), str(entry)], "--")
 
-        # The built-in flag remains a valid completion; the parameter only
-        # contributes its unambiguous module-qualified spelling.
-        assert "--settings::max-iters" in result
-        assert result.count("--settings::max-iters") == 1
+        assert "--settings::max-iters" not in result
 
     def test_file_with_ask_offers_param_options(self, tmp_path: Path) -> None:
         """Completion discovers params for normal exec programs using ``ask``."""
@@ -1494,11 +1491,10 @@ class TestExecParamCompletionItems:
         assert "--apple" in values
         assert "--banana" not in values
 
-    def test_ambiguous_or_reserved_short_flags_are_not_suggested(self) -> None:
+    def test_engine_key_params_are_not_suggested(self) -> None:
         items = completion._exec_param_completion_items("param max-iters: int\n", "--")
-        values = [item.value for item in items]
-        assert "--max-iters" not in values
-        assert values.count("--<entry>::max-iters") == 1
+
+        assert items == []
 
     def test_syntax_error_returns_empty(self) -> None:
         items = completion._exec_param_completion_items("@@@ bad syntax", "--")

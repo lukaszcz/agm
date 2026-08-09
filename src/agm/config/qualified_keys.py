@@ -10,8 +10,9 @@ from agm.config.general import GeneralConfig
 from agm.core.toml import TomlDict
 
 # These tables describe AGM's configuration schema rather than AgL modules.
-STRUCTURAL_CONFIG_SECTION_NAMES: frozenset[str] = frozenset({"modules"})
-_RESERVED_SECTION_NAMES = frozenset(COMMAND_NAMES) | STRUCTURAL_CONFIG_SECTION_NAMES
+# ``params`` is retained here to prevent the removed legacy ``[params.*]``
+# namespace from being interpreted as an AgL module route.
+RESERVED_CONFIG_SECTION_NAMES = frozenset(COMMAND_NAMES) | frozenset({"modules", "params"})
 _MISSING = object()
 
 
@@ -68,7 +69,9 @@ def resolve_qualified_values(
 def _resolve_layer(
     layer: TomlDict, keys: tuple[QualifiedConfigKey, ...]
 ) -> dict[QualifiedConfigKey, object]:
-    matches_by_table: dict[tuple[str, ...], list[QualifiedConfigKey]] = {}
+    matches_by_table: dict[
+        tuple[str, ...], dict[tuple[tuple[str, ...], tuple[str, ...]], list[QualifiedConfigKey]]
+    ] = {}
     values_by_key: dict[QualifiedConfigKey, list[tuple[tuple[str, ...], object]]] = {}
 
     for key in keys:
@@ -76,14 +79,19 @@ def _resolve_layer(
             table = _table_at(layer, path)
             if table is None or key.leaf not in table:
                 continue
-            matches_by_table.setdefault(path, []).append(key)
+            route = (key.module_segments, key.scope_path)
+            matches_by_table.setdefault(path, {}).setdefault(route, []).append(key)
             values_by_key.setdefault(key, []).append((path, table[key.leaf]))
 
-    for path, candidates in matches_by_table.items():
-        if len(candidates) > 1:
-            names = ", ".join(key.display_name() for key in candidates)
+    for path, candidates_by_route in matches_by_table.items():
+        if len(candidates_by_route) > 1:
+            names = ", ".join(
+                key.display_name()
+                for candidates in candidates_by_route.values()
+                for key in candidates
+            )
             raise QualifiedConfigLookupError(
-                f"table {_display_table_path(path)} matches multiple config keys: {names}"
+                f"table {_display_table_path(path)} matches multiple config routes: {names}"
             )
 
     resolved: dict[QualifiedConfigKey, object] = {}
@@ -106,7 +114,7 @@ def _table_paths_for(key: QualifiedConfigKey) -> tuple[tuple[str, ...], ...]:
     paths: list[tuple[str, ...]] = []
     seen_paths: set[tuple[str, ...]] = set()
     for path in (*suffix_paths, anchor_path):
-        if path[0] not in _RESERVED_SECTION_NAMES and path not in seen_paths:
+        if path[0] not in RESERVED_CONFIG_SECTION_NAMES and path not in seen_paths:
             seen_paths.add(path)
             paths.append(path)
     return tuple(paths)

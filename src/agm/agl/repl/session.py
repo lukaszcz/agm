@@ -18,7 +18,7 @@ rendering, meta-commands, and the prompt_toolkit console are future work.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
 from agm.agl.diagnostics import AglError, Diagnostic
@@ -58,6 +58,11 @@ if TYPE_CHECKING:
 
 # Layout-only token types that carry no statement to evaluate.
 _TRIVIAL_TOKENS: frozenset[str] = frozenset({"_NEWLINE", "_INDENT", "_DEDENT"})
+
+
+def _no_params_config_loader(_params: tuple["IrParam", ...]) -> Mapping[str, object]:
+    """Provide no external param values when the session has no config source."""
+    return {}
 
 
 def has_runnable_statements(text: str) -> bool:
@@ -135,6 +140,7 @@ class ReplSession:
         configured_roots: "Iterable[tuple[str, Path]]" = (),
         extra_cli_roots: "Iterable[str]" = (),
         default_stdlib: bool = True,
+        params_config_loader: "Callable[[tuple[IrParam, ...]], Mapping[str, object]] | None" = None,
     ) -> None:
         from agm.agl.lower import LinkImage
         from agm.agl.pipeline import PipelineDriver
@@ -145,6 +151,9 @@ class ReplSession:
         from agm.core.parse import format_timeout
 
         self._default_stdlib = default_stdlib
+        self._params_config_loader = (
+            params_config_loader if params_config_loader is not None else _no_params_config_loader
+        )
         # ``strict-json`` is the one engine key whose host argument cannot be
         # folded into the seed map below: it is a plain ``bool`` with no way to
         # spell "the host did not specify a value", so an unseeded ``False``
@@ -269,6 +278,10 @@ class ReplSession:
         self._roots: RootSet | None = None
         # Cached lib modules from prior REPL program entries.
         self._loaded_lib_modules: dict[ModuleId, LoadedModule] = {}
+        # Imported params installed by successfully completed entries.  These
+        # stay in the config-resolution inventory so later imports cannot make
+        # an existing suffix route ambiguous, but they are not installed again.
+        self._active_imported_params: dict[SymbolId, IrParam] = {}
         # Imports generally persist across successfully promoted program entries,
         # one retained generation per entry, kept as written so a wildcard keeps
         # tracking the module set. Declarations for a module named in a later
@@ -787,13 +800,67 @@ class ReplSession:
         self._default_loop_limit = interp.loop_limit
         self._shell_exec_timeout = interp.shell_exec_timeout
 
-    def _pre_eval_param_check(
+    def _pre_eval_param_values(
         self, params: tuple["IrParam", ...], warnings: list[Diagnostic]
-    ) -> EntryResult | None:
-        """Reject required params from the linked program before constructing an interpreter."""
+    ) -> tuple[dict["SymbolId", "Value"], EntryResult | None]:
+        """Validate active imported config routes and decode only new params."""
+        from agm.agl.runtime.convert import StrictJsonParseError
+        from agm.agl.runtime.params import decode_param_value
+
+        active_imported = (*self._active_imported_params.values(),)
+        active_symbols = self._active_imported_params
+        new_imported = tuple(
+            param
+            for param in params
+            if not param.module.is_entry and param.symbol not in active_symbols
+        )
+        try:
+            configured = self._params_config_loader((*active_imported, *new_imported))
+        except ValueError as exc:
+            return {}, self._fail([Diagnostic(message=str(exc), line=1)], warnings)
+
+        values: dict[SymbolId, Value] = {}
+        for param in new_imported:
+            name = param.qualified_public_name
+            if name not in configured:
+                if param.required:
+                    return {}, self._fail(
+                        [
+                            Diagnostic(
+                                message=(
+                                    f"Missing required param {name!r}: "
+                                    "provide a default expression."
+                                ),
+                                line=param.location.start_line,
+                                column=param.location.start_col,
+                            )
+                        ],
+                        warnings,
+                    )
+                continue
+            decoder = param.external_decoder
+            assert decoder is not None, "lowerer must provide an external param decoder"
+            try:
+                values[param.symbol] = decode_param_value(decoder, configured[name])
+            except (StrictJsonParseError, ValueError) as exc:
+                return {}, self._fail(
+                    [
+                        Diagnostic(
+                            message=(
+                                f"Param {name!r}: could not parse as "
+                                f"{decoder.target_type_label}: {exc}"
+                            ),
+                            line=param.location.start_line,
+                            column=param.location.start_col,
+                        )
+                    ],
+                    warnings,
+                )
+        # Prompt-local params are intentionally default-only; config values
+        # apply exclusively to newly linked imported params.
         for param in params:
-            if param.required:
-                return self._fail(
+            if param.module.is_entry and param.required:
+                return {}, self._fail(
                     [
                         Diagnostic(
                             message=(
@@ -806,7 +873,13 @@ class ReplSession:
                     ],
                     warnings,
                 )
-        return None
+        return values, None
+
+    def _record_active_imported_params(self, params: tuple["IrParam", ...]) -> None:
+        """Retain successfully installed imported params for later config validation."""
+        self._active_imported_params.update(
+            (param.symbol, param) for param in params if not param.module.is_entry
+        )
 
     def _build_check_only_result(
         self,
@@ -1432,6 +1505,7 @@ class ReplSession:
         # Clear module state.
         self._roots = None
         self._loaded_lib_modules = {}
+        self._active_imported_params = {}
         self._accumulated_imports = []
         self._accumulated_opens = []
         self._accumulated_infix = {}

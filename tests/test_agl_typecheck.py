@@ -1427,6 +1427,12 @@ class TestScopedParamTypes:
     a root `param`, keyed by node id like every other binding.
     """
 
+    @pytest.mark.parametrize("name", ("timeout", "default-agent", "strict-json"))
+    def test_engine_setting_names_are_reserved_for_params(self, name: str) -> None:
+        err = reject_type(f"param {name}: text\n()")
+
+        assert "engine setting name" in err.to_diagnostic().message
+
     def test_annotation_and_default_combine(self) -> None:
         r = accept_type('scope Deploy\nparam region: text = "eu"\nend Deploy\nDeploy::region')
         region = r.resolved.program.body.items[0]

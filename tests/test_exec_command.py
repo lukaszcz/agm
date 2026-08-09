@@ -1113,12 +1113,12 @@ class TestExecCommandExitCodes:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """A scoped `param Deploy::region` is supplied via `[demo]."Deploy::region"`."""
+        """A scoped param resolves from its qualified config table."""
         from agm.config.context import ConfigContext
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text('[test]\n"Deploy::region" = "prod"\n')
+        (home / ".agm" / "config.toml").write_text('[test.Deploy]\nregion = "prod"\n')
         agl_file = tmp_path / "test.agl"
         write_file_program(
             agl_file,
@@ -1134,18 +1134,38 @@ class TestExecCommandExitCodes:
         assert exec_command.run(_exec_args(agl_file)) is None
         assert capsys.readouterr().out == "prod\n"
 
-    def test_reserved_param_flag_accepts_its_qualified_spelling(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    def test_legacy_params_section_does_not_supply_values(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[params]\nmsg = "legacy"\n')
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+        agl_file = tmp_path / "test.agl"
+        write_file_program(
+            agl_file, 'param msg: text = "default"\nprogram def demo() -> unit = print msg\n'
+        )
+
+        assert exec_command.run(_exec_args(agl_file)) is None
+        assert capsys.readouterr().out == "default\n"
+
+    def test_engine_key_named_param_is_rejected(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
         write_file_program(agl_file, 'param timeout: text = "30s"\nprint timeout\n')
 
-        assert (
-            exec_command.run(_exec_args(agl_file, param_tokens=["--<entry>::timeout", "45s"]))
-            is None
-        )
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args(agl_file))
 
-        assert capsys.readouterr().out == "45s\n"
+        assert exc_info.value.code == 1
 
     def test_undeclared_param_config_warns_but_runs(
         self,
@@ -1172,7 +1192,7 @@ class TestExecCommandExitCodes:
         assert exec_command.run(_exec_args(agl_file)) is None
         captured = capsys.readouterr()
         assert captured.out == "ok\n"
-        assert "typo" in captured.err
+        assert captured.err == ""
 
     def test_ask_program_dispatches_through_the_value_dispatcher(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2224,7 +2244,7 @@ class TestExecTimeoutAndLogFileFlags:
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
         (home / ".agm" / "config.toml").write_text(
-            '[exec]\ntimeout = "1s"\n\n[prog]\ntimeout = 0.0001\n'
+            '[exec]\ntimeout = "1s"\n\n[prog.main]\ntimeout = 0.0001\n'
         )
         agl_file = tmp_path / "prog.agl"
         write_file_program(agl_file, "import std/config\nprint std/config::timeout\n")
@@ -3096,10 +3116,10 @@ class TestExecCliModulePaths:
         assert "Hello!" in captured.out
 
 
-class TestFileStemProgramConfig:
-    """A file program selects its config table from its file stem."""
+class TestEntryModuleConfig:
+    """A file entry uses its stem as the qualified config module component."""
 
-    def test_file_stem_selects_config_for_a_program_definition(
+    def test_entry_stem_selects_root_param_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         from agm.config.context import ConfigContext
@@ -3119,7 +3139,7 @@ class TestFileStemProgramConfig:
         assert exec_command.run(_exec_args_no_log(agl_file)) is None
         assert capsys.readouterr().out == "7\n"
 
-    def test_file_stem_value_selects_entry_param_despite_imported_name_collision(
+    def test_entry_module_config_selects_param_despite_imported_name_collision(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """A bare file-stem key belongs to the entry module, not an import."""
@@ -3143,35 +3163,223 @@ class TestFileStemProgramConfig:
         assert exec_command.run(_exec_args_no_log(agl_file)) is None
         assert capsys.readouterr().out == "configured\n"
 
-    def test_file_stem_value_for_engine_key_named_param_is_not_an_engine_override(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    def test_engine_key_named_param_is_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """An entry param keeps the file-stem config surface for its legal name."""
         from agm.config.context import ConfigContext
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text('[workflow]\ntimeout = "configured"\n')
         monkeypatch.setattr(
             exec_command,
             "current_config_context",
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
         agl_file = tmp_path / "workflow.agl"
+        write_file_program(agl_file, "param timeout: text\nprogram def main() -> unit = ()\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+
+        assert exc_info.value.code == 1
+
+    def test_reserved_entry_stem_cannot_declare_params(self, tmp_path: Path) -> None:
+        agl_file = tmp_path / "exec.agl"
+        write_file_program(agl_file, 'param region: text = "eu"\n')
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+
+        assert exc_info.value.code == 1
+
+    def test_reserved_entry_stem_without_params_runs_normally(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "exec.agl"
+        agl_file.write_text('program def main() -> unit = print "usable"\n')
+
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert capsys.readouterr().out == "usable\n"
+
+    def test_cli_max_iters_overrides_selected_qualified_program_table(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A CLI engine flag wins over the table for the ``-p``-selected program."""
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            "[workflow.first]\nmax-iters = 3\n\n[workflow.second]\nmax-iters = 1\n"
+        )
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+        agl_file = tmp_path / "workflow.agl"
+        agl_file.write_text(
+            'program def first() -> unit = print "first"\n'
+            "program def second() -> unit =\n"
+            "  var count = 0\n"
+            "  do\n"
+            "    count := count + 1\n"
+            "  until count >= 2\n"
+            '  print "second"\n'
+        )
+
+        configured = invoke(runner, ["exec", "-p", "second", str(agl_file)])
+        assert configured.exit_code == 2
+
+        overridden = invoke(
+            runner,
+            ["exec", "--max-iters", "2", "-p", "second", str(agl_file)],
+        )
+        assert overridden.exit_code == 0
+        assert overridden.output == "second\n"
+
+    def test_qualified_program_table_supplies_multiple_engine_keys(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            "[workflow.main]\nstrict-json = true\nmax-iters = 2\n"
+        )
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+        agl_file = tmp_path / "workflow.agl"
+        agl_file.write_text('program def main() -> unit = print "configured"\n')
+
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert capsys.readouterr().out == "configured\n"
+
+    def test_imported_params_resolve_by_qualified_config_and_flag(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[settings]\nregion = "configured"\n')
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+        (tmp_path / "settings.agl").write_text("param region: text\ndef read() -> text = region\n")
+        agl_file = tmp_path / "workflow.agl"
         write_file_program(
             agl_file,
-            "param timeout: text\nprogram def main() -> unit = print timeout\n",
+            "import settings\nprogram def main() -> unit = print(settings::read())\n",
         )
 
         assert exec_command.run(_exec_args_no_log(agl_file)) is None
         assert capsys.readouterr().out == "configured\n"
+        assert (
+            exec_command.run(
+                _exec_args_no_log(agl_file, param_tokens=["--settings::region", "flag"])
+            )
+            is None
+        )
+        assert capsys.readouterr().out == "flag\n"
+
+    def test_qualified_module_table_supplies_multiple_params(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            '[settings]\nregion = "configured"\nzone = "secondary"\n'
+        )
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+        (tmp_path / "settings.agl").write_text(
+            'param region: text\nparam zone: text\ndef read() -> text = region + ":" + zone\n'
+        )
+        agl_file = tmp_path / "workflow.agl"
+        write_file_program(
+            agl_file,
+            "import settings\nprogram def main() -> unit = print(settings::read())\n",
+        )
+
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert capsys.readouterr().out == "configured:secondary\n"
+
+    def test_conflicting_qualified_param_tables_fail_before_execution(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            '[settings]\nregion = "short"\n\n["nested/settings"]\nregion = "exact"\n'
+        )
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+        nested = tmp_path / "nested"
+        nested.mkdir()
+        (nested / "settings.agl").write_text("param region: text\ndef read() -> text = region\n")
+        agl_file = tmp_path / "workflow.agl"
+        write_file_program(
+            agl_file,
+            "import nested/settings\nprogram def main() -> unit = print(settings::read())\n",
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+
+        assert exc_info.value.code == 1
+
+    def test_colliding_imported_params_require_qualified_flags(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "one.agl").write_text("param region: text\ndef read() -> text = region\n")
+        (tmp_path / "two.agl").write_text("param region: text\ndef read() -> text = region\n")
+        agl_file = tmp_path / "workflow.agl"
+        write_file_program(
+            agl_file,
+            "import one\nimport two\n"
+            "program def main() -> unit = print(one::read() + two::read())\n",
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--region", "bad"]))
+        assert exc_info.value.code == 1
+        assert (
+            exec_command.run(
+                _exec_args_no_log(
+                    agl_file,
+                    param_tokens=["--one::region", "a", "--two::region", "b"],
+                )
+            )
+            is None
+        )
+        assert capsys.readouterr().out == "ab\n"
 
 
 class TestSettingOverrideProvenanceWithNoStdlib:
     """``--no-stdlib`` interacts differently with a CLI flag vs. ambient config.
 
     A ``default-agent`` override reaching the engine as AgL literal source
-    (``--agent`` or ``[exec]``/``[<program>] default-agent``) can only be
+    (``--agent`` or ``[exec]``/qualified program-table ``default-agent``) can only be
     spliced into ``std/config``'s own declaration when that module is loaded.
     ``--no-stdlib`` on a program that never explicitly imports ``std/config``
     means it never is. An ambient config value is then simply inert (the key
@@ -3364,20 +3572,20 @@ class TestExecProgramSelection:
 
 
 class TestProgramLogFilePathResolution:
-    """[<program>].log-file relative path is anchored to the config directory."""
+    """Qualified program log-file paths are anchored to their config directory."""
 
     def test_program_log_file_relative_resolved_to_config_dir(self, tmp_path: Path) -> None:
-        from agm.config.general import file_config_from_merged, load_merged_config
+        from agm.config.general import load_general_config
+        from agm.config.qualified_keys import QualifiedConfigKey, resolve_qualified_values
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text('[myprog]\nlog-file = "my.log"\n')
+        (home / ".agm" / "config.toml").write_text('[myprog.main]\nlog-file = "my.log"\n')
 
-        merged = load_merged_config(home=home, proj_dir=None, cwd=tmp_path)
-        prog = file_config_from_merged(merged, "myprog")
+        config = load_general_config(home=home, proj_dir=None, cwd=tmp_path)
+        key = QualifiedConfigKey(("myprog",), ("main",), "log-file")
+        log_file_val = resolve_qualified_values(config, (key,))[key]
 
-        log_file_val = prog.get("log-file")
         assert isinstance(log_file_val, str)
-        # Must be absolute (anchored to ~/.agm/ where the config lives)
         assert Path(log_file_val).is_absolute()
         assert log_file_val.endswith("my.log")

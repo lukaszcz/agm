@@ -30,12 +30,12 @@ Configuration is organized into sections consumed by specific features — for e
 For AgL execution, four sources combine with a defined precedence:
 
 - **Engine settings** (`default-agent`, `log`, `strict-json`, `max-iters`, `log-file`, `timeout`) — the `std/config` `builtin var` bindings:
-  `source write (std/config::X := e) > CLI flag > [<program>].X > [exec].X > engine default`
+  `source write (std/config::X := e) > CLI flag > qualified program table > [exec].X > engine default`
   Their names, value kinds, and consuming side come from the pure shared catalog in `config/engine_keys.py`, also consumed by AgL semantics, deep IR validation, and the AgL evaluator/REPL.
 - **Param values** (`param NAME`):
-  `agm exec` inventories params from the selected program's module and transitive imports. An entry-module param resolves as `CLI flag > [<program>].Y > source default (param Y = e) > required error`; an imported-module param currently resolves as `CLI flag > source default > required error`. `agm repl`: `source default (param Y = e) > required error`.
+  `agm exec` inventories the selected program module and its transitive imports, resolving every inventory param as `CLI flag > qualified config table > source default > required error`. The REPL uses those qualified config values for imported-module params; params declared directly at the prompt remain default-or-required.
 
-`[exec]` holds global engine defaults with kebab field names (`default-agent`, `strict-json`, `max-iters`, `log-file`). `default-agent` is a quoted AgL `Agent` literal; it remains raw configuration data until `exec` or `repl` lazily parse and typecheck it. For `agm exec`, `[<program>]` is a **top-level** section keyed by the `.agl` file stem; it holds both engine-key overrides and entry-module param values for that file. A key matching an entry param takes the param route even when it is also an engine key. Inline `-c` source has no such section. The REPL does not load per-program sections.
+`[exec]` holds global engine defaults with kebab field names (`default-agent`, `strict-json`, `max-iters`, `log-file`). `default-agent` is a quoted AgL `Agent` literal; it remains raw configuration data until `exec` or `repl` lazily parse and typecheck it. Qualified lookup in `config/qualified_keys.py` uses a module suffix plus declaration scope path, preserves layer provenance, and rejects ambiguous routes or conflicting spellings. AGM sections, including the removed legacy `params` namespace, cannot route to modules. A file entry uses its stem as its module component; reserved stems are rejected only when that entry declares params. Engine keys live at a selected program's qualified table, while params use their own declaring module path. Inline `-c` params are CLI-only.
 
 ## Sandbox Configuration
 

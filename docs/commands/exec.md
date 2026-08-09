@@ -63,9 +63,8 @@ like any other static error.
   declared inside a named scope region uses its full path spelling, e.g.
   `--Deploy::region`. The module-qualified spelling, such as
   `--review-tools/judge::Deploy::region`, is always accepted and disambiguates
-  params with the same short spelling. A file-stem config table supplies values
-  only for params declared by the entry file; params declared by imported modules
-  use a CLI flag or their source default. Values for `text` params are taken verbatim; every other
+  params with the same short spelling. Qualified config tables supply values
+  for every parameter in the selected inventory. Values for `text` params are taken verbatim; every other
   scalar or structured type (`int`/`decimal`/`bool`/`json`/`array`/`dict`/`record`/
   `enum`) is parsed as exactly one strict JSON value and validated against the
   declared type. Missing required params or invalid values are reported before any
@@ -98,13 +97,13 @@ like any other static error.
   raises `RecursionError`.
 - `--agent AGL_LITERAL`: Seed `std/config::default-agent` with one constant `Agent`
   expression, for example `AgentClaude("sonnet", "medium")`. The literal is parsed and
-  typechecked before execution; it overrides `[<program>]`/`[exec]` configuration. It
+  typechecked before execution; it overrides qualified program-table/`[exec]` configuration. It
   selects the value used by `ask` calls that omit `agent`. An `AgentCommand(...)`
   literal's command text is shell-split and validated the same way as `[exec] runner`
   before execution; a malformed command (e.g. an unclosed quote) exits 1 with nothing run.
   Because `--agent` is an explicit request, it still exits 1 when combined with
   `--no-stdlib` on a program that never loads `std/config` — unlike
-  `[<program>]`/`[exec] default-agent`, which is simply inert (has no effect) in
+  qualified program-table/`[exec] default-agent`, which is simply inert (has no effect) in
   that situation.
 - `--log` / `--log-file PATH` / `--no-log`: Control trace logging, which is **off by
   default**. `--log` enables it with an auto-generated timestamped path under
@@ -183,16 +182,18 @@ log = false                 # trace logging off by default; set true to enable
 `runner` is a bare host command (like `[loop] runner`), not AgL literal syntax; when
 set, it seeds `default-agent` as `AgentCommand(runner)`. It applies only when neither
 `--agent` nor `default-agent` (CLI or config) supplies a value: precedence, highest
-first, is `--agent` > `[<program>]`/`[exec] default-agent` > `[exec] runner` > the
+first, is `--agent` > qualified program-table/`[exec] default-agent` > `[exec] runner` > the
 `std/config` declaration's own default. `runner` is shell-split and validated as soon
 as configuration is read, before the module graph loads; a malformed command exits 1
 with nothing run.
 
-A top-level `[<program>]` table is keyed by an `agm exec` file's `.agl` stem. It provides per-program overrides of `[exec]` engine settings
-(`runner` excepted — it is read from `[exec]` only) and supplies values for params
-that the entry file declares. When an entry param has an engine-setting name, its
-file-stem key supplies the param rather than an engine override. Inline `-c` source
-has no per-program table.
+Qualified tables address declarations by module suffix and scope path. The entry
+file's `.agl` stem is its module component. For example, a `review::main` program
+in `review-tools/review` reads engine overrides from `[review-tools.review.main]`,
+and a `review::max-tries` param in `review-tools/judge` reads `[judge.review]` when
+that suffix is unambiguous. Use a longer suffix or an exact quoted module route
+such as `["review-tools/judge".review]` to disambiguate. `runner` remains an
+`[exec]`-only setting. Inline `-c` params are CLI-only.
 
 #### Source-level engine settings (`std/config`)
 
@@ -225,11 +226,10 @@ value.
 Precedence differs by kind:
 
 - **Engine settings** (`default-agent`, `log`, `strict-json`, `max-iters`, `log-file`, `timeout`):
-  `source std/config::X write > CLI > [<program>].X > [exec].X > engine default`.
+  `source std/config::X write > CLI > qualified program table > [exec].X > engine default`.
   `default-agent` has one extra fallback below `[exec] default-agent`: `[exec] runner`.
-- **Entry-module param values** (`param NAME`):
-  `CLI > [<program>].NAME > source default > required error`.
-- **Imported-module param values**: `CLI > source default > required error`.
+- **Param values** (`param NAME`):
+  `CLI > qualified config table > source default > required error`.
 
 `NAME` is a scoped param's full path spelling (`Deploy::region`) when it is
   declared as a member of a named scope region. That key must be quoted in TOML, since
@@ -254,14 +254,14 @@ logging; a later `log := false` disables it without clearing the path. Writing
 `strict-json`, `max-iters`, or `timeout` changes subsequent agent-output parsing,
 unbounded loops, or `exec` calls, respectively.
 
-A CLI, `[<program>]`, or `[exec]` timeout initially seeds both shell execution and
+A CLI, qualified program table, or `[exec]` timeout initially seeds both shell execution and
 agent idle timeout. A source write to the `timeout` setting changes only the
 **shell-exec** timeout; agent idle timeout cannot be changed mid-program.
 
 A bad duration in `std/config::timeout := Some("…")` is a runtime AgL error (exit 2),
 because a source write is a runtime-evaluated expression. A valid assigned timeout
 round-trips with its original text while the parsed duration drives shell execution.
-A bad `--timeout`, `[<program>].timeout`, or `[exec].timeout` value is a
+A bad `--timeout`, qualified program-table timeout, or `[exec].timeout` value is a
 pre-execution error (exit 1).
 
 `--no-log-file` clears only the initial `log-file` value; a log-file path set via

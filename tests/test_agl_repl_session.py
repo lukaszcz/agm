@@ -18,6 +18,7 @@ from unittest.mock import patch
 import pytest
 
 from agm.agl.diagnostics import AglError
+from agm.agl.ir.program import IrParam
 from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS, create_seeded_type_table
@@ -3175,6 +3176,38 @@ class TestParams:
         assert not result.ok
         assert "Missing required param" in result.diagnostics[0].message
         assert "token" in result.diagnostics[0].message
+
+    def test_later_import_validates_active_params_without_reinstalling_them(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "settings.agl").write_text(
+            "param items: array[int]\n"
+            "def update() -> unit =\n"
+            "  items[0] := 9\n"
+            "def read() -> int = items[0]\n"
+        )
+        (tmp_path / "other.agl").write_text("param count: int = 0\n")
+        seen_inventories: list[tuple[str, ...]] = []
+
+        def load_config(params: tuple[IrParam, ...]) -> dict[str, object]:
+            seen_inventories.append(tuple(param.qualified_public_name for param in params))
+            return {"settings::items": [1, 2]}
+
+        session = ReplSession(
+            lib_root=tmp_path,
+            default_stdlib=False,
+            params_config_loader=load_config,
+        )
+
+        assert session.eval_entry("import settings\nsettings::update()").ok
+        later = session.eval_entry("import other\nsettings::read()")
+
+        assert later.ok, later.diagnostics
+        assert later.value == IntValue(9)
+        assert seen_inventories == [
+            ("settings::items",),
+            ("settings::items", "other::count"),
+        ]
 
     def test_declared_param_typed_value(self) -> None:
         s = ReplSession()

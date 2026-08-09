@@ -90,10 +90,16 @@ class TestQualifiedConfigKeys:
 
         assert '["review-tools/judge"].review' in str(exc_info.value)
 
-    @pytest.mark.parametrize("reserved_name", ("exec", "modules"))
+    @pytest.mark.parametrize("reserved_name", ("exec", "modules", "params"))
     def test_reserved_sections_are_not_config_module_prefixes(self, reserved_name: str) -> None:
         key = QualifiedConfigKey((reserved_name,), ("review",), "max-tries")
         config = {reserved_name: {"review": {"max-tries": 1}}}
+
+        assert resolve_qualified_values(_config(config), (key,)) == {}
+
+    def test_legacy_params_subtable_cannot_route_to_a_params_module(self) -> None:
+        key = QualifiedConfigKey(("params", "workflow"), (), "region")
+        config = {"params": {"workflow": {"region": "legacy"}}}
 
         assert resolve_qualified_values(_config(config), (key,)) == {}
 
@@ -108,6 +114,16 @@ class TestQualifiedConfigKeys:
         key = QualifiedConfigKey(("review-tools", "judge"), ("review",), "max-tries")
 
         assert resolve_qualified_values(_config({"judge": "not a table"}), (key,)) == {}
+
+    def test_one_table_supplies_multiple_leaves_for_one_module_identity(self) -> None:
+        first = QualifiedConfigKey(("review-tools", "judge"), ("review",), "region")
+        second = QualifiedConfigKey(("review-tools", "judge"), ("review",), "max-tries")
+        config = {"judge": {"review": {"region": "eu", "max-tries": 3}}}
+
+        assert resolve_qualified_values(_config(config), (first, second)) == {
+            first: "eu",
+            second: 3,
+        }
 
     def test_deduplicates_repeated_key_identities(self) -> None:
         key = QualifiedConfigKey(("review-tools", "judge"), ("review",), "max-tries")

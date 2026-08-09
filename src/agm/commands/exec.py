@@ -29,8 +29,8 @@ Flag notes:
       of these three flags may be given (mutually exclusive).  ``[exec] log =
       true`` in config also enables logging; CLI flags override config.
     - ``--agent AGL_LITERAL`` seeds ``std/config::default-agent`` from one typed
-      constant Agent expression, taking precedence over ``[exec]``/
-      ``[<program>] default-agent``, which in turn takes precedence over the
+      constant Agent expression, taking precedence over the qualified program
+      table/``[exec] default-agent``, which in turn takes precedence over the
       bare host command in ``[exec] runner``.
     - A sole entry-module ``program def`` runs after initializers; when several
       are declared, ``-p``/``--program`` selects one by declaration path. A file
@@ -64,18 +64,20 @@ from agm.agl.diagnostics import format_diagnostic
 from agm.agl.runtime.agents import value_driven_agent_factory
 from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES
-from agm.agl.syntax.nodes import ParamDecl, scoped_public_name, static_items
+from agm.agl.syntax.nodes import FuncDef, ParamDecl, static_items
 from agm.cli_support.args import ExecArgs
 from agm.cli_support.engine_seeds import build_host_engine_seeds, check_max_iters
-from agm.cli_support.exec_params import parse_param_tokens, resolve_param_values
+from agm.cli_support.exec_params import parse_param_tokens
 from agm.cli_support.exec_roots import effective_exec_roots
 from agm.config.context import current_config_context
-from agm.config.general import (
-    exec_config_from_merged,
-    file_config_from_merged,
-    load_merged_config,
-)
+from agm.config.general import exec_config_from_merged, load_general_config
 from agm.config.module_roots import StaleStdlibError
+from agm.config.qualified_keys import (
+    RESERVED_CONFIG_SECTION_NAMES,
+    QualifiedConfigKey,
+    QualifiedConfigLookupError,
+    resolve_qualified_values,
+)
 from agm.core import dry_run
 from agm.core.fs import read_text_arg
 from agm.core.log import (
@@ -86,6 +88,23 @@ from agm.core.log import (
 from agm.core.parse import parse_timeout
 from agm.core.toml import toml_dict
 from agm.parser import exit_with_usage_error
+
+
+def _scoped_config_key(module_segments: tuple[str, ...], public_name: str) -> QualifiedConfigKey:
+    """Build the config address for one scope-qualified declaration name."""
+    *scope_path, leaf = public_name.split("::")
+    return QualifiedConfigKey(module_segments, tuple(scope_path), leaf)
+
+
+def _entry_module_segments(
+    entry_stem: str | None, module_segments: tuple[str, ...]
+) -> tuple[str, ...]:
+    """Replace the entry sentinel with its config module component."""
+    if module_segments == ("<entry>",):
+        assert entry_stem is not None
+        return (entry_stem,)
+    return module_segments
+
 
 _T = TypeVar("_T")
 
@@ -112,11 +131,10 @@ def run(args: ExecArgs) -> None:
         print("Error: exec requires either a FILE or -c/--command", file=sys.stderr)
         raise SystemExit(1)
 
-    # Load the merged config once. For this interim milestone a file's stem is
-    # the sole config key; inline source has no config table.
     ctx = current_config_context()
-    program_key: str | None = Path(args.file).stem if args.file is not None else None
-    merged_config = load_merged_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
+    entry_stem: str | None = Path(args.file).stem if args.file is not None else None
+    config_view = load_general_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
+    merged_config = config_view.merged
 
     # Inline source remains a statement-oriented host. Its AST is wrapped before
     # scope resolution whenever it has no explicit program entry.
@@ -127,26 +145,49 @@ def run(args: ExecArgs) -> None:
         program, next_id = wrap_inline_program(parsed.program, next_node_id=parsed.next_id)
         parsed = replace(parsed, program=program, next_id=next_id)
 
-    # Fetch the [<program_key>] table once. A file-stem table belongs to the
-    # entry module: a key matching one of its params stays a param value even
-    # when its name also belongs to the engine-key catalog. The parser has all
-    # the entry declarations needed to keep that distinction before engine
-    # configuration is resolved.
-    program_table: dict[str, object] = (
-        file_config_from_merged(merged_config, program_key) if program_key is not None else {}
+    # File-backed entries address their declarations under the file stem. A
+    # stem that would consume AGM's own configuration namespace is harmless
+    # until that entry actually exposes params.
+    parsed_items = static_items(parsed.program.body.items) if parsed.program is not None else ()
+    if entry_stem in RESERVED_CONFIG_SECTION_NAMES and any(
+        isinstance(item, ParamDecl) for item in parsed_items
+    ):
+        print(
+            f"Error: entry file stem '{entry_stem}' is reserved for configuration.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    parsed_programs = tuple(
+        item for item in parsed_items if isinstance(item, FuncDef) and item.is_program
     )
-    parsed_entry_param_names = (
-        {
-            scoped_public_name(item.scope_path, item.name)
-            for item in static_items(parsed.program.body.items)
-            if isinstance(item, ParamDecl)
+    selected_parsed_program = (
+        parsed_programs[0]
+        if len(parsed_programs) == 1
+        else next(
+            (
+                item
+                for item in parsed_programs
+                if "::".join((*(segment.name for segment in item.scope_path), item.name))
+                == args.program
+            ),
+            None,
+        )
+        if args.program is not None
+        else None
+    )
+    engine_program_table: dict[str, object] = {}
+    if entry_stem is not None and selected_parsed_program is not None:
+        program_path = tuple(segment.name for segment in selected_parsed_program.scope_path) + (
+            selected_parsed_program.name,
+        )
+        engine_keys = tuple(
+            QualifiedConfigKey((entry_stem,), program_path, key) for key in ENGINE_KEY_NAMES
+        )
+        engine_program_table = {
+            key.leaf: value
+            for key, value in resolve_qualified_values(config_view, engine_keys).items()
         }
-        if parsed.program is not None
-        else set()
-    )
-    engine_program_table = {
-        key: value for key, value in program_table.items() if key not in parsed_entry_param_names
-    }
     try:
         config = exec_config_from_merged(merged_config, program_table=engine_program_table)
     except ValueError as exc:
@@ -311,32 +352,31 @@ def run(args: ExecArgs) -> None:
     except ValueError as exc:
         exit_with_usage_error(["exec"], f"error: {exc}")
 
-    entry_params = {
-        param.name: param for param in selected_params if param.module_segments == ("<entry>",)
-    }
-    config_param_values = {
-        key: value
-        for key, value in program_table.items()
-        if key not in ENGINE_KEY_NAMES or key in entry_params
-    }
-    resolved_params, config_warnings = resolve_param_values(
-        set(entry_params),
-        config_param_values,
-        {},
-        config_key=program_key,
-    )
-    param_name_counts: dict[str, int] = {}
-    for param in selected_params:
-        param_name_counts[param.name] = param_name_counts.get(param.name, 0) + 1
-    external_params.update(
-        {
-            (entry_params[name].qualified_name if param_name_counts[name] > 1 else name): value
-            for name, value in resolved_params.items()
+    if entry_stem is not None:
+        param_keys = {
+            param: _scoped_config_key(
+                _entry_module_segments(entry_stem, param.module_segments), param.name
+            )
+            for param in selected_params
         }
-    )
+        try:
+            configured_params = resolve_qualified_values(config_view, param_keys.values())
+        except QualifiedConfigLookupError as exc:
+            print(f"Error: invalid qualified configuration: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
+        name_counts: dict[str, int] = {}
+        for param in selected_params:
+            name_counts[param.name] = name_counts.get(param.name, 0) + 1
+        external_params.update(
+            {
+                param.qualified_name
+                if name_counts[param.name] > 1
+                else param.name: configured_params[key]
+                for param, key in param_keys.items()
+                if key in configured_params
+            }
+        )
     external_params.update(cli_params)
-    for msg in config_warnings:
-        print(msg, file=sys.stderr)
 
     # Params are validated against the lowered program, so this preflight lowers
     # the graph.  It must report a param failure (exit 1) BEFORE the trace file

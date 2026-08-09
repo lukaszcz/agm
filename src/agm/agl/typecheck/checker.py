@@ -216,6 +216,7 @@ from agm.agl.typecheck.inference import (
     InferenceEngine,
     InferenceError,
 )
+from agm.config.engine_keys import ENGINE_KEY_NAMES
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -1085,6 +1086,10 @@ class _Checker:
             self._candidate_session = None
 
     def _check_param(self, stmt: ParamDecl) -> None:
+        if stmt.name in ENGINE_KEY_NAMES:
+            raise AglTypeError(
+                f"Param '{stmt.name}' conflicts with an engine setting name.", span=stmt.span
+            )
         ann_type = (
             self._env.resolve_type_expr(stmt.annotation, span=stmt.span)
             if stmt.annotation is not None

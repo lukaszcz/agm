@@ -24,6 +24,7 @@ opting into bare names.
 from __future__ import annotations
 
 import sys
+from typing import TYPE_CHECKING
 
 from agm.agl.diagnostics import format_diagnostic
 from agm.agl.repl import ReplSession
@@ -37,7 +38,7 @@ from agm.config.context import current_config_context
 from agm.config.general import (
     agm_home_dir,
     exec_config_from_merged,
-    load_merged_config,
+    load_general_config,
     load_repl_config,
     save_repl_theme,
 )
@@ -47,6 +48,7 @@ from agm.config.module_roots import (
     resolve_lib_root,
     resolve_stdlib_root,
 )
+from agm.config.qualified_keys import QualifiedConfigKey, resolve_qualified_values
 from agm.core import dry_run
 from agm.core.log import (
     LiveTracePathResolver,
@@ -55,12 +57,16 @@ from agm.core.log import (
 )
 from agm.core.toml import toml_dict
 
+if TYPE_CHECKING:
+    from agm.agl.ir.program import IrParam
+
 
 def run(args: ReplArgs) -> None:
     """Run the ``agm repl`` command."""
     ctx = current_config_context()
     try:
-        merged_config = load_merged_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
+        config_view = load_general_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
+        merged_config = config_view.merged
         config = exec_config_from_merged(merged_config)
     except ValueError as exc:
         print(f"Error: invalid exec configuration: {exc}", file=sys.stderr)
@@ -147,6 +153,18 @@ def run(args: ReplArgs) -> None:
         agent=args.agent,
     )
 
+    def imported_param_config(params: tuple["IrParam", ...]) -> dict[str, object]:
+        keys: dict[IrParam, QualifiedConfigKey] = {}
+        for param in params:
+            *scope_path, leaf = param.public_name.split("::")
+            keys[param] = QualifiedConfigKey(param.module.segments, tuple(scope_path), leaf)
+        resolved = resolve_qualified_values(config_view, keys.values())
+        return {
+            param.qualified_public_name: resolved[key]
+            for param, key in keys.items()
+            if key in resolved
+        }
+
     session = ReplSession(
         default_strict_json=strict_json,
         default_loop_limit=loop_limit,
@@ -162,6 +180,7 @@ def run(args: ReplArgs) -> None:
         lib_root=lib_root,
         configured_roots=mod_roots_cfg.extra,
         default_stdlib=not args.no_stdlib,
+        params_config_loader=imported_param_config,
     )
 
     # Load and check the session's initial library image now, so a rejected

@@ -181,7 +181,7 @@ class HostConfigurationError(Exception):
     Raised by :class:`IrInterpreter`'s constructor when the winning
     ``default-agent`` value — a host seed (``[exec] runner``, already
     validated before this point) or a declared/spliced ``builtin var``
-    default (``--agent``, ``[exec]``/``[<program>] default-agent``, or
+    default (``--agent``, ``[exec]``/qualified program-table ``default-agent``, or
     ``std/config``'s own default) — is an ``AgentCommand`` whose command text
     does not shell-split (see :func:`agm.agent.runner.parse_command`).
 

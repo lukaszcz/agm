@@ -243,7 +243,8 @@ param_decl ::= "param" name (":" type_expr)? ("=" expr)?
 
 `param` declarations are legal at the module root or as a member of a named
 scope region in every entry and library module ([Named scopes](scopes.md#parameters)
-— no declaration-path shorthand). Each enters its scope as an immutable binding.
+— no declaration-path shorthand). An engine-setting leaf name cannot be used
+for a param, including within a named scope. Each enters its scope as an immutable binding.
 A param may declare a type, a default expression, both, or neither. Without an
 explicit type or default, the param defaults to `text`.
 

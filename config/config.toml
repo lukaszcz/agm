@@ -28,26 +28,20 @@ runner = "agm run pi -p '@%{PROMPT_FILE}'"
 # [repl]
 # theme = "auto"    # syntax-highlighting theme: "dark", "light", or "auto" (detect from $COLORFGBG)
 
-# [<program>] — per-program settings.
+# Qualified AgL program and parameter settings.
 #
-# For ``agm exec``, the table key is the ``.agl`` file stem. CLI param options (e.g.
-# ``--topic``) override config values; config values for params suppress the
-# default expression. Inline ``-c`` programs with no declaration have no config
-# table. Engine-key overrides (e.g. ``timeout``) take precedence over ``[exec]``
-# (``[<program>].X > [exec].X > engine default``), unless the key names an
-# entry param, in which case it supplies that param.
+# Config tables use a module suffix followed by a declaration scope path. The
+# entry file's stem is its module component. A longer module suffix resolves
+# ambiguity; ``["review-tools/judge".review]`` is an exact module anchor.
+# CLI param options override config values. Inline ``-c`` params are CLI-only.
 #
-# ``agm repl`` does not use per-program tables or per-param CLI options.
-# REPL parameters require source defaults. This table does not override REPL
-# engine settings.
+# [review-workflow.main]
+# timeout = "60s"               # engine-key override for this program
+# log = true
 #
-# [review-workflow]
-# timeout  = "60s"              # engine-key override for agm exec
-# log      = true               # engine-key override for agm exec
-# topic    = "security"         # text param — verbatim string
-# verbose  = true               # bool param — native TOML bool
-# max-iter = 3                  # int param  — native TOML integer
-# tags     = ["bug", "audit"]   # list param — TOML array (or a JSON string)
-# ratio    = "0.75"             # decimal param — MUST be a quoted string;
-#                               #   a bare TOML float (0.75) is rejected because
-#                               #   AgL forbids binary floating-point values.
+# [judge.review]
+# topic = "security"            # text param — verbatim string
+# verbose = true                 # bool param — native TOML bool
+# max-iter = 3                   # int param — native TOML integer
+# tags = ["bug", "audit"]       # list param — TOML array (or a JSON string)
+# ratio = "0.75"                # decimal params must be quoted strings

@@ -10,7 +10,7 @@ by ``ReplSession`` via the narrow ``EntryPipelineCtx`` Protocol. Must NOT import
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Protocol, cast
 
 from agm.agl.diagnostics import Diagnostic
@@ -51,6 +51,7 @@ class EntryPipelineCtx(Protocol):
     """The minimal ReplSession surface the program pipeline needs."""
 
     _loaded_lib_modules: dict[ModuleId, LoadedModule]
+    _active_imported_params: dict[SymbolId, IrParam]
     _accumulated_imports: list[tuple[ImportDecl, ...]]
     _accumulated_opens: list[tuple[OpenDecl | ImportDecl | ScopeRegion, ...]]
     _link_image: LinkImage
@@ -85,13 +86,15 @@ class EntryPipelineCtx(Protocol):
         self, program: Program, checked: CheckedModule, warnings: list[Diagnostic]
     ) -> EntryResult: ...
 
-    def _pre_eval_param_check(
+    def _pre_eval_param_values(
         self, params: tuple[IrParam, ...], warnings: list[Diagnostic]
-    ) -> EntryResult | None: ...
+    ) -> tuple[dict[SymbolId, Value], EntryResult | None]: ...
 
     def _record_declared_engine_defaults(
         self, declared_keys: frozenset[str], interp: IrInterpreter
     ) -> None: ...
+
+    def _record_active_imported_params(self, params: tuple[IrParam, ...]) -> None: ...
 
     def _update_engine_settings(self, interp: IrInterpreter) -> None: ...
 
@@ -623,7 +626,17 @@ class EntryPipeline:
             source_text=text,
             contract_payloads=contract_payloads,
         )
-        pre_eval_result = self._ctx._pre_eval_param_check(lowered.program.params, warnings)
+        # Lowering normally omits modules already linked into the persistent
+        # image. Keep the boundary explicit nevertheless: config validation
+        # needs their metadata, but installing one again would overwrite its
+        # live base-frame slot (including mutations from prior entries).
+        params_to_install = tuple(
+            param
+            for param in lowered.program.params
+            if param.module.is_entry or param.symbol not in self._ctx._active_imported_params
+        )
+        program_to_run = replace(lowered.program, params=params_to_install)
+        ir_params, pre_eval_result = self._ctx._pre_eval_param_values(params_to_install, warnings)
         if pre_eval_result is not None:
             self._ctx._link_image.restore_state(link_snapshot)
             return pre_eval_result
@@ -646,8 +659,7 @@ class EntryPipeline:
             self._ctx._link_image.restore_state(link_snapshot)
             self._ctx._advance_node_ids(new_next_id)
             return self._ctx._fail(extern_diagnostics, warnings)
-        ir_params: dict[SymbolId, Value] = {}
-        host_contracts, _ = _materialize_ir_contracts(lowered.program, host_env.codecs)
+        host_contracts, _ = _materialize_ir_contracts(program_to_run, host_env.codecs)
         trace = TraceStore(path=self._ctx._trace_path)
         trace.run_start()
         if self._ctx._host_settings_policy is not None:
@@ -661,7 +673,7 @@ class EntryPipeline:
             reconfigurer = None
         try:
             interp = IrInterpreter(
-                lowered.program,
+                program_to_run,
                 agent_dispatcher=host_env.agent_dispatcher,
                 strict_json=self._ctx._default_strict_json,
                 loop_limit=self._ctx._default_loop_limit,
@@ -811,6 +823,7 @@ class EntryPipeline:
             ),
         )
         self._ctx._loaded_lib_modules.update(new_modules)
+        self._ctx._record_active_imported_params(params_to_install)
         self._ctx._link_image.mark_linked(
             mid for mid in checked_program.modules if not mid.is_entry
         )

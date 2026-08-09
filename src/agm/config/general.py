@@ -666,13 +666,13 @@ def exec_config_from_merged(
     """Build :class:`ExecConfig` from an already-merged config dict.
 
     Split out from :func:`load_exec_config` so a caller that already holds a
-    merged config (e.g. ``agm exec``, which also needs ``[<program>]``) can
-    derive the ``[exec]`` section without re-reading and re-merging the files.
+    merged config can derive the ``[exec]`` section without re-reading and
+    re-merging the files.
 
-    When *program_table* is supplied (the ``[<program>]`` table for the running
-    program), each engine key present in that table overrides the global
-    ``[exec]`` value.  Engine keys use kebab-case names: ``strict-json``,
-    ``max-iters``, ``log-file``.
+    When *program_table* is supplied, each engine key present in that already
+    resolved qualified program table overrides the global ``[exec]`` value.
+    Engine keys use kebab-case names: ``strict-json``, ``max-iters``,
+    ``log-file``.
     """
     exec_table = _select_command_table(
         toml_dict(merged.get("exec")),
@@ -681,7 +681,7 @@ def exec_config_from_merged(
         require_command=False,
     )
 
-    # Per-program engine-key overrides: [<program>].KEY wins over [exec].KEY.
+    # Qualified per-program engine-key overrides win over [exec].KEY.
     # Engine keys use kebab-case names.
     effective: TomlDict = dict(exec_table)
     if program_table is not None:
@@ -750,19 +750,6 @@ def load_refine_config(
         extra_revise_prompt_file=_optional_str(table, "extra_revise_prompt_file"),
         save_review=_optional_bool(table, "save_review", default=True),
     )
-
-
-def file_config_from_merged(merged: TomlDict, file_stem: str) -> dict[str, object]:
-    """Return the top-level ``[<file_stem>]`` table from merged config.
-
-    Returns an empty dict when the section is absent or not a table. Both
-    engine-key overrides (e.g. ``timeout``) and param values (e.g. ``scope``)
-    live directly under the table; callers separate the two.
-    """
-    section = merged.get(file_stem)
-    if isinstance(section, dict):
-        return dict(section)
-    return {}
 
 
 @dataclass(frozen=True)

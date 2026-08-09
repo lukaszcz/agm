@@ -113,7 +113,7 @@ def build_host_engine_seeds(
     are consulted in *primary_table* then *fallback_table* order.
 
     ``default-agent`` precedence, highest first: ``--agent``, then
-    ``[exec]``/``[<program>] default-agent``, then ``[exec] runner``.  Exactly
+    the qualified program table/``[exec] default-agent``, then ``[exec] runner``.  Exactly
     one of the three ever supplies the key, and it lands in exactly one of the
     two result mappings: an AgL literal (``--agent``/``default-agent``) becomes
     a :class:`~agm.agl.setting_overrides.SettingOverride` in ``overrides`` so
@@ -132,7 +132,7 @@ def build_host_engine_seeds(
     ``--agent`` is an explicit per-run request, so it is marked
     ``required=True`` and still produces a diagnostic when the loaded program
     never brings in ``std/config`` (e.g. ``--no-stdlib``); ``[exec]``/
-    ``[<program>] default-agent`` is ambient configuration, marked
+    qualified program-table ``default-agent`` is ambient configuration, marked
     ``required=False``, so it is simply inert — no diagnostic — in that same
     situation.
     """

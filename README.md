@@ -221,11 +221,12 @@ asks before each one. Multiline editing, syntax highlighting, tab-completion, an
 built in, and `:` meta-commands (`:help`, `:type`, `:bindings`, …) inspect the session.
 The `std/core` standard-library module is opened automatically throughout each loaded
 program, as in `agm exec`; pass `--no-stdlib` to disable that automatic opening for the
-entry and its library modules.
+entry and its library modules. Imported-module params can be supplied by their qualified
+config tables; params declared directly at the prompt use source defaults (or are required).
 
 ```bash
 agm repl                        # launch; type :help for commands, :quit to exit
-agm repl --confirm-agents       # confirm each agent call; params use source defaults
+agm repl --confirm-agents       # confirm calls; prompt params use source defaults
 agl> let n = 21 * 2             # bindings persist across entries → "n : int = 42"
 ```
 

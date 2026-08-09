@@ -3,6 +3,7 @@
 Public API
 ----------
 - :func:`parse_program` — parse AgL source text into a ``syntax.Program`` AST.
+- :func:`wrap_inline_program` — synthesize an inline-source ``program def main`` AST.
 - :class:`AglSyntaxError` — span-aware parse error raised on lex/parse failure.
 
 This package is the **only** place in the codebase that imports both ``lark``
@@ -23,6 +24,7 @@ from agm.agl.parser.parser import (
     parse_type_expr,
 )
 from agm.agl.parser.transform import resolve_infix_fixity
+from agm.agl.parser.wrap import wrap_inline_program
 
 __all__ = [
     "AglSyntaxError",
@@ -33,4 +35,5 @@ __all__ = [
     "parse_program_seeded",
     "parse_type_expr",
     "resolve_infix_fixity",
+    "wrap_inline_program",
 ]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,6 +22,30 @@ from agm.core.toml import (
 )
 from agm.project.layout import project_config_dir
 from agm.util.interp import interp_preserving
+
+
+@dataclass(frozen=True)
+class GeneralConfig:
+    """Path-normalized general configuration and its precedence-ordered layers.
+
+    ``layers`` run from least to most specific and retain the provenance that
+    qualified AgL config lookup needs when equivalent table aliases differ
+    between files. ``merged`` preserves the ordinary key-wise view consumed by
+    existing general-config readers.
+    """
+
+    layers: tuple[TomlDict, ...]
+    merged: TomlDict
+
+    @classmethod
+    def from_layers(cls, layers: Iterable[TomlDict]) -> GeneralConfig:
+        """Build a config view from normalized layers in precedence order."""
+
+        ordered_layers = tuple(layers)
+        merged: TomlDict = {}
+        for layer in ordered_layers:
+            merged = _merge_config(merged, layer)
+        return cls(layers=ordered_layers, merged=merged)
 
 
 class ConfigCommandNotFound(ValueError):
@@ -335,14 +359,25 @@ def _resolve_config_file_paths(config: TomlDict, config_dir: Path, cwd: Path) ->
     return resolved
 
 
-def load_merged_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> TomlDict:
-    merged: TomlDict = {}
+def load_general_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> GeneralConfig:
+    """Load path-normalized config layers and their conventional merged view."""
+
+    layers: list[TomlDict] = []
     for path in config_file_candidates(home=home, proj_dir=proj_dir, cwd=cwd):
         if path.is_file():
             raw = load_toml_file(path)
-            resolved = _resolve_config_file_paths(raw, config_dir=path.parent, cwd=cwd)
-            merged = _merge_config(merged, resolved)
-    return merged
+            layers.append(_resolve_config_file_paths(raw, config_dir=path.parent, cwd=cwd))
+    return GeneralConfig.from_layers(layers)
+
+
+def load_merged_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> TomlDict:
+    """Load the conventional merged config view.
+
+    Kept for readers that do not need per-file provenance. Qualified config
+    consumers must use :func:`load_general_config` and retain its layers.
+    """
+
+    return load_general_config(home=home, proj_dir=proj_dir, cwd=cwd).merged
 
 
 def load_run_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> RunConfig:

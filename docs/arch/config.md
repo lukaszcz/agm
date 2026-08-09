@@ -44,9 +44,10 @@ Sandbox settings for `agm run` follow their own discovery and merge chain across
 ## Code Entry Points
 
 - `src/agm/config/context.py` defines the config context and project-directory discovery.
-- `src/agm/config/general.py` loads and merges the layered config and exposes the per-feature config readers.
+- `src/agm/config/general.py` loads path-normalized config layers, retains their precedence order alongside the conventional merged view, and exposes the per-feature config readers.
 - `src/agm/config/command_config.py` resolves per-command override sections.
 - `src/agm/config/engine_keys.py` is the pure data-leaf catalog of engine keys: each key's name, value kind, config accessor, host default, and consuming side (runtime-live — backed by a live interpreter field — versus host-consumed registers). Shared with host seed/default resolution, the AgL engine-key type registry that maps each kind to an AgL type, and the evaluator/REPL, which route a write by its consuming side. Its named trace-register projection and trace coupling helper keep the `log`/`log-file` pair explicit; `default-agent` remains a register-only `Agent` value with no host default.
+- `src/agm/config/qualified_keys.py` is the pure qualified AgL config-key resolver. It consumes the retained general-config layers so qualified aliases retain their file provenance, enforcing unambiguous suffixes while keeping AGM sections out of module matching.
 - `src/agm/config/module_roots.py` resolves AgL module search roots from the `[modules]` config.
 - `src/agm/config/sandbox/` discovers and merges SRT sandbox settings.
 - `config/` (repository root) holds the default config templates installed into `~/.agm/`.

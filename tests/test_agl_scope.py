@@ -62,7 +62,11 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import IntT
-from tests.agl.module_graph import resolve_entry, resolve_program_ast
+from tests.agl.module_graph import (
+    resolve_entry,
+    resolve_inline_entry,
+    resolve_inline_program_ast,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -76,13 +80,27 @@ def parse_and_resolve(
     parent_scope: ScopeNode | None = None,
     default_stdlib: bool = True,
 ) -> ModuleResolution:
-    """Resolve *source* as the entry of a real module graph (std/core included by
-    default, matching production)."""
-    return resolve_entry(
+    """Resolve test-only inline source as ``agm exec -c`` does."""
+    return resolve_inline_entry(
         source,
         origin_path=origin_path,
         parent_scope=parent_scope,
         default_stdlib=default_stdlib,
+    )
+
+
+def parse_and_resolve_file(source: str, *, default_stdlib: bool = True) -> ModuleResolution:
+    """Resolve static test source without applying the command entry transform."""
+    return resolve_entry(source, default_stdlib=default_stdlib)
+
+
+def parse_and_resolve_repl(
+    source: str, *, parent_scope: ScopeNode | None = None
+) -> ModuleResolution:
+    """Resolve a test-only REPL entry, whose root admits incremental statements."""
+    return resolve_entry(
+        source,
+        parent_scope=parent_scope or ScopeNode(node_id=-1, parent=None, scope_path=()),
     )
 
 
@@ -296,14 +314,10 @@ def _make_program(*items: Item) -> Program:
 def resolve_program(*items: Item) -> ModuleResolution:
     """Construct and resolve a Program from the given top-level items.
 
-    Calls ``resolve_program_ast`` directly rather than through
-    ``tests.agl.module_graph``'s ``resolve_entry``: the items here are
-    hand-built AST nodes (via the ``_make_*`` helpers above, with node ids
-    from this module's own ``_nid()`` counter), not source text, and
-    ``resolve_entry`` only accepts a source string to parse. There is no
-    source text to hand it.
+    Uses the explicit test-only inline-AST seam: the hand-built items model
+    command source, where executable root items are synthesized into ``main``.
     """
-    return resolve_program_ast(_make_program(*items))
+    return resolve_inline_program_ast(_make_program(*items), next_node_id=_NID + 1)
 
 
 def reject_program(*items: Item) -> AglScopeError:
@@ -421,8 +435,8 @@ class TestScopedBindings:
         assert _ref(resolved, "x").kind is BinderKind.let_binding
 
     def test_double_colon_anchors_at_the_module_root_from_inside_a_region(self) -> None:
-        resolved = parse_and_resolve(
-            "let x = 1\nscope A\nlet x = 2\ndef read() -> int = ::x\nend A\nA::read()"
+        resolved = parse_and_resolve_file(
+            "param x: int\nscope A\nlet x = 2\ndef read() -> int = ::x\nend A"
         )
         assert _ref(resolved, "x").scope_path == ()
 
@@ -433,15 +447,13 @@ class TestScopedBindings:
 
     def test_shorthand_rhs_sees_an_earlier_regions_member_bare(self) -> None:
         """A root shorthand's RHS resolves in its own scope path's layer."""
-        resolved = parse_and_resolve(
-            "scope A\nlet base = 1\nend A\nvar A::next = base + 1\nA::next"
-        )
+        resolved = parse_and_resolve_file("scope A\nlet base = 1\nend A\nvar A::next = base + 1")
         assert set(resolved.scope_nodes[("A",)].members) == {"base", "next"}
         assert _ref(resolved, "base").scope_path == ("A",)
 
     def test_region_sees_an_earlier_shorthands_member_bare(self) -> None:
-        resolved = parse_and_resolve(
-            "let A::base = 1\nscope A\ndef read() -> int = base\nend A\nA::read()"
+        resolved = parse_and_resolve_file(
+            "let A::base = 1\nscope A\ndef read() -> int = base\nend A"
         )
         assert set(resolved.scope_nodes[("A",)].members) == {"base", "read"}
 
@@ -489,8 +501,9 @@ class TestScopedBindings:
         correctly-rejected case, included here to pin parity with the
         ``let``/``var`` binding forms across both textual orders.
         """
-        err = reject_scope(source)
-        assert "already declared" in err.to_diagnostic().message
+        with pytest.raises(AglScopeError) as exc_info:
+            parse_and_resolve_file(source.removesuffix("\n()"))
+        assert "already declared" in exc_info.value.to_diagnostic().message
 
     def test_earlier_block_cannot_see_a_later_blocks_binding(self) -> None:
         with pytest.raises(AglScopeError):
@@ -529,7 +542,7 @@ class TestScopedBindings:
             parse_and_resolve(f"if true =>\n  {keyword} A::x = 1\n  x\n| else =>\n  0\n")
 
     def test_multi_segment_scoped_let_and_var(self) -> None:
-        resolved = parse_and_resolve("let A::B::x = 1\nvar A::B::y = 2\nA::B::x\nA::B::y")
+        resolved = parse_and_resolve_file("let A::B::x = 1\nvar A::B::y = 2")
         assert set(resolved.scope_nodes[("A", "B")].members) == {"x", "y"}
         assert resolved.scope_nodes[("A", "B")].parent is resolved.scope_nodes[("A",)]
 
@@ -586,9 +599,8 @@ class TestScopedParam:
 
     def test_reference_textually_before_the_param_is_rejected(self) -> None:
         with pytest.raises(AglScopeError):
-            parse_and_resolve(
-                "def f() -> text = Deploy::region\n"
-                "scope Deploy\nparam region: text\nend Deploy\nf()"
+            parse_and_resolve_file(
+                "def f() -> text = Deploy::region\nscope Deploy\nparam region: text\nend Deploy"
             )
 
     def test_param_rejected_inside_a_function_body(self) -> None:
@@ -988,13 +1000,13 @@ class TestAcceptance:
         assert _ref(r, "greeting").kind == BinderKind.let_binding
 
     def test_simple_let_captured_by_function_still_resolves(self) -> None:
-        resolved = parse_and_resolve("let value = 1\ndef capture() = value\ncapture()")
+        resolved = parse_and_resolve_repl("let value = 1\ndef capture() = value\ncapture()")
 
         captured = _find_varref(resolved.program, "value")
         assert resolved.resolution[captured.node_id].kind is BinderKind.let_binding
 
     def test_destructuring_let_captured_by_function_still_resolves(self) -> None:
-        resolved = parse_and_resolve(
+        resolved = parse_and_resolve_repl(
             "record Pair\n"
             "  value: int\n"
             "let Pair(value) = Pair(value = 1)\n"
@@ -1084,7 +1096,9 @@ class TestBlockScoping:
         assert "a" in msg
 
     def test_redeclaration_input_with_let(self) -> None:
-        err = reject_scope('param spec\nlet spec = "again"\nspec')
+        with pytest.raises(AglScopeError) as exc_info:
+            parse_and_resolve_file('param spec\nlet spec = "again"')
+        err = exc_info.value
         line, msg = diag(err)
         assert line == 2
         assert "spec" in msg
@@ -1109,7 +1123,7 @@ class TestLetPatternCompatibility:
 
 class TestLetPatternScope:
     def test_simple_let_binding_identity_is_its_pattern_node(self) -> None:
-        resolved = parse_and_resolve("let value = 1\nvalue")
+        resolved = parse_and_resolve_file("let value = 1")
         declaration = resolved.program.body.items[0]
         assert isinstance(declaration, LetDecl)
         binding = resolved.root_scope.lookup("value")
@@ -1796,6 +1810,12 @@ class TestFuncDefMutualRecursion:
         assert "def" in msg.lower()
         assert "root" in msg.lower()
 
+    def test_def_directly_in_function_body_rejected(self) -> None:
+        err = reject_scope("def outer() -> int =\n  def helper() -> int = 1\n  helper()\nouter()")
+        _, msg = diag(err)
+        assert "def" in msg.lower()
+        assert "root" in msg.lower()
+
     def test_def_duplicate_name_rejected(self) -> None:
         err = reject_scope("def f(x: int) -> int = x\ndef f(y: int) -> int = y\nf(1)")
         _, msg = diag(err)
@@ -1817,7 +1837,7 @@ class TestFuncDefMutualRecursion:
 
     def test_def_param_default_resolved_in_enclosing_scope(self) -> None:
         """Parameter defaults are resolved in the DEFINITION scope (outer)."""
-        r = parse_and_resolve("let base = 10\ndef f(x: int = base) -> int = x\nf()")
+        r = parse_and_resolve_repl("let base = 10\ndef f(x: int = base) -> int = x\nf()")
         assert _ref(r, "base").kind == BinderKind.let_binding
 
     def test_return_allowed_in_def_body(self) -> None:
@@ -2018,7 +2038,9 @@ class TestLambdaScoping:
         parse_and_resolve("let f = fn(x: int) => return x\nf(1)")
 
     def test_return_rejected_at_top_level(self) -> None:
-        err = reject_scope("return 1")
+        with pytest.raises(AglScopeError) as exc_info:
+            parse_and_resolve_repl("return 1")
+        err = exc_info.value
         _, msg = diag(err)
         assert "return" in msg
         assert "function" in msg
@@ -2142,7 +2164,7 @@ class TestParentScopeSeam:
 
     def test_reference_resolves_into_parent(self) -> None:
         """A VarRef to a parent-scope binding resolves through the parent."""
-        session = parse_and_resolve("let x = 1\nx")
+        session = parse_and_resolve_repl("let x = 1\nx")
         entry = resolve_entry("print x", parent_scope=session.root_scope)
         # The print's arg VarRef resolved to the session's let binding.
         call_item = entry.program.body.items[0]
@@ -2163,7 +2185,7 @@ class TestParentScopeSeam:
 
     def test_assign_to_parent_mutable_resolves(self) -> None:
         """``:=`` of a parent var binding resolves through the parent."""
-        session = parse_and_resolve("var n: int = 0\nn")
+        session = parse_and_resolve_repl("var n: int = 0\nn")
         entry = resolve_entry("n := 1", parent_scope=session.root_scope)
         assign_stmt = entry.program.body.items[0]
         assert isinstance(assign_stmt, AssignStmt)
@@ -2173,7 +2195,7 @@ class TestParentScopeSeam:
 
     def test_assign_to_parent_immutable_resolves_as_immutable(self) -> None:
         """``:=`` of a parent let binding resolves; typechecking rejects it."""
-        session = parse_and_resolve("let k = 1\nk")
+        session = parse_and_resolve_repl("let k = 1\nk")
         entry = resolve_entry("k := 2", parent_scope=session.root_scope)
         assign_stmt = entry.program.body.items[0]
         assert isinstance(assign_stmt, AssignStmt)
@@ -2800,7 +2822,7 @@ class TestDirectASTConstruction:
         assert "param" in msg.lower()
 
     def test_program_inside_if_rejected(self) -> None:
-        err = reject_scope("if true =>\n  program nested\n| else =>\n  ()\n")
+        err = reject_scope("if true =>\n  program def nested() = ()\n| else =>\n  ()\n")
         line, msg = diag(err)
         assert line == 2
         assert "program" in msg.lower()
@@ -2827,11 +2849,8 @@ class TestDirectASTConstruction:
         assert "export" in msg.lower()
         assert "root" in msg.lower()
 
-    def test_duplicate_program_rejected(self) -> None:
-        err = reject_scope("program first\nprogram second\n1\n")
-        line, msg = diag(err)
-        assert line == 2
-        assert "already declared" in msg
+    def test_multiple_program_definitions_are_allowed(self) -> None:
+        parse_and_resolve("program def first() = ()\nprogram def second() = ()\n")
 
     # --- FuncDef: direct AST construction ---
 
@@ -2948,7 +2967,7 @@ class TestDeclaredFunctions:
         assert "g" in r.declared_functions
 
     def test_declared_functions_empty_when_no_defs(self) -> None:
-        r = parse_and_resolve("let x = 1\nx")
+        r = parse_and_resolve_file("let x = 1")
         assert r.declared_functions == {}
 
 

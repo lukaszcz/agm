@@ -4,5 +4,6 @@ open import facade
 
 open Shapes
 
-print(measure())
-print(Nested::Point(x = 4).x)
+program def main() -> unit =
+  print(measure())
+  print(Nested::Point(x = 4).x)

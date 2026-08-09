@@ -15,32 +15,33 @@ extern def count(xs: array[Node]) -> int
 extern def show(xs: array[Node]) -> int
 extern def identity[T](x: T) -> T
 
-let leaf = Node(children = [])
-var xs: array[Node] = [leaf]
+program def main() -> unit =
+  let leaf = Node(children = [])
+  var xs: array[Node] = [leaf]
 
-if mode == "cycle" =>
-  let n = Node(children = xs)
-  xs[0] := n
+  if mode == "cycle" =>
+    let n = Node(children = xs)
+    xs[0] := n
 
-if mode == "diamond" =>
-  xs := [leaf, leaf]
+  if mode == "diamond" =>
+    xs := [leaf, leaf]
 
-try
-  let c = count(xs)
-  print "count: %{c}"
-catch CyclicValueError as e =>
-  print "count caught: %{e.message}"
+  try
+    let c = count(xs)
+    print "count: %{c}"
+  catch CyclicValueError as e =>
+    print "count caught: %{e.message}"
 
-try
-  let s = show(xs)
-  print "show: %{s}"
-catch CyclicValueError as e =>
-  print "show caught: %{e.message}"
+  try
+    let s = show(xs)
+    print "show: %{s}"
+  catch CyclicValueError as e =>
+    print "show caught: %{e.message}"
 
-try
-  let r = identity(xs)
-  print "identity: %{r}"
-catch CyclicValueError as e =>
-  print "identity caught: %{e.message}"
+  try
+    let r = identity(xs)
+    print "identity: %{r}"
+  catch CyclicValueError as e =>
+    print "identity caught: %{e.message}"
 
-print "done"
+  print "done"

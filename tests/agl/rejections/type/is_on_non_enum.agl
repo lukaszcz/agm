@@ -1,4 +1,5 @@
 enum R
   | Pass
-let n = 1
-n is Pass
+program def main() -> unit =
+  let n = 1
+  n is Pass

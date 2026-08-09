@@ -19,6 +19,7 @@ import pytest
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.program import resolve_program
+from tests._agl_helpers import prepare_inline_command, run_inline_command
 from tests.agl.ir_harness import make_graph_from_files as _make_graph_from_files
 
 MULTI_FILE_DIR = Path(__file__).parent / "agl" / "multi_file"
@@ -53,7 +54,11 @@ def _run_program(
     roots = RootSet(
         roots=frozenset({*(d.resolve() for d in roots_dirs if d.exists()), REPO_STDLIB_ROOT})
     )
-    prepared = PipelineDriver.prepare_program(entry_source, entry_path=entry_path, roots=roots)
+    prepared = (
+        PipelineDriver.prepare_program(entry_source, entry_path=entry_path, roots=roots)
+        if entry_path is not None
+        else prepare_inline_command(entry_source, roots=roots)
+    )
     if agents:
         from agm.agl.semantics.values import TextValue
 
@@ -65,7 +70,23 @@ def _run_program(
         rt = PipelineDriver(agent_dispatcher=dispatch)
     else:
         rt = _make_runtime(default_agent=default_agent)
-    return rt.run_prepared(prepared, param_values=param_values)
+    if entry_path is None:
+        return run_inline_command(rt, entry_source, roots=roots, param_values=param_values)
+    discovery = rt.discover_params(prepared)
+    preflight = rt.preflight_params(
+        prepared, param_values=param_values, compiled=discovery.compiled
+    )
+    if not preflight.result.ok:
+        return preflight.result
+    entry_program = next(program for program in discovery.programs if program.module.is_entry)
+    assert preflight.executable is not None
+    return rt.run_prepared(
+        prepared,
+        param_values=param_values,
+        compiled=discovery.compiled,
+        executable=preflight.executable,
+        program_symbol=preflight.executable.program_symbols[entry_program.node_id],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -331,7 +352,9 @@ class TestLibRootModule:
         work_dir = tmp_path / "work"
         work_dir.mkdir()
         entry = work_dir / "prog.agl"
-        entry.write_text("open import shared\nlet r = double(21)\nprint r\n")
+        entry.write_text(
+            "open import shared\nprogram def main() -> unit =\n  let r = double(21)\n  print r\n"
+        )
 
         # Use lib_dir as the lib-root, work_dir as the invocation root.
         source = entry.read_text()
@@ -445,14 +468,7 @@ class TestMultiFileParams:
 
         source = "open import math\nparam n: int\nlet r = square(n)\nprint r\n"
 
-        from agm.agl import PipelineDriver
-        from agm.agl.modules.roots import RootSet
-
-        roots = RootSet(roots=frozenset({lib_dir.resolve(), REPO_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program(source, entry_path=None, roots=roots)
-
-        rt = PipelineDriver()
-        result = rt.run_prepared(prepared, param_values={"n": 7})
+        result = _run_program(source, roots_dirs=[lib_dir], param_values={"n": 7})
         assert result.ok is True
         captured = capsys.readouterr()
         assert "49" in captured.out
@@ -465,14 +481,7 @@ class TestMultiFileParams:
 
         source = "open import calc\nparam n: int\nlet r = sq(n)\nprint r\n"
 
-        from agm.agl import PipelineDriver
-        from agm.agl.modules.roots import RootSet
-
-        roots = RootSet(roots=frozenset({lib_dir.resolve(), REPO_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program(source, entry_path=None, roots=roots)
-
-        rt = PipelineDriver()
-        result = rt.run_prepared(prepared, param_values={})
+        result = _run_program(source, roots_dirs=[lib_dir], param_values={})
         assert result.ok is False
         assert any("n" in d.message for d in result.diagnostics)
 

@@ -25,10 +25,11 @@ exception Plain extends Exception
   code: int
   node: Node
 
-if mode == "function_field" =>
-  raise Boom(message = "boom", handler = fn(n: int) => n + 1, code = 7)
+program def main() -> unit =
+  if mode == "function_field" =>
+    raise Boom(message = "boom", handler = fn(n: int) => n + 1, code = 7)
 
-if mode == "unit_field" =>
-  raise WithUnit(message = "boom", note = (), code = 11)
+  if mode == "unit_field" =>
+    raise WithUnit(message = "boom", note = (), code = 11)
 
-raise Plain(message = "boom", code = 3, node = Node(x = 5))
+  raise Plain(message = "boom", code = 3, node = Node(x = 5))

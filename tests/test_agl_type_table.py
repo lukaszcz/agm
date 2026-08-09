@@ -71,7 +71,7 @@ from agm.agl.typecheck import AglTypeError, CheckedModule
 from agm.agl.typecheck.program import check_program
 from tests._agl_helpers import strip_decl_ids
 from tests.agl.ir_harness import evaluate_ir_output, make_graph_from_files
-from tests.agl.module_graph import resolve_and_check_entry
+from tests.agl.module_graph import resolve_and_check_inline_entry
 
 _CAPS = HostCapabilities(
     supports_shell_exec=True,
@@ -86,7 +86,7 @@ _LIB_ID = ModuleId.from_path("lib")
 
 def _check(src: str) -> CheckedModule:
     """Resolve + check *src* as the entry of a real module graph."""
-    return resolve_and_check_entry(src, _CAPS)
+    return resolve_and_check_inline_entry(src, _CAPS)
 
 
 def test_scoped_generic_enum_does_not_claim_the_root_type_or_constructor_namespace() -> None:

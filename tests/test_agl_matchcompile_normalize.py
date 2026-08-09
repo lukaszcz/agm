@@ -68,7 +68,7 @@ from agm.agl.typecheck import CheckedModule, check_program
 from tests._agl_helpers import next_decl_id, strip_decl_ids
 from tests.agl.ir_harness import make_graph_from_files
 from tests.agl.match_reference import reference_action
-from tests.agl.module_graph import resolve_and_check_entry
+from tests.agl.module_graph import resolve_and_check_inline_entry
 
 _CAPS = HostCapabilities(
     supports_shell_exec=True,
@@ -80,7 +80,7 @@ _CAPS = HostCapabilities(
 
 
 def _check(source: str) -> CheckedModule:
-    return resolve_and_check_entry(source, _CAPS)
+    return resolve_and_check_inline_entry(source, _CAPS)
 
 
 def _only_case(program: object) -> Case:

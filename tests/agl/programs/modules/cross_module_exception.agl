@@ -5,19 +5,21 @@ open import exc
 param mode: text
 
 # Open-import form: Boom and BoomDetail visible by unqualified name.
-try
-  if
-    | mode == "boom" =>
-        raise Boom(message = "open imported", code = 7)
-    | mode == "detail" =>
-        raise BoomDetail(message = "with detail", code = 3, detail = "info")
-    | mode == "qualified" =>
-        raise exc::Boom(message = "qualified", code = 99)
-    | else =>
-        print "ok"
-catch BoomDetail as e =>
-  print "detail %{e.code} %{e.detail}"
-catch Boom as e =>
-  print "boom %{e.code} %{e.message}"
-catch Exception as e =>
-  print "other %{e.message}"
+
+program def main() -> unit =
+  try
+    if
+      | mode == "boom" =>
+          raise Boom(message = "open imported", code = 7)
+      | mode == "detail" =>
+          raise BoomDetail(message = "with detail", code = 3, detail = "info")
+      | mode == "qualified" =>
+          raise exc::Boom(message = "qualified", code = 99)
+      | else =>
+          print "ok"
+  catch BoomDetail as e =>
+    print "detail %{e.code} %{e.detail}"
+  catch Boom as e =>
+    print "boom %{e.code} %{e.message}"
+  catch Exception as e =>
+    print "other %{e.message}"

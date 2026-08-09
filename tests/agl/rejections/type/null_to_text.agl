@@ -1,2 +1,3 @@
-let s: text = null
-s
+program def main() -> unit =
+  let s: text = null
+  s

@@ -1,1 +1,2 @@
-let x = copy(value = 1)
+program def main() -> unit =
+  let x = copy(value = 1)

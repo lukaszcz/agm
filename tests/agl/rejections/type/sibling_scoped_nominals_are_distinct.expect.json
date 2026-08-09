@@ -1,1 +1,9 @@
-{"diagnostic": {"line": 9, "message_contains": ["Left::Token", "Right::Token"]}}
+{
+  "diagnostic": {
+    "line": 8,
+    "message_contains": [
+      "Left::Token",
+      "Right::Token"
+    ]
+  }
+}

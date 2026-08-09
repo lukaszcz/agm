@@ -1,2 +1,3 @@
-let twice = 1
-var twice = 2
+program def main() -> unit =
+  let twice = 1
+  var twice = 2

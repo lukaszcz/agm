@@ -1,6 +1,7 @@
-var n: int = 0
-do[2]
-  let probe = n + 1
-  n := probe
-until probe >= 1
-print probe
+program def main() -> unit =
+  var n: int = 0
+  do[2]
+    let probe = n + 1
+    n := probe
+  until probe >= 1
+  print probe

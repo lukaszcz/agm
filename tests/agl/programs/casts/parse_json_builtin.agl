@@ -5,15 +5,17 @@
 param raw
 
 # `text as json` embeds the text verbatim as a JSON string — always succeeds
-let embedded: json = raw as json
-print embedded
 
-# parse_json performs strict parsing — may raise JsonParseError
-try
-  let parsed = parse_json(raw)
-  print parsed
-catch JsonParseError as e =>
-  print "parse error"
-  print e.raw
-  let has_msg = e.message != ""
-  print "has_message: %{has_msg as text}"
+program def main() -> unit =
+  let embedded: json = raw as json
+  print embedded
+
+  # parse_json performs strict parsing — may raise JsonParseError
+  try
+    let parsed = parse_json(raw)
+    print parsed
+  catch JsonParseError as e =>
+    print "parse error"
+    print e.raw
+    let has_msg = e.message != ""
+    print "has_message: %{has_msg as text}"

@@ -1,5 +1,6 @@
-try
-  ()
-catch _ as err =>
-  ()
-print err
+program def main() -> unit =
+  try
+    ()
+  catch _ as err =>
+    ()
+  print err

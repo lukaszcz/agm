@@ -22,7 +22,7 @@ import pytest
 from agm.agl.eval.ir_interpreter import IrInterpreter
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import DecimalValue, IntValue, TextValue
-from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises, lower_ir
+from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises, lower_inline_ir
 
 
 def test_top_level_call_can_reference_later_function() -> None:
@@ -39,17 +39,20 @@ def second(n: int) -> int =
     assert ir["answer"] == ir["answer"] == IntValue(41)
 
 
-def test_function_mutates_module_var_without_capture() -> None:
+def test_function_mutates_static_root_var() -> None:
     source = """
 var count = 0
 
 def increment() -> unit =
   count := count + 1
 
-increment()
-increment()
+program def main() -> unit =
+  increment()
+  increment()
 """
-    ir = evaluate_ir(source)
+    executable = lower_inline_ir(source)
+    (main_symbol,) = executable.program_functions
+    ir = IrInterpreter(executable).run(program_symbol=main_symbol)
     assert ir["count"] == ir["count"] == IntValue(2)
 
 
@@ -281,10 +284,10 @@ def test_recursion_depth_via_indirect_call() -> None:
 def test_recursion_depth_custom_limit_indirect() -> None:
     """IR-side recursion depth guard at a custom low limit via indirect call."""
     source = "def inf(n: int) -> int = inf(n + 1)\nlet f: (int) -> int = inf\nlet r = f(0)\n()"
-    executable = lower_ir(source)
+    executable = lower_inline_ir(source)
     interp = IrInterpreter(executable, max_call_depth=5)
     with pytest.raises(AglRaise) as exc_info:
-        interp.run()
+        interp.run(program_symbol=executable.synthetic_main_symbol)
     exc = exc_info.value.exc
     assert exc.display_name == "RecursionError"
     assert exc.fields["message"] == TextValue("Maximum call depth (5) exceeded")

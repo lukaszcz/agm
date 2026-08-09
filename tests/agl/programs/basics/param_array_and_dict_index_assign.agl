@@ -4,9 +4,10 @@
 param xs: array[int]
 param counts: dict[text, int]
 
-xs[0] := 0
-counts["first"] := 0
+program def main() -> unit =
+  xs[0] := 0
+  counts["first"] := 0
 
-print(xs)
-print(counts["first"])
-print(counts["second"])
+  print(xs)
+  print(counts["first"])
+  print(counts["second"])

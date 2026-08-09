@@ -32,7 +32,7 @@ class TestPrepareProgramDefaultRootsStaleStdlib:
         """``prepare_program(source)`` with ``roots=None`` must not raise."""
         monkeypatch.setattr(module_roots, "resolve_stdlib_root", _raise_stale)
 
-        prepared = PipelineDriver.prepare_program("1")
+        prepared = PipelineDriver.prepare_program("program def main() -> unit = ()")
 
         assert prepared.resolved is None
         assert prepared.diagnostics
@@ -50,7 +50,7 @@ class TestPrepareProgramDefaultRootsStaleStdlib:
         """
         monkeypatch.setattr(module_roots, "resolve_stdlib_root", _raise_stale)
 
-        prepared = PipelineDriver.prepare_program("param x: int\nx")
+        prepared = PipelineDriver.prepare_program("param x: int\nprogram def main() -> unit = ()")
         discovery = PipelineDriver().discover_params(prepared)
 
         assert discovery.params == ()
@@ -73,6 +73,6 @@ class TestDiscoverParamsFromSourceStaleStdlib:
         monkeypatch.setattr(module_roots, "resolve_stdlib_root", _raise_stale)
         from agm.cli_support.exec_params import discover_params_from_source
 
-        params = discover_params_from_source("param x: int\nx")
+        params = discover_params_from_source("param x: int\nprogram def main() -> unit = ()")
 
         assert params == ()

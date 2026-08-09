@@ -6,5 +6,6 @@ open facade::Empty
 def inspect(point: Nested::Point) -> int = point.x + measure()
 def unpack(box: Nested::Box[int]) -> int = box.value
 
-print inspect(Nested::Point(x = 4))
-print unpack(Nested::Box(value = 5))
+program def main() -> unit =
+  print inspect(Nested::Point(x = 4))
+  print unpack(Nested::Box(value = 5))

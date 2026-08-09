@@ -9,8 +9,9 @@ let reviewer = AgentCommand("reviewer")
 def fetch() -> Task = ask("Return a recursive task.", agent = reviewer)
 end Dispatch
 
-let task = Dispatch::fetch()
-let status: Status = ask("Return a workflow status.", agent = Dispatch::reviewer)
-print(score(task))
-print(label(status))
-print(status is completed)
+program def main() -> unit =
+  let task = Dispatch::fetch()
+  let status: Status = ask("Return a workflow status.", agent = Dispatch::reviewer)
+  print(score(task))
+  print(label(status))
+  print(status is completed)

@@ -6,12 +6,12 @@
 # var up to `target`, either converging below the bound or exhausting it.
 param bound: int
 param target: int
-
 var count: int = 0
 
 def make(b: int) -> () -> unit =
   fn() => do[b] count := count + 1 until count >= target
 
-let stepper = make(bound)
-stepper()
-print count
+program def main() -> unit =
+  let stepper = make(bound)
+  stepper()
+  print count

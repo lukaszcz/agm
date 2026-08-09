@@ -1,1 +1,2 @@
-print(?)
+program def main() -> unit =
+  print(?)

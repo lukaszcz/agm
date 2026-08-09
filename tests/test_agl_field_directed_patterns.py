@@ -12,16 +12,16 @@ from agm.agl.scope.program import resolve_program
 from agm.agl.typecheck import AglTypeError
 from agm.agl.typecheck.program import check_program
 from tests.agl.ir_harness import evaluate_ir, make_graph_from_files
-from tests.agl.module_graph import resolve_and_check_entry, resolve_entry
+from tests.agl.module_graph import resolve_and_check_inline_entry, resolve_inline_entry
 
 
 def _check(source: str) -> None:
-    resolve_and_check_entry(source, HostCapabilities())
+    resolve_and_check_inline_entry(source, HostCapabilities())
 
 
 def _reject_scope(source: str) -> None:
     with pytest.raises(AglScopeError):
-        resolve_entry(source)
+        resolve_inline_entry(source)
 
 
 def _reject_type(source: str) -> None:

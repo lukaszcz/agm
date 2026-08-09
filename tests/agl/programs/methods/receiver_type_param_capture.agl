@@ -37,19 +37,20 @@ def via_receiver[U](box: Box[U], tag: int) -> Outcome[U, int] = box.stamp(tag)
 
 def via_receiver_explicit[U](box: Box[U], tag: int) -> Outcome[U, int] = box.stamp::[int](tag)
 
-if
-  | mode == "later_inferred" =>
-      let result = via_later_parameter(Box(value = base), fn(n: int) -> text => "v=%{n}")
-      print(result.value)
-  | mode == "later_explicit" =>
-      let result = via_later_parameter_explicit(Box(value = base), fn(n: int) -> text => "x=%{n}")
-      print(result.value)
-  | mode == "qualified_spelling" =>
-      let result = via_qualified_spelling(Box(value = base), fn(n: int) -> text => "q=%{n}")
-      print(result.value)
-  | mode == "receiver_inferred" =>
-      let result = via_receiver(Box(value = base), 404)
-      print(describe_outcome(result))
-  | else =>
-      let result = via_receiver_explicit(Box(value = base), 404)
-      print(describe_outcome(result))
+program def main() -> unit =
+  if
+    | mode == "later_inferred" =>
+        let result = via_later_parameter(Box(value = base), fn(n: int) -> text => "v=%{n}")
+        print(result.value)
+    | mode == "later_explicit" =>
+        let result = via_later_parameter_explicit(Box(value = base), fn(n: int) -> text => "x=%{n}")
+        print(result.value)
+    | mode == "qualified_spelling" =>
+        let result = via_qualified_spelling(Box(value = base), fn(n: int) -> text => "q=%{n}")
+        print(result.value)
+    | mode == "receiver_inferred" =>
+        let result = via_receiver(Box(value = base), 404)
+        print(describe_outcome(result))
+    | else =>
+        let result = via_receiver_explicit(Box(value = base), 404)
+        print(describe_outcome(result))

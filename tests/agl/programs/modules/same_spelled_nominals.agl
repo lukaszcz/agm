@@ -2,10 +2,11 @@ import alpha as a
 import beta as b
 param items: bool
 
-case a::make(items) of
-  | a::Choice::same => print "alpha same"
-  | a::Choice::item(value) => print "alpha %{value}"
+program def main() -> unit =
+  case a::make(items) of
+    | a::Choice::same => print "alpha same"
+    | a::Choice::item(value) => print "alpha %{value}"
 
-case b::make(items) of
-  | b::Choice::same => print "beta same"
-  | b::Choice::item(value) => print "beta %{value}"
+  case b::make(items) of
+    | b::Choice::same => print "beta same"
+    | b::Choice::item(value) => print "beta %{value}"

@@ -51,7 +51,7 @@ from agm.agl.semantics.types import (
     substitute,
 )
 from agm.agl.typecheck.env import TypeEnvironment
-from tests.agl.module_graph import resolve_and_check_entry
+from tests.agl.module_graph import resolve_and_check_inline_entry
 
 # Comparability tests below only exercise scalar/agent/unit/function/typevar
 # operands, whose comparable_types arms never consult the TypeTable; an empty
@@ -137,7 +137,7 @@ class TestFunctionType:
         assert f1 == f2
 
     def test_bound_method_removes_and_substitutes_its_receiver(self) -> None:
-        checked = resolve_and_check_entry(
+        checked = resolve_and_check_inline_entry(
             "record Box[T]\n"
             "  value: T\n"
             "def Box::get[T](self) -> T = self.value\n"

@@ -4,9 +4,11 @@
 # restarts without exiting.  The loop can only exit via until when i > n,
 # i.e. on the iteration where i = n + 1.
 param n: int
-var i: int = 0
-do[n + 2]
-  i := i + 1
-  if i == n => continue
-until i >= n
-print i
+
+program def main() -> unit =
+  var i: int = 0
+  do[n + 2]
+    i := i + 1
+    if i == n => continue
+  until i >= n
+  print i

@@ -26,28 +26,30 @@ param b_val: int
 param z_val: int
 
 # add_po: positional fill, then positional+named.
-print(add_po(a_val, b_val))
-print(add_po(a_val, y = b_val))
 
-# mul_std_named: positional + named arg.
-print(mul_std_named(a_val, z = z_val))
+program def main() -> unit =
+  print(add_po(a_val, b_val))
+  print(add_po(a_val, y = b_val))
 
-# Named-only shorthand: z as bare name.
-let z = z_val
-print(mul_std_named(a_val, z))
+  # mul_std_named: positional + named arg.
+  print(mul_std_named(a_val, z = z_val))
 
-# triple: all three zones.
-print(triple(a_val, b_val, c = z_val))
+  # Named-only shorthand: z as bare name.
+  let z = z_val
+  print(mul_std_named(a_val, z))
 
-# add_atmarker: same as add_po but @std syntax.
-print(add_atmarker(a_val, b_val))
-print(add_atmarker(a_val, y = b_val))
+  # triple: all three zones.
+  print(triple(a_val, b_val, c = z_val))
 
-# with_default: omit y (uses default 10).
-print(with_default(a_val, z = z_val))
+  # add_atmarker: same as add_po but @std syntax.
+  print(add_atmarker(a_val, b_val))
+  print(add_atmarker(a_val, y = b_val))
 
-# with_default: supply y explicitly.
-print(with_default(a_val, b_val, z = z_val))
+  # with_default: omit y (uses default 10).
+  print(with_default(a_val, z = z_val))
 
-# identity_po with int.
-print(render(identity_po::[int](a_val, b_val)))
+  # with_default: supply y explicitly.
+  print(with_default(a_val, b_val, z = z_val))
+
+  # identity_po with int.
+  print(render(identity_po::[int](a_val, b_val)))

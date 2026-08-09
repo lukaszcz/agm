@@ -1,6 +1,7 @@
 def double(n: int) -> int = n * 2
 def triple(n: int) -> int = n * 3
-let fs: array[(int) -> int] = [double, triple]
-let gs: array[(int) -> int] = [double]
-let r = (fs == gs)
-r
+program def main() -> unit =
+  let fs: array[(int) -> int] = [double, triple]
+  let gs: array[(int) -> int] = [double]
+  let r = (fs == gs)
+  r

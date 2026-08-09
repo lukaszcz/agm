@@ -1,3 +1,4 @@
-let us: array[unit] = []
-let j = us as json
-j
+program def main() -> unit =
+  let us: array[unit] = []
+  let j = us as json
+  j

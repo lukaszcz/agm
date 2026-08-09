@@ -10,27 +10,28 @@ enum Plan
 
 param spec
 
-let impl = AgentCommand("impl")
-let reviewer = AgentCommand("reviewer")
-let planner = AgentCommand("planner")
-var artifact: text = ask("Implement %{spec}", agent = impl)
-var status: text = "working"
+program def main() -> unit =
+  let impl = AgentCommand("impl")
+  let reviewer = AgentCommand("reviewer")
+  let planner = AgentCommand("planner")
+  var artifact: text = ask("Implement %{spec}", agent = impl)
+  var status: text = "working"
 
-do[3]
-  let review: Review = ask("Review:\n%{artifact}", agent = reviewer)
-  case review of
-    | Pass() =>
-        status := "accepted"
-    | Fail(issues) =>
-        let plan: Plan = ask("Plan for:\n%{issues}", agent = planner)
-        case plan of
-          | Retry() =>
-              artifact := ask("Fix %{issues} in %{artifact}", agent = impl)
-          | GiveUp(why) =>
-              if why == "hopeless" =>
-                status := "abandoned"
-              else =>
-                status := "deferred: %{why}"
-until status != "working"
-print status
-print artifact
+  do[3]
+    let review: Review = ask("Review:\n%{artifact}", agent = reviewer)
+    case review of
+      | Pass() =>
+          status := "accepted"
+      | Fail(issues) =>
+          let plan: Plan = ask("Plan for:\n%{issues}", agent = planner)
+          case plan of
+            | Retry() =>
+                artifact := ask("Fix %{issues} in %{artifact}", agent = impl)
+            | GiveUp(why) =>
+                if why == "hopeless" =>
+                  status := "abandoned"
+                else =>
+                  status := "deferred: %{why}"
+  until status != "working"
+  print status
+  print artifact

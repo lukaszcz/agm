@@ -1,3 +1,4 @@
-if true =>
-  let A::x = 1
-  x
+program def main() -> unit =
+  if true =>
+    let A::x = 1
+    x

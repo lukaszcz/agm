@@ -20,7 +20,7 @@ from agm.agl.semantics.values import (
     TextValue,
 )
 from tests._agl_helpers import let_root_capture
-from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises, lower_ir
+from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises, inline_main_items, lower_inline_ir
 
 # ---------------------------------------------------------------------------
 # indexing.py unit tests
@@ -458,7 +458,7 @@ def _lower(source: str) -> "ExecutableProgram":
             ),
         },
     )
-    return lower_ir(source, caps=caps)
+    return lower_inline_ir(source, caps=caps)
 
 
 def test_golden_field_access_lowers_to_ir_field() -> None:
@@ -479,9 +479,9 @@ let px = p.x
 ()
 """
     prog = _lower(source)
-    entry = prog.modules[prog.entry_module]
+    prog.modules[prog.entry_module]
     found = False
-    for node in entry.initializers:
+    for node in inline_main_items(prog):
         if isinstance(node, (IrSequence, IrBind)):
             value = let_root_capture(node).value
             if isinstance(value, IrField):
@@ -500,9 +500,9 @@ let x = xs[1]
 ()
 """
     prog = _lower(source)
-    entry = prog.modules[prog.entry_module]
+    prog.modules[prog.entry_module]
     found = False
-    for node in entry.initializers:
+    for node in inline_main_items(prog):
         if isinstance(node, (IrSequence, IrBind)):
             value = let_root_capture(node).value
             if isinstance(value, IrIndex):
@@ -523,9 +523,9 @@ def test_golden_template_lowers_to_ir_render_template() -> None:
 
     source = 'let x: text = "val: %{42}"\n()'
     prog = _lower(source)
-    entry = prog.modules[prog.entry_module]
+    prog.modules[prog.entry_module]
     found = False
-    for node in entry.initializers:
+    for node in inline_main_items(prog):
         if isinstance(node, (IrSequence, IrBind)):
             value = let_root_capture(node).value
             if isinstance(value, IrRenderTemplate):
@@ -548,9 +548,9 @@ xs[0] := 99
 ()
 """
     prog = _lower(source)
-    entry = prog.modules[prog.entry_module]
+    prog.modules[prog.entry_module]
     found = False
-    for node in entry.initializers:
+    for node in inline_main_items(prog):
         if isinstance(node, IrIndexSet):
             assert node.kind is IndexKind.ARRAY
             assert isinstance(node.container, IrLoad)

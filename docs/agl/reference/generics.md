@@ -64,20 +64,18 @@ record Box[T]
 enum Outcome[A, B]
   | ok(value: A)
   | err(error: B)
-
 def Box::get[E](self) -> E = self.value
 def Box::map[E, U](self, f: E -> U) -> Box[U] = Box(value = f(self.value))
 def Box::size[_](self) -> int = 1
-
 def Outcome::is_ok[_, _](self) -> bool = self is ok
-
-let box = Box(value = 7)
-let mapped = box.map::[text](fn(value: int) -> text => "v=%{value}")
-let outcome: Outcome[int, text] = ok(value = 1)
-print(box.get())
-print(box.size())
-print(mapped.value)
-print(outcome.is_ok())
+program def main() -> unit =
+  let box = Box(value = 7)
+  let mapped = box.map::[text](fn(value: int) -> text => "v=%{value}")
+  let outcome: Outcome[int, text] = ok(value = 1)
+  let _ = print(box.get())
+  let _ = print(box.size())
+  let _ = print(mapped.value)
+  let _ = print(outcome.is_ok())
 ```
 
 The receiver fixes the leading method type parameters. In the example,
@@ -94,9 +92,9 @@ record Box[T]
   value: T
 
 def Box::build[U](value: U) -> Box[U] = Box(value = value)
-
-let box = Box::build("ready")
-print(box.value)
+program def main() -> unit =
+  let box = Box::build("ready")
+  let _ = print(box.value)
 ```
 
 ## Type application
@@ -108,14 +106,15 @@ name or a module-qualified name such as `lib::Box[int]`:
 ```agl
 record Box[T]
   value: T
+
 enum Outcome[T, E]
   | ok(value: T)
   | err(error: E)
-
-let bi: Box[int] = Box(value = 1)
-let bt: Box[text] = Box(value = "hi")
-let nested: Box[Box[int]] = Box(value = Box(value = 7))
-print nested.value.value
+program def main() -> unit =
+  let bi: Box[int] = Box(value = 1)
+  let bt: Box[text] = Box(value = "hi")
+  let nested: Box[Box[int]] = Box(value = Box(value = 7))
+  let _ = print nested.value.value
 ```
 
 `Box[int]`, `Option[text]`, `Outcome[int, text]`, and the nested
@@ -143,12 +142,12 @@ def id[T](x: T) -> T = x
 record Box[T]
   value: T
 
-print(id(5))                       # T inferred = int
-print(id("hi"))                    # T inferred = text
-let bi: Box[int] = Box(value = 5)   # T inferred from the payload
-
 def apply[T](f: T -> T, value: T) -> T = f(value)
-print(apply(id, 5))                 # the `id` occurrence is inferred as int -> int
+program def main() -> unit =
+  let _ = print(id(5))
+  let _ = print(id("hi"))
+  let bi: Box[int] = Box(value = 5)
+  let _ = print(apply(id, 5))
 ```
 
 Arguments provide exact type evidence before an expected result type is used.
@@ -205,19 +204,15 @@ explicitly:
 
 ```agl
 def id[T](x: T) -> T = x
-
 def singleton[T](x: T) -> array[T] = [x]
-
 def map_one[A, B](f: (A) -> B, xs: array[A]) -> array[B] = [f(xs[0])]
-
-let keep_ints: (array[int]) -> array[int] = map_one(id, ?)
-print(keep_ints([5])[0])        # 5
-
-let make_single: (int) -> array[int] = singleton(?)
-print(make_single(7)[0])        # 7
-
-let make_text = singleton::[text](?)
-print(make_text("hi")[0])       # hi
+program def main() -> unit =
+  let keep_ints: (array[int]) -> array[int] = map_one(id, ?)
+  let _ = print(keep_ints([5])[0])
+  let make_single: (int) -> array[int] = singleton(?)
+  let _ = print(make_single(7)[0])
+  let make_text = singleton::[text](?)
+  let _ = print(make_text("hi")[0])
 ```
 
 ## Constructors as values; generic constructor values
@@ -232,10 +227,12 @@ field order:
 ```agl
 record Box[T]
   value: T
-let direct: Box[int] = Box(value = 1)   # named, at the construction site
-let mk: int -> Box[int] = Box        # the constructor as a value
-let one = mk(1)                         # called positionally
-print one.value
+
+program def main() -> unit =
+  let direct: Box[int] = Box(value = 1)
+  let mk: int -> Box[int] = Box
+  let one = mk(1)
+  let _ = print one.value
 ```
 
 A **generic** constructor or generic `def` used as a first-class value needs
@@ -247,11 +244,12 @@ def id[T](x: T) -> T = x
 record Box[T]
   value: T
 
-let f: int -> int = id               # annotation instantiates T = int
-let mk: int -> Box[int] = Box        # annotation instantiates T = int
-print(f(7))
-let made = mk(2)
-print made.value
+program def main() -> unit =
+  let f: int -> int = id
+  let mk: int -> Box[int] = Box
+  let _ = print(f(7))
+  let made = mk(2)
+  let _ = print made.value
 ```
 
 A generic function occurrence can also be constrained by the other arguments
@@ -264,10 +262,11 @@ def id[T](value: T) -> T = value
 record Box[T]
   value: T
 
-let n = apply(id, 42)
-let mk: int -> Box[int] = Box
-let made = map(42, mk)
-print made.value
+program def main() -> unit =
+  let n = apply(id, 42)
+  let mk: int -> Box[int] = Box
+  let made = map(42, mk)
+  let _ = print made.value
 ```
 
 The same expression-local inference applies to every generic constructor form,
@@ -278,12 +277,11 @@ may come from a later sibling argument or the enclosing result:
 enum Option[T]
   | none
   | some(value: T)
-
 def build[T](factory: (T) -> Option[T], value: T) -> Option[T] = factory(value)
 def fallback[T](value: Option[T], item: T) -> Option[T] = value
-
-let present = build(some, 7)      # `some` is inferred as int -> Option[int]
-let missing = fallback(none, 7)   # `none` is inferred as Option[int]
+program def main() -> unit =
+  let present = build(some, 7)
+  let missing = fallback(none, 7)
 ```
 
 A binding is an inference boundary: `let f = id` is an error even if a later
@@ -301,10 +299,10 @@ variant constructs its value directly, with no parentheses:
 enum Option[T]
   | none
   | some(value: T)
-
-let mk: int -> Option[int] = some::[int]   # ≡ fn (x: int) => some(x)
-let v = mk(7)
-let z: Option[int] = none::[int]            # nullary value, no call needed
+program def main() -> unit =
+  let mk: int -> Option[int] = some::[int]
+  let v = mk(7)
+  let z: Option[int] = none::[int]
 ```
 
 The qualified forms `Option[int]::some` and `Option[int]::none` work the
@@ -352,9 +350,9 @@ through a type argument, and the `int → decimal` widening does not propagate
 inside one:
 
 ```agl
-let xs: array[int] = [1, 2]
-# let ys: array[decimal] = xs   # static error: array[int] ≠ array[decimal]
-print xs[0]
+program def main() -> unit =
+  let xs: array[int] = [1, 2]
+  let _ = print xs[0]
 ```
 
 `array[int]` is not assignable to `array[decimal]` or `array[json]`, and
@@ -488,15 +486,15 @@ Disambiguate by **qualifying** the reference with the owning enum:
 enum Option[T]
   | none
   | some(value: T)
-
 def describe_option(o: Option[int]) -> text =
   case o of
     | Option::none => "missing"
     | Option::some(value) => "found %{value}"
 
-let d: Option[int] = Option::some(value = 11)
-let line = describe_option(d)
-print line
+program def main() -> unit =
+  let d: Option[int] = Option::some(value = 11)
+  let line = describe_option(d)
+  let _ = print line
 ```
 
 Qualification is accepted in expression, pattern, and `is`-test positions

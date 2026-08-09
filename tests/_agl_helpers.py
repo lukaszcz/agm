@@ -40,15 +40,37 @@ from __future__ import annotations
 
 import dataclasses
 import itertools
+from pathlib import Path
 
+from agm.agl import PipelineDriver
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.nodes import IrBind, IrExpr, IrSequence
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, require_reserved_nominal_id
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program_seeded, wrap_inline_program
+from agm.agl.pipeline import PreparedProgram, RunResult
 from agm.agl.semantics.type_table import TypeDef, TypeTable, create_seeded_type_table
 from agm.agl.semantics.types import EnumType, ExceptionType, RecordType, Type, transform_type
 from agm.agl.semantics.values import EnumValue, TextValue
+from agm.agl.setting_overrides import SettingOverride
+from agm.agl.syntax import (
+    AssignStmt,
+    BuiltinVarDecl,
+    EnumDef,
+    ExceptionDef,
+    ExportDecl,
+    FuncDef,
+    ImportDecl,
+    InfixDecl,
+    LetDecl,
+    OpenDecl,
+    ParamDecl,
+    RecordDef,
+    ScopeRegion,
+    TypeAlias,
+    VarDecl,
+)
 from agm.agl.syntax.nodes import Program
 
 # Declaration identities for ad-hoc test TypeDefs, distinct from real AST node
@@ -57,19 +79,132 @@ from agm.agl.syntax.nodes import Program
 _decl_ids = itertools.count(900_000)
 
 
-def wrap_statement_source(source: str) -> tuple[Program, int, bool]:
-    """Parse *source* and apply the inline wrapper when it lacks a program.
+def file_program(source: str) -> str:
+    """Return file-style source with root statements in an explicit ``main``.
 
-    Returns the transformed program, its next node id, and whether the source
-    became a synthetic-main program. IR/eval helpers use this so statement-style
-    fixtures retain their historical value-binding assertions.
+    Test fixtures that model an ``agm exec FILE`` invocation use this helper
+    for legacy statement snippets. It keeps module declarations at the static
+    root and emits a real ``program def main`` for executable items; an
+    already explicit program (or invalid syntax that a test must reject) is
+    left unchanged.
+    """
+    try:
+        program = PipelineDriver.parse_entry(source, entry_path=None).program
+    except Exception:
+        return source
+    if program is None or any(
+        isinstance(item, FuncDef) and item.is_program for item in program.body.items
+    ):
+        return source
+    static = (
+        FuncDef,
+        RecordDef,
+        EnumDef,
+        ExceptionDef,
+        TypeAlias,
+        ParamDecl,
+        BuiltinVarDecl,
+        InfixDecl,
+        ImportDecl,
+        ExportDecl,
+        OpenDecl,
+        ScopeRegion,
+    )
+    root_items = [item for item in program.body.items if isinstance(item, static)]
+    body_items = [item for item in program.body.items if not isinstance(item, static)]
+    if not body_items:
+        return source
+
+    def text(item: object) -> str:
+        span = getattr(item, "span")
+        return source[span.start_offset : span.end_offset]
+
+    root = "\n".join(text(item) for item in root_items)
+    body_lines = [
+        text(item) if isinstance(item, (LetDecl, VarDecl, AssignStmt)) else f"let _ = {text(item)}"
+        for item in body_items
+    ]
+    body = "\n".join(body_lines)
+    indented = "\n".join(f"  {line}" if line else line for line in body.splitlines())
+    return f"{root + chr(10) if root else ''}program def main() -> unit =\n{indented}\n"
+
+
+def write_file_program(path: Path, source: str, **kwargs: str) -> None:
+    """Write a legacy executable snippet as an explicit file program."""
+    path.write_text(file_program(source), **kwargs)
+
+
+def parse_inline_command(source: str) -> tuple[Program, int, bool]:
+    """Parse inline ``agm exec -c`` source and synthesize its entry when needed.
+
+    Returns the executable program, its next node id, and whether a synthetic
+    ``main`` was added. Static-root tests must parse source directly instead.
     """
     program, next_node_id = parse_program_seeded(source, start_id=0)
     wrapped, next_node_id = wrap_inline_program(program, next_node_id=next_node_id)
-    if wrapped is program:
-        return wrapped, next_node_id, False
+    return wrapped, next_node_id, wrapped is not program
 
-    return wrapped, next_node_id, True
+
+def prepare_inline_command(
+    source: str,
+    *,
+    entry_path: Path | None = None,
+    roots: RootSet | None = None,
+    default_stdlib: bool = True,
+    setting_overrides: dict[str, SettingOverride] | None = None,
+) -> PreparedProgram:
+    """Prepare test-only inline source with the ``agm exec -c`` entry transform."""
+    from dataclasses import replace
+
+    assert entry_path is None
+    parsed = PipelineDriver.parse_entry(source, entry_path=None)
+    if parsed.program is not None:
+        program, next_node_id = wrap_inline_program(parsed.program, next_node_id=parsed.next_id)
+        parsed = replace(parsed, program=program, next_id=next_node_id)
+    return PipelineDriver.prepare_parsed_entry(
+        parsed,
+        roots=roots,
+        default_stdlib=default_stdlib,
+        setting_overrides=setting_overrides,
+    )
+
+
+def run_inline_command(
+    runtime: PipelineDriver,
+    source: str,
+    *,
+    roots: RootSet | None = None,
+    default_stdlib: bool = True,
+    setting_overrides: dict[str, SettingOverride] | None = None,
+    **run_kwargs: object,
+) -> RunResult:
+    """Run test-only inline source through the same entry transform as ``agm exec -c``."""
+    prepared = prepare_inline_command(
+        source,
+        roots=roots,
+        default_stdlib=default_stdlib,
+        setting_overrides=setting_overrides,
+    )
+    param_values = run_kwargs.pop("param_values", None)
+    discovery = runtime.discover_params(prepared)
+    if discovery.checked is None:
+        return runtime.run_prepared(prepared, param_values=param_values, **run_kwargs)
+    preflight = runtime.preflight_params(
+        prepared, param_values=param_values, compiled=discovery.compiled
+    )
+    if not preflight.result.ok:
+        return preflight.result
+    entry_programs = [program for program in discovery.programs if program.module.is_entry]
+    assert len(entry_programs) == 1
+    assert preflight.executable is not None
+    return runtime.run_prepared(
+        prepared,
+        param_values=param_values,
+        compiled=discovery.compiled,
+        executable=preflight.executable,
+        program_symbol=preflight.executable.program_symbols[entry_programs[0].node_id],
+        **run_kwargs,
+    )
 
 
 def next_decl_id() -> int:

@@ -1,2 +1,3 @@
-let result = exec(?)
-result
+program def main() -> unit =
+  let result = exec(?)
+  result

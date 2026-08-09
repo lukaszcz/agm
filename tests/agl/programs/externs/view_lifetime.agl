@@ -9,13 +9,14 @@ extern def stash(xs: array[int]) -> unit
 extern def mutate_stashed() -> unit
 extern def stash_and_use(xs: array[int]) -> unit
 
-if mode == "within_call" =>
-  var xs = [1]
-  let _: unit = stash_and_use(xs)
-  print xs
+program def main() -> unit =
+  if mode == "within_call" =>
+    var xs = [1]
+    let _: unit = stash_and_use(xs)
+    print xs
 
-if mode == "across_calls" =>
-  var xs = [1]
-  let _: unit = stash(xs)
-  let _: unit = mutate_stashed()
-  print xs
+  if mode == "across_calls" =>
+    var xs = [1]
+    let _: unit = stash(xs)
+    let _: unit = mutate_stashed()
+    print xs

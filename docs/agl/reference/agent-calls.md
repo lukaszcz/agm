@@ -53,7 +53,8 @@ With no named arguments, `ask` may be called with the prompt string written
 directly, without parentheses:
 
 ```agl
-let s = ask "Hello?"          # equivalent to ask("Hello?")
+program def main() -> unit =
+  let s = ask "Hello?"
 ```
 
 With named arguments, parentheses are required:
@@ -77,10 +78,11 @@ Type arguments must touch the raw name (`ask!::[T]` or
 record Review
   summary: text
 
-let subject = "the release notes"
-let summary: text = ask! Summarize %{subject}.
-let review: Review = ask!::[Review]
-  Review %{subject} and provide a concise summary.
+program def main() -> unit =
+  let subject = "the release notes"
+  let summary: text = ask! Summarize %{subject}.
+  let review: Review = ask!::[Review]
+    Review %{subject} and provide a concise summary.
 ```
 
 Raw-tail prompt text is verbatim except for `%{expr}` interpolation and
@@ -97,13 +99,13 @@ position.
 `Agent` is a built-in enum whose values describe the backend to invoke:
 
 ```agl
-let command = AgentCommand("claude -p")
-let reviewer = AgentClaude("sonnet", "medium")
-let local = AgentCodex("o3", "high")
-let pi = AgentPi("openai", "gpt", "low")
-
-let review: text = ask("Review this artifact", agent = reviewer)
-let same_review: text = reviewer.ask("Review this artifact")
+program def main() -> unit =
+  let command = AgentCommand("claude -p")
+  let reviewer = AgentClaude("sonnet", "medium")
+  let local = AgentCodex("o3", "high")
+  let pi = AgentPi("openai", "gpt", "low")
+  let review: text = ask("Review this artifact", agent = reviewer)
+  let same_review: text = reviewer.ask("Review this artifact")
 ```
 
 Each variant builds its own argv at dispatch. `AgentCommand` accepts a shell-like
@@ -177,7 +179,8 @@ A bare `ask` in a discarded-value position therefore runs as a fire-and-forget
 unit call:
 
 ```agl
-ask "Notify the reviewer."
+program def main() -> unit =
+  let _ = ask "Notify the reviewer."
 ```
 
 Because nothing is parsed, `format`, `strict_json`, and `on_parse_error` are
@@ -193,7 +196,8 @@ the same codec, schema, and validation as writing that concrete target directly:
 
 ```agl
 def select[T](first: T, second: T) -> T = first
-let count = select(ask("Choose a count."), 1)  # target: int
+program def main() -> unit =
+  let count = select(ask("Choose a count."), 1)
 ```
 
 ### Target types may not be type variables

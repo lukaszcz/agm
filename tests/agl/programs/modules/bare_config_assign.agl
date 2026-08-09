@@ -8,20 +8,22 @@ open import tuning
 param budget: int
 
 # Bare write through the open import; the qualified read sees the same binding.
-max-iters := budget
-print std/config::max-iters
 
-# The written value may come from an open-imported function, read back bare.
-max-iters := scaled(budget)
-print max-iters
+program def main() -> unit =
+  max-iters := budget
+  print std/config::max-iters
 
-# `strict-json` is a differently-typed setting reached through the same import.
-strict-json := wants_strict(budget)
-print strict-json
+  # The written value may come from an open-imported function, read back bare.
+  max-iters := scaled(budget)
+  print max-iters
 
-# The bare write raised the cap that bounds this otherwise unbounded loop.
-var i: int = 0
-do
-  i := i + 1
-until i >= 4
-print i
+  # `strict-json` is a differently-typed setting reached through the same import.
+  strict-json := wants_strict(budget)
+  print strict-json
+
+  # The bare write raised the cap that bounds this otherwise unbounded loop.
+  var i: int = 0
+  do
+    i := i + 1
+  until i >= 4
+  print i

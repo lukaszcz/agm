@@ -13,7 +13,8 @@ from tests._agl_helpers import let_root_capture
 from tests.agl.ir_harness import (
     evaluate_ir_raises_with_shell,
     evaluate_ir_with_shell,
-    lower_ir,
+    inline_main_items,
+    lower_inline_ir,
     shell_caps,
 )
 
@@ -278,13 +279,12 @@ def test_t10_golden_lowering() -> None:
     from agm.agl.ir.nodes import IrBind, IrExec, IrSequence
 
     source = 'let result = exec("echo hi")\nresult'
-    executable = lower_ir(source, caps=shell_caps())
+    executable = lower_inline_ir(source, caps=shell_caps())
 
-    # Check that the entry module initializers contain an IrExec node
-    entry_mod = executable.modules[executable.entry_module]
+    # Check that the inline command's synthetic main contains an IrExec node.
     exec_nodes = [
         let_root_capture(init).value
-        for init in entry_mod.initializers
+        for init in inline_main_items(executable)
         if isinstance(init, (IrSequence, IrBind))
         and isinstance(let_root_capture(init).value, IrExec)
     ]

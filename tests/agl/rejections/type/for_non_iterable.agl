@@ -1,3 +1,4 @@
-for x in 42 do
-  ()
-done
+program def main() -> unit =
+  for x in 42 do
+    ()
+  done

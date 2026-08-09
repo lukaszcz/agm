@@ -36,13 +36,14 @@ from agm.agl import PipelineDriver
 from agm.agl.parser import AglSyntaxError, parse_program
 from agm.agl.parser.errors import syntax_error_from_lark
 from agm.agl.syntax import FuncDef, VarRef
+from tests._agl_helpers import run_inline_command
 
 
 def _run(source: str) -> tuple[bool, str, list[str]]:
     """Run *source*, returning its success flag, stdout, and diagnostics."""
     buffer = io.StringIO()
     with redirect_stdout(buffer):
-        result = PipelineDriver().run(source, param_values={})
+        result = run_inline_command(PipelineDriver(), source, param_values={})
     return result.ok, buffer.getvalue(), [d.message for d in result.diagnostics]
 
 

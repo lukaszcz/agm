@@ -1,1 +1,9 @@
-{"diagnostic": {"line": 6, "message_contains": ["type arguments", "type name"]}}
+{
+  "diagnostic": {
+    "line": 4,
+    "message_contains": [
+      "type arguments",
+      "type name"
+    ]
+  }
+}

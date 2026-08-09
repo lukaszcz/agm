@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from agm.agl.eval.ir_interpreter import IrInterpreter
 from agm.agl.semantics.values import IntValue, TextValue
-from tests.agl.ir_harness import evaluate_ir
+from tests._agl_helpers import run_inline_command
+from tests.agl.ir_harness import evaluate_ir, lower_inline_ir
 
 # ---------------------------------------------------------------------------
 # IR evaluation tests — literal patterns
@@ -83,7 +85,7 @@ let r = case x of
   | 1 => "second"
   | _ => "other"
 r"""
-    result = PipelineDriver().run(src)
+    result = run_inline_command(PipelineDriver(), src)
     assert not result.ok
     assert any("Redundant" in diagnostic.message for diagnostic in result.diagnostics)
 
@@ -305,16 +307,22 @@ record Pair
   left: int
   right: int
 var calls = 0
+var observed_left = 0
+var observed_right = 0
 def make() -> Pair =
   calls := calls + 1
   Pair(left = 2, right = 3)
-let Pair(left, right) = make()
-left + right + calls
+program def main() -> unit =
+  let Pair(left, right) = make()
+  observed_left := left
+  observed_right := right
 """
-    values = evaluate_ir(src)
+    executable = lower_inline_ir(src)
+    (main_symbol,) = executable.program_functions
+    values = IrInterpreter(executable).run(program_symbol=main_symbol)
     assert values["calls"] == IntValue(1)
-    assert values["left"] == IntValue(2)
-    assert values["right"] == IntValue(3)
+    assert values["observed_left"] == IntValue(2)
+    assert values["observed_right"] == IntValue(3)
 
 
 def test_pattern_let_binders_are_local_to_function_capture_analysis() -> None:
@@ -378,7 +386,7 @@ let r = case x of
   | 1 => "one"
   | 2 => "two"
 r"""
-    result = PipelineDriver().run(src)
+    result = run_inline_command(PipelineDriver(), src)
     assert not result.ok
     assert any("Non-exhaustive" in diagnostic.message for diagnostic in result.diagnostics)
 
@@ -389,10 +397,11 @@ def test_case_no_match_enum_reports_missing_constructor() -> None:
 
     src = """\
 enum Color | Red | Blue
-let c = Color::Red()
-let r = case c of
-  | Blue() => "blue"
-r"""
+program def main() -> unit =
+  let c = Color::Red()
+  let r = case c of
+    | Blue() => "blue"
+  print r"""
     result = PipelineDriver().run(src)
     assert not result.ok
     assert any("Red" in diagnostic.message for diagnostic in result.diagnostics)
@@ -438,15 +447,18 @@ r"""
 def test_case_subject_effect_runs_exactly_once() -> None:
     source = """\
 var calls = 0
+var result = ""
 def subject() -> int =
   calls := calls + 1
   2
-let result = case subject() of
-  | 1 => "one"
-  | _ => "other"
-()
+program def main() -> unit =
+  result := case subject() of
+    | 1 => "one"
+    | _ => "other"
 """
-    values = evaluate_ir(source)
+    executable = lower_inline_ir(source)
+    (main_symbol,) = executable.program_functions
+    values = IrInterpreter(executable).run(program_symbol=main_symbol)
     assert values["calls"] == IntValue(1)
     assert values["result"] == TextValue("other")
 

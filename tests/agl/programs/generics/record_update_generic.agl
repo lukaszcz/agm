@@ -16,13 +16,14 @@ def relabel(b: Box[Pair[int, int]], t: int) -> Box[Pair[int, int]]
   else =>
     b with label = "kept"
 
-let pr = Pair(first = 2, second = "two")
-let doubled = pr with first = pr.first * 10, second = "twenty"
-print doubled.first
-print doubled.second
+program def main() -> unit =
+  let pr = Pair(first = 2, second = "two")
+  let doubled = pr with first = pr.first * 10, second = "twenty"
+  print doubled.first
+  print doubled.second
 
-let box = Box(label = "nums", content = Pair(first = 1, second = 2))
-let moved = relabel(box, threshold)
-print moved.label
-print moved.content.first
-print moved.content.second
+  let box = Box(label = "nums", content = Pair(first = 1, second = 2))
+  let moved = relabel(box, threshold)
+  print moved.label
+  print moved.content.first
+  print moved.content.second

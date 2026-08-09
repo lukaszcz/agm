@@ -1,1 +1,2 @@
-let x = 1 as unit
+program def main() -> unit =
+  let x = 1 as unit

@@ -6,4 +6,5 @@ param n: int
 def countdown(x: int) =
   if x <= 0 => 0 else => countdown(x - 1)
 
-print(countdown(n))
+program def main() -> unit =
+  print(countdown(n))

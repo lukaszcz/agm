@@ -1,1 +1,8 @@
-{"diagnostic": {"line": 2, "message_contains": ["too many positional"]}}
+{
+  "diagnostic": {
+    "line": 3,
+    "message_contains": [
+      "too many positional"
+    ]
+  }
+}

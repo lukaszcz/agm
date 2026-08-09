@@ -14,14 +14,15 @@ record Node(children: array[Node])
 exception Boom extends Exception
   data: array[Node]
 
-let leaf = Node(children = [])
-var xs: array[Node] = [leaf]
+program def main() -> unit =
+  let leaf = Node(children = [])
+  var xs: array[Node] = [leaf]
 
-if mode == "cycle" =>
-  let n = Node(children = xs)
-  xs[0] := n
+  if mode == "cycle" =>
+    let n = Node(children = xs)
+    xs[0] := n
 
-if mode == "diamond" =>
-  xs := [leaf, leaf]
+  if mode == "diamond" =>
+    xs := [leaf, leaf]
 
-raise Boom(message = "boom", data = xs)
+  raise Boom(message = "boom", data = xs)

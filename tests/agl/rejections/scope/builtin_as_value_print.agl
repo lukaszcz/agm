@@ -1,2 +1,3 @@
-let f = print
-f
+program def main() -> unit =
+  let f = print
+  f

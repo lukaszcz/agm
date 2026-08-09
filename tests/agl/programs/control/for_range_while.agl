@@ -2,8 +2,9 @@
 # Exercises: composition of integer-range for with a while guard.
 param limit: int
 
-var total: int = 0
-for i in 1 to 20 while i <= limit do
-  total := total + i
-done
-print total
+program def main() -> unit =
+  var total: int = 0
+  for i in 1 to 20 while i <= limit do
+    total := total + i
+  done
+  print total

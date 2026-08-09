@@ -21,30 +21,31 @@ enum Status
 exception Boom extends Exception
   code: int
 
-if
-  | mode == "record" =>
-      let make_point = Point(?, base)
-      let point = make_point(3)
-      let make_box: (text) -> Box[text] = Box(value = ?)
-      let boxed = make_box("hi")
-      print(point.x)
-      print(point.y)
-      print(boxed.value)
-  | mode == "enum" =>
-      let make_some: (int) -> Option[int] = Option::some(?)
-      let value = make_some(base)
-      case value of
-        | Option::none => print("none")
-        | Option::some(_ as n) => print(n)
-      let make_failed = Status::failed(reason = ?)
-      let status = make_failed("bad")
-      case status of
-        | ok(_ as n) => print(n)
-        | failed(reason) => print(reason)
-  | else =>
-      let make_boom = Boom(message = ?, code = base)
-      try
-        raise make_boom("kapow")
-      catch Boom as e =>
-        print(e.message)
-        print(e.code)
+program def main() -> unit =
+  if
+    | mode == "record" =>
+        let make_point = Point(?, base)
+        let point = make_point(3)
+        let make_box: (text) -> Box[text] = Box(value = ?)
+        let boxed = make_box("hi")
+        print(point.x)
+        print(point.y)
+        print(boxed.value)
+    | mode == "enum" =>
+        let make_some: (int) -> Option[int] = Option::some(?)
+        let value = make_some(base)
+        case value of
+          | Option::none => print("none")
+          | Option::some(_ as n) => print(n)
+        let make_failed = Status::failed(reason = ?)
+        let status = make_failed("bad")
+        case status of
+          | ok(_ as n) => print(n)
+          | failed(reason) => print(reason)
+    | else =>
+        let make_boom = Boom(message = ?, code = base)
+        try
+          raise make_boom("kapow")
+        catch Boom as e =>
+          print(e.message)
+          print(e.code)

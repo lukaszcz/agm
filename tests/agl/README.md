@@ -6,8 +6,9 @@ functions).
 
 Layout:
 
-- `programs/**/*.agl` — valid AgL programs, each with a sidecar
-  `<name>.scenarios.json` describing the scenarios it runs under. Every program is
+- `programs/**/*.agl` — valid file-style AgL programs, each declaring an explicit
+  `program def` entry and carrying a sidecar `<name>.scenarios.json` describing the
+  scenarios it runs under. Every program is
   exercised under **multiple scenarios**: distinct combinations of host params,
   scripted mock agent responses, and scripted shell results, each driving a different
   control-flow path with its own expected outcome.

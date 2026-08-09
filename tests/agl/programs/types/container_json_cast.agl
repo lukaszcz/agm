@@ -6,27 +6,28 @@
 param a: int
 param b: int
 
-let xs: array[int] = [a, b]
-let xs_json: json = xs as json
-print xs_json
+program def main() -> unit =
+  let xs: array[int] = [a, b]
+  let xs_json: json = xs as json
+  print xs_json
 
-let d: dict[text, int] = {"x": a, "y": b}
-let d_json: json = d as json
-print d_json
+  let d: dict[text, int] = {"x": a, "y": b}
+  let d_json: json = d as json
+  print d_json
 
-# int -> decimal still coerces implicitly
-let ratio: decimal = a
-print ratio
+  # int -> decimal still coerces implicitly
+  let ratio: decimal = a
+  print ratio
 
-# int -> json still coerces implicitly (scalar)
-let count: json = a
-print count
+  # int -> json still coerces implicitly (scalar)
+  let count: json = a
+  print count
 
-# A container embedded in a json-typed literal position needs its own cast
-let doc: json = {"values": xs as json, "count": a}
-print doc
+  # A container embedded in a json-typed literal position needs its own cast
+  let doc: json = {"values": xs as json, "count": a}
+  print doc
 
-# json literals stay unaffected by the narrowed rule: heterogeneous, no
-# container variables embedded
-let mixed: json = {"n": 1, "s": "text", "flag": true, "nothing": null}
-print mixed
+  # json literals stay unaffected by the narrowed rule: heterogeneous, no
+  # container variables embedded
+  let mixed: json = {"n": 1, "s": "text", "flag": true, "nothing": null}
+  print mixed

@@ -322,16 +322,16 @@ that explicitly raises the exception ([Exceptions](exceptions.md)):
 enum Response
   | Complete
   | Rejected
-
-let response = Complete
-case response of
-  | Complete => response
-  | _ =>
-    raise MatchError(
-      message = "response rejected by this workflow",
-      scrutinee_type = "Response",
-      scrutinee = response as json,
-    )
+program def main() -> unit =
+  let response = Complete
+  let _ = case response of
+    | Complete => response
+    | _ =>
+      raise MatchError(
+        message = "response rejected by this workflow",
+        scrutinee_type = "Response",
+        scrutinee = response as json,
+      )
 ```
 
 ## `is` versus `case`

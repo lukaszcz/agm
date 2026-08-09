@@ -1,1 +1,2 @@
-let x: int = true as int
+program def main() -> unit =
+  let x: int = true as int

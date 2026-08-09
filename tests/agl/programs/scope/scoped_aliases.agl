@@ -11,12 +11,13 @@ type Boxed[T] = Pair[T]
 def wrap(payload: text) -> Encoded = Frame("w:" + payload)
 end Codec
 
-let framed = Codec::Encoded("first")
-let aliased: Codec::Frame = Codec::Encoded("second")
-let held = Holder(value = Codec::wrap("third"))
-let boxed = Codec::Boxed("fourth")
+program def main() -> unit =
+  let framed = Codec::Encoded("first")
+  let aliased: Codec::Frame = Codec::Encoded("second")
+  let held = Holder(value = Codec::wrap("third"))
+  let boxed = Codec::Boxed("fourth")
 
-print(framed.payload)
-print(aliased.payload)
-print(held.value.payload)
-print(boxed.first)
+  print(framed.payload)
+  print(aliased.payload)
+  print(held.value.payload)
+  print(boxed.first)

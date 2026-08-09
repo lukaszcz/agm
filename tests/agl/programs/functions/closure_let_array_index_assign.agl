@@ -17,10 +17,11 @@ def make_closures(first: int, second: int) -> Closures =
 param first: int
 param second: int
 
-let closures = make_closures(first, second)
+program def main() -> unit =
+  let closures = make_closures(first, second)
 
-print closures.view()
-closures.mutate()
-print closures.view()
-closures.mutate()
-print closures.view()
+  print closures.view()
+  closures.mutate()
+  print closures.view()
+  closures.mutate()
+  print closures.view()

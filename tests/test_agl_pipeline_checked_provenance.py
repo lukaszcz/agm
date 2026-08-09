@@ -14,11 +14,12 @@ import pytest
 
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import ArtifactProvenanceError, PipelineDriver, PreparedProgram
+from tests._agl_helpers import prepare_inline_command
 
 
 def _prepare_graph(source: str) -> PreparedProgram:
     stdlib = Path(__file__).resolve().parent.parent / "stdlib"
-    return PipelineDriver.prepare_program(
+    return prepare_inline_command(
         source,
         entry_path=None,
         roots=RootSet(roots=frozenset({stdlib})),
@@ -29,10 +30,10 @@ def test_single_run_rejects_checked_artifact_from_different_prepared_program(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     runtime = PipelineDriver()
-    prepared_a = runtime.prepare_program('print "stale"')
+    prepared_a = prepare_inline_command('print "stale"')
     discovery_a = runtime.discover_params(prepared_a)
     assert discovery_a.checked is not None
-    prepared_b = runtime.prepare_program('print "fresh"')
+    prepared_b = prepare_inline_command('print "fresh"')
 
     with pytest.raises(ArtifactProvenanceError):
         runtime.run_prepared(prepared_b, checked=discovery_a.checked)

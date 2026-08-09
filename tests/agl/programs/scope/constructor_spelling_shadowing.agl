@@ -1,9 +1,6 @@
 # An enum variant's bare spelling is a convenience injection of
-# `Owner::variant`, so an ordinary binding may claim the bare name in the same
-# module: pattern position still classifies the variant, `Owner::variant` still
-# reaches it, and `::name` reaches the module-root binding past any shadow.
-# A constructor declared in another module never collides with a declaration
-# here, so a prelude spelling is always available to redeclare.
+# `Owner::variant`, so local bindings may reuse that spelling: pattern position
+# still classifies the variant while value references select the local binding.
 enum Color
   | Red
   | Blue
@@ -14,30 +11,31 @@ record Box
 param pick: text
 param tint: int
 
-let Red = tint
-let Blue = tint * 2
-
-def shade_of(c: Color) -> int
+def shade_of(c: Color, root_red: int, root_blue: int) -> int
   case c of
-    | Red => ::Red
-    | Blue => ::Blue
+    | Red => root_red
+    | Blue => root_blue
 
-def shadowed(Red: int) -> int
-  Red + ::Red
+def shadowed(Red: int, root_red: int) -> int
+  Red + root_red
 
-def Retry() -> int
+def Retry(tint: int) -> int
   tint + 100
 
-let chosen: Color = if | pick == "red" => Color::Red | else => Color::Blue
-let boxed = Box(shade = chosen)
+program def main() -> unit =
+  let Red = tint
+  let Blue = tint * 2
 
-case boxed.shade of
-  | Red => print "pattern red"
-  | Blue => print "pattern blue"
+  let chosen: Color = if | pick == "red" => Color::Red | else => Color::Blue
+  let boxed = Box(shade = chosen)
 
-print Red
-print Blue
-print(::Red)
-print shade_of(chosen)
-print shadowed(1)
-print Retry()
+  case boxed.shade of
+    | Red => print "pattern red"
+    | Blue => print "pattern blue"
+
+  print Red
+  print Blue
+  print Red
+  print shade_of(chosen, Red, Blue)
+  print shadowed(1, Red)
+  print Retry(tint)

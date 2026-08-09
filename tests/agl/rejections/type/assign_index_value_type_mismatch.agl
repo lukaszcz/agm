@@ -1,2 +1,3 @@
-var xs = [1, 2]
-xs[0] := "nope"
+program def main() -> unit =
+  var xs = [1, 2]
+  xs[0] := "nope"

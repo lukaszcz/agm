@@ -23,4 +23,5 @@ def run() -> text =
     "caught: %{e.exit_code}"
 end A
 
-print(A::run())
+program def main() -> unit =
+  print(A::run())

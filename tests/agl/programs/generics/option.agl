@@ -10,38 +10,40 @@ enum Option[T]
   | none
   | some(value: T)
 
-let picker = AgentCommand("picker")
-# Qualified patterns on a generic enum; `value` is correctly typed `int`.
 def describe_option(o: Option[int]) -> text =
   case o of
     | Option::none => "missing"
     | Option::some(value) => "found %{value}"
 
 # Inference from the payload argument.
-let a: Option[int] = some(value = 3)
-print(describe_option(a))
 
-# Nullary inference from the expected type.
-let b: Option[int] = none
-print(describe_option(b))
+program def main() -> unit =
+  let picker = AgentCommand("picker")
+  # Qualified patterns on a generic enum; `value` is correctly typed `int`.
+  let a: Option[int] = some(value = 3)
+  print(describe_option(a))
 
-# Explicit type-argument override on a type-qualified generic constructor.
-let c = Option[int]::some(value = 8)
-print(describe_option(c))
+  # Nullary inference from the expected type.
+  let b: Option[int] = none
+  print(describe_option(b))
 
-# Qualified constructor expressions select the owning enum.
-let d: Option[int] = Option::some(value = 11)
-print(describe_option(d))
-let e: Option[int] = Option::none
-print(describe_option(e))
+  # Explicit type-argument override on a type-qualified generic constructor.
+  let c = Option[int]::some(value = 8)
+  print(describe_option(c))
 
-# Qualified `is` / `is not` tests on a generic enum variant.
-let probe: Option[int] = some(value = 99)
-if probe is Option::some => print "probe is some"
-if probe is not Option::none => print "probe is not none"
+  # Qualified constructor expressions select the owning enum.
+  let d: Option[int] = Option::some(value = 11)
+  print(describe_option(d))
+  let e: Option[int] = Option::none
+  print(describe_option(e))
 
-# An Option flowing in from an agent response, destructured by unqualified `case`.
-let fetched: Option[int] = ask("Pick a number, or nothing.", agent = picker)
-case fetched of
-  | none() => print "agent: nothing"
-  | some(value) => print "agent: %{value}"
+  # Qualified `is` / `is not` tests on a generic enum variant.
+  let probe: Option[int] = some(value = 99)
+  if probe is Option::some => print "probe is some"
+  if probe is not Option::none => print "probe is not none"
+
+  # An Option flowing in from an agent response, destructured by unqualified `case`.
+  let fetched: Option[int] = ask("Pick a number, or nothing.", agent = picker)
+  case fetched of
+    | none() => print "agent: nothing"
+    | some(value) => print "agent: %{value}"

@@ -1,2 +1,3 @@
-let worker = AgentCommand("worker")
-let ask_text = worker.ask::[text]
+program def main() -> unit =
+  let worker = AgentCommand("worker")
+  let ask_text = worker.ask::[text]

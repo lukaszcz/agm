@@ -1,3 +1,4 @@
 import utils/math
-let r = utils/math::square(5)
-print r
+program def main() -> unit =
+  let r = utils/math::square(5)
+  print r

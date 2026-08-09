@@ -2,8 +2,8 @@
 # Also exercises on_parse_error: Retry and the RecursionError depth limit
 # (caught with try/catch).
 param topic: text
-
 let reviewer = AgentCommand("reviewer")
+
 enum Verdict
   | Pass
   | Fail(issues: array[text])
@@ -15,17 +15,19 @@ def review_with_retry(doc: text) -> Verdict =
   ask("Review this document: " + doc, agent = reviewer, on_parse_error = Retry(n = 2))
 
 # Direct call via function — result printed.
-let first_verdict: Verdict = review_once(topic)
-print(first_verdict is Pass)
-
-# Retry-enabled call.
-let second_verdict: Verdict = review_with_retry(topic)
-print(second_verdict is Pass)
-
-# RecursionError caught inside try/catch.
 def infinite(n: int) -> int = infinite(n + 1)
-let depth_result = try
-  infinite(0)
-catch RecursionError =>
-  -1
-print depth_result
+
+program def main() -> unit =
+  let first_verdict: Verdict = review_once(topic)
+  print(first_verdict is Pass)
+
+  # Retry-enabled call.
+  let second_verdict: Verdict = review_with_retry(topic)
+  print(second_verdict is Pass)
+
+  # RecursionError caught inside try/catch.
+  let depth_result = try
+    infinite(0)
+  catch RecursionError =>
+    -1
+  print depth_result

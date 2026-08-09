@@ -8,10 +8,11 @@ record Bucket
 param a: int
 param b: int
 
-let shared = [a, b]
+def make_bucket(items: array[int]) -> Bucket = Bucket(items = items)
 
-def make_bucket() -> Bucket = Bucket(items = shared)
+program def main() -> unit =
+  let shared = [a, b]
 
-make_bucket().items[0] := 0
-print(shared)
-print(make_bucket().items)
+  make_bucket(shared).items[0] := 0
+  print(shared)
+  print(make_bucket(shared).items)

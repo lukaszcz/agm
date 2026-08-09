@@ -12,24 +12,28 @@ from pathlib import Path
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.eval.ir_interpreter import IrInterpreter
 from agm.agl.ir.ids import NominalId, SymbolId
-from agm.agl.ir.program import ExecutableProgram, ExternFunctionBody
+from agm.agl.ir.nodes import IrBlock, IrConstUnit, IrExpr
+from agm.agl.ir.program import ExecutableProgram, ExternFunctionBody, IrFunctionBody
+from agm.agl.lexer import spaced_qualifier_collector
 from agm.agl.lower.program import lower_program
 from agm.agl.matchcompile import MatchCompiledModule, MatchCompiledProgram, compile_program_matches
 from agm.agl.matchcompile.stage import _compile_owner_sites
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.modules.loader import ModuleGraph, build_repl_graph
+from agm.agl.modules.loader import ModuleGraph, build_repl_graph, load_graph
 from agm.agl.modules.roots import RootSet
+from agm.agl.parser import parse_program_seeded
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.scope.program import resolve_program
+from agm.agl.scope.symbols import ScopeNode
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import ExceptionValue, TextValue, Value
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram, check_program
 from agm.core.process import ProcessCaptureResult
-from tests._agl_helpers import wrap_statement_source
-from tests.agl.module_graph import build_module_graph_from_program
+from tests._agl_helpers import parse_inline_command
+from tests.agl.module_graph import build_module_graph, build_module_graph_from_program
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parents[2] / "stdlib"
 
@@ -50,15 +54,33 @@ def _checked_program(
     production always runs, and the only one under which the module
     loader's own checks (e.g. an extern's missing companion file) fire.
     """
-    program, next_node_id, _wrapped = wrap_statement_source(source)
+    graph, _import_node_id = build_module_graph(
+        source, origin_path=origin_path, default_stdlib=default_stdlib
+    )
+    resolved_program = resolve_program(graph)
+    return check_program(resolved_program, caps or base_caps())
+
+
+def _checked_inline_program(
+    source: str,
+    *,
+    caps: HostCapabilities | None = None,
+    default_stdlib: bool = True,
+    origin_path: Path | None = None,
+) -> CheckedProgram:
+    """Compile test-only inline source as ``agm exec -c`` does.
+
+    Raw lowering helpers intentionally do not call this: shape tests must
+    supply static-root source explicitly.
+    """
+    program, next_node_id, _wrapped = parse_inline_command(source)
     graph, _import_node_id = build_module_graph_from_program(
         program,
         next_node_id=next_node_id,
         origin_path=origin_path,
         default_stdlib=default_stdlib,
     )
-    resolved_program = resolve_program(graph)
-    return check_program(resolved_program, caps or base_caps())
+    return check_program(resolve_program(graph), caps or base_caps())
 
 
 def _compiled_program(
@@ -72,6 +94,23 @@ def _compiled_program(
         source, caps=caps, default_stdlib=default_stdlib, origin_path=origin_path
     )
     result = compile_program_matches(checked)
+    assert isinstance(result.compiled, MatchCompiledProgram)
+    return result.compiled
+
+
+def _compiled_inline_program(
+    source: str,
+    *,
+    caps: HostCapabilities | None = None,
+    default_stdlib: bool = True,
+    origin_path: Path | None = None,
+) -> MatchCompiledProgram:
+    """Compile a statement-oriented test workflow as ``agm exec -c`` does."""
+    result = compile_program_matches(
+        _checked_inline_program(
+            source, caps=caps, default_stdlib=default_stdlib, origin_path=origin_path
+        )
+    )
     assert isinstance(result.compiled, MatchCompiledProgram)
     return result.compiled
 
@@ -123,6 +162,24 @@ def lower_compiled_module(compiled: MatchCompiledModule, *, source_text: str) ->
     return lower_program(program, _entry_source_text=source_text)
 
 
+def inline_main_items(program: ExecutableProgram) -> tuple[IrExpr, ...]:
+    """Return source items lowered into an inline command's synthetic ``main``.
+
+    The synthetic program function has one compiler-added final unit result;
+    this view removes that implementation detail while retaining an explicit
+    trailing ``()`` written by the test source.
+    """
+    assert program.synthetic_main_symbol is not None
+    function_id = program.program_functions[program.synthetic_main_symbol]
+    impl = program.functions[function_id].impl
+    assert isinstance(impl, IrFunctionBody)
+    assert isinstance(impl.body, IrBlock)
+    items = impl.body.items
+    if items and isinstance(items[-1], IrConstUnit):
+        return items[:-1]
+    return items
+
+
 def nominal_id_for(program: ExecutableProgram, display_name: str) -> NominalId:
     """Return the ``NominalId`` a lowered *program* uses for *display_name*.
 
@@ -144,8 +201,9 @@ def nominal_id_for(program: ExecutableProgram, display_name: str) -> NominalId:
     return matches[0]
 
 
-def _roots(*paths: Path) -> RootSet:
-    return RootSet(roots=frozenset((*paths, _REPO_STDLIB_ROOT)))
+def _roots(*paths: Path, include_stdlib: bool = True) -> RootSet:
+    roots = (*paths, _REPO_STDLIB_ROOT) if include_stdlib else paths
+    return RootSet(roots=frozenset(roots))
 
 
 def base_caps() -> HostCapabilities:
@@ -194,6 +252,21 @@ def lower_ir(
     return lower_program(compiled, _entry_source_text=source)
 
 
+def lower_inline_ir(
+    source: str,
+    *,
+    caps: HostCapabilities | None = None,
+    default_stdlib: bool = True,
+    origin_path: Path | None = None,
+) -> ExecutableProgram:
+    return lower_program(
+        _compiled_inline_program(
+            source, caps=caps, default_stdlib=default_stdlib, origin_path=origin_path
+        ),
+        _entry_source_text=source,
+    )
+
+
 def _run_ir(
     source: str,
     param_values: dict[str, Value] | None = None,
@@ -202,7 +275,7 @@ def _run_ir(
     agent_dispatcher: AgentFn | None = None,
     default_stdlib: bool = True,
 ) -> tuple[dict[str, Value], str]:
-    executable = lower_ir(source, caps=caps, default_stdlib=default_stdlib)
+    executable = lower_inline_ir(source, caps=caps, default_stdlib=default_stdlib)
     params = _build_ir_param_values(executable, param_values) if param_values else None
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
@@ -218,8 +291,21 @@ def evaluate_ir(
     *,
     default_stdlib: bool = True,
 ) -> dict[str, Value]:
+    """Run a statement-oriented inline command and return module bindings."""
     result, _ = _run_ir(source, param_values, default_stdlib=default_stdlib)
     return result
+
+
+def evaluate_file_ir(
+    source: str,
+    param_values: dict[str, Value] | None = None,
+    *,
+    default_stdlib: bool = True,
+) -> dict[str, Value]:
+    """Run a raw file-style static-root program and return its module bindings."""
+    executable = lower_ir(source, default_stdlib=default_stdlib)
+    params = _build_ir_param_values(executable, param_values) if param_values else None
+    return IrInterpreter(executable, param_values=params).run()
 
 
 def evaluate_ir_output(
@@ -289,7 +375,7 @@ def _prepare_extern_program(
     companion_path = tmp_path / "entry.py"
     companion_path.write_text(companion_source)
 
-    executable = lower_ir(source, caps=caps or extern_caps(), origin_path=entry_path)
+    executable = lower_inline_ir(source, caps=caps or extern_caps(), origin_path=entry_path)
     registry = ExternRegistry()
     registry.set_nominals(executable.nominals)
     loaded: set[ModuleId] = set()
@@ -340,50 +426,98 @@ def evaluate_ir_raises_with_externs(
     raise AssertionError("IR extern program did not raise AglRaise")
 
 
-def make_graph_from_files(
+def make_repl_graph_from_files(
     tmp_path: Path, modules: dict[str, str], *, default_stdlib: bool = True
 ) -> ModuleGraph:
-    """Build a ModuleGraph via ``load_graph`` from a ``{name: source}`` dict.
+    """Build a raw incremental-REPL graph plus file-backed imports.
 
-    The key ``'entry'`` is used as the entry source; all other keys are written
-    as ``.agl`` module files under a temp root. ``default_stdlib`` threads
-    through to ``load_graph`` for a caller that needs a program without the
-    shipped standard library.
+    Unlike :func:`make_inline_graph_from_files`, the entry stays at the REPL
+    root. This is the appropriate seam for resolver tests that inspect or
+    reject root expressions rather than model an ``agm exec -c`` invocation.
     """
     root = tmp_path / "root"
     root.mkdir(parents=True, exist_ok=True)
     entry_source = modules.get("entry", "()")
     for module_path, source in modules.items():
-        if module_path == "entry":
-            continue
-        write_module_file(root, module_path, source)
-    program, next_node_id, _wrapped = wrap_statement_source(entry_source)
+        if module_path != "entry":
+            write_module_file(root, module_path, source)
+    with spaced_qualifier_collector() as spaced_qualifiers:
+        program, next_node_id = parse_program_seeded(entry_source, start_id=0)
     graph, _next_id, _new_modules = build_repl_graph(
         program,
         next_node_id,
         path=None,
         cached={},
-        roots=_roots(root),
+        roots=_roots(root, include_stdlib=default_stdlib),
+        default_stdlib=default_stdlib,
+        spaced_qualifiers=tuple(spaced_qualifiers),
+        source_text=entry_source,
+    )
+    # ``resolve_program`` treats a supplied parent scope as the real REPL
+    # entry marker, enabling root statements without affecting imported files.
+    return graph
+
+
+def resolve_repl_graph(graph: ModuleGraph):
+    """Resolve a graph whose entry is an incremental REPL snippet."""
+    return resolve_program(
+        graph, entry_parent_scope=ScopeNode(node_id=-1, parent=None, scope_path=())
+    )
+
+
+def make_inline_graph_from_files(
+    tmp_path: Path, modules: dict[str, str], *, default_stdlib: bool = True
+) -> ModuleGraph:
+    """Build a test-only ``agm exec -c`` graph plus file-backed imports.
+
+    The ``entry`` value follows inline-command semantics; every other value
+    is a static library file. Use :func:`make_file_graph_from_files` when the
+    entry itself is a file-style program with an explicit entry declaration.
+    """
+    root = tmp_path / "root"
+    root.mkdir(parents=True, exist_ok=True)
+    entry_source = modules.get("entry", "()")
+    for module_path, source in modules.items():
+        if module_path != "entry":
+            write_module_file(root, module_path, source)
+    program, next_node_id, _wrapped = parse_inline_command(entry_source)
+    graph, _next_id, _new_modules = build_repl_graph(
+        program,
+        next_node_id,
+        path=None,
+        cached={},
+        roots=_roots(root, include_stdlib=default_stdlib),
         default_stdlib=default_stdlib,
         source_text=entry_source,
     )
     return graph
 
 
-def _checked(entry_source: str, modules: dict[str, str], tmp_path: Path) -> CheckedProgram:
+def make_file_graph_from_files(
+    tmp_path: Path, modules: dict[str, str], *, default_stdlib: bool = True
+) -> ModuleGraph:
+    """Build a file-style graph from explicit entry-program source and imports."""
     root = tmp_path / "root"
     root.mkdir(parents=True, exist_ok=True)
+    entry_source = modules.get("entry", "()")
     for module_path, source in modules.items():
-        write_module_file(root, module_path, source)
-    program, next_node_id, _wrapped = wrap_statement_source(entry_source)
-    graph, _next_id, _new_modules = build_repl_graph(
-        program,
-        next_node_id,
-        path=None,
-        cached={},
-        roots=_roots(root),
-        source_text=entry_source,
+        if module_path != "entry":
+            write_module_file(root, module_path, source)
+    return load_graph(
+        entry_source,
+        entry_path=None,
+        roots=_roots(root, include_stdlib=default_stdlib),
+        default_stdlib=default_stdlib,
     )
+
+
+# Existing compiler fixtures use inline snippets. New call sites must select
+# the explicitly named inline, REPL, or file helper above.
+make_graph_from_files = make_inline_graph_from_files
+
+
+def _checked(entry_source: str, modules: dict[str, str], tmp_path: Path) -> CheckedProgram:
+    graph = make_inline_graph_from_files(tmp_path, {"entry": entry_source, **modules})
     return check_program(resolve_program(graph), base_caps())
 
 
@@ -455,6 +589,18 @@ def evaluate_ir_with_agents(
     agent_dispatcher = _make_scripted_registry(scripts, default_responses=default_responses)
     result, _ = _run_ir(source, caps=caps, agent_dispatcher=agent_dispatcher)
     return result
+
+
+def evaluate_file_ir_with_agents(
+    source: str,
+    scripts: dict[str, list[str]],
+    *,
+    default_responses: list[str] | None = None,
+) -> dict[str, Value]:
+    """Run a raw file-style program with scripted agent calls."""
+    executable = lower_ir(source, caps=agent_caps())
+    dispatcher = _make_scripted_registry(scripts, default_responses=default_responses)
+    return IrInterpreter(executable, agent_dispatcher=dispatcher).run()
 
 
 def evaluate_ir_raises_with_agents(

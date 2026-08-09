@@ -8,15 +8,16 @@ enum Tree
   | Leaf
   | Node(value: int, left: Tree, right: Tree)
 
-let builder = AgentCommand("builder")
 def sum_tree(t: Tree) -> int =
   case t of
     | Leaf() => 0
     | Node(value, left, right) => value + sum_tree(left) + sum_tree(right)
 
-try
-  let t: Tree = ask("Build a tree.", agent = builder, on_parse_error = Retry(n = 1))
-  print sum_tree(t)
-catch AgentParseError as e =>
-  print "schema: %{e.expected_schema}"
-  raise e
+program def main() -> unit =
+  let builder = AgentCommand("builder")
+  try
+    let t: Tree = ask("Build a tree.", agent = builder, on_parse_error = Retry(n = 1))
+    print sum_tree(t)
+  catch AgentParseError as e =>
+    print "schema: %{e.expected_schema}"
+    raise e

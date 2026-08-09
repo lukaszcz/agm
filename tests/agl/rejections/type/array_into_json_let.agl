@@ -1,3 +1,4 @@
-let xs: array[int] = [1, 2]
-let j: json = xs
-j
+program def main() -> unit =
+  let xs: array[int] = [1, 2]
+  let j: json = xs
+  j

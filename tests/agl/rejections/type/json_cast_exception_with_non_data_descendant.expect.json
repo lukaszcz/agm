@@ -1,1 +1,10 @@
-{"diagnostic": {"line": 7, "message_contains": ["json", "Child", "'handler'"]}}
+{
+  "diagnostic": {
+    "line": 5,
+    "message_contains": [
+      "json",
+      "Child",
+      "'handler'"
+    ]
+  }
+}

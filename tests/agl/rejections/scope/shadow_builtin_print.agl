@@ -1,1 +1,2 @@
-let print = 1
+program def main() -> unit =
+  let print = 1

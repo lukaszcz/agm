@@ -12,6 +12,7 @@ from typer.main import get_command
 import agm.cli as cli
 import agm.commands.exec as exec_command
 from agm.config.context import ConfigContext
+from tests._agl_helpers import write_file_program
 from tests.conftest import FakeAgentTransport
 
 
@@ -44,7 +45,7 @@ def test_exec_dispatches_each_agent_value_through_its_builder(
     expected_argv: list[str],
 ) -> None:
     program = tmp_path / "program.agl"
-    program.write_text(f'let answer: text = ask("hello", agent = {agent})\nprint answer\n')
+    write_file_program(program, f'let answer: text = ask("hello", agent = {agent})\nprint answer\n')
     fake_agent_transport.queue(fake_agent_transport.success("done"))
 
     result = _invoke(CliRunner(), ["exec", "--no-log", str(program)])
@@ -76,8 +77,8 @@ def test_exec_default_agent_precedence_is_config_then_cli_then_source(
     (config_dir / "config.toml").write_text("[exec]\ndefault-agent = 'AgentCommand(\"config\")'\n")
     source_write = "" if source_agent is None else f"std/config::default-agent := {source_agent}\n"
     program = tmp_path / "program.agl"
-    program.write_text(
-        f'import std/config\n{source_write}let answer: text = ask("hello")\nprint answer\n'
+    write_file_program(
+        program, f'import std/config\n{source_write}let answer: text = ask("hello")\nprint answer\n'
     )
     monkeypatch.setattr(
         exec_command,
@@ -100,10 +101,11 @@ def test_exec_retries_with_the_output_contract_feedback(
     tmp_path: Path, fake_agent_transport: FakeAgentTransport
 ) -> None:
     program = tmp_path / "program.agl"
-    program.write_text(
+    write_file_program(
+        program,
         'let answer: int = ask("count", agent = AgentCommand("mock"), '
         "on_parse_error = Retry(n = 1))\n"
-        "print answer\n"
+        "print answer\n",
     )
     fake_agent_transport.queue(
         fake_agent_transport.success("not an integer"), fake_agent_transport.success("7")
@@ -131,12 +133,13 @@ def test_exec_typed_agent_errors_retain_the_selected_agent_value(
     caught_type: str,
 ) -> None:
     program = tmp_path / "program.agl"
-    program.write_text(
+    write_file_program(
+        program,
         "try\n"
         '  let answer: int = ask("count", agent = AgentPi("openai", "gpt", "low"))\n'
         "  print answer\n"
         f"catch {caught_type} as error =>\n"
-        "  print render(error.agent)\n"
+        "  print render(error.agent)\n",
     )
     fake_agent_transport.queue(result)
 

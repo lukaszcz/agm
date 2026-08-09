@@ -11,15 +11,16 @@ def describe_option(option: library::Option[int]) -> text =
 
 param seed: int
 
-let open_box: Box[int] = Box(value = seed)
-let qualified_box: library::Box[int] = library::Box(value = 7)
-let nested: library::Box[Box[int]] = library::Box(value = open_box)
+program def main() -> unit =
+  let open_box: Box[int] = Box(value = seed)
+  let qualified_box: library::Box[int] = library::Box(value = 7)
+  let nested: library::Box[Box[int]] = library::Box(value = open_box)
 
-print(unbox(open_box))
-print(qualified_box.value)
-print(nested.value.value)
+  print(unbox(open_box))
+  print(qualified_box.value)
+  print(nested.value.value)
 
-let some_value = library::Option[int]::some(value = seed + 5)
-let none_value = library::Option[int]::none()
-print(describe_option(some_value))
-print(describe_option(none_value))
+  let some_value = library::Option[int]::some(value = seed + 5)
+  let none_value = library::Option[int]::none()
+  print(describe_option(some_value))
+  print(describe_option(none_value))

@@ -31,19 +31,20 @@ def Outcome::replace_error[A, B, E](self, replacement: E) -> Outcome[A, E] =
     | ok(value) => ok(value = value)
     | err(error) => err(error = replacement)
 
-if
-  | mode == "box" =>
-      let box = Box(value = base)
-      print(box.get())
-      print(box.size())
-  | mode == "map" =>
-      let box = Box(value = base)
-      let inferred = box.map(fn(value: int) -> text => "v=%{value}")
-      let explicit = box.map::[text](fn(value: int) -> text => "x=%{value}")
-      print(inferred.value)
-      print(explicit.value)
-  | else =>
-      let chosen: Outcome[int, text] = if base > 0 => ok(value = base) else => err(error = "missing")
-      let replaced = chosen.replace_error(404)
-      print(replaced.summary())
-      print(replaced.is_ok())
+program def main() -> unit =
+  if
+    | mode == "box" =>
+        let box = Box(value = base)
+        print(box.get())
+        print(box.size())
+    | mode == "map" =>
+        let box = Box(value = base)
+        let inferred = box.map(fn(value: int) -> text => "v=%{value}")
+        let explicit = box.map::[text](fn(value: int) -> text => "x=%{value}")
+        print(inferred.value)
+        print(explicit.value)
+    | else =>
+        let chosen: Outcome[int, text] = if base > 0 => ok(value = base) else => err(error = "missing")
+        let replaced = chosen.replace_error(404)
+        print(replaced.summary())
+        print(replaced.is_ok())

@@ -16,9 +16,10 @@ def sum_b(n: NodeB) -> int =
     total := total + sum_a(c)
   total
 
-let leaf = LeafA()
-let child_group = NodeB(tag = tag, children = [leaf])
-let branch = BranchA(value = v, child = child_group)
+program def main() -> unit =
+  let leaf = LeafA()
+  let child_group = NodeB(tag = tag, children = [leaf])
+  let branch = BranchA(value = v, child = child_group)
 
-print sum_a(branch)
-print child_group.tag
+  print sum_a(branch)
+  print child_group.tag

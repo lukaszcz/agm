@@ -8,10 +8,11 @@ import consumer
 param mode: text
 param id: int
 
-if
-  | mode == "direct" =>
-      print(origin::make_parcel(id).label())
-  | mode == "transitive" =>
-      print(consumer::describe_forwarded(id))
-  | else =>
-      print(facade::make_parcel(id).label())
+program def main() -> unit =
+  if
+    | mode == "direct" =>
+        print(origin::make_parcel(id).label())
+    | mode == "transitive" =>
+        print(consumer::describe_forwarded(id))
+    | else =>
+        print(facade::make_parcel(id).label())

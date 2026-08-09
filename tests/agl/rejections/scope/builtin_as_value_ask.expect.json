@@ -1,1 +1,9 @@
-{"diagnostic": {"line": 1, "message_contains": ["ask", "built-in"]}}
+{
+  "diagnostic": {
+    "line": 2,
+    "message_contains": [
+      "ask",
+      "built-in"
+    ]
+  }
+}

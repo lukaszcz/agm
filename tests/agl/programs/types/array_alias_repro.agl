@@ -4,8 +4,9 @@
 param a: int
 param b: int
 
-var l = [a, b]
-var l2 = l
-l[0] := 0
-print(l)
-print(l2)
+program def main() -> unit =
+  var l = [a, b]
+  var l2 = l
+  l[0] := 0
+  print(l)
+  print(l2)

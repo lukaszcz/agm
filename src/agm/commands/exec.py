@@ -282,7 +282,7 @@ def run(args: ExecArgs) -> None:
     for diag in discovery.warnings:
         print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
     checked = discovery.checked
-    if checked is None:
+    if checked is None or discovery.diagnostics:
         for diag in discovery.diagnostics:
             print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
         raise SystemExit(1)

@@ -4,8 +4,10 @@
 # loop-carried outer var, done terminator.
 param items: array[int]
 param limit: int
-var total: int = 0
-for x in items while x < limit do
-  total := total + x
-done
-print total
+
+program def main() -> unit =
+  var total: int = 0
+  for x in items while x < limit do
+    total := total + x
+  done
+  print total

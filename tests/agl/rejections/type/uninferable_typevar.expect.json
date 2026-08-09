@@ -1,1 +1,9 @@
-{"diagnostic": {"line": 2, "message_contains": ["Cannot infer type argument", "empty"]}}
+{
+  "diagnostic": {
+    "line": 3,
+    "message_contains": [
+      "Cannot infer type argument",
+      "empty"
+    ]
+  }
+}

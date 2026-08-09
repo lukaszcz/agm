@@ -21,7 +21,9 @@ _CAPS = HostCapabilities(
 
 def test_extern_descriptor_has_no_boundary_contract(tmp_path: Path) -> None:
     entry = tmp_path / "entry.agl"
-    entry.write_text("extern def f(value: int) -> int\nlet result = f(1)\n")
+    entry.write_text(
+        "extern def f(value: int) -> int\nprogram def main() -> unit =\n  let result = f(1)\n"
+    )
     (tmp_path / "entry.py").write_text("def f(value): return value\n")
 
     prepared = PipelineDriver().prepare_program(
@@ -42,7 +44,7 @@ def test_extern_descriptor_has_no_boundary_contract(tmp_path: Path) -> None:
 
 def test_extern_still_initializes_as_a_function_closure(tmp_path: Path) -> None:
     entry = tmp_path / "entry.agl"
-    entry.write_text("extern def f() -> unit\n()\n")
+    entry.write_text("extern def f() -> unit\n")
     (tmp_path / "entry.py").write_text("def f(): return None\n")
     prepared = PipelineDriver().prepare_program(
         entry.read_text(),

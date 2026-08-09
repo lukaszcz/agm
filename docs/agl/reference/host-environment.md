@@ -65,11 +65,10 @@ Entry-module parameters are declared with `param`
 host as named external values at run start. An entry-module param declared as a
 member of a named scope region ([Named scopes](scopes.md#parameters)) is
 supplied under its full path spelling — `param Deploy::region` is named
-`Deploy::region` by the host, e.g. `--Deploy::region` on the CLI. During the
-M2 interim, non-entry param declarations are accepted and type-checked, but
-every use is a static error because discovery and lowering omit them until M3.
-In a config file the same key must be quoted, since `::` is not a legal bare
-TOML key:
+`Deploy::region` by the host, e.g. `--Deploy::region` on the CLI. A parameter
+outside the file entry module has no host value or runtime binding, so reading
+it is a static error. In a config file the same key must be quoted, since `::`
+is not a legal bare TOML key:
 
 ```toml
 [demo]

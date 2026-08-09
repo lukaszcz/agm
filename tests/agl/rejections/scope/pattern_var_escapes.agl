@@ -1,8 +1,9 @@
 enum R
   | Pass
   | Fail(issues: array[text])
-let r: R = Fail(issues = ["a"])
-case r of
-  | Fail(issues) => ()
-  | Pass => ()
-print issues
+program def main() -> unit =
+  let r: R = Fail(issues = ["a"])
+  case r of
+    | Fail(issues) => ()
+    | Pass => ()
+  print issues

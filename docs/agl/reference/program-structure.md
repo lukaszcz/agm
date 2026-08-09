@@ -70,11 +70,10 @@ region.
   scoped name is shared with the host across the whole program and may be
   declared only once at that path; see [Built-in functions](functions.md#built-in-functions).
 - **`param` declarations** — parameters are legal at a module root or in a
-  named scope region, with no declaration-path shorthand. A scoped
-  entry-module parameter's external key is its full path spelling; see
-  [Named scopes](scopes.md#parameters). During the M2 interim, non-entry
-  params are accepted, resolved, and type-checked but ignored by parameter
-  discovery and lowering until M3.
+  named scope region, with no declaration-path shorthand. A parameter belongs
+  to the file entry module to receive an external value and be readable at
+  runtime. A scoped entry-module parameter's external key is its full path
+  spelling; see [Named scopes](scopes.md#parameters).
 - **`import`/`export` declarations** — module-system declarations; root-only
   or a member of a named scope region. A scoped import's bare contribution
   narrows to its own region; its qualifier route stays module-wide. A scoped
@@ -126,9 +125,10 @@ continuation that evaluates after the block, such as a loop's `until`
 condition.
 
 ```agl
-let x = ask "A"
-let y = ask "B"
-y              # the program's value is y
+program def main() -> unit =
+  let x = ask "A"
+  let y = ask "B"
+  let _ = y
 ```
 
 Side-effecting forms (`print`, `:=`, loops, else-less `if`) have type `unit`,
@@ -191,8 +191,9 @@ record Pair
   left: int
   right: int
 
-let Pair(left, right) = Pair(left = 3, right = 4)
-left + right       # the block's value is 7
+program def main() -> unit =
+  let Pair(left, right) = Pair(left = 3, right = 4)
+  let _ = left + right
 ```
 
 ## Inline forms
@@ -249,9 +250,10 @@ made explicit with `let _ = call()`. A final expression becomes the block's
 value:
 
 ```agl
-exec "make build"
-ask "Log a status update."
-print "done"
+program def main() -> unit =
+  let _ = exec "make build"
+  let _ = ask "Log a status update."
+  let _ = print "done"
 ```
 
 `=` is not an expression operator, so `n = 2` as a block item is a syntax

@@ -663,12 +663,19 @@ class IrInterpreter:
                 assert_never(unreachable)
 
     def _get_closure_for(self, fn_id: FunctionId) -> IrClosureValue:
-        """Look up the IrClosureValue for fn_id from the function's symbol in the base frame."""
+        """Look up a direct-call closure in its lexical evaluation frame."""
         desc = self._program.functions[fn_id]
-        slot = self._frames[0].get(desc.function_symbol)
+        slot = next(
+            (
+                frame[desc.function_symbol]
+                for frame in reversed(self._frames)
+                if desc.function_symbol in frame
+            ),
+            None,
+        )
         if slot is None:
             raise InvalidIrError(
-                f"IrDirectCall: function_symbol for fn_id={fn_id!r} not in base frame"
+                f"IrDirectCall: function_symbol for fn_id={fn_id!r} not in any evaluation frame"
             )
         val = slot.value if isinstance(slot, Cell) else slot
         if not isinstance(val, IrClosureValue):
@@ -1087,13 +1094,10 @@ class IrInterpreter:
                 return JsonValue(json_result)
 
             case IrLoad(symbol=sym):
-                slot = self._frame.get(sym)
-                if slot is None and self._frames[0] is not self._frame:
-                    # Module-level bindings (let, var, function symbols) live in the base
-                    # frame (frames[0]) and are always accessible — even from inside a
-                    # function call frame that did not explicitly capture them.  This
-                    # mirrors lexical scope-chain parent traversal.
-                    slot = self._frames[0].get(sym)
+                slot = next(
+                    (frame[sym] for frame in reversed(self._frames) if sym in frame),
+                    None,
+                )
                 if slot is None:
                     raise InvalidIrError(
                         f"IrLoad: symbol_id={sym.value!r} is not bound in the frame"

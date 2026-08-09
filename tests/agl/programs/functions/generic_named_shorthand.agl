@@ -17,19 +17,21 @@ param zval: text
 param wval: int
 
 # Bind locals whose names match the param names so that bare-name shorthand works.
-let z = zval
-let w = wval
 
-# In-order shorthands: z then w.
-print(g(1, z, w))
+program def main() -> unit =
+  let z = zval
+  let w = wval
 
-# Out-of-order: shorthand w first, then named z.
-print(g(1, w, z = zval))
+  # In-order shorthands: z then w.
+  print(g(1, z, w))
 
-# Two out-of-order shorthands: w first, then z.  The same locals are in scope.
-print(g(1, w, z))
+  # Out-of-order: shorthand w first, then named z.
+  print(g(1, w, z = zval))
 
-# Combine with h: label shorthand (named-only) drives array[text] inference.
-let label = zval
-let ls = h(42, label)
-print(ls[0])
+  # Two out-of-order shorthands: w first, then z.  The same locals are in scope.
+  print(g(1, w, z))
+
+  # Combine with h: label shorthand (named-only) drives array[text] inference.
+  let label = zval
+  let ls = h(42, label)
+  print(ls[0])

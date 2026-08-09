@@ -21,7 +21,7 @@ import pytest
 from agm.agl.eval.ir_interpreter import IrInterpreter
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import BoolValue, DecimalValue, IntValue, TextValue
-from tests.agl.ir_harness import evaluate_ir, lower_ir
+from tests.agl.ir_harness import evaluate_ir, lower_inline_ir
 
 # ---------------------------------------------------------------------------
 # Basic function call tests
@@ -142,10 +142,10 @@ def test_call_depth_guard_ir_only() -> None:
     from agm.agl.semantics.values import TextValue
 
     source = "def inf(n: int) -> int = inf(n + 1)\nlet result = inf(0)\n()"
-    executable = lower_ir(source)
+    executable = lower_inline_ir(source)
     interp = IrInterpreter(executable, max_call_depth=10)
     with pytest.raises(AglRaise) as exc_info:
-        interp.run()
+        interp.run(program_symbol=executable.synthetic_main_symbol)
     exc = exc_info.value.exc
     assert exc.display_name == "RecursionError"
     assert exc.fields["message"] == TextValue("Maximum call depth (10) exceeded")
@@ -215,10 +215,10 @@ def test_function_with_let_in_body() -> None:
     assert ir["result"] == IntValue(25)
 
 
-def test_function_captures_outer_variable() -> None:
-    """Function captures an outer let-bound variable (exercises capture detection)."""
+def test_function_reads_root_parameter() -> None:
+    """A root function reads an immutable root parameter."""
     source = (
-        "let offset = 10\n"
+        "param offset: int = 10\n"
         "def add_offset(x: int) -> int = x + offset\n"
         "let result = add_offset(5)\n()"
     )
@@ -242,9 +242,9 @@ def test_function_with_case_in_body() -> None:
 
 
 def test_function_with_unary_in_body() -> None:
-    """Function body with unary negation (exercises _walk_for_captures for UnaryNeg)."""
+    """Function body with unary negation reads a root parameter."""
     source = (
-        "let scale = 2\n"
+        "param scale: int = 2\n"
         "def neg_scaled(x: int) -> int = -(x * scale)\n"
         "let result = neg_scaled(3)\n()"
     )
@@ -265,9 +265,9 @@ def test_function_with_named_args_in_body_call() -> None:
 
 
 def test_function_with_array_in_body() -> None:
-    """Function body containing an array literal (exercises _walk_for_captures for ArrayLit)."""
+    """Function body containing an array literal reads a root parameter."""
     source = (
-        "let base = 1\n"
+        "param base: int = 1\n"
         "def make_array(x: int) -> array[int] = [base, x, x * 2]\n"
         "let result = make_array(3)\n()"
     )
@@ -301,9 +301,9 @@ def test_function_with_cast_in_body() -> None:
 
 
 def test_function_with_template_in_body() -> None:
-    """Function body containing a template literal (exercises _walk_for_captures for Template)."""
+    """Function body containing a template literal reads a root parameter."""
     source = (
-        'let prefix = "Item"\n'
+        'param prefix: text = "Item"\n'
         'def label(n: int) -> text = "%{prefix} #%{n}"\n'
         "let result = label(5)\n()"
     )
@@ -358,10 +358,10 @@ def test_function_with_do_done_loop_in_body() -> None:
     assert ir["result"] == IntValue(0)
 
 
-def test_function_with_var_and_assignment_capture() -> None:
-    """Function body with var + assignment capturing outer variable."""
+def test_function_with_var_and_assignment_root_parameter() -> None:
+    """Function body uses a local var and an immutable root parameter."""
     source = (
-        "let factor = 3\n"
+        "param factor: int = 3\n"
         "def triple_then_add(x: int, y: int) -> int =\n"
         "  var acc = factor * x\n"
         "  acc := acc + y\n"
@@ -386,10 +386,10 @@ def test_function_with_raise_in_body() -> None:
     assert ir["result"] == IntValue(6)
 
 
-def test_function_with_index_access_and_capture() -> None:
-    """Function body with index access capturing outer array."""
+def test_function_with_index_access_and_root_parameter() -> None:
+    """Function body indexes an immutable root parameter."""
     source = (
-        "let items = [10, 20, 30]\n"
+        "param items: array[int] = [10, 20, 30]\n"
         "def get_item(i: int) -> int = items[i]\n"
         "let result = get_item(1)\n()"
     )
@@ -397,10 +397,10 @@ def test_function_with_index_access_and_capture() -> None:
     assert ir["result"] == IntValue(20)
 
 
-def test_function_with_dict_literal_and_capture() -> None:
-    """Function body with dict literal capturing outer variable."""
+def test_function_with_dict_literal_and_root_parameter() -> None:
+    """Function body with dict literal reads an immutable root parameter."""
     source = (
-        "let base = 10\n"
+        "param base: int = 10\n"
         'def make_dict(x: int) -> dict[text, int] = {"a": base + x, "b": x}\n'
         "let result = make_dict(5)\n()"
     )
@@ -410,11 +410,11 @@ def test_function_with_dict_literal_and_capture() -> None:
     assert ir["result"] == DictValue({"a": IntValue(15), "b": IntValue(5)})
 
 
-def test_function_with_is_test_and_capture() -> None:
-    """Function body with is-test capturing outer enum value."""
+def test_function_with_is_test_and_root_parameter() -> None:
+    """Function body with is-test reads an immutable root parameter."""
     source = (
         "enum Color | Red | Green | Blue\n"
-        "let my_color = Red()\n"
+        "param my_color: Color = Red()\n"
         "def check_red(c: Color) -> bool = c is Red or my_color is Red\n"
         "let result = check_red(Green())\n()"
     )
@@ -422,10 +422,18 @@ def test_function_with_is_test_and_capture() -> None:
     assert ir["result"] == BoolValue(True)
 
 
-def test_function_captures_mutable_outer_var() -> None:
-    """Function captures a mutable outer var (by_cell=True capture path)."""
-    source = "var counter = 0\ndef get_counter() -> int = counter\nlet result = get_counter()\n()"
-    ir = evaluate_ir(source)
+def test_function_reads_static_root_var() -> None:
+    """A root function may read a static root mutable binding."""
+    source = (
+        "var counter = 0\n"
+        "var result = 0\n"
+        "def get_counter() -> int = counter\n"
+        "program def main() -> unit =\n"
+        "  result := get_counter()"
+    )
+    executable = lower_inline_ir(source)
+    (main_symbol,) = executable.program_functions
+    ir = IrInterpreter(executable).run(program_symbol=main_symbol)
     assert ir["result"] == IntValue(0)
 
 
@@ -434,17 +442,21 @@ def test_function_captures_mutable_outer_var() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_index_target_capture() -> None:
-    """B1 fix: function mutating outer var via index target captures the var correctly.
-
-    `arr[k] := 99` inside a function must capture both the outer `var arr` (IndexTarget
-    root) and the outer `let k` (index expression).  Before the fix the root was missed
-    and lowering raised InvalidIrError.  Evaluation must yield arr = [0, 99, 0].
-    """
+def test_index_target_static_root_access() -> None:
+    """A root function can mutate a static root array through an index target."""
     from agm.agl.semantics.values import ArrayValue
 
-    source = "var arr = [0, 0, 0]\nlet k = 1\ndef setit() -> unit =\n  arr[k] := 99\nsetit()\n()"
-    ir = evaluate_ir(source)
+    source = (
+        "var arr = [0, 0, 0]\n"
+        "let k = 1\n"
+        "def setit() -> unit =\n"
+        "  arr[k] := 99\n"
+        "program def main() -> unit =\n"
+        "  setit()"
+    )
+    executable = lower_inline_ir(source)
+    (main_symbol,) = executable.program_functions
+    ir = IrInterpreter(executable).run(program_symbol=main_symbol)
     assert ir["arr"] == ArrayValue([IntValue(0), IntValue(99), IntValue(0)])
 
 
@@ -461,40 +473,54 @@ def test_assignment_as_function_result_yields_unit() -> None:
 
     # Index-target assignment as the function body / return value.
     index_source = (
-        "var arr = [0, 0, 0]\nlet k = 1\ndef setit() -> unit =\n  arr[k] := 99\nlet z = setit()\n()"
+        "var arr = [0, 0, 0]\n"
+        "let k = 1\n"
+        "var z: unit = ()\n"
+        "def setit() -> unit =\n"
+        "  arr[k] := 99\n"
+        "program def main() -> unit =\n"
+        "  z := setit()"
     )
-    ir = evaluate_ir(index_source)
+    executable = lower_inline_ir(index_source)
+    (main_symbol,) = executable.program_functions
+    ir = IrInterpreter(executable).run(program_symbol=main_symbol)
     assert ir["z"] == UnitValue()
 
     # Name-target assignment as the function body / return value.
-    name_source = "var counter = 0\ndef reset() -> unit =\n  counter := 5\nlet z = reset()\n()"
-    ir2 = evaluate_ir(name_source)
+    name_source = (
+        "var counter = 0\n"
+        "var z: unit = ()\n"
+        "def reset() -> unit =\n"
+        "  counter := 5\n"
+        "program def main() -> unit =\n"
+        "  z := reset()"
+    )
+    executable2 = lower_inline_ir(name_source)
+    (main_symbol2,) = executable2.program_functions
+    ir2 = IrInterpreter(executable2).run(program_symbol=main_symbol2)
     assert ir2["z"] == UnitValue()
 
 
-def test_name_target_only_assign_capture() -> None:
-    """Fix: a function whose only reference to an outer var is an assignment captures it.
-
-    `counter := 5` must capture the outer `var counter` even though it is never
-    READ inside the function.  Before the fix the NameTarget was not walked and the
-    capture was missed, causing IrAssign to fail at runtime.
-    """
-    source = "var counter = 0\ndef reset() -> unit =\n  counter := 5\nreset()\n()"
-    ir = evaluate_ir(source)
+def test_name_target_only_static_root_assignment() -> None:
+    """A root function can assign a static root mutable binding."""
+    source = (
+        "var counter = 0\n"
+        "def reset() -> unit =\n"
+        "  counter := 5\n"
+        "program def main() -> unit =\n"
+        "  reset()"
+    )
+    executable = lower_inline_ir(source)
+    (main_symbol,) = executable.program_functions
+    ir = IrInterpreter(executable).run(program_symbol=main_symbol)
     assert ir["counter"] == IntValue(5)
 
 
-def test_capture_through_nested_positions_and_pattern_locals() -> None:
-    """Fix: captures work through case/if/array/template/call-arg; pattern binders are local.
-
-    Exercises:
-    - Outer let used only inside a `case` arm (captured correctly).
-    - A `case` branch that binds a pattern variable: that variable must NOT be treated
-      as a capture of an outer binding (it is a local binder in the branch body).
-    """
+def test_root_parameter_through_nested_positions_and_pattern_locals() -> None:
+    """A root parameter is visible through case arms; pattern binders stay local."""
     source = (
         "enum Shape | Circle(radius: int) | Square(side: int)\n"
-        "let multiplier = 3\n"
+        "param multiplier: int = 3\n"
         "def describe(s: Shape) -> int =\n"
         "  case s of\n"
         "    | Circle(radius = _ as r) => r * multiplier\n"

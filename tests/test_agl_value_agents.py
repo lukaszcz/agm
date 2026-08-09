@@ -13,7 +13,7 @@ from agm.agl.runtime.agents import decode_agent_value, value_driven_agent_factor
 from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS
 from agm.agl.semantics.types import TextType
 from agm.agl.semantics.values import EnumValue
-from tests._agl_helpers import agent_value
+from tests._agl_helpers import agent_value, run_inline_command
 from tests.conftest import FakeAgentTransport
 
 
@@ -79,7 +79,10 @@ def test_ask_dispatches_each_agent_value(
 ) -> None:
     fake_agent_transport.queue(fake_agent_transport.success("ok"))
     runtime = PipelineDriver(agent_dispatcher=value_driven_agent_factory(idle_timeout=None))
-    result = runtime.run(f'let answer: text = ask("hello", agent = {source})\nanswer')
+    result = run_inline_command(
+        runtime,
+        f'let answer: text = ask("hello", agent = {source})\nanswer',
+    )
 
     assert result.ok
     assert fake_agent_transport.calls == [("hello", argv)]
@@ -100,7 +103,10 @@ def test_agent_transport_failures_become_typed_errors(
     )
     runtime = PipelineDriver(agent_dispatcher=value_driven_agent_factory(idle_timeout=None))
 
-    run = runtime.run('let answer: text = ask("hello", agent = AgentCommand("runner"))\nanswer')
+    run = run_inline_command(
+        runtime,
+        'let answer: text = ask("hello", agent = AgentCommand("runner"))\nanswer',
+    )
 
     assert not run.ok
     assert run.error is not None
@@ -116,7 +122,10 @@ def test_nonzero_exit_message_includes_the_exit_code(
     )
     runtime = PipelineDriver(agent_dispatcher=value_driven_agent_factory(idle_timeout=None))
 
-    run = runtime.run('let answer: text = ask("hello", agent = AgentCommand("runner"))\nanswer')
+    run = run_inline_command(
+        runtime,
+        'let answer: text = ask("hello", agent = AgentCommand("runner"))\nanswer',
+    )
 
     assert not run.ok
     assert run.error is not None
@@ -331,9 +340,10 @@ def test_escaped_command_hole_reaches_the_host_interpolator() -> None:
     """`\\%{` in AgL source passes the hole through for the host to resolve."""
     runtime = PipelineDriver(agent_dispatcher=value_driven_agent_factory(idle_timeout=None))
 
-    run = runtime.run(
+    run = run_inline_command(
+        runtime,
         'let answer: text = ask("hello", '
-        'agent = AgentCommand("runner --flag=\\%{AGM_NO_SUCH_VARIABLE}"))\nanswer'
+        'agent = AgentCommand("runner --flag=\\%{AGM_NO_SUCH_VARIABLE}"))\nanswer',
     )
 
     assert not run.ok
@@ -345,7 +355,10 @@ def test_escaped_command_hole_reaches_the_host_interpolator() -> None:
 def test_invalid_agent_value_becomes_typed_error() -> None:
     runtime = PipelineDriver(agent_dispatcher=value_driven_agent_factory(idle_timeout=None))
 
-    run = runtime.run('let answer: text = ask("hello", agent = AgentCommand(""))\nanswer')
+    run = run_inline_command(
+        runtime,
+        'let answer: text = ask("hello", agent = AgentCommand(""))\nanswer',
+    )
 
     assert not run.ok
     assert run.error is not None
@@ -362,13 +375,14 @@ def test_default_agent_value_is_read_at_each_call_and_errors_stay_typed() -> Non
         return "not an integer"
 
     runtime = PipelineDriver(agent_dispatcher=agent)
-    result = runtime.run(
+    result = run_inline_command(
+        runtime,
         "import std/config\n"
         'std/config::default-agent := AgentCommand("first")\n'
         'let first: text = ask("one")\n'
         'std/config::default-agent := AgentClaude("sonnet", "medium")\n'
         'let second: int = ask("two", on_parse_error = Retry(n = 0))\n'
-        "second"
+        "second",
     )
 
     assert not result.ok

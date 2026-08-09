@@ -1,5 +1,5 @@
 exception Problem extends Exception
   code: int
-
-let problem = Problem(message = "bad", code = 1)
-problem.missing
+program def main() -> unit =
+  let problem = Problem(message = "bad", code = 1)
+  problem.missing

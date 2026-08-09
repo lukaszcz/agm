@@ -21,43 +21,44 @@ record Annotated
 # --- declaration-order normalization ---
 # Construct Issue with fields in reverse of declaration order; rendered order
 # must match declaration (title, severity, tags, author).
-let author = Author(active = true, name = "Ada")
-let issue = Issue(
-  author = author,
-  tags = ["tests", "coverage"],
-  severity = 3,
-  title = "Missing tests",
-)
-print author
-print issue
-
-# --- nested containers ---
-let team = [Author(name = "Bo", active = false), Author(name = "Ada", active = true)]
-print team
-
-let scores: dict[text, int] = {"Bo": 0, "Ada": 3}
-print scores
-
-# --- enum variants ---
-let s1: Status = Open
-let s2: Status = Closed(by = "Ada", reason = "fixed")
-print s1
-print s2
-
-# --- json fields and top-level json both render compact under print ---
-let ann = Annotated(label = "note", meta = {"key": "value", "n": 1})
-print ann
-let top_json: json = {"key": "value", "n": 1}
-print top_json
-
-# --- as json opt-in: record and enum produce compact JSON under print ---
-print(author as json)
-print(s2 as json)
-
-# --- function combining nesting + rendering ---
 def describe(a: Author) -> text =
   if a.active => "active: %{a.name}"
   else => "inactive: %{a.name}"
 
-print(describe(Author(name = "Xe", active = false)))
-print(describe(Author(name = "Ada", active = true)))
+program def main() -> unit =
+  let author = Author(active = true, name = "Ada")
+  let issue = Issue(
+    author = author,
+    tags = ["tests", "coverage"],
+    severity = 3,
+    title = "Missing tests",
+  )
+  print author
+  print issue
+
+  # --- nested containers ---
+  let team = [Author(name = "Bo", active = false), Author(name = "Ada", active = true)]
+  print team
+
+  let scores: dict[text, int] = {"Bo": 0, "Ada": 3}
+  print scores
+
+  # --- enum variants ---
+  let s1: Status = Open
+  let s2: Status = Closed(by = "Ada", reason = "fixed")
+  print s1
+  print s2
+
+  # --- json fields and top-level json both render compact under print ---
+  let ann = Annotated(label = "note", meta = {"key": "value", "n": 1})
+  print ann
+  let top_json: json = {"key": "value", "n": 1}
+  print top_json
+
+  # --- as json opt-in: record and enum produce compact JSON under print ---
+  print(author as json)
+  print(s2 as json)
+
+  # --- function combining nesting + rendering ---
+  print(describe(Author(name = "Xe", active = false)))
+  print(describe(Author(name = "Ada", active = true)))

@@ -6,14 +6,15 @@ param first: int
 param second: int
 param third: int
 
-var inner = [first, second]
-var outer = [inner]
-let copied = shallow_copy(outer)
+program def main() -> unit =
+  var inner = [first, second]
+  var outer = [inner]
+  let copied = shallow_copy(outer)
 
-copied[0][0] := 99
-print(outer)
-print(copied)
+  copied[0][0] := 99
+  print(outer)
+  print(copied)
 
-outer[0] := [third]
-print(outer)
-print(copied)
+  outer[0] := [third]
+  print(outer)
+  print(copied)

@@ -8,10 +8,11 @@ param close_cycle: bool
 
 record Node(children: array[Node])
 
-var xs: array[Node] = [Node(children = [])]
-let n = Node(children = xs)
-if close_cycle =>
-  xs[0] := n
+program def main() -> unit =
+  var xs: array[Node] = [Node(children = [])]
+  let n = Node(children = xs)
+  if close_cycle =>
+    xs[0] := n
 
-print(n as? text)
-print(n as? json)
+  print(n as? text)
+  print(n as? json)

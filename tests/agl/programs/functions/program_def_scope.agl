@@ -1,5 +1,3 @@
 scope App
 program def entry() = print "scoped"
 end App
-
-App::entry()

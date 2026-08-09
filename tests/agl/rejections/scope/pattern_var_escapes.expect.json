@@ -1,1 +1,8 @@
-{"diagnostic": {"line": 8, "message_contains": ["issues"]}}
+{
+  "diagnostic": {
+    "line": 9,
+    "message_contains": [
+      "issues"
+    ]
+  }
+}

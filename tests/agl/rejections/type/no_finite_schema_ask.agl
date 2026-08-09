@@ -1,10 +1,9 @@
 record Pair[A, B]
   first: A
   second: B
-
 enum Perfect[T]
   | Single(value: T)
   | Succ(next: Perfect[Pair[T, T]])
-
-let x = ask::[Perfect[int]]("Q")
-x
+program def main() -> unit =
+  let x = ask::[Perfect[int]]("Q")
+  x

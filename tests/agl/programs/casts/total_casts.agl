@@ -7,29 +7,31 @@ param flag: bool
 param ratio: decimal
 
 # int / bool / decimal → text
-let n_text   = n     as text
-let b_text   = flag  as text
-let d_text   = ratio as text
-print n_text
-print b_text
-print d_text
 
-# int / bool / decimal → json
-let n_json   = n     as json
-let b_json   = flag  as json
-let d_json   = ratio as json
-print n_json
-print b_json
-print d_json
+program def main() -> unit =
+  let n_text   = n     as text
+  let b_text   = flag  as text
+  let d_text   = ratio as text
+  print n_text
+  print b_text
+  print d_text
 
-# text → json embeds the text as a JSON string (total, no parse)
-let embedded = "42" as json
-print embedded
+  # int / bool / decimal → json
+  let n_json   = n     as json
+  let b_json   = flag  as json
+  let d_json   = ratio as json
+  print n_json
+  print b_json
+  print d_json
 
-# parse_json parses the text and returns the number 42 (not a string)
-let parsed   = parse_json("42")
-print parsed
+  # text → json embeds the text as a JSON string (total, no parse)
+  let embedded = "42" as json
+  print embedded
 
-# Chained: int as json as text renders the JSON representation
-let chained  = n as json as text
-print chained
+  # parse_json parses the text and returns the number 42 (not a string)
+  let parsed   = parse_json("42")
+  print parsed
+
+  # Chained: int as json as text renders the JSON representation
+  let chained  = n as json as text
+  print chained

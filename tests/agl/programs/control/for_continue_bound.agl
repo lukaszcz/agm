@@ -3,6 +3,8 @@
 # so MaxIterationsExceeded is raised after k iterations.
 param items: array[int]
 param k: int
-for x in items do[k]
-  continue
-done
+
+program def main() -> unit =
+  for x in items do[k]
+    continue
+  done

@@ -1,3 +1,4 @@
-let n = 41
-let m = n with x = 42
-print "done"
+program def main() -> unit =
+  let n = 41
+  let m = n with x = 42
+  print "done"

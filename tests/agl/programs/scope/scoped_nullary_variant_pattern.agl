@@ -13,5 +13,6 @@ def label(s: Status) -> int =
   | Busy(n) => n
 end C
 
-print("%{C::label(C::Status::Idle)}")
-print("%{C::label(C::Status::Busy(n = 7))}")
+program def main() -> unit =
+  print("%{C::label(C::Status::Idle)}")
+  print("%{C::label(C::Status::Busy(n = 7))}")

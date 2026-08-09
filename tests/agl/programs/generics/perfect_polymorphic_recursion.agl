@@ -35,38 +35,39 @@ param b: int
 param c: int
 param d: int
 
-let show_int: int -> text = fn(n: int) -> text => "%{n}"
+program def main() -> unit =
+  let show_int: int -> text = fn(n: int) -> text => "%{n}"
 
-# Level 0: the base case, no growth yet.
-let level0: Perfect[int] = Single(value = a)
+  # Level 0: the base case, no growth yet.
+  let level0: Perfect[int] = Single(value = a)
 
-# Level 1: one `Succ` — `next` is a Perfect[Pair[int, int]] value, but the
-# WHOLE `level1` expression is still typed `Perfect[int]`.
-let level1: Perfect[int] = Succ(next = Single(value = Pair(first = a, second = b)))
+  # Level 1: one `Succ` — `next` is a Perfect[Pair[int, int]] value, but the
+  # WHOLE `level1` expression is still typed `Perfect[int]`.
+  let level1: Perfect[int] = Succ(next = Single(value = Pair(first = a, second = b)))
 
-# Level 2: two `Succ`s — the innermost `Single` carries a
-# `Pair[Pair[int, int], Pair[int, int]]`, two constructor-argument levels
-# "rounder" than `level0`'s bare `int`.
-let level2: Perfect[int] = Succ(
-  next = Succ(
-    next = Single(value = Pair(first = Pair(first = a, second = b), second = Pair(first = c, second = d))),
-  ),
-)
+  # Level 2: two `Succ`s — the innermost `Single` carries a
+  # `Pair[Pair[int, int], Pair[int, int]]`, two constructor-argument levels
+  # "rounder" than `level0`'s bare `int`.
+  let level2: Perfect[int] = Succ(
+    next = Succ(
+      next = Single(value = Pair(first = Pair(first = a, second = b), second = Pair(first = c, second = d))),
+    ),
+  )
 
-print shape(level0)
-print shape(level1)
-print shape(level2)
+  print shape(level0)
+  print shape(level1)
+  print shape(level2)
 
-print render_perfect(level0, show_int)
-print render_perfect(level1, show_int)
-print render_perfect(level2, show_int)
+  print render_perfect(level0, show_int)
+  print render_perfect(level1, show_int)
+  print render_perfect(level2, show_int)
 
-print (level0 == level0)
-print (level0 == level1)
+  print (level0 == level0)
+  print (level0 == level1)
 
-let level1_same: Perfect[int] = Succ(next = Single(value = Pair(first = a, second = b)))
-print (level1 == level1_same)
+  let level1_same: Perfect[int] = Succ(next = Single(value = Pair(first = a, second = b)))
+  print (level1 == level1_same)
 
-case level2 of
-  | Single(value) => print "unexpected leaf"
-  | Succ(next) => print "has a next level"
+  case level2 of
+    | Single(value) => print "unexpected leaf"
+    | Succ(next) => print "has a next level"

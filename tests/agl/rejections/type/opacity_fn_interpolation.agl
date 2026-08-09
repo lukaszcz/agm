@@ -1,1 +1,2 @@
-render(1, style = true)
+program def main() -> unit =
+  render(1, style = true)

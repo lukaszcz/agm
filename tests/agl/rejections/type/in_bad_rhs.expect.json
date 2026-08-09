@@ -1,1 +1,8 @@
-{"diagnostic": {"line": 1, "message_contains": ["requires (text in text)"]}}
+{
+  "diagnostic": {
+    "line": 2,
+    "message_contains": [
+      "requires (text in text)"
+    ]
+  }
+}

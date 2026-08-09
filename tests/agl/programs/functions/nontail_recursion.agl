@@ -15,4 +15,5 @@ def run_it(d: int, protect: bool) =
   else =>
     sum_to(d)
 
-print(run_it(depth, catch_it))
+program def main() -> unit =
+  print(run_it(depth, catch_it))

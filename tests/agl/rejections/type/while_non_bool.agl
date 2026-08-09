@@ -1,3 +1,4 @@
-while 42 do
-  ()
-done
+program def main() -> unit =
+  while 42 do
+    ()
+  done

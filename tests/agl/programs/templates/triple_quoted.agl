@@ -2,20 +2,21 @@
 # minimum common indentation), interpolation holes are never dedented.
 param body
 
-let critic = AgentCommand("critic")
-if true =>
-  let block = ask("""
-  Header line:
-    keep two spaces
-  A "quoted" tail.
-  """, agent = critic)
-  print "block sent"
-else =>
-  ()
+program def main() -> unit =
+  let critic = AgentCommand("critic")
+  if true =>
+    let block = ask("""
+    Header line:
+      keep two spaces
+    A "quoted" tail.
+    """, agent = critic)
+    print "block sent"
+  else =>
+    ()
 
-let mixed = ask("""
-Wrap:
-%{body}
-End.
-""", agent = critic)
-print "mixed sent"
+  let mixed = ask("""
+  Wrap:
+  %{body}
+  End.
+  """, agent = critic)
+  print "mixed sent"

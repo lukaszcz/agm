@@ -25,29 +25,31 @@ record Tag
 param val: int
 
 # Inferred instantiations from the argument type.
-print(id(val))
-print(id("hi"))
 
-let xs = id([1, 2, 3])
-print(xs[0])
+program def main() -> unit =
+  print(id(val))
+  print(id("hi"))
 
-let t = id(Tag(name = "core", weight = 7))
-print(t.name)
-print(t.weight)
+  let xs = id([1, 2, 3])
+  print(xs[0])
 
-# Explicit type-argument override at the call site.
-print(id::[int](9))
+  let t = id(Tag(name = "core", weight = 7))
+  print(t.name)
+  print(t.weight)
 
-# Generic `def` as a first-class value: the expected type instantiates `T`.
-let f: text -> text = id
-print(f("via value"))
+  # Explicit type-argument override at the call site.
+  print(id::[int](9))
 
-# The type-variable `let` annotation in action, instantiated at int and text.
-let ys = singleton(11)
-print ys[0]
-let zs = singleton("solo")
-print zs[0]
+  # Generic `def` as a first-class value: the expected type instantiates `T`.
+  let f: text -> text = id
+  print(f("via value"))
 
-# A value annotated with the parameterized alias instantiated at `text`.
-let names: Seq[text] = ["alpha", "beta"]
-print names[1]
+  # The type-variable `let` annotation in action, instantiated at int and text.
+  let ys = singleton(11)
+  print ys[0]
+  let zs = singleton("solo")
+  print zs[0]
+
+  # A value annotated with the parameterized alias instantiated at `text`.
+  let names: Seq[text] = ["alpha", "beta"]
+  print names[1]

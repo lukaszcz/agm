@@ -1,3 +1,4 @@
-for x in [1] do
-  1
-()
+program def main() -> unit =
+  for x in [1] do
+    1
+  ()

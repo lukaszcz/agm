@@ -14,5 +14,6 @@ def count_categories(c: Category) -> int =
     total := total + count_categories(sub)
   total
 
-print root.name
-print count_categories(root)
+program def main() -> unit =
+  print root.name
+  print count_categories(root)

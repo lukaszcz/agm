@@ -27,10 +27,11 @@ def Box::describe(self) = helper(self.n)
 
 def helper(m: int) = m + 1
 
-if
-  | mode == "forward_reference" =>
-      print(use_box(Box(n = n)))
-  | mode == "mutual_recursion" =>
-      print(Counter(n = n).is_even())
-  | else =>
-      print(Box(n = n).describe())
+program def main() -> unit =
+  if
+    | mode == "forward_reference" =>
+        print(use_box(Box(n = n)))
+    | mode == "mutual_recursion" =>
+        print(Counter(n = n).is_even())
+    | else =>
+        print(Box(n = n).describe())

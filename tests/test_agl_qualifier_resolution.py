@@ -17,7 +17,7 @@ from agm.agl.typecheck import AglTypeError
 from agm.agl.typecheck.env import TypeEnvironment
 from agm.agl.typecheck.program import check_program
 from tests.agl.ir_harness import base_caps, make_graph_from_files
-from tests.agl.module_graph import resolve_and_check_entry
+from tests.agl.module_graph import resolve_and_check_inline_entry
 
 Outcome = Literal["accepted", "scope", "typecheck"]
 
@@ -38,7 +38,7 @@ def _qualifier(*segments: str, member: str = "") -> QualifierChain:
 
 def _module_outcome(source: str) -> Outcome:
     try:
-        resolve_and_check_entry(source, base_caps())
+        resolve_and_check_inline_entry(source, base_caps())
     except AglScopeError:
         return "scope"
     except AglTypeError:

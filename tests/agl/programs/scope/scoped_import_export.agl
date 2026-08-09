@@ -14,8 +14,7 @@ scope App
 open import geom
 open import shading
 param scale: int
-let seed = Point(x = 1, y = 2)
-def total() -> int = sum2(seed) * scale
+def total() -> int = sum2(Point(x = 1, y = 2)) * scale
 def mood() -> Shade = if scale > 3 => Light else => Dark
 def describe() -> text = label(mood())
 end App
@@ -25,8 +24,9 @@ import vecmath using double as twice
 def doubled() -> int = twice(App::total())
 end Motion
 
-print(App::total())
-print(App::describe())
-print(geom::Point(x = 3, y = 4).x)
-print(Motion::doubled())
-print(facade::Geo::greet())
+program def main() -> unit =
+  print(App::total())
+  print(App::describe())
+  print(geom::Point(x = 3, y = 4).x)
+  print(Motion::doubled())
+  print(facade::Geo::greet())

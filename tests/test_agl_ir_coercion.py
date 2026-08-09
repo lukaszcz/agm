@@ -53,7 +53,7 @@ from agm.agl.semantics.values import (
     Value,
 )
 from tests._agl_helpers import let_root_capture
-from tests.agl.ir_harness import evaluate_ir, lower_ir
+from tests.agl.ir_harness import evaluate_ir, inline_main_items, lower_inline_ir
 
 # ---------------------------------------------------------------------------
 # Shared pipeline helper for structural IR assertions
@@ -61,7 +61,7 @@ from tests.agl.ir_harness import evaluate_ir, lower_ir
 
 
 def _lower(source: str) -> ExecutableProgram:
-    return lower_ir(source)
+    return lower_inline_ir(source)
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +77,7 @@ def test_identity_int_let() -> None:
 
     # Structural: the IR bind value is a plain IrConstInt (no IrCoerce).
     prog = _lower(source)
-    inits = prog.modules[prog.entry_module].initializers
+    inits = inline_main_items(prog)
     bind = let_root_capture(inits[0])
     assert not isinstance(bind.value, IrCoerce)
 
@@ -97,7 +97,7 @@ def test_identity_array_int() -> None:
 
     # Structural: no IrCoerce around the IrMakeArray.
     prog = _lower(source)
-    inits = prog.modules[prog.entry_module].initializers
+    inits = inline_main_items(prog)
     bind = let_root_capture(inits[0])
     assert isinstance(bind.value, IrMakeArray)
     for item in bind.value.items:
@@ -124,7 +124,7 @@ def test_int_to_decimal_scalar() -> None:
 
     # Structural: the bind value is IrCoerce(IrConstInt, IntToDecimal).
     prog = _lower(source)
-    inits = prog.modules[prog.entry_module].initializers
+    inits = inline_main_items(prog)
     bind = let_root_capture(inits[0])
     coerce = bind.value
     assert isinstance(coerce, IrCoerce)
@@ -158,7 +158,7 @@ def test_array_decimal_element_coercion() -> None:
 
     # Structural: elements inside IrMakeArray are wrapped in IrCoerce(IntToDecimal).
     prog = _lower(source)
-    inits = prog.modules[prog.entry_module].initializers
+    inits = inline_main_items(prog)
     bind = let_root_capture(inits[0])
     make_list = bind.value
     assert isinstance(make_list, IrMakeArray)
@@ -192,7 +192,7 @@ def test_array_ref_identity_no_coercion() -> None:
     from agm.agl.ir.nodes import IrLoad
 
     prog = _lower(source)
-    inits = prog.modules[prog.entry_module].initializers
+    inits = inline_main_items(prog)
     bind_b = let_root_capture(inits[1])
     assert isinstance(bind_b.value, IrLoad)
 
@@ -245,7 +245,7 @@ def test_to_json_array_literal() -> None:
     # Structural: the literal lowers to IrMakeJsonArray directly — no
     # IrMakeArray is ever built and no IrCoerce is involved.
     prog = _lower(source)
-    inits = prog.modules[prog.entry_module].initializers
+    inits = inline_main_items(prog)
     bind = let_root_capture(inits[0])
     make_json_array = bind.value
     assert isinstance(make_json_array, IrMakeJsonArray)
@@ -265,7 +265,7 @@ def test_dict_text_json_from_int_values() -> None:
 
     # Structural: the IrMakeDict entry VALUE nodes are wrapped in IrCoerce(ToJson).
     prog = _lower(source)
-    inits = prog.modules[prog.entry_module].initializers
+    inits = inline_main_items(prog)
     bind = let_root_capture(inits[0])
     make_dict = bind.value
     assert isinstance(make_dict, IrMakeDict)
@@ -288,7 +288,7 @@ def test_to_json_dict_literal_as_json() -> None:
     # Structural: the literal lowers to IrMakeJsonObject directly — no
     # IrMakeDict is ever built and no IrCoerce is involved.
     prog = _lower(source)
-    inits = prog.modules[prog.entry_module].initializers
+    inits = inline_main_items(prog)
     bind = let_root_capture(inits[0])
     make_json_object = bind.value
     assert isinstance(make_json_object, IrMakeJsonObject)

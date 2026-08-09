@@ -35,6 +35,7 @@ from agm.agl.typecheck import (
     AglTypeError,
     CheckedModule,
     CheckedProgram,
+    FunctionSignature,
     FunctionType,
     IntType,
     TextType,
@@ -48,9 +49,9 @@ from agm.agl.typecheck.env import (
 from tests.agl.ir_harness import make_graph_from_files, write_companion_file
 from tests.agl.module_graph import (
     check_resolved,
-    resolve_and_check_program_ast,
-    resolve_entry,
-    resolve_program_ast,
+    resolve_and_check_inline_program_ast,
+    resolve_inline_entry,
+    resolve_inline_program_ast,
 )
 
 _PATH = Path("/virtual/extern_typecheck.agl")
@@ -107,7 +108,7 @@ def check_extern(source: str, capabilities: HostCapabilities | None = None) -> C
     here would hit that loader check first and mask the one this class means
     to test.
     """
-    return resolve_and_check_program_ast(
+    return resolve_and_check_inline_program_ast(
         parse_program(source), capabilities or _CAPS, origin_path=_PATH
     )
 
@@ -134,7 +135,7 @@ def check_extern_graph(tmp_path: Path, modules: dict[str, str]) -> CheckedProgra
 class TestExternSignatureParity:
     def test_positional_zoned_and_named_only_params_accepted(self) -> None:
         cp = check_extern("extern def f(a: int, /, b: int, @named, c: int = 1) -> int\nf(1, 2)")
-        sig = cp.function_signatures["f"]
+        sig = _extern_signature(cp, "f")
         assert sig.result == IntType()
         assert len(sig.params) == 3
 
@@ -153,7 +154,7 @@ class TestExternSignatureParity:
 
     def test_generic_extern_signature_accepted(self) -> None:
         cp = check_extern("extern def reverse[T](xs: array[T]) -> array[T]\nreverse([1, 2])")
-        sig = cp.function_signatures["reverse"]
+        sig = _extern_signature(cp, "reverse")
         assert sig.type_params == ("T",)
 
     def test_extern_has_no_body_to_check(self) -> None:
@@ -161,7 +162,7 @@ class TestExternSignatureParity:
         # see tests/test_agl_extern_syntax.py) — this just confirms checking
         # an extern def does not choke looking for one.
         cp = check_extern("extern def f(x: int) -> int\n0")
-        assert cp.function_signatures["f"].result == IntType()
+        assert _extern_signature(cp, "f").result == IntType()
 
 
 # ---------------------------------------------------------------------------
@@ -329,7 +330,7 @@ class TestExternCallTyping:
     def test_extern_used_as_value_has_function_type(self) -> None:
         source = "extern def f(x: int) -> int\nlet g: (int) -> int = f\ng(1)"
         cp = check_extern(source)
-        assert cp.function_signatures["f"].result == IntType()
+        assert _extern_signature(cp, "f").result == IntType()
         from agm.agl.syntax.nodes import LetDecl
 
         program = cp.resolved.program
@@ -368,6 +369,18 @@ def _last_call_node_id(cp: CheckedModule, name: str) -> int:
             if isinstance(callee, VarRef) and callee.name == name:
                 return item.value.node_id
     raise AssertionError(f"no call to {name!r} found")
+
+
+def _extern_signature(cp: CheckedModule, name: str) -> FunctionSignature:
+    """Return a root extern's checked signature from the module environment."""
+    definition = next(
+        item
+        for item in cp.resolved.program.body.items
+        if isinstance(item, FuncDef) and item.is_extern and item.name == name
+    )
+    signature = cp.type_env.get_function_signature_by_node_id(definition.node_id)
+    assert signature is not None
+    return signature
 
 
 # ---------------------------------------------------------------------------
@@ -419,7 +432,7 @@ class TestExternCallSiteRecording:
         from agm.agl.typecheck.checker import _Checker
         from agm.agl.typecheck.env import TypeEnvironment
 
-        resolved = resolve_program_ast(
+        resolved = resolve_inline_program_ast(
             parse_program(
                 _ASK_BUILTIN_SOURCE + "extern def id[T](value: T) -> T\n"
                 "extern def same[T](left: T, right: T) -> T\n"
@@ -434,7 +447,10 @@ class TestExternCallSiteRecording:
         definitions = [item for item in resolved.program.body.items if isinstance(item, FuncDef)]
         for definition in definitions:
             checker._preregister_funcdef(definition)
-        failed_call = resolved.program.body.items[-1]
+        main = resolved.program.body.items[-1]
+        assert isinstance(main, FuncDef)
+        assert isinstance(main.body, Block)
+        failed_call = main.body.items[-1]
         assert isinstance(failed_call, Call)
         # A failed boundary must retain prior published data while dropping every
         # provisional side-table delta, including append-only finalization data.
@@ -488,7 +504,7 @@ class TestExternCallSiteRecording:
         from agm.agl.typecheck.env import TypeEnvironment
         from agm.agl.typecheck.inference import InferenceEngine
 
-        checker = _Checker(TypeEnvironment(), resolve_entry("()"), _CAPS)
+        checker = _Checker(TypeEnvironment(), resolve_inline_entry("()"), _CAPS)
         target = _ExternTarget("id", IntType(), 1, ENTRY_ID)
         checker._extern_expr_targets[10] = (target,)
         checker._extern_binding_targets[11] = (target,)
@@ -518,7 +534,7 @@ class TestExternCallSiteRecording:
         from agm.agl.typecheck.env import TypeEnvironment
         from agm.agl.typecheck.inference import InferenceEngine
 
-        checker = _Checker(TypeEnvironment(), resolve_entry("()"), _CAPS)
+        checker = _Checker(TypeEnvironment(), resolve_inline_entry("()"), _CAPS)
         unresolved = InferenceEngine().fresh("target")
         with pytest.raises(AglTypeError, match="concrete target"):
             checker._finalize_extern_call_obligation(

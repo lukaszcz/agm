@@ -2,6 +2,7 @@ enum R
   | Pass
 enum Q
   | Other
-let r: R = Pass
-let b = r is Other
-b
+program def main() -> unit =
+  let r: R = Pass
+  let b = r is Other
+  b

@@ -1,5 +1,6 @@
 open import utils/*
-let n = add(3, 4)
-let msg = greet("World")
-print n
-print msg
+program def main() -> unit =
+  let n = add(3, 4)
+  let msg = greet("World")
+  print n
+  print msg

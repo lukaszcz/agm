@@ -17,6 +17,7 @@ from agm.agl.semantics.values import (
     IntValue,
     TextValue,
 )
+from tests._agl_helpers import prepare_inline_command
 from tests.agl.ir_harness import (
     evaluate_ir_raises_with_externs,
     evaluate_ir_with_externs,
@@ -202,9 +203,8 @@ def test_dry_run_lists_call_site_without_running_the_extern(tmp_path: Path) -> N
         "    return x + 1\n",
     )
     driver = PipelineDriver()
-    prepared = PipelineDriver.prepare_program(
+    prepared = prepare_inline_command(
         "import lib/mod\nlib/mod::f(1)",
-        entry_path=None,
         roots=_roots(root),
         default_stdlib=False,
     )
@@ -219,9 +219,8 @@ def test_dry_run_does_not_import_a_broken_companion(tmp_path: Path) -> None:
     write_module_file(root, "lib/mod", "extern def f(x: int) -> int")
     write_companion_file(root, "lib/mod", "raise RuntimeError('broken')\n")
     driver = PipelineDriver()
-    prepared = PipelineDriver.prepare_program(
+    prepared = prepare_inline_command(
         "import lib/mod\nlib/mod::f(1)",
-        entry_path=None,
         roots=_roots(root),
         default_stdlib=False,
     )

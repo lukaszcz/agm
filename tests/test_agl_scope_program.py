@@ -28,14 +28,15 @@ from agm.agl.modules.ids import ENTRY_ID, STD_CONFIG_ID, ModuleId
 from agm.agl.scope.program import ResolvedModule, ResolvedProgram, resolve_program
 from agm.agl.scope.symbols import AglScopeError, BinderKind
 from agm.agl.semantics.values import IntValue
-from agm.agl.syntax.nodes import Case, ConstructorPattern, VarPattern, VarRef
+from agm.agl.syntax.nodes import AssignStmt, Case, ConstructorPattern, FuncDef, VarPattern, VarRef
 from tests.agl.ir_harness import (
     evaluate_ir_graph,
+    make_file_graph_from_files,
 )
 from tests.agl.ir_harness import (
-    make_graph_from_files as _make_graph_from_files,
+    make_inline_graph_from_files as _make_graph_from_files,
 )
-from tests.agl.module_graph import resolve_entry
+from tests.agl.module_graph import resolve_repl_entry
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1013,7 +1014,7 @@ class TestStaticModuleRoots:
         )
 
         with pytest.raises(AglScopeError):
-            resolve_program(_make_graph_from_files(tmp_path, modules))
+            resolve_program(make_file_graph_from_files(tmp_path, modules))
 
     @pytest.mark.parametrize("module", ("entry", "library"))
     def test_assignment_at_root_is_rejected_for_every_module(
@@ -1029,7 +1030,7 @@ class TestStaticModuleRoots:
         )
 
         with pytest.raises(AglScopeError):
-            resolve_program(_make_graph_from_files(tmp_path, modules))
+            resolve_program(make_file_graph_from_files(tmp_path, modules))
 
 
 # ---------------------------------------------------------------------------
@@ -1125,10 +1126,10 @@ class TestHeaderOnlyImports:
 
     def test_import_after_def_in_entry_errors(self, tmp_path: Path) -> None:
         """An import after a def at the entry module's root is also an error."""
-        graph = _make_graph_from_files(
+        graph = make_file_graph_from_files(
             tmp_path,
             {
-                "entry": "def helper() -> int = 1\nopen import mylib\n()",
+                "entry": "def helper() -> int = 1\nopen import mylib",
                 "mylib": "def foo() -> int = 42",
             },
         )
@@ -1713,8 +1714,11 @@ class TestAssignStmtModuleId:
         assert ENTRY_ID in result.modules
         # var "x" is declared in entry and is mutable
         entry_resolved = result.modules[ENTRY_ID].resolved
-        binding = entry_resolved.root_scope.lookup("x")
-        assert binding is not None
+        main = entry_resolved.program.body.items[-1]
+        assert isinstance(main, FuncDef)
+        assignment = main.body.items[-1]
+        assert isinstance(assignment, AssignStmt)
+        binding = entry_resolved.resolution[assignment.node_id]
         assert binding.module_id == ENTRY_ID
         assert binding.mutable is True
 
@@ -1817,7 +1821,7 @@ class TestTypeDeclarationsInModules:
         ordinary session binding keeps its expression-position meaning rather
         than being silently replaced by the new entry's alias.
         """
-        prior_resolved = resolve_entry("let Palette = 42\nPalette")
+        prior_resolved = resolve_repl_entry("let Palette = 42\nPalette")
         session_scope = prior_resolved.root_scope
 
         graph = _make_graph_from_files(
@@ -2170,7 +2174,7 @@ class TestResolveGraphReplSeams:
         """entry_parent_scope: a name pre-bound in the parent scope is visible in entry."""
         # Build a prior session that binds "x" as a let binding.
         prior_source = "let x = 42\nx"
-        prior_resolved = resolve_entry(prior_source)
+        prior_resolved = resolve_repl_entry(prior_source)
         session_scope = prior_resolved.root_scope
 
         # New entry references "x" — which is only in the parent scope.
@@ -2193,7 +2197,7 @@ class TestResolveGraphReplSeams:
         resolution, ``mylib`` would silently succeed.
         """
         prior_source = "let helper = 1\nhelper"
-        prior_resolved = resolve_entry(prior_source)
+        prior_resolved = resolve_repl_entry(prior_source)
         session_scope = prior_resolved.root_scope
 
         # mylib references "helper", which exists ONLY in the entry's parent scope.
@@ -2523,7 +2527,9 @@ def test_imported_nullary_variant_defers_duplicate_pattern_binders(
     )
 
     entry = resolve_program(graph).modules[ENTRY_ID].resolved
-    case = entry.program.body.items[-1]
+    main = entry.program.body.items[-1]
+    assert isinstance(main, FuncDef)
+    case = main.body.items[-1]
     assert isinstance(case, Case)
     assert isinstance(case.branches[0].pattern, ConstructorPattern)
     bare = next(
@@ -2553,7 +2559,9 @@ def test_plain_import_retains_qualified_constructor_pattern_candidates(
     )
 
     entry = resolve_program(graph).modules[ENTRY_ID].resolved
-    let_decl = entry.program.body.items[-2]
+    main = entry.program.body.items[-1]
+    assert isinstance(main, FuncDef)
+    let_decl = main.body.items[-2]
     assert isinstance(let_decl.pattern, ConstructorPattern)
     candidates = entry.pattern_constructor_candidates[let_decl.pattern.node_id]
     assert candidates[0].owner_module_id == ModuleId.from_path("library")
@@ -2580,7 +2588,10 @@ def test_bare_pattern_constructor_shared_spelling_defers_to_scrutinee(tmp_path: 
 
     result = resolve_program(graph)
     entry = result.modules[ENTRY_ID]
-    case = entry.resolved.program.body.items[-1]
+    main = entry.resolved.program.body.items[-1]
+    assert isinstance(main, FuncDef)
+    case = main.body.items[-1]
+    assert isinstance(case, Case)
     pattern = case.branches[0].pattern
     candidate_owners = {
         ref.owner_name for ref in entry.resolved.pattern_constructor_candidates[pattern.node_id]

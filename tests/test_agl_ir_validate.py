@@ -512,14 +512,14 @@ class TestValidProgram:
 
     def test_lowered_partial_application_program_passes_deep_validation(self) -> None:
         from agm.agl.capabilities import HostCapabilities
-        from tests.agl.ir_harness import lower_ir
+        from tests.agl.ir_harness import lower_inline_ir
 
         source = "def add(x: int, y: int) -> int = x + y\nlet add1 = add(1, ?)\nadd1(2)"
         capabilities = HostCapabilities(
             supports_shell_exec=True,
             codec_kinds={},
         )
-        program = lower_ir(source, caps=capabilities)
+        program = lower_inline_ir(source, caps=capabilities)
 
         validate_ir(program, deep=True)
 
@@ -1517,6 +1517,27 @@ class TestProgramEntryMaps:
         )
 
         with pytest.raises(InvalidIrError, match="synthetic_main_symbol"):
+            validate_ir(prog)
+
+    def test_synthetic_main_must_be_a_linked_program_entry(self) -> None:
+        marked = FunctionDescriptor(
+            function_id=FN0,
+            function_symbol=SYM0,
+            module_id=MOD_A,
+            params=(),
+            impl=IrFunctionBody(body=IrConstInt(location=LOC, value=42)),
+            is_synthetic_main=True,
+        )
+        other_function_id = FunctionId(1)
+        other = _make_fn_desc(fn_id=other_function_id, fn_sym=SYM_MUT)
+        prog = _make_program(
+            functions={FN0: marked, other_function_id: other},
+            program_symbols={10: SYM_MUT},
+            program_functions={SYM_MUT: other_function_id},
+            synthetic_main_symbol=SYM0,
+        )
+
+        with pytest.raises(InvalidIrError, match="linked program entry"):
             validate_ir(prog)
 
     def test_synthetic_main_requires_exactly_one_marked_descriptor(self) -> None:

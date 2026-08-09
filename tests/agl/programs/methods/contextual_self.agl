@@ -6,10 +6,11 @@ record Holder
 
 def helper(self: int) -> int = self + 1
 
-let self = 3
+program def main() -> unit =
+  let self = 3
 
-if mode == "local" =>
-  print(self)
-else =>
-  let holder = Holder(self = 4)
-  print(helper(holder.self))
+  if mode == "local" =>
+    print(self)
+  else =>
+    let holder = Holder(self = 4)
+    print(helper(holder.self))

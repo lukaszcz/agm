@@ -1,2 +1,3 @@
-let x = (1 == "one")
-x
+program def main() -> unit =
+  let x = (1 == "one")
+  x

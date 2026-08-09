@@ -11,18 +11,20 @@ def label(n: int) -> text =
 def apply(f: int -> text, n: int) -> text = f(n)
 
 # Bind a named def to a typed let (first-class function value).
-let g: int -> text = classify
 
-# Lambda with explicit return type.
-let dbl = fn(x: int) -> int => x * 2
+program def main() -> unit =
+  let g: int -> text = classify
 
-# Lambda with inferred return type.
-let inc = fn(x: int) => x + 1
+  # Lambda with explicit return type.
+  let dbl = fn(x: int) -> int => x * 2
 
-print(g(7))
-print(g(-3))
-print(g(0))
-print(dbl(4))
-print(inc(9))
-print(apply(classify, 10))
-print(apply(label, -5))
+  # Lambda with inferred return type.
+  let inc = fn(x: int) => x + 1
+
+  print(g(7))
+  print(g(-3))
+  print(g(0))
+  print(dbl(4))
+  print(inc(9))
+  print(apply(classify, 10))
+  print(apply(label, -5))

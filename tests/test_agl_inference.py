@@ -30,7 +30,7 @@ from agm.agl.typecheck.inference import (
     InferenceError,
 )
 from tests._agl_helpers import strip_decl_ids
-from tests.agl.module_graph import resolve_and_check_entry
+from tests.agl.module_graph import resolve_and_check_inline_entry
 
 
 def _span(line: int, source: str = "<test>") -> SourceSpan:
@@ -369,7 +369,7 @@ def test_destructuring_let_binder_preserves_candidate_validation_provenance() ->
     )
 
     with pytest.raises(AglTypeError) as raised:
-        resolve_and_check_entry(source, HostCapabilities())
+        resolve_and_check_inline_entry(source, HostCapabilities())
 
     error = raised.value
     assert "inferred return type" in str(error).lower()
@@ -378,7 +378,7 @@ def test_destructuring_let_binder_preserves_candidate_validation_provenance() ->
 
 def test_method_with_inferred_return_uses_receiver_header_type() -> None:
     """Candidate inference retains the receiver's rigid generic slot in its body."""
-    checked = resolve_and_check_entry(
+    checked = resolve_and_check_inline_entry(
         "record Box[T]\n"
         "  value: T\n"
         "def Box::get[E](self) = self.value\n"
@@ -395,7 +395,7 @@ def test_method_with_inferred_return_uses_receiver_header_type() -> None:
 
 def test_bound_generic_method_pins_receiver_and_inferrs_own_type_parameter() -> None:
     """Only method parameters beyond the receiver are inferred at member access."""
-    checked = resolve_and_check_entry(
+    checked = resolve_and_check_inline_entry(
         "record Box[T]\n"
         "  value: T\n"
         "def Box::map[T, U](self, f: (T) -> U) -> Box[U] = Box(value = f(self.value))\n"
@@ -410,7 +410,7 @@ def test_bound_generic_method_pins_receiver_and_inferrs_own_type_parameter() -> 
 
 def test_bound_generic_method_accepts_explicit_own_type_parameter() -> None:
     """Explicit member instantiation supplies only parameters not pinned by the receiver."""
-    checked = resolve_and_check_entry(
+    checked = resolve_and_check_inline_entry(
         "record Box[T]\n"
         "  value: T\n"
         "def Box::map[T, U](self, f: (T) -> U) -> Box[U] = Box(value = f(self.value))\n"

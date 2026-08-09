@@ -7,15 +7,16 @@ enum Status
   | waiting
   | completed
 
-let reviewer = AgentCommand("reviewer")
 def score(task: Task) -> bool = task.children[0].name == "ready"
 def label(status: Status) -> text =
   case status of
     | Status::waiting => "waiting"
     | Status::completed => "completed"
 
-let task: Task = ask("Return a recursive task.", agent = reviewer)
-let status: Status = ask("Return a workflow status.", agent = reviewer)
-print(score(task))
-print(label(status))
-print(status is Status::completed)
+program def main() -> unit =
+  let reviewer = AgentCommand("reviewer")
+  let task: Task = ask("Return a recursive task.", agent = reviewer)
+  let status: Status = ask("Return a workflow status.", agent = reviewer)
+  print(score(task))
+  print(label(status))
+  print(status is Status::completed)

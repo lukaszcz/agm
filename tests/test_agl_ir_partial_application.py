@@ -5,8 +5,9 @@ from __future__ import annotations
 import decimal
 from pathlib import Path
 
+from agm.agl.eval.ir_interpreter import IrInterpreter
 from agm.agl.semantics.values import DecimalValue, IntValue, RecordValue, TextValue
-from tests.agl.ir_harness import evaluate_ir, evaluate_ir_graph
+from tests.agl.ir_harness import evaluate_ir, evaluate_ir_graph, lower_inline_ir
 
 
 def test_bound_method_partial_captures_receiver_once() -> None:
@@ -14,6 +15,8 @@ def test_bound_method_partial_captures_receiver_once() -> None:
 record Meter(value: int)
 
 var builds = 0
+var first = 0
+var second = 0
 
 def make(value: int) -> Meter =
   builds := builds + 1
@@ -21,12 +24,14 @@ def make(value: int) -> Meter =
 
 def Meter::add(self, amount: int) -> int = self.value + amount
 
-let add = make(4).add(?)
-let first = add(3)
-let second = add(5)
-()
+program def main() -> unit =
+  let add = make(4).add(?)
+  first := add(3)
+  second := add(5)
 """
-    result = evaluate_ir(source)
+    executable = lower_inline_ir(source)
+    (main_symbol,) = executable.program_functions
+    result = IrInterpreter(executable).run(program_symbol=main_symbol)
     assert result["builds"] == IntValue(1)
     assert result["first"] == IntValue(7)
     assert result["second"] == IntValue(9)
@@ -65,6 +70,9 @@ let result = add_current(2)
 def test_partial_call_evaluates_callee_then_non_holes_in_written_order_at_creation() -> None:
     source = """
 var log = ""
+var after_create = ""
+var first = 0
+var second = 0
 
 def mark(label: text, value: int) -> int =
   log := log + label
@@ -72,18 +80,19 @@ def mark(label: text, value: int) -> int =
 
 def digits(a: int, b: int, c: int) -> int = a * 100 + b * 10 + c
 
-let digits_value = fn(a: int, b: int, c: int) -> int => digits(a, b, c)
 def make_callee() -> (int, int, int) -> int =
   log := log + "callee"
-  digits_value
+  digits
 
-let h = make_callee()(mark("a", 1), ?, mark("c", 3))
-let after_create = log
-let first = h(2)
-let second = h(4)
-()
+program def main() -> unit =
+  let h = make_callee()(mark("a", 1), ?, mark("c", 3))
+  after_create := log
+  first := h(2)
+  second := h(4)
 """
-    result = evaluate_ir(source)
+    executable = lower_inline_ir(source)
+    (main_symbol,) = executable.program_functions
+    result = IrInterpreter(executable).run(program_symbol=main_symbol)
     assert result["after_create"] == TextValue("calleeac")
     assert result["log"] == TextValue("calleeac")
     assert result["first"] == IntValue(123)

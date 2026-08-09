@@ -1,1 +1,2 @@
-let helper = fn(self) -> int => 1
+program def main() -> unit =
+  let helper = fn(self) -> int => 1

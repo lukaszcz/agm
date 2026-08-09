@@ -24,18 +24,24 @@ from agm.agl.syntax import (
     pattern_binding_node_ids,
 )
 from agm.agl.typecheck import AglTypeError
-from tests.agl.module_graph import check_resolved, resolve_and_check_entry, resolve_entry
+from tests._agl_helpers import run_inline_command
+from tests.agl.module_graph import (
+    check_resolved,
+    resolve_and_check_inline_entry,
+    resolve_inline_entry,
+)
 
 
 def _resolve(source: str) -> ModuleResolution:
-    return resolve_entry(source)
+    return resolve_inline_entry(source)
 
 
 def _run(source: str) -> tuple[bool, str, list[str]]:
     """Run *source*, returning its success flag, stdout, and diagnostics."""
     buffer = io.StringIO()
     with redirect_stdout(buffer):
-        result = PipelineDriver().run(source, param_values={})
+        runtime = PipelineDriver()
+        result = run_inline_command(runtime, source, param_values={})
     return result.ok, buffer.getvalue(), [d.message for d in result.diagnostics]
 
 
@@ -153,6 +159,27 @@ def test_a_slot_selected_as_a_constructor_is_callable_in_the_branch_body() -> No
     assert out == "true\n"
 
 
+def test_a_scoped_constructor_slot_without_a_lexical_fallback_matches() -> None:
+    """A scoped variant stays selectable even though it has no bare outer binding."""
+    ok, out, diagnostics = _run(
+        "scope Status\n"
+        "enum Flag\n"
+        "  | on\n"
+        "  | off\n"
+        "enum Packet\n"
+        "  | packet(flag: Flag)\n"
+        "def is_on(item: Packet) -> bool =\n"
+        "  case item of\n"
+        "    | Packet::packet(on) => Flag::on == Flag::on\n"
+        "    | Packet::packet(_) => false\n"
+        "end Status\n"
+        "print Status::is_on(Status::Packet::packet(Status::Flag::on))\n"
+    )
+
+    assert ok, diagnostics
+    assert out == "true\n"
+
+
 def test_a_bare_nullary_variant_name_tests_the_variant() -> None:
     ok, out, diagnostics = _run(
         "enum Flag\n"
@@ -170,7 +197,7 @@ def test_a_bare_nullary_variant_name_tests_the_variant() -> None:
 
 def test_top_level_let_nested_nullary_constructor_selects_its_slot() -> None:
     """A nested let pattern preserves its selected constructor in the continuation."""
-    checked = resolve_and_check_entry(
+    checked = resolve_and_check_inline_entry(
         "enum Flag\n"
         "  | on\n"
         "enum Packet\n"
@@ -191,7 +218,7 @@ def test_top_level_let_nested_nullary_constructor_selects_its_slot() -> None:
 
 def test_top_level_let_rejects_an_ambiguous_constructor_slot_reference() -> None:
     with pytest.raises(AglTypeError):
-        resolve_and_check_entry(
+        resolve_and_check_inline_entry(
             "enum First\n"
             "  | on\n"
             "enum Second\n"
@@ -239,7 +266,7 @@ def test_assigning_to_a_slot_selected_as_a_binder_is_rejected() -> None:
 
 def test_ambiguous_slot_assignment_is_diagnosed_at_the_target() -> None:
     with pytest.raises(AglTypeError) as exc_info:
-        resolve_and_check_entry(
+        resolve_and_check_inline_entry(
             "enum Color\n"
             "  | Red\n"
             "  | Blue\n"
@@ -270,7 +297,7 @@ def test_typecheck_diagnoses_duplicate_binders_that_could_have_been_variants(
 ) -> None:
     """A spelling that could name a nullary variant stays undecided until checking."""
     with pytest.raises(AglTypeError):
-        resolve_and_check_entry(
+        resolve_and_check_inline_entry(
             "enum Flag\n"
             "  | value\n"
             "enum Packet\n"
@@ -312,7 +339,7 @@ def test_scope_rejects_duplicate_binders_that_could_not_be_variants(
 
 
 def test_accessors_dereference_a_slot_selected_as_a_binder() -> None:
-    checked = resolve_and_check_entry(
+    checked = resolve_and_check_inline_entry(
         "enum Packet\n"
         "  | packet(value: int)\n"
         "let item = packet(1)\n"
@@ -328,7 +355,7 @@ def test_accessors_dereference_a_slot_selected_as_a_binder() -> None:
 
 
 def test_accessors_dereference_a_slot_selected_as_a_constructor() -> None:
-    checked = resolve_and_check_entry(
+    checked = resolve_and_check_inline_entry(
         "enum Flag\n"
         "  | on\n"
         "enum Packet\n"
@@ -346,7 +373,7 @@ def test_accessors_dereference_a_slot_selected_as_a_constructor() -> None:
 
 
 def test_accessors_dereference_a_nested_slot_to_the_enclosing_binding() -> None:
-    checked = resolve_and_check_entry(
+    checked = resolve_and_check_inline_entry(
         "enum Flag\n"
         "  | on\n"
         "enum Packet\n"
@@ -367,7 +394,7 @@ def test_accessors_dereference_a_nested_slot_to_the_enclosing_binding() -> None:
 
 
 def test_accessors_pass_through_references_that_are_not_slots() -> None:
-    checked = resolve_and_check_entry(
+    checked = resolve_and_check_inline_entry(
         "enum Flag\n  | on\nlet value = 1\nlet _ = value\non", HostCapabilities()
     )
     value_id, value = next(

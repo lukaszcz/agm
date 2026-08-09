@@ -1,2 +1,3 @@
 extern def do-it!(x: int) -> int
-do-it!(1)
+program def main() -> unit =
+  do-it!(1)

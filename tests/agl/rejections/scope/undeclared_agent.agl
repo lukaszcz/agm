@@ -1,1 +1,2 @@
-let result = reviewer "Review this code"
+program def main() -> unit =
+  let result = reviewer "Review this code"

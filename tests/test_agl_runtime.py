@@ -29,7 +29,7 @@ from agm.agl.runtime.contract import OutputContract
 from agm.agl.semantics.types import Type
 from agm.agl.semantics.values import TextValue
 from agm.agl.typecheck import AglTypeError
-from tests._agl_helpers import type_table_for
+from tests._agl_helpers import prepare_inline_command, run_inline_command, type_table_for
 
 if TYPE_CHECKING:
     from agm.agl.runtime.codec import OutputCodec
@@ -43,11 +43,12 @@ class TestOperatorProgramsRunEndToEnd:
     def test_operator_name_bindings_run_end_to_end(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        result = PipelineDriver().run(
+        result = run_inline_command(
+            PipelineDriver(),
             "let >> = 0\n"
             "def |>[T](x: T, f: T -> T) -> T = f x\n"
             "print(>>)\n"
-            "print((|>)(1, fn(y: int) -> int => y))\n"
+            "print((|>)(1, fn(y: int) -> int => y))\n",
         )
 
         assert result.ok is True
@@ -57,10 +58,11 @@ class TestOperatorProgramsRunEndToEnd:
     def test_user_defined_left_infix_operator_run_end_to_end(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        result = PipelineDriver().run(
+        result = run_inline_command(
+            PipelineDriver(),
             "infixl |> at prio > + 1\n"
             "def |>(x: int, y: int) -> int = x * 10 + y\n"
-            "print(1 + 2 |> 3 > 20)\n"
+            "print(1 + 2 |> 3 > 20)\n",
         )
 
         assert result.ok is True
@@ -70,11 +72,12 @@ class TestOperatorProgramsRunEndToEnd:
     def test_is_test_uses_scrutinee_owner_for_shared_variant_name(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        result = PipelineDriver().run(
+        result = run_inline_command(
+            PipelineDriver(),
             "enum Left\n  | Same\n"
             "enum Right\n  | Same\n"
             "let value = Left::Same()\n"
-            "print(value is Same)\n"
+            "print(value is Same)\n",
         )
 
         assert result.ok is True
@@ -83,10 +86,11 @@ class TestOperatorProgramsRunEndToEnd:
     def test_user_defined_right_infix_operator_run_end_to_end(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        result = PipelineDriver().run(
+        result = run_inline_command(
+            PipelineDriver(),
             "infixr << at 40\n"
             'def <<(x: text, y: text) -> text = "(" + x + y + ")"\n'
-            'print("a" << "b" << "c")\n'
+            'print("a" << "b" << "c")\n',
         )
 
         assert result.ok is True
@@ -103,9 +107,10 @@ class TestRegisterAgent:
             return "response"
 
         rt = PipelineDriver(agent_dispatcher=my_agent)
-        result = rt.run(
+        result = run_inline_command(
+            rt,
             'let my_agent = AgentCommand("my_agent")\n'
-            'let answer = ask("meaningful prompt", agent = my_agent)\nprint answer'
+            'let answer = ask("meaningful prompt", agent = my_agent)\nprint answer',
         )
 
         assert result.ok
@@ -117,61 +122,61 @@ class TestRunBehavior:
 
     def test_run_returns_run_result(self) -> None:
         rt = PipelineDriver()
-        result = rt.run("let x = 1")
+        result = run_inline_command(rt, "let x = 1")
         assert isinstance(result, RunResult)
 
     def test_valid_program_ok(self) -> None:
         rt = PipelineDriver()
-        result = rt.run("let x = 1\nx")
+        result = run_inline_command(rt, "let x = 1\nx")
         assert result.ok is True
 
     def test_run_uses_the_standard_library_program(self) -> None:
-        result = PipelineDriver().run("Option::Some(value = 1)")
+        result = run_inline_command(PipelineDriver(), "Option::Some(value = 1)")
         assert result.ok is True
 
     def test_static_error_not_ok(self) -> None:
         rt = PipelineDriver()
-        result = rt.run("let x = undefined_name")
+        result = run_inline_command(rt, "let x = undefined_name")
         assert result.ok is False
         assert result.error is None
         assert len(result.diagnostics) >= 1
 
     def test_static_error_diagnostic_has_message(self) -> None:
         rt = PipelineDriver()
-        result = rt.run("let x = undefined_name")
+        result = run_inline_command(rt, "let x = undefined_name")
         diag = result.diagnostics[0]
         assert isinstance(diag.message, str)
         assert diag.message
 
     def test_static_error_diagnostic_has_line(self) -> None:
         rt = PipelineDriver()
-        result = rt.run("let x = undefined_name")
+        result = run_inline_command(rt, "let x = undefined_name")
         diag = result.diagnostics[0]
         assert isinstance(diag.line, int)
         assert diag.line >= 1
 
     def test_run_result_error_none_for_static_failure(self) -> None:
         rt = PipelineDriver()
-        result = rt.run("let x = undefined_name")
+        result = run_inline_command(rt, "let x = undefined_name")
         # pre-execution failure: error is None (no AgL exception was raised)
         assert result.error is None
 
     def test_run_with_params(self) -> None:
         rt = PipelineDriver()
-        result = rt.run("param k\nprint k", param_values={"k": "value"})
+        result = run_inline_command(rt, "param k\nprint k", param_values={"k": "value"})
         assert isinstance(result, RunResult)
         assert result.ok is True
 
     def test_run_with_empty_params(self) -> None:
         rt = PipelineDriver()
-        result = rt.run("let x = 1\nx", param_values={})
+        result = run_inline_command(rt, "let x = 1\nx", param_values={})
         assert isinstance(result, RunResult)
         assert result.ok is True
 
     def test_run_parse_error_not_ok(self) -> None:
         rt = PipelineDriver()
         # Invalid syntax
-        result = rt.run("@@@@@")
+        result = run_inline_command(rt, "@@@@@")
         assert result.ok is False
         assert result.error is None
 
@@ -181,32 +186,38 @@ class TestFallbackAgent:
 
     def test_ask_without_a_dispatcher_raises_at_runtime(self) -> None:
         rt = PipelineDriver()
-        result = rt.run('let x = ask "hi"')
+        result = run_inline_command(rt, 'let x = ask "hi"')
         assert result.ok is False
         assert result.error is not None
 
     def test_with_default_agent_ask_call_succeeds(self) -> None:
         rt = PipelineDriver(agent_dispatcher=lambda req: "ok")
-        result = rt.run('let x = ask "hi"\nx')
+        result = run_inline_command(rt, 'let x = ask "hi"\nx')
         assert result.ok is True
 
     def test_named_agent_registered_accepted(self) -> None:
         rt = PipelineDriver(agent_dispatcher=lambda req: "output")
-        result = rt.run('let impl = AgentCommand("impl")\nask("do it", agent = impl)')
+        result = run_inline_command(
+            rt, 'let impl = AgentCommand("impl")\nask("do it", agent = impl)'
+        )
         assert result.ok is True
 
     def test_undeclared_named_agent_is_static_error(self) -> None:
         rt = PipelineDriver()
         # An undeclared named agent is a static scope binding error: it is
         # rejected before execution regardless of host backing.
-        result = rt.run('let x = mysterious_agent "hi"')
+        result = run_inline_command(rt, 'let x = mysterious_agent "hi"')
         assert result.ok is False
         assert result.error is None
 
     def test_default_agent_dispatches_an_agent_value(self) -> None:
         rt = PipelineDriver(agent_dispatcher=lambda req: "ok")
-        result = rt.run(
-            'let any_agent_name = AgentCommand("any-agent-name")\nask("hi", agent = any_agent_name)'
+        result = run_inline_command(
+            rt,
+            (
+                'let any_agent_name = AgentCommand("any-agent-name")\n'
+                'ask("hi", agent = any_agent_name)'
+            ),
         )
         assert result.ok is True
 
@@ -216,25 +227,25 @@ class TestInputValidationRuntime:
 
     def test_missing_param_fails_not_ok(self) -> None:
         rt = PipelineDriver()
-        result = rt.run("param spec\nprint spec", param_values={})
+        result = run_inline_command(rt, "param spec\nprint spec", param_values={})
         assert result.ok is False
         assert result.error is None  # host error, not AgL exception
 
     def test_missing_param_mentions_name(self) -> None:
         rt = PipelineDriver()
-        result = rt.run("param spec\nprint spec", param_values={})
+        result = run_inline_command(rt, "param spec\nprint spec", param_values={})
         msgs = " ".join(d.message for d in result.diagnostics)
         assert "spec" in msgs.lower()
 
     def test_undeclared_extra_is_ignored(self) -> None:
         rt = PipelineDriver()
-        result = rt.run("param a\nprint a", param_values={"a": "ok", "b": "extra"})
+        result = run_inline_command(rt, "param a\nprint a", param_values={"a": "ok", "b": "extra"})
         assert result.ok is True
         assert result.diagnostics == []
 
     def test_text_param_verbatim(self) -> None:
         rt = PipelineDriver()
-        result = rt.run("param msg\nprint msg", param_values={"msg": "hello world"})
+        result = run_inline_command(rt, "param msg\nprint msg", param_values={"msg": "hello world"})
         assert result.ok is True
 
     def test_no_agent_called_on_param_failure(self) -> None:
@@ -245,19 +256,19 @@ class TestInputValidationRuntime:
             return "ok"
 
         rt = PipelineDriver(agent_dispatcher=agent)
-        rt.run('param x\nask("Hi")', param_values={})
+        run_inline_command(rt, 'param x\nask("Hi")', param_values={})
         assert calls == []
 
     def test_int_param_json_parsed(self, capsys: pytest.CaptureFixture[str]) -> None:
         rt = PipelineDriver()
-        result = rt.run("param n: int\nprint n", param_values={"n": 5})
+        result = run_inline_command(rt, "param n: int\nprint n", param_values={"n": 5})
         assert result.ok
         out = capsys.readouterr().out
         assert "5" in out
 
     def test_invalid_typed_param_fails(self) -> None:
         rt = PipelineDriver()
-        result = rt.run("param n: int\nprint n", param_values={"n": "five"})
+        result = run_inline_command(rt, "param n: int\nprint n", param_values={"n": "five"})
         assert result.ok is False
         assert result.error is None
 
@@ -266,7 +277,7 @@ class TestInputValidationRuntime:
         rt = PipelineDriver()
         # ``param spec`` is on line 3; the diagnostic must report line 3, not 1.
         src = "let a = 1\nlet b = 2\nparam spec\nprint spec"
-        result = rt.run(src, param_values={})
+        result = run_inline_command(rt, src, param_values={})
         assert result.ok is False
         missing = [d for d in result.diagnostics if "spec" in d.message.lower()]
         assert missing, result.diagnostics
@@ -276,7 +287,7 @@ class TestInputValidationRuntime:
         """parity: the type-invalid diagnostic already reports the line."""
         rt = PipelineDriver()
         src = "let a = 1\nlet b = 2\nparam n: int\nprint n"
-        result = rt.run(src, param_values={"n": "five"})
+        result = run_inline_command(rt, src, param_values={"n": "five"})
         assert result.ok is False
         bad = [d for d in result.diagnostics if "n" in d.message.lower()]
         assert bad, result.diagnostics
@@ -288,7 +299,7 @@ class TestEmptyResponse:
 
     def test_empty_string_response_is_valid_text(self) -> None:
         rt = PipelineDriver(agent_dispatcher=lambda req: "")
-        result = rt.run('let x = ask "Say nothing."\nx')
+        result = run_inline_command(rt, 'let x = ask "Say nothing."\nx')
         assert result.ok is True
         from agm.agl.semantics.values import TextValue
 
@@ -306,7 +317,7 @@ class TestAgentRequest:
             return "ok"
 
         rt = PipelineDriver(agent_dispatcher=agent)
-        rt.run('ask "Hello world"')
+        run_inline_command(rt, 'ask "Hello world"')
         assert received[0].prompt == "Hello world"
 
     def test_request_agent_value_for_default(self) -> None:
@@ -317,7 +328,7 @@ class TestAgentRequest:
             return "ok"
 
         rt = PipelineDriver(agent_dispatcher=agent)
-        rt.run('ask "Hi"')
+        run_inline_command(rt, 'ask "Hi"')
         assert received[0].agent.variant == "AgentClaude"
 
     def test_request_agent_value_for_named(self) -> None:
@@ -328,7 +339,9 @@ class TestAgentRequest:
             return "ok"
 
         rt = PipelineDriver(agent_dispatcher=reviewer)
-        rt.run('let reviewer = AgentCommand("reviewer")\nask("Review this", agent = reviewer)')
+        run_inline_command(
+            rt, 'let reviewer = AgentCommand("reviewer")\nask("Review this", agent = reviewer)'
+        )
         assert received[0].agent.variant == "AgentCommand"
         assert received[0].agent.fields["command"] == TextValue("reviewer")
 
@@ -377,7 +390,7 @@ class TestUncaughtAgentCallErrorSpan:
             raise AglRaise(exc_val, span=existing)
 
         rt = PipelineDriver(agent_dispatcher=agent)
-        result = rt.run('let a = 1\nask("hi")')
+        result = run_inline_command(rt, 'let a = 1\nask("hi")')
         assert result.ok is False
         assert result.error is not None
         # The agent's own span (line 99) is kept, not replaced by the call site.
@@ -386,7 +399,7 @@ class TestUncaughtAgentCallErrorSpan:
     def test_uncaught_agent_call_error_reports_call_line(self) -> None:
         rt = self._failing_runtime()
         # The ``ask`` call is on line 2.
-        result = rt.run('let a = 1\nask("hi")')
+        result = run_inline_command(rt, 'let a = 1\nask("hi")')
         assert result.ok is False
         assert result.error is not None
         assert result.error.type_name == "AgentCallError"
@@ -405,7 +418,9 @@ class TestUncaughtAgentCallErrorSpan:
         from agm.commands.exec import run as exec_run
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('let a = 1\nask("hi")\n')
+        from tests._agl_helpers import write_file_program
+
+        write_file_program(agl_file, 'let a = 1\nask("hi")\n')
 
         def failing_agent(req: object) -> str:
             raise AgentCallHostError(
@@ -425,7 +440,7 @@ class TestUncaughtAgentCallErrorSpan:
             exec_run(args)
         assert exc_info.value.code == 2
         err = capsys.readouterr().err
-        assert "at line 2" in err
+        assert "at line 3" in err
 
 
 class TestDiagnosticType:
@@ -475,7 +490,7 @@ class TestRunResultType:
 
     def test_run_result_has_bindings(self) -> None:
         rt = PipelineDriver()
-        result = rt.run("let x = 1\nx")
+        result = run_inline_command(rt, "let x = 1\nx")
         assert hasattr(result, "bindings")
         assert isinstance(result.bindings, dict)
 
@@ -708,7 +723,7 @@ class TestNoDefaultAgent:
 
     def test_ask_without_a_dispatcher_is_a_runtime_error(self) -> None:
         rt = PipelineDriver()
-        result = rt.run('ask "hi"')
+        result = run_inline_command(rt, 'ask "hi"')
         assert result.ok is False
         assert result.error is not None
         assert result.error.type_name == "AgentCallError"
@@ -718,7 +733,7 @@ class TestNoDefaultAgent:
             return "answer"
 
         rt = PipelineDriver(agent_dispatcher=agent)
-        result = rt.run('ask "hi"')
+        result = run_inline_command(rt, 'ask "hi"')
         assert result.ok is True
         assert result.error is None
 
@@ -729,10 +744,11 @@ class TestNoDefaultAgent:
             requests.append(request)
             return "7"
 
-        result = PipelineDriver(agent_dispatcher=agent).run(
+        result = run_inline_command(
+            PipelineDriver(agent_dispatcher=agent),
             "def select[T](first: T, second: T) -> T = first\n"
             'let value = select(ask("number"), 1)\n'
-            "value"
+            "value",
         )
         assert result.ok is True
         assert len(requests) == 1
@@ -749,7 +765,7 @@ class TestDryRunCheckOnly:
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         rt = PipelineDriver()
-        result = rt.run('print "hello"', check_only=True)
+        result = run_inline_command(rt, 'print "hello"', check_only=True)
         assert result.ok is True
         assert result.bindings == {}
         captured = capsys.readouterr()
@@ -757,7 +773,7 @@ class TestDryRunCheckOnly:
 
     def test_check_only_static_error_still_fails(self) -> None:
         rt = PipelineDriver()
-        result = rt.run("let x = undefined_name", check_only=True)
+        result = run_inline_command(rt, "let x = undefined_name", check_only=True)
         assert result.ok is False
 
     def test_check_only_never_invokes_agent(self) -> None:
@@ -768,14 +784,14 @@ class TestDryRunCheckOnly:
             return "should not be called"
 
         rt = PipelineDriver(agent_dispatcher=agent)
-        result = rt.run('let x = ask "hi"\nx', check_only=True)
+        result = run_inline_command(rt, 'let x = ask "hi"\nx', check_only=True)
         assert result.ok is True
         # The agent must never be invoked during a dry run.
         assert calls == []
 
     def test_check_only_unit_ask_reports_no_codec(self) -> None:
         rt = PipelineDriver(agent_dispatcher=lambda request: "ignored")
-        result = rt.run('let result: unit = ask "hi"\nresult', check_only=True)
+        result = run_inline_command(rt, 'let result: unit = ask "hi"\nresult', check_only=True)
         assert result.ok is True
         assert len(result.call_sites) == 1
         site = result.call_sites[0]
@@ -786,7 +802,7 @@ class TestDryRunCheckOnly:
     def test_check_only_param_validation_still_runs(self) -> None:
         rt = PipelineDriver()
         # Missing declared param is caught even under check_only.
-        result = rt.run("param msg\nprint msg", param_values={}, check_only=True)
+        result = run_inline_command(rt, "param msg\nprint msg", param_values={}, check_only=True)
         assert result.ok is False
         assert any("msg" in d.message for d in result.diagnostics)
 
@@ -798,7 +814,9 @@ class TestDecimalSerialization:
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         rt = PipelineDriver()
-        result = rt.run("param data: json\nprint data", param_values={"data": '{"a": 1.5}'})
+        result = run_inline_command(
+            rt, "param data: json\nprint data", param_values={"data": '{"a": 1.5}'}
+        )
         assert result.ok is True
         captured = capsys.readouterr()
         assert "1.5" in captured.out
@@ -807,7 +825,7 @@ class TestDecimalSerialization:
 
     def test_decimal_value_prints_exact_text(self, capsys: pytest.CaptureFixture[str]) -> None:
         rt = PipelineDriver()
-        result = rt.run("let x = 0.1\nprint x")
+        result = run_inline_command(rt, "let x = 0.1\nprint x")
         assert result.ok is True
         captured = capsys.readouterr()
         assert captured.out.strip() == "0.1"
@@ -853,7 +871,7 @@ class TestWarningsThreadedOnFailurePaths:
         monkeypatch.setattr(tc_mod, "check_program", check_with_warning)
 
         rt = PipelineDriver()
-        result = rt.run("param msg\nprint msg", param_values={})
+        result = run_inline_command(rt, "param msg\nprint msg", param_values={})
         assert result.ok is False
         # The warning is threaded onto its own channel even on a failure path.
         warning_messages = [d.message for d in result.warnings]
@@ -884,7 +902,7 @@ class TestParamBindingInvariant:
 
         rt = PipelineDriver()
         with pytest.raises(AssertionError, match="binding type"):
-            rt.run("param msg\nprint msg", param_values={"msg": "hi"})
+            run_inline_command(rt, "param msg\nprint msg", param_values={"msg": "hi"})
 
 
 # ---------------------------------------------------------------------------
@@ -904,7 +922,7 @@ class TestCapabilitiesBuiltFromRegistrations:
         tc, jc = TextCodec(), JsonCodec()
         assert tc.name == "text"
         assert jc.name == "json"
-        result = rt.run('ask "hi"')
+        result = run_inline_command(rt, 'ask "hi"')
         assert result.ok is True
 
     def test_register_codec_before_run_extends_capabilities(self) -> None:
@@ -951,7 +969,7 @@ class TestCapabilitiesBuiltFromRegistrations:
         rt = PipelineDriver()
         rt.register_codec(FooCodec())
         # The program just needs to run without capability errors.
-        result = rt.run("let x = 1\nx")
+        result = run_inline_command(rt, "let x = 1\nx")
         assert result.ok is True
 
     def test_custom_codec_named_none_materializes_its_contract(self) -> None:
@@ -985,7 +1003,7 @@ class TestCapabilitiesBuiltFromRegistrations:
 
         rt = PipelineDriver(agent_dispatcher=agent)
         rt.register_codec(NoneCodec())
-        result = rt.run('let answer: text = ask("prompt", format = "none")\nanswer')
+        result = run_inline_command(rt, 'let answer: text = ask("prompt", format = "none")\nanswer')
 
         assert result.ok
         assert result.bindings["answer"] == TextValue("decoded")
@@ -996,7 +1014,9 @@ class TestCapabilitiesBuiltFromRegistrations:
     def test_as_renderer_syntax_is_parse_error(self) -> None:
         """``%{x as name}`` is a syntax error (renderer syntax removed)."""
         rt = PipelineDriver(agent_dispatcher=lambda req: "ok")
-        result = rt.run('param x\nlet y = ask "see %{x as fancy}"', param_values={"x": "hi"})
+        result = run_inline_command(
+            rt, 'param x\nlet y = ask "see %{x as fancy}"', param_values={"x": "hi"}
+        )
         assert result.ok is False
 
 
@@ -1121,7 +1141,7 @@ class TestRenderValue:
         from agm.agl.semantics.values import IrClosureValue
 
         rt = PipelineDriver()
-        result = rt.run("let f = fn(x: int, y: int) -> int => x + y\nf\n")
+        result = run_inline_command(rt, "let f = fn(x: int, y: int) -> int => x + y\nf\n")
         assert result.ok is True
         closure = result.bindings["f"]
         assert isinstance(closure, IrClosureValue)
@@ -1133,7 +1153,7 @@ class TestRenderValue:
         from agm.agl.semantics.values import IrClosureValue
 
         rt = PipelineDriver()
-        result = rt.run("let f = fn(x: int) -> int => x + 1\nf\n")
+        result = run_inline_command(rt, "let f = fn(x: int) -> int => x + 1\nf\n")
         assert result.ok is True
         closure = result.bindings["f"]
         assert isinstance(closure, IrClosureValue)
@@ -1145,7 +1165,7 @@ class TestRenderValue:
         from agm.agl.semantics.values import IrClosureValue
 
         rt = PipelineDriver()
-        result = rt.run("let f = fn(g: int -> int) -> int => g(1)\nf\n")
+        result = run_inline_command(rt, "let f = fn(g: int -> int) -> int => g(1)\nf\n")
         assert result.ok is True
         closure = result.bindings["f"]
         assert isinstance(closure, IrClosureValue)
@@ -1157,7 +1177,7 @@ class TestRenderValue:
         from agm.agl.semantics.values import IrClosureValue
 
         rt = PipelineDriver()
-        result = rt.run("let f = fn(g: (int, int) -> int) -> int => g(1, 2)\nf\n")
+        result = run_inline_command(rt, "let f = fn(g: (int, int) -> int) -> int => g(1, 2)\nf\n")
         assert result.ok is True
         closure = result.bindings["f"]
         assert isinstance(closure, IrClosureValue)
@@ -1169,7 +1189,7 @@ class TestRenderValue:
         from agm.agl.semantics.values import IrClosureValue
 
         rt = PipelineDriver()
-        result = rt.run("let f = fn(gs: array[int -> int]) -> int => 0\nf\n")
+        result = run_inline_command(rt, "let f = fn(gs: array[int -> int]) -> int => 0\nf\n")
         assert result.ok is True
         closure = result.bindings["f"]
         assert isinstance(closure, IrClosureValue)
@@ -1181,7 +1201,7 @@ class TestRenderValue:
         from agm.agl.semantics.values import IrClosureValue
 
         rt = PipelineDriver()
-        result = rt.run("let thunk = fn() -> int => 42\nthunk\n")
+        result = run_inline_command(rt, "let thunk = fn() -> int => 42\nthunk\n")
         assert result.ok is True
         closure = result.bindings["thunk"]
         assert isinstance(closure, IrClosureValue)
@@ -1753,7 +1773,7 @@ class TestRuntimeErrorPaths:
 
         monkeypatch.setattr(parser_mod, "parse_program_seeded", bad_parse)
         rt = PipelineDriver()
-        result = rt.run("let x = 1")
+        result = run_inline_command(rt, "let x = 1")
         assert result.ok is False
         assert any("unexpected parse error" in d.message for d in result.diagnostics)
 
@@ -1762,7 +1782,7 @@ class TestRuntimeErrorPaths:
         parse failure: the scan completes (recording the TAB) before the grammar
         rejects the token stream."""
         rt = PipelineDriver()
-        result = rt.run("\tprint")  # leading TAB, then an incomplete `print`
+        result = run_inline_command(rt, "\tprint")  # leading TAB, then an incomplete `print`
         assert result.ok is False
         assert result.diagnostics  # genuine parse error surfaced
         tab_warns = [w for w in result.warnings if w.severity == "warning"]
@@ -1778,7 +1798,7 @@ class TestRuntimeErrorPaths:
 
         monkeypatch.setattr(scope_mod, "resolve_program", bad_resolve)
         rt = PipelineDriver()
-        result = rt.run("let x = 1")
+        result = run_inline_command(rt, "let x = 1")
         assert result.ok is False
         assert any("Scope error" in d.message for d in result.diagnostics)
 
@@ -1791,7 +1811,7 @@ class TestRuntimeErrorPaths:
 
         monkeypatch.setattr(tc_mod, "check_program", bad_check)
         rt = PipelineDriver()
-        result = rt.run("let x = 1")
+        result = run_inline_command(rt, "let x = 1")
         assert result.ok is False
         assert any("Type error" in d.message for d in result.diagnostics)
 
@@ -1808,7 +1828,7 @@ class TestRuntimeErrorPaths:
             ),
         )
         rt = PipelineDriver(agent_dispatcher=lambda req: "ok")
-        result = rt.run('ask "hi"')
+        result = run_inline_command(rt, 'ask "hi"')
         assert result.ok is False
         assert any("Contract error" in d.message for d in result.diagnostics)
 
@@ -1827,7 +1847,7 @@ class TestRuntimeErrorPaths:
             )
 
         rt = PipelineDriver(agent_dispatcher=bad_agent)
-        result = rt.run('ask "hi"')
+        result = run_inline_command(rt, 'ask "hi"')
         assert result.ok is False
         assert result.error is not None
         assert result.error.type_name == "Abort"
@@ -1906,14 +1926,14 @@ class TestRuntimeErrorPaths:
         """
         from agm.agl.eval.ir_interpreter import IrInterpreter
 
-        def bad_execute(self: IrInterpreter) -> dict[str, object]:
+        def bad_execute(self: IrInterpreter, **_: object) -> dict[str, object]:
             raise RuntimeError("internal crash")
 
         monkeypatch.setattr(IrInterpreter, "run", bad_execute)
 
         rt = PipelineDriver()
         with pytest.raises(RuntimeError, match="internal crash"):
-            rt.run("let x = 1\nx")
+            run_inline_command(rt, "let x = 1\nx")
 
     def test_exception_value_to_run_error_maps_all_field_kinds(self) -> None:
         """exception_value_to_run_error converts every Value kind to JSON shape.
@@ -2016,7 +2036,7 @@ class TestRuntimeErrorPaths:
         from agm.agl.semantics.exceptions import AglRaise
         from agm.agl.semantics.values import ExceptionValue, TextValue
 
-        def bad_execute(self: IrInterpreter) -> dict[str, object]:
+        def bad_execute(self: IrInterpreter, **_: object) -> dict[str, object]:
             exc_val = ExceptionValue(
                 nominal=NominalId(1),
                 display_name="Abort",
@@ -2027,7 +2047,7 @@ class TestRuntimeErrorPaths:
         monkeypatch.setattr(IrInterpreter, "run", bad_execute)
 
         rt = PipelineDriver()
-        result = rt.run("let x = 1\nx")
+        result = run_inline_command(rt, "let x = 1\nx")
         assert result.ok is False
         assert result.error is not None
         assert result.error.type_name == "Abort"
@@ -2079,7 +2099,8 @@ class TestRuntimeErrorPaths:
         """E2e: param xs: array[decimal] with Decimal values binds and prints."""
         import decimal as _decimal
 
-        result = PipelineDriver().run(
+        result = run_inline_command(
+            PipelineDriver(),
             "param xs: array[decimal]\nprint xs\n",
             param_values={"xs": [_decimal.Decimal("1.5"), _decimal.Decimal("2.25")]},
         )
@@ -2092,7 +2113,8 @@ class TestRuntimeErrorPaths:
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """Native JSON-shaped floats are canonicalized before typed decoding."""
-        result = PipelineDriver().run(
+        result = run_inline_command(
+            PipelineDriver(),
             "param xs: array[decimal]\nprint xs\n",
             param_values={"xs": [1.5, 2.25]},
         )
@@ -2104,10 +2126,11 @@ class TestRuntimeErrorPaths:
     def test_render_builtin_returns_single_line_unquoted_text(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        result = PipelineDriver().run(
+        result = run_inline_command(
+            PipelineDriver(),
             'print(render("hello", quote_strings = false))\n'
             "print(render([1, 2], pretty = false))\n"
-            'print(render({"a": 1} as json, pretty = false))\n'
+            'print(render({"a": 1} as json, pretty = false))\n',
         )
 
         assert result.ok is True
@@ -2117,8 +2140,9 @@ class TestRuntimeErrorPaths:
     def test_render_builtin_accepts_render_options(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        result = PipelineDriver().run(
-            'print(render("hello"))\nprint(render([1, 2]))\nprint(render({"a": 1} as json))\n'
+        result = run_inline_command(
+            PipelineDriver(),
+            'print(render("hello"))\nprint(render([1, 2]))\nprint(render({"a": 1} as json))\n',
         )
 
         assert result.ok is True
@@ -2148,7 +2172,8 @@ class TestUniformRenderingInPrompts:
             return "ok"
 
         rt = PipelineDriver(agent_dispatcher=agent)
-        result = rt.run(
+        result = run_inline_command(
+            rt,
             'param x\nask("see: %{x}")',
             param_values={"x": "hello"},
         )
@@ -2166,7 +2191,8 @@ class TestUniformRenderingInPrompts:
             return "ok"
 
         rt = PipelineDriver(agent_dispatcher=agent)
-        result = rt.run(
+        result = run_inline_command(
+            rt,
             'let items: array[text] = ["a", "b"]\nask("items: %{items}")',
         )
         assert result.ok is True
@@ -2200,7 +2226,7 @@ class TestMaxIterationsExceededSchema:
 
     def test_fields_surface_through_real_source(self, capsys: pytest.CaptureFixture[str]) -> None:
         rt = PipelineDriver()
-        result = rt.run(self._PROGRAM)
+        result = run_inline_command(rt, self._PROGRAM)
         # The exception is caught, so the run completes successfully.
         assert result.ok is True
         assert result.error is None
@@ -2219,7 +2245,7 @@ class TestMaxIterationsExceededSchema:
             "catch MaxIterationsExceeded as e =>\n"
             "  print e.metadata\n"
         )
-        result = rt.run(program)
+        result = run_inline_command(rt, program)
         assert result.ok is True
         assert capsys.readouterr().out.strip() == "null"
 
@@ -2238,7 +2264,7 @@ class TestMaxIterationsExceededSchema:
             "  print e.condition\n"
             "  print e.last_condition_value\n"
         )
-        result = rt.run(program)
+        result = run_inline_command(rt, program)
         assert result.ok is True
         lines = capsys.readouterr().out.splitlines()
         assert lines == ["finished", "false"]
@@ -2254,7 +2280,7 @@ class TestExhaustivenessErrorSurfaces:
         program = (
             'enum R\n  | Pass\n  | Fail\nlet r: R = Pass()\ncase r of\n  | Pass() => print "ok"\n'
         )
-        result = rt.run(program)
+        result = run_inline_command(rt, program)
         assert result.ok is False
         assert result.error is None
         assert len(result.diagnostics) == 1
@@ -2324,7 +2350,7 @@ class TestTraceWriteFailureIsBestEffort:
         log_file.chmod(0o444)
 
         program = 'print "a"\nprint "b"\nprint "c"\n'
-        result = rt.run(program, log_file=log_file)
+        result = run_inline_command(rt, program, log_file=log_file)
 
         # Program semantics unaffected: clean success, all prints emitted.
         assert result.ok is True
@@ -2345,7 +2371,7 @@ class TestTabWarningsInRunResult:
 
     def test_no_tab_no_warning(self) -> None:
         rt = PipelineDriver()
-        result = rt.run("let x = 1")
+        result = run_inline_command(rt, "let x = 1")
         tab_warns = [w for w in result.warnings if "TAB" in w.message]
         assert tab_warns == []
 
@@ -2353,7 +2379,7 @@ class TestTabWarningsInRunResult:
         # TAB used as whitespace inside a valid statement on the second line.
         source = "let x = 1\nlet\ty = 2"
         rt = PipelineDriver()
-        result = rt.run(source)
+        result = run_inline_command(rt, source)
         tab_warns = [w for w in result.warnings if "TAB" in w.message]
         assert len(tab_warns) == 1
         assert tab_warns[0].line == 2
@@ -2362,14 +2388,14 @@ class TestTabWarningsInRunResult:
         # A tab warning must not cause ok to become False.
         source = "let\tx = 1\nx"
         rt = PipelineDriver()
-        result = rt.run(source)
+        result = run_inline_command(rt, source)
         assert result.ok is True
         assert result.error is None
 
     def test_multiple_tabs_multiple_warnings(self) -> None:
         source = "let\tx = 1\nlet\ty = 2"
         rt = PipelineDriver()
-        result = rt.run(source)
+        result = run_inline_command(rt, source)
         tab_warns = [w for w in result.warnings if "TAB" in w.message]
         assert len(tab_warns) == 2
 
@@ -2399,13 +2425,17 @@ class TestLegacyAgentRegistry:
             return "output"
 
         rt = PipelineDriver(agent_dispatcher=agent)
-        result = rt.run('let impl = AgentCommand("impl")\nask("do it", agent = impl)')
+        result = run_inline_command(
+            rt, 'let impl = AgentCommand("impl")\nask("do it", agent = impl)'
+        )
         assert result.ok
         assert calls == ["do it"]
 
     def test_command_value_uses_the_default_dispatcher(self) -> None:
         rt = PipelineDriver(agent_dispatcher=lambda req: "ok")
-        result = rt.run('let any_name = AgentCommand("any-name")\nask("hi", agent = any_name)')
+        result = run_inline_command(
+            rt, 'let any_name = AgentCommand("any-name")\nask("hi", agent = any_name)'
+        )
         assert result.ok
 
 
@@ -2682,14 +2712,14 @@ class TestSerializeV2OpaqueValues:
 
 class TestIrHostMetadataCoverage:
     def test_invalid_external_param_shapes_are_diagnostics(self) -> None:
-        text_result = PipelineDriver().run(
-            "param value: text\nprint value", param_values={"value": 3}
+        text_result = run_inline_command(
+            PipelineDriver(), "param value: text\nprint value", param_values={"value": 3}
         )
         assert not text_result.ok
         assert "text value" in text_result.diagnostics[0].message
 
-        json_result = PipelineDriver().run(
-            "param value: int\nprint value", param_values={"value": {1, 2}}
+        json_result = run_inline_command(
+            PipelineDriver(), "param value: int\nprint value", param_values={"value": {1, 2}}
         )
         assert not json_result.ok
         assert "JSON-compatible" in json_result.diagnostics[0].message
@@ -2855,25 +2885,26 @@ class TestV2UserDefinedFunctions:
 
     def test_def_call_basic(self) -> None:
         rt = PipelineDriver()
-        result = rt.run("def add(a: int, b: int) -> int = a + b\nadd(1, 2)\n")
+        result = run_inline_command(rt, "def add(a: int, b: int) -> int = a + b\nadd(1, 2)\n")
         assert result.ok is True
 
     def test_def_recursive_call(self) -> None:
         rt = PipelineDriver()
-        result = rt.run(
+        result = run_inline_command(
+            rt,
             "def fact(n: int) -> int =\n"
             "  if n <= 1 =>\n"
             "    1\n"
             "  | else =>\n"
             "    n * fact(n - 1)\n"
-            "fact(5)\n"
+            "fact(5)\n",
         )
         assert result.ok is True
 
     def test_def_call_depth_limit_enforced(self) -> None:
         """Exceeding max_call_depth raises a RecursionError."""
         rt = PipelineDriver(default_call_depth_limit=10)
-        result = rt.run("def inf(n: int) -> int =\n  inf(n + 1)\ninf(0)\n")
+        result = run_inline_command(rt, "def inf(n: int) -> int =\n  inf(n + 1)\ninf(0)\n")
         assert result.ok is False
 
 
@@ -2882,14 +2913,14 @@ class TestV2ExecStructuredForm:
 
     def test_exec_text_form_captures_stdout(self, capsys: pytest.CaptureFixture[str]) -> None:
         rt = PipelineDriver()
-        result = rt.run('let out: text = exec "echo hello"\nprint out\n')
+        result = run_inline_command(rt, 'let out: text = exec "echo hello"\nprint out\n')
         assert result.ok is True
         captured = capsys.readouterr()
         assert "hello" in captured.out
 
     def test_exec_nonzero_raises_when_typed(self) -> None:
         rt = PipelineDriver()
-        result = rt.run('let out: text = exec "false"\nprint out\n')
+        result = run_inline_command(rt, 'let out: text = exec "false"\nprint out\n')
         assert result.ok is False
         # Uncaught AgL exception (exit 2 semantics): error is set
         assert result.error is not None
@@ -2906,7 +2937,9 @@ class TestV2AskWithAgentValue:
             return "answer"
 
         rt = PipelineDriver(agent_dispatcher=agent)
-        result = rt.run('let helper = AgentCommand("helper")\nask("question", agent = helper)\n')
+        result = run_inline_command(
+            rt, 'let helper = AgentCommand("helper")\nask("question", agent = helper)\n'
+        )
         assert result.ok is True
         assert received == ["question"]
 
@@ -2927,7 +2960,7 @@ class TestPrepareProgram:
         from agm.agl.pipeline import PreparedProgram
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program("let x = 1\nx", entry_path=None, roots=roots)
+        prepared = prepare_inline_command("let x = 1\nx", entry_path=None, roots=roots)
         assert isinstance(prepared, PreparedProgram)
         assert prepared.resolved is not None
         assert prepared.diagnostics == ()
@@ -2937,7 +2970,7 @@ class TestPrepareProgram:
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program("let x = !!!", entry_path=None, roots=roots)
+        prepared = prepare_inline_command("let x = !!!", entry_path=None, roots=roots)
         assert prepared.resolved is None
         assert len(prepared.diagnostics) >= 1
 
@@ -2946,7 +2979,7 @@ class TestPrepareProgram:
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program(
+        prepared = prepare_inline_command(
             "open import nonexistent/module\nlet x = 1\nx",
             entry_path=None,
             roots=roots,
@@ -2965,7 +2998,7 @@ class TestPrepareProgram:
 
         roots = RootSet(roots=frozenset({lib_dir, _STDLIB_ROOT}))
         entry = "open import mymod\nlet r = add(2, 3)\nr"
-        prepared = PipelineDriver.prepare_program(entry, entry_path=None, roots=roots)
+        prepared = prepare_inline_command(entry, entry_path=None, roots=roots)
         assert prepared.resolved is not None
         assert prepared.diagnostics == ()
 
@@ -2974,7 +3007,7 @@ class TestPrepareProgram:
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program("let x = = =", entry_path=None, roots=roots)
+        prepared = prepare_inline_command("let x = = =", entry_path=None, roots=roots)
         assert prepared.resolved is None
         assert prepared.diagnostics
 
@@ -2988,7 +3021,7 @@ class TestRunPreparedProgram:
 
         rt = PipelineDriver()
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program("let x = 1\nx", entry_path=None, roots=roots)
+        prepared = prepare_inline_command("let x = 1\nx", entry_path=None, roots=roots)
         result = rt.run_prepared(prepared)
         assert result.ok is True
         assert result.error is None
@@ -3003,7 +3036,7 @@ class TestRunPreparedProgram:
 
         roots = RootSet(roots=frozenset({lib_dir.resolve(), _STDLIB_ROOT}))
         entry = "open import mymod\nlet r = add(2, 3)\nr"
-        prepared = PipelineDriver.prepare_program(entry, entry_path=None, roots=roots)
+        prepared = prepare_inline_command(entry, entry_path=None, roots=roots)
         rt = PipelineDriver()
         result = rt.run_prepared(prepared)
         assert result.ok is True
@@ -3014,9 +3047,7 @@ class TestRunPreparedProgram:
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program(
-            "let x = undefined_name", entry_path=None, roots=roots
-        )
+        prepared = prepare_inline_command("let x = undefined_name", entry_path=None, roots=roots)
         rt = PipelineDriver()
         result = rt.run_prepared(prepared)
         assert result.ok is False
@@ -3028,7 +3059,7 @@ class TestRunPreparedProgram:
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program(
+        prepared = prepare_inline_command(
             "open import missing/module\nlet x = 1\nx", entry_path=None, roots=roots
         )
         rt = PipelineDriver()
@@ -3041,7 +3072,7 @@ class TestRunPreparedProgram:
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program(
+        prepared = prepare_inline_command(
             'let r = ask("hello")\nprint r', entry_path=None, roots=roots
         )
         rt = PipelineDriver(agent_dispatcher=lambda req: "x")  # type: ignore[arg-type]
@@ -3063,7 +3094,7 @@ class TestRunPreparedProgram:
 
         roots = RootSet(roots=frozenset({lib_dir.resolve(), _STDLIB_ROOT}))
         entry = 'open import utils/*\nlet n = add(2, 3)\nlet g = greet("World")\nprint n\nprint g\n'
-        prepared = PipelineDriver.prepare_program(entry, entry_path=None, roots=roots)
+        prepared = prepare_inline_command(entry, entry_path=None, roots=roots)
         rt = PipelineDriver()
         result = rt.run_prepared(prepared, check_only=True)
         assert result.ok is True
@@ -3078,7 +3109,7 @@ class TestRunPreparedProgram:
 
         roots = RootSet(roots=frozenset({lib_dir.resolve(), _STDLIB_ROOT}))
         entry = "import calc\nlet r = calc::square(5)\nr"
-        prepared = PipelineDriver.prepare_program(entry, entry_path=None, roots=roots)
+        prepared = prepare_inline_command(entry, entry_path=None, roots=roots)
         rt = PipelineDriver()
         result = rt.run_prepared(prepared)
         assert result.ok is True
@@ -3092,7 +3123,7 @@ class TestDiscoverParamsGraph:
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program("let x = 1\nx", entry_path=None, roots=roots)
+        prepared = prepare_inline_command("let x = 1\nx", entry_path=None, roots=roots)
         rt = PipelineDriver()
         discovery = rt.discover_params(prepared)
         assert discovery.diagnostics == ()
@@ -3103,7 +3134,7 @@ class TestDiscoverParamsGraph:
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program(
+        prepared = prepare_inline_command(
             "param name: text\nprint name",
             entry_path=None,
             roots=roots,
@@ -3151,7 +3182,7 @@ class TestDiscoverParamsGraph:
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program(
+        prepared = prepare_inline_command(
             "import no_such_module\nlet x = 1", entry_path=None, roots=roots
         )
         rt = PipelineDriver()
@@ -3174,7 +3205,7 @@ class TestPreparedProgramDefensivePaths:
         related = SourceSpan(2, 1, 2, 2, 2, 3)
         error = AglError("parse failed", related=(("constraint", related),))
         with patch("agm.agl.modules.loader.parse_program_seeded", side_effect=error):
-            prepared = PipelineDriver.prepare_program("let x = 1")
+            prepared = prepare_inline_command("let x = 1")
 
         assert prepared.diagnostics[0].related[0].message == "constraint"
 
@@ -3185,7 +3216,7 @@ class TestPreparedProgramDefensivePaths:
         related = SourceSpan(2, 1, 2, 2, 2, 3)
         error = AglError("scope failed", related=(("constraint", related),))
         with patch("agm.agl.scope.program.resolve_program", side_effect=error):
-            prepared = PipelineDriver.prepare_program("let x = 1")
+            prepared = prepare_inline_command("let x = 1")
 
         assert prepared.diagnostics[0].related[0].message == "constraint"
 
@@ -3199,7 +3230,7 @@ class TestPreparedProgramDefensivePaths:
         related = SourceSpan(2, 1, 2, 2, 2, 3)
         error = AglError("load failed", related=(("constraint", related),))
         with patch("agm.agl.modules.loader.build_repl_graph", side_effect=error):
-            prepared = PipelineDriver.prepare_program("let x = 1", entry_path=None, roots=roots)
+            prepared = prepare_inline_command("let x = 1", entry_path=None, roots=roots)
 
         assert prepared.diagnostics[0].related[0].message == "constraint"
 
@@ -3215,7 +3246,7 @@ class TestPreparedProgramDefensivePaths:
         related = SourceSpan(2, 1, 2, 2, 2, 3)
         error = AglError("scope failed", related=(("constraint", related),))
         with patch("agm.agl.scope.program.resolve_program", side_effect=error):
-            prepared = PipelineDriver.prepare_program("let x = 1", entry_path=None, roots=roots)
+            prepared = prepare_inline_command("let x = 1", entry_path=None, roots=roots)
 
         assert prepared.diagnostics[0].related[0].message == "constraint"
 
@@ -3227,7 +3258,7 @@ class TestPreparedProgramDefensivePaths:
 
         roots = RootSet(roots=frozenset({tmp_path.resolve(), _STDLIB_ROOT}))
         with patch("agm.agl.modules.loader.build_repl_graph", side_effect=RuntimeError("boom")):
-            prepared = PipelineDriver.prepare_program("let x = 1\nx", entry_path=None, roots=roots)
+            prepared = prepare_inline_command("let x = 1\nx", entry_path=None, roots=roots)
         assert len(prepared.diagnostics) >= 1
         assert "boom" in prepared.diagnostics[0].message
 
@@ -3242,7 +3273,7 @@ class TestPreparedProgramDefensivePaths:
             "agm.agl.scope.program.resolve_program",
             side_effect=RuntimeError("resolve fail"),
         ):
-            prepared = PipelineDriver.prepare_program("let x = 1\nx", entry_path=None, roots=roots)
+            prepared = prepare_inline_command("let x = 1\nx", entry_path=None, roots=roots)
         assert len(prepared.diagnostics) >= 1
         assert "resolve fail" in prepared.diagnostics[0].message
 
@@ -3257,7 +3288,7 @@ class TestDiscoverParamsDefensivePaths:
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program("let x = 1\nx", entry_path=None, roots=roots)
+        prepared = prepare_inline_command("let x = 1\nx", entry_path=None, roots=roots)
         rt = PipelineDriver()
         # Patch check_program to return a graph with no ENTRY_ID.
         fake_checked = MagicMock()
@@ -3274,9 +3305,7 @@ class TestDiscoverParamsDefensivePaths:
 
         from agm.agl.typecheck import AglTypeError
 
-        prepared = PipelineDriver.prepare_program(
-            'def f(x: int) -> text = "bad"\nlet r = f(1)\nprint r'
-        )
+        prepared = prepare_inline_command('def f(x: int) -> text = "bad"\nlet r = f(1)\nprint r')
         rt = PipelineDriver()
         with patch(
             "agm.agl.typecheck.program.check_program", side_effect=AglTypeError("type error")
@@ -3289,7 +3318,7 @@ class TestDiscoverParamsDefensivePaths:
         """The module typecheck boundary uses AglError.to_diagnostic()."""
         from unittest.mock import patch
 
-        prepared = PipelineDriver.prepare_program("let x = 1")
+        prepared = prepare_inline_command("let x = 1")
         related = SourceSpan(2, 1, 2, 2, 2, 3)
         error = AglError("type failed", related=(("constraint", related),))
         with patch("agm.agl.typecheck.program.check_program", side_effect=error):
@@ -3362,7 +3391,7 @@ class TestRunPreparedDefensivePaths:
         from agm.agl.matchcompile import MatchCompiledProgram, compile_program_matches
         from agm.agl.typecheck.program import check_program
 
-        prepared = PipelineDriver.prepare_program("let x = 1\nx")
+        prepared = prepare_inline_command("let x = 1\nx")
         assert prepared.resolved is not None
         rt = PipelineDriver()
         env = rt.host_environment()
@@ -3378,7 +3407,7 @@ class TestRunPreparedDefensivePaths:
 
         from agm.agl.typecheck import AglTypeError
 
-        prepared = PipelineDriver.prepare_program("let x = 1\nx")
+        prepared = prepare_inline_command("let x = 1\nx")
         rt = PipelineDriver()
         with patch("agm.agl.typecheck.program.check_program", side_effect=AglTypeError("tc fail")):
             result = rt.run_prepared(prepared)
@@ -3398,7 +3427,7 @@ class TestRunPreparedDefensivePaths:
                 return "bad"
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program(
+        prepared = prepare_inline_command(
             'let r = ask("hi", format = "bad")\nr', entry_path=None, roots=roots
         )
         rt = PipelineDriver(agent_dispatcher=lambda req: "ok")
@@ -3417,9 +3446,7 @@ class TestRunPreparedDefensivePaths:
         from agm.agl.typecheck.program import check_program as real_check_program
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program(
-            "param n: int\nprint n", entry_path=None, roots=roots
-        )
+        prepared = prepare_inline_command("param n: int\nprint n", entry_path=None, roots=roots)
         rt = PipelineDriver()
         env = rt.host_environment()
         assert prepared.resolved is not None
@@ -3452,7 +3479,7 @@ print(ask("second", agent = B::bot))
 
         runtime = PipelineDriver(agent_dispatcher=dispatch)
 
-        result = runtime.run(source)
+        result = run_inline_command(runtime, source)
 
         assert result.ok
         assert capsys.readouterr().out == "from A\nfrom B\n"
@@ -3468,7 +3495,7 @@ scope B
 let bot = AgentCommand("b-bot")
 end B
 """
-        result = PipelineDriver().run(source)
+        result = run_inline_command(PipelineDriver(), source)
 
         assert result.ok, result.diagnostics
         assert isinstance(result.bindings["A::bot"], EnumValue)
@@ -3487,7 +3514,7 @@ print(ask("hi", agent = A::bot))
 """
         runtime = PipelineDriver(agent_dispatcher=lambda _request: "hi there")
 
-        result = runtime.run(source)
+        result = run_inline_command(runtime, source)
 
         assert result.ok, result.diagnostics
         assert result.bindings["bot"] == IntValue(42)
@@ -3512,7 +3539,7 @@ let x = 10
 var y = 20
 end A
 """
-        result = PipelineDriver().run(source)
+        result = run_inline_command(PipelineDriver(), source)
 
         assert result.ok, result.diagnostics
         assert result.bindings["x"] == IntValue(1)
@@ -3530,7 +3557,7 @@ end A
 """
         shorthand_source = "let A::x = 1"
 
-        region_result = PipelineDriver().run(region_source)
+        region_result = run_inline_command(PipelineDriver(), region_source)
         shorthand_result = PipelineDriver().run(shorthand_source)
 
         assert region_result.ok and shorthand_result.ok
@@ -3548,7 +3575,7 @@ scope A
 let Point(x, y) = Point(x = 1, y = 2)
 end A
 """
-        result = PipelineDriver().run(source)
+        result = run_inline_command(PipelineDriver(), source)
 
         assert result.ok, result.diagnostics
         assert result.bindings["A::x"] == IntValue(1)

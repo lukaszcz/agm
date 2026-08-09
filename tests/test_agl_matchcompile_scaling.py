@@ -20,7 +20,7 @@ from agm.agl.semantics.types import BoolType, EnumType
 from agm.agl.syntax.nodes import Case
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck import CheckedModule
-from tests.agl.module_graph import resolve_and_check_entry
+from tests.agl.module_graph import resolve_and_check_inline_entry
 
 _CAPS = HostCapabilities(
     supports_shell_exec=True,
@@ -32,7 +32,7 @@ _CAPS = HostCapabilities(
 
 
 def _normalized(source: str) -> tuple[CheckedModule, Case]:
-    checked = resolve_and_check_entry(source, _CAPS)
+    checked = resolve_and_check_inline_entry(source, _CAPS)
     cases: list[Case] = []
 
     def collect(node: object) -> None:

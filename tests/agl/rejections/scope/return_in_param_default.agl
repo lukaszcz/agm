@@ -1,2 +1,3 @@
 def f(x: int = (return 1)) -> int = x
-f()
+program def main() -> unit =
+  f()

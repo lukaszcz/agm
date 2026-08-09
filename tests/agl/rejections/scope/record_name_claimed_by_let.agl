@@ -1,5 +1,4 @@
+let Widget = 1
 record Widget
   x: int
-
-let Widget = 1
-print Widget
+program def main() -> unit = print Widget

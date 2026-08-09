@@ -105,11 +105,19 @@ from agm.agl.semantics.types import (
     TypeVarType,
     UnitType,
 )
-from agm.agl.syntax.nodes import Case, FuncDef, ParamDecl, Placeholder
+from agm.agl.syntax.nodes import (
+    Block,
+    Case,
+    FuncDef,
+    LetDecl,
+    ParamDecl,
+    Placeholder,
+    pattern_binder_candidates,
+)
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import check_program
 from tests.agl.ir_harness import _compiled_checked, compile_checked_module, lower_compiled_module
-from tests.agl.module_graph import resolve_and_check_entry
+from tests.agl.module_graph import resolve_and_check_inline_entry
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 _MIXED_ROOT_AND_SCOPED_DECLARATIONS = (
@@ -142,7 +150,7 @@ def _caps() -> HostCapabilities:
 
 
 def _check(source: str, *, default_stdlib: bool = True) -> CheckedModule:
-    return resolve_and_check_entry(source, _caps(), default_stdlib=default_stdlib)
+    return resolve_and_check_inline_entry(source, _caps(), default_stdlib=default_stdlib)
 
 
 def _repl_entry(
@@ -178,7 +186,10 @@ def _repl_entry(
         roots=RootSet(roots=frozenset()),
         default_stdlib=default_stdlib,
     )
-    resolved = resolve_program(graph, entry_parent_scope=parent_scope)
+    resolved = resolve_program(
+        graph,
+        entry_parent_scope=parent_scope or ScopeNode(node_id=-1, parent=None, scope_path=()),
+    )
     checked_program = check_program(resolved, _caps(), entry_seed_env=seed_env)
     result = compile_program_matches(checked_program)
     assert isinstance(result.compiled, MatchCompiledProgram)
@@ -444,6 +455,67 @@ def test_constructor_result_nominal_rejects_non_nominal_type() -> None:
 
     with pytest.raises(AssertionError, match="non-nominal result"):
         lowerer._nominal_for_constructor_result(IntType())
+
+
+def test_preallocation_ignores_constructor_pattern_candidates() -> None:
+    """Only binders, not nested constructor tests, receive runtime symbols."""
+    source = (
+        "enum Flag\n"
+        "  | On\n"
+        "  | Off\n"
+        "record Pair\n"
+        "  flag: Flag\n"
+        "  value: int\n"
+        "let Pair(On, _ as root) = Pair(flag = On, value = 1)\n"
+        "def extract(pair: Pair) -> int =\n"
+        "  let Pair(On, _ as inner) = pair\n"
+        "  inner\n"
+        "program def main() -> unit = ()\n"
+    )
+    checked = _check(source)
+
+    from agm.agl.ir.ids import SourceId
+    from agm.agl.ir.program import SourceFile
+    from agm.agl.lower.lowerer import _LinkState
+
+    link = _LinkState()
+    source_id = SourceId(link.next_source)
+    link.next_source += 1
+    link.sources[source_id] = SourceFile(display_name="<test>", normalized_text=source)
+    lowerer = _Lowerer(checked, link, ENTRY_ID, source_id, source, {})
+    lowerer.prealloc_static_symbols(checked.resolved.program.body)
+
+    root_let = next(
+        item for item in checked.resolved.program.body.items if isinstance(item, LetDecl)
+    )
+    extract = next(
+        item
+        for item in checked.resolved.program.body.items
+        if isinstance(item, FuncDef) and item.name == "extract"
+    )
+    assert isinstance(extract.body, Block)
+    function_let = next(item for item in extract.body.items if isinstance(item, LetDecl))
+    root_candidates = pattern_binder_candidates(root_let.pattern)
+    function_candidates = pattern_binder_candidates(function_let.pattern)
+    root_bound_ids = {
+        binding.decl_node_id
+        for candidate in root_candidates
+        if (binding := checked.pattern_binding_for(candidate.node_id)) is not None
+    }
+    function_bound_ids = {
+        binding.decl_node_id
+        for candidate in function_candidates
+        if (binding := checked.pattern_binding_for(candidate.node_id)) is not None
+    }
+    constructor_ids = {
+        candidate.node_id
+        for candidate in (*root_candidates, *function_candidates)
+        if checked.pattern_binding_for(candidate.node_id) is None
+    }
+
+    assert root_bound_ids <= link.decl_to_sym.keys()
+    assert function_bound_ids.isdisjoint(link.decl_to_sym)
+    assert constructor_ids.isdisjoint(link.decl_to_sym)
 
 
 def test_lowering_erases_flexible_state_from_generic_direct_nested_and_partial_calls() -> None:
@@ -1280,7 +1352,7 @@ class TestBuiltinNominalsTable:
         ``default_stdlib=False``: that is what makes "nothing declared at
         the root" true here.
         """
-        from tests.agl.ir_harness import evaluate_ir_raises, lower_ir, nominal_id_for
+        from tests.agl.ir_harness import evaluate_ir_raises, lower_inline_ir, nominal_id_for
 
         source = (
             "scope A\n"
@@ -1291,7 +1363,7 @@ class TestBuiltinNominalsTable:
             "  ()\n"
             "done\n"
         )
-        program = lower_ir(source, default_stdlib=False)
+        program = lower_inline_ir(source, default_stdlib=False)
         exc = evaluate_ir_raises(source, default_stdlib=False)
         assert exc.display_name == "A::RangeError"
         assert exc.nominal == nominal_id_for(program, "A::RangeError")
@@ -1341,9 +1413,9 @@ class TestBuiltinNominalsTable:
         ``builtin`` declaration, and a scoped one.
         """
         from agm.agl.semantics.types import BUILTIN_EXCEPTIONS, BUILTIN_PRELUDE_TYPES
-        from tests.agl.ir_harness import lower_ir
+        from tests.agl.ir_harness import lower_inline_ir
 
-        program = lower_ir(source, default_stdlib=default_stdlib)
+        program = lower_inline_ir(source, default_stdlib=default_stdlib)
         for name in (*BUILTIN_PRELUDE_TYPES, *BUILTIN_EXCEPTIONS):
             descriptor = program.nominals.get(program.builtin_nominals.nominal(name))
             assert descriptor is not None, f"no descriptor for host-minted {name!r}"
@@ -1702,8 +1774,10 @@ class TestScanCapturesLambdaBoundary:
         # f's body is a block containing a lambda let-binding followed by the unit value.
         # _scan_captures should stop at the Lambda boundary rather than descending into
         # the lambda's body and incorrectly treating y as a capture of f.
-        source = "let y = 5\ndef f() -> unit =\n  let _g = fn(u: unit) -> int => y\n  ()\nf()\n()"
-        prog = _lower(source)
+        source = "let y = 5\ndef f() -> unit =\n  let _g = fn(u: unit) -> int => y\n  ()"
+        from tests.agl.ir_harness import lower_ir
+
+        prog = lower_ir(source)
         # f should have no captures (y is not used in f's body directly)
         # Find the outer def whose function_symbol corresponds to "f"
         f_descs = [
@@ -2168,9 +2242,9 @@ class TestLowerGraph:
             "record EntryBox\n"
             "  width: int\n"
             "\n"
-            "let result = lib::make_point(1, 2)\n"
-            "let box = EntryBox(width = 10)\n"
-            "()\n"
+            "program def main() -> unit =\n"
+            "  let result = lib::make_point(1, 2)\n"
+            "  let box = EntryBox(width = 10)\n"
         )
 
         root = tmp_path / "root"
@@ -2228,15 +2302,14 @@ class TestLowerGraph:
                 f"Library IrBind value must be IrMakeClosure, got {type(init_node.value).__name__}"
             )
 
-        # The entry module's result binding must be in the symbols table
-        result_syms = [desc for desc in prog.symbols.values() if desc.public_name == "result"]
-        assert len(result_syms) == 1
+        # Program-local bindings are not module exports.
+        assert not any(desc.public_name == "result" for desc in prog.symbols.values())
 
         # The suite-enabled self-checks already validated this program during
         # lowering; call validate_ir explicitly so the test pins it regardless.
         validate_ir(prog, deep=True)
 
-    def test_lower_program_records_origins_and_skips_already_linked_modules(
+    def test_lower_program_skips_non_entry_params_and_already_linked_modules(
         self, tmp_path: Path
     ) -> None:
         import os
@@ -2249,8 +2322,8 @@ class TestLowerGraph:
         from agm.agl.scope.program import resolve_program
         from agm.agl.typecheck.program import check_program
 
-        lib_source = "def first() -> int = 1\ndef second() -> int = 2\n"
-        entry_source = "import lib\nlet value = lib::first()\n()\n"
+        lib_source = "param retained: int = 1\ndef first() -> int = 1\ndef second() -> int = 2\n"
+        entry_source = "import lib\nprogram def main() -> unit =\n  let value = lib::first()\n"
         root = tmp_path / "root"
         root.mkdir()
         lib_mid = ModuleId.from_path("lib")
@@ -2287,6 +2360,15 @@ class TestLowerGraph:
         assert link.initializer_origins[lib_mid] == sentinel
         assert relinked.modules[lib_mid].initializers == ()
 
+        # Re-linking the current entry is unsupported: it owns the runtime
+        # params collected below, unlike already-linked dependency modules.
+        with pytest.raises(KeyError):
+            lower_program(
+                _compiled_checked(checked),
+                _link=link,
+                _already_linked=frozenset({checked.entry_id}),
+            )
+
     def test_lower_program_type_alias_no_spurious_nominal(self, tmp_path: Path) -> None:
         """Type alias does not register a spurious NominalId in lower_program.
 
@@ -2321,7 +2403,7 @@ class TestLowerGraph:
             "def origin() -> Point =\n"
             "    Point(x = 0, y = 0)\n"
         )
-        entry_source = "import lib\nlet p = lib::origin()\n()\n"
+        entry_source = "import lib\nprogram def main() -> unit =\n  let p = lib::origin()\n"
 
         root = tmp_path / "root"
         root.mkdir()

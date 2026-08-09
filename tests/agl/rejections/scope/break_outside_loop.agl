@@ -1,3 +1,4 @@
-var x: int = 0
-x := x + 1
-break
+program def main() -> unit =
+  var x: int = 0
+  x := x + 1
+  break

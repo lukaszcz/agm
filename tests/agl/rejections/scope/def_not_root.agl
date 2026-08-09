@@ -1,3 +1,4 @@
-if true =>
-  def nested(x: int) -> int = x
-  nested(1)
+program def main() -> unit =
+  if true =>
+    def nested(x: int) -> int = x
+    nested(1)

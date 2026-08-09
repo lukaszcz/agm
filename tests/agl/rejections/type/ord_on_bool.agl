@@ -1,2 +1,3 @@
-let x = (true < false)
-x
+program def main() -> unit =
+  let x = (true < false)
+  x

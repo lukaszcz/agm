@@ -1,4 +1,5 @@
 record P
   n: int
-let p = P(n = 1, extra = 2)
-p
+program def main() -> unit =
+  let p = P(n = 1, extra = 2)
+  p

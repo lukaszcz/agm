@@ -16,34 +16,35 @@ enum Wrapped
   | Empty
   | Holds(shape: Shape)
 
-let picker = AgentCommand("picker")
-let wrapped: Wrapped = ask("Pick a wrapped shape.", agent = picker)
+program def main() -> unit =
+  let picker = AgentCommand("picker")
+  let wrapped: Wrapped = ask("Pick a wrapped shape.", agent = picker)
 
-# Nested constructor patterns with '=' on the enum-typed field 'shape'; the
-# record-typed field 'at' is matched full-form ('at = _ as p'), where 'as' captures
-# the alias, and read via 'p.x'/'p.y'.
-let described = case wrapped of
-  | Empty => "empty"
-  | Holds(shape = Dot) => "dot"
-  | Holds(shape = Line(len = _ as n)) => "line %{n}"
-  | Holds(shape = Box(at = _ as p, len = _ as n)) => "box at %{p.x},%{p.y} size %{n}"
+  # Nested constructor patterns with '=' on the enum-typed field 'shape'; the
+  # record-typed field 'at' is matched full-form ('at = _ as p'), where 'as' captures
+  # the alias, and read via 'p.x'/'p.y'.
+  let described = case wrapped of
+    | Empty => "empty"
+    | Holds(shape = Dot) => "dot"
+    | Holds(shape = Line(len = _ as n)) => "line %{n}"
+    | Holds(shape = Box(at = _ as p, len = _ as n)) => "box at %{p.x},%{p.y} size %{n}"
 
-print described
+  print described
 
-# Construction inside branch bodies; a nested constructor and a record-typed
-# field bound by its matched-field name then read via field access.
-let bumped: Wrapped = case wrapped of
-  | Empty => Empty
-  | Holds(shape) =>
-      case shape of
-        | Dot => Holds(shape = Dot)
-        | Line(len) => Holds(shape = Line(len = len + 1))
-        | Box(at, len) =>
-            let nx = at.x + 1
-            Holds(shape = Box(at = Pt(x = nx, y = at.y), len = len))
+  # Construction inside branch bodies; a nested constructor and a record-typed
+  # field bound by its matched-field name then read via field access.
+  let bumped: Wrapped = case wrapped of
+    | Empty => Empty
+    | Holds(shape) =>
+        case shape of
+          | Dot => Holds(shape = Dot)
+          | Line(len) => Holds(shape = Line(len = len + 1))
+          | Box(at, len) =>
+              let nx = at.x + 1
+              Holds(shape = Box(at = Pt(x = nx, y = at.y), len = len))
 
-case bumped of
-  | Empty => print "still empty"
-  | Holds(shape = Dot) => print "still dot"
-  | Holds(shape = Line(len = _ as m)) => print "bumped line %{m}"
-  | Holds(shape = Box(at = _ as q, len = _ as m)) => print "bumped box %{q.x} %{m}"
+  case bumped of
+    | Empty => print "still empty"
+    | Holds(shape = Dot) => print "still dot"
+    | Holds(shape = Line(len = _ as m)) => print "bumped line %{m}"
+    | Holds(shape = Box(at = _ as q, len = _ as m)) => print "bumped box %{q.x} %{m}"

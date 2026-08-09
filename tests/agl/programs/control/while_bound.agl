@@ -4,8 +4,10 @@
 # – zero bound → zero iterations / normal completion
 param limit: int
 param k: int
-var n: int = 0
-while n < limit do[k]
-  n := n + 1
-done
-print n
+
+program def main() -> unit =
+  var n: int = 0
+  while n < limit do[k]
+    n := n + 1
+  done
+  print n

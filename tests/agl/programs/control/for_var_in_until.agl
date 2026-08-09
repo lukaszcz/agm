@@ -3,8 +3,10 @@
 # Proves the for-variable is in scope in the until condition.
 param items: array[int]
 param sentinel: int
-var total: int = 0
-for x in items do
-  total := total + x
-until x == sentinel
-print total
+
+program def main() -> unit =
+  var total: int = 0
+  for x in items do
+    total := total + x
+  until x == sentinel
+  print total

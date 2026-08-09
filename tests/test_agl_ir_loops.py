@@ -78,9 +78,9 @@ _DUMMY_LOC = Location(
 
 def _lower(source: str) -> ExecutableProgram:
     """Parse → resolve → check → lower *source*; return the ExecutableProgram."""
-    from tests.agl.ir_harness import lower_ir
+    from tests.agl.ir_harness import lower_inline_ir
 
-    return lower_ir(source)
+    return lower_inline_ir(source)
 
 
 def _make_minimal_program(
@@ -257,25 +257,28 @@ def test_valve_does_not_cap_for_over_finite_collection() -> None:
     exempt from the host safety valve.
     """
     source = "var s = 0\nfor x in [1, 2, 3, 4, 5] do s := s + x done\ns\n"
-    interp = IrInterpreter(_lower(source), loop_limit=3)
-    result = interp.run()
+    executable = _lower(source)
+    interp = IrInterpreter(executable, loop_limit=3)
+    result = interp.run(program_symbol=executable.synthetic_main_symbol)
     assert result["s"] == IntValue(15)
 
 
 def test_valve_does_not_cap_bounded_do_n_loop() -> None:
     """The max-iters valve must not cap a do[n] loop whose own bound exceeds it."""
     source = "var i = 0\ndo[10]\n  i := i + 1\nuntil i >= 5\ni\n"
-    interp = IrInterpreter(_lower(source), loop_limit=3)
-    result = interp.run()
+    executable = _lower(source)
+    interp = IrInterpreter(executable, loop_limit=3)
+    result = interp.run(program_symbol=executable.synthetic_main_symbol)
     assert result["i"] == IntValue(5)
 
 
 def test_valve_caps_unbounded_do_until_loop() -> None:
     """The max-iters valve caps an unguarded (no [n], no for) do...until loop."""
     source = "var i = 0\ndo\n  i := i + 1\nuntil i >= 1000\ni\n"
-    interp = IrInterpreter(_lower(source), loop_limit=3)
+    executable = _lower(source)
+    interp = IrInterpreter(executable, loop_limit=3)
     try:
-        interp.run()
+        interp.run(program_symbol=executable.synthetic_main_symbol)
     except AglRaise as exc:
         assert exc.exc.display_name == "MaxIterationsExceeded"
         assert exc.exc.fields.get("limit") == IntValue(3)
@@ -751,22 +754,22 @@ def test_for_loop_non_iterable_bool_raises_type_error() -> None:
     """for x in bool do body done — non-iterable type is a typecheck error."""
     from agm.agl.typecheck.env import AglTypeError
     from tests.agl.ir_harness import base_caps
-    from tests.agl.module_graph import resolve_and_check_entry
+    from tests.agl.module_graph import resolve_and_check_inline_entry
 
     source = "for x in true do\n  ()\ndone\n"
     with pytest.raises(AglTypeError):
-        resolve_and_check_entry(source, base_caps())
+        resolve_and_check_inline_entry(source, base_caps())
 
 
 def test_for_loop_int_collection_raises_type_error() -> None:
     """for x in int_expr do body done — int is not an iterable collection."""
     from agm.agl.typecheck.env import AglTypeError
     from tests.agl.ir_harness import base_caps
-    from tests.agl.module_graph import resolve_and_check_entry
+    from tests.agl.module_graph import resolve_and_check_inline_entry
 
     source = "for x in 42 do\n  ()\ndone\n"
     with pytest.raises(AglTypeError):
-        resolve_and_check_entry(source, base_caps())
+        resolve_and_check_inline_entry(source, base_caps())
 
 
 # ---------------------------------------------------------------------------

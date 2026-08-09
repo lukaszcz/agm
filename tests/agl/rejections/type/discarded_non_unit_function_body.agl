@@ -1,4 +1,5 @@
 def effect() -> unit =
   1
   ()
-effect()
+program def main() -> unit =
+  effect()

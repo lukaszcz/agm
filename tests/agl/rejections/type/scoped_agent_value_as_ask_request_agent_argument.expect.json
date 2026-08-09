@@ -1,1 +1,9 @@
-{"diagnostic": {"line": 9, "message_contains": ["Agent", "A::Agent"]}}
+{
+  "diagnostic": {
+    "line": 10,
+    "message_contains": [
+      "Agent",
+      "A::Agent"
+    ]
+  }
+}

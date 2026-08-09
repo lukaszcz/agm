@@ -23,12 +23,13 @@ def render_category(c: Category) -> text =
     result := result + " > " + render_category(child)
   result
 
-let grandchildren: array[Category] = if include_grandchild => [Category(name = "leaf", subcategories = [])] else => []
-let child = Category(name = child_name, subcategories = grandchildren)
-let root = Category(name = root_name, subcategories = [child])
-let empty_root = Category(name = "empty", subcategories = [])
+program def main() -> unit =
+  let grandchildren: array[Category] = if include_grandchild => [Category(name = "leaf", subcategories = [])] else => []
+  let child = Category(name = child_name, subcategories = grandchildren)
+  let root = Category(name = root_name, subcategories = [child])
+  let empty_root = Category(name = "empty", subcategories = [])
 
-print count_categories(root)
-print render_category(root)
-print count_categories(empty_root)
-print render_category(empty_root)
+  print count_categories(root)
+  print render_category(root)
+  print count_categories(empty_root)
+  print render_category(empty_root)

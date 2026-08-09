@@ -1,1 +1,8 @@
-{"diagnostic": {"line": 5, "message_contains": ["duplicate"]}}
+{
+  "diagnostic": {
+    "line": 6,
+    "message_contains": [
+      "duplicate"
+    ]
+  }
+}

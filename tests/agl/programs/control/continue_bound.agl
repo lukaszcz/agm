@@ -2,6 +2,8 @@
 # `continue` counts toward the iteration bound, so MaxIterationsExceeded is
 # raised after n iterations exactly as if the body had not used `continue`.
 param n: int
-do[n]
-  continue
-done
+
+program def main() -> unit =
+  do[n]
+    continue
+  done

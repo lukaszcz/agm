@@ -120,6 +120,7 @@ from agm.agl.syntax.types import (
     UnitT,
 )
 from agm.core.process import ProcessCaptureResult
+from tests._agl_helpers import run_inline_command
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -779,9 +780,9 @@ class TestDeclarations:
         assert len(exc.fields) == 2
         assert [f.name for f in exc.fields] == ["code", "reason"]
 
-    def test_named_program_syntax_is_rejected(self) -> None:
+    def test_program_keyword_requires_a_definition(self) -> None:
         with pytest.raises(AglSyntaxError):
-            parse("program myapp\n()")
+            parse("program()")
 
     def test_builtin_func_def(self) -> None:
         fd = first(parse("builtin def encode(x: text) -> int"))
@@ -922,14 +923,12 @@ class TestScopeRegions:
             "1 + 2",
             "value := 1",
             "infixl %%",
-            "program app",
         ),
         ids=(
             "expression",
             "infix-expression",
             "assignment",
             "infix",
-            "program",
         ),
     )
     def test_region_rejects_non_declaration_items(self, item: str) -> None:
@@ -4498,7 +4497,7 @@ print exec! true
             pytest.param("var exec! = 1", id="var_binder"),
             pytest.param("record R\n  exec!: int", id="record_field_name"),
             pytest.param("enum E\n  | ask!", id="enum_variant_name"),
-            pytest.param("program exec!\n()", id="legacy_program"),
+            pytest.param("program def exec!\n()", id="legacy_program"),
             pytest.param("for exec! in [] do 1 done", id="for_binder"),
             pytest.param("type exec! = int", id="type_name"),
         ),
@@ -4646,6 +4645,6 @@ print exec! true
         from agm.agl import PipelineDriver
 
         with patch("agm.core.process.run_capture_result", return_value=completed):
-            result = PipelineDriver().run("exec! true")
+            result = run_inline_command(PipelineDriver(), "exec! true")
 
         assert result.ok

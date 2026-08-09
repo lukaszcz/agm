@@ -13,6 +13,7 @@ def combine(private: int, other: int) -> int =
 
 def private(entry: Entry) -> text = "%{entry.label}=%{entry.private}"
 
-let entry = Entry(private = combine(2, 3), label = label)
-print(private(entry))
-print(combine(1, 1))
+program def main() -> unit =
+  let entry = Entry(private = combine(2, 3), label = label)
+  print(private(entry))
+  print(combine(1, 1))

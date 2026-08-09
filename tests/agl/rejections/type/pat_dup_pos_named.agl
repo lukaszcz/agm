@@ -1,7 +1,8 @@
 enum Opt
   | Some(value: int)
   | None
-let o: Opt = Opt::Some(value = 3)
-case o of
-  | Opt::Some(x, value = y) => print x
-  | None => ()
+program def main() -> unit =
+  let o: Opt = Opt::Some(value = 3)
+  case o of
+    | Opt::Some(x, value = y) => print x
+    | None => ()

@@ -99,6 +99,44 @@ def _agent_from_spec(name: str, spec: Any) -> ScriptedAgent:
     )
 
 
+def _run_prepared_entry(runtime: Any, prepared: Any, *, param_values: dict[str, Any]) -> Any:
+    """Run the sole selected file-style entry through the public pipeline seams."""
+    discovery = runtime.discover_params(prepared)
+    if discovery.checked is None:
+        return runtime.run_prepared(prepared, param_values=param_values)
+    preflight = runtime.preflight_params(
+        prepared,
+        param_values=param_values,
+        compiled=discovery.compiled,
+    )
+    if not preflight.result.ok:
+        return preflight.result
+    entry_programs = [item for item in discovery.programs if item.module.is_entry]
+    assert len(entry_programs) == 1
+    assert preflight.executable is not None
+    return runtime.run_prepared(
+        prepared,
+        param_values=param_values,
+        compiled=discovery.compiled,
+        executable=preflight.executable,
+        program_symbol=preflight.executable.program_symbols[entry_programs[0].node_id],
+    )
+
+
+def _run_source_entry(
+    runtime: Any,
+    source: str,
+    *,
+    roots: Any | None = None,
+    default_stdlib: bool = True,
+) -> Any:
+    """Prepare and invoke a sole explicit entry for focused file-style tests."""
+    from agm.agl import PipelineDriver
+
+    prepared = PipelineDriver.prepare_program(source, roots=roots, default_stdlib=default_stdlib)
+    return _run_prepared_entry(runtime, prepared, param_values={})
+
+
 def _run_program(
     source: str, scenario: dict[str, Any], program: Path
 ) -> tuple[Any, dict[str, ScriptedAgent], FakeShell]:
@@ -141,7 +179,6 @@ def _run_program(
             prepared = PipelineDriver.prepare_program(
                 source, entry_path=None, roots=roots, default_stdlib=default_stdlib
             )
-            result = runtime.run_prepared(prepared, param_values=scenario.get("params", {}))
         elif program.is_relative_to(EXTERNS_PROGRAMS_DIR):
             from agm.agl.modules.roots import RootSet
 
@@ -149,11 +186,10 @@ def _run_program(
             prepared = PipelineDriver.prepare_program(
                 source, entry_path=program, roots=roots, default_stdlib=default_stdlib
             )
-            result = runtime.run_prepared(prepared, param_values=scenario.get("params", {}))
         else:
-            result = runtime.run(
-                source, param_values=scenario.get("params", {}), default_stdlib=default_stdlib
-            )
+            prepared = PipelineDriver.prepare_program(source, default_stdlib=default_stdlib)
+
+        result = _run_prepared_entry(runtime, prepared, param_values=scenario.get("params", {}))
     return result, agents, shell
 
 
@@ -355,7 +391,8 @@ def test_qualified_std_core_print_still_works(capsys: pytest.CaptureFixture[str]
     declaration a bare ``print`` does, just by a qualified route."""
     from agm.agl import PipelineDriver
 
-    result = PipelineDriver().run('std/core::print("hi")\n')
+    runtime = PipelineDriver()
+    result = _run_source_entry(runtime, 'program def main() -> unit = std/core::print("hi")\n')
 
     assert list(result.diagnostics) == [], (
         f"unexpected static diagnostics: {' | '.join(d.message for d in result.diagnostics)}"
@@ -408,14 +445,17 @@ def test_scoped_stdlib_arrangement_runs_end_to_end(
     scoped_stdlib_root = _scoped_stdlib_root(tmp_path)
 
     program = (
-        'let r = Std::exec("echo hi")\nStd::print(r.stdout)\n'
-        'raise Std::RangeError(message = "boom")\n'
+        "program def main() -> unit =\n"
+        '  let r = Std::exec("echo hi")\n  Std::print(r.stdout)\n'
+        '  raise Std::RangeError(message = "boom")\n'
     )
 
     shell = FakeShell([{"command": "echo hi", "stdout": "hi\n"}])
     runtime = PipelineDriver()
     with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
-        result = runtime.run(program, roots=RootSet(roots=frozenset({scoped_stdlib_root})))
+        result = _run_source_entry(
+            runtime, program, roots=RootSet(roots=frozenset({scoped_stdlib_root}))
+        )
     shell.assert_complete()
 
     assert list(result.diagnostics) == [], (
@@ -443,12 +483,17 @@ def test_scoped_stdlib_arrangement_structured_exec_result_is_the_scoped_nominal(
 
     scoped_stdlib_root = _scoped_stdlib_root(tmp_path)
 
-    program = 'let r: Std::ExecResult = Std::exec("echo hi")\nStd::print(r.stdout)\n'
+    program = (
+        "program def main() -> unit =\n"
+        '  let r: Std::ExecResult = Std::exec("echo hi")\n  Std::print(r.stdout)\n'
+    )
 
     shell = FakeShell([{"command": "echo hi", "stdout": "hi\n"}])
     runtime = PipelineDriver()
     with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
-        result = runtime.run(program, roots=RootSet(roots=frozenset({scoped_stdlib_root})))
+        result = _run_source_entry(
+            runtime, program, roots=RootSet(roots=frozenset({scoped_stdlib_root}))
+        )
     shell.assert_complete()
 
     assert list(result.diagnostics) == [], (
@@ -472,12 +517,16 @@ def test_scoped_stdlib_arrangement_uncaught_host_raised_exec_error_reports_scope
 
     scoped_stdlib_root = _scoped_stdlib_root(tmp_path)
 
-    program = 'let out: text = Std::exec("false")\nStd::print(out)\n'
+    program = (
+        'program def main() -> unit =\n  let out: text = Std::exec("false")\n  Std::print(out)\n'
+    )
 
     shell = FakeShell([{"command": "false", "returncode": 1}])
     runtime = PipelineDriver()
     with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
-        result = runtime.run(program, roots=RootSet(roots=frozenset({scoped_stdlib_root})))
+        result = _run_source_entry(
+            runtime, program, roots=RootSet(roots=frozenset({scoped_stdlib_root}))
+        )
     shell.assert_complete()
 
     assert list(result.diagnostics) == [], (
@@ -505,11 +554,15 @@ def test_scoped_stdlib_arrangement_bare_print_is_undefined_but_qualified_works(
     roots = RootSet(roots=frozenset({scoped_stdlib_root}))
     runtime = PipelineDriver()
 
-    bare_result = runtime.run('print("hi")\n', roots=roots)
+    bare_result = _run_source_entry(
+        runtime, 'program def main() -> unit = print("hi")\n', roots=roots
+    )
     assert not bare_result.ok, "expected the bare 'print' call to be statically rejected"
     assert bare_result.diagnostics, "expected at least one diagnostic"
 
-    qualified_result = runtime.run('Std::print("hi")\n', roots=roots)
+    qualified_result = _run_source_entry(
+        runtime, 'program def main() -> unit = Std::print("hi")\n', roots=roots
+    )
     assert list(qualified_result.diagnostics) == [], (
         f"unexpected static diagnostics: "
         f"{' | '.join(d.message for d in qualified_result.diagnostics)}"
@@ -568,13 +621,14 @@ def test_scoped_builtin_hierarchy_declared_in_the_entry_module_catches_a_host_ra
         '    "caught"\n'
         "end Host\n"
         "builtin def print[T](value: T) -> unit\n"
-        'print(Host::run("false"))\n'
+        "program def main() -> unit =\n"
+        '  print(Host::run("false"))\n'
     )
 
     shell = FakeShell([{"command": "false", "returncode": 1}])
     runtime = PipelineDriver()
     with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
-        result = runtime.run(program, default_stdlib=False)
+        result = _run_source_entry(runtime, program, default_stdlib=False)
     shell.assert_complete()
 
     assert list(result.diagnostics) == [], (

@@ -1,3 +1,4 @@
 def dbl(n: int) -> int = n * 2
-let g: (int) -> text = dbl
-g
+program def main() -> unit =
+  let g: (int) -> text = dbl
+  g

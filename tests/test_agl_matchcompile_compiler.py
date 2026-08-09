@@ -86,7 +86,7 @@ from agm.agl.typecheck import (
 )
 from tests.agl.ir_harness import make_graph_from_files
 from tests.agl.match_reference import reference_action
-from tests.agl.module_graph import resolve_and_check_entry
+from tests.agl.module_graph import resolve_and_check_inline_entry
 
 _CAPS = HostCapabilities(
     supports_shell_exec=True,
@@ -98,7 +98,7 @@ _CAPS = HostCapabilities(
 
 
 def _compile(source: str) -> tuple[CheckedModule, Case, CompiledMatchSite]:
-    checked = resolve_and_check_entry(source, _CAPS)
+    checked = resolve_and_check_inline_entry(source, _CAPS)
     cases: list[Case] = []
 
     def collect(node: object) -> None:
@@ -112,7 +112,7 @@ def _compile(source: str) -> tuple[CheckedModule, Case, CompiledMatchSite]:
 
 
 def test_compiler_marks_a_refutable_let_with_its_decision_witness() -> None:
-    checked = resolve_and_check_entry("let true = false", _CAPS)
+    checked = resolve_and_check_inline_entry("let true = false", _CAPS)
     lets: list[LetDecl] = []
 
     def collect(node: object) -> None:
@@ -153,7 +153,7 @@ def test_issue_kind_is_selected_by_the_sealed_source_payload() -> None:
     assert isinstance(case_compiled.normalized.source, CaseSite)
     assert isinstance(case_compiled.issues[0], NonExhaustiveIssue)
 
-    checked = resolve_and_check_entry("let true = false", _CAPS)
+    checked = resolve_and_check_inline_entry("let true = false", _CAPS)
     lets: list[LetDecl] = []
 
     def collect(node: object) -> None:

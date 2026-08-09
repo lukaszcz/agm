@@ -3,15 +3,17 @@ param spec
 enum Review
   | Pass
   | Fail(issues: array[text])
-let impl = AgentCommand("impl")
-let reviewer = AgentCommand("reviewer")
-var artifact: text = ask("Implement %{spec}", agent = impl)
-var review: Review = Pass
-do[5]
-  review := ask("Review %{artifact}", agent = reviewer, on_parse_error = Retry(n = 2))
-  case review of
-    | Fail(issues) =>
-        artifact := ask("Fix %{issues} in %{artifact}", agent = impl)
-    | Pass() => ()
-until review is Pass
-print artifact
+
+program def main() -> unit =
+  let impl = AgentCommand("impl")
+  let reviewer = AgentCommand("reviewer")
+  var artifact: text = ask("Implement %{spec}", agent = impl)
+  var review: Review = Pass
+  do[5]
+    review := ask("Review %{artifact}", agent = reviewer, on_parse_error = Retry(n = 2))
+    case review of
+      | Fail(issues) =>
+          artifact := ask("Fix %{issues} in %{artifact}", agent = impl)
+      | Pass() => ()
+  until review is Pass
+  print artifact

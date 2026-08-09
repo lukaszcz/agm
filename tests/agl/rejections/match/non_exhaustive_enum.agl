@@ -1,7 +1,7 @@
 enum Choice
   | none
   | some(value: int)
-
-let value: Choice = none
-case value of
-  | none => ()
+program def main() -> unit =
+  let value: Choice = none
+  case value of
+    | none => ()

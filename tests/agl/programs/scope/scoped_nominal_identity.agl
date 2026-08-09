@@ -18,19 +18,20 @@ scope Right
 record Token(value: int)
 end Right
 
-let root = Token(value = 1)
-let left = Left::Token(value = 2)
-let right = Right::Token(value = 3)
+program def main() -> unit =
+  let root = Token(value = 1)
+  let left = Left::Token(value = 2)
+  let right = Right::Token(value = 3)
 
-let decoded: Left::Tree[int] = ask("Return a tree.")
-let flag = Left::Flag::on
-let matched = case flag of
-  | Left::Flag::on => "on"
-  | Left::Flag::off => "off"
+  let decoded: Left::Tree[int] = ask("Return a tree.")
+  let flag = Left::Flag::on
+  let matched = case flag of
+    | Left::Flag::on => "on"
+    | Left::Flag::off => "off"
 
-print(root.value)
-print(left.value)
-print(right.value)
-print(decoded.children[0].value)
-print(decoded.children[0].value == expected)
-print(matched)
+  print(root.value)
+  print(left.value)
+  print(right.value)
+  print(decoded.children[0].value)
+  print(decoded.children[0].value == expected)
+  print(matched)

@@ -20,6 +20,7 @@ from agm.agl.semantics.values import (
     RecordValue,
     TextValue,
 )
+from tests._agl_helpers import run_inline_command
 from tests.agl.ir_harness import (
     evaluate_ir,
     evaluate_ir_raises_with_agents,
@@ -318,7 +319,8 @@ def test_unit_typed_ask() -> None:
         calls.append(request)
         return "acknowledged"
 
-    result = PipelineDriver(agent_dispatcher=notify).run('ask("Notify!")\n()')
+    runtime = PipelineDriver(agent_dispatcher=notify)
+    result = run_inline_command(runtime, 'ask("Notify!")\n()')
     assert result.ok
     assert len(calls) == 1
 
@@ -329,9 +331,9 @@ def test_unit_typed_ask() -> None:
 
 
 def test_ask_inside_function() -> None:
-    """ask call site inside a function body — agent is captured in closure."""
+    """A root function uses an agent supplied by an immutable root parameter."""
     source = """\
-let namer = AgentCommand("namer")
+param namer: Agent = AgentCommand("namer")
 def get_name(prompt: text) -> text = ask(prompt, agent = namer)
 let name: text = get_name("What is the name?")
 name

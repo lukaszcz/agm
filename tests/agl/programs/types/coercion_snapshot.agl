@@ -10,16 +10,17 @@
 # container into a `json`-typed slot is a static error, not a silent copy.
 param seed: int
 
-var n: int = seed
-let widened: decimal = n
-let boxed: json = n
-n := n + 1
-print widened
-print boxed
-print n
+program def main() -> unit =
+  var n: int = seed
+  let widened: decimal = n
+  let boxed: json = n
+  n := n + 1
+  print widened
+  print boxed
+  print n
 
-var xs = [seed, seed + 1]
-let snapshot: json = xs as json
-xs[0] := -1
-print snapshot
-print xs
+  var xs = [seed, seed + 1]
+  let snapshot: json = xs as json
+  xs[0] := -1
+  print snapshot
+  print xs

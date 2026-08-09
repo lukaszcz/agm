@@ -16,24 +16,25 @@ enum T
   | Leaf
   | Pair(a: T, b: T)
 
-var t: T = Leaf()
-for i in 1 to 32 do
-  t := Pair(a = t, b = t)
-done
+program def main() -> unit =
+  var t: T = Leaf()
+  for i in 1 to 32 do
+    t := Pair(a = t, b = t)
+  done
 
-var u: T = Leaf()
-for i in 1 to 32 do
-  u := Pair(a = u, b = u)
-done
+  var u: T = Leaf()
+  for i in 1 to 32 do
+    u := Pair(a = u, b = u)
+  done
 
-print(t == t)
-print(t == u)
+  print(t == t)
+  print(t == u)
 
-# A mismatch buried under the shared structure must still be reported, so the
-# memo cannot be masking real differences.
-var v: T = Pair(a = Leaf(), b = Leaf())
-for i in 1 to 32 do
-  v := Pair(a = v, b = v)
-done
+  # A mismatch buried under the shared structure must still be reported, so the
+  # memo cannot be masking real differences.
+  var v: T = Pair(a = Leaf(), b = Leaf())
+  for i in 1 to 32 do
+    v := Pair(a = v, b = v)
+  done
 
-print(t == v)
+  print(t == v)

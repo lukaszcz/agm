@@ -35,41 +35,43 @@ param b: int
 param c: int
 
 # Tree[int]: build, fold, equality.
-let int_tree: Tree[int] = Node(
-  value = a,
-  left = Node(value = b, left = Leaf, right = Leaf),
-  right = Node(value = c, left = Leaf, right = Leaf),
-)
-let same_int_tree: Tree[int] = Node(
-  value = a,
-  left = Node(value = b, left = Leaf, right = Leaf),
-  right = Node(value = c, left = Leaf, right = Leaf),
-)
-let different_int_tree: Tree[int] = Node(value = a, left = Leaf, right = Leaf)
 
-print count_nodes(int_tree)
-print sum_ints(int_tree)
-print (int_tree == same_int_tree)
-print (int_tree == different_int_tree)
+program def main() -> unit =
+  let int_tree: Tree[int] = Node(
+    value = a,
+    left = Node(value = b, left = Leaf, right = Leaf),
+    right = Node(value = c, left = Leaf, right = Leaf),
+  )
+  let same_int_tree: Tree[int] = Node(
+    value = a,
+    left = Node(value = b, left = Leaf, right = Leaf),
+    right = Node(value = c, left = Leaf, right = Leaf),
+  )
+  let different_int_tree: Tree[int] = Node(value = a, left = Leaf, right = Leaf)
 
-# Tree[text]: the SAME generic declaration, a different instantiation.
-let text_tree: Tree[text] = Node(
-  value = "b",
-  left = Node(value = "a", left = Leaf, right = Leaf),
-  right = Node(value = "c", left = Leaf, right = Leaf),
-)
-print count_nodes(text_tree)
-print concat_texts(text_tree)
+  print count_nodes(int_tree)
+  print sum_ints(int_tree)
+  print (int_tree == same_int_tree)
+  print (int_tree == different_int_tree)
 
-# Tree[array[int]]: a container-of-container instantiation.
-let array_tree: Tree[array[int]] = Node(
-  value = [a, b],
-  left = Leaf,
-  right = Node(value = [c], left = Leaf, right = Leaf),
-)
-print count_nodes(array_tree)
-print sum_nested_arrays(array_tree)
+  # Tree[text]: the SAME generic declaration, a different instantiation.
+  let text_tree: Tree[text] = Node(
+    value = "b",
+    left = Node(value = "a", left = Leaf, right = Leaf),
+    right = Node(value = "c", left = Leaf, right = Leaf),
+  )
+  print count_nodes(text_tree)
+  print concat_texts(text_tree)
 
-case int_tree of
-  | Leaf => print "empty"
-  | Node(value, left, right) => print "root %{value}"
+  # Tree[array[int]]: a container-of-container instantiation.
+  let array_tree: Tree[array[int]] = Node(
+    value = [a, b],
+    left = Leaf,
+    right = Node(value = [c], left = Leaf, right = Leaf),
+  )
+  print count_nodes(array_tree)
+  print sum_nested_arrays(array_tree)
+
+  case int_tree of
+    | Leaf => print "empty"
+    | Node(value, left, right) => print "root %{value}"

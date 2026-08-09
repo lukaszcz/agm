@@ -4,8 +4,9 @@
 param arg
 param k: int
 
-let quoted: text = exec "printf '%s|' %{arg}"
-print quoted
+program def main() -> unit =
+  let quoted: text = exec "printf '%s|' %{arg}"
+  print quoted
 
-let digits: text = exec "printf '%s' %{k}"
-print digits
+  let digits: text = exec "printf '%s' %{k}"
+  print digits

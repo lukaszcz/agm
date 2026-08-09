@@ -20,8 +20,9 @@ def Workflow::Status::label(status: Workflow::Status) -> text =
     | Workflow::Status::waiting => "waiting"
     | Workflow::Status::completed => "completed"
 
-let task: Task = ask("Return a recursive task.", agent = reviewer)
-let status: Status = ask("Return a workflow status.", agent = reviewer)
-print(score(task))
-print(label(status))
-print(status is completed)
+program def main() -> unit =
+  let task: Task = ask("Return a recursive task.", agent = reviewer)
+  let status: Status = ask("Return a workflow status.", agent = reviewer)
+  print(score(task))
+  print(label(status))
+  print(status is completed)

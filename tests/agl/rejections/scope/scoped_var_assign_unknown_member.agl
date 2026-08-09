@@ -1,5 +1,5 @@
 scope Config
 var attempts = 0
 end Config
-
-Config::missing := 4
+program def main() -> unit =
+  Config::missing := 4

@@ -26,40 +26,41 @@ param shout: bool
 
 # Generic function values are fresh occurrences constrained by the other
 # argument of the enclosing declared call.
-print(app(id, 0))
-print(app(id, "fresh"))
-
-# Inferred A=int, B=int.
-print(apply(3, fn(n: int) -> int => n * 2))
-
-# Inferred A=int, B=text (result type differs from the argument type).
-print(apply(7, fn(n: int) -> text => "n=%{n}"))
-
-# Inferred A=text, B=int.
-print(apply("hello", fn(s: text) -> int => 5))
-
-# Explicit override pinning both type parameters.
-print(apply::[int, int](10, fn(n: int) -> int => n + 1))
-
-# `twice` instantiated at int and at text.
-print(twice(2, fn(n: int) -> int => n * n))
-print(twice("a", fn(s: text) -> text => s + "!"))
-
-# The type-variable lambda, instantiated at int and at text.
-print(via_lambda(99))
-print(via_lambda("kept"))
-
-# A GENERIC enum variant constructor as a first-class value, passed THROUGH the
-# generic HOF and called there — `apply` builds `Wrapper(value: "hi")` at runtime.
-let w: text -> Wrapper[text] = wrap
-let boxed = apply("hi", w)
-case boxed of
-  | wrap(value) => print "wrapped %{value}"
-
-# A generic HOF applied to an array element, with a param-selected transform.
 def loud(s: text) -> text = s + "!!!"
 def quiet(s: text) -> text = s
 
-let words = ["raw"]
-let transform: text -> text = if shout => loud else => quiet
-print(apply(words[0], transform))
+program def main() -> unit =
+  print(app(id, 0))
+  print(app(id, "fresh"))
+
+  # Inferred A=int, B=int.
+  print(apply(3, fn(n: int) -> int => n * 2))
+
+  # Inferred A=int, B=text (result type differs from the argument type).
+  print(apply(7, fn(n: int) -> text => "n=%{n}"))
+
+  # Inferred A=text, B=int.
+  print(apply("hello", fn(s: text) -> int => 5))
+
+  # Explicit override pinning both type parameters.
+  print(apply::[int, int](10, fn(n: int) -> int => n + 1))
+
+  # `twice` instantiated at int and at text.
+  print(twice(2, fn(n: int) -> int => n * n))
+  print(twice("a", fn(s: text) -> text => s + "!"))
+
+  # The type-variable lambda, instantiated at int and at text.
+  print(via_lambda(99))
+  print(via_lambda("kept"))
+
+  # A GENERIC enum variant constructor as a first-class value, passed THROUGH the
+  # generic HOF and called there — `apply` builds `Wrapper(value: "hi")` at runtime.
+  let w: text -> Wrapper[text] = wrap
+  let boxed = apply("hi", w)
+  case boxed of
+    | wrap(value) => print "wrapped %{value}"
+
+  # A generic HOF applied to an array element, with a param-selected transform.
+  let words = ["raw"]
+  let transform: text -> text = if shout => loud else => quiet
+  print(apply(words[0], transform))

@@ -22,10 +22,11 @@ def Signal::is_terminal(self) -> bool =
     | number(value) => false
     | stopped(reason) => true
 
-let signal: Signal = if
-    | mode == "idle" => idle
-    | mode == "number" => number(value = value)
-    | else => stopped(reason = "halt")
+program def main() -> unit =
+  let signal: Signal = if
+      | mode == "idle" => idle
+      | mode == "number" => number(value = value)
+      | else => stopped(reason = "halt")
 
-print(signal.describe())
-print(signal.is_terminal())
+  print(signal.describe())
+  print(signal.is_terminal())

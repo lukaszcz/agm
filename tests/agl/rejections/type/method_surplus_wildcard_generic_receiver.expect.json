@@ -1,1 +1,9 @@
-{"diagnostic": {"line": 4, "message_contains": ["Method 'm'", "needs a name"]}}
+{
+  "diagnostic": {
+    "line": 3,
+    "message_contains": [
+      "Method 'm'",
+      "needs a name"
+    ]
+  }
+}

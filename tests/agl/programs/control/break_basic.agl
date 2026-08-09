@@ -3,9 +3,11 @@
 #   - break inside if branch exits immediately
 #   - break in an inline body exits immediately
 param target: int
-var n: int = 0
-do
-  n := n + 1
-  if n >= target => break
-done
-print n
+
+program def main() -> unit =
+  var n: int = 0
+  do
+    n := n + 1
+    if n >= target => break
+  done
+  print n

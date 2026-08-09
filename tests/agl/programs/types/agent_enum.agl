@@ -1,18 +1,19 @@
-# Agent is ordinary enum data: constructors use both standard argument forms,
-# variants pattern-match, and JSON casts round-trip through the enum codec.
-let command: Agent = AgentCommand("echo hello")
-let claude = AgentClaude(model = "sonnet", thinking = "medium")
-let codex = AgentCodex("o3", "high")
-let pi = AgentPi(provider = "openai", model = "gpt", thinking = "low")
+program def main() -> unit =
+  # Agent is ordinary enum data: constructors use both standard argument forms,
+  # variants pattern-match, and JSON casts round-trip through the enum codec.
+  let command: Agent = AgentCommand("echo hello")
+  let claude = AgentClaude(model = "sonnet", thinking = "medium")
+  let codex = AgentCodex("o3", "high")
+  let pi = AgentPi(provider = "openai", model = "gpt", thinking = "low")
 
-print command
-print (claude == AgentClaude("sonnet", "medium"))
-print(render(codex))
-case pi of
-  | AgentPi(provider, model, thinking) => print "%{provider}/%{model}/%{thinking}"
-  | _ => ()
+  print command
+  print (claude == AgentClaude("sonnet", "medium"))
+  print(render(codex))
+  case pi of
+    | AgentPi(provider, model, thinking) => print "%{provider}/%{model}/%{thinking}"
+    | _ => ()
 
-let encoded: json = claude as json
-let decoded: Agent = encoded as Agent
-print (decoded == claude)
-print (encoded as? Agent)
+  let encoded: json = claude as json
+  let decoded: Agent = encoded as Agent
+  print (decoded == claude)
+  print (encoded as? Agent)

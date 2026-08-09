@@ -24,7 +24,7 @@ from tests.agl.ir_harness import (
     evaluate_ir,
     evaluate_ir_graph,
     evaluate_ir_graph_raises,
-    lower_ir,
+    lower_inline_ir,
     nominal_id_for,
 )
 
@@ -48,7 +48,7 @@ def test_wrap_mode_captures_synthetic_main_locals() -> None:
 
 
 def test_synthetic_main_runs_only_when_explicitly_selected() -> None:
-    executable = lower_ir("print 1")
+    executable = lower_inline_ir("print 1")
     synthetic_main = executable.synthetic_main_symbol
     assert synthetic_main is not None
 
@@ -63,7 +63,7 @@ def test_synthetic_main_runs_only_when_explicitly_selected() -> None:
 
 
 def test_empty_synthetic_main_lowers_and_runs_as_unit() -> None:
-    executable = lower_ir("def helper() -> unit = ()")
+    executable = lower_inline_ir("def helper() -> unit = ()")
     synthetic_main = executable.synthetic_main_symbol
     assert synthetic_main is not None
 
@@ -71,7 +71,7 @@ def test_empty_synthetic_main_lowers_and_runs_as_unit() -> None:
 
 
 def test_synthetic_main_discards_a_non_unit_body_result() -> None:
-    executable = lower_ir("1")
+    executable = lower_inline_ir("1")
     synthetic_main = executable.synthetic_main_symbol
     assert synthetic_main is not None
     main = executable.functions[executable.program_functions[synthetic_main]]
@@ -81,9 +81,9 @@ def test_synthetic_main_discards_a_non_unit_body_result() -> None:
 
 
 def test_validation_rejects_an_invalid_synthetic_main_symbol() -> None:
-    wrapped = lower_ir("let value = 1")
+    wrapped = lower_inline_ir("let value = 1")
     missing_symbol = replace(wrapped, synthetic_main_symbol=None)
-    file_program = lower_ir("program def main() -> unit = ()")
+    file_program = lower_inline_ir("program def main() -> unit = ()")
     (main_symbol,) = file_program.program_functions
     unmarked_symbol = replace(file_program, synthetic_main_symbol=main_symbol)
 
@@ -100,7 +100,7 @@ program def main() -> unit =
   let local = helper()
   print local
 """
-    executable = lower_ir(source)
+    executable = lower_inline_ir(source)
     (main_symbol,) = executable.program_functions
 
     result = IrInterpreter(executable).run(program_symbol=main_symbol)
@@ -176,7 +176,7 @@ let box = Alias(value = 1)
 box
 """
     result = evaluate_ir(source)
-    program = lower_ir(source)
+    program = lower_inline_ir(source)
 
     assert result["box"] == RecordValue(
         nominal_id_for(program, "Box"), "Box", {"value": IntValue(1)}

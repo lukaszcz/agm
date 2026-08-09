@@ -12,13 +12,14 @@ record Grid
 param a: int
 param b: int
 
-let box = Box(items = [a, b])
-let shared = box.items
+program def main() -> unit =
+  let box = Box(items = [a, b])
+  let shared = box.items
 
-box.items[0] := 0
-print(box.items)
-print(shared)
+  box.items[0] := 0
+  print(box.items)
+  print(shared)
 
-let grid = Grid(cells = [[a, b], [b, a]])
-grid.cells[1][0] := 999
-print(grid.cells)
+  let grid = Grid(cells = [[a, b], [b, a]])
+  grid.cells[1][0] := 999
+  print(grid.cells)

@@ -2,29 +2,30 @@
 # annotations, typed agent targets for every built-in.
 param payload: json
 
-let source = AgentCommand("source")
-let empty_array: array[text] = []
-let empty_map: dict[text, json] = {}
-print empty_array
-print empty_map
+program def main() -> unit =
+  let source = AgentCommand("source")
+  let empty_array: array[text] = []
+  let empty_map: dict[text, json] = {}
+  print empty_array
+  print empty_map
 
-let document: json = {
-  "quoted": 1,
-  shorthand: [true, false, null],
-  nested: {inner: ["x", 2.5]},
-}
-print document
+  let document: json = {
+    "quoted": 1,
+    shorthand: [true, false, null],
+    nested: {inner: ["x", 2.5]},
+  }
+  print document
 
-let fetched: json = ask("Emit a JSON document about %{payload}.", agent = source)
-print fetched
+  let fetched: json = ask("Emit a JSON document about %{payload}.", agent = source)
+  print fetched
 
-let n: int = ask("Emit a count.", agent = source)
-let d: decimal = ask("Emit a ratio.", agent = source)
-let flag: bool = ask("Emit a flag.", agent = source)
-let names: array[text] = ask("Emit names.", agent = source)
-let scores: dict[text, int] = ask("Emit scores.", agent = source)
-print n
-print d
-print flag
-print names
-print scores
+  let n: int = ask("Emit a count.", agent = source)
+  let d: decimal = ask("Emit a ratio.", agent = source)
+  let flag: bool = ask("Emit a flag.", agent = source)
+  let names: array[text] = ask("Emit names.", agent = source)
+  let scores: dict[text, int] = ask("Emit scores.", agent = source)
+  print n
+  print d
+  print flag
+  print names
+  print scores

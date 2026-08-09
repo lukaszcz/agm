@@ -24,8 +24,9 @@ declarations are valid intermediate items. To run a value-producing expression
 for effect without retaining its result, bind it to `_`:
 
 ```agl
-let _ = ["report"]
-print "report fetched"
+program def main() -> unit =
+  let _ = ["report"]
+  let _ = print "report fetched"
 ```
 
 `_` creates no readable name and may be used repeatedly. The same rule applies
@@ -61,7 +62,8 @@ constraint in the same enclosing expression:
 
 ```agl
 def choose[T](left: T, right: T) -> T = right
-let items = choose([], [1])
+program def main() -> unit =
+  let items = choose([], [1])
 ```
 
 If no such constraint determines the element type before the enclosing
@@ -234,7 +236,8 @@ record Box[T]
   value: T
 
 def build[T](factory: (T) -> Box[T], value: T) -> Box[T] = factory(value)
-let b = build(Box(value = ?), 5)  # the partial is int -> Box[int]
+program def main() -> unit =
+  let b = build(Box(value = ?), 5)
 ```
 
 Nullary variants of a generic enum carry no payload to infer from, so they
@@ -294,7 +297,8 @@ let n: Option[int] = none           # the nullary variant as a value
 Built-in exception types are constructed like records:
 
 ```agl
-raise Abort(message = "Cannot continue.")
+program def main() -> unit =
+  let _ = raise Abort(message = "Cannot continue.")
 ```
 
 ## Member access
@@ -309,14 +313,14 @@ record Meter
   value: int
 
 def Meter::add(self, amount: int) -> int = self.value + amount
-
-let meter = Meter(value = 4)
-let value = meter.value
-let add = meter.add
-let plus = meter.add(?)
-print(value)
-print(add(3))
-print(plus(5))
+program def main() -> unit =
+  let meter = Meter(value = 4)
+  let value = meter.value
+  let add = meter.add
+  let plus = meter.add(?)
+  let _ = print(value)
+  let _ = print(add(3))
+  let _ = print(plus(5))
 ```
 
 Thus `meter.add(3)` calls the method with `meter` as its receiver, while
@@ -490,10 +494,11 @@ structured values and JSON. `quote_strings` controls only a top-level `text`
 argument; when it is `false`, rendering text is identity.
 
 ```agl
-let _ = render("hi")                         # "\"hi\""
-let _ = render("hi", quote_strings = false)  # "hi"
-let _ = render([1, 2])                       # "[\n  1,\n  2\n]"
-let _ = render([1, 2], pretty = false)       # "[1, 2]"
+program def main() -> unit =
+  let _ = render("hi")
+  let _ = render("hi", quote_strings = false)
+  let _ = render([1, 2])
+  let _ = render([1, 2], pretty = false)
 ```
 
 `render` cannot be bound as a function value (`let f = render` is a static
@@ -519,13 +524,12 @@ prose, no repair. On success it returns the parsed JSON tree. On failure it
 raises a catchable `JsonParseError` ([Exceptions](exceptions.md)).
 
 ```agl
-let v: json = parse_json('{"key": 42}')   # json dict
-let n: json = parse_json("42")             # json number 42
-let b: json = parse_json("true")           # json boolean true
-
-# parse_json("42") ≠ "42" as json — the former parses; the latter embeds
-let embedded: json = "42" as json     # the JSON string "42" (wraps text)
-let parsed: json   = parse_json("42") # the JSON number 42 (interprets text)
+program def main() -> unit =
+  let v: json = parse_json('{"key": 42}')
+  let n: json = parse_json("42")
+  let b: json = parse_json("true")
+  let embedded: json = "42" as json
+  let parsed: json   = parse_json("42")
 ```
 
 **Contrast with `text as json`.** Because `text` is already JSON-shaped,
@@ -753,9 +757,10 @@ expression. A `let` pattern may destructure records or enums, but must be
 irrefutable for the complete initializer type:
 
 ```agl
-let x = 3
-let y = x + 1
-y                 # the block's value is y, an int
+program def main() -> unit =
+  let x = 3
+  let y = x + 1
+  let _ = y
 ```
 
 A block may end in a `let` or `var`. With no following item, the binder has no

@@ -1,2 +1,3 @@
 param spec
-let spec = "again"
+program def main() -> unit =
+  let spec = "again"

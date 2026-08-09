@@ -7,18 +7,20 @@ enum Option[T]
   | some(value: T)
 
 # A payload constructor pinned with `::[int]` is a positional function value.
-let mk: int -> Option[int] = some::[int]
-let v = mk(7)
 
-# A nullary constructor pinned with `::[int]` constructs directly.
-let z: Option[int] = none::[int]
+program def main() -> unit =
+  let mk: int -> Option[int] = some::[int]
+  let v = mk(7)
 
-# The qualified forms work the same way.
-let qmk: int -> Option[int] = Option[int]::some
-let qv = qmk(9)
-let qz: Option[int] = Option[int]::none
+  # A nullary constructor pinned with `::[int]` constructs directly.
+  let z: Option[int] = none::[int]
 
-print(v is Option::some)
-print(z is Option::none)
-print(qv is Option::some)
-print(qz is Option::none)
+  # The qualified forms work the same way.
+  let qmk: int -> Option[int] = Option[int]::some
+  let qv = qmk(9)
+  let qz: Option[int] = Option[int]::none
+
+  print(v is Option::some)
+  print(z is Option::none)
+  print(qv is Option::some)
+  print(qz is Option::none)

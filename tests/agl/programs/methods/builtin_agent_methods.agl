@@ -3,24 +3,25 @@
 # method form, and the free-function ask-request form.
 param mode: text
 
-let agents = [AgentCommand("typed"), AgentCommand("request")]
+program def main() -> unit =
+  let agents = [AgentCommand("typed"), AgentCommand("request")]
 
-if
-  | mode == "typed" =>
-      let count: int = agents[0].ask::[int](
-        "How many?",
-        format = "json",
-        strict_json = true,
-        on_parse_error = Abort,
-      )
-      print(count)
-  | mode == "defaulted" =>
-      let response = agents[0].ask("Use the defaults.")
-      print(response)
-  | mode == "request" =>
-      let request = agents[1].ask-request("Prepare a count.")
-      print(request.agent)
-  | else =>
-      let request = ask-request("Prepare a count.", agent = agents[1])
-      print(request.agent)
-      print(request.prompt)
+  if
+    | mode == "typed" =>
+        let count: int = agents[0].ask::[int](
+          "How many?",
+          format = "json",
+          strict_json = true,
+          on_parse_error = Abort,
+        )
+        print(count)
+    | mode == "defaulted" =>
+        let response = agents[0].ask("Use the defaults.")
+        print(response)
+    | mode == "request" =>
+        let request = agents[1].ask-request("Prepare a count.")
+        print(request.agent)
+    | else =>
+        let request = ask-request("Prepare a count.", agent = agents[1])
+        print(request.agent)
+        print(request.prompt)

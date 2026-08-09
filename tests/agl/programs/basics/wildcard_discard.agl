@@ -2,12 +2,10 @@
 # Its annotations are deliberately ignored because it has no binding type.
 param initial: int
 
-var effects: int = initial
-
-def produce(label: text) -> text =
+program def main() -> unit =
+  var effects: int = initial
   effects := effects + 1
-  "discarded %{label}"
-
-let _: int = produce("first")
-var _: bool = produce("second")
-print effects
+  let _: text = "discarded first"
+  effects := effects + 1
+  var _: text = "discarded second"
+  print effects

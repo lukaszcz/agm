@@ -11,12 +11,13 @@ exception AppError extends Exception
 param trigger: bool
 param code: int
 
-try
-  if trigger =>
-    raise Boom(message = "boom!", code = code)
-  else =>
-    print "no error"
-catch Boom as e =>
-  print "boom code %{e.code}"
-catch Exception as e =>
-  print "other"
+program def main() -> unit =
+  try
+    if trigger =>
+      raise Boom(message = "boom!", code = code)
+    else =>
+      print "no error"
+  catch Boom as e =>
+    print "boom code %{e.code}"
+  catch Exception as e =>
+    print "other"

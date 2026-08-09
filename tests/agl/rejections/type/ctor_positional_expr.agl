@@ -1,6 +1,7 @@
 record R
   *
   x: int
-let x = 1
-let r = R(x + 1)
-print r.x
+program def main() -> unit =
+  let x = 1
+  let r = R(x + 1)
+  print r.x

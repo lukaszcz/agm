@@ -4,17 +4,19 @@ param value
 param target
 
 # Attempt cast and inspect all fields on failure
-try
-  if target == "int" =>
-    let n = value as int
-    print "int: %{n}"
-  else =>
-    let d = value as decimal
-    print "decimal: %{d as text}"
-catch CastError as e =>
-  print "source: %{e.source_type}"
-  print "target: %{e.target_type}"
-  print "raw: %{e.raw}"
-  # message is non-empty
-  let has_msg = e.message as? text and e.message != ""
-  print "has_message: %{has_msg as text}"
+
+program def main() -> unit =
+  try
+    if target == "int" =>
+      let n = value as int
+      print "int: %{n}"
+    else =>
+      let d = value as decimal
+      print "decimal: %{d as text}"
+  catch CastError as e =>
+    print "source: %{e.source_type}"
+    print "target: %{e.target_type}"
+    print "raw: %{e.raw}"
+    # message is non-empty
+    let has_msg = e.message as? text and e.message != ""
+    print "has_message: %{has_msg as text}"

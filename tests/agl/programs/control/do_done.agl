@@ -3,8 +3,9 @@
 # MaxIterationsExceeded.  n=0 runs zero times and completes normally.
 param n: int
 
-var iters: int = 0
-do[n]
-  iters := iters + 1
-done
-print iters
+program def main() -> unit =
+  var iters: int = 0
+  do[n]
+    iters := iters + 1
+  done
+  print iters

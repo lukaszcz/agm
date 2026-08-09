@@ -1,2 +1,3 @@
 def fetch[T](p: text) -> T = ask::[T](p)
-fetch::[text]("hello")
+program def main() -> unit =
+  fetch::[text]("hello")

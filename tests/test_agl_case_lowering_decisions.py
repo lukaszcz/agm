@@ -36,7 +36,7 @@ from agm.agl.syntax.nodes import (
 )
 from tests.agl.ir_harness import compile_checked_module, lower_compiled_module
 from tests.agl.match_reference import case_sites
-from tests.agl.module_graph import resolve_and_check_entry
+from tests.agl.module_graph import resolve_and_check_inline_entry
 
 
 def _lower(source: str) -> ExecutableProgram:
@@ -48,7 +48,7 @@ def _lower(source: str) -> ExecutableProgram:
             ),
         }
     )
-    checked = resolve_and_check_entry(source, capabilities)
+    checked = resolve_and_check_inline_entry(source, capabilities)
     compiled = compile_checked_module(checked)
     return lower_compiled_module(compiled, source_text=source)
 
@@ -93,7 +93,7 @@ def test_record_root_decomposition_projects_only_demanded_fields_without_a_switc
 def test_lowering_rejects_a_forged_failed_decision(self_validation_disabled: None) -> None:
     """A failed decision path cannot become executable IR."""
     source = "let value = 1\ncase value of | _ => 1\n"
-    checked = resolve_and_check_entry(source, HostCapabilities())
+    checked = resolve_and_check_inline_entry(source, HostCapabilities())
     compiled = compile_checked_module(checked)
     case_id, compiled_case = next(iter(case_sites(compiled.sites).items()))
     forged = replace(
@@ -110,7 +110,7 @@ def test_lowering_rejects_a_forged_record_switch(self_validation_disabled: None)
         "record Box\n  value: int\nlet value = Box(value = 1)\n"
         "case value of | Box(value = _) => 1\n"
     )
-    checked = resolve_and_check_entry(source, HostCapabilities())
+    checked = resolve_and_check_inline_entry(source, HostCapabilities())
     compiled = compile_checked_module(checked)
     case_id, compiled_case = next(iter(case_sites(compiled.sites).items()))
     root = compiled_case.root

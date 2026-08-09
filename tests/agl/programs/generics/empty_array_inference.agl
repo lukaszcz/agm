@@ -11,14 +11,16 @@ def wrap[T](xs: array[T]) -> Bag[T] = Bag(items = xs)
 param n: int
 
 # Empty-array field resolved purely from the `Bag[int]` annotation.
-let empty: Bag[int] = Bag(items = [])
-print empty.items
 
-# Non-empty construction for contrast (inference from the payload).
-let full: Bag[int] = Bag(items = [n, n + 1])
-print full.items
+program def main() -> unit =
+  let empty: Bag[int] = Bag(items = [])
+  print empty.items
 
-# Generic function whose empty-array argument is resolved from the expected
-# `Bag[text]` result type.
-let words: Bag[text] = wrap([])
-print words.items
+  # Non-empty construction for contrast (inference from the payload).
+  let full: Bag[int] = Bag(items = [n, n + 1])
+  print full.items
+
+  # Generic function whose empty-array argument is resolved from the expected
+  # `Bag[text]` result type.
+  let words: Bag[text] = wrap([])
+  print words.items

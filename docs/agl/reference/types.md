@@ -81,7 +81,8 @@ expressions such as `print(…)`, `:=`, an `if` without an `else` branch, and
 loops all have type `unit`.
 
 ```agl
-let _: unit = print "hello"
+program def main() -> unit =
+  let _: unit = print "hello"
 ```
 
 `unit` cannot be JSON-encoded or stored in a `json` slot; it renders and
@@ -165,10 +166,10 @@ contains it — a genuine reference cycle:
 
 ```agl
 record Node(children: array[Node])
-
-var xs: array[Node] = [Node(children = [])]
-let n = Node(children = xs)
-xs[0] := n            # xs now contains n, and n.children is xs itself
+program def main() -> unit =
+  var xs: array[Node] = [Node(children = [])]
+  let n = Node(children = xs)
+  xs[0] := n
 ```
 
 A record, enum, or exception cannot be self-referential on its own — every
@@ -231,11 +232,12 @@ never recurses, so it can never loop and never raises, even on a cyclic
 value.
 
 ```agl
-var inner = [1, 2]
-var outer = [inner]
-let copied = shallow_copy(outer)
-copied[0][0] := 9
-print(outer)     # [[9, 2]] -- inner is shared, so the mutation is visible
+program def main() -> unit =
+  var inner = [1, 2]
+  var outer = [inner]
+  let copied = shallow_copy(outer)
+  copied[0][0] := 9
+  let _ = print(outer)
 ```
 
 `copy` is deep: every array, dict, record, enum, and exception reachable from
@@ -255,12 +257,13 @@ separate structure — printing or otherwise walking the *copy* of a cyclic
 value still raises, exactly as it would for the original.
 
 ```agl
-var shared = [1]
-var pair = [shared, shared]
-let copied = copy(pair)
-copied[0][0] := 9
-print(pair)     # [[1], [1]]  -- the original is untouched
-print(copied)   # [[9], [9]]  -- both slots still point at the SAME new array
+program def main() -> unit =
+  var shared = [1]
+  var pair = [shared, shared]
+  let copied = copy(pair)
+  copied[0][0] := 9
+  let _ = print(pair)
+  let _ = print(copied)
 ```
 
 ### Function types: `A -> B` and `(A, B, …) -> C`
@@ -947,16 +950,11 @@ not implicitly assignable to `json`; `as json` must be written explicitly:
 record R
   x: int
 
-let r: R = R(x = 1)
-print r              # → R(x = 1)      (AgL render form — the default)
-
-# print renders a json value as compact JSON, same as any other value:
-print(r as json)     # → {"x": 1}
-
-# For indented, multi-line output, call render explicitly:
-print render(r as json, pretty = true)   # → {
-                                          #      "x": 1
-                                          #    }
+program def main() -> unit =
+  let r: R = R(x = 1)
+  let _ = print r
+  let _ = print(r as json)
+  let _ = print render(r as json, pretty = true)
 ```
 
 A record (or exception) with a field of type `unit` or a function type cannot

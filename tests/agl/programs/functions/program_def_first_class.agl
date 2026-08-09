@@ -1,5 +1,11 @@
-program def entry() -> unit = print "called"
+# A program def is an ordinary first-class callable, not a host-only entry.
+var invoked: bool = false
 
 def invoke(f: () -> unit) -> unit = f()
 
-invoke(entry)
+program def entry() -> unit =
+  if
+    | invoked => print "called"
+    | else =>
+      invoked := true
+      invoke(entry)

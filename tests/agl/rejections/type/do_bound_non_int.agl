@@ -1,3 +1,4 @@
-do[true]
-  ()
-until true
+program def main() -> unit =
+  do[true]
+    ()
+  until true

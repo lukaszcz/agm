@@ -19,7 +19,7 @@ from agm.agl.runtime.option import some_value
 from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, TextValue, Value
 from agm.agl.syntax import BuiltinVarDecl, Call, Expr, VarRef, walk
 from agm.agl.syntax.constants import is_constant_expression
-from tests._agl_helpers import agent_value
+from tests._agl_helpers import agent_value, run_inline_command
 
 _STDLIB = Path(__file__).resolve().parent.parent / "stdlib"
 
@@ -27,10 +27,7 @@ _STDLIB = Path(__file__).resolve().parent.parent / "stdlib"
 def _run(source: str, *, default_loop_limit: int | None = None) -> RunResult:
     """Run a single-module *source* (no imports) through prepare + run_prepared."""
     rt = PipelineDriver(default_loop_limit=default_loop_limit)
-    prepared = rt.prepare_program(source)
-    result = rt.run_prepared(prepared)
-    assert isinstance(result, RunResult)
-    return result
+    return run_inline_command(rt, source)
 
 
 def _run_program(
@@ -47,10 +44,7 @@ def _run_program(
         default_loop_limit=default_loop_limit,
         shell_exec_timeout=shell_exec_timeout,
     )
-    prepared = rt.prepare_program(source, entry_path=None, roots=roots)
-    result = rt.run_prepared(prepared, builtin_host_settings=builtin_host_settings)
-    assert isinstance(result, RunResult)
-    return result
+    return run_inline_command(rt, source, roots=roots, builtin_host_settings=builtin_host_settings)
 
 
 def _run_with_std_config(
@@ -65,15 +59,13 @@ def _run_with_std_config(
     config_path.parent.mkdir(parents=True)
     config_path.write_text(std_config, encoding="utf-8")
     rt = PipelineDriver()
-    prepared = rt.prepare_program(
+    return run_inline_command(
+        rt,
         source,
-        entry_path=None,
         roots=RootSet(roots=frozenset({root})),
         default_stdlib=False,
+        builtin_host_settings=builtin_host_settings,
     )
-    result = rt.run_prepared(prepared, builtin_host_settings=builtin_host_settings)
-    assert isinstance(result, RunResult)
-    return result
 
 
 # ---------------------------------------------------------------------------

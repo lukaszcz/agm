@@ -1,4 +1,5 @@
 record P(x: int, y: int)
-let p = P(1, 2)
-let q = p with z = 3
-print q.x
+program def main() -> unit =
+  let p = P(1, 2)
+  let q = p with z = 3
+  print q.x

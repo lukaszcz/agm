@@ -1,1 +1,2 @@
-raise Exception(message = "x")
+program def main() -> unit =
+  raise Exception(message = "x")

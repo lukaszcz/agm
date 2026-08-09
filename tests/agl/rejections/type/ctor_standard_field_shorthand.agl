@@ -1,8 +1,8 @@
 record Pair
   left: int
   right: text
-
-let left = 1
-let right = "right"
-let pair = Pair(right, left)
-pair
+program def main() -> unit =
+  let left = 1
+  let right = "right"
+  let pair = Pair(right, left)
+  pair

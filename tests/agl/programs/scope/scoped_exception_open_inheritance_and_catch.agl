@@ -18,5 +18,6 @@ def describe(trigger: bool) -> text =
   catch Base as e =>
     "base %{e.code}"
 
-print describe(true)
-print describe(false)
+program def main() -> unit =
+  print describe(true)
+  print describe(false)

@@ -25,9 +25,10 @@ enum Flag
   | Ready
 def Flag::label() -> text = "ready"
 
-print add(2, 3)
-print Metrics::scale(3)
-print format(4)
-print visible()
-print Ready
-print label()
+program def main() -> unit =
+  print add(2, 3)
+  print Metrics::scale(3)
+  print format(4)
+  print visible()
+  print Ready
+  print label()

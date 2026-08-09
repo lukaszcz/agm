@@ -1,2 +1,3 @@
 param p: int
-p := 2
+program def main() -> unit =
+  p := 2

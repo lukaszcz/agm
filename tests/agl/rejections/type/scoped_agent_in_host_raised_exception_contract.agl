@@ -22,4 +22,5 @@ def trigger() -> text =
       | AgentCodex(model, thinking) => model
       | AgentPi(provider, model, thinking) => model
 end A
-print A::trigger()
+program def main() -> unit =
+  print A::trigger()

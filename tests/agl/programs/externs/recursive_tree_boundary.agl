@@ -12,11 +12,12 @@ extern def sum_tree(t: Tree) -> int
 
 param n: int
 
-let built = build_tree(n)
-print sum_tree(built)
+program def main() -> unit =
+  let built = build_tree(n)
+  print sum_tree(built)
 
-let manual = Node(
-  left = Leaf(value = 10),
-  right = Node(left = Leaf(value = 20), right = Leaf(value = 30)),
-)
-print sum_tree(manual)
+  let manual = Node(
+    left = Leaf(value = 10),
+    right = Node(left = Leaf(value = 20), right = Leaf(value = 30)),
+  )
+  print sum_tree(manual)

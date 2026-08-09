@@ -1,4 +1,5 @@
-try
-  ()
-catch _ as e =>
-  print e.raw
+program def main() -> unit =
+  try
+    ()
+  catch _ as e =>
+    print e.raw

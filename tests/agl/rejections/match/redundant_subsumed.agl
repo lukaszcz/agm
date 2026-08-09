@@ -1,4 +1,5 @@
-let value = 1
-case value of
-  | _ => ()
-  | 1 => ()
+program def main() -> unit =
+  let value = 1
+  case value of
+    | _ => ()
+    | 1 => ()

@@ -217,11 +217,12 @@ record Person
 def Person::with_address(self, address: text) -> Person =
   Person(name = self.name, address = address)
 
-let person = Person(name = "Ada", address = "Main Street")
-let by_member = person.with_address("East Road")
-let by_path = Person::with_address(person, "East Road")
-print(by_member.address)
-print(by_path.address)
+program def main() -> unit =
+  let person = Person(name = "Ada", address = "Main Street")
+  let by_member = person.with_address("East Road")
+  let by_path = Person::with_address(person, "East Road")
+  let _ = print(by_member.address)
+  let _ = print(by_path.address)
 ```
 
 `self` must be the first parameter, before any zone marker. It has no default
@@ -241,10 +242,10 @@ record Box[T]
 
 def Box::get[E](self: Box[E]) -> E = self.value
 def Box::size[_](self) -> int = 1
-
-let box = Box(value = 7)
-print(box.get())
-print(box.size())
+program def main() -> unit =
+  let box = Box(value = 7)
+  let _ = print(box.get())
+  let _ = print(box.size())
 ```
 
 A method member used without a call is a **bound method**: a function value
@@ -257,14 +258,13 @@ record Meter
   value: int
 
 def Meter::add(self, amount: int) -> int = self.value + amount
-
 def apply(value: int, f: int -> int) -> int = f(value)
-
-let meter = Meter(value = 4)
-let add = meter.add
-let plus = meter.add(?)
-print(apply(3, add))
-print(plus(5))
+program def main() -> unit =
+  let meter = Meter(value = 4)
+  let add = meter.add
+  let plus = meter.add(?)
+  let _ = print(apply(3, add))
+  let _ = print(plus(5))
 ```
 
 The `self` spelling is special only in this receiver position. An annotated
@@ -307,24 +307,26 @@ when omitted it is inferred from the body. Parameter types are always
 required.
 
 ```agl
-let double = fn(x: int) => x * 2
-let add    = fn(x: int, y: int) -> int => x + y
-let greet  = fn(name: text) -> text => "Hello, %{name}!"
+program def main() -> unit =
+  let double = fn(x: int) => x * 2
+  let add    = fn(x: int, y: int) -> int => x + y
+  let greet  = fn(name: text) -> text => "Hello, %{name}!"
 ```
 
 A lambda is an ordinary expression and may appear anywhere an expression is
 accepted — in a binding, as a call argument, or in an array:
 
 ```agl
-let ops: array[int -> int] = [fn(x: int) => x + 1, fn(x: int) => x * 2]
+program def main() -> unit =
+  let ops: array[int -> int] = [fn(x: int) => x + 1, fn(x: int) => x * 2]
 ```
 
 When used in juxtaposition position (as the right operand of an operator or
 the lone argument to a single-arg call), a lambda must be parenthesized:
 
 ```agl
-# Correct: parenthesized lambda in operator position
-let result = (fn(x: int) => x + 1)(5)
+program def main() -> unit =
+  let result = (fn(x: int) => x + 1)(5)
 ```
 
 ### Lambdas are not self-recursive
@@ -398,9 +400,9 @@ its instantiation. An expected function type does so for an annotated binding:
 
 ```agl
 def id[T](x: T) -> T = x
-
-let f: text -> text = id      # T = text, fixed by the annotation
-print(f("via value"))
+program def main() -> unit =
+  let f: text -> text = id
+  let _ = print(f("via value"))
 ```
 
 A higher-order declared call can supply those constraints through its other
@@ -409,8 +411,8 @@ arguments, so a generic function occurrence is fresh at each use:
 ```agl
 def apply[T](f: T -> T, value: T) -> T = f(value)
 def id[T](value: T) -> T = value
-
-let n = apply(id, 5)              # `id` is instantiated as int -> int
+program def main() -> unit =
+  let n = apply(id, 5)
 ```
 
 You can also pin the instantiation explicitly without calling the function:
@@ -498,17 +500,14 @@ arguments at the call site.
 
 ```agl
 def add(x: int, y: int) -> int = x + y
-let r = add(3, 4)          # x=3, y=4 (both standard — positional or named)
-let s = add(3, y = 4)      # x=3 positional, y=4 named
-
 def f(x: int, /, y: int) -> int = x + y
-let a = f(1, 2)            # x=1 positional-only, y=2 positional
-let b = f(1, y = 2)        # x=1 positional-only, y=2 named (standard)
-# f(x = 1, y = 2) is an error — x is positional-only
-
 def g(x: int, *, z: int) -> int = x + z
-let c = g(5, z = 3)        # x=5 (standard), z=3 named-only
-# g(5, 3) is an error — z is named-only, positional not permitted
+program def main() -> unit =
+  let r = add(3, 4)
+  let s = add(3, y = 4)
+  let a = f(1, 2)
+  let b = f(1, y = 2)
+  let c = g(5, z = 3)
 ```
 
 **Named-only shorthand.** When a bare variable name `x` appears in a
@@ -519,9 +518,10 @@ position is an error:
 
 ```agl
 def h(a: int, *, key: text) -> text = "%{a}: %{key}"
-let key = "hello"
-print(h(1, key))           # key is bare name, lands on named-only 'key' → key = key
-print(h(1, key = key))     # explicit form, identical result
+program def main() -> unit =
+  let key = "hello"
+  let _ = print(h(1, key))
+  let _ = print(h(1, key = key))
 ```
 
 **Defaults.** Defaulted parameters may be omitted. Named-only defaults may be
@@ -531,8 +531,9 @@ supplied in any order:
 def format_msg(text: text, prefix: text = "[INFO]") -> text =
   "%{prefix} %{text}"
 
-let _ = format_msg("Done.")              # prefix uses its default
-let _ = format_msg("Done.", prefix = "!") # prefix supplied by name
+program def main() -> unit =
+  let _ = format_msg("Done.")
+  let _ = format_msg("Done.", prefix = "!")
 ```
 
 Unknown names, duplicates, and supplying a positional-only parameter by name
@@ -560,8 +561,8 @@ expression are considered together, so this needs no intermediate annotation:
 
 ```agl
 def maker[T]() -> T -> T = fn(value: T) => value
-
-let number = maker()(7)        # T = int
+program def main() -> unit =
+  let number = maker()(7)
 ```
 
 Each occurrence is inferred independently. As with any generic expression,
@@ -578,18 +579,15 @@ functions, constructors, and function values.
 
 ```agl
 def add(a: int, b: int) -> int = a + b
-
 def digits(a: int, b: int, c: int) -> int = a * 100 + b * 10 + c
-
-let inc: (int) -> int = add(?, 1)
-print(inc(4))                  # 5
-
-let plus: (int, int) -> int = add
-let plus_two: (int) -> int = plus(?, 2)
-print(plus_two(5))              # 7
-
-let fill_edges: (int, int) -> int = digits(?, 9, ?)
-print(fill_edges(1, 2))         # 192
+program def main() -> unit =
+  let inc: (int) -> int = add(?, 1)
+  let _ = print(inc(4))
+  let plus: (int, int) -> int = add
+  let plus_two: (int) -> int = plus(?, 2)
+  let _ = print(plus_two(5))
+  let fill_edges: (int, int) -> int = digits(?, 9, ?)
+  let _ = print(fill_edges(1, 2))
 ```
 
 The resulting function type has one parameter for each placeholder. Each
@@ -617,11 +615,11 @@ parameters:
 
 ```agl
 def shaped(x: int, *, y: int, z: int = 0) -> int = x * 100 + y * 10 + z
-
-let fill_y: (int) -> int = shaped(3, y = ?, z = 9)
-let fill_x: (int) -> int = shaped(x = ?, y = 4)
-print(fill_y(5))                # 359
-print(fill_x(2))                # 240
+program def main() -> unit =
+  let fill_y: (int) -> int = shaped(3, y = ?, z = 9)
+  let fill_x: (int) -> int = shaped(x = ?, y = 4)
+  let _ = print(fill_y(5))
+  let _ = print(fill_x(2))
 ```
 
 For constructors, the same argument binding rules apply:
@@ -630,8 +628,9 @@ For constructors, the same argument binding rules apply:
 record Box[T]
   value: T
 
-let make_box: (int) -> Box[int] = Box(value = ?)
-print(make_box(8).value)        # 8
+program def main() -> unit =
+  let make_box: (int) -> Box[int] = Box(value = ?)
+  let _ = print(make_box(8).value)
 ```
 
 Non-placeholder arguments, and the callee expression for a function-value call,
@@ -652,13 +651,14 @@ def add_saved(a: int, b: int) -> int = a + b
 
 def stamped(x: int, suffix: int = next_tick()) -> int = x * 10 + suffix
 
-let use_saved = add_saved(?, saved)
-saved := 100
-print(use_saved(6))             # 10; captured saved = 4
+program def main() -> unit =
+  let use_saved = add_saved(?, saved)
+  saved := 100
+  print(use_saved(6))             # 10; captured saved = 4
 
-let stamp: (int) -> int = stamped(?)
-print(stamp(2))                 # 21
-print(stamp(2))                 # 22; default ran again
+  let stamp: (int) -> int = stamped(?)
+  print(stamp(2))                 # 21
+  print(stamp(2))                 # 22; default ran again
 ```
 
 An exception raised while evaluating a captured callee or non-placeholder
@@ -667,21 +667,20 @@ underlying call is raised when the closure is invoked:
 
 ```agl
 def add(a: int, b: int) -> int = a + b
-
 def fail_created() -> int = raise Abort(message = "created")
 def fail_called(x: int) -> int = raise Abort(message = "called %{x}")
+program def main() -> unit =
+  let _ = try
+    let f = add(?, fail_created())
+    print(f(1))
+  catch Abort as e =>
+    print(e.message)              # created
 
-try
-  let f = add(?, fail_created())
-  print(f(1))
-catch Abort as e =>
-  print(e.message)              # created
-
-try
-  let g = fail_called(?)
-  print(g(9))
-catch Abort as e =>
-  print(e.message)              # called 9
+  let _ = try
+    let g = fail_called(?)
+    print(g(9))
+  catch Abort as e =>
+    print(e.message)
 ```
 
 Generic callees infer type arguments jointly from non-placeholder arguments,
@@ -693,19 +692,15 @@ the `::[…]` form.
 
 ```agl
 def id[T](x: T) -> T = x
-
 def singleton[T](x: T) -> array[T] = [x]
-
 def map_one[A, B](f: (A) -> B, xs: array[A]) -> array[B] = [f(xs[0])]
-
-let keep_ints: (array[int]) -> array[int] = map_one(id, ?)
-print(keep_ints([5])[0])        # 5
-
-let make_single: (int) -> array[int] = singleton(?)
-print(make_single(7)[0])        # 7
-
-let make_text = singleton::[text](?)
-print(make_text("hi")[0])       # hi
+program def main() -> unit =
+  let keep_ints: (array[int]) -> array[int] = map_one(id, ?)
+  let _ = print(keep_ints([5])[0])
+  let make_single: (int) -> array[int] = singleton(?)
+  let _ = print(make_single(7)[0])
+  let make_text = singleton::[text](?)
+  let _ = print(make_text("hi")[0])
 ```
 
 Error conditions are reported statically:
@@ -777,8 +772,9 @@ it raises `RecursionError` ([Exceptions](exceptions.md)):
 def fact(n: int) -> int =
   if n <= 1 => 1 else => n * fact(n - 1)
 
-let r = fact(10)     # fine
-let s = fact(10000)  # raises RecursionError at depth limit
+program def main() -> unit =
+  let r = fact(10)
+  let s = fact(10000)
 ```
 
 `RecursionError` is catchable with `try`/`catch`. The limit counts
@@ -826,10 +822,12 @@ def review_artifact(artifact: text) -> Review =
   r
 
 param spec: text
-let artifact: text = ask "Implement %{spec}"
-let result = review_artifact(artifact)
 
-case result of
-  | Pass => print "Accepted."
-  | Fail(issues) => print(summarize_issues(issues))
+program def main() -> unit =
+  let artifact: text = ask "Implement %{spec}"
+  let result = review_artifact(artifact)
+
+  case result of
+    | Pass => print "Accepted."
+    | Fail(issues) => print(summarize_issues(issues))
 ```

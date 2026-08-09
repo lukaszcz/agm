@@ -1,3 +1,4 @@
-for i in 1 to i do
-  ()
-done
+program def main() -> unit =
+  for i in 1 to i do
+    ()
+  done

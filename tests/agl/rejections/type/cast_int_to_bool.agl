@@ -1,1 +1,2 @@
-let b = 1 as bool
+program def main() -> unit =
+  let b = 1 as bool

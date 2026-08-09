@@ -7,21 +7,22 @@ param tag: int
 
 record Node(children: array[Node], tag: array[int])
 
-var xs: array[Node] = [Node(children = [], tag = [tag])]
-let n = Node(children = xs, tag = [tag])
-xs[0] := n
+program def main() -> unit =
+  var xs: array[Node] = [Node(children = [], tag = [tag])]
+  let n = Node(children = xs, tag = [tag])
+  xs[0] := n
 
-let ys = copy(xs)
-print("copy did not raise")
+  let ys = copy(xs)
+  print("copy did not raise")
 
-try
-  print(ys)
-catch CyclicValueError =>
-  print("print raised CyclicValueError")
+  try
+    print(ys)
+  catch CyclicValueError =>
+    print("print raised CyclicValueError")
 
-# Equality is cycle-safe and co-inductive, so it can compare the two cyclic
-# structures without ever rendering them: isomorphic right after the copy,
-# no longer equal once the original's cycle is mutated and the copy's is not.
-print(xs == ys)
-xs[0].tag[0] := 999
-print(xs == ys)
+  # Equality is cycle-safe and co-inductive, so it can compare the two cyclic
+  # structures without ever rendering them: isomorphic right after the copy,
+  # no longer equal once the original's cycle is mutated and the copy's is not.
+  print(xs == ys)
+  xs[0].tag[0] := 999
+  print(xs == ys)

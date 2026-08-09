@@ -12,21 +12,22 @@ def bump(xs: array[int]) -> unit =
 
 param seed: int
 
-var l = [seed, seed + 1]
-var l2 = l
-let l3 = l
-let box = Box(items = l)
+program def main() -> unit =
+  var l = [seed, seed + 1]
+  var l2 = l
+  let l3 = l
+  let box = Box(items = l)
 
-l[0] := 0
-print(l)
-print(l2)
-print(l3)
-print(box.items)
-print(first_of(l))
+  l[0] := 0
+  print(l)
+  print(l2)
+  print(l3)
+  print(box.items)
+  print(first_of(l))
 
-bump(l)
-print(l)
-print(l2)
-print(l3)
-print(box.items)
-print(first_of(l))
+  bump(l)
+  print(l)
+  print(l2)
+  print(l3)
+  print(box.items)
+  print(first_of(l))

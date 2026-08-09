@@ -3,11 +3,13 @@
 # We verify by putting `i := i + 100` after the continue: if it were reached,
 # the observable `i` would be much larger than `n`.
 param n: int
-var i: int = 0
-do
-  i := i + 1
-  if i >= n => break
-  continue
-  i := i + 100
-done
-print i
+
+program def main() -> unit =
+  var i: int = 0
+  do
+    i := i + 1
+    if i >= n => break
+    continue
+    i := i + 100
+  done
+  print i

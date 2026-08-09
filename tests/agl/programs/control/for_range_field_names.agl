@@ -5,12 +5,13 @@ record Step
   to: int
   downto: int
 
-let s = Step(by = 3, to = 10, downto = 2)
-print s.by
-print s.to
-print s.downto
+program def main() -> unit =
+  let s = Step(by = 3, to = 10, downto = 2)
+  print s.by
+  print s.to
+  print s.downto
 
-for i in s.by to s.to do
-  ()
-done
-print "ok"
+  for i in s.by to s.to do
+    ()
+  done
+  print "ok"

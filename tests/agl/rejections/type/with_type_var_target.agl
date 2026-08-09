@@ -1,3 +1,4 @@
 def keep[T](x: T) -> T = x with y = 1
 record P(x: int, y: int)
-print keep(P(1, 2)).y
+program def main() -> unit =
+  print keep(P(1, 2)).y

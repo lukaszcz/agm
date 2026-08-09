@@ -11,6 +11,7 @@ def build(k: int)
   else =>
     build(k - 1) with count = k, last = k * 10
 
-let t = build(n)
-print t.count
-print t.last
+program def main() -> unit =
+  let t = build(n)
+  print t.count
+  print t.last

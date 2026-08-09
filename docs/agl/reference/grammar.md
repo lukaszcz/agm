@@ -542,8 +542,9 @@ or as the final single-argument juxtaposition argument (for example,
 inline bodies, or another inline expression. Use the ordinary call form there.
 
 ```agl
-let path = "."
-let output: text = exec! printf '%s' %{path}
+program def main() -> unit =
+  let path = "."
+  let output: text = exec! printf '%s' %{path}
 ```
 
 ## Expressions

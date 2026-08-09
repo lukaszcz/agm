@@ -12,13 +12,14 @@ def make_local() -> Pair[text] =
   build("a", "b")
 end A
 
-let root_build = Pair::[int]
-let root = root_build(1, 2)
-print (root.first + root.second)
+program def main() -> unit =
+  let root_build = Pair::[int]
+  let root = root_build(1, 2)
+  print (root.first + root.second)
 
-let scoped_build = A::Pair::[int]
-let scoped = scoped_build(10, 20)
-print (scoped.first + scoped.second)
+  let scoped_build = A::Pair::[int]
+  let scoped = scoped_build(10, 20)
+  print (scoped.first + scoped.second)
 
-let inner = A::make_local()
-print (inner.first + inner.second)
+  let inner = A::make_local()
+  print (inner.first + inner.second)

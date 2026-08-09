@@ -16,7 +16,7 @@ from agm.agl.syntax.nodes import AsPattern, Case, ConstructorPattern, FuncDef, L
 from agm.agl.typecheck import AglTypeError, CheckedProgram, check_program
 from tests._agl_helpers import strip_decl_ids
 from tests.agl.ir_harness import make_graph_from_files
-from tests.agl.module_graph import resolve_and_check_entry
+from tests.agl.module_graph import resolve_and_check_inline_entry
 
 _CAPS = HostCapabilities(
     supports_shell_exec=True,
@@ -28,7 +28,7 @@ _CAPS = HostCapabilities(
 
 
 def accept(source: str):
-    return resolve_and_check_entry(source, _CAPS)
+    return resolve_and_check_inline_entry(source, _CAPS)
 
 
 def reject(source: str) -> None:
@@ -171,9 +171,11 @@ def test_record_patterns_support_imported_and_qualified_alias_spellings(tmp_path
     )
 
     entry = checked.modules[ENTRY_ID]
+    main = entry.resolved.program.body.items[-1]
+    assert isinstance(main, FuncDef)
     pattern_lets = [
         item
-        for item in entry.resolved.program.body.items
+        for item in main.body.items
         if isinstance(item, LetDecl) and isinstance(item.pattern, ConstructorPattern)
     ]
     assert len(pattern_lets) == 5

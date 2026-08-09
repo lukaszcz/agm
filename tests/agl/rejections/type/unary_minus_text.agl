@@ -1,2 +1,3 @@
-let x = -"a"
-x
+program def main() -> unit =
+  let x = -"a"
+  x

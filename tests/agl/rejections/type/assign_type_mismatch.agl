@@ -1,2 +1,3 @@
-var n: int = 1
-n := "two"
+program def main() -> unit =
+  var n: int = 1
+  n := "two"

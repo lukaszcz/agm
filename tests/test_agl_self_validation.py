@@ -34,13 +34,13 @@ from agm.agl.semantics.types import InferenceVarType
 from agm.agl.typecheck.env import assert_checked_module_closed
 from agm.agl.typecheck.program import check_program
 from tests.agl.ir_harness import (
-    _checked_program,
-    _compiled_program,
+    _checked_inline_program,
+    _compiled_inline_program,
     base_caps,
-    make_graph_from_files,
+    make_inline_graph_from_files,
 )
 from tests.agl.match_reference import case_sites
-from tests.agl.module_graph import resolve_and_check_entry
+from tests.agl.module_graph import resolve_and_check_inline_entry
 
 _SOURCE = "let x = 1\nx"
 
@@ -85,7 +85,7 @@ def test_optional_self_checks_are_enabled_for_the_suite() -> None:
 def test_disabled_validation_accepts_a_corrupt_artifact(
     self_validation_disabled: None,
 ) -> None:
-    compiled = _compiled_program("case true of | true => 1 | false => 2")
+    compiled = _compiled_inline_program("case true of | true => 1 | false => 2")
     entry_sites = compiled.sites_by_module[ENTRY_ID]
     (case_id,) = tuple(case_sites(entry_sites))
     corrupt = replace(case_sites(entry_sites)[case_id], reachable_action_ids=())
@@ -104,7 +104,9 @@ def test_graph_lowering_trusts_the_artifact_that_already_validated_itself(
     tmp_path: Path,
 ) -> None:
     """A match-compiled graph is validated once, where it is built — not again per consumer."""
-    graph = make_graph_from_files(tmp_path, {"entry": "case true of | true => 1 | false => 2"})
+    graph = make_inline_graph_from_files(
+        tmp_path, {"entry": "case true of | true => 1 | false => 2"}
+    )
     compiled = compile_program_matches(check_program(resolve_program(graph), base_caps())).compiled
     assert isinstance(compiled, MatchCompiledProgram)
     entry_cases = case_sites(compiled.sites_by_module[ENTRY_ID])
@@ -128,7 +130,7 @@ def test_graph_lowering_trusts_the_artifact_that_already_validated_itself(
 def test_repl_entry_lowering_trusts_the_artifact_that_already_validated_itself() -> None:
     """A REPL entry's artifact is validated at construction, not again by incremental lowering."""
     source = "case true of | true => 1 | false => 2"
-    compiled = _compiled_program(source)
+    compiled = _compiled_inline_program(source)
     entry_sites = compiled.sites_by_module[ENTRY_ID]
     (case_id,) = tuple(case_sites(entry_sites))
     corrupt = dict(entry_sites)
@@ -153,7 +155,7 @@ def test_repl_entry_lowering_does_not_validate_ir_when_disabled(
 ) -> None:
     """Production REPL lowering trusts its own output: structural IR validation is test-only."""
     entry = lower_repl_program(
-        _compiled_program(_SOURCE), image=_broken_image(), source_text=_SOURCE
+        _compiled_inline_program(_SOURCE), image=_broken_image(), source_text=_SOURCE
     )
 
     # Returned rather than rejected, even though the IR is structurally invalid.
@@ -165,7 +167,9 @@ def test_repl_entry_lowering_does_not_validate_ir_when_disabled(
 def test_repl_entry_lowering_validates_ir_when_enabled() -> None:
     """With the flag on (the suite default), every REPL lowering is an IR invariant oracle."""
     with pytest.raises(InvalidIrError):
-        lower_repl_program(_compiled_program(_SOURCE), image=_broken_image(), source_text=_SOURCE)
+        lower_repl_program(
+            _compiled_inline_program(_SOURCE), image=_broken_image(), source_text=_SOURCE
+        )
 
 
 def test_production_match_compilation_takes_the_unvalidated_path(
@@ -178,14 +182,14 @@ def test_production_match_compilation_takes_the_unvalidated_path(
     boundaries, the rejected stage result, and whole-program lowering — down its
     production branch, where the compiler's own output is trusted as produced.
     """
-    program_artifact = _compiled_program(_MATCH_SOURCE)
+    program_artifact = _compiled_inline_program(_MATCH_SOURCE)
     assert case_sites(program_artifact.sites_by_module[ENTRY_ID])
 
-    rejected = compile_program_matches(_checked_program("case true of | true => 1"))
+    rejected = compile_program_matches(_checked_inline_program("case true of | true => 1"))
     assert rejected.compiled is None
     assert rejected.issues != ()
 
-    graph = make_graph_from_files(tmp_path, {"entry": _MATCH_SOURCE})
+    graph = make_inline_graph_from_files(tmp_path, {"entry": _MATCH_SOURCE})
     program_result = compile_program_matches(check_program(resolve_program(graph), base_caps()))
     assert isinstance(program_result.compiled, MatchCompiledProgram)
 
@@ -197,7 +201,7 @@ def test_lowering_does_not_validate_ir_when_disabled(
     self_validation_disabled: None,
 ) -> None:
     """Production lowering trusts its own output: structural IR validation is test-only."""
-    program = lower_program(_compiled_program(_SOURCE), _link=_broken_link())
+    program = lower_program(_compiled_inline_program(_SOURCE), _link=_broken_link())
 
     # Returned rather than rejected, even though the IR is structurally invalid.
     assert program.symbols == {}
@@ -208,7 +212,7 @@ def test_lowering_does_not_validate_ir_when_disabled(
 def test_lowering_validates_ir_when_enabled() -> None:
     """With the flag on (the suite default), every lowering is an IR invariant oracle."""
     with pytest.raises(InvalidIrError):
-        lower_program(_compiled_program(_SOURCE), _link=_broken_link())
+        lower_program(_compiled_inline_program(_SOURCE), _link=_broken_link())
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +229,7 @@ def test_disabled_validation_still_seals_the_checked_type_env(
     enabling memoization/seeding) independently of whether it also re-verifies
     itself; a checked module's ``type_env`` must come out sealed either way.
     """
-    checked = resolve_and_check_entry(_SOURCE, base_caps())
+    checked = resolve_and_check_inline_entry(_SOURCE, base_caps())
 
     assert checked.type_env.is_sealed is True
 
@@ -241,7 +245,7 @@ def test_disabled_validation_skips_the_inference_region_leak_check(
     only, so disabling it does not stop the call from checking normally.
     """
     source = "def id[T](value: T) -> T = value\nlet result = id(1)\nresult"
-    checked = resolve_and_check_entry(source, base_caps())
+    checked = resolve_and_check_inline_entry(source, base_caps())
 
     assert checked.node_types
 
@@ -261,7 +265,7 @@ def test_disabled_validation_skips_the_extern_target_leak_check(
     source = "extern def id[T](value: T) -> T\nlet apply: (int) -> int = id\napply(1)"
     origin_path = tmp_path / "self_validation.agl"
     origin_path.with_suffix(".py").write_text("")
-    checked = resolve_and_check_entry(source, base_caps(), origin_path=origin_path)
+    checked = resolve_and_check_inline_entry(source, base_caps(), origin_path=origin_path)
 
     assert [site.callee for site in checked.call_sites] == ["id"]
 
@@ -388,7 +392,7 @@ def test_closed_output_covers_explicit_builtin_targets() -> None:
     be walked by the closed-output boundary exactly like every other
     type-bearing side table.
     """
-    checked = resolve_and_check_entry(_SOURCE, base_caps())
+    checked = resolve_and_check_inline_entry(_SOURCE, base_caps())
     leaked = replace(checked, explicit_builtin_targets={-1: InferenceVarType("leak")})
 
     with pytest.raises(AssertionError, match="inference variable leaked"):

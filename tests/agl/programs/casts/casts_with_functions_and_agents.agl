@@ -5,8 +5,6 @@ record Task
   title: text
   effort: int
 
-let planner = AgentCommand("planner")
-# A helper that converts a text to int, returning 0 on failure
 def parse_int_or_zero(s: text) -> int =
   if s as? int =>
     s as int
@@ -21,14 +19,17 @@ def double_text_int(s: text) -> text =
 param a
 param b
 
-print(parse_int_or_zero(a))
-print(double_text_int(b))
+program def main() -> unit =
+  let planner = AgentCommand("planner")
+  # A helper that converts a text to int, returning 0 on failure
+  print(parse_int_or_zero(a))
+  print(double_text_int(b))
 
-# Agent supplies a JSON text; cast it to a record
-try
-  let raw: text = ask("Return a task.", agent = planner)
-  let task = raw as Task
-  print task.title
-  print task.effort
-catch CastError as e =>
-  print "task cast failed: %{e.source_type} -> %{e.target_type}"
+  # Agent supplies a JSON text; cast it to a record
+  try
+    let raw: text = ask("Return a task.", agent = planner)
+    let task = raw as Task
+    print task.title
+    print task.effort
+  catch CastError as e =>
+    print "task cast failed: %{e.source_type} -> %{e.target_type}"

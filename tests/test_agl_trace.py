@@ -15,9 +15,11 @@ import pytest
 
 import agm.commands.exec as exec_command
 from agm.agl import PipelineDriver
+from agm.agl.pipeline import RunResult
 from agm.agl.runtime import AgentRequest, AgentResponse
 from agm.agl.runtime.agents import AgentFn
 from agm.cli_support.args import ExecArgs
+from tests._agl_helpers import run_inline_command, write_file_program
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -65,12 +67,17 @@ def _exec_args(
 # ---------------------------------------------------------------------------
 
 
+def _run_inline(runtime: PipelineDriver, source: str, **kwargs: object) -> RunResult:
+    """Run this module's command-style source through the inline entry transform."""
+    return run_inline_command(runtime, source, **kwargs)
+
+
 class TestTraceFileCreated:
     def test_trace_file_created_at_custom_path(self, tmp_path: Path) -> None:
         """A custom --log-file path receives JSONL trace output after a run."""
         log_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver()
-        result = rt.run('let x = 1\nprint "hello"', log_file=log_path)
+        result = _run_inline(rt, 'let x = 1\nprint "hello"', log_file=log_path)
         assert result.ok
         assert log_path.exists(), "trace file must be created when log_file is given"
 
@@ -78,7 +85,7 @@ class TestTraceFileCreated:
         """Each line of the trace file is a valid JSON object."""
         log_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver()
-        rt.run('let x = 1\nprint "hello"', log_file=log_path)
+        _run_inline(rt, 'let x = 1\nprint "hello"', log_file=log_path)
         records = _load_jsonl(log_path)
         assert len(records) >= 1
         for rec in records:
@@ -87,7 +94,7 @@ class TestTraceFileCreated:
     def test_trace_file_not_created_when_no_log(self, tmp_path: Path) -> None:
         """When log_file is None (no-log semantics), no trace file is written."""
         rt = PipelineDriver()
-        result = rt.run('let x = 1\nprint "hello"', log_file=None)
+        result = _run_inline(rt, 'let x = 1\nprint "hello"', log_file=None)
         assert result.ok
         # No trace file: any file created would be under .agent-files/ which
         # we cannot check here, but RunResult.trace_path should be None.
@@ -97,7 +104,7 @@ class TestTraceFileCreated:
         """RunResult.trace_path is the Path of the written JSONL file."""
         log_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver()
-        result = rt.run("let x = 1\nx", log_file=log_path)
+        result = _run_inline(rt, "let x = 1\nx", log_file=log_path)
         assert result.ok
         assert result.trace_path == log_path
 
@@ -111,7 +118,8 @@ class TestTraceFileCreated:
             raise OSError("read-only filesystem")
 
         monkeypatch.setattr("agm.core.fs.mkdir", fail_mkdir)
-        result = PipelineDriver().run(
+        result = _run_inline(
+            PipelineDriver(),
             'print "still runs"',
             log_file=tmp_path / "missing" / "trace.jsonl",
         )
@@ -130,7 +138,7 @@ class TestPrintRecord:
     def test_print_produces_trace_record(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver()
-        rt.run('print "hello world"', log_file=log_path)
+        _run_inline(rt, 'print "hello world"', log_file=log_path)
         records = _load_jsonl(log_path)
         kinds = [r.get("kind") for r in records]
         assert "print" in kinds
@@ -138,7 +146,7 @@ class TestPrintRecord:
     def test_print_record_has_value(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver()
-        rt.run('print "hello world"', log_file=log_path)
+        _run_inline(rt, 'print "hello world"', log_file=log_path)
         records = _load_jsonl(log_path)
         print_recs = [r for r in records if r.get("kind") == "print"]
         assert print_recs
@@ -148,7 +156,7 @@ class TestPrintRecord:
     def test_print_record_has_span(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver()
-        rt.run('print "hello"', log_file=log_path)
+        _run_inline(rt, 'print "hello"', log_file=log_path)
         records = _load_jsonl(log_path)
         print_recs = [r for r in records if r.get("kind") == "print"]
         assert print_recs
@@ -160,7 +168,7 @@ class TestExecCommandRecord:
     def test_exec_produces_exec_record(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver()
-        rt.run('let x: text = exec "echo hi"\nx', log_file=log_path)
+        _run_inline(rt, 'let x: text = exec "echo hi"\nx', log_file=log_path)
         records = _load_jsonl(log_path)
         kinds = [r.get("kind") for r in records]
         assert "exec_command" in kinds
@@ -168,7 +176,7 @@ class TestExecCommandRecord:
     def test_exec_record_has_exit_code(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver()
-        rt.run('let x: text = exec "echo hi"\nx', log_file=log_path)
+        _run_inline(rt, 'let x: text = exec "echo hi"\nx', log_file=log_path)
         records = _load_jsonl(log_path)
         exec_recs = [r for r in records if r.get("kind") == "exec_command"]
         assert exec_recs
@@ -178,7 +186,7 @@ class TestExecCommandRecord:
     def test_exec_record_has_stdout(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver()
-        rt.run('let x: text = exec "echo captured"\nx', log_file=log_path)
+        _run_inline(rt, 'let x: text = exec "echo captured"\nx', log_file=log_path)
         records = _load_jsonl(log_path)
         exec_recs = [r for r in records if r.get("kind") == "exec_command"]
         assert exec_recs
@@ -188,7 +196,7 @@ class TestExecCommandRecord:
     def test_exec_record_has_command(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver()
-        rt.run('let x: text = exec "echo hello"\nx', log_file=log_path)
+        _run_inline(rt, 'let x: text = exec "echo hello"\nx', log_file=log_path)
         records = _load_jsonl(log_path)
         exec_recs = [r for r in records if r.get("kind") == "exec_command"]
         assert exec_recs
@@ -197,7 +205,7 @@ class TestExecCommandRecord:
     def test_exec_record_has_duration(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver()
-        rt.run('let x: text = exec "echo hello"\nx', log_file=log_path)
+        _run_inline(rt, 'let x: text = exec "echo hello"\nx', log_file=log_path)
         records = _load_jsonl(log_path)
         exec_recs = [r for r in records if r.get("kind") == "exec_command"]
         assert exec_recs
@@ -210,7 +218,8 @@ class TestAgentCallRecord:
     def test_agent_call_produces_attempt_record(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = _agent_runtime(_agent_returning("good"))
-        rt.run(
+        _run_inline(
+            rt,
             'let reviewer = AgentCommand("reviewer")\n'
             'let x: text = ask("check this", agent = reviewer)\n'
             "x",
@@ -224,7 +233,8 @@ class TestAgentCallRecord:
     def test_agent_call_record_has_rendered_agent_value(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = _agent_runtime(_agent_returning("ok"))
-        rt.run(
+        _run_inline(
+            rt,
             'let critic = AgentCommand("critic")\nlet x: text = ask("review", agent = critic)\nx',
             log_file=log_path,
         )
@@ -238,7 +248,8 @@ class TestAgentCallRecord:
 
     def test_agent_request_preserves_agent_variant_payload(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        _agent_runtime(_agent_returning("ok")).run(
+        run_inline_command(
+            _agent_runtime(_agent_returning("ok")),
             'let a = AgentClaude("sonnet", "high")\nlet x: text = ask("review", agent = a)\nx',
             log_file=log_path,
         )
@@ -253,7 +264,8 @@ class TestAgentCallRecord:
     def test_agent_call_record_has_attempt_number(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = _agent_runtime(_agent_returning("result"))
-        rt.run(
+        _run_inline(
+            rt,
             'let impl = AgentCommand("impl")\nlet x: text = ask("do work", agent = impl)\nx',
             log_file=log_path,
         )
@@ -265,7 +277,8 @@ class TestAgentCallRecord:
 
     def test_unit_ask_logs_a_request_and_response(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        result = _agent_runtime(_agent_returning("ignored")).run(
+        result = run_inline_command(
+            _agent_runtime(_agent_returning("ignored")),
             'let a = AgentCommand("a")\nlet value: unit = ask "do it"\nvalue',
             log_file=log_path,
         )
@@ -283,7 +296,8 @@ class TestAgentCallRecord:
             received.append(request.prompt)
             return AgentResponse(content="42")
 
-        result = _agent_runtime(agent, strict_json=True).run(
+        result = run_inline_command(
+            _agent_runtime(agent, strict_json=True),
             'let a = AgentCommand("a")\nlet value: int = ask("number", agent = a)\nvalue',
             log_file=log_path,
         )
@@ -317,7 +331,8 @@ class TestRetryRecords:
             return AgentResponse(content="42")
 
         rt = _agent_runtime(agent, strict_json=True)
-        rt.run(
+        _run_inline(
+            rt,
             'let impl = AgentCommand("impl")\n'
             'let x: int = ask("get int", agent = impl, on_parse_error = Retry(n = 2))\nx',
             log_file=log_path,
@@ -355,7 +370,8 @@ class TestRetryRecords:
             return AgentResponse(content="42")
 
         rt = _agent_runtime(agent, strict_json=True)
-        rt.run(
+        _run_inline(
+            rt,
             'let impl = AgentCommand("impl")\n'
             'let x: int = ask("get int", agent = impl, on_parse_error = Retry(n = 2))\nx',
             log_file=log_path,
@@ -378,7 +394,7 @@ class TestRetryRecords:
             'let x: int = ask("get int", agent = impl, on_parse_error = Retry(n = 1))\nx'
         )
         try:
-            rt.run(src, log_file=log_path)
+            _run_inline(rt, src, log_file=log_path)
         except SystemExit:
             pass
 
@@ -396,7 +412,8 @@ class TestRetryRecords:
                 cause="timeout", exit_code=9, stderr_tail="too slow", elapsed=1.5
             )
 
-        result = _agent_runtime(agent).run(
+        result = run_inline_command(
+            _agent_runtime(agent),
             'let a = AgentCommand("a")\nlet value: text = ask("work", agent = a)\nvalue',
             log_file=log_path,
         )
@@ -424,7 +441,8 @@ class TestExceptionRecord:
             return AgentResponse(content="not json")
 
         rt = _agent_runtime(agent, strict_json=True)
-        result = rt.run(
+        result = _run_inline(
+            rt,
             'let impl = AgentCommand("impl")\nlet x: int = ask("get int", agent = impl)\nx',
             log_file=log_path,
         )
@@ -442,7 +460,8 @@ class TestExceptionRecord:
             return AgentResponse(content="not json")
 
         rt = _agent_runtime(agent, strict_json=True)
-        result = rt.run(
+        result = _run_inline(
+            rt,
             'let impl = AgentCommand("impl")\nlet x: int = ask("get int", agent = impl)\nx',
             log_file=log_path,
         )
@@ -454,7 +473,8 @@ class TestExceptionRecord:
 
     def test_exception_record_and_value_have_no_trace_id(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        result = _agent_runtime(_agent_returning("not json"), strict_json=True).run(
+        result = run_inline_command(
+            _agent_runtime(_agent_returning("not json"), strict_json=True),
             'let impl = AgentCommand("impl")\nlet x: int = ask("get int", agent = impl)\nx',
             log_file=log_path,
         )
@@ -473,7 +493,8 @@ class TestExceptionRecord:
 
         rt = _agent_runtime(agent, strict_json=True)
         # The AgentParseError is caught and the result is a fallback string.
-        result = rt.run(
+        result = _run_inline(
+            rt,
             'let impl = AgentCommand("impl")\n'
             "try\n"
             '  let x: int = ask("get int", agent = impl)\n'
@@ -501,7 +522,7 @@ class TestBuiltinExceptionFields:
         log_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver()
         # Uncaught division by zero → ArithmeticError escapes the program.
-        result = rt.run("let x = 1 / 0\nx", log_file=log_path)
+        result = _run_inline(rt, "let x = 1 / 0\nx", log_file=log_path)
         assert not result.ok
         assert result.error is not None
         assert result.error.type_name == "ArithmeticError"
@@ -512,7 +533,7 @@ class TestBuiltinExceptionFields:
 
     def test_arithmetic_error_trace_id_non_empty_without_logging(self) -> None:
         rt = PipelineDriver()
-        result = rt.run("let x = 1 / 0\nx", log_file=None)
+        result = _run_inline(rt, "let x = 1 / 0\nx", log_file=None)
         assert not result.ok
         assert result.error is not None
         assert result.error.type_name == "ArithmeticError"
@@ -521,7 +542,8 @@ class TestBuiltinExceptionFields:
     def test_match_error_trace_id_non_empty_without_logging(self) -> None:
         rt = PipelineDriver()
         # Explicit source raising retains the ordinary MatchError runtime contract.
-        result = rt.run(
+        result = _run_inline(
+            rt,
             "case 5 of\n"
             "  | 0 => ()\n"
             "  | _ =>\n"
@@ -538,7 +560,8 @@ class TestBuiltinExceptionFields:
         log_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver()
         # A do-loop whose condition never becomes true exhausts its limit.
-        result = rt.run(
+        result = _run_inline(
+            rt,
             "var x = 0\ndo[2]\n  x := x\nuntil false\n",
             log_file=log_path,
         )
@@ -560,7 +583,7 @@ class TestRunBoundaryRecords:
     def test_run_start_record_present(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver()
-        rt.run("let x = 1\nx", log_file=log_path)
+        _run_inline(rt, "let x = 1\nx", log_file=log_path)
         records = _load_jsonl(log_path)
         kinds = [r.get("kind") for r in records]
         assert "run_start" in kinds
@@ -568,7 +591,7 @@ class TestRunBoundaryRecords:
     def test_run_end_record_present(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver()
-        rt.run("let x = 1\nx", log_file=log_path)
+        _run_inline(rt, "let x = 1\nx", log_file=log_path)
         records = _load_jsonl(log_path)
         kinds = [r.get("kind") for r in records]
         assert "run_end" in kinds
@@ -576,7 +599,7 @@ class TestRunBoundaryRecords:
     def test_run_start_before_run_end(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver()
-        rt.run("let x = 1\nx", log_file=log_path)
+        _run_inline(rt, "let x = 1\nx", log_file=log_path)
         records = _load_jsonl(log_path)
         kinds = [r.get("kind") for r in records]
         start_idx = kinds.index("run_start")
@@ -587,7 +610,7 @@ class TestRunBoundaryRecords:
         """Every record in a trace file carries the same run_id."""
         log_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver()
-        rt.run('var x = 1\nx := 2\nprint "done"', log_file=log_path)
+        _run_inline(rt, 'var x = 1\nx := 2\nprint "done"', log_file=log_path)
         records = _load_jsonl(log_path)
         assert len(records) >= 3
         run_ids = {r.get("run_id") for r in records}
@@ -599,7 +622,8 @@ class TestRunBoundaryRecords:
         from datetime import datetime
 
         log_path = tmp_path / "trace.jsonl"
-        _agent_runtime(_agent_returning("agent output")).run(
+        run_inline_command(
+            _agent_runtime(_agent_returning("agent output")),
             'let a = AgentCommand("a")\n'
             'let x: text = ask("prompt", agent = a)\n'
             'let y: text = exec "printf shell"\n'
@@ -622,7 +646,7 @@ class TestNoLog:
     def test_no_log_writes_nothing(self, tmp_path: Path) -> None:
         """With log_file=None the trace store is a no-op and no files are created."""
         rt = PipelineDriver()
-        result = rt.run('let x = 1\nprint "silent"', log_file=None)
+        result = _run_inline(rt, 'let x = 1\nprint "silent"', log_file=None)
         assert result.ok
         # No JSONL files created anywhere in tmp_path.
         jsonl_files = list(tmp_path.rglob("*.jsonl"))
@@ -630,13 +654,13 @@ class TestNoLog:
 
     def test_no_log_result_trace_path_is_none(self, tmp_path: Path) -> None:
         rt = PipelineDriver()
-        result = rt.run("let x = 1\nx", log_file=None)
+        result = _run_inline(rt, "let x = 1\nx", log_file=None)
         assert result.trace_path is None
 
     def test_no_log_with_agent_call_writes_nothing(self, tmp_path: Path) -> None:
         rt = _agent_runtime(_agent_returning("hello"))
-        result = rt.run(
-            'let a = AgentCommand("a")\nlet x: text = ask("hi", agent = a)\nx', log_file=None
+        result = _run_inline(
+            rt, 'let a = AgentCommand("a")\nlet x: text = ask("hi", agent = a)\nx', log_file=None
         )
         assert result.ok
         jsonl_files = list(tmp_path.rglob("*.jsonl"))
@@ -646,7 +670,8 @@ class TestNoLog:
         """A no-log run that assigns to a decimal binding still succeeds and
         writes nothing."""
         rt = PipelineDriver()
-        result = rt.run(
+        result = _run_inline(
+            rt,
             "var x: decimal = 0.1\nx := x + 0.2",
             log_file=None,
         )
@@ -663,7 +688,7 @@ class TestNoLog:
 class TestExecNoLog:
     def test_exec_no_log_flag_writes_nothing(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('print "hello"\n')
+        write_file_program(agl_file, 'print "hello"\n')
         args = _exec_args(agl_file, no_log=True)
         exec_command.run(args)
         # No JSONL files created under tmp_path or any default path.
@@ -672,7 +697,7 @@ class TestExecNoLog:
 
     def test_exec_log_file_flag_creates_file(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('let x = 1\nprint "hi"\n')
+        write_file_program(agl_file, 'let x = 1\nprint "hi"\n')
         log_path = tmp_path / "out.jsonl"
         args = _exec_args(agl_file, log_file=str(log_path))
         exec_command.run(args)
@@ -691,7 +716,7 @@ class TestDryRunNoTrace:
         """check_only=True (--dry-run) must produce no trace output."""
         log_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver()
-        result = rt.run("let x = 1\nx", log_file=log_path, check_only=True)
+        result = _run_inline(rt, "let x = 1\nx", log_file=log_path, check_only=True)
         assert result.ok
         # No trace file created for dry-run.
         assert not log_path.exists()
@@ -699,7 +724,7 @@ class TestDryRunNoTrace:
     def test_dry_run_trace_path_is_none(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver()
-        result = rt.run("let x = 1\nx", log_file=log_path, check_only=True)
+        result = _run_inline(rt, "let x = 1\nx", log_file=log_path, check_only=True)
         assert result.trace_path is None
 
 
@@ -712,7 +737,7 @@ class TestSourceSpans:
     def test_exec_record_has_source_span(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver()
-        rt.run('let x: text = exec "echo hi"\nx', log_file=log_path)
+        _run_inline(rt, 'let x: text = exec "echo hi"\nx', log_file=log_path)
         records = _load_jsonl(log_path)
         exec_recs = [r for r in records if r.get("kind") == "exec_command"]
         assert exec_recs
@@ -724,7 +749,8 @@ class TestSourceSpans:
     def test_agent_record_has_source_span(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = _agent_runtime(_agent_returning("hello"))
-        rt.run(
+        _run_inline(
+            rt,
             'let impl = AgentCommand("impl")\nlet x: text = ask("do work", agent = impl)\nx',
             log_file=log_path,
         )
@@ -1000,7 +1026,8 @@ class TestUnparseableFeedback:
             return AgentResponse(content="42")
 
         rt = _agent_runtime(agent, strict_json=True)
-        result = rt.run(
+        result = _run_inline(
+            rt,
             'let impl = AgentCommand("impl")\n'
             'let x: int = ask("get int", agent = impl, on_parse_error = Retry(n = 1))\nx',
             log_file=log_path,
@@ -1025,7 +1052,8 @@ class TestUnparseableFeedback:
             return AgentResponse(content="totally not json #@!")
 
         rt = _agent_runtime(agent, strict_json=True)
-        rt.run(
+        _run_inline(
+            rt,
             'let impl = AgentCommand("impl")\n'
             'let x: int = ask("get int", agent = impl, on_parse_error = Retry(n = 1))\nx',
             log_file=log_path,
@@ -1057,10 +1085,11 @@ class TestUnparseableFeedback:
         # Patch the IR output parser to return a failure with no details at all.
         bare_fail = ParseResult(ok=False, value=None, error_msg="", errors=())
         with patch("agm.agl.eval.ir_interpreter._parse_contract_output", return_value=bare_fail):
-            result = rt.run(
+            result = _run_inline(
+                rt,
                 'let impl = AgentCommand("impl")\n'
                 'let x: int = ask("q", agent = impl, on_parse_error = Abort())\n'
-                "x"
+                "x",
             )
         # The program raises AgentParseError; run returns ok=False.
         assert not result.ok

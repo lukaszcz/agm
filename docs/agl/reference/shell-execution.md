@@ -25,7 +25,8 @@ With no named arguments, `exec` may be called with the command template
 written directly without parentheses:
 
 ```agl
-exec "make build"                    # equivalent to exec("make build")
+program def main() -> unit =
+  let _ = exec "make build"
 ```
 
 With named arguments, parentheses are required.
@@ -42,13 +43,13 @@ must touch the name (`exec!::[T]`); in `exec! ::[T]`, the spaced `::[T]` is
 command payload:
 
 ```agl
-let directory = "."
-let listing: text = exec! printf '%s\n' %{directory}
-
-let home_listing: text = exec!
-  for file in "$HOME"/*; do
-    printf '%s\n' "$file"
-  done
+program def main() -> unit =
+  let directory = "."
+  let listing: text = exec! printf '%s\n' %{directory}
+  let home_listing: text = exec!
+    for file in "$HOME"/*; do
+      printf '%s\n' "$file"
+    done
 ```
 
 The payload is verbatim shell text, except that inline payloads discard
@@ -61,7 +62,8 @@ nonempty inline command or a block with at least one nonblank line. For example,
 this command passes `%{literal}` to the shell:
 
 ```agl
-let marker: text = exec! printf '\%{literal}'
+program def main() -> unit =
+  let marker: text = exec! printf '\%{literal}'
 ```
 
 The backslash in `\%{` is consumed by the escape, so a payload cannot spell a
@@ -70,8 +72,9 @@ that is a literal backslash followed by a literal `%{expr}`. Interpolate the
 backslash from a text literal instead:
 
 ```agl
-let subdir: text = "docs"
-let path: text = exec! printf '%s' "C:%{"\\"}%{subdir}"
+program def main() -> unit =
+  let subdir: text = "docs"
+  let path: text = exec! printf '%s' "C:%{"\\"}%{subdir}"
 ```
 
 Raw-tail calls are permitted only in line-final expression positions: block
@@ -122,10 +125,11 @@ A **nonzero exit does not raise** in this form — the caller branches on
 `exit_code`:
 
 ```agl
-let res = exec "ls -la"             # res : ExecResult
-print(res.stdout)
-if res.exit_code != 0 =>
-  print("command failed: %{res.stderr}")
+program def main() -> unit =
+  let res = exec "ls -la"
+  let _ = print(res.stdout)
+  let _ = if res.exit_code != 0 =>
+    print("command failed: %{res.stderr}")
 ```
 
 A spawn failure or timeout raises `ExecError` in this form. A timeout does
@@ -156,8 +160,9 @@ unit contract, a nonzero exit raises `ExecError`; successful stdout is
 discarded and the call returns `void`:
 
 ```agl
-exec "make build"
-let completed: unit = exec "make lint"
+program def main() -> unit =
+  let _ = exec "make build"
+  let completed: unit = exec "make lint"
 ```
 
 Because no output is parsed, `format`, `strict_json`, and `on_parse_error` are
@@ -198,10 +203,11 @@ to parse, `ExecError` is raised.
 parsed or unit form:
 
 ```agl
-try
-  let data: dict[text, int] = exec "compute-stats --json"
-catch ExecError as e =>
-  print "command failed (%{e.exit_code}): %{e.stderr}"
+program def main() -> unit =
+  let _ = try
+    let data: dict[text, int] = exec "compute-stats --json"
+  catch ExecError as e =>
+    print "command failed (%{e.exit_code}): %{e.stderr}"
 ```
 
 In the structured form, `ExecError` is raised for a spawn failure (the shell

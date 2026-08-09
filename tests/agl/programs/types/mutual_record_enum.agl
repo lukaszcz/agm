@@ -25,10 +25,11 @@ def eval_expr(e: Expr) -> int =
 param x: int
 param y: int
 
-let block_expr = Block(stmts = [
-  Stmt(name = "a", value = Lit(value = x)),
-  Stmt(name = "b", value = Add(lhs = Lit(value = y), rhs = Lit(value = 1))),
-])
+program def main() -> unit =
+  let block_expr = Block(stmts = [
+    Stmt(name = "a", value = Lit(value = x)),
+    Stmt(name = "b", value = Add(lhs = Lit(value = y), rhs = Lit(value = 1))),
+  ])
 
-print eval_expr(block_expr)
-print eval_expr(Add(lhs = Lit(value = x), rhs = Lit(value = y)))
+  print eval_expr(block_expr)
+  print eval_expr(Add(lhs = Lit(value = x), rhs = Lit(value = y)))

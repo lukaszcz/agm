@@ -1719,7 +1719,7 @@ class TestDirectCallInterpreterDefensivePaths:
             symbols=symbols,
             functions={_FN_ID: fn_desc},
         )
-        with pytest.raises(InvalidIrError, match="not in base frame"):
+        with pytest.raises(InvalidIrError, match="not in any evaluation frame"):
             IrInterpreter(prog).run()
 
     def test_get_closure_for_slot_not_ir_closure_value_raises(self) -> None:

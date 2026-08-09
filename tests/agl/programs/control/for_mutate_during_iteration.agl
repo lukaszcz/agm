@@ -4,13 +4,14 @@
 # the sum, even though the array itself still ends up mutated.
 param trigger: int
 
-var xs = [1, 2, 3, 4]
-var total = 0
-var i = 0
-for x in xs do
-  if i == trigger => xs[3] := 100
-  total := total + x
-  i := i + 1
-done
-print total
-print xs
+program def main() -> unit =
+  var xs = [1, 2, 3, 4]
+  var total = 0
+  var i = 0
+  for x in xs do
+    if i == trigger => xs[3] := 100
+    total := total + x
+    i := i + 1
+  done
+  print total
+  print xs

@@ -62,11 +62,12 @@ def inner_name(w: Wrapper) -> text =
     | Wrap(color = Red) => "wrapped-red"
     | Wrap(color) => "wrapped-%{name(color)}"
 
-let c: Color = pick(n)
-print(name(c))
-print(code(c))
-print(describe(Empty))
-print(describe(Full(item = n)))
-print(inner_name(Wrap(color = c)))
-print(signal_name(Signal::Halt))
-print(trend_name(Trend::Halt))
+program def main() -> unit =
+  let c: Color = pick(n)
+  print(name(c))
+  print(code(c))
+  print(describe(Empty))
+  print(describe(Full(item = n)))
+  print(inner_name(Wrap(color = c)))
+  print(signal_name(Signal::Halt))
+  print(trend_name(Trend::Halt))

@@ -28,41 +28,42 @@ def choose[T](left: T, right: T) -> T = right
 
 def stringify(n: int) -> text = "n=%{n}"
 
-if
-  | mode == "argument_order" =>
-      # Generic evidence appears before the concrete argument, then after it.
-      print(app(id, 0))
-      print(app_reversed(0, id))
-  | mode == "nested_and_fresh" =>
-      # `compose` has three quantified variables. The two `id` occurrences in
-      # `pair` must be independently fresh.
-      print(compose(2, id, stringify))
-      print(app(id, app(id, 3)))
-      let values = pair(id, id, 1, "fresh")
-      print(values.first)
-      print(values.second)
-  | mode == "constructors" =>
-      # Generic record, payload, and nullary constructors flow through HOFs.
-      let boxed = apply_to(7, Box)
-      let present = apply_to(8, some)
-      let missing: Option[int] = relay(none, id)
-      print(boxed.value)
-      print(present is Option::some)
-      print(missing is Option::none)
-  | mode == "partial" =>
-      # The first partial is solved by the sibling argument; the second by its
-      # expected result type.
-      let from_sibling = apply_to(10, id(?))
-      let from_result: int -> int = id(?)
-      print(from_sibling)
-      print(from_result(11))
-  | mode == "empty_literal" =>
-      # The later array argument determines the empty literal's element type.
-      let values = same_arrays([], [12])
-      print(values[0])
-  | mode == "ask_target" =>
-      # The mocked `ask` target is determined by `choose`'s sibling argument.
-      print(choose(ask("Give an integer."), 7))
-  | else =>
-      # Explicit type application remains an exact composition escape hatch.
-      print(app::[int](id::[int], 12))
+program def main() -> unit =
+  if
+    | mode == "argument_order" =>
+        # Generic evidence appears before the concrete argument, then after it.
+        print(app(id, 0))
+        print(app_reversed(0, id))
+    | mode == "nested_and_fresh" =>
+        # `compose` has three quantified variables. The two `id` occurrences in
+        # `pair` must be independently fresh.
+        print(compose(2, id, stringify))
+        print(app(id, app(id, 3)))
+        let values = pair(id, id, 1, "fresh")
+        print(values.first)
+        print(values.second)
+    | mode == "constructors" =>
+        # Generic record, payload, and nullary constructors flow through HOFs.
+        let boxed = apply_to(7, Box)
+        let present = apply_to(8, some)
+        let missing: Option[int] = relay(none, id)
+        print(boxed.value)
+        print(present is Option::some)
+        print(missing is Option::none)
+    | mode == "partial" =>
+        # The first partial is solved by the sibling argument; the second by its
+        # expected result type.
+        let from_sibling = apply_to(10, id(?))
+        let from_result: int -> int = id(?)
+        print(from_sibling)
+        print(from_result(11))
+    | mode == "empty_literal" =>
+        # The later array argument determines the empty literal's element type.
+        let values = same_arrays([], [12])
+        print(values[0])
+    | mode == "ask_target" =>
+        # The mocked `ask` target is determined by `choose`'s sibling argument.
+        print(choose(ask("Give an integer."), 7))
+    | else =>
+        # Explicit type application remains an exact composition escape hatch.
+        print(app::[int](id::[int], 12))

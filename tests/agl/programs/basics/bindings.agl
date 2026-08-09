@@ -1,20 +1,21 @@
 # let/var/set, literal inference, agent-call targets, bare expression statements.
 param start
 
-let impl = AgentCommand("impl")
-let greeting = "hello"
-let count = 2
-let exact = 1.5
-let okay = true
+program def main() -> unit =
+  let impl = AgentCommand("impl")
+  let greeting = "hello"
+  let count = 2
+  let exact = 1.5
+  let okay = true
 
-var artifact = ask("Start from %{start}", agent = impl)
-print artifact
-artifact := ask("Refine: %{artifact}", agent = impl)
-print artifact
+  var artifact = ask("Start from %{start}", agent = impl)
+  print artifact
+  artifact := ask("Refine: %{artifact}", agent = impl)
+  print artifact
 
-var total: int = count + 1
-total := total * 2
-print total
+  var total: int = count + 1
+  total := total * 2
+  print total
 
-ask "Note %{greeting} %{exact} %{okay}"
-print "done"
+  ask "Note %{greeting} %{exact} %{okay}"
+  print "done"

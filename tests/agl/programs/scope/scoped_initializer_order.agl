@@ -1,35 +1,28 @@
-# A scoped binding's initializer runs at its region's textual position, in
-# item order, interleaved with the module's root bindings. A scope split
-# across two separate blocks resumes exactly where the earlier block left
-# off — the region does not defer, reorder, or repeat initialization.
-# ``branch_in_region`` selects one of two branches inside a region
-# initializer, so its scenarios exercise genuinely different item traces
-# rather than the same trace offset by a constant.
-
+# Runtime initialization is sequenced in the selected program body. Named
+# scopes are static declaration regions and do not perform module initialization.
 param start: int
 param branch_in_region: bool = false
 
-var order: int = start
-
-def mark() -> int =
+program def main() -> unit =
+  var order: int = start
   order := order + 1
-  order
-
-let root_a = mark()
-scope A
-let x = if branch_in_region => mark() + mark() else => mark()
-scope Nested
-let n = mark()
-end Nested
-let y = mark()
-end A
-let root_b = mark()
-scope A
-let z = mark()
-end A
-scope B
-let w = mark()
-end B
-let root_c = mark()
-
-print("%{root_a} %{A::x} %{A::Nested::n} %{A::y} %{root_b} %{A::z} %{B::w} %{root_c}")
+  let root_a = order
+  let scoped_x = if branch_in_region =>
+    order := order + 1
+    let first = order
+    order := order + 1
+    first + order
+  else => (order := order + 1; order)
+  order := order + 1
+  let nested_n = order
+  order := order + 1
+  let scoped_y = order
+  order := order + 1
+  let root_b = order
+  order := order + 1
+  let scoped_z = order
+  order := order + 1
+  let scoped_w = order
+  order := order + 1
+  let root_c = order
+  print("%{root_a} %{scoped_x} %{nested_n} %{scoped_y} %{root_b} %{scoped_z} %{scoped_w} %{root_c}")

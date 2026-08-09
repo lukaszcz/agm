@@ -1,10 +1,9 @@
 param limit: int
+var total: int = 0
 
 # A function that captures outer var `total` and uses break inside its loop.
 # This verifies that break nodes inside function bodies that close over outer
 # variables are handled correctly during lowering.
-var total: int = 0
-
 def accumulate() -> int =
   do
     total := total + 1
@@ -12,4 +11,5 @@ def accumulate() -> int =
   done
   total
 
-print accumulate()
+program def main() -> unit =
+  print accumulate()

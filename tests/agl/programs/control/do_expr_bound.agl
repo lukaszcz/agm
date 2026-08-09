@@ -4,10 +4,11 @@
 param cap: int
 param target: int
 
-let pad: int = 1
-var rounds: int = 0
+program def main() -> unit =
+  let pad: int = 1
+  var rounds: int = 0
 
-do[cap + pad]
-  rounds := rounds + 1
-until rounds >= target
-print rounds
+  do[cap + pad]
+    rounds := rounds + 1
+  until rounds >= target
+  print rounds

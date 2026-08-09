@@ -32,6 +32,7 @@ from agm.agl.typecheck.checker import (
 from agm.agl.typecheck.env import AglTypeError, FunctionSignature, ParamSpec
 from agm.agl.typecheck.program import check_program
 from tests._agl_helpers import strip_decl_ids
+from tests.agl.module_graph import resolve_and_check_inline_entry, resolve_inline_entry
 
 _ROOTS = RootSet(frozenset({Path(__file__).resolve().parents[1] / "stdlib"}))
 _CAPS = HostCapabilities()
@@ -39,9 +40,7 @@ _STD_CORE = Path(__file__).resolve().parents[1] / "stdlib" / "std" / "core.agl"
 
 
 def _check(source: str, *, default_stdlib: bool = True) -> None:
-    graph = load_graph(source, entry_path=None, roots=_ROOTS, default_stdlib=default_stdlib)
-    resolved = resolve_program(graph)
-    check_program(resolved, _CAPS)
+    resolve_and_check_inline_entry(source, _CAPS, default_stdlib=default_stdlib)
 
 
 def test_core_stdlib_is_opened_unqualified_by_default() -> None:
@@ -49,28 +48,16 @@ def test_core_stdlib_is_opened_unqualified_by_default() -> None:
 
 
 def test_no_stdlib_disables_default_open_import() -> None:
-    graph = load_graph(
-        "let x: Option[int] = Some(value = 1)\nx\n",
-        entry_path=None,
-        roots=_ROOTS,
-        default_stdlib=False,
-    )
     with pytest.raises(AglScopeError, match="'Some' is not defined"):
-        resolve_program(graph)
+        resolve_inline_entry("let x: Option[int] = Some(value = 1)\nx\n", default_stdlib=False)
 
 
 def test_no_stdlib_reports_bare_print_as_undefined() -> None:
     """A bare built-in call has no reachable declaration once the standard
     library is switched off — it is an ordinary undefined-name error, not a
     silently-accepted host dispatch."""
-    graph = load_graph(
-        'print("hi")\n',
-        entry_path=None,
-        roots=_ROOTS,
-        default_stdlib=False,
-    )
     with pytest.raises(AglScopeError, match="'print' is not defined"):
-        resolve_program(graph)
+        resolve_inline_entry('print("hi")\n', default_stdlib=False)
 
 
 def test_no_stdlib_still_allows_explicit_std_core_import() -> None:
@@ -91,7 +78,9 @@ def test_builtin_function_signature_must_match() -> None:
 
 
 def test_stdlib_ask_signature_is_context_inferred_with_optional_arguments() -> None:
-    graph = load_graph("()\n", entry_path=None, roots=_ROOTS, default_stdlib=True)
+    graph = load_graph(
+        "program def main() = ()\n", entry_path=None, roots=_ROOTS, default_stdlib=True
+    )
     resolved = resolve_program(graph)
     checked = check_program(resolved, _CAPS)
     std_core = checked.modules[ModuleId.from_path("std/core")]
@@ -311,7 +300,7 @@ def test_exception_extends_cycle_is_uninhabitable() -> None:
 def test_lowerer_skips_builtin_function_definitions() -> None:
     from tests.agl.ir_harness import lower_ir
 
-    source = "builtin def print[T](value: T) -> unit\n()\n"
+    source = "builtin def print[T](value: T) -> unit\nprogram def main() = ()\n"
     lower_ir(source, caps=_CAPS, default_stdlib=False)
 
 

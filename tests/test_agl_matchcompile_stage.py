@@ -56,9 +56,10 @@ from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck import EnumOwnerForm
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram, check_program
+from tests._agl_helpers import prepare_inline_command, run_inline_command
 from tests.agl.ir_harness import base_caps, make_graph_from_files
 from tests.agl.match_reference import case_sites
-from tests.agl.module_graph import resolve_and_check_entry
+from tests.agl.module_graph import resolve_and_check_inline_entry
 
 
 def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
@@ -113,7 +114,7 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
 
 
 def _checked(source: str) -> CheckedModule:
-    return resolve_and_check_entry(source, base_caps())
+    return resolve_and_check_inline_entry(source, base_caps())
 
 
 def _compile_module_matches(checked: CheckedModule) -> MatchCompilationResult:
@@ -143,7 +144,7 @@ def _compiled(source: str) -> MatchCompiledModule:
 
 
 def _prepared_program(source: str, *, roots: frozenset[Path] = frozenset()) -> PreparedProgram:
-    return PipelineDriver.prepare_program(
+    return prepare_inline_command(
         source,
         entry_path=None,
         roots=RootSet(roots=roots),
@@ -888,12 +889,12 @@ def test_pipeline_nonraising_helpers_defend_against_wrong_artifact_kind(
 def test_single_and_program_discovery_surface_match_errors() -> None:
     runtime = PipelineDriver()
     discovery = runtime.discover_params(
-        runtime.prepare_program("param n: int = 1\ncase true of | true => n")
+        prepare_inline_command("param n: int = 1\ncase true of | true => n")
     )
     assert discovery.compiled is None
     assert any("Non-exhaustive" in item.message for item in discovery.diagnostics)
 
-    prepared_program = PipelineDriver.prepare_program(
+    prepared_program = prepare_inline_command(
         "case true of | true => ()",
         entry_path=None,
         roots=RootSet(roots=frozenset()),
@@ -920,7 +921,7 @@ def test_single_discovery_and_cached_run_compile_matches_once(
         counted_compile,
     )
     runtime = PipelineDriver()
-    prepared = runtime.prepare_program(
+    prepared = prepare_inline_command(
         "param selected: bool = true\ncase selected of | true => 1 | false => 0"
     )
 
@@ -997,7 +998,8 @@ def test_discovery_and_execution_reuse_one_graph_match_compilation(
 
 
 def test_match_invalid_unreachable_case_fails_single_dry_run() -> None:
-    result = PipelineDriver().run(
+    result = run_inline_command(
+        PipelineDriver(),
         "def dormant(x: bool) -> int =\n  case x of\n    | true => 1\n()",
         check_only=True,
     )

@@ -5,6 +5,7 @@ import extern_counter
 param value: int
 param amount: int
 
-let counter = extern_counter::Counter(value = value)
-print(counter.increment(amount))
-print(counter.double())
+program def main() -> unit =
+  let counter = extern_counter::Counter(value = value)
+  print(counter.increment(amount))
+  print(counter.double())

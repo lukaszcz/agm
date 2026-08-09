@@ -2,20 +2,21 @@
 # typed targets parsed like agent output.
 param name
 
-let greeting: text = exec "printf 'hi %s' %{name}"
-print greeting
+program def main() -> unit =
+  let greeting: text = exec "printf 'hi %s' %{name}"
+  print greeting
 
-let trimmed: text = exec "echo padded"
-print trimmed
-print "end marker"
+  let trimmed: text = exec "echo padded"
+  print trimmed
+  print "end marker"
 
-exec "true"
+  exec "true"
 
-let answer: int = exec "echo 42"
-print(answer + 1)
+  let answer: int = exec "echo 42"
+  print(answer + 1)
 
-let data: json = exec "printf '{\"k\": [1, 2]}'"
-print data
+  let data: json = exec "printf '{\"k\": [1, 2]}'"
+  print data
 
-let words: array[text] = exec "printf '[\"a\", \"b\"]'"
-print words
+  let words: array[text] = exec "printf '[\"a\", \"b\"]'"
+  print words

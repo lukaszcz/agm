@@ -130,7 +130,13 @@ from agm.agl.typecheck.env import (
 )
 from agm.agl.typecheck.function_inference import resolve_function_header
 from tests._agl_helpers import all_node_ids, strip_decl_ids
-from tests.agl.module_graph import check_resolved, resolve_and_check_entry, resolve_entry
+from tests.agl.module_graph import (
+    check_resolved,
+    resolve_and_check_entry,
+    resolve_and_check_inline_entry,
+    resolve_and_check_repl_entry,
+    resolve_inline_entry,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -179,7 +185,7 @@ def parse_resolve_check(
 ) -> CheckedModule:
     if capabilities is None:
         capabilities = default_capabilities()
-    return resolve_and_check_entry(source, capabilities, default_stdlib=default_stdlib)
+    return resolve_and_check_repl_entry(source, capabilities, default_stdlib=default_stdlib)
 
 
 def accept_type(
@@ -4450,27 +4456,33 @@ class TestPartialConstructorAndValueCalls:
         from agm.agl.modules.ids import ENTRY_ID, ModuleId
         from agm.agl.scope.program import resolve_program
         from agm.agl.typecheck.program import check_program
-        from tests.agl.ir_harness import make_graph_from_files
+        from tests.agl.ir_harness import make_file_graph_from_files
 
         modules = {
             "entry": (
                 "open import mylib\n"
-                "let make: (int) -> mylib::Point = mylib::Point(x = ?)\n"
-                "let make_open: (int) -> Point = Point(x = ?)\n"
-                "let make_box: (text) -> mylib::Box[text] = mylib::Box(value = ?)\n"
-                "let make_box_open: (text) -> Box[text] = Box(value = ?)\n"
-                "make_box_open"
+                "program def main() -> unit =\n"
+                "  let make: (int) -> mylib::Point = mylib::Point(x = ?)\n"
+                "  let make_open: (int) -> Point = Point(x = ?)\n"
+                "  let make_box: (text) -> mylib::Box[text] = mylib::Box(value = ?)\n"
+                "  let make_box_open: (text) -> Box[text] = Box(value = ?)\n"
             ),
             "mylib": "record Point\n  x: int\nrecord Box[T]\n  value: T",
         }
         checked = check_program(
-            resolve_program(make_graph_from_files(Path(tmp_path), modules)),
+            resolve_program(make_file_graph_from_files(Path(tmp_path), modules)),
             default_capabilities(),
         )
         entry = checked.modules[ENTRY_ID]
+        main = next(
+            item
+            for item in entry.resolved.program.body.items
+            if isinstance(item, FuncDef) and item.is_program
+        )
+        assert isinstance(main.body, Block)
         calls = {
             item.pattern.name: item.value
-            for item in entry.resolved.program.body.items
+            for item in main.body.items
             if isinstance(item, LetDecl)
             and isinstance(item.pattern, VarPattern)
             and isinstance(item.value, Call)
@@ -5912,7 +5924,7 @@ class TestConstructorRefDispatch:
             "    on\n"
             "  | packet(_) => 0"
         )
-        checked = resolve_and_check_entry(source, default_capabilities())
+        checked = resolve_and_check_inline_entry(source, default_capabilities())
         resolved = checked.resolved
         case = resolved.program.body.items[-1]
         assert isinstance(case, Case)
@@ -5945,7 +5957,7 @@ class TestConstructorRefDispatch:
             "    on[0]\n"
             "  | packet(_) => 0"
         )
-        checked = resolve_and_check_entry(source, default_capabilities())
+        checked = resolve_and_check_inline_entry(source, default_capabilities())
         resolved = checked.resolved
         case = resolved.program.body.items[-1]
         assert isinstance(case, Case)
@@ -5980,7 +5992,7 @@ class TestConstructorRefDispatch:
         # Checked via check_resolved (not resolve_and_check_entry) so this test
         # can assert `resolved` itself — the exact object the failed check ran
         # against — is untouched by the failure.
-        resolved = resolve_entry(source)
+        resolved = resolve_inline_entry(source)
         case = resolved.program.body.items[-1]
         assert isinstance(case, Case)
         body = case.branches[0].body
@@ -6007,7 +6019,7 @@ class TestConstructorRefDispatch:
             "  | packet(_) => 0"
         )
         with pytest.raises(AglTypeError) as excinfo:
-            resolve_and_check_entry(source, default_capabilities())
+            resolve_and_check_inline_entry(source, default_capabilities())
 
         # The rejection names the actual binder kind, matching the wording the
         # scope pass uses for assignments it rejects itself.
@@ -6016,7 +6028,7 @@ class TestConstructorRefDispatch:
     def test_checker_has_no_scope_repair_state(self) -> None:
         from agm.agl.typecheck.checker import _Checker
 
-        resolved = resolve_entry("enum Flag\n  | on\non")
+        resolved = resolve_inline_entry("enum Flag\n  | on\non")
         checker = _Checker(TypeEnvironment(), resolved, default_capabilities())
 
         assert checker._resolved is resolved
@@ -6047,7 +6059,7 @@ class TestConstructorRefDispatch:
             "      | packet(_) => 0\n"
             "  | packet(_) => 0"
         )
-        checked = resolve_and_check_entry(source, default_capabilities())
+        checked = resolve_and_check_inline_entry(source, default_capabilities())
         resolved = checked.resolved
         outer_var = resolved.program.body.items[2]
         assert isinstance(outer_var, VarDecl)
@@ -6076,13 +6088,13 @@ class TestConstructorRefDispatch:
             "  | box(_) => 0"
         )
 
-        assert resolve_and_check_entry(source, default_capabilities())
+        assert resolve_and_check_inline_entry(source, default_capabilities())
 
     def test_bare_pattern_rejects_missing_or_stale_constructor_candidates(self) -> None:
         # The corrupted-candidate variants below are checked directly via
         # check_resolved (not resolve_and_check_entry), since each is a
         # deliberately mutated copy of `resolved` that checking must reject.
-        resolved = resolve_entry(
+        resolved = resolve_inline_entry(
             "enum Choice\n  | none\nlet value: Choice = none\ncase value of | none => 0",
         )
         case = resolved.program.body.items[-1]
@@ -6739,7 +6751,7 @@ class TestTypeDeclarations:
 
     def test_enum_duplicate_variant_is_rejected_during_scope_collection(self) -> None:
         with pytest.raises(AglScopeError):
-            resolve_entry("enum E\n  | A\n  | A\nA()")
+            resolve_inline_entry("enum E\n  | A\n  | A\nA()")
 
     def test_alias_cycle_raises(self) -> None:
         err = reject_type("type A = B\ntype B = A\n1")
@@ -7135,7 +7147,7 @@ class TestHostContractBuiltinIdentity:
 class TestSeedEnv:
     def test_seed_env_shares_types(self) -> None:
         r1 = accept_type("let x: int = 1\nx")
-        r2 = resolve_and_check_entry(
+        r2 = resolve_and_check_inline_entry(
             "x",
             default_capabilities(),
             parent_scope=r1.resolved.root_scope,
@@ -7146,7 +7158,7 @@ class TestSeedEnv:
     def test_seed_env_shares_function_signatures(self) -> None:
         r1 = accept_type("def f(x: int) -> int = x\nf(1)")
         assert "f" in r1.function_signatures
-        r2 = resolve_and_check_entry(
+        r2 = resolve_and_check_inline_entry(
             "f(2)",
             default_capabilities(),
             parent_scope=r1.resolved.root_scope,
@@ -7155,7 +7167,7 @@ class TestSeedEnv:
         assert r2.resolved.program is not None
 
     def test_seed_env_recursive_type_declared_earlier_is_usable_later(self) -> None:
-        # Single-module "REPL" pattern (two resolve_and_check_entry() calls
+        # Single-module "REPL" pattern (two resolve_and_check_inline_entry() calls
         # chained via seed_env): a recursive type declared in the first entry is
         # constructed and pattern-matched in a later one, re-validating the
         # accumulated table cheaply (idempotently) each time.
@@ -7163,7 +7175,7 @@ class TestSeedEnv:
             "enum Tree\n  | Leaf\n  | Node(value: int, left: Tree, right: Tree)\n"
             "Node(value = 1, left = Leaf(), right = Leaf())"
         )
-        r2 = resolve_and_check_entry(
+        r2 = resolve_and_check_inline_entry(
             "case Node(value = 2, left = Leaf(), right = Leaf()) of\n"
             "  | Leaf() => 0\n"
             "  | Node(value, left, right) => value",
@@ -7208,7 +7220,7 @@ def test_nullary_candidate_defers_duplicate_pattern_binder_until_typecheck_selec
         )
     else:
         prior = accept_type("enum Mark\n  | mark\nmark()")
-        checked = resolve_and_check_entry(
+        checked = resolve_and_check_inline_entry(
             _nullary_duplicate_pattern_source("mark", "Mark", "mark()", bare_first=bare_first),
             default_capabilities(),
             parent_scope=prior.resolved.root_scope,
@@ -8175,7 +8187,7 @@ class TestRootBindingInitializers:
         assert checked.resolved.program is not None
 
     def test_function_body_initializer_remains_dynamic(self) -> None:
-        checked = resolve_and_check_entry(
+        checked = resolve_and_check_inline_entry(
             "def value() -> int = 1\n"
             "program def main() -> unit =\n"
             "  let root = value()\n"
@@ -8508,7 +8520,7 @@ class TestDefensiveGuards:
         sp = mk_span()
         # Build a record type that has field 'x'.
         record_source = "record Box\n  x: int\nBox(x = 1)"
-        checked_base = resolve_and_check_entry(record_source, default_capabilities())
+        checked_base = resolve_and_check_inline_entry(record_source, default_capabilities())
         box_type = checked_base.type_env.get_type("Box")
         assert box_type is not None
 
@@ -8785,7 +8797,7 @@ def _method_header(
     source: str, *, origin_path: Path | None = None
 ) -> tuple[FuncDef, tuple[ParamSpec, ...]]:
     """Resolve one classified method header through the shared function seam."""
-    resolved = resolve_entry(source, origin_path=origin_path or Path("method.agl"))
+    resolved = resolve_inline_entry(source, origin_path=origin_path or Path("method.agl"))
     function = next(item for item in resolved.program.body.items if isinstance(item, FuncDef))
     owner = resolved.method_declarations[(ENTRY_ID, ("Point",), function.name)]
     env = TypeEnvironment()
@@ -9898,7 +9910,7 @@ class TestGenerics:
         from agm.agl.typecheck.checker import _Checker, _InferenceRegion
         from agm.agl.typecheck.inference import InferenceEngine
 
-        checker = _Checker(TypeEnvironment(), resolve_entry("()"), default_capabilities())
+        checker = _Checker(TypeEnvironment(), resolve_inline_entry("()"), default_capabilities())
         engine = InferenceEngine()
         checker._inference_region = _InferenceRegion(engine, {}, {}, [])
         unresolved = engine.fresh("target")
@@ -10151,7 +10163,7 @@ class TestGenericTypeDecl:
 
     def test_generic_enum_duplicate_variant_is_rejected_during_scope_collection(self) -> None:
         with pytest.raises(AglScopeError):
-            resolve_entry("enum Bad[T]\n  | Foo\n  | Foo\nFoo()")
+            resolve_inline_entry("enum Bad[T]\n  | Foo\n  | Foo\nFoo()")
 
 
 class TestGenericConstructorInference:
@@ -10353,7 +10365,7 @@ class TestGenericConstructorInference:
         from agm.agl.typecheck.checker import _Checker, _InferenceRegion
         from agm.agl.typecheck.inference import InferenceEngine
 
-        checker = _Checker(TypeEnvironment(), resolve_entry("()"), default_capabilities())
+        checker = _Checker(TypeEnvironment(), resolve_inline_entry("()"), default_capabilities())
         concrete_owner = RecordType("Box", type_args=(IntType(),))
         assert checker._zonk_constructor_owner(concrete_owner) == concrete_owner
         engine = InferenceEngine()

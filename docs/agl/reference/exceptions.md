@@ -51,10 +51,10 @@ exception DetailedProblem extends Problem
 
 def Problem::label(self) -> text = "problem %{self.code}"
 def DetailedProblem::detail_label(self) -> text = self.label() + ": %{self.detail}"
-
-let problem = DetailedProblem(message = "failed", code = 7, detail = "network")
-print(problem.label())
-print(problem.detail_label())
+program def main() -> unit =
+  let problem = DetailedProblem(message = "failed", code = 7, detail = "network")
+  let _ = print(problem.label())
+  let _ = print(problem.detail_label())
 ```
 
 A method name is declared only once in an exception hierarchy. A subtype cannot
@@ -205,7 +205,8 @@ exception DeployError extends Exception
   service: text
   exit_code: int
 
-raise DeployError("api", 1, message = "deployment failed")
+program def main() -> unit =
+  let _ = raise DeployError("api", 1, message = "deployment failed")
 ```
 
 Any concrete built-in exception type is constructible with named arguments

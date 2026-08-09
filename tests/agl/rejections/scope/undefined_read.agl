@@ -1,1 +1,2 @@
-print missing_thing
+program def main() -> unit =
+  print missing_thing

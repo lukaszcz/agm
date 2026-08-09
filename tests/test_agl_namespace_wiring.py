@@ -8,8 +8,6 @@ import pytest
 
 from agm.agl.matchcompile.diagnostics import qualified_owner_name
 from agm.agl.modules.ids import ModuleId
-from agm.agl.modules.loader import load_graph
-from agm.agl.modules.roots import RootSet
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import AglScopeError
 from agm.agl.semantics.types import EnumOwnerFormKind
@@ -17,18 +15,15 @@ from agm.agl.syntax import QualifierAnchor, QualifierChain, QualifierSegment
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
 from agm.agl.typecheck import AglTypeError
 from agm.agl.typecheck.program import check_program
-from tests.agl.ir_harness import base_caps, make_graph_from_files, write_module_file
+from tests.agl.ir_harness import (
+    base_caps,
+    make_graph_from_files,
+    make_inline_graph_from_files,
+)
 
 
 def _make_graph_without_prelude(tmp_path: Path, modules: dict[str, str]) -> object:
-    root = tmp_path / "root"
-    root.mkdir()
-    for module_path, source in modules.items():
-        if module_path != "entry":
-            write_module_file(root, module_path, source)
-    return load_graph(
-        modules["entry"], entry_path=None, roots=RootSet(frozenset({root})), default_stdlib=False
-    )
+    return make_inline_graph_from_files(tmp_path, modules, default_stdlib=False)
 
 
 def test_scope_resolves_suffix_anchor_and_using_contributions(tmp_path: Path) -> None:

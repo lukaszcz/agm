@@ -87,11 +87,13 @@ from agm.agl.typecheck.env import CheckedModule, OutputContractSpec
 from tests._agl_helpers import (
     enum_type,
     next_decl_id,
+    prepare_inline_command,
     record_type,
+    run_inline_command,
     strip_decl_ids,
     type_table_for,
 )
-from tests.agl.module_graph import resolve_and_check_program_ast
+from tests.agl.module_graph import resolve_and_check_inline_program_ast
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -275,7 +277,7 @@ def _check_program_with_json(body: tuple[Item, ...]) -> CheckedModule:
             ),
         },
     )
-    return resolve_and_check_program_ast(program, caps)
+    return resolve_and_check_inline_program_ast(program, caps)
 
 
 class _Bindings(dict[str, object]):
@@ -2388,7 +2390,8 @@ class TestRecordEnumParams:
     """Runtime.convert_param now accepts record/enum types via JsonCodec."""
 
     def test_record_param_parsed_from_json_string(self) -> None:
-        result = PipelineDriver().run(
+        result = run_inline_command(
+            PipelineDriver(),
             """
 record Issue
   title: text
@@ -2416,7 +2419,8 @@ issue
 
     def test_array_param_parsed_from_json_string(self) -> None:
         rt = PipelineDriver()
-        result = rt.run(
+        result = run_inline_command(
+            rt,
             "param tags: array[text]",
             param_values={"tags": '["a", "b"]'},
         )
@@ -3232,7 +3236,8 @@ class TestRegisterCodec:
                 return frozenset({"text"})
 
         rt.register_codec(AltTextCodec())
-        result = rt.run(
+        result = run_inline_command(
+            rt,
             'let answer: text = ask("question", format = "alt_text")\nprint answer',
             param_values={},
         )
@@ -3345,7 +3350,7 @@ class TestRegisterCodec:
         rt = PipelineDriver(agent_dispatcher=agent)
         rt.register_codec(TagCodec())
         #  format: arg takes the codec name as a string; let needs a continuation.
-        result = rt.run('let y: text = ask("Q", format = "tagcodec")\ny')
+        result = run_inline_command(rt, 'let y: text = ask("Q", format = "tagcodec")\ny')
         assert result.ok is True
         # parse() ran: the binding carries the codec's distinctive prefix.
         assert result.bindings["y"] == TextValue("PARSED::hello")
@@ -3394,7 +3399,7 @@ class TestRegisterCodec:
 
         rt = PipelineDriver(agent_dispatcher=lambda req: "7")
         rt.register_codec(IntCodec())
-        result = rt.run('let y: int = ask("Q", format = "intcodec")\ny')
+        result = run_inline_command(rt, 'let y: int = ask("Q", format = "intcodec")\ny')
         assert result.ok is True
         assert result.bindings["y"] == IntValue(7)
         assert seen_targets == ["int"]
@@ -3441,7 +3446,7 @@ class TestRegisterCodec:
 
         rt = PipelineDriver(agent_dispatcher=lambda req: "11")
         rt.register_codec(LegacyCodec())
-        result = rt.run('let y: int = ask("Q", format = "legacy-int")\ny')
+        result = run_inline_command(rt, 'let y: int = ask("Q", format = "legacy-int")\ny')
 
         from agm.agl.runtime.contract import materialize_contract
         from agm.agl.typecheck.env import OutputContractSpec
@@ -3495,8 +3500,9 @@ class TestRegisterCodec:
 
         rt = PipelineDriver(agent_dispatcher=lambda req: "12")
         rt.register_codec(LegacyBoxCodec())
-        result = rt.run(
-            'record Box[T]\n  value: T\nlet y: Box[int] = ask("Q", format = "legacy-box")\ny.value'
+        result = run_inline_command(
+            rt,
+            'record Box[T]\n  value: T\nlet y: Box[int] = ask("Q", format = "legacy-box")\ny.value',
         )
 
         assert result.ok is True
@@ -3540,7 +3546,11 @@ class TestRegisterCodec:
         rt = PipelineDriver(agent_dispatcher=lambda req: "unused")
         rt.register_codec(SchemaTextCodec())
 
-        result = rt.run('let y: text = ask("Q", format = "schema-text")\ny', check_only=True)
+        result = run_inline_command(
+            rt,
+            'let y: text = ask("Q", format = "schema-text")\ny',
+            check_only=True,
+        )
 
         assert result.ok is True
         assert len(result.call_sites) == 1
@@ -3574,9 +3584,8 @@ class TestRegisterCodec:
                 return ParseResult.success(TextValue(raw))
 
         roots = RootSet(roots=frozenset({Path(__file__).resolve().parents[1] / "stdlib"}))
-        prepared = PipelineDriver.prepare_program(
+        prepared = prepare_inline_command(
             'let y: text = ask("Q", format = "graph-schema-text")\ny',
-            entry_path=None,
             roots=roots,
         )
         rt = PipelineDriver(agent_dispatcher=lambda req: "unused")
@@ -3785,7 +3794,10 @@ class TestRegisterCodec:
 
         rt = PipelineDriver(agent_dispatcher=agent)
         rt.register_codec(ArrayIntCodec())
-        result = rt.run('let xs: array[int] = ask("Q", format = "array-int-codec")\nxs')
+        result = run_inline_command(
+            rt,
+            'let xs: array[int] = ask("Q", format = "array-int-codec")\nxs',
+        )
 
         assert result.ok is True
         assert result.bindings["xs"] == ArrayValue([IntValue(3)])
@@ -3853,7 +3865,10 @@ class TestRegisterCodec:
 
         rt = PipelineDriver(agent_dispatcher=lambda req: "5")
         rt.register_codec(ShapeCodec())
-        result = rt.run('record Box\n  value: int\nlet box: Box = ask("Q", format = "shape")\nbox')
+        result = run_inline_command(
+            rt,
+            'record Box\n  value: int\nlet box: Box = ask("Q", format = "shape")\nbox',
+        )
 
         assert result.ok is True
         assert isinstance(seen_parse_type[0], RecordType)
@@ -4303,11 +4318,11 @@ class TestRuntimeBuildsCodecKinds:
         src = 'let x: text = ask("Q", format = "altcodec")\nx'
 
         rt_unreg = PipelineDriver(agent_dispatcher=lambda req: "ok")
-        unreg = rt_unreg.run(src)
+        unreg = run_inline_command(rt_unreg, src)
         assert unreg.ok is False  # altcodec unknown without registration
         assert any("altcodec" in d.message for d in unreg.diagnostics)
 
         rt = PipelineDriver(agent_dispatcher=lambda req: "ok")
         rt.register_codec(AltCodec())
-        reg = rt.run(src)
+        reg = run_inline_command(rt, src)
         assert reg.ok is True

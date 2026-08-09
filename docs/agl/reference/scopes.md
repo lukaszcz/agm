@@ -21,12 +21,12 @@ scope Format
 def label(point: ::Geometry::Point) -> text = "%{point.x},%{point.y}"
 end Format
 end Geometry
-
 def Geometry::translate(point: Geometry::Point) -> Geometry::Point =
   Geometry::Point(point.x + 1, point.y)
 
-let origin = Geometry::origin()
-print(Geometry::Format::label(Geometry::translate(origin)))
+program def main() -> unit =
+  let origin = Geometry::origin()
+  let _ = print(Geometry::Format::label(Geometry::translate(origin)))
 ```
 
 The closer is mandatory and must repeat the complete header path: `scope
@@ -38,10 +38,9 @@ paths, extends the same scope:
 scope Text
 def normalize(value: text) -> text = value
 end Text
-
 def Text::display(value: text) -> text = "[%{normalize(value)}]"
-
-print(Text::display("ready"))
+program def main() -> unit =
+  let _ = print(Text::display("ready"))
 ```
 
 A region contains nested regions, header `open` and `import` declarations,
@@ -67,8 +66,10 @@ module root, declaring a binding at that path directly — the same
 declaration-path shorthand available for `def` and the type forms:
 
 ```agl
-let Config::retries = 3
-var Config::attempts = 0
+scope Config
+let retries = 3
+var attempts = 0
+end Config
 ```
 
 A `let` pattern written as a plain qualifier chain — one or more `::`-separated
@@ -93,13 +94,12 @@ pattern selects as a member of that scope:
 
 ```agl
 record Bounds(low: int, high: int)
-
 scope Config
 let Bounds(low, high) = Bounds(low = 0, high = 10)
 end Config
-
-print(Config::low)
-print(Config::high)
+program def main() -> unit =
+  let _ = print(Config::low)
+  let _ = print(Config::high)
 ```
 
 A binding's initializer runs at its region's position in the module body: in
@@ -118,8 +118,8 @@ scope Deploy
 param region: text = "eu"
 param replicas: int
 end Deploy
-
-print("%{Deploy::region} x %{Deploy::replicas}")
+program def main() -> unit =
+  let _ = print("%{Deploy::region} x %{Deploy::replicas}")
 ```
 
 A scoped parameter follows the same member and duplicate rules as every other
@@ -127,10 +127,8 @@ member: visible bare inside its region, by its exact path from outside, and
 through `open`. An entry-module parameter's **external key** — the name the
 CLI flag and the config table entry use to supply a value — is its full path
 spelling (`Deploy::region`), which is what makes grouping related parameters
-under one scope useful. During the M2 interim, a non-entry scoped param has no
-external key or runtime binding. Its declaration is accepted and type-checked,
-but each use is a static error; parameter discovery and lowering omit it until
-M3. See
+under one scope useful. A scoped parameter outside the file entry module has
+no external key or runtime binding, so reading it is a static error. See
 [Host environment](host-environment.md#params) for how the host resolves an
 external param value.
 
@@ -173,9 +171,9 @@ builtin record ExecResult
 
 builtin def print[T](value: T) -> unit
 end Host
-
-let result = Host::ExecResult(stdout = "x", exit_code = 0, stderr = "", timed_out = false)
-Host::print(result.stdout)
+program def main() -> unit =
+  let result = Host::ExecResult(stdout = "x", exit_code = 0, stderr = "", timed_out = false)
+  let _ = Host::print(result.stdout)
 ```
 
 A scoped `builtin record`/`enum`/`exception` carries its declared scope path
@@ -244,10 +242,10 @@ def Point::shift(self, amount: int) -> Point =
 scope Point
 def total(self) -> int = self.x + self.y
 end Point
-
-let point = Point(x = 2, y = 3)
-let shifted = point.shift(4)
-print(shifted.total())
+program def main() -> unit =
+  let point = Point(x = 2, y = 3)
+  let shifted = point.shift(4)
+  let _ = print(shifted.total())
 ```
 
 Methods may be declared only in the module that declares their receiver type.
@@ -274,20 +272,18 @@ a header declaration, so it appears before the region's other items.
 ```agl
 open Math
 open Text using show as format
-
 scope Math
 def add(left: int, right: int) -> int = left + right
 scope Metrics
 def scale(value: int) -> int = value * 2
 end Metrics
 end Math
-
 scope Text
 def show(value: int) -> text = "value %{value}"
 end Text
-
-let result = add(1, 2) + Metrics::scale(3)
-print(format(result))
+program def main() -> unit =
+  let result = add(1, 2) + Metrics::scale(3)
+  let _ = print(format(result))
 ```
 
 A plain `open` selects every member. `using` selects listed relative paths, and

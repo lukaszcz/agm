@@ -28,6 +28,7 @@ from typer.main import get_command
 import agm.cli as cli
 import agm.commands.exec as exec_command
 from agm.cli_support.args import ExecArgs
+from tests._agl_helpers import write_file_program
 
 
 class RecordedArgs(Protocol):
@@ -68,7 +69,7 @@ class TestExecArgsParsing:
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
+        write_file_program(agl_file, "let x = 1\n")
 
         result = invoke(runner, ["exec", str(agl_file)])
         assert result.exit_code == 0
@@ -81,7 +82,7 @@ class TestExecArgsParsing:
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
+        write_file_program(agl_file, "let x = 1\n")
 
         result = invoke(runner, ["exec", str(agl_file), "--k", "v"])
         assert result.exit_code == 0
@@ -93,7 +94,7 @@ class TestExecArgsParsing:
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
+        write_file_program(agl_file, "let x = 1\n")
 
         result = invoke(runner, ["exec", str(agl_file), "--a", "1", "--b", "2"])
         assert result.exit_code == 0
@@ -105,7 +106,7 @@ class TestExecArgsParsing:
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
+        write_file_program(agl_file, "let x = 1\n")
 
         result = invoke(runner, ["exec", "--strict-json", str(agl_file)])
         assert result.exit_code == 0
@@ -117,7 +118,7 @@ class TestExecArgsParsing:
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
+        write_file_program(agl_file, "let x = 1\n")
 
         result = invoke(runner, ["exec", "--no-strict-json", str(agl_file)])
         assert result.exit_code == 0
@@ -129,7 +130,7 @@ class TestExecArgsParsing:
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
+        write_file_program(agl_file, "let x = 1\n")
 
         result = invoke(runner, ["exec", "--max-iters", "10", str(agl_file)])
         assert result.exit_code == 0
@@ -141,7 +142,7 @@ class TestExecArgsParsing:
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
+        write_file_program(agl_file, "let x = 1\n")
 
         result = invoke(runner, ["exec", "--agent", 'AgentCommand("echo agent")', str(agl_file)])
         assert result.exit_code == 0
@@ -152,7 +153,7 @@ class TestExecArgsParsing:
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
+        write_file_program(agl_file, "let x = 1\n")
 
         result = invoke(runner, ["exec", "--log-file", "/tmp/out.log", str(agl_file)])
         assert result.exit_code == 0
@@ -164,7 +165,7 @@ class TestExecArgsParsing:
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
+        write_file_program(agl_file, "let x = 1\n")
 
         result = invoke(runner, ["exec", "--no-log", str(agl_file)])
         assert result.exit_code == 0
@@ -176,7 +177,7 @@ class TestExecArgsParsing:
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("program def main() -> unit = ()\n")
+        write_file_program(agl_file, "program def main() -> unit = ()\n")
 
         result = invoke(runner, ["exec", "-p", "main", str(agl_file)])
         assert result.exit_code == 0
@@ -209,7 +210,7 @@ class TestExecCommandArgParsing:
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
+        write_file_program(agl_file, "let x = 1\n")
         result = invoke(runner, ["exec", "-c", "let x = 1", str(agl_file)])
         assert result.exit_code != 0
         # run() must not be reached when the CLI rejects the combination.
@@ -299,7 +300,10 @@ class TestExecDynamicHelp:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('param msg: text = "hi"\nprogram def main() -> unit = print msg\n')
+        write_file_program(
+            agl_file,
+            'param msg: text = "hi"\nprogram def main() -> unit = print msg\n',
+        )
 
         with pytest.raises(SystemExit) as exc_info:
             cli._exec_print_help(file=str(agl_file), command=None)
@@ -408,7 +412,7 @@ class TestExecCommandBehavior:
     ) -> None:
         """A valid .agl file with no agent calls exits 0 (success)."""
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\nx\n")
+        write_file_program(agl_file, "let x = 1\nx\n")
         from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
@@ -428,7 +432,7 @@ class TestExecCommandBehavior:
     ) -> None:
         """A .agl file with a static error exits 1 and prints diagnostics to stderr."""
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = undefined_name\n")
+        write_file_program(agl_file, "let x = undefined_name\n")
         from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
@@ -447,7 +451,7 @@ class TestExecCommandBehavior:
 
     def test_static_discovery_failure_does_not_truncate_trace(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = undefined_name\n")
+        write_file_program(agl_file, "let x = undefined_name\n")
         log_path = tmp_path / "trace.jsonl"
         log_path.write_text("existing trace\n", encoding="utf-8")
 
@@ -503,7 +507,7 @@ class TestExecLogFileValidatedUpFront:
         BEFORE any program statement runs (no raw PermissionError traceback)."""
         agl_file = tmp_path / "test.agl"
         # If the program ran, it would print to stdout — it must NOT.
-        agl_file.write_text('print "should-not-run"\n')
+        write_file_program(agl_file, 'print "should-not-run"\n')
 
         ro_dir = tmp_path / "ro"
         ro_dir.mkdir()
@@ -535,7 +539,7 @@ class TestExecCommandEdgePaths:
     ) -> None:
         """A successful real program prints its output and returns (exit 0)."""
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text('print "ok"\n')
+        write_file_program(agl_file, 'print "ok"\n')
 
         # Real pipeline: no SystemExit on the success path.
         assert exec_command.run(_exec_args(agl_file)) is None
@@ -546,7 +550,7 @@ class TestExecCommandEdgePaths:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text('param msg: text = "ok"\nprint msg\n')
+        write_file_program(agl_file, 'param msg: text = "ok"\nprint msg\n')
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args(agl_file, param_tokens=["--unknown"]))
@@ -559,13 +563,14 @@ class TestExecCommandEdgePaths:
     ) -> None:
         """A non-exhaustive enum ``case`` fails statically before execution."""
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text(
+        write_file_program(
+            agl_file,
             "enum R\n"
             "  | Pass\n"
             "  | Fail\n"
             "let r: R = Pass()\n"
             "case r of\n"
-            '  | Pass() => print "passed"\n'
+            '  | Pass() => print "passed"\n',
         )
 
         with pytest.raises(SystemExit) as exc_info:
@@ -606,7 +611,7 @@ class TestExecExitCodeMapping:
         from agm.agl.pipeline import PipelineDriver, RunError, RunResult
 
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\nx\n")
+        write_file_program(agl_file, "let x = 1\nx\n")
 
         def fake_run(
             self: PipelineDriver,
@@ -654,7 +659,7 @@ class TestExecCommandWarnings:
         from agm.agl.pipeline import PipelineDriver, RunResult
 
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\nx\n")
+        write_file_program(agl_file, "let x = 1\nx\n")
 
         warning = Diagnostic(
             message="declared agent 'reviewer' is unused",
@@ -692,7 +697,7 @@ class TestExecCommandWarnings:
     ) -> None:
         # Real source: an undefined name is a static (error-severity) diagnostic.
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = undefined_name\n")
+        write_file_program(agl_file, "let x = undefined_name\n")
 
         monkeypatch.chdir(tmp_path)
         with pytest.raises(SystemExit) as exc_info:
@@ -700,7 +705,7 @@ class TestExecCommandWarnings:
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         assert "undefined_name" in captured.err
-        assert captured.err.startswith("test.agl:1:9-22: error:")
+        assert captured.err.startswith("test.agl:2:11-24: error:")
 
     def test_inline_error_diagnostic_has_command_label(
         self, capsys: pytest.CaptureFixture[str]
@@ -735,7 +740,7 @@ class TestExecCommandWarnings:
         from agm.agl.pipeline import PipelineDriver, RunResult
 
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\nx\n")
+        write_file_program(agl_file, "let x = 1\nx\n")
 
         warning = Diagnostic(
             message="unused binding",
@@ -802,7 +807,10 @@ class TestExecParsesSourceOnce:
         agl_file = tmp_path / "prog.agl"
         # A declared+called agent: exec must read the inventory AND run the
         # static pipeline, the exact scenario that previously parsed twice.
-        agl_file.write_text('let impl = AgentCommand("impl")\nask("do it", agent = impl)\n')
+        write_file_program(
+            agl_file,
+            'let impl = AgentCommand("impl")\nask("do it", agent = impl)\n',
+        )
 
         real_build_repl_graph = loader_mod.build_repl_graph
         real_resolve_program = scope_graph_mod.resolve_program
@@ -887,8 +895,8 @@ class TestExecLowersGraphOnce:
         lowerings = self._count_lowerings(monkeypatch)
         (tmp_path / "helper.agl").write_text('def greet(who: text) -> text = "hi %{who}"\n')
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            'open import helper\nparam who: text = "world"\nprint helper::greet(who)\n'
+        write_file_program(
+            agl_file, 'open import helper\nparam who: text = "world"\nprint helper::greet(who)\n'
         )
 
         assert exec_command.run(_exec_args(agl_file, param_tokens=["--who", "agl"])) is None
@@ -906,8 +914,11 @@ class TestExecLowersGraphOnce:
 
         lowerings = self._count_lowerings(monkeypatch)
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            'let impl = AgentCommand("impl")\nparam task: text = "do it"\nask(task, agent = impl)\n'
+        write_file_program(
+            agl_file,
+            'let impl = AgentCommand("impl")\n'
+            'param task: text = "do it"\n'
+            "ask(task, agent = impl)\n",
         )
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
@@ -924,7 +935,7 @@ class TestExecLowersGraphOnce:
     ) -> None:
         """A param failure preempts the run: no trace file, no program output."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('param n: int\nprint "n=%{n}"\n')
+        write_file_program(agl_file, 'param n: int\nprint "n=%{n}"\n')
         log_path = tmp_path / "trace.jsonl"
 
         with pytest.raises(SystemExit) as exc_info:
@@ -946,7 +957,7 @@ class TestExecCLIPaths:
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
+        write_file_program(agl_file, "let x = 1\n")
         # recorded_runs intercepts exec.run so we don't actually run the file.
         result = invoke(
             runner,
@@ -960,7 +971,7 @@ class TestExecCommandExitCodes:
 
     def test_valid_program_exits_0(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\nx\n")
+        write_file_program(agl_file, "let x = 1\nx\n")
         from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
@@ -976,7 +987,7 @@ class TestExecCommandExitCodes:
 
     def test_program_with_params_exits_0(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("param msg\nprint msg\n")
+        write_file_program(agl_file, "param msg\nprint msg\n")
         from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
@@ -992,9 +1003,10 @@ class TestExecCommandExitCodes:
 
     def test_declared_agents_with_std_config_preserve_params(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text(
+        write_file_program(
+            agl_file,
             'import std/config\nlet worker = AgentCommand("worker")\nstd/config::log := false\n'
-            "param value: int\nprint value\n"
+            "param value: int\nprint value\n",
         )
         from agm.cli_support.args import ExecArgs
 
@@ -1011,7 +1023,7 @@ class TestExecCommandExitCodes:
 
     def test_missing_param_exits_1(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("param msg\nprint msg\n")
+        write_file_program(agl_file, "param msg\nprint msg\n")
         from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
@@ -1031,8 +1043,8 @@ class TestExecCommandExitCodes:
     ) -> None:
         """A scoped `param Deploy::region` is supplied as `--Deploy::region`."""
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text(
-            'scope Deploy\nparam region: text = "eu"\nend Deploy\nprint(Deploy::region)\n'
+        write_file_program(
+            agl_file, 'scope Deploy\nparam region: text = "eu"\nend Deploy\nprint(Deploy::region)\n'
         )
 
         assert (
@@ -1053,11 +1065,12 @@ class TestExecCommandExitCodes:
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text('[demo]\n"Deploy::region" = "prod"\n')
+        (home / ".agm" / "config.toml").write_text('[test]\n"Deploy::region" = "prod"\n')
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text(
-            'program demo\nscope Deploy\nparam region: text = "eu"\nend Deploy\n'
-            "print(Deploy::region)\n"
+        write_file_program(
+            agl_file,
+            'scope Deploy\nparam region: text = "eu"\nend Deploy\n'
+            "program def demo() -> unit = print(Deploy::region)\n",
         )
         monkeypatch.setattr(
             exec_command,
@@ -1073,7 +1086,7 @@ class TestExecCommandExitCodes:
     ) -> None:
         # 'timeout' is an engine key name (kebab); param timeout → --timeout collides.
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text('param timeout: text = "30s"\nprint timeout\n')
+        write_file_program(agl_file, 'param timeout: text = "30s"\nprint timeout\n')
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args(agl_file))
@@ -1091,9 +1104,12 @@ class TestExecCommandExitCodes:
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text("\n".join(["[demo]", 'typo = "ignored"']))
+        (home / ".agm" / "config.toml").write_text("\n".join(["[test]", 'typo = "ignored"']))
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text('program demo\nparam msg: text = "ok"\nprint msg\n')
+        write_file_program(
+            agl_file,
+            'param msg: text = "ok"\nprogram def demo() -> unit = print msg\n',
+        )
         monkeypatch.setattr(
             exec_command,
             "current_config_context",
@@ -1114,7 +1130,7 @@ class TestExecCommandExitCodes:
         from agm.cli_support.args import ExecArgs
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('ask("hi")\n')
+        write_file_program(agl_file, 'ask("hi")\n')
 
         args = ExecArgs(
             file=str(agl_file),
@@ -1149,7 +1165,7 @@ class TestExecCommandExitCodes:
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('print "hello"\n')
+        write_file_program(agl_file, 'print "hello"\n')
 
         args = ExecArgs(
             file=str(agl_file),
@@ -1173,7 +1189,7 @@ class TestExecCommandExitCodes:
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("let x = undefined_name\n")
+        write_file_program(agl_file, "let x = undefined_name\n")
 
         args = ExecArgs(
             file=str(agl_file),
@@ -1198,8 +1214,9 @@ class TestExecCommandExitCodes:
 
         monkeypatch.setattr(dry_run, "_ENABLED", True)
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            'def dormant(x: bool) -> int =\n  case x of\n    | true => 1\nprint "unreachable"\n'
+        write_file_program(
+            agl_file,
+            'def dormant(x: bool) -> int =\n  case x of\n    | true => 1\nprint "unreachable"\n',
         )
         args = ExecArgs(
             file=str(agl_file),
@@ -1220,7 +1237,7 @@ class TestExecCommandExitCodes:
 
     def test_static_error_exits_1_not_2(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = undefined_name\n")
+        write_file_program(agl_file, "let x = undefined_name\n")
         from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
@@ -1288,7 +1305,7 @@ class TestExecConfigWiring:
 
         home = self._config_home(tmp_path)
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("let x = 1\nx\n")
+        write_file_program(agl_file, "let x = 1\nx\n")
 
         monkeypatch.setattr(
             exec_command,
@@ -1318,7 +1335,7 @@ class TestExecConfigWiring:
 
         home = self._config_home(tmp_path)  # config sets strict_json = true
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("let x = 1\nx\n")
+        write_file_program(agl_file, "let x = 1\nx\n")
 
         monkeypatch.setattr(
             exec_command,
@@ -1352,7 +1369,7 @@ class TestExecConfigWiring:
         (home / ".agm" / "config.toml").write_text("[exec]\ntimeout = 60\n")
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("let x = 1\nx\n")
+        write_file_program(agl_file, "let x = 1\nx\n")
 
         monkeypatch.setattr(
             exec_command,
@@ -1385,7 +1402,7 @@ class TestExecConfigWiring:
         (home / ".agm").mkdir(parents=True)
         (home / ".agm" / "config.toml").write_text('[exec]\ntimeout = "forever"\n')
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("let x = 1\n")
+        write_file_program(agl_file, "let x = 1\n")
 
         monkeypatch.setattr(
             exec_command,
@@ -1462,7 +1479,7 @@ class TestDryRunInventory:
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('let x = ask("Hello")\nx\n')
+        write_file_program(agl_file, 'let x = ask("Hello")\nx\n')
 
         args = _exec_args_with_fallback_runtime(agl_file, monkeypatch)
         assert exec_command.run(args) is None
@@ -1474,7 +1491,7 @@ class TestDryRunInventory:
         # The entry surfaces both the source line and column as "line N:C:"
         # (the captured call-site column is not dead).  `ask` starts at
         # column 9 of `let x = ask("Hello")`.
-        assert "line 1:9:" in captured.out
+        assert "line 2:11:" in captured.out
 
     def test_dry_run_inventory_named_agent(
         self,
@@ -1488,8 +1505,9 @@ class TestDryRunInventory:
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            'let reviewer = AgentCommand("reviewer")\nask("Review this", agent = reviewer)\n'
+        write_file_program(
+            agl_file,
+            'let reviewer = AgentCommand("reviewer")\nask("Review this", agent = reviewer)\n',
         )
 
         args = _exec_args_with_fallback_runtime(agl_file, monkeypatch)
@@ -1511,7 +1529,7 @@ class TestDryRunInventory:
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('ask("Hello", on_parse_error = Abort)\n')
+        write_file_program(agl_file, 'ask("Hello", on_parse_error = Abort)\n')
 
         args = _exec_args_with_fallback_runtime(agl_file, monkeypatch)
         assert exec_command.run(args) is None
@@ -1530,7 +1548,7 @@ class TestDryRunInventory:
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('print "hello"\n')
+        write_file_program(agl_file, 'print "hello"\n')
 
         assert exec_command.run(_exec_args(agl_file)) is None
         captured = capsys.readouterr()
@@ -1548,7 +1566,7 @@ class TestDryRunInventory:
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("let x = undefined_name\n")
+        write_file_program(agl_file, "let x = undefined_name\n")
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args(agl_file))
@@ -1598,7 +1616,7 @@ class TestDryRunInventory:
         monkeypatch.setattr(exec_command, "PipelineDriver", SpyRuntime)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('ask("Hi")\n')
+        write_file_program(agl_file, 'ask("Hi")\n')
 
         assert exec_command.run(_exec_args(agl_file)) is None
         assert agent_calls == []
@@ -1611,7 +1629,7 @@ class TestExecFFI:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("extern def add_one(x: int) -> int\nprint(add_one(41))\n")
+        write_file_program(agl_file, "extern def add_one(x: int) -> int\nprint(add_one(41))\n")
         (tmp_path / "prog.py").write_text("def add_one(x):\n    return x + 1\n")
 
         assert exec_command.run(_exec_args(agl_file)) is None
@@ -1631,7 +1649,7 @@ class TestExecFFI:
 
         marker = tmp_path / "marker.txt"
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("extern def add_one(x: int) -> int\nadd_one(41)\n")
+        write_file_program(agl_file, "extern def add_one(x: int) -> int\nadd_one(41)\n")
         (tmp_path / "prog.py").write_text(
             f"open({str(marker)!r}, 'a').write('imported')\n"
             "def add_one(x):\n"
@@ -1658,7 +1676,7 @@ class TestExecFFI:
 
         marker = tmp_path / "marker.txt"
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("extern def choose_runner() -> text\nchoose_runner()\n")
+        write_file_program(agl_file, "extern def choose_runner() -> text\nchoose_runner()\n")
         (tmp_path / "prog.py").write_text(
             f"open({str(marker)!r}, 'a').write('imported')\n"
             "def choose_runner():\n"
@@ -1684,7 +1702,7 @@ class TestExecFFI:
 
         marker = tmp_path / "marker.txt"
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("open import mylib\nmylib::run()\n")
+        write_file_program(agl_file, "open import mylib\nmylib::run()\n")
         (tmp_path / "mylib.agl").write_text(
             "extern def from_lib(x: int) -> int\ndef run() -> int = from_lib(1)\n"
         )
@@ -1709,8 +1727,9 @@ class TestExecFFI:
 
         marker = tmp_path / "marker.txt"
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            "extern def chosen(x: int) -> int\ndef choose() -> int -> int = chosen\nchoose()(1)\n"
+        write_file_program(
+            agl_file,
+            "extern def chosen(x: int) -> int\ndef choose() -> int -> int = chosen\nchoose()(1)\n",
         )
         (tmp_path / "prog.py").write_text(
             f"open({str(marker)!r}, 'a').write('imported')\ndef chosen(x):\n    return x\n"
@@ -1733,11 +1752,12 @@ class TestExecFFI:
 
         marker = tmp_path / "marker.txt"
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
+        write_file_program(
+            agl_file,
             "extern def chosen(x: int) -> int\n"
             "def get() -> int -> int = chosen\n"
             "let h = get\n"
-            "h()(1)\n"
+            "h()(1)\n",
         )
         (tmp_path / "prog.py").write_text(
             f"open({str(marker)!r}, 'a').write('imported')\ndef chosen(x):\n    return x\n"
@@ -1756,7 +1776,10 @@ class TestJsonParamsCLI:
     def test_record_param_parsed_from_json_string(self, tmp_path: Path) -> None:
         """A record-typed param provided as a JSON string is parsed and usable."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("record Point\n  x: int\n  y: int\nparam pt: Point\nprint pt.x\n")
+        write_file_program(
+            agl_file,
+            "record Point\n  x: int\n  y: int\nparam pt: Point\nprint pt.x\n",
+        )
         from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
@@ -1783,7 +1806,7 @@ class TestJsonParamsCLI:
     def test_decimal_param_parsed_from_json_string(self, tmp_path: Path) -> None:
         """A decimal-typed param provided as a JSON string is accepted."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param price: decimal\nprint price\n")
+        write_file_program(agl_file, "param price: decimal\nprint price\n")
         from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
@@ -1810,7 +1833,7 @@ class TestJsonParamsCLI:
     def test_array_param_parsed_from_json_string(self, tmp_path: Path) -> None:
         """An array-typed param provided as a JSON array string is accepted."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param tags: array[text]\nprint tags\n")
+        write_file_program(agl_file, "param tags: array[text]\nprint tags\n")
         from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
@@ -1839,7 +1862,10 @@ class TestJsonParamsCLI:
     def test_record_param_invalid_json_exits_1(self, tmp_path: Path) -> None:
         """A record-typed param with invalid JSON exits 1."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("record Point\n  x: int\n  y: int\nparam pt: Point\nprint pt.x\n")
+        write_file_program(
+            agl_file,
+            "record Point\n  x: int\n  y: int\nparam pt: Point\nprint pt.x\n",
+        )
         from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
@@ -1881,14 +1907,14 @@ class TestUncaughtExceptionOutputFormat:
         """Exit-2 stderr must include the source line number of the raise site."""
         agl_file = tmp_path / "prog.agl"
         # Force an uncaught ExecError from an exec call on line 1.
-        agl_file.write_text('let x: int = exec "echo not-an-int"\nx\n')
+        write_file_program(agl_file, 'let x: int = exec "echo not-an-int"\nx\n')
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(self._exec_args_nolog(agl_file))
         assert exc_info.value.code == 2
         captured = capsys.readouterr()
         err = captured.err
         # The output must include a line reference (line 1).
-        assert "line 1" in err or "line:1" in err or ":1:" in err, (
+        assert "line 2" in err or "line:2" in err or ":2:" in err, (
             f"Expected line reference in stderr, got: {err!r}"
         )
 
@@ -2016,8 +2042,11 @@ class TestExecAgentValues:
         env.setdefault("HOME", str(Path.home()))
         _install_marker_runner(tmp_path / "bin", env, name="value-runner", marker="FROM-VALUE")
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            'let impl = AgentCommand("value-runner")\nlet x = ask("do it", agent = impl)\nprint x\n'
+        write_file_program(
+            agl_file,
+            'let impl = AgentCommand("value-runner")\n'
+            'let x = ask("do it", agent = impl)\n'
+            "print x\n",
         )
         result = self._run_agm_exec([str(agl_file), "--no-log"], env=env, cwd=tmp_path)
 
@@ -2029,9 +2058,10 @@ class TestExecAgentValues:
         env.setdefault("HOME", str(Path.home()))
         _install_argv_echo_runner(tmp_path / "bin", env, name="value-runner", marker="FROM-VALUE")
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
+        write_file_program(
+            agl_file,
             'let impl = AgentCommand("value-runner --file=\\%{PROMPT_FILE}")\n'
-            'let x = ask("do it", agent = impl)\nprint x\n'
+            'let x = ask("do it", agent = impl)\nprint x\n',
         )
 
         result = self._run_agm_exec([str(agl_file), "--no-log"], env=env, cwd=tmp_path)
@@ -2091,7 +2121,7 @@ class TestExecTimeoutAndLogFileFlags:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("let x = 1\nx\n")
+        write_file_program(agl_file, "let x = 1\nx\n")
         captured = self._capture_timeout(monkeypatch)
 
         result = exec_command.run(_exec_args_no_log(agl_file, timeout="45s"))
@@ -2102,7 +2132,7 @@ class TestExecTimeoutAndLogFileFlags:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("let x = 1\nx\n")
+        write_file_program(agl_file, "let x = 1\nx\n")
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_log(agl_file, timeout="not-a-duration"))
@@ -2113,7 +2143,7 @@ class TestExecTimeoutAndLogFileFlags:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("let x = 1\nx\n")
+        write_file_program(agl_file, "let x = 1\nx\n")
         captured = self._capture_timeout(monkeypatch)
 
         result = exec_command.run(_exec_args_no_log(agl_file, no_timeout=True))
@@ -2124,7 +2154,7 @@ class TestExecTimeoutAndLogFileFlags:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("import std/config\nprint std/config::timeout\n")
+        write_file_program(agl_file, "import std/config\nprint std/config::timeout\n")
 
         exec_command.run(_exec_args_no_log(agl_file, timeout="0.0001s"))
 
@@ -2144,7 +2174,7 @@ class TestExecTimeoutAndLogFileFlags:
             '[exec]\ntimeout = "1s"\n\n[prog]\ntimeout = 0.0001\n'
         )
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("import std/config\nprint std/config::timeout\n")
+        write_file_program(agl_file, "import std/config\nprint std/config::timeout\n")
         monkeypatch.setattr(
             exec_command,
             "current_config_context",
@@ -2170,7 +2200,7 @@ class TestExecTimeoutAndLogFileFlags:
             f'[exec]\nlog = true\nlog-file = "{trace_path}"\n'
         )
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("import std/config\nprint std/config::log-file\n")
+        write_file_program(agl_file, "import std/config\nprint std/config::log-file\n")
         monkeypatch.setattr(
             exec_command,
             "current_config_context",
@@ -2206,13 +2236,14 @@ class TestExecSourceConfigPrecedence:
         the command exits 2.
         """
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
+        write_file_program(
+            agl_file,
             "import std/config\n"
             "std/config::max-iters := 3\n"
             "var n = 0\n"
             "do\n"
             "  n := n + 1\n"
-            "until n >= 100\n"
+            "until n >= 100\n",
         )
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_log(agl_file))
@@ -2223,14 +2254,15 @@ class TestExecSourceConfigPrecedence:
     ) -> None:
         """``std/config::max-iters := 100`` allows a do loop needing exactly 100 iterations."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
+        write_file_program(
+            agl_file,
             "import std/config\n"
             "std/config::max-iters := 100\n"
             "var n = 0\n"
             "do\n"
             "  n := n + 1\n"
             "until n >= 100\n"
-            'print "done"\n'
+            'print "done"\n',
         )
         result = exec_command.run(_exec_args_no_log(agl_file))
         assert result is None  # exit 0
@@ -2241,14 +2273,15 @@ class TestExecSourceConfigPrecedence:
     ) -> None:
         """``std/config::max-iters := 0`` turns an active host valve off."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
+        write_file_program(
+            agl_file,
             "import std/config\n"
             "std/config::max-iters := 0\n"
             "var i = 0\n"
             "do\n"
             "  i := i + 1\n"
             "until i >= 3\n"
-            "print i\n"
+            "print i\n",
         )
 
         exec_command.run(_exec_args_no_log(agl_file, max_iters=1))
@@ -2257,8 +2290,8 @@ class TestExecSourceConfigPrecedence:
     def test_source_max_iters_negative_expression_is_rejected(self, tmp_path: Path) -> None:
         """A computed negative ``max-iters`` value is rejected at the assignment point."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            "import std/config\nlet bad = 0 - 1\nstd/config::max-iters := bad\nprint 1\n"
+        write_file_program(
+            agl_file, "import std/config\nlet bad = 0 - 1\nstd/config::max-iters := bad\nprint 1\n"
         )
 
         with pytest.raises(SystemExit) as exc_info:
@@ -2276,14 +2309,15 @@ class TestExecSourceConfigPrecedence:
         command exits 2 (source wins over the CLI flag).
         """
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
+        write_file_program(
+            agl_file,
             "import std/config\n"
             "std/config::max-iters := 3\n"
             "var n = 0\n"
             "do\n"
             "  n := n + 1\n"
             "until n >= 100\n"
-            'print "done"\n'
+            'print "done"\n',
         )
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_log(agl_file, max_iters=100))
@@ -2310,14 +2344,15 @@ class TestExecSourceConfigPrecedence:
         )
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
+        write_file_program(
+            agl_file,
             "import std/config\n"
             "std/config::max-iters := 100\n"
             "var n = 0\n"
             "do\n"
             "  n := n + 1\n"
             "until n >= 100\n"
-            'print "done"\n'
+            'print "done"\n',
         )
         result = exec_command.run(_exec_args_no_log(agl_file))
         assert result is None  # exit 0 — source 100 overrides config 3
@@ -2337,7 +2372,10 @@ class TestExecSourceConfigPrecedence:
         ``for x in [1,2,3,4]``.
         """
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("var s = 0\nfor x in [1, 2, 3, 4, 5] do s := s + x done\nprint s\n")
+        write_file_program(
+            agl_file,
+            "var s = 0\nfor x in [1, 2, 3, 4, 5] do s := s + x done\nprint s\n",
+        )
         result = exec_command.run(_exec_args_no_log(agl_file, max_iters=3))
         assert result is None  # exit 0
         assert capsys.readouterr().out == "15\n"
@@ -2351,7 +2389,7 @@ class TestExecSourceConfigPrecedence:
         safety valve must not cut it short.
         """
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("var i = 0\ndo[10]\n  i := i + 1\nuntil i >= 5\nprint i\n")
+        write_file_program(agl_file, "var i = 0\ndo[10]\n  i := i + 1\nuntil i >= 5\nprint i\n")
         result = exec_command.run(_exec_args_no_log(agl_file, max_iters=3))
         assert result is None  # exit 0
         assert capsys.readouterr().out == "5\n"
@@ -2359,7 +2397,7 @@ class TestExecSourceConfigPrecedence:
     def test_max_iters_caps_unbounded_do_until_loop(self, tmp_path: Path) -> None:
         """``--max-iters`` caps an unguarded ``do…until`` loop (no [n], no for)."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("var i = 0\ndo\n  i := i + 1\nuntil i >= 1000\nprint i\n")
+        write_file_program(agl_file, "var i = 0\ndo\n  i := i + 1\nuntil i >= 1000\nprint i\n")
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_log(agl_file, max_iters=3))
         assert exc_info.value.code == 2
@@ -2367,7 +2405,7 @@ class TestExecSourceConfigPrecedence:
     @pytest.mark.parametrize("limit", [0, -1])
     def test_cli_max_iters_requires_positive_value(self, tmp_path: Path, limit: int) -> None:
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("print 1\n")
+        write_file_program(agl_file, "print 1\n")
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_log(agl_file, max_iters=limit))
@@ -2377,7 +2415,7 @@ class TestExecSourceConfigPrecedence:
     def test_max_iters_five_enables_valve(self, tmp_path: Path) -> None:
         """An explicit positive CLI limit consistently enables the valve."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("var i = 0\ndo\n  i := i + 1\nuntil i >= 1000\nprint i\n")
+        write_file_program(agl_file, "var i = 0\ndo\n  i := i + 1\nuntil i >= 1000\nprint i\n")
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_log(agl_file, max_iters=5))
         assert exc_info.value.code == 2
@@ -2393,7 +2431,10 @@ class TestExecSourceConfigPrecedence:
         PipelineDriver constructor; it is applied when the assignment executes.
         The constructor receives the config-file value (False by default)."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("import std/config\nstd/config::strict-json := true\nlet x = 1\nx\n")
+        write_file_program(
+            agl_file,
+            "import std/config\nstd/config::strict-json := true\nlet x = 1\nx\n",
+        )
 
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
@@ -2412,11 +2453,12 @@ class TestExecSourceConfigPrecedence:
         floor alone the value would have parsed and the command exited 0).
         """
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
+        write_file_program(
+            agl_file,
             "import std/config\n"
             "std/config::strict-json := true\n"
             "let r: int = exec \"printf '```json\\n5\\n```'\"\n"
-            "print r\n"
+            "print r\n",
         )
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_log(agl_file, strict_json=False))
@@ -2440,7 +2482,10 @@ class TestExecSourceConfigPrecedence:
         monkeypatch.setattr(exec_command, "exec_config_from_merged", lambda *_, **__: strict_config)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("import std/config\nstd/config::strict-json := false\nlet x = 1\nx\n")
+        write_file_program(
+            agl_file,
+            "import std/config\nstd/config::strict-json := false\nlet x = 1\nx\n",
+        )
 
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
@@ -2460,7 +2505,10 @@ class TestExecSourceConfigPrecedence:
         PipelineDriver constructor; it is applied when the assignment executes.
         The constructor receives the config-file value (None by default)."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('import std/config\nstd/config::timeout := Some("30s")\nlet x = 1\nx\n')
+        write_file_program(
+            agl_file,
+            'import std/config\nstd/config::timeout := Some("30s")\nlet x = 1\nx\n',
+        )
 
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
@@ -2474,7 +2522,7 @@ class TestExecSourceConfigPrecedence:
     ) -> None:
         """``std/config::timeout := 60`` (integer) is a type error: timeout is Option[text]."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("import std/config\nstd/config::timeout := 60\nlet x = 1\nx\n")
+        write_file_program(agl_file, "import std/config\nstd/config::timeout := 60\nlet x = 1\nx\n")
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_log(agl_file))
@@ -2500,7 +2548,10 @@ class TestExecSourceConfigPrecedence:
         )
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('import std/config\nstd/config::timeout := Some("30s")\nlet x = 1\nx\n')
+        write_file_program(
+            agl_file,
+            'import std/config\nstd/config::timeout := Some("30s")\nlet x = 1\nx\n',
+        )
 
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
@@ -2518,8 +2569,8 @@ class TestExecSourceConfigPrecedence:
         parse_timeout ValueError to an AglRaise (uncaught AgL exception → exit 2).
         """
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            'import std/config\nstd/config::timeout := Some("forever")\nlet x = 1\nx\n'
+        write_file_program(
+            agl_file, 'import std/config\nstd/config::timeout := Some("forever")\nlet x = 1\nx\n'
         )
 
         with pytest.raises(SystemExit) as exc_info:
@@ -2533,7 +2584,7 @@ class TestExecSourceConfigPrecedence:
     def test_source_log_write_creates_trace_file(self, tmp_path: Path) -> None:
         """``std/config::log := true`` in source enables trace logging (creates a file)."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('import std/config\nstd/config::log := true\nprint "hi"\n')
+        write_file_program(agl_file, 'import std/config\nstd/config::log := true\nprint "hi"\n')
 
         # Run in tmp_path so .agent-files/ is created there.
         import os
@@ -2562,8 +2613,8 @@ class TestExecSourceConfigPrecedence:
         """``std/config::log-file := Some("path")`` in source writes the trace to that path."""
         log_path = tmp_path / "trace.log"
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            f'import std/config\nstd/config::log-file := Some("{log_path}")\nprint "hi"\n'
+        write_file_program(
+            agl_file, f'import std/config\nstd/config::log-file := Some("{log_path}")\nprint "hi"\n'
         )
 
         exec_command.run(
@@ -2616,7 +2667,7 @@ class TestExecModuleRoots:
         lib_dir = tmp_path
         (lib_dir / "mylib.agl").write_text("def answer() -> int = 42\n")
         entry = lib_dir / "entry.agl"
-        entry.write_text("open import mylib\nlet r = answer()\nprint r\n")
+        write_file_program(entry, "open import mylib\nlet r = answer()\nprint r\n")
 
         # A successful run returns normally (no SystemExit).
         exec_command.run(_exec_args_no_log(entry))
@@ -2630,7 +2681,7 @@ class TestExecModuleRoots:
         lib_dir = tmp_path
         (lib_dir / "broken.agl").write_text("def f() -> int = undeclared_name\n")
         entry = lib_dir / "entry.agl"
-        entry.write_text("open import broken\nlet r = f()\nr\n")
+        write_file_program(entry, "open import broken\nlet r = f()\nr\n")
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_log(entry))
@@ -2671,7 +2722,7 @@ class TestExecModuleRoots:
     ) -> None:
         """A missing import causes exit 1 with a diagnostic on stderr."""
         entry = tmp_path / "prog.agl"
-        entry.write_text("open import no_such_module\nlet x = 1\nx\n")
+        write_file_program(entry, "open import no_such_module\nlet x = 1\nx\n")
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_log(entry))
@@ -2686,7 +2737,7 @@ class TestExecModuleRoots:
         lib_dir = tmp_path
         (lib_dir / "calc.agl").write_text("def square(n: int) -> int = n * n\n")
         entry = lib_dir / "prog.agl"
-        entry.write_text("open import calc\nlet r = square(4)\nprint r\n")
+        write_file_program(entry, "open import calc\nlet r = square(4)\nprint r\n")
 
         # A successful run returns normally (no SystemExit).
         exec_command.run(_exec_args_no_log(entry))
@@ -2700,7 +2751,7 @@ class TestExecModuleRoots:
         from unittest.mock import patch
 
         entry = tmp_path / "prog.agl"
-        entry.write_text("let x = 1\nx\n")
+        write_file_program(entry, "let x = 1\nx\n")
 
         with (
             patch(
@@ -2722,7 +2773,7 @@ class TestExecModuleRoots:
         from agm.config.module_roots import StaleStdlibError
 
         entry = tmp_path / "prog.agl"
-        entry.write_text("let x = 1\nx\n")
+        write_file_program(entry, "let x = 1\nx\n")
         stale_path = tmp_path / "stale" / "stdlib"
 
         def fake_resolve_stdlib_root(*, home: Path) -> Path:
@@ -2751,7 +2802,7 @@ class TestExecModuleRoots:
         entry_dir = tmp_path / "work"
         entry_dir.mkdir()
         entry = entry_dir / "prog.agl"
-        entry.write_text("open import shared\nlet r = pi()\nprint r\n")
+        write_file_program(entry, "open import shared\nlet r = pi()\nprint r\n")
 
         # Patch load_module_roots to return a ModuleRootsConfig with lib_root set.
         with monkeypatch.context() as mp:
@@ -2780,8 +2831,8 @@ class TestExecModuleRoots:
         (pkg_dir / "add.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
         (pkg_dir / "mul.agl").write_text("def mul(a: int, b: int) -> int = a * b\n")
         entry = tmp_path / "prog.agl"
-        entry.write_text(
-            "open import pkg/*\nlet s = add(3, 4)\nlet p = mul(3, 4)\nprint s\nprint p\n"
+        write_file_program(
+            entry, "open import pkg/*\nlet s = add(3, 4)\nlet p = mul(3, 4)\nprint s\nprint p\n"
         )
 
         exec_command.run(_exec_args_no_log(entry))
@@ -2798,7 +2849,7 @@ class TestExecModuleRoots:
         """
         (tmp_path / "mathlib.agl").write_text("def square(n: int) -> int = n * n\n")
         entry = tmp_path / "prog.agl"
-        entry.write_text("import mathlib\nlet r = mathlib::square(7)\nprint r\n")
+        write_file_program(entry, "import mathlib\nlet r = mathlib::square(7)\nprint r\n")
 
         exec_command.run(_exec_args_no_log(entry))
         captured = capsys.readouterr()
@@ -2822,11 +2873,12 @@ class TestExecModuleRoots:
             "def greet(prompt: text, bot: Agent) -> text =\n  ask(prompt, agent = bot)\n"
         )
         entry = tmp_path / "entry.agl"
-        entry.write_text(
+        write_file_program(
+            entry,
             "open import greeter\n"
             'let mybot = AgentCommand("mock")\n'
             'let result = greeter::greet("What is your name?", mybot)\n'
-            "print result\n"
+            "print result\n",
         )
 
         def _run_with_response(response: str) -> str:
@@ -2869,7 +2921,7 @@ class TestExecCliModulePaths:
         entry_dir = tmp_path / "prog"
         entry_dir.mkdir()
         entry = entry_dir / "main.agl"
-        entry.write_text("open import helper\nlet r = answer()\nprint r\n")
+        write_file_program(entry, "open import helper\nlet r = answer()\nprint r\n")
 
         args = ExecArgs(
             file=str(entry),
@@ -2901,7 +2953,10 @@ class TestExecCliModulePaths:
         entry_dir = tmp_path / "entry"
         entry_dir.mkdir()
         entry = entry_dir / "prog.agl"
-        entry.write_text("open import mod_a\nopen import mod_b\nlet r = va() + vb()\nprint r\n")
+        write_file_program(
+            entry,
+            "open import mod_a\nopen import mod_b\nlet r = va() + vb()\nprint r\n",
+        )
 
         args = ExecArgs(
             file=str(entry),
@@ -2929,7 +2984,7 @@ class TestExecCliModulePaths:
         entry_dir = tmp_path / "prog"
         entry_dir.mkdir()
         entry = entry_dir / "main.agl"
-        entry.write_text("open import helper\nlet r = answer()\nprint r\n")
+        write_file_program(entry, "open import helper\nlet r = answer()\nprint r\n")
 
         args = ExecArgs(
             file=str(entry),
@@ -3005,7 +3060,7 @@ class TestFileStemProgramConfig:
         )
 
         agl_file = tmp_path / "foo.agl"
-        agl_file.write_text("param limit: int\nprogram def main() -> unit = print limit\n")
+        write_file_program(agl_file, "param limit: int\nprogram def main() -> unit = print limit\n")
 
         assert exec_command.run(_exec_args_no_log(agl_file)) is None
         assert capsys.readouterr().out == "7\n"
@@ -3042,7 +3097,7 @@ class TestSettingOverrideProvenanceWithNoStdlib:
         )
 
         agl_file = tmp_path / "plain.agl"
-        agl_file.write_text("let x = 1\nprogram def main() -> unit = ()\n")
+        write_file_program(agl_file, "let x = 1\nprogram def main() -> unit = ()\n")
 
         result = exec_command.run(_exec_args_no_log(agl_file, no_stdlib=True))
         assert result is None
@@ -3054,7 +3109,7 @@ class TestSettingOverrideProvenanceWithNoStdlib:
         must still fail (rather than be silently dropped) when the program
         never loads ``std/config``."""
         agl_file = tmp_path / "plain.agl"
-        agl_file.write_text("let x = 1\nprogram def main() -> unit = ()\n")
+        write_file_program(agl_file, "let x = 1\nprogram def main() -> unit = ()\n")
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_log(agl_file, no_stdlib=True, agent="("))
@@ -3070,7 +3125,7 @@ class TestExecProgramSelection:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         agl_file = tmp_path / "sole.agl"
-        agl_file.write_text('program def main() -> unit = print "sole"\n')
+        write_file_program(agl_file, 'program def main() -> unit = print "sole"\n')
 
         assert exec_command.run(_exec_args_no_log(agl_file)) is None
         assert capsys.readouterr().out == "sole\n"
@@ -3079,11 +3134,12 @@ class TestExecProgramSelection:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         agl_file = tmp_path / "several.agl"
-        agl_file.write_text(
+        write_file_program(
+            agl_file,
             'program def first() -> unit = print "first"\n'
             "scope review\n"
             'program def main() -> unit = print "review"\n'
-            "end review\n"
+            "end review\n",
         )
 
         with pytest.raises(SystemExit) as exc_info:
@@ -3099,7 +3155,7 @@ class TestExecProgramSelection:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         agl_file = tmp_path / "sole.agl"
-        agl_file.write_text('program def main() -> unit = print "sole"\n')
+        write_file_program(agl_file, 'program def main() -> unit = print "sole"\n')
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_log(agl_file, program="missing"))
@@ -3138,11 +3194,36 @@ class TestExecProgramSelection:
         assert exec_command.run(args) is None
         assert capsys.readouterr().out == "inline\n"
 
+    def test_inline_execution_without_a_selected_program_runs_only_initializers(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A prepared inline entry with no discovered program does not invoke its main."""
+        from agm.agl.pipeline import PipelineDriver as RealRuntime
+
+        class NoProgramDiscoveryRuntime(RealRuntime):
+            def discover_params(self, *args: object, **kwargs: object):
+                return replace(super().discover_params(*args, **kwargs), programs=())
+
+        monkeypatch.setattr(exec_command, "PipelineDriver", NoProgramDiscoveryRuntime)
+        args = ExecArgs(
+            file=None,
+            command='print "only selected mains run"',
+            param_tokens=[],
+            strict_json=None,
+            max_iters=None,
+            no_log=True,
+            log_file=None,
+            log=False,
+        )
+
+        assert exec_command.run(args) is None
+        assert capsys.readouterr().out == ""
+
     def test_selected_program_uses_and_restores_the_pinned_decimal_context(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         agl_file = tmp_path / "decimal.agl"
-        agl_file.write_text("program def main() -> unit = print(1.0 / 3.0)\n")
+        write_file_program(agl_file, "program def main() -> unit = print(1.0 / 3.0)\n")
         previous = decimal.getcontext().copy()
         decimal.getcontext().prec = 4
         try:
@@ -3156,9 +3237,10 @@ class TestExecProgramSelection:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         agl_file = tmp_path / "recursive.agl"
-        agl_file.write_text(
+        write_file_program(
+            agl_file,
             "def recurse(n: int) -> unit = recurse(n + 1)\n"
-            "program def main() -> unit = recurse(0)\n"
+            "program def main() -> unit = recurse(0)\n",
         )
 
         with pytest.raises(SystemExit) as exc_info:
@@ -3171,7 +3253,7 @@ class TestExecProgramSelection:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         agl_file = tmp_path / "failure.agl"
-        agl_file.write_text("program def main() -> unit = print(1 / 0)\n")
+        write_file_program(agl_file, "program def main() -> unit = print(1 / 0)\n")
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_log(agl_file))

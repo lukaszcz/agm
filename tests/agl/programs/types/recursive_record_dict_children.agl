@@ -23,12 +23,13 @@ def render_tree(t: Tree) -> text =
     result := result + " > " + render_tree(t.children[key])
   result
 
-let grandchildren: dict[text, Tree] = if include_grandchild => {"leaf": Tree(name = "leaf", children = {})} else => {}
-let child = Tree(name = child_name, children = grandchildren)
-let root = Tree(name = root_name, children = {"child": child, "second": Tree(name = "second", children = {})})
-let empty_root = Tree(name = "empty", children = {})
+program def main() -> unit =
+  let grandchildren: dict[text, Tree] = if include_grandchild => {"leaf": Tree(name = "leaf", children = {})} else => {}
+  let child = Tree(name = child_name, children = grandchildren)
+  let root = Tree(name = root_name, children = {"child": child, "second": Tree(name = "second", children = {})})
+  let empty_root = Tree(name = "empty", children = {})
 
-print count_nodes(root)
-print render_tree(root)
-print count_nodes(empty_root)
-print render_tree(empty_root)
+  print count_nodes(root)
+  print render_tree(root)
+  print count_nodes(empty_root)
+  print render_tree(empty_root)

@@ -1,2 +1,3 @@
-let stable = 1
-stable := 2
+program def main() -> unit =
+  let stable = 1
+  stable := 2

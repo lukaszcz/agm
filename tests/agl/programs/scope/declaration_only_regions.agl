@@ -4,5 +4,9 @@ let helper = AgentCommand("helper")
 end Block
 
 def Shorthand::hidden() -> int = 0
-let Shorthand::helper = AgentCommand("helper")
-print "scope declarations are deferred"
+scope Shorthand
+let helper = AgentCommand("helper")
+end Shorthand
+
+program def main() -> unit =
+  print "scope declarations are deferred"

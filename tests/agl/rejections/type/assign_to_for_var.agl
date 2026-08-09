@@ -1,3 +1,4 @@
-for x in [1, 2, 3] do
-  x := x + 1
-done
+program def main() -> unit =
+  for x in [1, 2, 3] do
+    x := x + 1
+  done

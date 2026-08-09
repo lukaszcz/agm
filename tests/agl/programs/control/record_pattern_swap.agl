@@ -7,4 +7,5 @@ def swap(r: R) -> R =
   let R(x, y) = r
   R(y, x)
 
-print swap(R(1, 2))
+program def main() -> unit =
+  print swap(R(1, 2))

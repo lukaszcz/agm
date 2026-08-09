@@ -1,4 +1,5 @@
 def f() -> int =
   return
   1
-f()
+program def main() -> unit =
+  f()

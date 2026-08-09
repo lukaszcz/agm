@@ -23,23 +23,24 @@ def tree_depth(t: Tree) -> int =
         let r = tree_depth(right)
         1 + (if l >= r => l else => r)
 
-let tree = Node(
-  value = a,
-  left = Node(value = b, left = Leaf(), right = Leaf()),
-  right = Node(value = c, left = Leaf(), right = Leaf()),
-)
-let same_shape = Node(
-  value = a,
-  left = Node(value = b, left = Leaf(), right = Leaf()),
-  right = Node(value = c, left = Leaf(), right = Leaf()),
-)
-let different = Node(value = a, left = Leaf(), right = Leaf())
+program def main() -> unit =
+  let tree = Node(
+    value = a,
+    left = Node(value = b, left = Leaf(), right = Leaf()),
+    right = Node(value = c, left = Leaf(), right = Leaf()),
+  )
+  let same_shape = Node(
+    value = a,
+    left = Node(value = b, left = Leaf(), right = Leaf()),
+    right = Node(value = c, left = Leaf(), right = Leaf()),
+  )
+  let different = Node(value = a, left = Leaf(), right = Leaf())
 
-print sum_tree(tree)
-print tree_depth(tree)
-print (tree == same_shape)
-print (tree == different)
+  print sum_tree(tree)
+  print tree_depth(tree)
+  print (tree == same_shape)
+  print (tree == different)
 
-case tree of
-  | Leaf() => print "empty"
-  | Node(value, left, right) => print "root %{value}"
+  case tree of
+    | Leaf() => print "empty"
+    | Node(value, left, right) => print "root %{value}"

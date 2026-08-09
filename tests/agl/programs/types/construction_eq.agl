@@ -13,32 +13,34 @@ enum E
 param base: int
 
 # Explicit '=' construction.
-let r1 = R(x = base, y = base + 1)
-print r1.x
-print r1.y
 
-# Reordered named fields.
-let r2 = R(y = 20, x = 10)
-print r2.x
-print r2.y
+program def main() -> unit =
+  let r1 = R(x = base, y = base + 1)
+  print r1.x
+  print r1.y
 
-# A standard field accepts a positional bare-name argument.
-let x = 7
-let r3 = R(x, y = x + 1)
-print r3.x
-print r3.y
+  # Reordered named fields.
+  let r2 = R(y = 20, x = 10)
+  print r2.x
+  print r2.y
 
-# Enum construction with '=' and nested construction.
-let e1 = A(x = base)
-let e2 = B(x, r = R(x = x + 1, y = x + 2))
+  # A standard field accepts a positional bare-name argument.
+  let x = 7
+  let r3 = R(x, y = x + 1)
+  print r3.x
+  print r3.y
 
-case e1 of
-  | A(x) => print x
-  | B(x, r) => print "unreachable"
+  # Enum construction with '=' and nested construction.
+  let e1 = A(x = base)
+  let e2 = B(x, r = R(x = x + 1, y = x + 2))
 
-case e2 of
-  | A(x) => print "unreachable"
-  | B(x, r) =>
-      print x
-      print r.x
-      print r.y
+  case e1 of
+    | A(x) => print x
+    | B(x, r) => print "unreachable"
+
+  case e2 of
+    | A(x) => print "unreachable"
+    | B(x, r) =>
+        print x
+        print r.x
+        print r.y

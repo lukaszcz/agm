@@ -25,6 +25,7 @@ from agm.agl.pipeline import (
     PreparedProgram,
 )
 from agm.agl.typecheck.program import check_program
+from tests._agl_helpers import prepare_inline_command
 
 
 def _prepare_graph(
@@ -33,7 +34,7 @@ def _prepare_graph(
     extra_roots: frozenset[Path] = frozenset(),
 ) -> PreparedProgram:
     stdlib = Path(__file__).resolve().parent.parent / "stdlib"
-    return PipelineDriver.prepare_program(
+    return prepare_inline_command(
         source,
         entry_path=None,
         roots=RootSet(roots=frozenset({stdlib, *extra_roots})),
@@ -63,10 +64,10 @@ def test_single_run_rejects_cached_artifact_from_different_prepared_program(
     check_only: bool, capsys: pytest.CaptureFixture[str]
 ) -> None:
     runtime = PipelineDriver()
-    prepared_a = runtime.prepare_program('param a: int = 1\nprint "stale %{a}"')
+    prepared_a = prepare_inline_command('param a: int = 1\nprint "stale %{a}"')
     discovery_a = runtime.discover_params(prepared_a)
     assert discovery_a.compiled is not None
-    prepared_b = runtime.prepare_program('param b: int = 2\nprint "fresh %{b}"')
+    prepared_b = prepare_inline_command('param b: int = 2\nprint "fresh %{b}"')
 
     with pytest.raises(ArtifactProvenanceError):
         runtime.run_prepared(
@@ -134,7 +135,7 @@ def test_single_run_rechecks_cached_artifact_when_host_capabilities_change() -> 
 
     source = "let value = 1\nvalue"
     runtime = PipelineDriver()
-    prepared = runtime.prepare_program(source)
+    prepared = prepare_inline_command(source)
     discovery = runtime.discover_params(prepared)
     assert discovery.compiled is not None
 
@@ -221,7 +222,7 @@ def test_program_run_rejects_cached_artifact_from_different_prepared_program(
 
 def test_prechecked_artifacts_compile_without_rechecking_single_and_graph_paths() -> None:
     runtime = PipelineDriver()
-    single_prepared = runtime.prepare_program("let value = 1\nvalue")
+    single_prepared = prepare_inline_command("let value = 1\nvalue")
     single_discovery = runtime.discover_params(single_prepared)
     assert single_discovery.checked is not None
     single_run = runtime.run_prepared(
@@ -243,7 +244,7 @@ def test_production_path_reuses_cached_artifacts_without_verifying_provenance(
 ) -> None:
     """With the self-checks off, every cached-artifact seam trusts its input."""
     runtime = PipelineDriver()
-    single_prepared = runtime.prepare_program("let value = 1\nvalue")
+    single_prepared = prepare_inline_command("let value = 1\nvalue")
     single_discovery = runtime.discover_params(single_prepared)
     assert single_discovery.compiled is not None
     assert single_discovery.checked is not None

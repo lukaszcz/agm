@@ -31,6 +31,7 @@ from agm.agl.pipeline import PipelineDriver, _wire_extern_registry
 from agm.agl.runtime.externs import ExternImportError, ExternRegistry, ExternResolutionError
 from agm.agl.scope.program import resolve_program
 from agm.agl.typecheck.program import CheckedProgram, check_program
+from tests._agl_helpers import file_program, prepare_inline_command
 from tests.agl.ir_harness import write_companion_file, write_module_file
 
 _CAPS = HostCapabilities(
@@ -60,7 +61,10 @@ def _build_checked(
         if module_path != "entry":
             write_module_file(root, module_path, source)
     graph = load_graph(
-        modules.get("entry", "()"), entry_path=None, roots=_roots(root), default_stdlib=False
+        file_program(modules.get("entry", "()")),
+        entry_path=None,
+        roots=_roots(root),
+        default_stdlib=False,
     )
     resolved = resolve_program(graph)
     checked = check_program(resolved, capabilities)
@@ -145,7 +149,7 @@ class TestCompanionPathDerivation:
         assert graph.modules[ENTRY_ID].companion_path == companion
 
         result = PipelineDriver().run(
-            source,
+            file_program(source),
             entry_path=tmp_path / "entry.agl",
             roots=_roots(tmp_path),
             default_stdlib=False,
@@ -167,9 +171,8 @@ class TestCompanionPathDerivation:
     def test_missing_companion_becomes_prepared_program_diagnostic(self, tmp_path: Path) -> None:
         root = tmp_path / "root"
         write_module_file(root, "lib/mod", "extern def f(x: int) -> int")
-        prepared = PipelineDriver.prepare_program(
+        prepared = prepare_inline_command(
             "open import lib/mod\nlib/mod::f(1)",
-            entry_path=None,
             roots=_roots(root),
             default_stdlib=False,
         )
@@ -486,9 +489,8 @@ class TestFailFastDiagnostics:
         write_module_file(tmp_path / "root", "lib/mod", "extern def f(x: int) -> int")
         write_companion_file(tmp_path / "root", "lib/mod", "def wrong_name(x):\n    return x\n")
         driver = PipelineDriver()
-        prepared = PipelineDriver.prepare_program(
+        prepared = prepare_inline_command(
             "open import lib/mod\nlib/mod::f(1)",
-            entry_path=None,
             roots=_roots(tmp_path / "root"),
             default_stdlib=False,
         )
@@ -509,9 +511,8 @@ class TestOrdering:
             f"open({str(marker)!r}, 'w').write('imported')\ndef wrong_name(x):\n    return x\n",
         )
         driver = PipelineDriver()
-        prepared = PipelineDriver.prepare_program(
+        prepared = prepare_inline_command(
             'open import lib/mod\n1 + "a"',
-            entry_path=None,
             roots=_roots(tmp_path / "root"),
             default_stdlib=False,
         )
@@ -538,9 +539,8 @@ class TestOrdering:
             ),
         )
         driver = PipelineDriver()
-        prepared = PipelineDriver.prepare_program(
+        prepared = prepare_inline_command(
             "open import lib/mod\nlib/mod::f(1)",
-            entry_path=None,
             roots=_roots(tmp_path / "root"),
             default_stdlib=False,
         )
@@ -557,9 +557,8 @@ class TestRegistryPopulatedViaPipeline:
         write_module_file(tmp_path / "root", "lib/mod", "extern def f(x: int) -> int")
         write_companion_file(tmp_path / "root", "lib/mod", "def f(x):\n    return x + 1\n")
         driver = PipelineDriver()
-        prepared = PipelineDriver.prepare_program(
+        prepared = prepare_inline_command(
             "open import lib/mod\nlib/mod::f(1)",
-            entry_path=None,
             roots=_roots(tmp_path / "root"),
             default_stdlib=False,
         )
@@ -581,9 +580,8 @@ class TestRegistryPopulatedViaPipeline:
         write_module_file(tmp_path / "root", "lib/mod", "extern def f(x: int) -> int")
         write_companion_file(tmp_path / "root", "lib/mod", "def f(x):\n    return x + 1\n")
         driver = PipelineDriver()
-        prepared = PipelineDriver.prepare_program(
+        prepared = prepare_inline_command(
             "open import lib/mod\nlib/mod::f(1)",
-            entry_path=None,
             roots=_roots(tmp_path / "root"),
             default_stdlib=False,
         )

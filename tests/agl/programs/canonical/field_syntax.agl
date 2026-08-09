@@ -11,23 +11,24 @@ enum E
 
 param start: int
 
-let r = R(x = 0, y = 1)
-let e = A(x = start)
+program def main() -> unit =
+  let r = R(x = 0, y = 1)
+  let e = A(x = start)
 
-let ee = case e of
-  | A(x) => B(x, r = R(x = x + 1, y = x + 2))
-  | B(x, r) => B(x, r = r)
+  let ee = case e of
+    | A(x) => B(x, r = R(x = x + 1, y = x + 2))
+    | B(x, r) => B(x, r = r)
 
-let d = {"e1": e, "e2": ee}
+  let d = {"e1": e, "e2": ee}
 
-let same = (r.x == 0)
-print same
+  let same = (r.x == 0)
+  print same
 
-case ee of
-  | A(x) => print "A %{x}"
-  | B(x, r) =>
-      print x
-      print r.x
-      print r.y
+  case ee of
+    | A(x) => print "A %{x}"
+    | B(x, r) =>
+        print x
+        print r.x
+        print r.y
 
-print(d == d)
+  print(d == d)

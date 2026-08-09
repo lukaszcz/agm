@@ -8,13 +8,14 @@ extern def dedup[T](xs: array[T]) -> array[T]
 
 param extra: int
 
-let xs = [1, 2, 2, 3, 1, 4]
-let uniq = dedup(xs)
-var total = extra
-for x in uniq do
-  total := total + x
-done
-let verdict: Verdict = if total >= 10 => High else => Low
-case verdict of
-  | High() => print "high"
-  | Low() => print "low"
+program def main() -> unit =
+  let xs = [1, 2, 2, 3, 1, 4]
+  let uniq = dedup(xs)
+  var total = extra
+  for x in uniq do
+    total := total + x
+  done
+  let verdict: Verdict = if total >= 10 => High else => Low
+  case verdict of
+    | High() => print "high"
+    | Low() => print "low"

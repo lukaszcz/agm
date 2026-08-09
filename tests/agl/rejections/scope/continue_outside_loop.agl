@@ -1,2 +1,3 @@
-var x: int = 0
-continue
+program def main() -> unit =
+  var x: int = 0
+  continue

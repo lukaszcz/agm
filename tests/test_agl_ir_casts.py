@@ -40,11 +40,11 @@ from agm.agl.semantics.values import (
     RecordValue,
     TextValue,
 )
-from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises, lower_ir
+from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises, inline_main_items, lower_inline_ir
 
 
 def _lower(source: str):
-    return lower_ir(source)
+    return lower_inline_ir(source)
 
 
 # ---------------------------------------------------------------------------
@@ -244,8 +244,8 @@ let r = x as? text
 
 def _bound_value(source: str, name: str):
     prog = _lower(source)
-    entry = prog.modules[prog.entry_module]
-    for node in entry.initializers:
+    prog.modules[prog.entry_module]
+    for node in inline_main_items(prog):
         if isinstance(node, IrBind):
             desc = prog.symbols.get(node.symbol)
             if desc is not None and desc.public_name == name:

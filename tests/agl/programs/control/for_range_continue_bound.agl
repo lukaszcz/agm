@@ -3,7 +3,8 @@
 param n: int
 param bound: int
 
-for i in 1 to n do[bound]
-  continue
-done
-print "done"
+program def main() -> unit =
+  for i in 1 to n do[bound]
+    continue
+  done
+  print "done"

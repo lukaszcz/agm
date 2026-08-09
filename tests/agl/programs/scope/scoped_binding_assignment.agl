@@ -1,7 +1,6 @@
-# Scoped let/var bindings: type annotations, qualified and bare assignment,
-# a bare reference reaching a var opened before its own scope declares it, a
-# scoped binding holding a function value, and visibility from a nested
-# region and a qualified path.
+# Scoped static bindings: qualified and bare assignment, a bare reference
+# reaching a var opened before its own scope declares it, and visibility from
+# nested and qualified paths.
 open Config
 
 param increment: int
@@ -13,20 +12,20 @@ def bump() -> unit =
   attempts := attempts + increment
   ()
 def show() -> text = "%{retries}/%{attempts}"
-let handler = bump
 scope Nested
 def doubled() -> int = attempts * 2
 end Nested
 end Config
 
-var Config::extra: int = 1
+program def main() -> unit =
+  var extra: int = 1
 
-Config::bump()
-attempts := attempts + 1
-Config::extra := Config::extra + increment
-Config::handler()
+  Config::bump()
+  attempts := attempts + 1
+  extra := extra + increment
+  Config::bump()
 
-print(Config::show())
-print("%{Config::attempts}")
-print("%{Config::extra}")
-print("%{Config::Nested::doubled()}")
+  print(Config::show())
+  print("%{Config::attempts}")
+  print("%{extra}")
+  print("%{Config::Nested::doubled()}")

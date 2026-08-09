@@ -1,13 +1,12 @@
 enum Color
   | Red
   | Green
-
 enum Box
   | Empty
   | Full(item: int)
-
-let c: Color = Red
-case c of
-  | Red   => print "red"
-  | Green => print "green"
-  | Empty => print "empty"
+program def main() -> unit =
+  let c: Color = Red
+  case c of
+    | Red   => print "red"
+    | Green => print "green"
+    | Empty => print "empty"

@@ -9,18 +9,19 @@ exception Failure extends Exception
 exception Nested extends Failure
   causes: array[Failure]
 
-let one = Failure(message = note, code = code)
-print(one as json)
+program def main() -> unit =
+  let one = Failure(message = note, code = code)
+  print(one as json)
 
-let many: array[Failure] = [one, Failure(message = note, code = code + 1)]
-print(many as json)
+  let many: array[Failure] = [one, Failure(message = note, code = code + 1)]
+  print(many as json)
 
-let by_stage: dict[text, Failure] = {"build": one}
-print(by_stage as json)
+  let by_stage: dict[text, Failure] = {"build": one}
+  print(by_stage as json)
 
-# A subtype is convertible on its own terms, and its array field converts too.
-let deep = Nested(message = note, code = code, causes = [one])
-print(deep as json)
+  # A subtype is convertible on its own terms, and its array field converts too.
+  let deep = Nested(message = note, code = code, causes = [one])
+  print(deep as json)
 
-print(one as? json)
-print(many as? json)
+  print(one as? json)
+  print(many as? json)

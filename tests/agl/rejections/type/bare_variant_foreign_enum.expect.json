@@ -1,1 +1,10 @@
-{"diagnostic": {"line": 13, "message_contains": ["Empty", "does not belong", "Color"]}}
+{
+  "diagnostic": {
+    "line": 12,
+    "message_contains": [
+      "Empty",
+      "does not belong",
+      "Color"
+    ]
+  }
+}

@@ -2,18 +2,19 @@
 # exit_code, stdout, stderr, timed_out.
 param mode
 
-try
-  let out: text = exec "sh -c 'echo partial; echo oops >&2; exit 3'"
-  print out
-catch ExecError as e =>
-  print "failed code %{e.exit_code}"
-  print "captured %{e.stdout}"
-  print "err %{e.stderr}"
-  print "timed %{e.timed_out}"
+program def main() -> unit =
+  try
+    let out: text = exec "sh -c 'echo partial; echo oops >&2; exit 3'"
+    print out
+  catch ExecError as e =>
+    print "failed code %{e.exit_code}"
+    print "captured %{e.stdout}"
+    print "err %{e.stderr}"
+    print "timed %{e.timed_out}"
 
-if mode == "uncaught" =>
-  let ignored: text = exec "false"
-  ()
-else =>
-  print "skip"
-print "tail"
+  if mode == "uncaught" =>
+    let ignored: text = exec "false"
+    ()
+  else =>
+    print "skip"
+  print "tail"

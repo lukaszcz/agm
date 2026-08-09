@@ -56,7 +56,7 @@ from agm.agl.semantics.values import (
 )
 from agm.agl.typecheck import AglTypeError
 from tests._agl_helpers import let_root_capture
-from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises, lower_ir
+from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises, inline_main_items, lower_inline_ir
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -546,7 +546,7 @@ def _lower(source: str) -> object:
             ),
         },
     )
-    return lower_ir(source, caps=caps)
+    return lower_inline_ir(source, caps=caps)
 
 
 def test_lower_if_no_else_shape() -> None:
@@ -556,8 +556,8 @@ def test_lower_if_no_else_shape() -> None:
     source = "if true => ()\n"
     prog = _lower(source)
     assert isinstance(prog, ExecutableProgram)
-    entry = prog.modules[prog.entry_module]
-    items = entry.initializers
+    prog.modules[prog.entry_module]
+    items = inline_main_items(prog)
     assert len(items) == 1
     ir_if = items[0]
     assert isinstance(ir_if, IrIf)
@@ -575,8 +575,8 @@ def test_lower_if_with_else_shape() -> None:
     source = "let r = if true => 1 | else => 2\nr\n"
     prog = _lower(source)
     assert isinstance(prog, ExecutableProgram)
-    entry = prog.modules[prog.entry_module]
-    items = entry.initializers
+    prog.modules[prog.entry_module]
+    items = inline_main_items(prog)
     ir_bind = let_root_capture(items[0])
     ir_if = ir_bind.value
     assert isinstance(ir_if, IrIf)
@@ -593,8 +593,8 @@ def test_lower_raise_shape() -> None:
     source = 'raise Abort(message = "boom")\n'
     prog = _lower(source)
     assert isinstance(prog, ExecutableProgram)
-    entry = prog.modules[prog.entry_module]
-    items = entry.initializers
+    prog.modules[prog.entry_module]
+    items = inline_main_items(prog)
     assert len(items) == 1
     ir_raise = items[0]
     assert isinstance(ir_raise, IrRaise)
@@ -624,8 +624,8 @@ def test_lower_try_no_binding_shape() -> None:
     source = "let r = try\n  1\ncatch Abort =>\n  2\nr\n"
     prog = _lower(source)
     assert isinstance(prog, ExecutableProgram)
-    entry = prog.modules[prog.entry_module]
-    items = entry.initializers
+    prog.modules[prog.entry_module]
+    items = inline_main_items(prog)
     ir_bind = let_root_capture(items[0])
     ir_try = ir_bind.value
     assert isinstance(ir_try, IrTry)
@@ -644,8 +644,8 @@ def test_lower_try_with_binding_shape() -> None:
     source = "let r = try\n  1\ncatch Abort as e =>\n  2\nr\n"
     prog = _lower(source)
     assert isinstance(prog, ExecutableProgram)
-    entry = prog.modules[prog.entry_module]
-    items = entry.initializers
+    prog.modules[prog.entry_module]
+    items = inline_main_items(prog)
     ir_bind = let_root_capture(items[0])
     ir_try = ir_bind.value
     assert isinstance(ir_try, IrTry)
@@ -664,8 +664,8 @@ def test_lower_try_catchall_shape() -> None:
     source = "let r = try\n  1\ncatch _ =>\n  2\nr\n"
     prog = _lower(source)
     assert isinstance(prog, ExecutableProgram)
-    entry = prog.modules[prog.entry_module]
-    items = entry.initializers
+    prog.modules[prog.entry_module]
+    items = inline_main_items(prog)
     ir_bind = let_root_capture(items[0])
     ir_try = ir_bind.value
     assert isinstance(ir_try, IrTry)

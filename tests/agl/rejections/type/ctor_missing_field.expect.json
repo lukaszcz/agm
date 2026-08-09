@@ -1,1 +1,8 @@
-{"diagnostic": {"line": 4, "message_contains": ["Missing required argument"]}}
+{
+  "diagnostic": {
+    "line": 5,
+    "message_contains": [
+      "Missing required argument"
+    ]
+  }
+}

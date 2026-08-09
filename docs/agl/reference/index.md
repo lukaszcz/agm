@@ -62,12 +62,13 @@ def review_and_fix(artifact: text) -> text =
         agent = impl
       )
 
-var artifact: text = ask("Implement %{spec}", agent = impl)
+program def main() -> unit =
+  var artifact: text = ask("Implement %{spec}", agent = impl)
 
-do[5]
-  artifact := review_and_fix(artifact)
-  let final: Review = ask("Final review:\n%{artifact}", agent = reviewer)
-until final is Pass
+  do[5]
+    artifact := review_and_fix(artifact)
+    let final: Review = ask("Final review:\n%{artifact}", agent = reviewer)
+  until final is Pass
 ```
 
 ## Chapters

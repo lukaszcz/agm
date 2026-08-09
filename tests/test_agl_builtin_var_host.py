@@ -21,6 +21,7 @@ from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.cli_support.args import ExecArgs
 from agm.commands import exec as exec_command
 from agm.config.context import ConfigContext
+from tests._agl_helpers import write_file_program
 from tests.conftest import FakeAgentTransport
 
 _STDLIB = Path(__file__).resolve().parent.parent / "stdlib"
@@ -94,7 +95,11 @@ class TestCommandEngineSeeding:
             'builtin var timeout: Option[text] = Option[text]::Some("2s")\n',
         )
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("import std/config\nprint std/config::timeout\n", encoding="utf-8")
+        write_file_program(
+            agl_file,
+            "import std/config\nprint std/config::timeout\n",
+            encoding="utf-8",
+        )
         config_dir = tmp_path / ".agm"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text("[exec]\ntimeout = 0\n")
@@ -117,7 +122,7 @@ class TestCommandEngineSeeding:
             'builtin var timeout: Option[text] = Option[text]::Some("bogus")\n',
         )
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("import std/config\n()\n", encoding="utf-8")
+        write_file_program(agl_file, "import std/config\n()\n", encoding="utf-8")
         monkeypatch.setattr(exec_command, "resolve_stdlib_root", lambda *, home: stdlib_root)
         monkeypatch.setattr(
             exec_command,
@@ -137,10 +142,11 @@ class TestDefaultAgentReconfiguration:
     ) -> None:
         """A ``default-agent :=`` selects the following ``ask`` dispatch."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
+        write_file_program(
+            agl_file,
             "open import std/config\n"
             'std/config::default-agent := AgentCommand("codex-runner")\n'
-            'ask("hi")\n'
+            'ask("hi")\n',
         )
 
         exec_command.run(_exec_args(agl_file))
@@ -152,7 +158,7 @@ class TestDefaultAgentReconfiguration:
     ) -> None:
         """The stdlib initializer supplies the default AgentClaude value."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('ask("hi")\n')
+        write_file_program(agl_file, 'ask("hi")\n')
 
         exec_command.run(_exec_args(agl_file))
 
@@ -164,12 +170,13 @@ class TestDefaultAgentReconfiguration:
         self, tmp_path: Path, fake_agent_transport: FakeAgentTransport
     ) -> None:
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
+        write_file_program(
+            agl_file,
             "open import std/config\n"
             'let fixed = AgentCommand("fixed-runner")\n'
             'std/config::default-agent := AgentCommand("new-runner")\n'
             'ask("one", agent = fixed)\n'
-            'ask("two")\n'
+            'ask("two")\n',
         )
 
         exec_command.run(_exec_args(agl_file))
@@ -185,13 +192,14 @@ class TestTraceReconfiguration:
         """A path enables tracing, while a later ``log := false`` disables it."""
         trace_path = tmp_path / "trace.jsonl"
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
+        write_file_program(
+            agl_file,
             "open import std/config\n"
             'print "before"\n'
             f'std/config::log-file := Some("{trace_path}")\n'
             'print "after"\n'
             "std/config::log := false\n"
-            'print "disabled"\n'
+            'print "disabled"\n',
         )
 
         exec_command.run(_exec_args(agl_file))
@@ -213,12 +221,13 @@ class TestTraceReconfiguration:
         monkeypatch.setattr("agm.core.log.default_agent_files_dir", lambda: tmp_path)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
+        write_file_program(
+            agl_file,
             "open import std/config\n"
             "std/config::log := true\n"
             'print "first"\n'
             "std/config::log := false\n"
-            'print "second"\n'
+            'print "second"\n',
         )
 
         exec_command.run(_exec_args(agl_file))
@@ -242,7 +251,7 @@ class TestTraceReconfiguration:
         """``--log`` seeds the ``log`` register so a read before any write sees True."""
         monkeypatch.setattr("agm.core.log.default_agent_files_dir", lambda: tmp_path)
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("open import std/config\nlet l = std/config::log\nprint l\n")
+        write_file_program(agl_file, "open import std/config\nlet l = std/config::log\nprint l\n")
 
         exec_command.run(_exec_args(agl_file, no_log=False, log=True))
 
@@ -252,7 +261,7 @@ class TestTraceReconfiguration:
         """A program that never touches the settings logs to --log-file as before."""
         trace_path = tmp_path / "trace.jsonl"
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('print "hello"\n')
+        write_file_program(agl_file, 'print "hello"\n')
 
         exec_command.run(_exec_args(agl_file, no_log=False, log_file=str(trace_path)))
 
@@ -272,8 +281,9 @@ class TestTraceReconfiguration:
         """``--log`` plus a mid-run ``log := true`` keeps the run in ONE file."""
         monkeypatch.setattr("agm.core.log.default_agent_files_dir", lambda: tmp_path)
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            'open import std/config\nprint "before"\nstd/config::log := true\nprint "after"\n'
+        write_file_program(
+            agl_file,
+            'open import std/config\nprint "before"\nstd/config::log := true\nprint "after"\n',
         )
 
         with patch("agm.core.log.datetime", _StepClock()):
@@ -292,14 +302,15 @@ class TestTraceReconfiguration:
         """A program that turns logging on, off, then on again writes ONE file."""
         monkeypatch.setattr("agm.core.log.default_agent_files_dir", lambda: tmp_path)
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
+        write_file_program(
+            agl_file,
             "open import std/config\n"
             "std/config::log := true\n"
             'print "first"\n'
             "std/config::log := false\n"
             'print "second"\n'
             "std/config::log := true\n"
-            'print "third"\n'
+            'print "third"\n',
         )
 
         with patch("agm.core.log.datetime", _StepClock()):
@@ -319,8 +330,9 @@ class TestTraceReconfiguration:
         monkeypatch.setattr("agm.core.log.default_agent_files_dir", lambda: auto_dir)
         trace_path = tmp_path / "explicit.jsonl"
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            'open import std/config\nprint "before"\nstd/config::log := true\nprint "after"\n'
+        write_file_program(
+            agl_file,
+            'open import std/config\nprint "before"\nstd/config::log := true\nprint "after"\n',
         )
 
         with patch("agm.core.log.datetime", _StepClock()):

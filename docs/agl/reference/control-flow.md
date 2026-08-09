@@ -180,11 +180,12 @@ have type `unit` (or `bottom`). A trailing `let` or `var` is unit-valued (or bot
 may bind a value for the loop's post-body `until` clause:
 
 ```agl
-var attempts = 0
-do
-  attempts := attempts + 1
-  let finished = attempts >= 3
-until finished
+program def main() -> unit =
+  var attempts = 0
+  let _ = do
+    attempts := attempts + 1
+    let finished = attempts >= 3
+  until finished
 ```
 
 ### Clause semantics

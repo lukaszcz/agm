@@ -1,3 +1,4 @@
-let d: dict[text, int] = {"a": 1}
-let j: json = d
-j
+program def main() -> unit =
+  let d: dict[text, int] = {"a": 1}
+  let j: json = d
+  j

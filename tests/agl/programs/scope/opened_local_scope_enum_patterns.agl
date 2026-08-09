@@ -8,10 +8,11 @@ enum Status
   | Bad
 end A
 
-let s = Status::Good
+program def main() -> unit =
+  let s = Status::Good
 
-print(s is Status::Good)
-print(s is Status::Bad)
-print(case s of
-  | Status::Good => "good"
-  | Status::Bad => "bad")
+  print(s is Status::Good)
+  print(s is Status::Bad)
+  print(case s of
+    | Status::Good => "good"
+    | Status::Bad => "bad")

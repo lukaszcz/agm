@@ -202,7 +202,7 @@ class TestPlacement:
         entry_path = tmp_path / "entry.agl"
         (tmp_path / "entry.py").write_text("def f(x):\n    return x\n")
         graph = load_graph(
-            "extern def f(x: int) -> int\n()",
+            "extern def f(x: int) -> int",
             entry_path=entry_path,
             roots=RootSet(roots=frozenset()),
             default_stdlib=False,

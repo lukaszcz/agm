@@ -126,11 +126,11 @@ proposal := ask("Revise proposal.", agent = researcher)   # target type: Turn
 dictionary:
 
 ```agl
-let xs = [1, 2]
-xs[0] := 10
-
-var metadata = {"status": "draft"}
-metadata["status"] := "ready"
+program def main() -> unit =
+  let xs = [1, 2]
+  xs[0] := 10
+  var metadata = {"status": "draft"}
+  metadata["status"] := "ready"
 ```
 
 Assignment indexes are adjacency-sensitive: the opening `[` must be adjacent
@@ -220,8 +220,9 @@ A `def` inside a nested block is a static error. See
   structured `ExecResult`**:
 
   ```agl
-  let x = ask "A"           # x: text
-  let res = exec "ls"       # res: ExecResult (structured default)
+program def main() -> unit =
+  let x = ask "A"
+  let res = exec "ls"
   ```
 
 - Empty array/dictionary literals cannot be inferred and require an
@@ -246,10 +247,9 @@ scope region in every entry and library module ([Named scopes](scopes.md#paramet
 A param may declare a type, a default expression, both, or neither. Without an
 explicit type or default, the param defaults to `text`.
 
-**M2 interim:** non-entry param declarations are accepted and type-checked,
-but every use is a static error because parameter discovery and lowering omit
-them. Only entry-module params have external values and runtime bindings until
-M3 adds library-param handling.
+A parameter declared outside the file entry module has no external value or
+runtime binding, so reading it is a static error. Only entry-module parameters
+participate in host parameter resolution.
 
 ```agl
 param spec                 # same as: param spec: text
@@ -316,11 +316,11 @@ and store it in ordinary bindings, arrays, or function parameters. The word
 `agent` is an ordinary identifier and may also be used as a record field name.
 
 ```agl
-let reviewer = AgentClaude("sonnet", "medium")
-let impl = AgentCommand("claude -p")
-let agents: array[Agent] = [reviewer, impl]
-
-let r: text = ask("Review the artifact", agent = reviewer)
+program def main() -> unit =
+  let reviewer = AgentClaude("sonnet", "medium")
+  let impl = AgentCommand("claude -p")
+  let agents: array[Agent] = [reviewer, impl]
+  let r: text = ask("Review the artifact", agent = reviewer)
 ```
 
 ## Names, namespaces, and constructors
@@ -418,10 +418,12 @@ let Red = 5                 # allowed — 'Color::Red' still names the variant
 let ExecResult = 0          # allowed — declared in another module
 def Retry(n: int) -> int = n + 1
 
+scope Collision
 record Widget
   x: int
 
 let Widget = 1              # error: 'Widget' is already declared in this scope
+end Collision
 ```
 
 Use [`::name`](modules.md) to reach the module's own top-level declaration past
@@ -449,7 +451,8 @@ their scope. Lambda bodies close over their definition environment but are not
 self-recursive (the lambda name is not in scope inside its own body):
 
 ```agl
-let double = fn(x: int) => x * 2   # 'double' is NOT in scope inside
+program def main() -> unit =
+  let double = fn(x: int) => x * 2
 ```
 
 ### Shadowing
@@ -514,7 +517,7 @@ Each call opens a fresh scope with the function's parameters bound. Defaults
 are evaluated in the function's **definition** scope (not the call site):
 
 ```agl
-let default_limit = 3
+param default_limit: int = 3
 
 def summarize(doc: text, limit: int = default_limit) -> text =
   "[%{limit}] %{doc}"

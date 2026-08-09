@@ -1,2 +1,3 @@
-let x: text = ask("prompt1", "prompt2")
-x
+program def main() -> unit =
+  let x: text = ask("prompt1", "prompt2")
+  x

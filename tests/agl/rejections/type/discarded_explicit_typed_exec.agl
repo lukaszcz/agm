@@ -1,2 +1,3 @@
-exec::[text]("true")
-print "unreachable"
+program def main() -> unit =
+  exec::[text]("true")
+  print "unreachable"

@@ -2,17 +2,18 @@
 # bindings visible to the condition, MaxIterationsExceeded on exhaustion.
 param target: int
 
-let oracle = AgentCommand("oracle")
-var hits: int = 0
-var rounds: int = 0
+program def main() -> unit =
+  let oracle = AgentCommand("oracle")
+  var hits: int = 0
+  var rounds: int = 0
 
-do[4]
-  rounds := rounds + 1
-  let verdict = ask("Round %{rounds}: have %{hits} of %{target}.", agent = oracle)
-  if verdict == "hit" =>
-    hits := hits + 1
-  else =>
-    ()
-until hits >= target
-print rounds
-print hits
+  do[4]
+    rounds := rounds + 1
+    let verdict = ask("Round %{rounds}: have %{hits} of %{target}.", agent = oracle)
+    if verdict == "hit" =>
+      hits := hits + 1
+    else =>
+      ()
+  until hits >= target
+  print rounds
+  print hits

@@ -1,1 +1,2 @@
-fn(x: int = 5, y: int) -> int => x + y
+program def main() -> unit =
+  fn(x: int = 5, y: int) -> int => x + y

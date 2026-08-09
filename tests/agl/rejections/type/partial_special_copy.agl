@@ -1,1 +1,2 @@
-copy(?)
+program def main() -> unit =
+  copy(?)

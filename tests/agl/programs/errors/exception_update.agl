@@ -7,15 +7,16 @@ exception Boom extends Exception
 param trigger: bool
 param bump: int
 
-try
+program def main() -> unit =
   try
-    if trigger =>
-      raise Boom(message = "boom", code = 1)
-    else =>
-      print "calm"
-  catch Exception as e =>
-    let wrapped = e with message = "ctx: %{e.message}"
-    raise wrapped
-catch Boom as e =>
-  let bumped = e with code = e.code + bump, message = "final"
-  print "boom %{bumped.message} %{bumped.code} (%{e.message})"
+    try
+      if trigger =>
+        raise Boom(message = "boom", code = 1)
+      else =>
+        print "calm"
+    catch Exception as e =>
+      let wrapped = e with message = "ctx: %{e.message}"
+      raise wrapped
+  catch Boom as e =>
+    let bumped = e with code = e.code + bump, message = "final"
+    print "boom %{bumped.message} %{bumped.code} (%{e.message})"

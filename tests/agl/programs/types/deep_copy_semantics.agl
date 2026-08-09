@@ -4,22 +4,23 @@
 param first: int
 param second: int
 
-var inner = [first, second]
-var outer = [inner]
-let deep = copy(outer)
+program def main() -> unit =
+  var inner = [first, second]
+  var outer = [inner]
+  let deep = copy(outer)
 
-deep[0][0] := 99
-print(outer)
-print(deep)
+  deep[0][0] := 99
+  print(outer)
+  print(deep)
 
-inner[0] := -1
-print(outer)
-print(deep)
+  inner[0] := -1
+  print(outer)
+  print(deep)
 
-var shared = [first]
-var pair = [shared, shared]
-let copied_pair = copy(pair)
+  var shared = [first]
+  var pair = [shared, shared]
+  let copied_pair = copy(pair)
 
-copied_pair[0][0] := 42
-print(pair)
-print(copied_pair)
+  copied_pair[0][0] := 42
+  print(pair)
+  print(copied_pair)

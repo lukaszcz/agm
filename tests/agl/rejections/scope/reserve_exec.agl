@@ -1,1 +1,2 @@
-var exec = "not allowed"
+program def main() -> unit =
+  var exec = "not allowed"

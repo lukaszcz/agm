@@ -1,2 +1,3 @@
-let value = AgentCommand("worker")
-value.exec! echo hello
+program def main() -> unit =
+  let value = AgentCommand("worker")
+  value.exec! echo hello

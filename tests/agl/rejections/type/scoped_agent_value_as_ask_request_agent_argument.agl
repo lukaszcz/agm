@@ -5,11 +5,12 @@ builtin enum Agent
   | AgentCodex(model: text, thinking: text)
   | AgentPi(provider: text, model: text, thinking: text)
 end A
-let g = A::Agent::AgentCommand("echo")
-let q = ask-request("hi", agent = g)
-let name = case q.agent of
-  | AgentCommand(command) => command
-  | AgentClaude(model, thinking) => model
-  | AgentCodex(model, thinking) => model
-  | AgentPi(provider, model, thinking) => model
-print name
+program def main() -> unit =
+  let g = A::Agent::AgentCommand("echo")
+  let q = ask-request("hi", agent = g)
+  let name = case q.agent of
+    | AgentCommand(command) => command
+    | AgentClaude(model, thinking) => model
+    | AgentCodex(model, thinking) => model
+    | AgentPi(provider, model, thinking) => model
+  print name

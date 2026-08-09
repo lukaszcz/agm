@@ -32,9 +32,9 @@ followed by `{` is literal; `\%` produces a literal percent sign.
 
 ```agl
 import std/text
-
-let vars = {"name": "Ada"}
-print std/text::interp("Hello, \%{name}!", vars)  # Hello, Ada!
+program def main() -> unit =
+  let vars = {"name": "Ada"}
+  let _ = print std/text::interp("Hello, \%{name}!", vars)
 ```
 
 Runtime holes are **name-only**: `%{name}` names a single AgL identifier and
@@ -113,8 +113,9 @@ print render(r as json, pretty = true)   # → {
 Function values render as opaque handles in templates:
 
 ```agl
-let f = fn(x: int) => x
-print "function is %{f}"   # function is <function: int -> int>
+program def main() -> unit =
+  let f = fn(x: int) => x
+  let _ = print "function is %{f}"
 ```
 
 They still cannot be stored in a `json` slot or used where a JSON-shaped value

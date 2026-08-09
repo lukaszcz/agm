@@ -1028,7 +1028,7 @@ class _Checker:
             # Check body against declared return type.
             assert node.body is not None
             with self._return_context(sig.result):
-                body_type = self._check_expr(
+                body_type = self._check_boundary_expr(
                     node.body, expected=None if node.is_synthetic else sig.result
                 )
                 return_targets = self._current_return_extern_targets()

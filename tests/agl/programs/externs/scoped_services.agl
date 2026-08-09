@@ -19,8 +19,9 @@ extern def increment(value: int) -> int
 let reviewer = AgentCommand("reviewer")
 end Math
 
-print(Math::factorial(5))
-print(Math::even(7))
-print(Math::echo::[text]("typed chain"))
-print(Math::increment(41))
-print(ask("Review the scoped service.", agent = Math::reviewer))
+program def main() -> unit =
+  print(Math::factorial(5))
+  print(Math::even(7))
+  print(Math::echo::[text]("typed chain"))
+  print(Math::increment(41))
+  print(ask("Review the scoped service.", agent = Math::reviewer))

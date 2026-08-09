@@ -14,31 +14,32 @@ param close_cycle: bool
 
 record Node(children: array[Node], tag: int)
 
-var xs1: array[Node] = [Node(children = [], tag = 1)]
-let n1 = Node(children = xs1, tag = 1)
-if close_cycle =>
-  xs1[0] := n1
+program def main() -> unit =
+  var xs1: array[Node] = [Node(children = [], tag = 1)]
+  let n1 = Node(children = xs1, tag = 1)
+  if close_cycle =>
+    xs1[0] := n1
 
-var xs2: array[Node] = [Node(children = [], tag = 1)]
-let n2 = Node(children = xs2, tag = 1)
-if close_cycle =>
-  xs2[0] := n2
+  var xs2: array[Node] = [Node(children = [], tag = 1)]
+  let n2 = Node(children = xs2, tag = 1)
+  if close_cycle =>
+    xs2[0] := n2
 
-print(xs1 == xs2)
+  print(xs1 == xs2)
 
-var xs3: array[Node] = [Node(children = [], tag = 2)]
-let n3 = Node(children = xs3, tag = 2)
-if close_cycle =>
-  xs3[0] := n3
+  var xs3: array[Node] = [Node(children = [], tag = 2)]
+  let n3 = Node(children = xs3, tag = 2)
+  if close_cycle =>
+    xs3[0] := n3
 
-print(xs1 == xs3)
+  print(xs1 == xs3)
 
-# Diamond sharing: `shared` is reachable twice from `pair`, but never from
-# itself, so it must not be mistaken for a cycle in either direction.
-let shared = [1, 2]
-let d1 = [shared, shared]
-let d2 = [[1, 2], [1, 2]]
-print(d1 == d2)
+  # Diamond sharing: `shared` is reachable twice from `pair`, but never from
+  # itself, so it must not be mistaken for a cycle in either direction.
+  let shared = [1, 2]
+  let d1 = [shared, shared]
+  let d2 = [[1, 2], [1, 2]]
+  print(d1 == d2)
 
-let d3 = [shared, [9, 9]]
-print(d3 == d2)
+  let d3 = [shared, [9, 9]]
+  print(d3 == d2)

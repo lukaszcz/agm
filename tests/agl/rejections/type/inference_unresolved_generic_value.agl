@@ -1,3 +1,4 @@
 def id[T](x: T) -> T = x
-let f = id
-f
+program def main() -> unit =
+  let f = id
+  f

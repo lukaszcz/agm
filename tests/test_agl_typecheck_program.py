@@ -22,6 +22,7 @@ from agm.agl.semantics.types import (
     InferenceVarType,
     contains_inference_var,
 )
+from agm.agl.syntax.nodes import Block, FuncDef, Item
 from agm.agl.typecheck import (
     AglTypeError,
     ArrayType,
@@ -43,7 +44,7 @@ from agm.agl.typecheck import (
 )
 from tests._agl_helpers import strip_decl_ids
 from tests.agl.ir_harness import make_graph_from_files as _make_graph_from_files
-from tests.agl.module_graph import resolve_and_check_entry
+from tests.agl.module_graph import resolve_and_check_inline_entry, resolve_and_check_repl_entry
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -67,7 +68,9 @@ def _check(
     an incremental REPL entry builds on earlier ones: declarations from *src*
     land in a type table that already carries the seed's registered owners.
     """
-    return resolve_and_check_entry(src, _CAPS, seed_env=seed_env, default_stdlib=default_stdlib)
+    return resolve_and_check_inline_entry(
+        src, _CAPS, seed_env=seed_env, default_stdlib=default_stdlib
+    )
 
 
 def _check_graph(graph: ModuleGraph) -> CheckedProgram:
@@ -91,12 +94,20 @@ def _with_reversed_module_discovery_order(graph: ModuleGraph) -> ModuleGraph:
     )
 
 
+def _module_items(module: CheckedModule) -> tuple[Item, ...]:
+    """Return an entry's test-only inline items or a file module's root items."""
+    items = module.resolved.program.body.items
+    if items and isinstance(items[-1], FuncDef) and items[-1].is_synthetic:
+        return items[-1].body.items if isinstance(items[-1].body, Block) else (items[-1].body,)
+    return items
+
+
 def _binding_value_type(cg: CheckedProgram, module_id: ModuleId, name: str) -> Type:
-    """Inferred type of the RHS of the top-level ``let``/``var <name> = ...`` in ``module_id``."""
+    """Inferred type of a source ``let``/``var <name> = ...`` in *module_id*."""
     from agm.agl.syntax.nodes import LetDecl, VarDecl, simple_let_pattern_name
 
     module = cg.modules[module_id]
-    for item in module.resolved.program.body.items:
+    for item in _module_items(module):
         if isinstance(item, VarDecl) and item.name == name:
             return module.node_types[item.value.node_id]
         if isinstance(item, LetDecl) and simple_let_pattern_name(item.pattern) == name:
@@ -190,12 +201,13 @@ def test_candidate_inference_reads_a_preceding_destructuring_let_binder() -> Non
     # Named "Holder", not "Option": the standard library's own Option[T] is in
     # scope, and a same-named top-level enum would make Option:: ambiguous
     # instead of exercising the candidate-seeding path under test.
-    checked = _check(
+    checked = resolve_and_check_repl_entry(
         "enum Holder[T]\n"
         "  | some(value: T)\n"
         "let some(value = value): Holder[int] = some(value = 1)\n"
         "def capture() = value\n"
-        "capture()"
+        "capture()",
+        _CAPS,
     )
 
     assert checked.function_signatures["capture"].result == IntType()
@@ -543,7 +555,7 @@ def test_module_qualified_imported_enum_pattern_publishes_constructor_ref(
     from agm.agl.syntax.nodes import ConstructorPattern, LetDecl
 
     entry = checked.modules[ENTRY_ID]
-    let_decl = next(item for item in entry.resolved.program.body.items if isinstance(item, LetDecl))
+    let_decl = next(item for item in _module_items(entry) if isinstance(item, LetDecl))
     assert isinstance(let_decl.pattern, ConstructorPattern)
     constructor = entry.pattern_constructor_ref_for(let_decl.pattern.node_id)
     assert constructor is not None
@@ -2707,7 +2719,7 @@ def test_open_nullary_candidate_defers_duplicate_binder_until_selection(
     checked = _check_program(tmp_path, modules)
 
     entry = checked.modules[ENTRY_ID]
-    case = entry.resolved.program.body.items[-1]
+    case = _module_items(entry)[-1]
     from agm.agl.syntax.nodes import Case, ConstructorPattern
 
     assert isinstance(case, Case)
@@ -3609,7 +3621,11 @@ def test_checked_modules_publish_only_their_own_function_signatures(tmp_path: Pa
     assert set(graph.modules[ModuleId.from_path("app")].function_signatures) == {"shared"}
     app_signatures = graph.modules[ModuleId.from_path("app")].function_signatures
     assert app_signatures["shared"].result == TextType()
-    assert graph.modules[ENTRY_ID].function_signatures == {}
+    assert {
+        name
+        for name, decl in graph.modules[ENTRY_ID].resolved.declared_functions.items()
+        if not decl.is_synthetic
+    } == set()
 
 
 # ---------------------------------------------------------------------------
@@ -4144,5 +4160,5 @@ def test_plain_function_can_operate_on_an_imported_type(tmp_path: Path) -> None:
         },
     )
 
-    result = checked.modules[ENTRY_ID].resolved.program.body.items[-1]
+    result = _module_items(checked.modules[ENTRY_ID])[-1]
     assert checked.modules[ENTRY_ID].node_types[result.node_id] == IntType()

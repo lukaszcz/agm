@@ -18,7 +18,7 @@ from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.semantics.values import BoolValue
 from tests._agl_helpers import let_root_capture
-from tests.agl.ir_harness import evaluate_ir, lower_ir, nominal_id_for
+from tests.agl.ir_harness import evaluate_ir, inline_main_items, lower_inline_ir, nominal_id_for
 
 
 def _lower(source: str) -> ExecutableProgram:
@@ -34,7 +34,7 @@ def _lower(source: str) -> ExecutableProgram:
             ),
         },
     )
-    return lower_ir(source, caps=caps)
+    return lower_inline_ir(source, caps=caps)
 
 
 # ---------------------------------------------------------------------------
@@ -120,9 +120,9 @@ let r = c is not Blue
 ()
 """
     prog = _lower(source)
-    entry = prog.modules[prog.entry_module]
+    prog.modules[prog.entry_module]
     found = False
-    for node in entry.initializers:
+    for node in inline_main_items(prog):
         if isinstance(node, (IrSequence, IrBind)) and isinstance(
             let_root_capture(node).value, IrVariantIs
         ):

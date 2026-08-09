@@ -1,1 +1,9 @@
-{"diagnostic": {"line": 1, "message_contains": ["placeholder", "copy"]}}
+{
+  "diagnostic": {
+    "line": 2,
+    "message_contains": [
+      "placeholder",
+      "copy"
+    ]
+  }
+}

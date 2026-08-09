@@ -17,77 +17,78 @@ enum FixResult
   | Changed(output: text)
   | Blocked(reason: text)
 
-let impl = AgentCommand("impl")
-let reviewer = AgentCommand("reviewer")
-let critic = AgentCommand("critic")
-var artifact: text = ask("Implement %{spec}", agent = impl)
+program def main() -> unit =
+  let impl = AgentCommand("impl")
+  let reviewer = AgentCommand("reviewer")
+  let critic = AgentCommand("critic")
+  var artifact: text = ask("Implement %{spec}", agent = impl)
 
-# review declared as var so the until condition can reference it.
-var review: Review = Pass
+  # review declared as var so the until condition can reference it.
+  var review: Review = Pass
 
-try
-  do[5]
-    review := ask("""
-    Review the artifact for correctness, completeness, and maintainability.
+  try
+    do[5]
+      review := ask("""
+      Review the artifact for correctness, completeness, and maintainability.
 
-    Artifact:
+      Artifact:
+      %{artifact}
+      """, agent = reviewer, on_parse_error = Retry(n = 2))
+
+      case review of
+        | Pass() =>
+            ()
+
+        | Fail(issues) =>
+            let result: FixResult = ask("""
+            Fix valid issues.
+
+            Issues:
+            %{issues}
+
+            Current artifact:
+            %{artifact}
+            """, agent = impl, on_parse_error = Retry(n = 2))
+
+            case result of
+              | Complete(output) =>
+                  artifact := output
+              | Changed(output) =>
+                  artifact := output
+              | Blocked(reason) =>
+                  let blocker_report = ask("Explain blocker:\n%{reason}", agent = critic)
+                  raise Abort(message = blocker_report)
+
+    until review is Pass
+
+  catch AgentParseError as e =>
+    let diagnostic = ask("""
+    An agent failed to return valid structured output.
+
+    Agent:
+    %{e.agent}
+
+    Expected schema:
+    %{e.expected_schema}
+
+    Raw output:
+    %{e.raw}
+
+    Validation errors:
+    %{e.validation_errors}
+    """, agent = critic)
+    raise e
+
+  catch MaxIterationsExceeded as e =>
+    let summary = ask("""
+    The review/fix loop did not converge.
+
+    Last artifact:
     %{artifact}
-    """, agent = reviewer, on_parse_error = Retry(n = 2))
 
-    case review of
-      | Pass() =>
-          ()
+    Loop metadata:
+    %{e}
+    """, agent = critic)
+    raise e
 
-      | Fail(issues) =>
-          let result: FixResult = ask("""
-          Fix valid issues.
-
-          Issues:
-          %{issues}
-
-          Current artifact:
-          %{artifact}
-          """, agent = impl, on_parse_error = Retry(n = 2))
-
-          case result of
-            | Complete(output) =>
-                artifact := output
-            | Changed(output) =>
-                artifact := output
-            | Blocked(reason) =>
-                let blocker_report = ask("Explain blocker:\n%{reason}", agent = critic)
-                raise Abort(message = blocker_report)
-
-  until review is Pass
-
-catch AgentParseError as e =>
-  let diagnostic = ask("""
-  An agent failed to return valid structured output.
-
-  Agent:
-  %{e.agent}
-
-  Expected schema:
-  %{e.expected_schema}
-
-  Raw output:
-  %{e.raw}
-
-  Validation errors:
-  %{e.validation_errors}
-  """, agent = critic)
-  raise e
-
-catch MaxIterationsExceeded as e =>
-  let summary = ask("""
-  The review/fix loop did not converge.
-
-  Last artifact:
-  %{artifact}
-
-  Loop metadata:
-  %{e}
-  """, agent = critic)
-  raise e
-
-print artifact
+  print artifact

@@ -1,2 +1,3 @@
-let _ = "discarded"
-print _
+program def main() -> unit =
+  let _ = "discarded"
+  print _

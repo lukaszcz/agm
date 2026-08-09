@@ -1,8 +1,8 @@
 enum Color
   | Red
   | Green
-
-let x: int = 5
-case x of
-  | Red => print "red"
-  | _   => print "other"
+program def main() -> unit =
+  let x: int = 5
+  case x of
+    | Red => print "red"
+    | _   => print "other"

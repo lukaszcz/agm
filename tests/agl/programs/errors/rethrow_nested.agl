@@ -2,21 +2,22 @@
 # clause matches propagating out of the program.
 param mode
 
-try
+program def main() -> unit =
   try
-    if mode == "inner" =>
-      raise Abort(message = "from inner")
-    else =>
-      ()
-    print "inner ok"
-  catch Abort as e =>
-    print "inner saw %{e.message}"
-    raise e
-catch Abort =>
-  print "outer saw abort"
-print "continue"
+    try
+      if mode == "inner" =>
+        raise Abort(message = "from inner")
+      else =>
+        ()
+      print "inner ok"
+    catch Abort as e =>
+      print "inner saw %{e.message}"
+      raise e
+  catch Abort =>
+    print "outer saw abort"
+  print "continue"
 
-try
-  raise Abort(message = "fatal %{mode}")
-catch MatchError =>
-  print "wrong handler"
+  try
+    raise Abort(message = "fatal %{mode}")
+  catch MatchError =>
+    print "wrong handler"

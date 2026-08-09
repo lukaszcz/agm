@@ -1,4 +1,4 @@
 def id[T](x: T) -> T = x
-
-let bad = id(?)
-bad
+program def main() -> unit =
+  let bad = id(?)
+  bad

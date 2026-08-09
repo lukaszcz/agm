@@ -8,11 +8,12 @@ record Query
 
 def Query::m(self, amount: int) -> int = self.value + amount
 
-let query = Query(
-  f = fn(amount: int) -> int => amount * base,
-  value = base,
-)
+program def main() -> unit =
+  let query = Query(
+    f = fn(amount: int) -> int => amount * base,
+    value = base,
+  )
 
-print(query.f(2))
-print(query.m(2))
-print query.f(2)
+  print(query.f(2))
+  print(query.m(2))
+  print query.f(2)

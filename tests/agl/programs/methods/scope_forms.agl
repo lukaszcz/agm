@@ -63,30 +63,31 @@ def nested_value(self) -> int = self.value
 end T
 end A
 
-if
-  | mode == "plain" =>
-      let plain = Plain(value = base)
-      let path = plain.path_add
-      let region = plain.region_add
-      print(path(2))
-      print(region(2))
-  | mode == "generic" =>
-      let box = Box(value = base)
-      let entry = Box::Entry::make(base + 1)
-      print(box.path_value())
-      print(box.region_value())
-      print(box.path_size())
-      print(box.region_size())
-      print(entry.value)
-  | mode == "variants" =>
-      let signal = Signal::ready(value = base)
-      let notice = Notice(message = "notice", code = base)
-      print(signal.path_text())
-      print(signal.region_text())
-      print(notice.path_text())
-      print(notice.region_text())
-  | else =>
-      let value = A::T(value = base)
-      print(value.path_value())
-      print(value.region_value())
-      print(value.nested_value())
+program def main() -> unit =
+  if
+    | mode == "plain" =>
+        let plain = Plain(value = base)
+        let path = plain.path_add
+        let region = plain.region_add
+        print(path(2))
+        print(region(2))
+    | mode == "generic" =>
+        let box = Box(value = base)
+        let entry = Box::Entry::make(base + 1)
+        print(box.path_value())
+        print(box.region_value())
+        print(box.path_size())
+        print(box.region_size())
+        print(entry.value)
+    | mode == "variants" =>
+        let signal = Signal::ready(value = base)
+        let notice = Notice(message = "notice", code = base)
+        print(signal.path_text())
+        print(signal.region_text())
+        print(notice.path_text())
+        print(notice.region_text())
+    | else =>
+        let value = A::T(value = base)
+        print(value.path_value())
+        print(value.region_value())
+        print(value.nested_value())

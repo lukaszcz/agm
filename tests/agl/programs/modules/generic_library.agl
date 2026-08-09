@@ -9,19 +9,21 @@ param seed: int
 param empty: bool
 
 # Imported generic enum at int; imported generic function consumes it.
-let maybe: Maybe[int] = if empty => none else => some(value = seed)
-print(or_else(maybe, 0) as text)
 
-# Pattern matching on the imported variant (brought in unqualified by the open
-# import); the bare `none` is a nullary constructor pattern, not a binder.
-case maybe of
-  | none => print "empty"
-  | some(value) => print "value %{value}"
+program def main() -> unit =
+  let maybe: Maybe[int] = if empty => none else => some(value = seed)
+  print(or_else(maybe, 0) as text)
 
-# The SAME imported definition at text — erasure across the module boundary.
-let word: Maybe[text] = if empty => none else => some(value = "w%{seed}")
-print(or_else(word, "fallback"))
+  # Pattern matching on the imported variant (brought in unqualified by the open
+  # import); the bare `none` is a nullary constructor pattern, not a binder.
+  case maybe of
+    | none => print "empty"
+    | some(value) => print "value %{value}"
 
-# Qualified generic record type + qualified constructor, then field access.
-let p: collections::Pair[int, text] = collections::make_pair(seed, "tag")
-print "%{p.first}:%{p.second}"
+  # The SAME imported definition at text — erasure across the module boundary.
+  let word: Maybe[text] = if empty => none else => some(value = "w%{seed}")
+  print(or_else(word, "fallback"))
+
+  # Qualified generic record type + qualified constructor, then field access.
+  let p: collections::Pair[int, text] = collections::make_pair(seed, "tag")
+  print "%{p.first}:%{p.second}"

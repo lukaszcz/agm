@@ -16,6 +16,7 @@ import pytest
 from agm.agl.eval import ir_interpreter
 from agm.agl.pipeline import PipelineDriver
 from agm.agl.semantics.values import IntValue
+from tests._agl_helpers import run_inline_command
 
 # A non-tail recursive helper plus a variant guarded by a ``try``/``catch``.
 _PRELUDE = """
@@ -35,7 +36,7 @@ def _run(initializer: str, *, depth: int, max_call_depth: int):
     # ``out`` a public binding the caller can inspect.
     source = f"{_PRELUDE}let out: int = {initializer}\nprint(out)\n"
     driver = PipelineDriver(default_call_depth_limit=max_call_depth)
-    return driver.run(source, param_values={"depth": depth})
+    return run_inline_command(driver, source, param_values={"depth": depth})
 
 
 class TestGuardIsAuthoritative:

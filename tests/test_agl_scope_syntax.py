@@ -29,8 +29,9 @@ from agm.agl.syntax import (
     VarDecl,
     VarPattern,
 )
+from tests._agl_helpers import run_inline_command
 from tests.agl.ir_harness import write_module_file
-from tests.agl.module_graph import resolve_entry
+from tests.agl.module_graph import resolve_entry, resolve_inline_entry
 
 
 def _declaration(source: str) -> object:
@@ -447,7 +448,7 @@ def test_import_and_export_clauses_accept_path_atoms(source: str, kind: type[obj
 
 
 def test_scope_pass_opens_local_scope_members() -> None:
-    resolved = resolve_entry(
+    resolved = resolve_inline_entry(
         "open Point\nscope Point\ndef distance() -> int = 1\nend Point\ndistance()"
     )
 
@@ -465,7 +466,7 @@ def test_opened_scope_members_clash_at_their_use_site() -> None:
     )
 
     with pytest.raises(AglScopeError, match="ambiguous"):
-        resolve_entry(source)
+        resolve_inline_entry(source)
 
 
 def test_ast_walk_visits_open_and_export_selection_paths() -> None:
@@ -498,7 +499,7 @@ def test_ast_walk_visits_a_scoped_params_scope_path_segments() -> None:
 
 
 def test_scoped_declarations_do_not_generate_runtime_initializers() -> None:
-    result = PipelineDriver().run("def A::f() -> int = 0\n()", default_stdlib=False)
+    result = run_inline_command(PipelineDriver(), "def A::f() -> int = 0\n()", default_stdlib=False)
 
     assert result.ok
 
@@ -508,7 +509,8 @@ def test_library_scope_regions_apply_entry_only_declaration_restrictions(tmp_pat
     root.mkdir()
     write_module_file(root, "library", "scope A\nagent bot\nend A")
 
-    result = PipelineDriver().run(
+    result = run_inline_command(
+        PipelineDriver(),
         "import library\n()",
         roots=RootSet(roots=frozenset({root})),
         default_stdlib=False,
@@ -534,7 +536,8 @@ def test_production_pipeline_validates_path_atoms_against_public_content(
     if "dependency" in library:
         write_module_file(root, "dependency", "record Point()")
 
-    result = PipelineDriver().run(
+    result = run_inline_command(
+        PipelineDriver(),
         entry,
         roots=RootSet(roots=frozenset({root})),
         default_stdlib=False,

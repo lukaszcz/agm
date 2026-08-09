@@ -28,6 +28,7 @@ from typing import TypedDict, cast
 import pytest
 
 from agm.project.workspace_shell import _sanitize_session_key
+from tests._agl_helpers import write_file_program
 from tests._proc_helpers import wait_for_path
 
 
@@ -7915,7 +7916,7 @@ class TestExecCommand:
         work = tmp_path / "work"
         work.mkdir()
         program = work / "hello.agl"
-        program.write_text('print "hello from agl"\n', encoding="utf-8")
+        write_file_program(program, 'print "hello from agl"\n', encoding="utf-8")
 
         result = run_agm(["exec", str(program)], env=env, cwd=str(work))
 
@@ -7937,7 +7938,7 @@ class TestExecCommand:
         work = tmp_path / "work"
         work.mkdir()
         program = work / "greet.agl"
-        program.write_text('param name\nprint "hi "\nprint name\n', encoding="utf-8")
+        write_file_program(program, 'param name\nprint "hi "\nprint name\n', encoding="utf-8")
 
         result = run_agm(["exec", str(program), "--name", "world"], env=env, cwd=str(work))
 
@@ -7960,7 +7961,7 @@ class TestExecCommand:
         work.mkdir()
         program = work / "bad.agl"
         # ``let`` binding to an undefined name is a static scope error.
-        program.write_text("let x = undefined_name\nx\n", encoding="utf-8")
+        write_file_program(program, "let x = undefined_name\nx\n", encoding="utf-8")
 
         result = run_agm(["exec", str(program)], env=env, cwd=str(work), check=False)
 
@@ -7973,7 +7974,8 @@ class TestExecCommand:
         work = tmp_path / "work"
         work.mkdir()
         program = work / "ask.agl"
-        program.write_text(
+        write_file_program(
+            program,
             'let reviewer = AgentCommand("claude -p")\n'
             'let r = ask("ping", agent = reviewer)\nprint r\n',
             encoding="utf-8",
@@ -7997,7 +7999,8 @@ class TestExecCommand:
         work = tmp_path / "work"
         work.mkdir()
         program = work / "review_workflow.agl"
-        program.write_text(
+        write_file_program(
+            program,
             "param task: text\n"
             "record Issue\n"
             "  description: text\n"
@@ -8068,7 +8071,8 @@ class TestExecCommand:
         work = tmp_path / "work"
         work.mkdir()
         program = work / "retry.agl"
-        program.write_text(
+        write_file_program(
+            program,
             "enum Review\n"
             "  | Pass\n"
             'let reviewer = AgentCommand("review-runner")\n'
@@ -8112,7 +8116,7 @@ class TestExecCommand:
         work = tmp_path / "work"
         work.mkdir()
         program = work / "abort.agl"
-        program.write_text('raise Abort(message = "stop now")\n', encoding="utf-8")
+        write_file_program(program, 'raise Abort(message = "stop now")\n', encoding="utf-8")
 
         result = run_agm(["exec", str(program)], env=env, cwd=work, check=False)
 

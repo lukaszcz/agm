@@ -9,15 +9,14 @@ import pytest
 from agm.agl.modules.loader import ModuleGraph
 from agm.agl.parser import parse_program
 from agm.agl.parser.errors import AglSyntaxError
-from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import AglScopeError
 from agm.agl.typecheck import AglTypeError
 from agm.agl.typecheck.program import check_program
-from tests.agl.ir_harness import base_caps, make_graph_from_files
+from tests.agl.ir_harness import base_caps, make_repl_graph_from_files, resolve_repl_graph
 
 
 def _graph(tmp_path: Path, entry: str, modules: dict[str, str] | None = None) -> ModuleGraph:
-    return make_graph_from_files(tmp_path, {"entry": entry, **(modules or {})})
+    return make_repl_graph_from_files(tmp_path, {"entry": entry, **(modules or {})})
 
 
 @pytest.mark.parametrize(
@@ -52,7 +51,7 @@ def test_spaced_qualifier_near_miss_suggests_a_tight_qualifier(tmp_path: Path) -
     )
 
     with pytest.raises(AglScopeError) as raised:
-        resolve_program(graph)
+        resolve_repl_graph(graph)
 
     diagnostic = str(raised.value).lower()
     assert "config::x" in diagnostic
@@ -77,7 +76,7 @@ def test_spaced_qualifier_near_miss_unwraps_postfix_and_type_qualifiers(
     )
 
     with pytest.raises(AglScopeError) as raised:
-        resolve_program(graph)
+        resolve_repl_graph(graph)
 
     diagnostic = str(raised.value).lower()
     assert intended.lower() in diagnostic
@@ -102,7 +101,7 @@ def test_spaced_slash_qualifier_near_miss_suggests_the_full_tight_route(
     )
 
     with pytest.raises(AglScopeError) as raised:
-        resolve_program(graph)
+        resolve_repl_graph(graph)
 
     diagnostic = str(raised.value).lower()
     assert intended.lower() in diagnostic
@@ -119,11 +118,11 @@ def test_spaced_qualifier_repair_preserves_explicit_type_arguments(tmp_path: Pat
     )
 
     with pytest.raises(AglScopeError) as raised:
-        resolve_program(graph)
+        resolve_repl_graph(graph)
 
     assert "app/config::e[int]::x" in str(raised.value).lower()
 
-    repaired = resolve_program(
+    repaired = resolve_repl_graph(
         _graph(
             tmp_path,
             "import app/config\napp/config::E[int]::X",
@@ -146,7 +145,7 @@ def test_spaced_slash_qualifier_near_miss_uses_the_full_route_despite_suffix_col
     )
 
     with pytest.raises(AglScopeError) as raised:
-        resolve_program(graph)
+        resolve_repl_graph(graph)
 
     diagnostic = str(raised.value).lower()
     assert "app/config::x" in diagnostic
@@ -209,7 +208,7 @@ def test_spaced_slash_qualifier_near_miss_uses_the_full_route_despite_suffix_col
 def test_spaced_qualifier_preserves_resolvable_juxtaposition(
     tmp_path: Path, entry: str, modules: dict[str, str]
 ) -> None:
-    resolved = resolve_program(_graph(tmp_path, entry, modules))
+    resolved = resolve_repl_graph(_graph(tmp_path, entry, modules))
     check_program(resolved, base_caps())
 
 
@@ -227,7 +226,7 @@ def test_spaced_qualifier_preserves_resolvable_juxtaposition(
 def test_spaced_slash_qualifier_preserves_non_route_division_forms(
     tmp_path: Path, expression: str
 ) -> None:
-    resolved = resolve_program(
+    resolved = resolve_repl_graph(
         _graph(
             tmp_path,
             (
@@ -257,7 +256,7 @@ def test_spaced_qualifier_near_miss_requires_a_contributed_member(
     )
 
     with pytest.raises(AglScopeError) as raised:
-        resolve_program(graph)
+        resolve_repl_graph(graph)
 
     diagnostic = str(raised.value).lower()
     assert "whitespace" not in diagnostic
@@ -272,7 +271,7 @@ def test_spaced_type_qualified_near_miss_requires_a_constructible_owner(tmp_path
     )
 
     with pytest.raises(AglScopeError) as raised:
-        resolve_program(graph)
+        resolve_repl_graph(graph)
 
     diagnostic = str(raised.value).lower()
     assert "whitespace" not in diagnostic
@@ -318,7 +317,7 @@ def test_spaced_qualifier_near_miss_survives_a_shadowed_route_spelling(
     graph = _graph(tmp_path, entry, modules)
 
     with pytest.raises(AglScopeError) as raised:
-        resolve_program(graph)
+        resolve_repl_graph(graph)
 
     diagnostic = str(raised.value).lower()
     assert intended.lower() in diagnostic
@@ -334,7 +333,7 @@ def test_an_unrelated_undefined_name_reports_its_own_error(tmp_path: Path) -> No
     )
 
     with pytest.raises(AglScopeError) as raised:
-        resolve_program(graph)
+        resolve_repl_graph(graph)
 
     diagnostic = str(raised.value).lower()
     assert "missing" in diagnostic
@@ -352,7 +351,7 @@ def test_spaced_qualifier_near_miss_reaches_a_non_juxtaposition_mis_parse(
     )
 
     with pytest.raises(AglScopeError) as raised:
-        resolve_program(graph)
+        resolve_repl_graph(graph)
 
     diagnostic = str(raised.value).lower()
     assert "config::x" in diagnostic
@@ -379,7 +378,7 @@ def test_qualified_scope_errors_distinguish_unknown_route_from_unselected_member
 
     for entry, modules, expected, absent in cases:
         with pytest.raises(AglScopeError) as raised:
-            resolve_program(_graph(tmp_path, entry, modules))
+            resolve_repl_graph(_graph(tmp_path, entry, modules))
         diagnostic = str(raised.value).lower()
         assert all(term in diagnostic for term in expected)
         assert all(term not in diagnostic for term in absent)
@@ -402,7 +401,7 @@ def test_qualified_type_errors_keep_the_same_distinctions(tmp_path: Path) -> Non
     for entry, modules, expected in cases:
         graph = _graph(tmp_path, entry, modules)
         with pytest.raises(AglTypeError) as raised:
-            check_program(resolve_program(graph), base_caps())
+            check_program(resolve_repl_graph(graph), base_caps())
         diagnostic = str(raised.value).lower()
         assert all(term in diagnostic for term in expected)
 
@@ -418,7 +417,7 @@ def test_qualified_ambiguity_lists_sorted_candidates_and_repairs(tmp_path: Path)
     )
 
     with pytest.raises(AglScopeError) as raised:
-        resolve_program(graph)
+        resolve_repl_graph(graph)
 
     diagnostic = str(raised.value)
     assert diagnostic.index("a/config") < diagnostic.index("z/config")
@@ -436,7 +435,7 @@ def test_wildcard_using_identifies_the_module_missing_the_selected_name(tmp_path
     )
 
     with pytest.raises(AglScopeError) as raised:
-        resolve_program(graph)
+        resolve_repl_graph(graph)
 
     diagnostic = str(raised.value)
     assert "shared" in diagnostic
@@ -471,7 +470,7 @@ class TestAmbiguityRepairsAreSpellable:
         graph = _graph(tmp_path, self._AMBIGUOUS_OPENED_SCOPES + "\nlet f = Flag::Good\n")
 
         with pytest.raises(AglScopeError) as raised:
-            resolve_program(graph)
+            resolve_repl_graph(graph)
 
         diagnostic = str(raised.value)
         assert "\x00" not in diagnostic
@@ -486,7 +485,7 @@ class TestAmbiguityRepairsAreSpellable:
         )
 
         with pytest.raises(AglTypeError) as raised:
-            check_program(resolve_program(graph), base_caps())
+            check_program(resolve_repl_graph(graph), base_caps())
 
         diagnostic = str(raised.value)
         assert "\x00" not in diagnostic

@@ -9,33 +9,34 @@ record Label
 extern def mutate[T](xs: array[T], operation: text) -> unit
 extern def write_across_type_variables[T, U](xs: array[T], other: array[U]) -> unit
 
-if mode == "reverse_text" =>
-  var xs = ["one", "two", "three"]
-  let _: unit = mutate(xs, "reverse")
-  print xs
+program def main() -> unit =
+  if mode == "reverse_text" =>
+    var xs = ["one", "two", "three"]
+    let _: unit = mutate(xs, "reverse")
+    print xs
 
-if mode == "rotate_record" =>
-  var xs = [Label(value = "one"), Label(value = "two"), Label(value = "three")]
-  let _: unit = mutate(xs, "rotate")
-  print xs
+  if mode == "rotate_record" =>
+    var xs = [Label(value = "one"), Label(value = "two"), Label(value = "three")]
+    let _: unit = mutate(xs, "rotate")
+    print xs
 
-if mode == "duplicate_text" =>
-  var xs = ["one", "two", "three"]
-  let _: unit = mutate(xs, "duplicate")
-  print xs
+  if mode == "duplicate_text" =>
+    var xs = ["one", "two", "three"]
+    let _: unit = mutate(xs, "duplicate")
+    print xs
 
-if mode == "write_across_type_variables" =>
-  var xs = [Label(value = "one"), Label(value = "two")]
-  let other = ["foreign"]
-  let _: unit = write_across_type_variables(xs, other)
-  print xs
+  if mode == "write_across_type_variables" =>
+    var xs = [Label(value = "one"), Label(value = "two")]
+    let other = ["foreign"]
+    let _: unit = write_across_type_variables(xs, other)
+    print xs
 
-if mode == "write_supported_scalar" =>
-  var xs = ["one", "two"]
-  let _: unit = mutate(xs, "replace")
-  print xs
+  if mode == "write_supported_scalar" =>
+    var xs = ["one", "two"]
+    let _: unit = mutate(xs, "replace")
+    print xs
 
-if mode == "sort_text" =>
-  var xs = ["one", "two", "three"]
-  let _: unit = mutate(xs, "sort")
-  print xs
+  if mode == "sort_text" =>
+    var xs = ["one", "two", "three"]
+    let _: unit = mutate(xs, "sort")
+    print xs

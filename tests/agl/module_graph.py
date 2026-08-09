@@ -57,6 +57,7 @@ from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.loader import LoadedModule, ModuleGraph, build_repl_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser.parser import parse_program_seeded
+from agm.agl.parser.wrap import wrap_inline_program
 from agm.agl.scope import ModuleResolution
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import ConstructorRef, ScopeNode
@@ -66,6 +67,7 @@ from agm.agl.typecheck import CheckedModule
 from agm.agl.typecheck.checker import _check_prepared_module
 from agm.agl.typecheck.env import TypeEnvironment
 from agm.agl.typecheck.program import check_program
+from tests._agl_helpers import parse_inline_command
 
 # A general-purpose capability set (default agent, shell exec, json/text
 # codecs) for a test that does not care which capabilities back its checked
@@ -227,6 +229,125 @@ def resolve_entry(
     return _without_synthetic_import(resolved, import_node_id)
 
 
+def resolve_inline_entry(
+    source: str,
+    *,
+    parent_scope: ScopeNode | None = None,
+    ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
+    ambient_type_names: frozenset[str] = frozenset(),
+    origin_path: Path | None = None,
+    default_stdlib: bool = True,
+) -> ModuleResolution:
+    """Resolve test-only inline source with the ``agm exec -c`` entry transform.
+
+    This is deliberately separate from :func:`resolve_entry`: inline snippets
+    admit executable root statements, while static-root tests must retain the
+    file source unchanged.
+    """
+    source_program, next_node_id, _wrapped = parse_inline_command(source)
+    graph, import_node_id = build_module_graph_from_program(
+        source_program,
+        next_node_id=next_node_id,
+        origin_path=origin_path,
+        default_stdlib=default_stdlib,
+    )
+    resolved_program = resolve_program(
+        graph,
+        entry_ambient_constructor_candidates=ambient_constructor_candidates,
+        entry_ambient_type_names=ambient_type_names,
+        entry_parent_scope=parent_scope,
+    )
+    resolved = _without_synthetic_import(
+        resolved_program.modules[graph.entry_id].resolved, import_node_id
+    )
+    return dataclasses.replace(resolved, program=parse_program_seeded(source, start_id=0)[0])
+
+
+def resolve_repl_entry(
+    source: str,
+    *,
+    parent_scope: ScopeNode | None = None,
+    default_stdlib: bool = True,
+) -> ModuleResolution:
+    """Resolve a test-only incremental REPL entry without an inline wrapper."""
+    entry_program, next_node_id = parse_program_seeded(source, start_id=0)
+    graph, import_node_id = build_module_graph_from_program(
+        entry_program,
+        next_node_id=next_node_id,
+        origin_path=None,
+        default_stdlib=default_stdlib,
+    )
+    resolved_program = resolve_program(
+        graph,
+        entry_parent_scope=parent_scope or ScopeNode(node_id=-1, parent=None, scope_path=()),
+    )
+    return _without_synthetic_import(
+        resolved_program.modules[graph.entry_id].resolved, import_node_id
+    )
+
+
+def resolve_and_check_repl_entry(
+    source: str,
+    capabilities: HostCapabilities,
+    *,
+    parent_scope: ScopeNode | None = None,
+    seed_env: TypeEnvironment | None = None,
+    default_stdlib: bool = True,
+) -> CheckedModule:
+    """Type-check a test-only incremental REPL entry."""
+    entry_program, next_node_id = parse_program_seeded(source, start_id=0)
+    graph, import_node_id = build_module_graph_from_program(
+        entry_program,
+        next_node_id=next_node_id,
+        origin_path=None,
+        default_stdlib=default_stdlib,
+    )
+    resolved_program = resolve_program(
+        graph,
+        entry_parent_scope=parent_scope or ScopeNode(node_id=-1, parent=None, scope_path=()),
+    )
+    checked_program = check_program(resolved_program, capabilities, entry_seed_env=seed_env)
+    checked = checked_program.modules[graph.entry_id]
+    stripped_resolved = _without_synthetic_import(checked.resolved, import_node_id)
+    return dataclasses.replace(checked, resolved=stripped_resolved)
+
+
+def resolve_and_check_inline_entry(
+    source: str,
+    capabilities: HostCapabilities,
+    *,
+    parent_scope: ScopeNode | None = None,
+    ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
+    ambient_type_names: frozenset[str] = frozenset(),
+    origin_path: Path | None = None,
+    seed_env: TypeEnvironment | None = None,
+    default_stdlib: bool = True,
+) -> CheckedModule:
+    """Type-check test-only inline source with the ``agm exec -c`` transform."""
+    source_program, next_node_id, _wrapped = parse_inline_command(source)
+    graph, import_node_id = build_module_graph_from_program(
+        source_program,
+        next_node_id=next_node_id,
+        origin_path=origin_path,
+        default_stdlib=default_stdlib,
+    )
+    resolved_program = resolve_program(
+        graph,
+        entry_ambient_constructor_candidates=ambient_constructor_candidates,
+        entry_ambient_type_names=ambient_type_names,
+        entry_parent_scope=parent_scope,
+    )
+    checked_program = check_program(resolved_program, capabilities, entry_seed_env=seed_env)
+    checked = checked_program.modules[graph.entry_id]
+    stripped_resolved = _without_synthetic_import(checked.resolved, import_node_id)
+    # Keep the source AST view: the wrapper only changes execution placement,
+    # and side tables stay valid because every source node id is preserved.
+    source_view = dataclasses.replace(
+        stripped_resolved, program=parse_program_seeded(source, start_id=0)[0]
+    )
+    return dataclasses.replace(checked, resolved=source_view)
+
+
 def resolve_and_check_entry(
     source: str,
     capabilities: HostCapabilities,
@@ -379,6 +500,45 @@ def resolve_program_ast(
         entry_parent_scope=parent_scope,
     )
     return resolved_program.modules[graph.entry_id].resolved
+
+
+def resolve_inline_program_ast(
+    program: Program,
+    *,
+    next_node_id: int = 1_000_000,
+    origin_path: Path | None = None,
+    parent_scope: ScopeNode | None = None,
+    ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
+    ambient_type_names: frozenset[str] = frozenset(),
+) -> ModuleResolution:
+    """Resolve test-only hand-built inline AST with the command entry transform."""
+    wrapped, _ = wrap_inline_program(program, next_node_id=next_node_id)
+    graph = _single_module_graph(wrapped, origin_path=origin_path)
+    resolved_program = resolve_program(
+        graph,
+        entry_ambient_constructor_candidates=ambient_constructor_candidates,
+        entry_ambient_type_names=ambient_type_names,
+        entry_parent_scope=parent_scope,
+    )
+    return resolved_program.modules[graph.entry_id].resolved
+
+
+def resolve_and_check_inline_program_ast(
+    program: Program,
+    capabilities: HostCapabilities,
+    *,
+    next_node_id: int = 1_000_000,
+    origin_path: Path | None = None,
+    seed_env: TypeEnvironment | None = None,
+) -> CheckedModule:
+    """Type-check a test-only hand-built inline AST."""
+    wrapped, _ = wrap_inline_program(program, next_node_id=next_node_id)
+    graph = _single_module_graph(wrapped, origin_path=origin_path)
+    checked_program = check_program(resolve_program(graph), capabilities, entry_seed_env=seed_env)
+    checked = checked_program.modules[graph.entry_id]
+    return dataclasses.replace(
+        checked, resolved=dataclasses.replace(checked.resolved, program=program)
+    )
 
 
 def resolve_and_check_program_ast(

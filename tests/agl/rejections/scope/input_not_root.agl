@@ -1,4 +1,5 @@
-if true =>
-  param late
-| else =>
-  pass
+program def main() -> unit =
+  if true =>
+    param late
+  | else =>
+    pass

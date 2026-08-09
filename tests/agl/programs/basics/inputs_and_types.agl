@@ -5,10 +5,11 @@ param ratio: decimal
 param flag: bool
 param meta: json
 
-print topic
-print rounds
-print ratio
-print flag
-print meta
-let summary = ask "Summarize %{topic} in %{rounds} rounds (ratio %{ratio}, flag %{flag})."
-print summary
+program def main() -> unit =
+  print topic
+  print rounds
+  print ratio
+  print flag
+  print meta
+  let summary = ask "Summarize %{topic} in %{rounds} rounds (ratio %{ratio}, flag %{flag})."
+  print summary

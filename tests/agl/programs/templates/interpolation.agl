@@ -10,19 +10,20 @@ enum Pick
 
 param who
 
-let item = Item(name = "bolt", qty = 7)
-let items = ["alpha", "beta"]
-let pick: Pick = One(item = item)
+program def main() -> unit =
+  let item = Item(name = "bolt", qty = 7)
+  let items = ["alpha", "beta"]
+  let pick: Pick = One(item = item)
 
-let a = ask "Hello %{who}, qty %{item.qty}, sum %{1 + 2 * 3}."
-let b = ask "%{who}%{item.qty}"
-let c = ask "data: %{ {kind: "demo", tags: items as json} }"
-let d = ask """
-Report for %{who}:
-%{item}
-%{pick}
-"""
-print a
-print b
-print c
-print d
+  let a = ask "Hello %{who}, qty %{item.qty}, sum %{1 + 2 * 3}."
+  let b = ask "%{who}%{item.qty}"
+  let c = ask "data: %{ {kind: "demo", tags: items as json} }"
+  let d = ask """
+  Report for %{who}:
+  %{item}
+  %{pick}
+  """
+  print a
+  print b
+  print c
+  print d

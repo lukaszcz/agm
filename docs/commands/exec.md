@@ -10,12 +10,14 @@ agm exec [--strict-json|--no-strict-json]
          [--log|--log-file PATH|--no-log] [--no-log-file]
          [--no-stdlib]
          [-I DIR]... [-p PATH]
-         (FILE | -c COMMAND) [--PARAM VALUE]...
+         (FILE | PACKAGE/MODULE::PROGRAM | -c COMMAND) [--PARAM VALUE]...
 ```
 
 Execute an AgL workflow program, either from a source `FILE` or from inline program
 text given with `-c`/`--command`. The two are mutually exclusive, and exactly one is
-required.
+required. `PACKAGE/MODULE::PROGRAM` resolves its module through the active package
+selection, for example `agm exec review_tools/review::main`. An existing `FILE` path always
+takes precedence, even when its name contains `::`.
 
 A file must declare at least one `program def` function. `exec` initializes the
 linked program and invokes its sole entry implicitly; if it declares several, select

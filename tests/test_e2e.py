@@ -7382,6 +7382,48 @@ class TestPackageInstall:
         assert uninstalled.returncode == 0
         assert "alpha 1.0.0 active\n  command launch" in listed_uninstalled.stdout
 
+    def test_registered_command_fallback_reports_a_malformed_activation_index_cleanly(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["AGM_HOME"] = str(tmp_path / "agm-home")
+        index_path = tmp_path / "agm-home" / "packages" / "index.toml"
+        index_path.parent.mkdir(parents=True)
+        index_path.write_text("[commands\n", encoding="utf-8")
+
+        result = run_agm(["unknown"], env=env, cwd=tmp_path, check=False)
+
+        assert result.returncode != 0
+        assert result.stderr
+        assert "Traceback" not in result.stderr
+
+    def test_registered_command_rejects_a_stale_activation_index_entry(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["AGM_HOME"] = str(tmp_path / "agm-home")
+        package = _write_store_test_package(tmp_path / "alpha-source", "alpha", "1.0.0")
+        (package / "package.toml").write_text(
+            '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
+            '[commands]\nlaunch = { program = "alpha/main::main" }\n',
+            encoding="utf-8",
+        )
+        (package / "alpha" / "main.agl").write_text(
+            'program def main() -> unit = print "launched"\n', encoding="utf-8"
+        )
+
+        installed = run_agm(["pkg", "install", str(package)], env=env, cwd=tmp_path)
+        launched = run_agm(["launch"], env=env, cwd=tmp_path)
+        index_path = tmp_path / "agm-home" / "packages" / "index.toml"
+        index_path.write_text(
+            index_path.read_text(encoding="utf-8").replace("alpha/main::main", "alpha/main::stale"),
+            encoding="utf-8",
+        )
+        stale = run_agm(["launch"], env=env, cwd=tmp_path, check=False)
+
+        assert installed.returncode == 0
+        assert launched.stdout == "launched\n"
+        assert stale.returncode == 1
+        assert "Traceback" not in stale.stderr
+
     def test_create_archive_install_and_url_dependency_install_are_hermetic(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -8370,6 +8412,17 @@ class TestExecCommand:
 
         assert result.returncode == 0
         assert result.stdout.strip() == "hello from agl"
+
+    def test_exec_treats_an_existing_path_with_a_reference_separator_as_a_file(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        program = tmp_path / "literal::path.agl"
+        write_file_program(program, 'print "literal path"\n', encoding="utf-8")
+
+        result = run_agm(["exec", str(program)], env=env, cwd=tmp_path)
+
+        assert result.returncode == 0
+        assert result.stdout == "literal path\n"
 
     def test_exec_uses_project_pin_from_an_isolated_package_store(
         self, tmp_path: Path, env: dict[str, str]

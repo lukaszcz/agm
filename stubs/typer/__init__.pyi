@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import ParamSpec, TypeVar
 
-from typer.core import TyperCommand
+from typer.core import TyperCommand, TyperGroup
 
 CommandParam = ParamSpec("CommandParam")
 CommandReturn = TypeVar("CommandReturn")
@@ -28,6 +28,7 @@ class Typer:
         self,
         *,
         add_completion: bool = ...,
+        cls: type[TyperGroup] | None = ...,
         context_settings: dict[str, bool | list[str]] | None = ...,
         invoke_without_command: bool = ...,
     ) -> None: ...

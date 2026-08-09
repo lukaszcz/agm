@@ -38,7 +38,8 @@ activation.
 
 `--editable` activates the source directory directly, so its edits are visible immediately and
 no immutable copy or `RECORD` is created. Manifest `[commands]` registrations are merged into the
-activation index. A command path cannot begin with an AGM built-in command or alias (`wsp`, `wt`,
+activation index. Invoke a registered single- or multi-word command directly as `agm COMMAND ...`;
+the longest matching path wins and trailing words are passed to its AgL program. A command path cannot begin with an AGM built-in command or alias (`wsp`, `wt`,
 `cp`, or `copy`). A conflicting registration refuses installation unless `--shadow` is supplied;
 the replacing package becomes the active command owner, and successful shadow installs identify the
 displaced command owners. Command precedence is persisted in a sidecar beside each immutable store

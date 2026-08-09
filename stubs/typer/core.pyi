@@ -1,4 +1,4 @@
-"""Minimal stub for typer.core covering the TyperCommand class."""
+"""Minimal Typer core stubs used by AGM's custom command classes."""
 
 from __future__ import annotations
 
@@ -6,13 +6,20 @@ import click
 from click.shell_completion import CompletionItem
 
 
+class TyperGroup:
+    def resolve_command(
+        self, ctx: click.Context, args: list[str]
+    ) -> tuple[str | None, TyperCommand | None, list[str]]: ...
+
+
 class TyperCommand:
-    """Typer's command class, wrapping click.Command.
+    """Typed façade for Typer's Click command base."""
 
-    Modelled as a standalone class in this stub (not subclassing click.Command
-    directly) to avoid ``Any``-propagation via click's ``Callable[..., Any]``
-    callback parameter, which would trigger mypy's ``[misc]`` rule on every
-    subclass passed as ``type[TyperCommand]``.
-    """
-
+    def __init__(
+        self,
+        *,
+        name: str | None = ...,
+        context_settings: dict[str, bool | list[str]] | None = ...,
+    ) -> None: ...
+    def invoke(self, ctx: click.Context) -> None: ...
     def shell_complete(self, ctx: click.Context, incomplete: str) -> list[CompletionItem]: ...

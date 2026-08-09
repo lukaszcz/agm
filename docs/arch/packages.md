@@ -79,7 +79,11 @@ and the host-selected standard library, while ad-hoc modules retain open visibil
 paths, and that each registered command names an actual `program def` in the package. It
 uses the existing AgL module and identifier rules plus the built-in command catalog, so
 package names and command registrations cannot claim AGM's command namespace. Activation
-merges valid manifest commands in `packages/activation.py`; conflicts with every active manifest,
+merges valid manifest commands in `packages/activation.py`; `cli_dispatch.py` consumes the active
+index only after a built-in root command misses, then forwards the longest matching command's
+remaining words to its registered AgL program. The index is only a lookup cache: before execution,
+the host verifies the registration against the selected active or project-pinned manifest and that
+the resolved module is owned by its selected package. Conflicts with every active manifest,
 including an owner displaced by an earlier shadow, refuse an install unless its `--shadow` request
 replaces them. Reconciliation restores a remaining active owner when a winner is removed and records
 only current owners. Install and list render the resulting shadow relationships explicitly. Command
@@ -100,5 +104,6 @@ dispatch remains a CLI concern.
 - `src/agm/agl/modules/roots.py` and `loader.py` — root mounting and ownership-based import visibility.
 - `src/agm/packages/discipline.py` — directory and command/program validation.
 - `src/agm/commands/pkg/` — CLI-facing validation, archive creation, installation, inspection, and removal commands.
+- `src/agm/cli_dispatch.py` and `src/agm/commands/exec_program.py` — lazy registered-command lookup and shared AgL program execution.
 - `tests/test_packages_manifest.py`, `tests/test_packages_discipline.py`, and
   `tests/agl/packages/` — focused validation tests and reusable package fixtures.

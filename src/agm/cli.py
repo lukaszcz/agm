@@ -38,6 +38,7 @@ import agm.commands.worktree.new as worktree_new_command
 import agm.commands.worktree.remove as worktree_remove_command
 from agm import completion
 from agm import parser as parser_helpers
+from agm.cli_dispatch import RegisteredCommandGroup
 from agm.cli_support.args import (
     CloseArgs,
     ConfigCopyArgs,
@@ -578,7 +579,11 @@ def _parse_max_steps(value: str | None, *, command_path: Sequence[str], name: st
     return parsed
 
 
-app = typer.Typer(context_settings=_BASE_CONTEXT_SETTINGS, invoke_without_command=True)
+app = typer.Typer(
+    cls=RegisteredCommandGroup,
+    context_settings=_BASE_CONTEXT_SETTINGS,
+    invoke_without_command=True,
+)
 
 config_app = typer.Typer(context_settings=_BASE_CONTEXT_SETTINGS, invoke_without_command=True)
 worktree_app = typer.Typer(context_settings=_BASE_CONTEXT_SETTINGS, invoke_without_command=True)

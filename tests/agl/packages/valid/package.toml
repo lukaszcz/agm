@@ -1,0 +1,17 @@
+[package]
+name = "review_tools"
+version = "0.2.0"
+description = "Review workflow commands"
+license = "MIT"
+authors = ["AGM"]
+repository = "https://example.test/review-tools"
+keywords = ["review", "workflow"]
+
+[dependencies]
+std = "0.4"
+judge = { version = "0.1", path = "../judge" }
+tools = { version = "1.1", url = "https://example.test/tools.agmpkg", hash = "sha256:abc123" }
+
+[commands]
+review-loop = { program = "review_tools/review::main", description = "Run the review loop" }
+"review-loop lint" = { program = "review_tools/lint::main", description = "Lint review configurations" }

@@ -1,0 +1,6 @@
+[package]
+name = "invalid_utf8_source"
+version = "1.0.0"
+
+[commands]
+run = { program = "invalid_utf8_source/main::main" }

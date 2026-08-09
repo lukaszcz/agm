@@ -1,0 +1,6 @@
+[package]
+name = "reserved_command"
+version = "1.0.0"
+
+[commands]
+"exec review" = { program = "reserved_command/main::main" }

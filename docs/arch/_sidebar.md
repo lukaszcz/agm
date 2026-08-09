@@ -4,6 +4,7 @@
   - [Core primitives](/core.md)
   - [Configuration](/config.md)
   - [Projects and workspaces](/workspaces.md)
+  - [Packages](/packages.md)
   - [Sandboxed execution](/sandbox.md)
   - [Agent workflows](/agents.md)
   - [Testing](/testing.md)

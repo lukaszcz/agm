@@ -10,7 +10,7 @@ AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-c
 
 - **CLI layer** — a Typer command tree whose directory structure mirrors the command tree exactly. It parses arguments into typed containers and dispatches to command implementations.
 - **Command layer** — one module per command/command-group; each orchestrates domain logic but holds little of its own.
-- **Domain layer** — project/workspace layout, git integration, sandboxing, tmux, configuration, and agent invocation.
+- **Domain layer** — project/workspace layout, packages, git integration, sandboxing, tmux, configuration, and agent invocation.
 - **Primitive layer** — process execution, environment handling, filesystem and TOML I/O, and a cross-cutting dry-run facility, plus pure generic utility helpers.
 - **AgL subsystem** — a complete language implementation (lexer → parser → AST → scope → typecheck → match compilation → lower → IR eval) plus its host runtime, lazily imported so non-AgL commands stay fast to start.
 
@@ -29,6 +29,7 @@ AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-c
 - Read [core.md](core.md) for the shared process, environment, filesystem, TOML, and dry-run primitives, and the pure utility helpers.
 - Read [config.md](config.md) for configuration loading, layering precedence, and command/sandbox config sections.
 - Read [workspaces.md](workspaces.md) for project layout, git worktrees, dependencies, sync, and tmux — the project-management half of AGM.
+- Read [packages.md](packages.md) for package manifests, ownership, and validation discipline.
 - Read [sandbox.md](sandbox.md) for `agm run`, the SRT sandbox, and resource limits.
 - Read [agents.md](agents.md) for the agent runner and the loop/review/revise/refine workflows.
 - Read [agl/index.md](agl/index.md) first for any AgL language task; it links to the AgL frontend, execution, modules, and REPL documents.
@@ -42,6 +43,7 @@ AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-c
 - `src/agm/core/` contains the cross-cutting process, environment, filesystem, and TOML primitives plus the dry-run facility; `src/agm/util/` holds pure, `agm`-import-free generic helpers (graph algorithms, text normalization).
 - `src/agm/config/` implements loading and resolving general and sandbox configuration.
 - `src/agm/project/` implements project/worktree setup and layout management.
+- `src/agm/packages/` implements package manifests, package identity, and package discipline validation.
 - `src/agm/sandbox/` implements sandbox runtime/template support.
 - `src/agm/tmux/` implements tmux session and layout logic.
 - `src/agm/vcs/` implements git integration.

@@ -1,0 +1,6 @@
+[package]
+name = "missing_program"
+version = "1.0.0"
+
+[commands]
+run = { program = "missing_program/main::main" }

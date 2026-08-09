@@ -1,0 +1,6 @@
+[package]
+name = "malformed_command"
+version = "1.0.0"
+
+[commands]
+" review" = { program = "malformed_command/main::main" }

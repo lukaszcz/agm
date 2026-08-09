@@ -7364,14 +7364,22 @@ class TestPackageInstall:
             '[commands]\nlaunch = { program = "bravo/main::main" }\n',
             encoding="utf-8",
         )
+        (alpha / "alpha" / "main.agl").write_text(
+            'program def main() -> unit = print "alpha"\n', encoding="utf-8"
+        )
+        (bravo / "bravo" / "main.agl").write_text(
+            'program def main() -> unit = print "bravo"\n', encoding="utf-8"
+        )
 
         installed_alpha = run_agm(["pkg", "install", str(alpha)], env=env, cwd=tmp_path)
         listed_alpha = run_agm(["pkg", "list"], env=env, cwd=tmp_path)
         refused = run_agm(["pkg", "install", str(bravo)], env=env, cwd=tmp_path, check=False)
         shadowed = run_agm(["pkg", "install", "--shadow", str(bravo)], env=env, cwd=tmp_path)
         listed_shadow = run_agm(["pkg", "list"], env=env, cwd=tmp_path)
+        winner_dispatch = run_agm(["launch"], env=env, cwd=tmp_path)
         uninstalled = run_agm(["pkg", "uninstall", "bravo"], env=env, cwd=tmp_path)
         listed_uninstalled = run_agm(["pkg", "list"], env=env, cwd=tmp_path)
+        restored_dispatch = run_agm(["launch"], env=env, cwd=tmp_path)
 
         assert installed_alpha.returncode == 0
         assert "launch" in listed_alpha.stdout
@@ -7379,8 +7387,87 @@ class TestPackageInstall:
         assert shadowed.returncode == 0
         assert "shadowed command launch from alpha" in shadowed.stdout
         assert "bravo 1.0.0 active\n  command launch (shadows alpha)" in listed_shadow.stdout
+        assert winner_dispatch.stdout == "bravo\n"
         assert uninstalled.returncode == 0
         assert "alpha 1.0.0 active\n  command launch" in listed_uninstalled.stdout
+        assert restored_dispatch.stdout == "alpha\n"
+
+    def test_registered_commands_honor_params_config_engine_help_and_multiword_paths(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        home = tmp_path / "agm-home"
+        env["AGM_HOME"] = str(home)
+        package = _write_store_test_package(tmp_path / "tools-source", "tools", "1.0.0")
+        (package / "package.toml").write_text(
+            '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
+            "[commands]\n"
+            'publish = { program = "tools/main::main", description = "Publish a subject" }\n'
+            '"tools inspect" = { program = "tools/inspect::main" }\n',
+            encoding="utf-8",
+        )
+        (package / "tools" / "main.agl").write_text(
+            "import std/config\n"
+            "param subject: text\n"
+            "program def main() -> unit =\n"
+            "  print subject\n"
+            "  print std/config::max-iters\n",
+            encoding="utf-8",
+        )
+        (package / "tools" / "inspect.agl").write_text(
+            "param subject: text\nprogram def main() -> unit = print subject\n", encoding="utf-8"
+        )
+        home.mkdir()
+        (home / "config.toml").write_text(
+            '["tools/main"]\nsubject = "configured"\n\n["tools/main".main]\nmax-iters = 9\n',
+            encoding="utf-8",
+        )
+
+        installed = run_agm(["pkg", "install", str(package)], env=env, cwd=tmp_path)
+        help_result = run_agm(["help"], env=env, cwd=tmp_path)
+        published = run_agm(["publish", "--subject", "flag"], env=env, cwd=tmp_path)
+        configured = run_agm(["publish"], env=env, cwd=tmp_path)
+        inspected = run_agm(["tools", "inspect", "--subject", "trailing"], env=env, cwd=tmp_path)
+        uninstalled = run_agm(["pkg", "uninstall", "tools"], env=env, cwd=tmp_path)
+        unknown = run_agm(["publish"], env=env, cwd=tmp_path, check=False)
+
+        assert installed.returncode == 0
+        assert "publish" in help_result.stdout
+        assert "Publish a subject" in help_result.stdout
+        assert published.stdout == "flag\n9\n"
+        assert configured.stdout == "configured\n9\n"
+        assert inspected.stdout == "trailing\n"
+        assert uninstalled.returncode == 0
+        assert unknown.returncode != 0
+
+    def test_editable_registered_command_rereads_its_manifest_at_dispatch(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["AGM_HOME"] = str(tmp_path / "agm-home")
+        package = _write_store_test_package(tmp_path / "tools-source", "tools", "1.0.0")
+        (package / "package.toml").write_text(
+            '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
+            '[commands]\nlive = { program = "tools/main::main" }\n',
+            encoding="utf-8",
+        )
+        (package / "tools" / "main.agl").write_text(
+            'program def main() -> unit = print "old"\n', encoding="utf-8"
+        )
+        (package / "tools" / "updated.agl").write_text(
+            'program def main() -> unit = print "new"\n', encoding="utf-8"
+        )
+
+        installed = run_agm(["pkg", "install", "--editable", str(package)], env=env, cwd=tmp_path)
+        before_edit = run_agm(["live"], env=env, cwd=tmp_path)
+        (package / "package.toml").write_text(
+            '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
+            '[commands]\nlive = { program = "tools/updated::main" }\n',
+            encoding="utf-8",
+        )
+        after_edit = run_agm(["live"], env=env, cwd=tmp_path)
+
+        assert installed.returncode == 0
+        assert before_edit.stdout == "old\n"
+        assert after_edit.stdout == "new\n"
 
     def test_registered_command_fallback_reports_a_malformed_activation_index_cleanly(
         self, tmp_path: Path, env: dict[str, str]

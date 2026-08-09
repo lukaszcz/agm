@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -196,6 +197,34 @@ def complete_help_path(ctx: click.Context, incomplete: str) -> list[str]:
         return _match(_HELP_TREE.get(path_key, []), incomplete)
     except (Exception, SystemExit):
         return []
+
+
+def registered_command_completion(
+    command_path: Sequence[str], incomplete: str
+) -> tuple[list[str], bool]:
+    """Return next path segments and whether the path resolves to a registered command."""
+    try:
+        from agm.cli_dispatch import load_activation_index, resolve_registered_command
+
+        context = current_config_context()
+        index = load_activation_index(home=context.home)
+        prefix = tuple(command_path)
+        candidates = {
+            words[len(prefix)]
+            for path_name in index.commands
+            if (words := tuple(path_name.split()))[: len(prefix)] == prefix
+            and len(words) > len(prefix)
+        }
+        return _match(candidates, incomplete), resolve_registered_command(
+            command_path, index.commands
+        ) is not None
+    except (Exception, SystemExit):
+        return [], False
+
+
+def complete_registered_commands(command_path: Sequence[str], incomplete: str) -> list[str]:
+    """Complete the next active registered-command path segment."""
+    return registered_command_completion(command_path, incomplete)[0]
 
 
 def complete_open_target(incomplete: str) -> list[str]:

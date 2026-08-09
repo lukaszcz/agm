@@ -81,9 +81,12 @@ uses the existing AgL module and identifier rules plus the built-in command cata
 package names and command registrations cannot claim AGM's command namespace. Activation
 merges valid manifest commands in `packages/activation.py`; `cli_dispatch.py` consumes the active
 index only after a built-in root command misses, then forwards the longest matching command's
-remaining words to its registered AgL program. The index is only a lookup cache: before execution,
-the host verifies the registration against the selected active or project-pinned manifest and that
-the resolved module is owned by its selected package. Conflicts with every active manifest,
+remaining words to its registered AgL program. Help and shell completion also read this lightweight
+index; completion suppresses suggestions if it cannot be read. The index is only a lookup cache:
+before execution, the host verifies the registration against the selected active or project-pinned
+manifest and that the resolved module is owned by its selected package. Editable registrations are
+re-read from their live manifest at dispatch, while immutable cached mismatches are rejected.
+Conflicts with every active manifest,
 including an owner displaced by an earlier shadow, refuse an install unless its `--shadow` request
 replaces them. Reconciliation restores a remaining active owner when a winner is removed and records
 only current owners. Install and list render the resulting shadow relationships explicitly. Command

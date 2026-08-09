@@ -10,6 +10,7 @@ class TyperGroup:
     def resolve_command(
         self, ctx: click.Context, args: list[str]
     ) -> tuple[str | None, TyperCommand | None, list[str]]: ...
+    def shell_complete(self, ctx: click.Context, incomplete: str) -> list[CompletionItem]: ...
 
 
 class TyperCommand:

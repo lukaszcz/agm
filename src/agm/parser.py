@@ -954,6 +954,22 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
 }
 
 
+def _registered_command_overview() -> tuple[tuple[str, str], ...]:
+    """Read registered command names for help without loading package manifests."""
+    try:
+        from agm.cli_dispatch import load_activation_index
+        from agm.config.context import current_config_context
+
+        context = current_config_context()
+        index = load_activation_index(home=context.home)
+    except (OSError, SystemExit, ValueError):
+        return ()
+    return tuple(
+        (path_name, registration.description or "Package-registered command.")
+        for path_name, registration in sorted(index.commands.items())
+    )
+
+
 def _overview_text() -> str:
     lines = [
         "agm - Agent Management Framework",
@@ -965,6 +981,12 @@ def _overview_text() -> str:
     width = max(len(name) for name, _ in COMMAND_OVERVIEW)
     for name, desc in COMMAND_OVERVIEW:
         lines.append(f"  {name:<{width + 2}} {desc}")
+    registered_commands = _registered_command_overview()
+    if registered_commands:
+        lines.extend(("", "Registered commands:"))
+        width = max(len(name) for name, _ in registered_commands)
+        for name, desc in registered_commands:
+            lines.append(f"  {name:<{width + 2}} {desc}")
     lines.extend(
         [
             "",

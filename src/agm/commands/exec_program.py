@@ -57,7 +57,7 @@ from __future__ import annotations
 import sys
 from dataclasses import replace
 from pathlib import Path
-from typing import Protocol, TypeVar
+from typing import NoReturn, Protocol, TypeVar
 
 from agm.agl import PipelineDriver as _PipelineDriver
 from agm.agl.diagnostics import format_diagnostic
@@ -87,7 +87,7 @@ from agm.core.log import (
 )
 from agm.core.parse import parse_timeout
 from agm.core.toml import TomlDict, toml_dict
-from agm.packages.activation import select_active_packages
+from agm.packages.activation import load_activation_index, select_active_packages
 from agm.packages.development import discover_development_packages
 from agm.packages.model import owning_package
 from agm.parser import exit_with_usage_error
@@ -138,6 +138,15 @@ _T = TypeVar("_T")
 def _first(*values: _T | None) -> _T | None:
     """Return the first non-None value, or None if all are None."""
     return next((v for v in values if v is not None), None)
+
+
+def _registered_command_mismatch(command_path: str) -> NoReturn:
+    """Report a cached command that does not agree with its active package."""
+    print(
+        f"Error: registered command {command_path!r} does not match its active package.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 
 
 def run(
@@ -580,12 +589,31 @@ def run_registered(
         raise SystemExit(1)
     if package is not None and command_path is not None:
         command = selected_package.manifest.commands.get(command_path)
-        if module_id.segments[0] != package or command is None or command.program != program:
-            print(
-                f"Error: registered command {command_path!r} does not match its active package.",
-                file=sys.stderr,
-            )
-            raise SystemExit(1)
+        if module_id.segments[0] != package or command is None:
+            _registered_command_mismatch(command_path)
+        if command.program != program:
+            # The index deliberately remains an install-time cache. Editable
+            # packages are its one live exception: their manifest is reread
+            # above with the active package selection, so follow a changed
+            # registration while immutable cached entries stay fail-closed.
+            active = load_activation_index(home=context.home).packages.get(package)
+            if active is None or active.editable != selected_package.root:
+                _registered_command_mismatch(command_path)
+            program = command.program
+            module_path, separator, declaration_path = program.partition("::")
+            if not separator or not declaration_path:
+                print(f"Error: invalid installed program reference {program!r}.", file=sys.stderr)
+                raise SystemExit(1)
+            try:
+                module_id = ModuleId.from_path(module_path)
+            except ValueError as exc:
+                print(
+                    f"Error: invalid installed program reference {program!r}: {exc}",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1) from exc
+            if module_id.segments[0] != package:
+                _registered_command_mismatch(command_path)
 
     entry_path = selected_package.root / module_id.relpath()
     if not entry_path.is_file():

@@ -5,9 +5,10 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 import click
+from click.shell_completion import CompletionItem
 from typer.core import TyperCommand, TyperGroup
 
 from agm.config.context import current_config_context
@@ -21,6 +22,9 @@ class CommandRegistrationLike(Protocol):
 
     @property
     def program(self) -> str: ...
+
+    @property
+    def description(self) -> str | None: ...
 
 
 class CommandIndexLike(Protocol):
@@ -98,6 +102,22 @@ class RegisteredProgramCommand(TyperCommand):
 
 class RegisteredCommandGroup(TyperGroup):
     """Root group that falls back to package registrations after builtins miss."""
+
+    def shell_complete(self, ctx: click.Context, incomplete: str) -> list[CompletionItem]:
+        """Extend root completion with the next registered-command path segment."""
+        from agm.completion import registered_command_completion
+
+        command_path = [*ctx._protected_args, *ctx.args]
+        registered_segments, is_registered = registered_command_completion(command_path, incomplete)
+        if command_path and (registered_segments or is_registered):
+            return [CompletionItem(segment) for segment in registered_segments]
+
+        items_by_value: dict[str, CompletionItem] = {
+            cast(str, item.value): item for item in super().shell_complete(ctx, incomplete)
+        }
+        for segment in registered_segments:
+            items_by_value[segment] = CompletionItem(segment)
+        return list(items_by_value.values())
 
     def resolve_command(
         self, ctx: click.Context, args: list[str]

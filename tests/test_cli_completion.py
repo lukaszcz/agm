@@ -22,6 +22,70 @@ def _make_ctx(**params: Any) -> click.Context:
     return ctx
 
 
+def test_complete_registered_commands_reads_active_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import semver
+
+    from agm.config.context import ConfigContext
+    from agm.packages.activation import (
+        ActivationIndex,
+        ActivePackage,
+        CommandRegistration,
+        write_activation_index,
+    )
+
+    home = tmp_path / "home"
+    write_activation_index(
+        ActivationIndex(
+            packages={"tools": ActivePackage(semver.Version.parse("1.0.0"))},
+            commands={
+                "tools lint": CommandRegistration("tools", "tools/lint::main"),
+                "review-tools": CommandRegistration("tools", "tools/review::main"),
+            },
+        ),
+        home=home,
+    )
+    monkeypatch.setattr(
+        completion, "current_config_context", lambda: ConfigContext(home, None, tmp_path)
+    )
+
+    from agm.cli import app
+
+    cli_command = typer.main.get_command(app)
+    shell_complete = ShellComplete(cli_command, {}, "agm", "_TYPER_COMPLETE_ARGS")
+
+    first_segments = [item.value for item in shell_complete.get_completions([], "to")]
+    assert "tools" in first_segments
+    assert "tools lint" not in first_segments
+
+    next_segments = [item.value for item in shell_complete.get_completions(["tools"], "li")]
+    assert next_segments == ["lint"]
+
+    assert shell_complete.get_completions(["tools", "lint"], "") == []
+    assert shell_complete.get_completions(["tools", "lint", "--level"], "") == []
+
+
+def test_complete_registered_commands_silently_degrades_on_bad_index(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import agm.cli_dispatch as dispatch
+    from agm.config.context import ConfigContext
+
+    monkeypatch.setattr(
+        completion,
+        "current_config_context",
+        lambda: ConfigContext(tmp_path / "home", None, tmp_path),
+    )
+    monkeypatch.setattr(
+        dispatch,
+        "load_activation_index",
+        lambda **_: (_ for _ in ()).throw(ValueError("bad index")),
+    )
+
+    assert completion.complete_registered_commands([], "") == []
+
+
 def test_complete_open_target_includes_repo_and_branches(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

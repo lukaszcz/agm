@@ -24,8 +24,10 @@ from agm.packages.manifest import CommandSpec, PackageManifest
 from agm.packages.model import PackageInfo
 
 
-def invoke(runner: CliRunner, argv: list[str]) -> Result:
-    return runner.invoke(get_command(cli.app), argv, prog_name="agm", catch_exceptions=False)
+def invoke(runner: CliRunner, argv: list[str], *, env: dict[str, str] | None = None) -> Result:
+    return runner.invoke(
+        get_command(cli.app), argv, prog_name="agm", catch_exceptions=False, env=env
+    )
 
 
 def test_unexpected_command_resolution_errors_are_not_treated_as_registered_fallbacks(
@@ -137,6 +139,41 @@ def test_builtin_commands_do_not_load_the_package_index(monkeypatch: pytest.Monk
     result = invoke(CliRunner(), ["pkg"])
 
     assert result.exit_code == 0
+
+
+def test_help_overview_appends_registered_commands(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    index = ActivationIndex(
+        packages={"tools": ActivePackage(semver.Version.parse("1.0.0"))},
+        commands={
+            "tools lint": CommandRegistration("tools", "tools/lint::main", "Lint package inputs")
+        },
+    )
+    write_activation_index(index, home=home)
+
+    result = invoke(CliRunner(), ["help"], env={"HOME": str(home)})
+
+    assert result.exit_code == 0
+    assert "Registered commands:" in result.stdout
+    assert "tools lint" in result.stdout
+    assert "Lint package inputs" in result.stdout
+
+
+def test_help_overview_degrades_when_the_command_index_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agm.cli_dispatch as dispatch
+
+    monkeypatch.setattr(
+        dispatch,
+        "load_activation_index",
+        lambda **_: (_ for _ in ()).throw(ValueError("bad index")),
+    )
+
+    result = invoke(CliRunner(), ["help"])
+
+    assert result.exit_code == 0
+    assert "Registered commands:" not in result.stdout
 
 
 def test_exec_installed_reference_preserves_all_file_options(
@@ -288,6 +325,88 @@ def test_registered_dispatch_rejects_a_stale_cached_program(
         exec_program.run_registered(
             "tools/review::other", [], package="tools", command_path="review"
         )
+
+    assert exc_info.value.code == 1
+
+
+def test_editable_registered_dispatch_uses_the_live_manifest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import agm.commands.exec_program as exec_program
+
+    root = tmp_path / "tools"
+    updated = root / "tools" / "updated.agl"
+    updated.parent.mkdir(parents=True)
+    updated.write_text("program def main() -> unit = ()\n", encoding="utf-8")
+    package = PackageInfo(
+        root,
+        PackageManifest(
+            "tools",
+            semver.Version.parse("1.0.0"),
+            commands={"live": CommandSpec("tools/updated::main")},
+        ),
+    )
+    context = ConfigContext(home=tmp_path / "home", proj_dir=None, cwd=tmp_path)
+    index = ActivationIndex(
+        packages={"tools": ActivePackage(semver.Version.parse("1.0.0"), editable=root)}
+    )
+    monkeypatch.setattr(exec_program, "current_config_context", lambda: context)
+    monkeypatch.setattr(exec_program, "select_active_packages", lambda **_: (package,))
+    monkeypatch.setattr(exec_program, "load_activation_index", lambda **_: index)
+    calls: list[tuple[ExecArgs, tuple[str, ...] | None]] = []
+    monkeypatch.setattr(
+        exec_program,
+        "run",
+        lambda args, *, entry_module_segments=None: calls.append((args, entry_module_segments)),
+    )
+
+    exec_program.run_registered("tools/main::main", [], package="tools", command_path="live")
+
+    assert calls == [
+        (
+            ExecArgs(
+                file=str(updated.resolve()),
+                program="main",
+                param_tokens=[],
+                strict_json=None,
+                no_log=False,
+                log_file=None,
+            ),
+            ("tools", "updated"),
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "commands",
+    (
+        {},
+        {"live": CommandSpec("not-valid")},
+        {"live": CommandSpec("not-valid::main")},
+        {"live": CommandSpec("other/main::main")},
+    ),
+)
+def test_editable_registered_dispatch_rejects_invalid_live_manifest_command(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    commands: dict[str, CommandSpec],
+) -> None:
+    import agm.commands.exec_program as exec_program
+
+    root = tmp_path / "tools"
+    package = PackageInfo(
+        root, PackageManifest("tools", semver.Version.parse("1.0.0"), commands=commands)
+    )
+    context = ConfigContext(home=tmp_path / "home", proj_dir=None, cwd=tmp_path)
+    index = ActivationIndex(
+        packages={"tools": ActivePackage(semver.Version.parse("1.0.0"), editable=root)}
+    )
+    monkeypatch.setattr(exec_program, "current_config_context", lambda: context)
+    monkeypatch.setattr(exec_program, "select_active_packages", lambda **_: (package,))
+    monkeypatch.setattr(exec_program, "load_activation_index", lambda **_: index)
+
+    with pytest.raises(SystemExit) as exc_info:
+        exec_program.run_registered("tools/main::main", [], package="tools", command_path="live")
 
     assert exc_info.value.code == 1
 

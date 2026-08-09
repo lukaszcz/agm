@@ -204,7 +204,7 @@ def test_command_subpackages_match_cli_command_groups() -> None:
         if path.is_dir() and not path.name.startswith("__")
     }
 
-    assert subpackages == {"config", "dep", "loop", "sync", "tmux", "workspace", "worktree"}
+    assert subpackages == {"config", "dep", "loop", "pkg", "sync", "tmux", "workspace", "worktree"}
 
 
 def test_e2e_command_coverage() -> None:

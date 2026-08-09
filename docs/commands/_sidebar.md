@@ -6,6 +6,7 @@
 - [AgL workflow DSL (REPL)](agl.md)
 - [Configuration](config.md)
 - [Dependencies](dependencies.md)
+- [Packages](pkg.md)
 - [Sandboxing](run.md)
 - [Worktrees](worktrees.md)
 - [tmux sessions](tmux.md)

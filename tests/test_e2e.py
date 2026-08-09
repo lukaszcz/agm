@@ -7181,6 +7181,115 @@ class TestTmuxLayout:
         assert "display-message -p -t @0 #{window_height}" in log
 
 
+# ── package validation ─────────────────────────────────────────────────────
+
+
+class TestPackageCheck:
+    def test_checks_explicit_and_current_package_directory(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        package = Path(__file__).parent / "agl" / "packages" / "valid"
+
+        explicit = run_agm(["pkg", "check", str(package)], env=env, cwd=tmp_path)
+        implicit = run_agm(["pkg", "check"], env=env, cwd=package)
+
+        assert explicit.returncode == 0
+        assert implicit.returncode == 0
+
+    @pytest.mark.parametrize(
+        "fixture",
+        (
+            "tree_mismatch",
+            "reserved_name",
+            "missing_program",
+            "malformed_command",
+            "reserved_command",
+            "invalid_utf8_source",
+        ),
+    )
+    def test_reports_each_package_discipline_violation(
+        self, fixture: str, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        package = Path(__file__).parent / "agl" / "packages" / fixture
+
+        result = run_agm(["pkg", "check", str(package)], env=env, cwd=tmp_path, check=False)
+
+        assert result.returncode == 1
+        assert result.stderr
+        assert "Traceback" not in result.stderr
+
+    @pytest.mark.parametrize(
+        "manifest",
+        (
+            "[package\n",
+            "[package]\nname = 'demo'\n",
+            "[package]\nname = 'bad-name'\nversion = '1.0.0'\n",
+            "[package]\nname = 'demo'\nversion = '1.0'\n",
+            "[package]\nname = 'demo'\nversion = '1.0.0'\n\n[dependencies]\nstd = 1\n",
+            (
+                "[package]\nname = 'demo'\nversion = '1.0.0'\n\n[dependencies]\n"
+                "std = { path = '../std' }\n"
+            ),
+            (
+                "[package]\nname = 'demo'\nversion = '1.0.0'\n\n[dependencies]\n"
+                "tools = { version = '1.0.0', url = 'https://example.test/tools.agmpkg' }\n"
+            ),
+            (
+                "[package]\nname = 'demo'\nversion = '1.0.0'\n\n[dependencies]\n"
+                "tools = { version = '1.0.0', hash = 'sha256:abc' }\n"
+            ),
+            (
+                "[package]\nname = 'demo'\nversion = '1.0.0'\n\n[dependencies]\n"
+                "tools = { version = '1.0.0', path = '../tools', "
+                "url = 'https://example.test/tools.agmpkg', hash = 'sha256:abc' }\n"
+            ),
+            (
+                "[package]\nname = 'demo'\nversion = '1.0.0'\n\n[commands]\n"
+                "run = 'demo/main::main'\n"
+            ),
+            (
+                "[package]\nname = 'demo'\nversion = '1.0.0'\n\n[commands]\n"
+                "run = { description = 'Run' }\n"
+            ),
+        ),
+    )
+    def test_reports_each_manifest_violation_at_the_command_boundary(
+        self, manifest: str, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        package = tmp_path / "invalid-package"
+        package.mkdir()
+        (package / "package.toml").write_text(manifest, encoding="utf-8")
+
+        result = run_agm(["pkg", "check", str(package)], env=env, cwd=tmp_path, check=False)
+
+        assert result.returncode == 1
+        assert result.stderr
+        assert "Traceback" not in result.stderr
+
+    def test_reports_missing_package_directory(self, tmp_path: Path, env: dict[str, str]) -> None:
+        result = run_agm(
+            ["pkg", "check", str(tmp_path / "missing")], env=env, cwd=tmp_path, check=False
+        )
+
+        assert result.returncode == 1
+        assert result.stderr
+        assert "Traceback" not in result.stderr
+
+    def test_group_and_command_help_are_available(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        group = run_agm(["pkg"], env=env, cwd=tmp_path)
+        help_command = run_agm(["help", "pkg"], env=env, cwd=tmp_path)
+        command_help = run_agm(["pkg", "check", "-h"], env=env, cwd=tmp_path)
+
+        assert group.returncode == 0
+        assert help_command.returncode == 0
+        assert command_help.returncode == 0
+        assert "check" in group.stdout
+        assert "check" in help_command.stdout
+        assert "DIR" in command_help.stdout
+
+
 # ── help system ────────────────────────────────────────────────────────────
 
 

@@ -18,6 +18,7 @@ COMMAND_OVERVIEW: tuple[tuple[str, str], ...] = (
     ("init", "Initialize a project"),
     ("sync", "Fetch and merge project repositories"),
     ("dep", "Manage project dependency checkouts"),
+    ("pkg", "Validate package directories"),
     ("loop", "Run the loop prompt until completion"),
     ("review", "Run the review prompt"),
     ("revise", "Run the revision prompt"),

@@ -6,7 +6,7 @@ AGM's entry point is a Typer application that defines the whole command tree, pa
 
 The command tree is defined once as a set of Typer apps — a root app plus one sub-app per command group — and several top-level commands. Group callbacks print help when invoked without a subcommand.
 
-The structure of `src/agm/commands/` mirrors this tree exactly: a command group is a directory with an `__init__.py` callback and one module per subcommand. Locating the implementation of any command is therefore a direct path lookup from its CLI name.
+The structure of `src/agm/commands/` mirrors this tree exactly: a command group is a directory with an `__init__.py` callback and one module per subcommand. For example, `agm pkg check` dispatches to `commands/pkg/check.py`. Locating the implementation of any command is therefore a direct path lookup from its CLI name.
 
 ## Argument Handling
 

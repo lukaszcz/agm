@@ -124,9 +124,19 @@ def test_complete_help_path_suggests_subcommands() -> None:
         "step",
     ]
     assert completion.complete_help_path(_make_ctx(help_command=["config"]), "e") == ["env"]
+    assert completion.complete_help_path(_make_ctx(help_command=["pkg"]), "") == ["check"]
     assert completion.complete_help_path(_make_ctx(help_command=[]), "o") == ["open"]
     assert completion.complete_help_path(_make_ctx(), "o") == ["open"]
     assert completion.complete_help_path(_make_ctx(), "s") == ["sync"]
+    assert completion.complete_help_path(_make_ctx(), "p") == ["pkg"]
+    assert completion.complete_help_path(_make_ctx(), "e") == ["exec"]
+    assert completion.complete_help_path(_make_ctx(), "r") == [
+        "refine",
+        "repl",
+        "review",
+        "revise",
+        "run",
+    ]
 
 
 def test_complete_dep_name_lists_dependencies(

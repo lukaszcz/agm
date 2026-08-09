@@ -94,6 +94,14 @@ Use `agm help` for the command list and `agm help <command>` for detailed help. 
 
 ## Commands
 
+### `agm pkg`
+
+Validate a package directory's manifest, module tree, and registered program references.
+
+```bash
+agm pkg check [DIR]
+```
+
 ### `agm open`
 
 Shortcut for `agm workspace open`. Open a tmux session for the main workspace or a branch

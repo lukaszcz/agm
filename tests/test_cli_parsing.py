@@ -87,6 +87,54 @@ class TestConfigCopy:
         assert len(calls) == 1
 
 
+class TestPackageCheck:
+    def test_pkg_check_passes_optional_directory_to_command(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli, "_run_pkg_check")
+
+        result = invoke(runner, ["pkg", "check", "package-dir"])
+
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].directory == "package-dir"
+
+    def test_pkg_check_uses_current_directory_without_argument(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli, "_run_pkg_check")
+
+        result = invoke(runner, ["pkg", "check"])
+
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].directory is None
+
+    def test_pkg_check_validates_current_and_explicit_directories(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        package = tmp_path / "demo"
+        module_root = package / "demo"
+        module_root.mkdir(parents=True)
+        (package / "package.toml").write_text('[package]\nname = "demo"\nversion = "1.0.0"\n')
+        monkeypatch.chdir(package)
+
+        implicit = invoke(runner, ["pkg", "check"])
+        explicit = invoke(runner, ["pkg", "check", str(package)])
+        missing = invoke(runner, ["pkg", "check", str(tmp_path / "missing")])
+
+        assert implicit.exit_code == 0
+        assert explicit.exit_code == 0
+        assert missing.exit_code == 1
+        assert missing.stderr
+
+    def test_pkg_group_without_subcommand_shows_help(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["pkg"])
+
+        assert result.exit_code == 0
+        assert "check" in result.output
+
+
 class TestWorktreeNew:
     def test_wt_new(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.worktree_new_command)

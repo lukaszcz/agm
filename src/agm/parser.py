@@ -447,6 +447,13 @@ _HELP_TEXTS: dict[str, str] = {
           DEP/repo           Remove the main dependency checkout.
           DEP/MAIN_CHECKOUT  Remove the main dependency checkout by directory name.
     """),
+    "pkg": textwrap.dedent("""\
+        agm pkg check [DIR]
+
+        Validate package manifests, module-tree discipline, and registered program references.
+        DIR defaults to the current directory. This command validates only; it does not create,
+        install, or modify packages.
+    """),
     "run": textwrap.dedent("""\
         agm run [--no-sandbox] [--no-patch] [--memory LIMIT] [--swap LIMIT]
         [--no-memory-limit] [--no-swap-limit] [-f|--file SETTINGS] COMMAND [ARGS...]
@@ -885,6 +892,12 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
 
         Remove a dependency worktree by DEP/NAME_OR_BRANCH, or remove the main
         checkout with DEP/repo, DEP/MAIN_CHECKOUT, or --all DEP.
+    """),
+    ("pkg", "check"): textwrap.dedent("""\
+        agm pkg check [DIR]
+
+        Validate the package manifest, module-tree discipline, and registered program references
+        in DIR. DIR defaults to the current directory.
     """),
     ("tmux", "open"): textwrap.dedent("""\
         agm tmux open [-d|--detach] [-n|--num-panes PANES] [SESSION]

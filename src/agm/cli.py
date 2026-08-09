@@ -51,6 +51,7 @@ from agm.cli_support.args import (
     LoopArgs,
     LoopSelectArgs,
     OpenArgs,
+    PkgCheckArgs,
     RefineArgs,
     ReplArgs,
     ReviewArgs,
@@ -579,6 +580,7 @@ worktree_app = typer.Typer(context_settings=_BASE_CONTEXT_SETTINGS, invoke_witho
 workspace_app = typer.Typer(context_settings=_BASE_CONTEXT_SETTINGS, invoke_without_command=True)
 sync_app = typer.Typer(context_settings=_BASE_CONTEXT_SETTINGS, invoke_without_command=True)
 dep_app = typer.Typer(context_settings=_BASE_CONTEXT_SETTINGS, invoke_without_command=True)
+pkg_app = typer.Typer(context_settings=_BASE_CONTEXT_SETTINGS, invoke_without_command=True)
 tmux_app = typer.Typer(context_settings=_BASE_CONTEXT_SETTINGS, invoke_without_command=True)
 
 
@@ -1491,6 +1493,42 @@ def _run_dep_remove(*, command_path: list[str], target: str | None, all: bool) -
     )
 
 
+def _run_pkg_check(args: PkgCheckArgs) -> None:
+    """Load package validation only when its command is invoked."""
+
+    import agm.commands.pkg.check as pkg_check_command
+
+    pkg_check_command.run(args)
+
+
+@pkg_app.callback(invoke_without_command=True)
+def pkg_callback(
+    ctx: typer.Context,
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    del _dry_run
+    if ctx.invoked_subcommand is None:
+        print_help_for_command_path(["pkg"])
+        raise typer.Exit()
+
+
+@pkg_app.command(name="check")
+def pkg_check(
+    directory: str | None = typer.Argument(
+        None,
+        metavar="DIR",
+        autocompletion=completion.complete_dir_argument,
+    ),
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    del _dry_run
+    _run_pkg_check(PkgCheckArgs(directory=directory))
+
+
 @sync_app.callback(invoke_without_command=True)
 def sync_callback(
     ctx: typer.Context,
@@ -2045,6 +2083,7 @@ app.add_typer(worktree_app, name="wt")
 app.add_typer(worktree_app, name="worktree")
 app.add_typer(sync_app, name="sync")
 app.add_typer(dep_app, name="dep")
+app.add_typer(pkg_app, name="pkg")
 app.add_typer(tmux_app, name="tmux")
 
 

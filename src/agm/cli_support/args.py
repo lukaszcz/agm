@@ -23,6 +23,11 @@ class ConfigEnvArgs:
 
 
 @dataclass(slots=True)
+class PkgCheckArgs:
+    directory: str | None
+
+
+@dataclass(slots=True)
 class ConfigUpdateArgs:
     pass
 

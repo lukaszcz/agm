@@ -16,7 +16,7 @@ AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-c
 
 ## Architecture and Design Decisions
 
-- **The command tree is the directory tree.** `src/agm/commands/` mirrors the CLI command hierarchy one-to-one, including nested groups (`config/`, `dep/`, `loop/`, `sync/`, `tmux/`, `workspace/`, `worktree/`). Finding a command's code is a path lookup.
+- **The command tree is the directory tree.** `src/agm/commands/` mirrors the CLI command hierarchy one-to-one, including nested groups (`config/`, `dep/`, `loop/`, `pkg/`, `sync/`, `tmux/`, `workspace/`, `worktree/`). Finding a command's code is a path lookup.
 - **Commands orchestrate; primitives do.** Command modules wire config, project layout, git, and agents together. Reusable behavior lives in `util/`, `core/`, `project/`, `vcs/`, `config/`, and `agent/`, never copied into individual commands.
 - **Configuration is layered TOML.** Settings merge across install, home, project, and workspace scopes; per-command sections override base sections; AgL source engine-setting writes and CLI flags override the file layers for the relevant commands.
 - **The filesystem is the project model.** A project is a directory layout (embedded or split) plus git worktrees and dependency checkouts. AGM detects state from disk rather than maintaining a separate database.
@@ -38,7 +38,7 @@ AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-c
 ## Code Entry Points
 
 - `src/agm/cli.py` defines the Typer app and every command group; `src/agm/parser.py` holds help text and command-overview resolution; `src/agm/completion.py` provides shell completions. `src/agm/command_catalog.py` and `src/agm/raw_tail_catalog.py` are pure data leaves for CLI help and raw-tail parsing.
-- `src/agm/commands/` contains the command implementations, one subtree per command group.
+- `src/agm/commands/` contains the command implementations, one subtree per command group; `commands/pkg/` exposes package validation without coupling the package domain to CLI wiring.
 - `src/agm/cli_support/` holds the typed argument containers that bridge the CLI layer and command implementations, plus the host-side AgL constant-expression parser used for engine-setting literals (imported lazily, so non-AgL commands stay free of AgL imports).
 - `src/agm/core/` contains the cross-cutting process, environment, filesystem, and TOML primitives plus the dry-run facility; `src/agm/util/` holds pure, `agm`-import-free generic helpers (graph algorithms, text normalization).
 - `src/agm/config/` implements loading and resolving general and sandbox configuration.

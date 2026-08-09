@@ -3,7 +3,8 @@
 The package domain defines the portable package boundary independently of installation and
 CLI dispatch. A package directory has a `package.toml` manifest and a module tree named after
 the package; its `PackageInfo` is the source-agnostic input module-root assembly mounts for
-development directories now and installed packages later. `agm exec` discovers the package
+development directories now and installed packages later. `agm pkg check` exposes the current
+validation boundary without modifying or installing a package. `agm exec` discovers the package
 containing its file (or its current directory for inline source), while `agm repl` discovers
 one at its current directory; each mounts its explicitly path-sourced dependency closure.
 
@@ -33,5 +34,6 @@ package names and command registrations cannot claim AGM's command namespace.
 - `src/agm/packages/development.py` — containing development-package and path-dependency discovery.
 - `src/agm/agl/modules/roots.py` and `loader.py` — root mounting and ownership-based import visibility.
 - `src/agm/packages/discipline.py` — directory and command/program validation.
+- `src/agm/commands/pkg/check.py` — CLI-facing manifest and discipline validation.
 - `tests/test_packages_manifest.py`, `tests/test_packages_discipline.py`, and
   `tests/agl/packages/` — focused validation tests and reusable package fixtures.

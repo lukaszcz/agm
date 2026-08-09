@@ -16,6 +16,7 @@ from agm.packages.activation import (
 from agm.packages.archive import (
     ArchiveError,
     ArchiveMetadata,
+    extract_archive,
     read_archive_manifest,
     read_archive_metadata,
     verify_archive,
@@ -41,6 +42,7 @@ __all__ = [
     "DisciplineError",
     "PackageActivationError",
     "discover_development_packages",
+    "extract_archive",
     "distribution_manifest",
     "ManifestError",
     "PackageInfo",

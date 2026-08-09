@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from functools import partial
 from pathlib import Path
+from tempfile import mkdtemp
 
 from agm.core import dry_run, fs
 from agm.packages.activation import (
@@ -16,11 +16,22 @@ from agm.packages.activation import (
     validate_activation_index,
     write_activation_index,
 )
+from agm.packages.archive import (
+    ArchiveError,
+    extract_archive,
+    verify_archive_discipline,
+)
 from agm.packages.discipline import DisciplineError, validate_package
 from agm.packages.fetch import FetchError, fetch_archive
 from agm.packages.manifest import DependencySpec, ManifestError, PackageManifest, load_manifest
 from agm.packages.model import PackageInfo
-from agm.packages.record import RecordEntry, RecordError, verify_record, write_record
+from agm.packages.record import (
+    RecordEntry,
+    RecordError,
+    content_hash,
+    verify_record,
+    write_record,
+)
 from agm.packages.store import canonical_package_store_path, store_root
 
 
@@ -49,8 +60,8 @@ def install_directory(
     """Install a package directory or activate it as an editable package.
 
     Dependencies use MVS: an installed satisfying version is selected first;
-    otherwise a declared local path is installed recursively.  Archive sources
-    are fetched and verified before the deliberately deferred archive handoff.
+    otherwise a declared local path is installed recursively or a URL archive
+    is fetched, hash-verified, and installed.
     """
 
     try:
@@ -60,6 +71,34 @@ def install_directory(
     state = _InstallState(home=home, env=env, index=index)
     try:
         package = _install_directory(source, state=state, editable=editable, shadow=shadow)
+        _commit_activation(
+            state.index,
+            home=home,
+            env=env,
+            transient_packages=state.transient_packages if dry_run.enabled() else None,
+        )
+    except PackageInstallError:
+        _rollback_created_trees(state)
+        raise
+    return package
+
+
+def install_archive(
+    archive: Path,
+    *,
+    home: Path,
+    env: Mapping[str, str] | None = None,
+    shadow: bool = False,
+) -> PackageInfo:
+    """Verify, atomically extract, and activate a portable package archive."""
+
+    try:
+        index = load_activation_index(home=home, env=env)
+    except PackageActivationError as exc:
+        raise PackageInstallError(f"cannot load package activation: {exc}") from exc
+    state = _InstallState(home=home, env=env, index=index)
+    try:
+        package = _install_archive(archive, state=state, shadow=shadow)
         _commit_activation(
             state.index,
             home=home,
@@ -197,6 +236,68 @@ def _install_directory(
     return installed
 
 
+def _install_archive(archive: Path, *, state: _InstallState, shadow: bool) -> PackageInfo:
+    """Extract an archive from one verified open ZIP stream and activate it."""
+
+    archive_path = archive.resolve()
+    if dry_run.enabled():
+        try:
+            metadata = verify_archive_discipline(archive_path)
+            destination = canonical_package_store_path(
+                metadata.manifest.name, metadata.manifest.version, home=state.home, env=state.env
+            )
+            if destination.exists():
+                _verify_existing_install(destination, metadata.manifest, metadata.package_hash)
+        except (ArchiveError, ValueError) as exc:
+            raise PackageInstallError(f"cannot install package archive {archive}: {exc}") from exc
+        dry_run.print_operation("install-package-archive", str(archive))
+        installed = PackageInfo(destination, metadata.manifest)
+    else:
+        staging: Path | None = None
+        try:
+            staging_parent = store_root(home=state.home, env=state.env).parent
+            fs.mkdir(staging_parent, parents=True, exist_ok=True)
+            staging = Path(mkdtemp(prefix=".agm-package-", dir=staging_parent))
+            # extract_archive verifies and extracts through one ZipFile instance,
+            # so a pathname swap cannot separate accepted data from extracted data.
+            metadata = extract_archive(archive_path, staging)
+            destination = canonical_package_store_path(
+                metadata.manifest.name, metadata.manifest.version, home=state.home, env=state.env
+            )
+            package = PackageInfo(staging, metadata.manifest)
+            validate_package(package)
+            verify_record(staging)
+            if destination.exists():
+                _verify_existing_install(destination, metadata.manifest, metadata.package_hash)
+            else:
+                fs.mkdir(destination.parent, parents=True, exist_ok=True)
+                staging.replace(destination)
+                state.created.append(destination)
+                staging = None
+            installed = PackageInfo(destination, package.manifest)
+        except PackageInstallError:
+            raise
+        except (ArchiveError, DisciplineError, RecordError, OSError, ValueError) as exc:
+            raise PackageInstallError(f"cannot install package archive {archive}: {exc}") from exc
+        finally:
+            if staging is not None and staging.exists():
+                fs.rmtree(staging)
+
+    try:
+        state.installing.add(archive_path)
+        try:
+            _resolve_dependencies(installed, state)
+        finally:
+            state.installing.remove(archive_path)
+        packages = dict(state.index.packages)
+        packages[installed.manifest.name] = ActivePackage(installed.manifest.version, shadow=shadow)
+        state.index = ActivationIndex(packages)
+        state.transient_packages[installed.manifest.name] = installed
+        return installed
+    except (DisciplineError, PackageInstallError, ValueError) as exc:
+        raise PackageInstallError(f"cannot install package archive {archive}: {exc}") from exc
+
+
 def _resolve_dependencies(package: PackageInfo, state: _InstallState) -> None:
     for name, requirement in package.manifest.dependencies.items():
         selected = _installed_satisfying(name, requirement, state)
@@ -205,7 +306,7 @@ def _resolve_dependencies(package: PackageInfo, state: _InstallState) -> None:
                 package.root / requirement.path, state=state, editable=False, shadow=False
             )
         if selected is None and requirement.url is not None and requirement.hash is not None:
-            _fetch_deferred_archive(
+            selected = _fetch_archive_install(
                 name,
                 str(requirement.version),
                 url=requirement.url,
@@ -257,51 +358,58 @@ def _installed_satisfying(
     return selected
 
 
-def _fetch_deferred_archive(
+def _fetch_archive_install(
     name: str, version: str, *, url: str, expected_hash: str, state: _InstallState
-) -> None:
-    """Fetch a verified archive and fail at M6's not-yet-implemented handoff."""
+) -> PackageInfo:
+    """Fetch a content-addressed archive and install it in the current transaction."""
 
     requirement = f"{name} >= {version}"
     if dry_run.enabled():
         dry_run.print_operation("fetch-package", url)
-        raise _deferred_archive_install_error(requirement)
+        raise PackageInstallError(
+            f"cannot install URL package dependency during dry-run: {requirement}"
+        )
     scratch = store_root(home=state.home, env=state.env)
     try:
         fs.mkdir(scratch, parents=True, exist_ok=True)
     except OSError as exc:
-        error = FetchError(f"fetch failed for {name} >= {version}: {exc}")
+        error = FetchError(f"fetch failed for {requirement}: {exc}")
         raise PackageInstallError(str(error)) from error
+    selected: PackageInfo | None = None
+
+    def handoff(archive: Path) -> None:
+        nonlocal selected
+        selected = _install_archive(archive, state=state, shadow=False)
+
     try:
         fetch_archive(
             requirement=requirement,
             url=url,
             expected_hash=expected_hash,
-            handoff=partial(_archive_install_deferred, requirement=requirement),
+            handoff=handoff,
             scratch_dir=scratch if scratch.is_dir() else None,
         )
-    except FetchError as exc:
+    except (FetchError, PackageInstallError) as exc:
         raise PackageInstallError(str(exc)) from exc
+    if selected is None:
+        raise PackageInstallError(f"fetch failed for {requirement}: archive was not installed")
+    return selected
 
 
-def _archive_install_deferred(_: Path, *, requirement: str) -> None:
-    raise _deferred_archive_install_error(requirement)
-
-
-def _deferred_archive_install_error(requirement: str) -> PackageInstallError:
-    return PackageInstallError(
-        f"archive package installation is not available yet for {requirement}"
-    )
-
-
-def _verify_existing_install(root: Path, manifest: PackageManifest) -> None:
+def _verify_existing_install(
+    root: Path, manifest: PackageManifest, package_hash: str | None = None
+) -> None:
     try:
         installed = load_manifest(root / "package.toml")
         if installed != manifest:
             raise PackageInstallError(
                 f"installed package at {root} disagrees with the source manifest"
             )
-        verify_record(root)
+        entries = verify_record(root)
+        if package_hash is not None and content_hash(entries) != package_hash:
+            raise PackageInstallError(
+                f"installed package at {root} conflicts with the archive content hash"
+            )
     except (ManifestError, RecordError) as exc:
         raise PackageInstallError(
             f"package integrity check failed for {manifest.name!r}: {exc}"

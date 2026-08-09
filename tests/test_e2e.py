@@ -12,6 +12,8 @@ this repository.
 
 from __future__ import annotations
 
+import hashlib
+import http.server
 import json
 import os
 import re
@@ -20,8 +22,11 @@ import shutil
 import signal
 import stat
 import subprocess
+import threading
 import time
 import tomllib
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TypedDict, cast
 
@@ -7184,6 +7189,24 @@ class TestTmuxLayout:
 # ── package validation ─────────────────────────────────────────────────────
 
 
+@contextmanager
+def _archive_server(directory: Path) -> Iterator[str]:
+    """Serve *directory* on an ephemeral loopback port for package-fetch e2e tests."""
+
+    def handler(*args: object, **kwargs: object) -> None:
+        http.server.SimpleHTTPRequestHandler(*args, directory=str(directory), **kwargs)
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+
 def _write_store_test_package(root: Path, name: str, version: str) -> Path:
     root.mkdir()
     (root / name).mkdir()
@@ -7324,6 +7347,107 @@ class TestPackageInstall:
         assert uninstall.returncode == 0
         assert missing_import.returncode == 1
         assert unknown.returncode == 1
+
+    def test_create_archive_install_and_url_dependency_install_are_hermetic(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["AGM_HOME"] = str(tmp_path / "agm-home")
+        bravo = _write_store_test_package(tmp_path / "bravo-source", "bravo", "1.0.0")
+        archive = tmp_path / "bravo.agmpkg"
+        created = run_agm(["pkg", "create", str(bravo), "-o", str(archive)], env=env, cwd=tmp_path)
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        alpha = _write_store_test_package(tmp_path / "alpha-source", "alpha", "1.0.0")
+        (alpha / "package.toml").write_text(
+            '[package]\nname = "alpha"\nversion = "1.0.0"\n\n[dependencies]\n'
+            'bravo = { version = "1", url = "URL", hash = "sha256=' + digest + '" }\n',
+            encoding="utf-8",
+        )
+        program = tmp_path / "program.agl"
+        program.write_text("import alpha/main\nprogram def main() -> unit = ()\n", encoding="utf-8")
+
+        direct = run_agm(["pkg", "install", str(archive)], env=env, cwd=tmp_path)
+        run_agm(["pkg", "uninstall", "bravo"], env=env, cwd=tmp_path)
+        with _archive_server(tmp_path) as server:
+            manifest = (alpha / "package.toml").read_text(encoding="utf-8")
+            (alpha / "package.toml").write_text(
+                manifest.replace("URL", f"{server}/bravo.agmpkg"), encoding="utf-8"
+            )
+            installed = run_agm(["pkg", "install", str(alpha)], env=env, cwd=tmp_path)
+
+        executed = run_agm(["exec", str(program)], env=env, cwd=tmp_path)
+        assert created.returncode == 0
+        assert direct.returncode == 0
+        assert installed.returncode == 0
+        assert executed.returncode == 0
+
+    def test_url_dependency_refuses_a_wrong_declared_sha256(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["AGM_HOME"] = str(tmp_path / "agm-home")
+        bravo = _write_store_test_package(tmp_path / "bravo-source", "bravo", "1.0.0")
+        archive = tmp_path / "bravo.agmpkg"
+        from agm.packages.archive import write_archive
+
+        write_archive(bravo, archive)
+        alpha = _write_store_test_package(tmp_path / "alpha-source", "alpha", "1.0.0")
+        with _archive_server(tmp_path) as server:
+            (alpha / "package.toml").write_text(
+                '[package]\nname = "alpha"\nversion = "1.0.0"\n\n[dependencies]\n'
+                f'bravo = {{ version = "1", url = "{server}/bravo.agmpkg", hash = "sha256='
+                + "0" * 64
+                + '" }\n',
+                encoding="utf-8",
+            )
+            refused = run_agm(["pkg", "install", str(alpha)], env=env, cwd=tmp_path, check=False)
+
+        assert refused.returncode == 1
+        assert not (tmp_path / "agm-home" / "packages" / "alpha").exists()
+
+    def test_create_and_archive_install_dry_runs_do_not_write_and_report_plans(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["AGM_HOME"] = str(tmp_path / "agm-home")
+        source = _write_store_test_package(tmp_path / "source", "alpha", "1.0.0")
+        archive = tmp_path / "alpha.agmpkg"
+
+        created = run_agm(
+            ["--dry-run", "pkg", "create", str(source), "-o", str(archive)],
+            env=env,
+            cwd=tmp_path,
+        )
+        write_archive = run_agm(
+            ["pkg", "create", str(source), "-o", str(archive)], env=env, cwd=tmp_path
+        )
+        installed = run_agm(["--dry-run", "pkg", "install", str(archive)], env=env, cwd=tmp_path)
+
+        assert created.returncode == 0
+        assert "dry-run: agm create-package-archive" in created.stdout
+        assert write_archive.returncode == 0
+        assert installed.returncode == 0
+        assert "dry-run: agm install-package-archive" in installed.stdout
+        assert not (tmp_path / "agm-home").exists()
+
+    def test_check_accepts_a_path_dependency_but_create_requires_a_portable_source(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["AGM_HOME"] = str(tmp_path / "agm-home")
+        bravo = _write_store_test_package(tmp_path / "bravo", "bravo", "1.0.0")
+        alpha = _write_store_test_package(tmp_path / "alpha", "alpha", "1.0.0")
+        (alpha / "package.toml").write_text(
+            '[package]\nname = "alpha"\nversion = "1.0.0"\n\n[dependencies]\n'
+            'bravo = { version = "1", path = "../bravo" }\n',
+            encoding="utf-8",
+        )
+
+        checked = run_agm(["pkg", "check", str(alpha)], env=env, cwd=tmp_path)
+        rejected = run_agm(["pkg", "create", str(alpha)], env=env, cwd=tmp_path, check=False)
+        installed = run_agm(["pkg", "install", str(bravo)], env=env, cwd=tmp_path)
+        created = run_agm(["pkg", "create", str(alpha)], env=env, cwd=tmp_path)
+
+        assert checked.returncode == 0
+        assert rejected.returncode == 1
+        assert installed.returncode == 0
+        assert created.returncode == 0
 
     def test_editable_package_reflects_live_edits_and_dry_run_does_not_install(
         self, tmp_path: Path, env: dict[str, str]

@@ -7,13 +7,21 @@ from pathlib import Path
 import pytest
 import semver
 
+import agm.commands.pkg.create as create_command
 import agm.commands.pkg.info as info_command
 import agm.commands.pkg.install as install_command
 import agm.commands.pkg.list as list_command
 import agm.commands.pkg.uninstall as uninstall_command
-from agm.cli_support.args import PkgInfoArgs, PkgInstallArgs, PkgListArgs, PkgUninstallArgs
+from agm.cli_support.args import (
+    PkgCreateArgs,
+    PkgInfoArgs,
+    PkgInstallArgs,
+    PkgListArgs,
+    PkgUninstallArgs,
+)
 from agm.config.context import ConfigContext
 from agm.packages.activation import ActivationIndex, ActivePackage, PackageActivationError
+from agm.packages.archive import ArchiveError
 from agm.packages.install import PackageInstallError
 from agm.packages.manifest import CommandSpec, DependencySpec, PackageManifest
 from agm.packages.model import PackageInfo
@@ -29,6 +37,65 @@ def _package(tmp_path: Path, name: str = "alpha") -> PackageInfo:
     return PackageInfo(root, PackageManifest(name=name, version=semver.Version.parse("1.0.0")))
 
 
+def test_create_command_validates_and_writes_the_default_archive_beside_its_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    package = _package(tmp_path)
+    monkeypatch.setattr(create_command, "load_manifest", lambda _: package.manifest)
+    monkeypatch.setattr(create_command, "validate_package", lambda _: None)
+    monkeypatch.setattr(create_command, "validate_dependencies", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(create_command, "current_config_context", lambda: _context(tmp_path))
+    written: list[Path] = []
+    monkeypatch.setattr(
+        create_command,
+        "write_archive",
+        lambda _root, destination: written.append(destination),
+    )
+
+    create_command.run(PkgCreateArgs(directory=str(package.root), output=None))
+
+    assert written == [package.root.parent / "alpha-1.0.0.agmpkg"]
+    assert "alpha-1.0.0.agmpkg" in capsys.readouterr().out
+
+
+def test_create_command_dry_run_reports_its_plan_without_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    package = _package(tmp_path)
+    monkeypatch.setattr(create_command, "load_manifest", lambda _: package.manifest)
+    monkeypatch.setattr(create_command, "validate_package", lambda _: None)
+    monkeypatch.setattr(create_command, "validate_dependencies", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(create_command, "current_config_context", lambda: _context(tmp_path))
+    monkeypatch.setattr(create_command.dry_run, "enabled", lambda: True)
+    monkeypatch.setattr(
+        create_command,
+        "write_archive",
+        lambda *_: (_ for _ in ()).throw(AssertionError("dry-run must not write an archive")),
+    )
+
+    create_command.run(PkgCreateArgs(directory=str(package.root), output="out.agmpkg"))
+
+    assert "dry-run: agm create-package-archive" in capsys.readouterr().out
+
+
+def test_create_command_reports_validation_or_archive_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = _package(tmp_path)
+    monkeypatch.setattr(create_command, "load_manifest", lambda _: package.manifest)
+    monkeypatch.setattr(create_command, "validate_package", lambda _: None)
+    monkeypatch.setattr(create_command, "validate_dependencies", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(create_command, "current_config_context", lambda: _context(tmp_path))
+    monkeypatch.setattr(
+        create_command,
+        "write_archive",
+        lambda *_: (_ for _ in ()).throw(ArchiveError("broken")),
+    )
+
+    with pytest.raises(SystemExit):
+        create_command.run(PkgCreateArgs(directory=str(package.root), output="out.agmpkg"))
+
+
 def test_install_command_delegates_and_renders_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -39,6 +106,18 @@ def test_install_command_delegates_and_renders_result(
     install_command.run(PkgInstallArgs("source", editable=False, shadow=True))
 
     assert "installed alpha 1.0.0" in capsys.readouterr().out
+
+
+def test_install_command_routes_an_archive_to_the_archive_installer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive = tmp_path / "package.agmpkg"
+    archive.write_bytes(b"archive")
+    package = _package(tmp_path)
+    monkeypatch.setattr(install_command, "current_config_context", lambda: _context(tmp_path))
+    monkeypatch.setattr(install_command, "install_archive", lambda *args, **kwargs: package)
+
+    install_command.run(PkgInstallArgs(str(archive), editable=False, shadow=True))
 
 
 def test_install_command_reports_domain_error(

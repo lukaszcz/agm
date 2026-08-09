@@ -91,37 +91,44 @@ class TestPackageLifecycle:
     def test_pkg_runner_helpers_lazy_load_command_adapters(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        import agm.commands.pkg.create as create_command
         import agm.commands.pkg.info as info_command
         import agm.commands.pkg.install as install_command
         import agm.commands.pkg.list as list_command
         import agm.commands.pkg.uninstall as uninstall_command
 
         calls: list[object] = []
+        monkeypatch.setattr(create_command, "run", lambda args: calls.append(args))
         monkeypatch.setattr(install_command, "run", lambda args: calls.append(args))
         monkeypatch.setattr(uninstall_command, "run", lambda args: calls.append(args))
         monkeypatch.setattr(list_command, "run", lambda args: calls.append(args))
         monkeypatch.setattr(info_command, "run", lambda args: calls.append(args))
 
+        cli._run_pkg_create(cli.PkgCreateArgs(directory="package", output=None))
         cli._run_pkg_install(cli.PkgInstallArgs("source", editable=False, shadow=False))
         cli._run_pkg_uninstall(cli.PkgUninstallArgs("alpha"))
         cli._run_pkg_list(cli.PkgListArgs())
         cli._run_pkg_info(cli.PkgInfoArgs("alpha"))
 
-        assert len(calls) == 4
+        assert len(calls) == 5
 
     def test_pkg_lifecycle_options_map_to_typed_arguments(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        create_calls = make_recorder(monkeypatch, cli, "_run_pkg_create")
         install_calls = make_recorder(monkeypatch, cli, "_run_pkg_install")
         uninstall_calls = make_recorder(monkeypatch, cli, "_run_pkg_uninstall")
         list_calls = make_recorder(monkeypatch, cli, "_run_pkg_list")
         info_calls = make_recorder(monkeypatch, cli, "_run_pkg_info")
 
+        assert invoke(runner, ["pkg", "create", "package", "-o", "out.agmpkg"]).exit_code == 0
         assert invoke(runner, ["pkg", "install", "--editable", "--shadow", "source"]).exit_code == 0
         assert invoke(runner, ["pkg", "uninstall", "alpha"]).exit_code == 0
         assert invoke(runner, ["pkg", "list"]).exit_code == 0
         assert invoke(runner, ["pkg", "info", "alpha"]).exit_code == 0
 
+        assert create_calls[0].directory == "package"
+        assert create_calls[0].output == "out.agmpkg"
         assert install_calls[0].source == "source"
         assert install_calls[0].editable is True
         assert install_calls[0].shadow is True
@@ -170,6 +177,48 @@ class TestPackageCheck:
         assert explicit.exit_code == 0
         assert missing.exit_code == 1
         assert missing.stderr
+
+    def test_pkg_create_refuses_a_package_that_fails_check(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        package = tmp_path / "alpha"
+        (package / "alpha").mkdir(parents=True)
+        (package / "alpha" / "main.agl").write_text(
+            "program def main() -> unit = ()\n", encoding="utf-8"
+        )
+        (package / "package.toml").write_text(
+            '[package]\nname = "alpha"\nversion = "1.0.0"\n'
+            '\n[commands]\nlaunch = { program = "alpha/main::missing" }\n',
+            encoding="utf-8",
+        )
+        archive = tmp_path / "alpha.agmpkg"
+
+        checked = invoke(runner, ["pkg", "check", str(package)])
+        created = invoke(runner, ["pkg", "create", str(package), "-o", str(archive)])
+
+        assert checked.exit_code == 1
+        assert created.exit_code == 1
+        assert not archive.exists()
+
+    def test_pkg_create_refuses_a_dependency_without_a_version(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        package = tmp_path / "alpha"
+        (package / "alpha").mkdir(parents=True)
+        (package / "alpha" / "main.agl").write_text(
+            "program def main() -> unit = ()\n", encoding="utf-8"
+        )
+        (package / "package.toml").write_text(
+            '[package]\nname = "alpha"\nversion = "1.0.0"\n'
+            '\n[dependencies]\nbravo = { path = "../bravo" }\n',
+            encoding="utf-8",
+        )
+        archive = tmp_path / "alpha.agmpkg"
+
+        result = invoke(runner, ["pkg", "create", str(package), "-o", str(archive)])
+
+        assert result.exit_code == 1
+        assert not archive.exists()
 
     def test_pkg_group_without_subcommand_shows_help(self, runner: CliRunner) -> None:
         result = invoke(runner, ["pkg"])

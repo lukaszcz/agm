@@ -7,7 +7,7 @@ from pathlib import Path
 
 from agm.cli_support.args import PkgInstallArgs
 from agm.config.context import current_config_context
-from agm.packages.install import PackageInstallError, install_directory
+from agm.packages.install import PackageInstallError, install_archive, install_directory
 
 
 def run(args: PkgInstallArgs) -> None:
@@ -15,12 +15,16 @@ def run(args: PkgInstallArgs) -> None:
 
     context = current_config_context()
     try:
-        package = install_directory(
-            Path(args.source),
-            home=context.home,
-            editable=args.editable,
-            shadow=args.shadow,
-        )
+        source = Path(args.source)
+        if source.is_file() and not args.editable:
+            package = install_archive(source, home=context.home, shadow=args.shadow)
+        else:
+            package = install_directory(
+                source,
+                home=context.home,
+                editable=args.editable,
+                shadow=args.shadow,
+            )
     except PackageInstallError as exc:
         print(f"pkg install: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc

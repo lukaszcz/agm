@@ -23,7 +23,13 @@ from agm.packages.manifest import (
     load_manifest,
     load_manifest_text,
 )
-from agm.packages.record import RecordEntry, RecordError, parse_record, serialize_record
+from agm.packages.record import (
+    RecordEntry,
+    RecordError,
+    content_hash,
+    parse_record,
+    serialize_record,
+)
 
 _MANIFEST_NAME = "package.toml"
 _RECORD_NAME = "RECORD"
@@ -311,29 +317,82 @@ def read_archive_metadata(archive_path: Path) -> ArchiveMetadata:
 def verify_archive(archive_path: Path) -> ArchiveMetadata:
     """Stream-verify layout, normalized manifest, and every ``RECORD`` digest."""
 
-    def verify(archive: zipfile.ZipFile) -> ArchiveMetadata:
-        prefix, manifest_name, record_name, infos = _archive_layout(archive.infolist())
-        manifest_bytes = _read_entry(archive, infos[manifest_name])
-        manifest = _manifest_from_bytes(manifest_bytes)
-        _validate_prefix(prefix, manifest)
-        entries = _record_from_bytes(_read_entry(archive, infos[record_name]))
-        expected_entries = tuple(
-            RecordEntry(
-                name.removeprefix(prefix),
-                hashlib.sha256(manifest_bytes).hexdigest()
-                if name == manifest_name
-                else _entry_digest(archive, info),
-            )
-            for name, info in infos.items()
-            if name != record_name
-        )
-        if manifest_bytes != _normalized_manifest(manifest):
-            raise ArchiveError("archive package manifest is not normalized")
-        if entries != expected_entries:
-            raise ArchiveError("archive contents do not match RECORD")
-        return ArchiveMetadata(manifest, _package_hash(entries))
+    return _read_archive(archive_path, _verify_open_archive)
 
-    return _read_archive(archive_path, verify)
+
+def verify_archive_discipline(archive_path: Path) -> ArchiveMetadata:
+    """Verify an archive and validate its package discipline without extracting it."""
+
+    def verify_and_validate(archive: zipfile.ZipFile) -> ArchiveMetadata:
+        metadata = _verify_open_archive(archive)
+        prefix, _, _, infos = _archive_layout(archive.infolist())
+        # Import lazily so archive creation and verification remain independent
+        # of the AgL parser unless a caller explicitly asks for discipline.
+        from agm.packages.discipline import DisciplineError, validate_archive_package
+
+        try:
+            validate_archive_package(
+                metadata.manifest,
+                archive_paths=(name.removeprefix(prefix) for name in infos),
+                read_module=lambda path: _read_entry(archive, infos[prefix + path]).decode(),
+            )
+        except DisciplineError as exc:
+            raise ArchiveError(f"archive package violates discipline: {exc}") from exc
+        return metadata
+
+    return _read_archive(archive_path, verify_and_validate)
+
+
+def extract_archive(archive_path: Path, destination: Path) -> ArchiveMetadata:
+    """Verify then safely extract an archive into an empty private *destination*.
+
+    The caller owns publication of the extracted directory.  Archive paths are
+    validated before any write, and the extracted tree retains the archive's
+    canonical ``RECORD`` for the installed-tree integrity contract.
+    """
+
+    def extract(archive: zipfile.ZipFile) -> ArchiveMetadata:
+        metadata = _verify_open_archive(archive)
+        prefix, _, record_name, infos = _archive_layout(archive.infolist())
+        for name, info in infos.items():
+            if name == record_name:
+                continue
+            relative = name.removeprefix(prefix)
+            target = destination / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(info) as source, target.open("xb") as output:
+                while chunk := source.read(_HASH_CHUNK_SIZE):
+                    output.write(chunk)
+        record_target = destination / _RECORD_NAME
+        record_target.write_bytes(_read_entry(archive, infos[record_name]))
+        return metadata
+
+    return _read_archive(archive_path, extract)
+
+
+def _verify_open_archive(archive: zipfile.ZipFile) -> ArchiveMetadata:
+    """Verify an opened archive and return its identity metadata."""
+
+    prefix, manifest_name, record_name, infos = _archive_layout(archive.infolist())
+    manifest_bytes = _read_entry(archive, infos[manifest_name])
+    manifest = _manifest_from_bytes(manifest_bytes)
+    _validate_prefix(prefix, manifest)
+    entries = _record_from_bytes(_read_entry(archive, infos[record_name]))
+    expected_entries = tuple(
+        RecordEntry(
+            name.removeprefix(prefix),
+            hashlib.sha256(manifest_bytes).hexdigest()
+            if name == manifest_name
+            else _entry_digest(archive, info),
+        )
+        for name, info in infos.items()
+        if name != record_name
+    )
+    if manifest_bytes != _normalized_manifest(manifest):
+        raise ArchiveError("archive package manifest is not normalized")
+    if entries != expected_entries:
+        raise ArchiveError("archive contents do not match RECORD")
+    return ArchiveMetadata(manifest, _package_hash(entries))
 
 
 def _read_archive(archive_path: Path, operation: Callable[[zipfile.ZipFile], T]) -> T:
@@ -597,7 +656,7 @@ def _metadata(manifest: PackageManifest, contents: dict[str, bytes]) -> ArchiveM
 
 
 def _package_hash(entries: tuple[RecordEntry, ...]) -> str:
-    return hashlib.sha256(serialize_record(entries).encode()).hexdigest()
+    return content_hash(entries)
 
 
 def _entry_prefix(manifest: PackageManifest) -> str:

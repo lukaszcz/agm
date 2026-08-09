@@ -1,19 +1,24 @@
-"""Filesystem and command discipline for package directories."""
+"""Filesystem and command discipline for package directories and archives."""
 
 from __future__ import annotations
 
-from pathlib import Path
+from collections.abc import Callable, Iterable, Mapping
+from pathlib import Path, PurePosixPath
+from typing import TypeVar
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.parser import AglSyntaxError, parse_program
 from agm.agl.syntax.nodes import static_function_items
 from agm.command_catalog import COMMAND_NAMES
 from agm.core import fs
+from agm.packages.manifest import PackageManifest
 from agm.packages.model import PackageInfo
 from agm.util.ident import is_identifier
 
 # These are the command-tree aliases that do not appear in COMMAND_NAMES.
 _RESERVED_COMMAND_NAMES = frozenset(COMMAND_NAMES) | frozenset({"wsp", "wt", "cp", "copy"})
+
+T = TypeVar("T")
 
 
 class DisciplineError(ValueError):
@@ -25,9 +30,32 @@ def validate_package(package: PackageInfo) -> None:
 
     _validate_package_name(package.manifest.name)
     modules = _module_files(package)
-    for command_path, command in package.manifest.commands.items():
-        _validate_command_path(command_path)
-        _validate_program_reference(package, command.program, modules)
+    _validate_commands(package.manifest, modules, fs.read_text)
+
+
+def validate_archive_package(
+    manifest: PackageManifest,
+    *,
+    archive_paths: Iterable[str],
+    read_module: Callable[[str], str],
+) -> None:
+    """Validate archived module content without extracting it to disk."""
+
+    _validate_package_name(manifest.name)
+    paths = tuple(archive_paths)
+    module_root = manifest.name + "/"
+    if not any(path.startswith(module_root) for path in paths):
+        raise DisciplineError(f"package {manifest.name!r} requires module tree {manifest.name!r}")
+    modules: dict[ModuleId, str] = {}
+    for path in paths:
+        if not path.startswith(module_root) or not path.endswith(".agl"):
+            continue
+        try:
+            module_id = ModuleId.from_path(PurePosixPath(path).with_suffix("").as_posix())
+        except ValueError as exc:
+            raise DisciplineError(f"invalid module path {path.removesuffix('.agl')!r}") from exc
+        modules[module_id] = path
+    _validate_commands(manifest, modules, read_module)
 
 
 def _validate_package_name(name: str) -> None:
@@ -55,6 +83,14 @@ def _module_files(package: PackageInfo) -> dict[ModuleId, Path]:
     return modules
 
 
+def _validate_commands(
+    manifest: PackageManifest, modules: Mapping[ModuleId, T], read_module: Callable[[T], str]
+) -> None:
+    for command_path, command in manifest.commands.items():
+        _validate_command_path(command_path)
+        _validate_program_reference(manifest, command.program, modules, read_module)
+
+
 def _validate_command_path(command_path: str) -> None:
     words = command_path.split()
     if not words or " ".join(words) != command_path:
@@ -64,7 +100,10 @@ def _validate_command_path(command_path: str) -> None:
 
 
 def _validate_program_reference(
-    package: PackageInfo, reference: str, modules: dict[ModuleId, Path]
+    manifest: PackageManifest,
+    reference: str,
+    modules: Mapping[ModuleId, T],
+    read_module: Callable[[T], str],
 ) -> None:
     module_path, separator, declaration_path = reference.partition("::")
     if not separator or not module_path or not declaration_path:
@@ -80,18 +119,18 @@ def _validate_program_reference(
     declaration = tuple(declaration_path.split("::"))
     if not all(is_identifier(segment) for segment in declaration):
         raise DisciplineError(f"program reference {reference!r} has an invalid declaration path")
-    if module_id.segments[0] != package.manifest.name:
+    if module_id.segments[0] != manifest.name:
         raise DisciplineError(
-            f"program reference {reference!r} is outside package {package.manifest.name!r}"
+            f"program reference {reference!r} is outside package {manifest.name!r}"
         )
-    source_path = modules.get(module_id)
-    if source_path is None:
+    source = modules.get(module_id)
+    if source is None:
         raise DisciplineError(f"program reference {reference!r} names no package module")
 
     try:
-        program = parse_program(fs.read_text(source_path))
+        program = parse_program(read_module(source))
     except (AglSyntaxError, OSError, UnicodeDecodeError) as exc:
-        raise DisciplineError(f"cannot parse program module {source_path}: {exc}") from exc
+        raise DisciplineError(f"cannot parse program module {source}: {exc}") from exc
     candidates = {
         tuple(segment.name for segment in function.scope_path) + (function.name,)
         for function in static_function_items(program.body.items)

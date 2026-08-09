@@ -28,6 +28,12 @@ class PkgCheckArgs:
 
 
 @dataclass(slots=True)
+class PkgCreateArgs:
+    directory: str | None
+    output: str | None
+
+
+@dataclass(slots=True)
 class PkgInstallArgs:
     source: str
     editable: bool

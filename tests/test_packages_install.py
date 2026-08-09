@@ -7,11 +7,14 @@ from pathlib import Path
 
 import pytest
 
+import agm.packages.archive as package_archive
 import agm.packages.install as package_install
 from agm.core import dry_run
 from agm.packages.activation import PackageActivationError, load_activation_index
+from agm.packages.archive import write_archive
 from agm.packages.install import (
     PackageInstallError,
+    install_archive,
     install_directory,
     installed_packages,
     uninstall_package,
@@ -291,9 +294,256 @@ def test_store_dependency_integrity_error_is_reported(tmp_path: Path) -> None:
         install_directory(source, home=home, env={})
 
 
-def test_url_dependency_fetches_only_to_the_deferred_archive_handoff(
+def test_install_archive_verifies_extracts_records_and_activates_it(tmp_path: Path) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    archive = tmp_path / "alpha.agmpkg"
+    write_archive(source, archive)
+
+    installed = install_archive(archive, home=tmp_path / "home", env={})
+
+    assert installed.root == tmp_path / "home" / ".agm" / "packages" / "alpha" / "1.0.0"
+    assert verify_record(installed.root)
+    assert load_activation_index(home=tmp_path / "home", env={}).packages["alpha"].version == (
+        installed.manifest.version
+    )
+
+
+def test_install_archive_reuses_an_existing_verified_tree(tmp_path: Path) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    archive = tmp_path / "alpha.agmpkg"
+    write_archive(source, archive)
+    first = install_archive(archive, home=tmp_path / "home", env={})
+
+    second = install_archive(archive, home=tmp_path / "home", env={})
+
+    assert second == first
+
+
+def test_install_archive_rejects_a_different_content_hash_for_an_existing_identity(
+    tmp_path: Path,
+) -> None:
+    first_source = _package(tmp_path / "first-source", "alpha", "1.0.0")
+    second_source = _package(tmp_path / "second-source", "alpha", "1.0.0")
+    (second_source / "alpha" / "main.agl").write_text(
+        "program def main() -> unit = ()\n// different\n", encoding="utf-8"
+    )
+    first_archive = tmp_path / "first.agmpkg"
+    second_archive = tmp_path / "second.agmpkg"
+    write_archive(first_source, first_archive)
+    write_archive(second_source, second_archive)
+    home = tmp_path / "home"
+
+    install_archive(first_archive, home=home, env={})
+
+    with pytest.raises(PackageInstallError, match="content"):
+        install_archive(second_archive, home=home, env={})
+
+    assert (home / ".agm" / "packages" / "alpha" / "1.0.0" / "alpha" / "main.agl").read_text(
+        encoding="utf-8"
+    ) == "program def main() -> unit = ()\n"
+
+
+def test_install_archive_does_not_reopen_an_archive_after_verification(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    replacement_source = _package(tmp_path / "replacement-source", "alpha", "1.0.0")
+    (replacement_source / "alpha" / "main.agl").write_text(
+        "program def main() -> unit = ()\n// replacement\n", encoding="utf-8"
+    )
+    archive = tmp_path / "alpha.agmpkg"
+    replacement = tmp_path / "replacement.agmpkg"
+    write_archive(source, archive)
+    write_archive(replacement_source, replacement)
+
+    def replace_after_verification(path: Path) -> object:
+        path.write_bytes(replacement.read_bytes())
+        raise AssertionError("archive verification must be bound to extraction")
+
+    monkeypatch.setattr(package_archive, "verify_archive", replace_after_verification)
+
+    install_archive(archive, home=tmp_path / "home", env={})
+
+    installed_module = (
+        tmp_path / "home" / ".agm" / "packages" / "alpha" / "1.0.0" / "alpha" / "main.agl"
+    )
+    assert installed_module.read_text(encoding="utf-8") == "program def main() -> unit = ()\n"
+
+
+def test_dry_run_archive_install_reports_a_verification_failure_without_writing(
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "invalid.agmpkg"
+    archive.write_bytes(b"not an archive")
+    dry_run.set_enabled(True)
+
+    with pytest.raises(PackageInstallError, match="archive"):
+        install_archive(archive, home=tmp_path / "home", env={})
+
+    assert not (tmp_path / "home").exists()
+
+
+def test_dry_run_archive_install_verifies_without_writing_and_reports_its_plan(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    archive = tmp_path / "alpha.agmpkg"
+    write_archive(source, archive)
+    dry_run.set_enabled(True)
+
+    installed = install_archive(archive, home=tmp_path / "home", env={})
+
+    assert installed.manifest.name == "alpha"
+    assert not (tmp_path / "home").exists()
+    assert "dry-run: agm install-package-archive" in capsys.readouterr().out
+
+
+def test_dry_run_archive_install_validates_an_existing_verified_tree(tmp_path: Path) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    archive = tmp_path / "alpha.agmpkg"
+    write_archive(source, archive)
+    home = tmp_path / "home"
+    installed = install_archive(archive, home=home, env={})
+    activation = (home / ".agm" / "packages" / "index.toml").read_text(encoding="utf-8")
+    dry_run.set_enabled(True)
+
+    assert install_archive(archive, home=home, env={}) == installed
+    assert (home / ".agm" / "packages" / "index.toml").read_text(encoding="utf-8") == activation
+
+
+def test_dry_run_archive_install_rejects_a_content_conflict_with_existing_tree(
+    tmp_path: Path,
+) -> None:
+    first_source = _package(tmp_path / "first-source", "alpha", "1.0.0")
+    second_source = _package(tmp_path / "second-source", "alpha", "1.0.0")
+    (second_source / "alpha" / "main.agl").write_text(
+        "program def main() -> unit = ()\n// different\n", encoding="utf-8"
+    )
+    first_archive = tmp_path / "first.agmpkg"
+    second_archive = tmp_path / "second.agmpkg"
+    write_archive(first_source, first_archive)
+    write_archive(second_source, second_archive)
+    home = tmp_path / "home"
+    install_archive(first_archive, home=home, env={})
+    dry_run.set_enabled(True)
+
+    with pytest.raises(PackageInstallError, match="content"):
+        install_archive(second_archive, home=home, env={})
+
+
+def test_dry_run_archive_install_rejects_a_tampered_existing_tree(tmp_path: Path) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    archive = tmp_path / "alpha.agmpkg"
+    write_archive(source, archive)
+    home = tmp_path / "home"
+    installed = install_archive(archive, home=home, env={})
+    (installed.root / "alpha" / "main.agl").write_text("tampered", encoding="utf-8")
+    dry_run.set_enabled(True)
+
+    with pytest.raises(PackageInstallError, match="integrity"):
+        install_archive(archive, home=home, env={})
+
+
+def test_install_archive_wraps_an_unsatisfied_dependency_error(tmp_path: Path) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0", '\n[dependencies]\nbravo = "1"\n')
+    archive = tmp_path / "alpha.agmpkg"
+    write_archive(source, archive)
+
+    with pytest.raises(PackageInstallError, match="bravo"):
+        install_archive(archive, home=tmp_path / "home", env={})
+
+
+def test_archive_staging_is_not_visible_to_package_store_scans(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    archive = tmp_path / "alpha.agmpkg"
+    write_archive(source, archive)
+    extract = package_install.extract_archive
+
+    def extract_and_scan(path: Path, destination: Path) -> object:
+        assert installed_packages(home=home, env={}) == ()
+        return extract(path, destination)
+
+    monkeypatch.setattr(package_install, "extract_archive", extract_and_scan)
+
+    installed = install_archive(archive, home=home, env={})
+
+    assert installed.manifest.name == "alpha"
+    assert not list((home / ".agm").glob(".agm-package-*"))
+
+
+def test_dry_run_archive_install_validates_discipline_without_writing(tmp_path: Path) -> None:
+    source = _package(
+        tmp_path / "source",
+        "alpha",
+        "1.0.0",
+        '\n[commands]\nlaunch = { program = "alpha/main::missing" }\n',
+    )
+    archive = tmp_path / "alpha.agmpkg"
+    write_archive(source, archive)
+    dry_run.set_enabled(True)
+
+    with pytest.raises(PackageInstallError, match="program"):
+        install_archive(archive, home=tmp_path / "home", env={})
+
+    assert not (tmp_path / "home").exists()
+
+
+def test_dry_run_archive_install_rejects_a_missing_module_tree_without_writing(
+    tmp_path: Path,
+) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    (source / "alpha" / "main.agl").unlink()
+    (source / "alpha").rmdir()
+    archive = tmp_path / "alpha.agmpkg"
+    write_archive(source, archive)
+    dry_run.set_enabled(True)
+
+    with pytest.raises(PackageInstallError, match="module tree"):
+        install_archive(archive, home=tmp_path / "home", env={})
+
+    assert not (tmp_path / "home").exists()
+
+
+def test_dry_run_archive_install_rejects_an_invalid_module_path_without_writing(
+    tmp_path: Path,
+) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    (source / "alpha" / "invalid-name.agl").write_text(
+        "program def invalid() -> unit = ()\n", encoding="utf-8"
+    )
+    archive = tmp_path / "alpha.agmpkg"
+    write_archive(source, archive)
+    dry_run.set_enabled(True)
+
+    with pytest.raises(PackageInstallError, match="invalid module path"):
+        install_archive(archive, home=tmp_path / "home", env={})
+
+    assert not (tmp_path / "home").exists()
+
+
+def test_install_archive_refuses_tampering_without_publishing_a_tree(tmp_path: Path) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    archive = tmp_path / "alpha.agmpkg"
+    write_archive(source, archive)
+    corrupted = bytearray(archive.read_bytes())
+    corrupted[len(corrupted) // 2] ^= 1
+    archive.write_bytes(corrupted)
+
+    with pytest.raises(PackageInstallError, match="archive"):
+        install_archive(archive, home=tmp_path / "home", env={})
+
+    assert not (tmp_path / "home" / ".agm" / "packages" / "alpha").exists()
+
+
+def test_url_dependency_hands_verified_archive_to_the_installer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bravo = _package(tmp_path / "bravo", "bravo", "1.0.0")
+    archive = tmp_path / "bravo.agmpkg"
+    write_archive(bravo, archive)
     source = _package(
         tmp_path / "source",
         "alpha",
@@ -307,12 +557,44 @@ def test_url_dependency_fetches_only_to_the_deferred_archive_handoff(
         fetched.append(str(kwargs["requirement"]))
         handoff = kwargs["handoff"]
         assert callable(handoff)
-        handoff(tmp_path / "archive.agmpkg")
+        handoff(archive)
 
     monkeypatch.setattr(package_install, "fetch_archive", fake_fetch)
-    with pytest.raises(PackageInstallError, match=r"archive.*bravo >= 1\.0\.0"):
-        install_directory(source, home=tmp_path / "home", env={})
+    installed = install_directory(source, home=tmp_path / "home", env={})
+
+    assert installed.manifest.name == "alpha"
     assert fetched == ["bravo >= 1.0.0"]
+    assert set(load_activation_index(home=tmp_path / "home", env={}).packages) == {"alpha", "bravo"}
+
+
+def test_archive_install_wraps_activation_and_extraction_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    archive = tmp_path / "alpha.agmpkg"
+    write_archive(source, archive)
+    monkeypatch.setattr(
+        package_install,
+        "load_activation_index",
+        lambda **_: (_ for _ in ()).throw(PackageActivationError("broken")),
+    )
+
+    with pytest.raises(PackageInstallError, match="activation"):
+        install_archive(archive, home=tmp_path / "home", env={})
+
+    monkeypatch.setattr(
+        package_install,
+        "load_activation_index",
+        lambda **_: load_activation_index(home=tmp_path / "other", env={}),
+    )
+    monkeypatch.setattr(
+        package_install,
+        "extract_archive",
+        lambda *_: (_ for _ in ()).throw(package_install.ArchiveError("broken")),
+    )
+
+    with pytest.raises(PackageInstallError, match="archive"):
+        install_archive(archive, home=tmp_path / "home", env={})
 
 
 def test_fetch_and_activation_failures_become_package_errors(
@@ -490,11 +772,27 @@ def test_dry_run_url_dependency_never_fetches_or_creates_scratch(
     monkeypatch.setattr(package_install, "fetch_archive", fail_fetch)
     dry_run.set_enabled(True)
 
-    with pytest.raises(PackageInstallError, match=r"archive.*bravo >= 1\.0\.0"):
+    with pytest.raises(PackageInstallError, match=r"URL package.*bravo >= 1\.0\.0"):
         install_directory(source, home=tmp_path / "dry-home", env={})
 
     assert not fetched
     assert not (tmp_path / "dry-home").exists()
+
+
+def test_url_fetch_refuses_when_the_fetch_handoff_does_not_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _package(
+        tmp_path / "source",
+        "alpha",
+        "1.0.0",
+        '\n[dependencies]\nbravo = { version = "1", url = "https://example.test/bravo.agmpkg", '
+        'hash = "sha256=' + "0" * 64 + '" }\n',
+    )
+    monkeypatch.setattr(package_install, "fetch_archive", lambda **_: None)
+
+    with pytest.raises(PackageInstallError, match="archive was not installed"):
+        install_directory(source, home=tmp_path / "home", env={})
 
 
 def test_url_fetch_scratch_creation_failure_names_the_requirement(
@@ -538,7 +836,7 @@ def test_fetch_failure_and_dry_run_use_clean_dependency_errors(
         install_directory(source, home=tmp_path / "home", env={})
 
     dry_run.set_enabled(True)
-    with pytest.raises(PackageInstallError, match=r"archive.*bravo >= 1\.0\.0"):
+    with pytest.raises(PackageInstallError, match=r"URL package.*bravo >= 1\.0\.0"):
         install_directory(source, home=tmp_path / "dry-home", env={})
 
 

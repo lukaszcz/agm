@@ -52,6 +52,7 @@ from agm.cli_support.args import (
     LoopSelectArgs,
     OpenArgs,
     PkgCheckArgs,
+    PkgCreateArgs,
     PkgInfoArgs,
     PkgInstallArgs,
     PkgListArgs,
@@ -1505,6 +1506,14 @@ def _run_pkg_check(args: PkgCheckArgs) -> None:
     pkg_check_command.run(args)
 
 
+def _run_pkg_create(args: PkgCreateArgs) -> None:
+    """Load archive creation only when its command is invoked."""
+
+    import agm.commands.pkg.create as pkg_create_command
+
+    pkg_create_command.run(args)
+
+
 def _run_pkg_install(args: PkgInstallArgs) -> None:
     import agm.commands.pkg.install as pkg_install_command
 
@@ -1555,6 +1564,22 @@ def pkg_check(
     del _help
     del _dry_run
     _run_pkg_check(PkgCheckArgs(directory=directory))
+
+
+@pkg_app.command(name="create")
+def pkg_create(
+    directory: str | None = typer.Argument(
+        None,
+        metavar="DIR",
+        autocompletion=completion.complete_dir_argument,
+    ),
+    output: str | None = typer.Option(None, "-o", "--output", metavar="FILE"),
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    del _dry_run
+    _run_pkg_create(PkgCreateArgs(directory=directory, output=output))
 
 
 @pkg_app.command(name="install")

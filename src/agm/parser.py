@@ -449,13 +449,15 @@ _HELP_TEXTS: dict[str, str] = {
     """),
     "pkg": textwrap.dedent("""\
         agm pkg check [DIR]
+        agm pkg create [DIR] [-o FILE]
         agm pkg install [--editable] [--shadow] SRC
         agm pkg uninstall NAME
         agm pkg list
         agm pkg info NAME
 
-        Validate, install, inspect, and remove AgL packages. Directory installs are copied into
-        AGM's versioned store; editable installs mount their live source directory.
+        Validate, create, install, inspect, and remove AgL packages. Archives and directory
+        installs are copied into AGM's versioned store; editable installs mount their live source
+        directory.
     """),
     "run": textwrap.dedent("""\
         agm run [--no-sandbox] [--no-patch] [--memory LIMIT] [--swap LIMIT]
@@ -902,11 +904,18 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         Validate the package manifest, module-tree discipline, and registered program references
         in DIR. DIR defaults to the current directory.
     """),
+    ("pkg", "create"): textwrap.dedent("""\
+        agm pkg create [DIR] [-o FILE]
+
+        Run package validation and write a deterministic <name>-<version>.agmpkg archive beside DIR.
+        DIR defaults to the current directory and -o selects the output file.
+    """),
     ("pkg", "install"): textwrap.dedent("""\
         agm pkg install [--editable] [--shadow] SRC
 
-        Install a package directory into AGM's versioned store and activate its version. --editable
-        mounts SRC directly; --shadow is retained for package command registration.
+        Install a package directory or .agmpkg archive into AGM's versioned store and activate its
+        version. --editable mounts a directory SRC directly. --shadow is retained for command
+        registration. URL dependencies are fetched with their declared SHA-256 hash before install.
     """),
     ("pkg", "uninstall"): textwrap.dedent("""\
         agm pkg uninstall NAME

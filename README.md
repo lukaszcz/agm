@@ -96,17 +96,25 @@ Use `agm help` for the command list and `agm help <command>` for detailed help. 
 
 ### `agm pkg`
 
-Validate, install, inspect, and remove AgL packages. Installations use a versioned store;
-editable packages mount their working directory directly.
+Validate, archive, install, inspect, and remove AgL packages. Installations use a versioned
+store; editable packages mount their working directory directly.
 
 ```bash
 agm pkg check [DIR]
+agm pkg create [DIR] [-o package.agmpkg]
 agm pkg install path/to/package
+agm pkg install package.agmpkg
 agm pkg install --editable path/to/package
 agm pkg list
 agm pkg info package-name
 agm pkg uninstall package-name
 ```
+
+`pkg check` validates package discipline and dependency satisfiability without writing. `pkg create`
+checks that its distribution dependencies are portable, then writes a deterministic archive; it removes
+local dependency paths from the archived manifest without changing the source manifest. Archive installs
+verify the archive contents before atomically activating them. `--dry-run` reports package archive creation
+or installation without writing an archive, store tree, or activation index.
 
 ### `agm open`
 

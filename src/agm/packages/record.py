@@ -62,6 +62,12 @@ def serialize_record(entries: tuple[RecordEntry, ...]) -> str:
     return "".join(_serialize_entry(entry) for entry in entries)
 
 
+def content_hash(entries: tuple[RecordEntry, ...]) -> str:
+    """Return the stable content identity represented by canonical record entries."""
+
+    return hashlib.sha256(serialize_record(entries).encode()).hexdigest()
+
+
 def parse_record(content: str) -> tuple[RecordEntry, ...]:
     """Parse and validate package ``RECORD`` content without reading a tree."""
 

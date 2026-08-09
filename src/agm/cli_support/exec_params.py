@@ -1,9 +1,11 @@
 """CLI helpers for mapping AgL ``param`` declarations to exec CLI options.
 
-Each ``param`` declaration in a program becomes a ``--<name>`` option on
-``agm exec``.  Bool params use ``--name/--no-name`` flag form.  This module
-provides pure, unit-testable functions used by both the exec command and the
-help/completion machinery.
+Each ``param`` declaration in a program becomes a ``--<scope-path>`` option
+on ``agm exec``. The module-qualified spelling is always accepted; it is
+required when two inventory params share their scope-path spelling. Bool
+params use ``--name/--no-name`` flag form. This module provides pure,
+unit-testable functions used by both the exec command and the help/completion
+machinery.
 
 It also provides ``resolve_param_values`` for merging config-file values with
 CLI values (CLI wins) and detecting undeclared config keys.  This helper is
@@ -19,8 +21,9 @@ a param named ``timeout`` (the exact engine key name) collides, but one named
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
 
-from agm.agl.diagnostics import Diagnostic, format_diagnostic
+from agm.agl.modules.roots import RootSet
 from agm.agl.runtime.request import AgentResponse
 from agm.agl.runtime.types import ParamDeclInfo
 from agm.agl.semantics.types import BoolType
@@ -82,15 +85,89 @@ def negative_param_flag(name: str) -> str:
     return f"--no-{name}"
 
 
+def _add_flag_candidates(
+    candidates: dict[str, list[tuple[ParamDeclInfo, bool | None]]],
+    param: ParamDeclInfo,
+    spelling: str,
+) -> None:
+    """Add the positive and, when applicable, negative flag for *spelling*."""
+    if isinstance(param.type, BoolType):
+        candidates.setdefault(param_flag(spelling), []).append((param, True))
+        candidates.setdefault(negative_param_flag(spelling), []).append((param, False))
+    else:
+        candidates.setdefault(param_flag(spelling), []).append((param, None))
+
+
+def _ambiguous_short_flags(
+    params: tuple[ParamDeclInfo, ...],
+) -> dict[str, tuple[ParamDeclInfo, ...]]:
+    """Return short spellings that cannot safely select a param.
+
+    A short spelling is ambiguous both when several params generate it and when
+    it belongs to AGM itself. The latter still has one param candidate, but it
+    cannot be parsed as a param option by Click, so callers must use the
+    module-qualified spelling.
+    """
+    candidates: dict[str, list[tuple[ParamDeclInfo, bool | None]]] = {}
+    for param in params:
+        _add_flag_candidates(candidates, param, param.name)
+    return {
+        flag: tuple(param for param, _value in matches)
+        for flag, matches in candidates.items()
+        if len(matches) > 1 or flag in RESERVED_FLAGS
+    }
+
+
+def _param_value_name(
+    param: ParamDeclInfo, ambiguous_short_flags: Mapping[str, tuple[ParamDeclInfo, ...]]
+) -> str:
+    """Return the external key for *param*, qualifying ambiguous leaves."""
+    if any(param in candidates for candidates in ambiguous_short_flags.values()):
+        return param.qualified_name
+    return param.name
+
+
+def _param_flag_selection(
+    params: tuple[ParamDeclInfo, ...],
+) -> tuple[tuple[str, ParamDeclInfo, bool | None], ...]:
+    """Return the valid, unambiguous parameter flags for one inventory."""
+    ambiguous = _ambiguous_short_flags(params)
+    flags: dict[str, tuple[ParamDeclInfo, bool | None]] = {}
+    for param in params:
+        qualified_candidates: dict[str, list[tuple[ParamDeclInfo, bool | None]]] = {}
+        _add_flag_candidates(qualified_candidates, param, param.qualified_name)
+        flags.update({flag: candidates[0] for flag, candidates in qualified_candidates.items()})
+        short_candidates: dict[str, list[tuple[ParamDeclInfo, bool | None]]] = {}
+        _add_flag_candidates(short_candidates, param, param.name)
+        flags.update(
+            {
+                flag: candidates[0]
+                for flag, candidates in short_candidates.items()
+                if flag not in ambiguous
+            }
+        )
+    return tuple((flag, param, bool_value) for flag, (param, bool_value) in flags.items())
+
+
+def param_option_flags(params: tuple[ParamDeclInfo, ...]) -> tuple[str, ...]:
+    """Return valid CLI flags for *params*, without ambiguous short spellings."""
+    return tuple(flag for flag, _param, _bool_value in _param_flag_selection(params))
+
+
 def discover_params_from_source(
-    source: str, *, inline_source: bool = False
+    source: str,
+    *,
+    inline_source: bool = False,
+    entry_path: Path | None = None,
+    roots: RootSet | None = None,
 ) -> tuple[ParamDeclInfo, ...]:
     """Discover declared params from AgL *source*, degrading to ``()`` on error.
 
     Shared by the help and shell-completion paths, which both need only the
     discovered params and must tolerate unreadable/unparsable sources. Inline
     sources receive the same pure synthetic-main wrapper as ``agm exec -c``;
-    file sources retain their ordinary unwrapped behavior.
+    file sources retain their ordinary unwrapped behavior. Supplying their
+    *entry_path* lets the loader discover imports relative to that file.
     """
     try:
         from dataclasses import replace
@@ -105,49 +182,20 @@ def discover_params_from_source(
 
                 program, next_id = wrap_inline_program(parsed.program, next_node_id=parsed.next_id)
                 parsed = replace(parsed, program=program, next_id=next_id)
-            prepared = runtime.prepare_parsed_entry(parsed)
+            prepared = (
+                runtime.prepare_parsed_entry(parsed)
+                if roots is None
+                else runtime.prepare_parsed_entry(parsed, roots=roots)
+            )
         else:
-            prepared = runtime.prepare_program(source)
+            prepared = (
+                runtime.prepare_program(source, entry_path=entry_path)
+                if roots is None
+                else runtime.prepare_program(source, entry_path=entry_path, roots=roots)
+            )
         return runtime.discover_params(prepared).params
     except (Exception, SystemExit):
         return ()
-
-
-def _format_param_collision(param: ParamDeclInfo, flag: str, *, source_name: str | None) -> str:
-    """Return a formatted diagnostic for a param flag collision."""
-    return format_diagnostic(
-        Diagnostic(
-            message=(
-                f"param '{param.name}' generates flag '{flag}' which collides "
-                "with a built-in exec option; rename the param."
-            ),
-            line=param.line,
-            column=param.col,
-        ),
-        source_name=source_name,
-    )
-
-
-def check_param_collisions(
-    params: tuple[ParamDeclInfo, ...], *, source_name: str | None = "<agl>"
-) -> list[str]:
-    """Check for collisions between param-generated flags and reserved built-in flags.
-
-    Returns a list of error messages (empty = no collisions).  Collision is
-    verbatim: the flag string ``--<param.name>`` must appear in ``RESERVED_FLAGS``
-    exactly as written.  There is no underscore↔hyphen normalisation.
-    For bool params, ``--no-<name>`` is also checked against the reserved set.
-    """
-    errors: list[str] = []
-    for param in params:
-        flag = param_flag(param.name)
-        if flag in RESERVED_FLAGS:
-            errors.append(_format_param_collision(param, flag, source_name=source_name))
-        if isinstance(param.type, BoolType):
-            no_flag = negative_param_flag(param.name)
-            if no_flag in RESERVED_FLAGS:
-                errors.append(_format_param_collision(param, no_flag, source_name=source_name))
-    return errors
 
 
 def parse_param_tokens(
@@ -168,16 +216,12 @@ def parse_param_tokens(
     - Missing value for a non-bool flag
     - Duplicate param flags
     """
-    # Build forward-lookup table: flag string → (param, bool_value)
-    # bool_value is True/False for bool flags, None for value-taking flags.
-    flag_to_param: dict[str, tuple[ParamDeclInfo, bool | None]] = {}
-    for p in params:
-        if isinstance(p.type, BoolType):
-            # Positive bool flag → True; negative → False.
-            flag_to_param[param_flag(p.name)] = (p, True)
-            flag_to_param[negative_param_flag(p.name)] = (p, False)
-        else:
-            flag_to_param[param_flag(p.name)] = (p, None)
+    # Qualified flags always participate; unsafe short flags remain in the
+    # ambiguity map solely to produce an actionable diagnostic.
+    ambiguous_flags = _ambiguous_short_flags(params)
+    flag_to_param = {
+        flag: (param, bool_value) for flag, param, bool_value in _param_flag_selection(params)
+    }
 
     result: dict[str, object] = {}
     i = 0
@@ -190,35 +234,48 @@ def parse_param_tokens(
         # Handle ``--name=value`` form.
         if "=" in token:
             flag, _, value = token.partition("=")
+            if flag in ambiguous_flags:
+                spellings = ", ".join(
+                    param_flag(param.qualified_name) for param in ambiguous_flags[flag]
+                )
+                raise ValueError(f"Option {flag!r} is ambiguous; use one of: {spellings}")
             if flag not in flag_to_param:
                 raise ValueError(f"Unknown option: {flag!r}")
             param, bool_val = flag_to_param[flag]
             if bool_val is not None:
                 raise ValueError(f"Option {flag!r} does not take a value")
-            if param.name in result:
+            result_name = _param_value_name(param, ambiguous_flags)
+            if result_name in result:
                 raise ValueError(f"Option '{param_flag(param.name)}' specified more than once")
-            result[param.name] = value
+            result[result_name] = value
             i += 1
             continue
 
         # Handle ``--name`` form.
+        if token in ambiguous_flags:
+            spellings = ", ".join(
+                param_flag(param.qualified_name) for param in ambiguous_flags[token]
+            )
+            raise ValueError(f"Option {token!r} is ambiguous; use one of: {spellings}")
         if token not in flag_to_param:
             raise ValueError(f"Unknown option: {token!r}")
 
         param, bool_val = flag_to_param[token]
         if bool_val is not None:
             # Bool flag: --name → True, --no-name → False.
-            if param.name in result:
+            result_name = _param_value_name(param, ambiguous_flags)
+            if result_name in result:
                 raise ValueError(f"Option '{param_flag(param.name)}' specified more than once")
-            result[param.name] = bool_val
+            result[result_name] = bool_val
             i += 1
         else:
             # Value-taking flag: next token is the value.
             if i + 1 >= len(tokens) or tokens[i + 1].startswith("--"):
                 raise ValueError(f"Option {token!r} requires a value")
-            if param.name in result:
+            result_name = _param_value_name(param, ambiguous_flags)
+            if result_name in result:
                 raise ValueError(f"Option '{param_flag(param.name)}' specified more than once")
-            result[param.name] = tokens[i + 1]
+            result[result_name] = tokens[i + 1]
             i += 2
 
     return result
@@ -232,15 +289,17 @@ def render_param_help_section(params: tuple[ParamDeclInfo, ...]) -> str:
     """
     if not params:
         return ""
+    ambiguous = _ambiguous_short_flags(params)
     lines: list[str] = ["Program parameters:"]
     for p in params:
+        display_name = _param_value_name(p, ambiguous)
         is_bool = isinstance(p.type, BoolType)
         if is_bool:
-            flag_str = f"{param_flag(p.name)}/{negative_param_flag(p.name)}"
+            flag_str = f"{param_flag(display_name)}/{negative_param_flag(display_name)}"
             type_label = "bool"
         else:
             type_label = p.type.kind.upper()
-            flag_str = f"{param_flag(p.name)} {type_label}"
+            flag_str = f"{param_flag(display_name)} {type_label}"
         req_str = "(required)" if not p.has_default else "(optional, has default)"
         lines.append(f"  {flag_str}  {req_str}")
     return "\n".join(lines) + "\n"

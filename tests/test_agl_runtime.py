@@ -3177,6 +3177,28 @@ class TestDiscoverParamsGraph:
         assert discovery.programs[0].qualified_path == "review::main"
         assert discovery.programs[-1].qualified_path == "helper::helper"
 
+    def test_program_inventory_follows_loader_export_edges_only(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        from agm.agl.modules.roots import RootSet
+
+        (tmp_path / "runner.agl").write_text("export settings\nprogram def main() -> unit = ()\n")
+        (tmp_path / "settings.agl").write_text('param token: text = "ok"\n')
+        (tmp_path / "unrelated.agl").write_text('param ignored: text = "no"\n')
+        prepared = PipelineDriver.prepare_program(
+            "import runner\nimport unrelated\nprogram def entry() -> unit = ()\n",
+            entry_path=tmp_path / "entry.agl",
+            roots=RootSet(roots=frozenset({tmp_path})),
+            default_stdlib=False,
+        )
+
+        discovery = PipelineDriver().discover_params(prepared)
+
+        runner = next(
+            program for program in discovery.programs if program.module.path_str() == "runner"
+        )
+        assert [param.name for param in discovery.params_for(runner)] == ["token"]
+
     def test_discover_params_failure_returns_diagnostics(self, tmp_path: pathlib.Path) -> None:
         """discover_params returns diagnostics when the prepare phase failed."""
         from agm.agl.modules.roots import RootSet

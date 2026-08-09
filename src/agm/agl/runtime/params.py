@@ -146,12 +146,26 @@ def _prepare_ir_params(
 
     decoded: "dict[SymbolId, Value]" = {}
     errors: list[Diagnostic] = []
+    name_counts: dict[str, int] = {}
     for param in executable.params:
-        if param.public_name not in param_values:
+        name_counts[param.public_name] = name_counts.get(param.public_name, 0) + 1
+    for param in executable.params:
+        value_name = (
+            param.qualified_public_name if name_counts[param.public_name] > 1 else param.public_name
+        )
+        # The CLI accepts a module-qualified spelling even where the short
+        # spelling is unavailable because it collides with an AGM option.
+        # Prefer that identity-preserving key whenever supplied.
+        supplied_name = (
+            param.qualified_public_name
+            if param.qualified_public_name in param_values
+            else value_name
+        )
+        if supplied_name not in param_values:
             if param.required:
                 errors.append(
                     Diagnostic(
-                        message=f"Missing required param: {param.public_name!r}",
+                        message=f"Missing required param: {value_name!r}",
                         line=param.location.start_line,
                         column=param.location.start_col,
                     )
@@ -160,12 +174,12 @@ def _prepare_ir_params(
         decoder = param.external_decoder
         assert decoder is not None, "lowerer must provide an external param decoder"
         try:
-            decoded[param.symbol] = decode_param_value(decoder, param_values[param.public_name])
+            decoded[param.symbol] = decode_param_value(decoder, param_values[supplied_name])
         except (StrictJsonParseError, ValueError) as exc:
             errors.append(
                 Diagnostic(
                     message=(
-                        f"Param {param.public_name!r}: could not parse as "
+                        f"Param {value_name!r}: could not parse as "
                         f"{decoder.target_type_label}: {exc}"
                     ),
                     line=param.location.start_line,

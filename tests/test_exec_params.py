@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from agm.agl.runtime.types import ParamDeclInfo
@@ -15,11 +17,19 @@ def _make_param(
     has_default: bool = False,
     line: int = 1,
     col: int = 1,
+    module_segments: tuple[str, ...] = (),
 ) -> ParamDeclInfo:
     """Build a ``ParamDeclInfo`` for testing."""
     if typ is None:
         typ = TextType()
-    return ParamDeclInfo(name=name, type=typ, has_default=has_default, line=line, col=col)
+    return ParamDeclInfo(
+        name=name,
+        type=typ,
+        has_default=has_default,
+        line=line,
+        col=col,
+        module_segments=module_segments,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -47,6 +57,19 @@ class TestSourceDiscovery:
         )
 
         assert [param.name for param in params] == ["count"]
+
+    def test_file_source_discovers_imported_module_params(self, tmp_path: Path) -> None:
+        from agm.cli_support.exec_params import discover_params_from_source
+
+        entry_path = tmp_path / "program.agl"
+        entry_path.write_text("import settings\nprogram def main() -> unit = ()\n")
+        (tmp_path / "settings.agl").write_text('param region: text = "eu"\n')
+
+        params = discover_params_from_source(entry_path.read_text(), entry_path=entry_path)
+
+        assert [(param.module_segments, param.name) for param in params] == [
+            (("settings",), "region")
+        ]
 
     def test_invalid_inline_source_degrades_to_no_params(self) -> None:
         from agm.cli_support.exec_params import discover_params_from_source
@@ -103,135 +126,6 @@ class TestParamFlag:
         from agm.cli_support.exec_params import param_flag
 
         assert param_flag("my-param") == "--my-param"
-
-
-# ---------------------------------------------------------------------------
-# check_param_collisions
-# ---------------------------------------------------------------------------
-
-
-class TestCheckParamCollisions:
-    def test_clean_params_no_errors(self) -> None:
-        from agm.cli_support.exec_params import check_param_collisions
-
-        params = (_make_param("msg"), _make_param("count"), _make_param("verbose", BoolType()))
-        assert check_param_collisions(params) == []
-
-    def test_verbatim_collision_with_max_iters(self) -> None:
-        from agm.cli_support.exec_params import check_param_collisions
-
-        # verbatim: param name max-iters (kebab) → --max-iters is reserved
-        params = (_make_param("max-iters"),)
-        errors = check_param_collisions(params)
-        assert len(errors) == 1
-        assert "max-iters" in errors[0]
-
-    def test_underscore_max_iters_no_collision(self) -> None:
-        from agm.cli_support.exec_params import check_param_collisions
-
-        # underscore: --max_iters ≠ --max-iters (no normalization → no collision)
-        params = (_make_param("max_iters"),)
-        errors = check_param_collisions(params)
-        assert errors == []
-
-    def test_exact_collision_with_command(self) -> None:
-        from agm.cli_support.exec_params import check_param_collisions
-
-        params = (_make_param("command"),)
-        errors = check_param_collisions(params)
-        assert len(errors) == 1
-        assert "command" in errors[0]
-
-    def test_verbatim_collision_strict_json(self) -> None:
-        from agm.cli_support.exec_params import check_param_collisions
-
-        # verbatim: param strict-json (kebab) → --strict-json is reserved
-        params = (_make_param("strict-json"),)
-        errors = check_param_collisions(params)
-        assert len(errors) == 1
-        assert "strict-json" in errors[0]
-
-    def test_underscore_strict_json_no_collision(self) -> None:
-        from agm.cli_support.exec_params import check_param_collisions
-
-        # underscore form no longer normalises → --strict_json ≠ --strict-json
-        params = (_make_param("strict_json"),)
-        errors = check_param_collisions(params)
-        assert errors == []
-
-    def test_bool_no_prefix_collision_no_log(self) -> None:
-        from agm.cli_support.exec_params import check_param_collisions
-
-        # bool param "log" → generates --no-log which collides with reserved --no-log
-        params = (_make_param("log", BoolType()),)
-        errors = check_param_collisions(params)
-        # must report the --no-log collision
-        assert any("no-log" in e or "--no-log" in e for e in errors)
-
-    def test_bool_param_positive_flag_no_collision(self) -> None:
-        from agm.cli_support.exec_params import check_param_collisions
-
-        # bool param "verbose" — neither --verbose nor --no-verbose is reserved
-        params = (_make_param("verbose", BoolType()),)
-        assert check_param_collisions(params) == []
-
-    def test_verbatim_collision_dry_run(self) -> None:
-        from agm.cli_support.exec_params import check_param_collisions
-
-        # verbatim: param dry-run (kebab) → --dry-run is reserved
-        params = (_make_param("dry-run"),)
-        errors = check_param_collisions(params)
-        assert len(errors) == 1
-        assert "dry-run" in errors[0]
-
-    def test_underscore_dry_run_no_collision(self) -> None:
-        from agm.cli_support.exec_params import check_param_collisions
-
-        # underscore form: --dry_run ≠ --dry-run (no normalization)
-        params = (_make_param("dry_run"),)
-        errors = check_param_collisions(params)
-        assert errors == []
-
-    def test_multiple_collisions_reported(self) -> None:
-        from agm.cli_support.exec_params import check_param_collisions
-
-        # Both use kebab engine key names (verbatim match).
-        params = (_make_param("max-iters"), _make_param("strict-json"))
-        errors = check_param_collisions(params)
-        assert len(errors) == 2
-
-    def test_line_number_in_error(self) -> None:
-        from agm.cli_support.exec_params import check_param_collisions
-
-        params = (_make_param("max-iters", line=7),)
-        errors = check_param_collisions(params)
-        assert "7" in errors[0]
-
-    def test_verbatim_collision_module_path(self) -> None:
-        from agm.cli_support.exec_params import check_param_collisions
-
-        # verbatim: param module-path (kebab) → --module-path is reserved
-        params = (_make_param("module-path"),)
-        errors = check_param_collisions(params)
-        assert len(errors) == 1
-        assert "module-path" in errors[0]
-
-    def test_underscore_module_path_no_collision(self) -> None:
-        from agm.cli_support.exec_params import check_param_collisions
-
-        # underscore form: --module_path ≠ --module-path (no normalization)
-        params = (_make_param("module_path"),)
-        errors = check_param_collisions(params)
-        assert errors == []
-
-    def test_log_collision(self) -> None:
-        from agm.cli_support.exec_params import check_param_collisions
-
-        # param log → --log collides with reserved --log
-        params = (_make_param("log"),)
-        errors = check_param_collisions(params)
-        assert len(errors) >= 1
-        assert any("log" in e for e in errors)
 
 
 # ---------------------------------------------------------------------------
@@ -389,6 +283,57 @@ class TestParseParamTokens:
         with pytest.raises(ValueError):
             parse_param_tokens(params, ["--name=a", "--name=b"])
 
+    def test_module_qualified_spelling_resolves_to_the_short_param_key(self) -> None:
+        from agm.cli_support.exec_params import parse_param_tokens
+
+        params = (self._text_param("Deploy::region", module_segments=("pkg", "deploy")),)
+
+        assert parse_param_tokens(params, ["--Deploy::region", "eu"]) == {"Deploy::region": "eu"}
+        assert parse_param_tokens(params, ["--pkg/deploy::Deploy::region", "us"]) == {
+            "Deploy::region": "us"
+        }
+
+    def test_reserved_short_spelling_requires_module_qualification(self) -> None:
+        from agm.cli_support.exec_params import parse_param_tokens
+
+        params = (self._text_param("max-iters", module_segments=("pkg", "tuning")),)
+
+        with pytest.raises(ValueError, match="pkg/tuning::max-iters"):
+            parse_param_tokens(params, ["--max-iters", "5"])
+        assert parse_param_tokens(params, ["--pkg/tuning::max-iters", "5"]) == {
+            "pkg/tuning::max-iters": "5"
+        }
+
+    def test_short_spelling_collision_requires_module_qualification(self) -> None:
+        from agm.cli_support.exec_params import parse_param_tokens
+
+        params = (
+            self._text_param("Deploy::region", module_segments=("pkg", "one")),
+            self._text_param("Deploy::region", module_segments=("pkg", "two")),
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            parse_param_tokens(params, ["--Deploy::region", "eu"])
+        assert "pkg/one::Deploy::region" in str(exc_info.value)
+        assert "pkg/two::Deploy::region" in str(exc_info.value)
+        assert parse_param_tokens(params, ["--pkg/one::Deploy::region", "eu"]) == {
+            "pkg/one::Deploy::region": "eu"
+        }
+        with pytest.raises(ValueError) as equals_exc_info:
+            parse_param_tokens(params, ["--Deploy::region=eu"])
+        assert "pkg/one::Deploy::region" in str(equals_exc_info.value)
+
+    def test_bool_short_collision_rejects_the_negative_spelling(self) -> None:
+        from agm.cli_support.exec_params import parse_param_tokens
+
+        params = (
+            self._bool_param("verbose", module_segments=("pkg", "one")),
+            self._bool_param("verbose", module_segments=("pkg", "two")),
+        )
+
+        with pytest.raises(ValueError, match="pkg/one::verbose"):
+            parse_param_tokens(params, ["--no-verbose"])
+
 
 # ---------------------------------------------------------------------------
 # render_param_help_section
@@ -444,6 +389,28 @@ class TestRenderParamHelpSection:
         params = (_make_param("x", TextType()),)
         section = render_param_help_section(params)
         assert section.startswith("Program parameters:")
+
+    def test_reserved_param_renders_only_its_module_qualified_spelling(self) -> None:
+        from agm.cli_support.exec_params import render_param_help_section
+
+        section = render_param_help_section(
+            (_make_param("max-iters", IntType(), module_segments=("pkg", "tuning")),)
+        )
+
+        assert "--pkg/tuning::max-iters" in section
+        assert "--max-iters INT" not in section
+
+    def test_ambiguous_params_render_module_qualified_spellings(self) -> None:
+        from agm.cli_support.exec_params import render_param_help_section
+
+        params = (
+            _make_param("region", TextType(), module_segments=("pkg", "one")),
+            _make_param("region", TextType(), module_segments=("pkg", "two")),
+        )
+
+        section = render_param_help_section(params)
+        assert "--pkg/one::region" in section
+        assert "--pkg/two::region" in section
 
 
 # ---------------------------------------------------------------------------

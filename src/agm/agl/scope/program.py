@@ -16,9 +16,7 @@ Design
   collected BEFORE resolving any body, enabling cross-module mutual recursion.
 - **Static module roots**: every file-backed module permits declarations,
   parameters, and bindings but rejects root assignments and bare expressions;
-  the incremental REPL is the executable-root host. During M2, non-entry param
-  declarations resolve while typecheck rejects their uses until M3 adds runtime
-  support.
+  the incremental REPL is the executable-root host.
 - **Header-only imports** (every module root): imports must appear before any
   declaration.
 - **``::name`` self-reference**: resolved to the current module's own scope.
@@ -125,6 +123,9 @@ class ResolvedProgram:
     ``import_sccs``
         Loader-computed import strongly-connected components, retained in their
         deterministic reverse-topological order for downstream program passes.
+    ``graph``
+        The loaded module graph, retained so consumers that need module
+        reachability use its import/export adjacency rather than scope data.
     """
 
     modules: dict[ModuleId, ResolvedModule]
@@ -132,6 +133,7 @@ class ResolvedProgram:
     all_public_funcs: dict[QName, FuncDef]
     all_public_types: dict[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias]
     import_sccs: tuple[tuple[ModuleId, ...], ...]
+    graph: ModuleGraph
 
 
 # ---------------------------------------------------------------------------
@@ -638,4 +640,5 @@ def resolve_program(
         all_public_funcs=all_public_funcs,
         all_public_types=all_public_types,
         import_sccs=graph.sccs,
+        graph=graph,
     )

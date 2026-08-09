@@ -991,7 +991,9 @@ def new(
     )
 
 
-def _exec_print_help(*, file: str | None, command: str | None) -> None:
+def _exec_print_help(
+    *, file: str | None, command: str | None, module_paths: list[str] | None = None
+) -> None:
     """Print exec help, optionally with program param section, then exit 0.
 
     When FILE or -c is provided and the source can be prepared + typechecked,
@@ -1016,7 +1018,27 @@ def _exec_print_help(*, file: str | None, command: str | None) -> None:
             source = None
 
     if source is not None:
-        params = discover_params_from_source(source, inline_source=command is not None)
+        try:
+            from agm.cli_support.exec_roots import effective_exec_roots
+            from agm.config.context import current_config_context
+
+            context = current_config_context()
+            entry_path = None if file is None else Path(file)
+            roots = effective_exec_roots(
+                entry_path=entry_path,
+                module_paths=[] if module_paths is None else module_paths,
+                cwd=context.cwd,
+                home=context.home,
+                proj_dir=context.proj_dir,
+            )
+            params = discover_params_from_source(
+                source,
+                inline_source=command is not None,
+                entry_path=entry_path,
+                roots=roots,
+            )
+        except (Exception, SystemExit):
+            params = ()
         if params:
             print(render_param_help_section(params), end="")
 
@@ -1145,7 +1167,7 @@ def exec_cmd(
     if file in ("--help", "-h") or "--help" in ctx.args or "-h" in ctx.args:
         # When the help flag was misassigned to ``file``, treat ``file`` as absent.
         effective_file = None if file in ("--help", "-h") else file
-        _exec_print_help(file=effective_file, command=command)
+        _exec_print_help(file=effective_file, command=command, module_paths=module_paths)
     del _dry_run
     # Under ``ignore_unknown_options``, Click binds the first unrecognised token to the
     # positional FILE argument.  When a program ``--param`` option is placed BEFORE the

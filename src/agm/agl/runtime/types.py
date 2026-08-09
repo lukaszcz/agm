@@ -101,9 +101,11 @@ class ProgramDeclInfo:
 class ParamDeclInfo:
     """Static summary of one ``param`` declaration in a program.
 
-    ``name`` is the param's external key: a root param's bare name, or a
-    scoped param's full ``::``-joined path spelling (e.g. ``"Deploy::region"``)
-    — the same string the CLI flag and config-table key use.
+    ``module_segments`` and ``name`` together retain the declaration's
+    external identity. ``name`` is its scope-path spelling: a root param's
+    bare name, or a scoped param's full ``::``-joined path spelling. The
+    module-qualified spelling disambiguates same-named params in one program
+    inventory.
     """
 
     name: str
@@ -111,3 +113,11 @@ class ParamDeclInfo:
     has_default: bool
     line: int
     col: int
+    module_segments: tuple[str, ...] = ()
+
+    @property
+    def qualified_name(self) -> str:
+        """Return the module-qualified external spelling."""
+        if not self.module_segments:
+            return self.name
+        return f"{'/'.join(self.module_segments)}::{self.name}"

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import click
 from click.shell_completion import CompletionItem
@@ -15,6 +15,10 @@ import agm.vcs.git as git_helpers
 from agm.config.context import current_config_context
 from agm.config.general import load_merged_config, load_run_config
 from agm.project.dependency_checkout import main_dep_repo
+
+if TYPE_CHECKING:
+    from agm.agl.modules.roots import RootSet
+
 from agm.project.layout import (
     current_workspace_or_project_root,
     default_worktrees_dir,
@@ -384,30 +388,29 @@ def complete_agl_file(ctx: click.Context, args: list[str], incomplete: str) -> l
 
 
 def _exec_param_completion_items(
-    source: str, incomplete: str, *, inline_source: bool = False
+    source: str,
+    incomplete: str,
+    *,
+    inline_source: bool = False,
+    entry_path: Path | None = None,
+    roots: "RootSet | None" = None,
 ) -> list[CompletionItem]:
     """Return ``CompletionItem`` objects for ``--<param>`` flags discovered in *source*.
 
     Used by :class:`ExecCommand` to augment the standard shell_complete results.
     Degrades silently to ``[]`` on any error.
     """
-    from agm.agl.semantics.types import BoolType
-    from agm.cli_support.exec_params import (
-        discover_params_from_source,
-        negative_param_flag,
-        param_flag,
-    )
+    from agm.cli_support.exec_params import discover_params_from_source, param_option_flags
 
-    items: list[CompletionItem] = []
-    for param in discover_params_from_source(source, inline_source=inline_source):
-        flag = param_flag(param.name)
-        if flag.startswith(incomplete):
-            items.append(CompletionItem(flag))
-        if isinstance(param.type, BoolType):
-            no_flag = negative_param_flag(param.name)
-            if no_flag.startswith(incomplete):
-                items.append(CompletionItem(no_flag))
-    return items
+    return [
+        CompletionItem(flag)
+        for flag in param_option_flags(
+            discover_params_from_source(
+                source, inline_source=inline_source, entry_path=entry_path, roots=roots
+            )
+        )
+        if flag.startswith(incomplete)
+    ]
 
 
 class ExecCommand(TyperCommand):
@@ -426,6 +429,7 @@ class ExecCommand(TyperCommand):
         try:
             params = cast(dict[str, object], ctx.params)
             source: str | None = None
+            entry_path: Path | None = None
             inline_source = False
             raw_command = params.get("command")
             if isinstance(raw_command, str):
@@ -435,15 +439,41 @@ class ExecCommand(TyperCommand):
                 raw_file = params.get("file")
                 if isinstance(raw_file, str):
                     try:
-                        source = Path(raw_file).read_text()
+                        entry_path = Path(raw_file)
+                        source = entry_path.read_text()
                     except OSError:
                         source = None
             if source is None:
                 return base
-            extra = _exec_param_completion_items(source, incomplete, inline_source=inline_source)
+            from agm.cli_support.exec_roots import effective_exec_roots
+
+            context = current_config_context()
+            raw_module_paths = params.get("module_paths")
+            module_paths: list[str] = []
+            if isinstance(raw_module_paths, (list, tuple)):
+                paths = cast(list[object] | tuple[object, ...], raw_module_paths)
+                if all(isinstance(path, str) for path in paths):
+                    module_paths = [cast(str, path) for path in paths]
+            roots = effective_exec_roots(
+                entry_path=entry_path,
+                module_paths=module_paths,
+                cwd=context.cwd,
+                home=context.home,
+                proj_dir=context.proj_dir,
+            )
+            extra = _exec_param_completion_items(
+                source,
+                incomplete,
+                inline_source=inline_source,
+                entry_path=entry_path,
+                roots=roots,
+            )
         except (Exception, SystemExit):
             return base
-        return base + extra
+        items_by_value: dict[str, CompletionItem] = {}
+        for item in (*base, *extra):
+            items_by_value[cast(str, item.value)] = item
+        return list(items_by_value.values())
 
 
 def complete_revise_command_or_review_file(

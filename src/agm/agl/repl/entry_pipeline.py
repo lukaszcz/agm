@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from agm.agl.eval.ir_interpreter import IrInterpreter
     from agm.agl.ir.contracts import ContractPayload
     from agm.agl.ir.ids import SymbolId
+    from agm.agl.ir.program import IrParam
     from agm.agl.lower import LinkImage
     from agm.agl.matchcompile import MatchCompiledProgram
     from agm.agl.modules.ids import ModuleId
@@ -85,8 +86,8 @@ class EntryPipelineCtx(Protocol):
     ) -> EntryResult: ...
 
     def _pre_eval_param_check(
-        self, program: Program, checked: CheckedModule, warnings: list[Diagnostic]
-    ) -> tuple[EntryResult | None, dict[str, Value]]: ...
+        self, params: tuple[IrParam, ...], warnings: list[Diagnostic]
+    ) -> EntryResult | None: ...
 
     def _record_declared_engine_defaults(
         self, declared_keys: frozenset[str], interp: IrInterpreter
@@ -333,12 +334,6 @@ class EntryPipeline:
         if check_only:
             return self._ctx._build_check_only_result(orig_program, checked, warnings)
 
-        pre_eval_result, param_values = self._ctx._pre_eval_param_check(
-            orig_program, checked, warnings
-        )
-        if pre_eval_result is not None:
-            return pre_eval_result
-
         from agm.agl.pipeline import _materialize_program_custom_contract_payloads
 
         contract_payloads, contract_errors = _materialize_program_custom_contract_payloads(
@@ -361,7 +356,6 @@ class EntryPipeline:
             new_modules=new_modules,
             entry_imports=entry_imports,
             entry_opens=entry_opens,
-            param_values=param_values,
             contract_payloads=contract_payloads,
         )
 
@@ -595,7 +589,6 @@ class EntryPipeline:
         new_modules: dict[ModuleId, LoadedModule],
         entry_imports: tuple[ImportDecl, ...],
         entry_opens: tuple[OpenDecl | ImportDecl | ScopeRegion, ...],
-        param_values: dict[str, Value],
         contract_payloads: Mapping[int, "ContractPayload"],
     ) -> EntryResult:
         """Lower and execute one program entry in the persistent IR image."""
@@ -630,6 +623,10 @@ class EntryPipeline:
             source_text=text,
             contract_payloads=contract_payloads,
         )
+        pre_eval_result = self._ctx._pre_eval_param_check(lowered.program.params, warnings)
+        if pre_eval_result is not None:
+            self._ctx._link_image.restore_state(link_snapshot)
+            return pre_eval_result
         extern_diagnostics = _wire_extern_registry(
             checked=checked_program,
             capabilities=host_env.capabilities,
@@ -649,11 +646,7 @@ class EntryPipeline:
             self._ctx._link_image.restore_state(link_snapshot)
             self._ctx._advance_node_ids(new_next_id)
             return self._ctx._fail(extern_diagnostics, warnings)
-        ir_params = {
-            param.symbol: param_values[param.public_name]
-            for param in lowered.program.params
-            if param.public_name in param_values
-        }
+        ir_params: dict[SymbolId, Value] = {}
         host_contracts, _ = _materialize_ir_contracts(lowered.program, host_env.codecs)
         trace = TraceStore(path=self._ctx._trace_path)
         trace.run_start()

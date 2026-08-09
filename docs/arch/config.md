@@ -33,9 +33,9 @@ For AgL execution, four sources combine with a defined precedence:
   `source write (std/config::X := e) > CLI flag > [<program>].X > [exec].X > engine default`
   Their names, value kinds, and consuming side come from the pure shared catalog in `config/engine_keys.py`, also consumed by AgL semantics, deep IR validation, and the AgL evaluator/REPL.
 - **Param values** (`param NAME`):
-  `agm exec`: `CLI flag > [<program>].Y > source default (param Y = e) > required error`; `agm repl`: `source default (param Y = e) > required error`.
+  `agm exec` inventories params from the selected program's module and transitive imports. An entry-module param resolves as `CLI flag > [<program>].Y > source default (param Y = e) > required error`; an imported-module param currently resolves as `CLI flag > source default > required error`. `agm repl`: `source default (param Y = e) > required error`.
 
-`[exec]` holds global engine defaults with kebab field names (`default-agent`, `strict-json`, `max-iters`, `log-file`). `default-agent` is a quoted AgL `Agent` literal; it remains raw configuration data until `exec` or `repl` lazily parse and typecheck it. For `agm exec`, `[<program>]` is a **top-level** section keyed by the `.agl` file stem; it holds both engine-key overrides and param values for that file. Inline `-c` source has no such section. The REPL does not load per-program sections.
+`[exec]` holds global engine defaults with kebab field names (`default-agent`, `strict-json`, `max-iters`, `log-file`). `default-agent` is a quoted AgL `Agent` literal; it remains raw configuration data until `exec` or `repl` lazily parse and typecheck it. For `agm exec`, `[<program>]` is a **top-level** section keyed by the `.agl` file stem; it holds both engine-key overrides and entry-module param values for that file. A key matching an entry param takes the param route even when it is also an engine key. Inline `-c` source has no such section. The REPL does not load per-program sections.
 
 ## Sandbox Configuration
 

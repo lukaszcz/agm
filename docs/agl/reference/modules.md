@@ -258,8 +258,8 @@ Every file-backed module has a static root: imports, declarations, parameters,
 and `let`/`var` bindings are allowed there, while bare expressions and assignments
 are not. Root binding initializers must be constant expressions. Put executable
 workflow code in a `program def` body. Parameters are also legal in named scope
-regions in every module. A parameter outside the file entry module has no host
-value or runtime binding, so reading it is a static error.
+regions in every module. A program receives values for the params in its module
+and transitive imports before it starts.
 Imports and exports appear before other declarations at a module's root, in
 every module, entry or library; a named scope region is one declaration for
 this rule, so an import or export inside a region does not need to precede

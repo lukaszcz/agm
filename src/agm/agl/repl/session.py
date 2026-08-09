@@ -21,7 +21,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
-from agm.agl.diagnostics import AglError, Diagnostic, diagnostic_from_span
+from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.repl.entry import EntryKind, EntryResult
 from agm.agl.repl.entry_pipeline import EntryPipeline
 from agm.agl.self_validation import self_validation_enabled
@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 
     from agm.agl.eval.ir_interpreter import IrInterpreter
     from agm.agl.ir.ids import SymbolId
+    from agm.agl.ir.program import IrParam
     from agm.agl.modules.ids import ModuleId
     from agm.agl.modules.loader import LoadedModule
     from agm.agl.modules.roots import RootSet
@@ -51,7 +52,6 @@ if TYPE_CHECKING:
         ScopeRegion,
         TypeAlias,
     )
-    from agm.agl.syntax.spans import SourceSpan
     from agm.agl.syntax.types import TypeExpr
     from agm.agl.typecheck.env import CheckedModule, TypeEnvironment
 
@@ -788,31 +788,25 @@ class ReplSession:
         self._shell_exec_timeout = interp.shell_exec_timeout
 
     def _pre_eval_param_check(
-        self,
-        program: "Program",
-        checked: "CheckedModule",
-        warnings: list[Diagnostic],
-    ) -> tuple[EntryResult | None, dict[str, Value]]:
-        """Validate REPL params from source defaults without mutating session state."""
-        del checked
-        from agm.agl.syntax.nodes import ParamDecl, scoped_public_name, static_items
-
-        def reject(message: str, span: "SourceSpan") -> EntryResult:
-            return self._fail([diagnostic_from_span(message, span)], warnings)
-
-        param_values: dict[str, Value] = {}
-        for item in static_items(program.body.items):
-            if isinstance(item, ParamDecl) and item.default is None:
-                external_name = scoped_public_name(item.scope_path, item.name)
-                return (
-                    reject(
-                        f"Missing required param {external_name!r}: provide a default expression.",
-                        item.span,
-                    ),
-                    {},
+        self, params: tuple["IrParam", ...], warnings: list[Diagnostic]
+    ) -> EntryResult | None:
+        """Reject required params from the linked program before constructing an interpreter."""
+        for param in params:
+            if param.required:
+                return self._fail(
+                    [
+                        Diagnostic(
+                            message=(
+                                f"Missing required param {param.qualified_public_name!r}: "
+                                "provide a default expression."
+                            ),
+                            line=param.location.start_line,
+                            column=param.location.start_col,
+                        )
+                    ],
+                    warnings,
                 )
-
-        return None, param_values
+        return None
 
     def _build_check_only_result(
         self,

@@ -3368,10 +3368,6 @@ class _Lowerer:
                 return self._lower_funcdef(funcdef)
 
             case ParamDecl() as param_decl:
-                # M2 deliberately calls this only for entry-module params.
-                # Typecheck rejects legal non-entry declarations when used, so
-                # they remain absent until M3 adds lowering.
-                # program.py ensures _lower_param_decl is applicable here.
                 self._lower_param_decl(param_decl)
                 return None
 
@@ -3399,11 +3395,10 @@ class _Lowerer:
                 return self.lower_expr(item)
 
     def _lower_param_decl(self, param: "ParamDecl") -> None:
-        """Lower a discovered entry-module ``ParamDecl`` to an ``IrParam``.
+        """Lower a module ``ParamDecl`` to an ``IrParam``.
 
-        M2 deliberately excludes legal non-entry params from this path until M3.
-        Allocates a PUBLIC ``SymbolId`` for the param (owner = entry module) and
-        appends an ``IrParam`` to ``self._params``.  Does NOT emit an initializer
+        Allocates a PUBLIC ``SymbolId`` for the param and appends an ``IrParam``
+        to ``self._params``. Does NOT emit an initializer
         into ``ir_items`` — params are installed by the evaluator's ``run()``
         from ``program.params + param_values`` BEFORE any module initializer runs.
 
@@ -3428,6 +3423,7 @@ class _Lowerer:
         ir_param = IrParam(
             symbol=sym,
             public_name=public_name,
+            module=self._module_id,
             required=(param.default is None),
             default=default_ir,
             location=self._loc(param.span),
@@ -3504,8 +3500,8 @@ class _Lowerer:
         Function bodies lower before ordinary module initializers. Allocating
         static ``let``/``var`` symbols in the same phase lets their references
         lower as module-frame loads, while initialization remains in source
-        order after function closures. Parameters are intentionally absent:
-        only entry parameters have M2 runtime handling.
+        order after function closures. Parameters allocate their descriptors
+        while the remaining static declarations are lowered.
         """
         for item in static_items(body.items):
             if isinstance(item, FuncDef) and not item.is_builtin:
@@ -3531,7 +3527,6 @@ class _Lowerer:
         body: Block,
         *,
         top_level: bool,
-        lower_params: bool,
     ) -> tuple[IrExpr, ...]:
         """Lower one module body and publish its initializer origins.
 
@@ -3542,8 +3537,8 @@ class _Lowerer:
         ``static_items``: each of its members gets its own source index, the
         same as a root item, so a region is not one promotable declaration
         group — a binder inside a region completes and promotes independently
-        of its siblings. Static ``let``/``var`` initializers run in every
-        module; only entry-module params are lowered during the M2 interim.
+        of its siblings. Static ``let``/``var`` initializers and parameter
+        declarations are handled in every module.
         """
         function_initializers: list[IrExpr] = []
         function_origins: list[InitializerOrigin] = []
@@ -3551,8 +3546,6 @@ class _Lowerer:
         other_origins: list[InitializerOrigin] = []
         for source_index, member in enumerate(static_items(body.items)):
             is_function = isinstance(member, FuncDef) and not member.is_builtin
-            if isinstance(member, ParamDecl) and not lower_params:
-                continue
             ir = self.lower_item(member, top_level=top_level)
             if ir is None:
                 continue

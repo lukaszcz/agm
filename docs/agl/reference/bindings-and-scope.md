@@ -247,9 +247,9 @@ scope region in every entry and library module ([Named scopes](scopes.md#paramet
 A param may declare a type, a default expression, both, or neither. Without an
 explicit type or default, the param defaults to `text`.
 
-A parameter declared outside the file entry module has no external value or
-runtime binding, so reading it is a static error. Only entry-module parameters
-participate in host parameter resolution.
+Each program's parameter inventory includes params declared in its module and
+in its transitive imports. Every inventory parameter receives a host value or
+default before execution, so imported functions can read their module's params.
 
 ```agl
 param spec                 # same as: param spec: text
@@ -259,12 +259,13 @@ param limit: int = 10
 ```
 
 At run start, before any expression evaluates, the host validates provided
-values for discovered entry-module params. Required params without an external
-value or default, and params whose external values fail conversion, are *host
-invocation errors* — not AgL exceptions and not catchable in-language. Extra
-external values are ignored by the runtime after CLI/config resolution.
+values for every parameter in the selected program's inventory. Required params
+without an external value or default, and params whose external values fail
+conversion, are *host invocation errors* — not AgL exceptions and not catchable
+in-language. Extra external values are ignored by the runtime after CLI/config
+resolution.
 
-Every discovered entry-module param must have a JSON-wire-serializable type,
+Every discovered parameter must have a JSON-wire-serializable type,
 even when it has a default and the host does not supply a value. Supported param
 types are `text`,
 `int`, `decimal`, `bool`, `json`, arrays, dictionaries, records, and enums.

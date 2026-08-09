@@ -1401,6 +1401,20 @@ class TestExecCommandShellComplete:
         # Built-in exec options are still offered alongside param options.
         assert "--agent" in result
 
+    def test_module_root_params_offer_only_valid_qualified_completion(self, tmp_path: Path) -> None:
+        module_root = tmp_path / "modules"
+        module_root.mkdir()
+        (module_root / "settings.agl").write_text("param max-iters: int\n")
+        entry = tmp_path / "prog.agl"
+        entry.write_text("import settings\nprogram def main() -> unit = ()\n")
+
+        result = self._complete(["exec", "-I", str(module_root), str(entry)], "--")
+
+        # The built-in flag remains a valid completion; the parameter only
+        # contributes its unambiguous module-qualified spelling.
+        assert "--settings::max-iters" in result
+        assert result.count("--settings::max-iters") == 1
+
     def test_file_with_ask_offers_param_options(self, tmp_path: Path) -> None:
         """Completion discovers params for normal exec programs using ``ask``."""
         agl_file = tmp_path / "prog.agl"
@@ -1480,6 +1494,12 @@ class TestExecParamCompletionItems:
         assert "--apple" in values
         assert "--banana" not in values
 
+    def test_ambiguous_or_reserved_short_flags_are_not_suggested(self) -> None:
+        items = completion._exec_param_completion_items("param max-iters: int\n", "--")
+        values = [item.value for item in items]
+        assert "--max-iters" not in values
+        assert values.count("--<entry>::max-iters") == 1
+
     def test_syntax_error_returns_empty(self) -> None:
         items = completion._exec_param_completion_items("@@@ bad syntax", "--")
         assert items == []
@@ -1531,6 +1551,22 @@ class TestExecCommandShellCompleteEdgeCases:
         result = exec_cmd.shell_complete(ctx, "foo")
         # "--msg" must not appear since we short-circuit on non-option prefix
         assert not any(item.value == "--msg" for item in result)
+
+    @pytest.mark.parametrize("module_paths", [None, [1]])
+    def test_non_string_module_paths_are_ignored(
+        self, tmp_path: Path, module_paths: object
+    ) -> None:
+        from click.shell_completion import _resolve_context
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param msg: text\n")
+        cli = self._get_cli()
+        ctx = _resolve_context(cli, {}, "agm", ["exec", str(agl_file)])
+        ctx.params["module_paths"] = module_paths
+
+        result = self._get_exec_cmd().shell_complete(ctx, "--")
+
+        assert any(item.value == "--msg" for item in result)
 
     def test_exception_in_param_discovery_degrades_to_base(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

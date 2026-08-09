@@ -57,10 +57,15 @@ like any other static error.
   directly, instead of reading the program from `FILE`.
 - `-p PATH`, `--program PATH`: Select a `program def` entry by its declaration
   path. This accepts entry-file paths such as `main` or `review::main`.
-- `--PARAM VALUE`: Provide a value for a `param` declaration. Each declared param
-  becomes a program-specific option; booleans use `--name` / `--no-name`. A param
+- `--PARAM VALUE`: Provide a value for a `param` declaration. The selected
+  program exposes params from its module and transitive imports; each becomes a
+  program-specific option. Booleans use `--name` / `--no-name`. A param
   declared inside a named scope region uses its full path spelling, e.g.
-  `--Deploy::region`. Values for `text` params are taken verbatim; every other
+  `--Deploy::region`. The module-qualified spelling, such as
+  `--review-tools/judge::Deploy::region`, is always accepted and disambiguates
+  params with the same short spelling. A file-stem config table supplies values
+  only for params declared by the entry file; params declared by imported modules
+  use a CLI flag or their source default. Values for `text` params are taken verbatim; every other
   scalar or structured type (`int`/`decimal`/`bool`/`json`/`array`/`dict`/`record`/
   `enum`) is parsed as exactly one strict JSON value and validated against the
   declared type. Missing required params or invalid values are reported before any
@@ -184,7 +189,10 @@ as configuration is read, before the module graph loads; a malformed command exi
 with nothing run.
 
 A top-level `[<program>]` table is keyed by an `agm exec` file's `.agl` stem. It provides per-program overrides of `[exec]` engine settings
-(`runner` excepted — it is read from `[exec]` only) and supplies that program's param values. Inline `-c` source has no per-program table.
+(`runner` excepted — it is read from `[exec]` only) and supplies values for params
+that the entry file declares. When an entry param has an engine-setting name, its
+file-stem key supplies the param rather than an engine override. Inline `-c` source
+has no per-program table.
 
 #### Source-level engine settings (`std/config`)
 
@@ -219,10 +227,12 @@ Precedence differs by kind:
 - **Engine settings** (`default-agent`, `log`, `strict-json`, `max-iters`, `log-file`, `timeout`):
   `source std/config::X write > CLI > [<program>].X > [exec].X > engine default`.
   `default-agent` has one extra fallback below `[exec] default-agent`: `[exec] runner`.
-- **Param values** (`param NAME`):
-  `CLI > [<program>].NAME > source default > required error`. `NAME` is a
-  scoped param's full path spelling (`Deploy::region`) when it is declared as
-  a member of a named scope region. That key must be quoted in TOML, since
+- **Entry-module param values** (`param NAME`):
+  `CLI > [<program>].NAME > source default > required error`.
+- **Imported-module param values**: `CLI > source default > required error`.
+
+`NAME` is a scoped param's full path spelling (`Deploy::region`) when it is
+  declared as a member of a named scope region. That key must be quoted in TOML, since
   `::` is not a legal bare key:
 
   ```toml

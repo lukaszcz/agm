@@ -1654,11 +1654,6 @@ class _Checker:
                 owner=owner, variant=ctor_ref.variant, span=node.span
             )
         ref = self._binding_for(node.node_id)
-        if ref.is_module_param and not ref.module_id.is_entry:
-            raise AglTypeError(
-                "Parameters declared in library modules are not available at runtime during M2.",
-                span=node.span,
-            )
         # A constructor_binding resolves to a type declaration, not a value.
         # Catch bare type name references (e.g. ``mylib::Color``) and raise a
         # user-facing error instead of an internal assertion failure.

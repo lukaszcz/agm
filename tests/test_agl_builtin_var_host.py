@@ -103,7 +103,9 @@ class TestCommandEngineSeeding:
         config_dir = tmp_path / ".agm"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text("[exec]\ntimeout = 0\n")
-        monkeypatch.setattr(exec_command, "resolve_stdlib_root", lambda *, home: stdlib_root)
+        monkeypatch.setattr(
+            "agm.cli_support.exec_roots.resolve_stdlib_root", lambda *, home: stdlib_root
+        )
         monkeypatch.setattr(
             exec_command,
             "current_config_context",
@@ -123,7 +125,9 @@ class TestCommandEngineSeeding:
         )
         agl_file = tmp_path / "prog.agl"
         write_file_program(agl_file, "import std/config\n()\n", encoding="utf-8")
-        monkeypatch.setattr(exec_command, "resolve_stdlib_root", lambda *, home: stdlib_root)
+        monkeypatch.setattr(
+            "agm.cli_support.exec_roots.resolve_stdlib_root", lambda *, home: stdlib_root
+        )
         monkeypatch.setattr(
             exec_command,
             "current_config_context",

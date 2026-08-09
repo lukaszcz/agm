@@ -23,7 +23,7 @@ from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
 from agm.agl.ir.contracts import ContractRequest, ParamDecoder
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import IrExpr, IrFunctionParam
-from agm.agl.modules.ids import ModuleId, spell_scope_path
+from agm.agl.modules.ids import ENTRY_ID, ModuleId, spell_scope_path
 
 __all__ = [
     "ContractId",
@@ -230,21 +230,17 @@ class ExecutableModule:
 
 
 # ---------------------------------------------------------------------------
-# M2 entry-param descriptor
+# Module parameter descriptor
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
 class IrParam:
-    """Descriptor for an entry-module ``param`` declaration.
-
-    M2 deliberately emits descriptors only for entry-module params; legal
-    non-entry declarations remain excluded until M3, and typecheck rejects
-    their uses before lowering.
+    """Descriptor for a module ``param`` declaration.
 
     ``symbol``      — the linker-allocated ``SymbolId`` for this param binding.
-    ``public_name`` — the user-facing param name (used as the key in the
-                      ``param_values`` dict passed by the host).
+    ``module``      — the declaring module's logical identity.
+    ``public_name`` — the scope-path user-facing param name.
     ``required``    — ``True`` when the param has no default (host must supply
                       a value; reaching ``run()`` without one is a host bug).
     ``default``     — an ``IrExpr`` to evaluate when the host supplies no value
@@ -262,6 +258,12 @@ class IrParam:
     default: "IrExpr | None"
     location: Location
     external_decoder: ParamDecoder | None = None
+    module: ModuleId = ENTRY_ID
+
+    @property
+    def qualified_public_name(self) -> str:
+        """Return this param's module-qualified external spelling."""
+        return f"{self.module.display()}::{self.public_name}"
 
 
 # ---------------------------------------------------------------------------

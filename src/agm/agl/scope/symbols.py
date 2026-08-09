@@ -382,10 +382,6 @@ class BindingRef:
     ``slot_id``
         The :class:`PatternSlot` id when this reference is a field-directed
         pattern slot, or ``None`` for an ordinary resolved binding.
-    ``is_module_param``
-        Whether this binding comes from a static ``param`` declaration rather
-        than an ordinary function/lambda parameter. M2 uses this distinction
-        to defer only library-module parameter loads until M3.
     """
 
     name: str
@@ -396,7 +392,6 @@ class BindingRef:
     module_id: ModuleId = ENTRY_ID
     scope_path: ScopePath = ()
     slot_id: int | None = None
-    is_module_param: bool = False
 
 
 # ---------------------------------------------------------------------------

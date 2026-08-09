@@ -124,16 +124,19 @@ class ModuleGraph:
     entry_id:
         Always :data:`~agm.agl.modules.ids.ENTRY_ID`.
     sccs:
-        Strongly-connected components of the *import graph*, computed by
-        Tarjan's algorithm.  Each SCC is a tuple of :class:`ModuleId` values;
-        the outer tuple is in **reverse topological order** (a module whose
-        imports have no back-edges is last).  Retained for diagnostics; has no
-        semantic effect on loading.
+        Strongly-connected components of the dependency graph, computed by
+        Tarjan's algorithm. Each SCC is a tuple of :class:`ModuleId` values;
+        the outer tuple is in **reverse topological order**.
+    adjacency:
+        Direct dependency edges for every loaded module. This includes both
+        imports and exports, after wildcard expansion, and is the authoritative
+        reachability relation for graph consumers.
     """
 
     modules: dict[ModuleId, LoadedModule]
     entry_id: ModuleId
     sccs: tuple[tuple[ModuleId, ...], ...]
+    adjacency: dict[ModuleId, tuple[ModuleId, ...]]
 
 
 # ---------------------------------------------------------------------------
@@ -379,7 +382,12 @@ def _load_into_graph(
             _resolve_dependencies(mid, (*loaded.imports, *loaded.export_decls))
 
     sccs = _tarjan_sccs(adj)
-    graph = ModuleGraph(modules=modules, entry_id=ENTRY_ID, sccs=sccs)
+    graph = ModuleGraph(
+        modules=modules,
+        entry_id=ENTRY_ID,
+        sccs=sccs,
+        adjacency={mid: tuple(targets) for mid, targets in adj.items()},
+    )
     return graph, next_id, newly_loaded
 
 

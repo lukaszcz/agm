@@ -71,9 +71,9 @@ region.
   declared only once at that path; see [Built-in functions](functions.md#built-in-functions).
 - **`param` declarations** — parameters are legal at a module root or in a
   named scope region, with no declaration-path shorthand. A parameter belongs
-  to the file entry module to receive an external value and be readable at
-  runtime. A scoped entry-module parameter's external key is its full path
-  spelling; see [Named scopes](scopes.md#parameters).
+  to its declaring module. A program receives external values for the params in
+  its module and transitive imports. A scoped parameter's short external
+  spelling is its full scope path; see [Named scopes](scopes.md#parameters).
 - **`import`/`export` declarations** — module-system declarations; root-only
   or a member of a named scope region. A scoped import's bare contribution
   narrows to its own region; its qualifier route stays module-wide. A scoped

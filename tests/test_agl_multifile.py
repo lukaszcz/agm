@@ -90,26 +90,76 @@ def _run_program(
 
 
 # ---------------------------------------------------------------------------
-# Library-parameter interim boundary
+# Module-graph parameter inventory
 # ---------------------------------------------------------------------------
 
 
-def test_library_param_reference_is_a_static_failure(tmp_path: Path) -> None:
-    """M2 library params resolve but cannot reach the absent runtime binding."""
+def test_imported_module_param_is_discovered_lowered_and_available(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An imported module's params are host-provided runtime bindings."""
     library_root = tmp_path / "library"
     library_root.mkdir()
-    (library_root / "config.agl").write_text(
-        'param region: text = "eu"\ndef read() -> text = region\n'
+    (library_root / "config.agl").write_text("param region: text\ndef read() -> text = region\n")
+
+    from agm.agl import PipelineDriver
+    from agm.agl.modules.roots import RootSet
+
+    roots = RootSet(roots=frozenset({library_root, REPO_STDLIB_ROOT}))
+    prepared = PipelineDriver.prepare_program(
+        "import config\nprogram def main() -> unit = print config::read()\n", roots=roots
+    )
+    runtime = PipelineDriver()
+    discovery = runtime.discover_params(prepared)
+
+    assert [(param.module_segments, param.name) for param in discovery.params] == [
+        (("config",), "region")
+    ]
+    preflight = runtime.preflight_params(
+        prepared,
+        param_values={"region": "eu"},
+        compiled=discovery.compiled,
+    )
+    assert preflight.result.ok is True
+    assert preflight.executable is not None
+    (param,) = preflight.executable.params
+    assert param.module == ModuleId.from_path("config")
+
+    main = next(program for program in discovery.programs if program.module.is_entry)
+    result = runtime.run_prepared(
+        prepared,
+        param_values={"region": "eu"},
+        compiled=discovery.compiled,
+        executable=preflight.executable,
+        program_symbol=preflight.executable.program_symbols[main.node_id],
     )
 
-    result = _run_program(
-        "import config\nprogram def main() -> unit = print config::read()\n",
-        roots_dirs=[library_root],
+    assert result.ok is True
+    assert capsys.readouterr().out == "eu\n"
+
+
+def test_program_inventory_excludes_params_outside_its_import_subgraph(tmp_path: Path) -> None:
+    """A program only inherits params from modules it transitively imports."""
+    library_root = tmp_path / "library"
+    library_root.mkdir()
+    (library_root / "a.agl").write_text(
+        "param included: int = 1\nprogram def run_a() -> unit = ()\n"
+    )
+    (library_root / "b.agl").write_text("param excluded: int = 2\n")
+
+    from agm.agl import PipelineDriver
+    from agm.agl.modules.roots import RootSet
+
+    roots = RootSet(roots=frozenset({library_root, REPO_STDLIB_ROOT}))
+    prepared = PipelineDriver.prepare_program(
+        "import a\nimport b\nprogram def main() -> unit = ()\n", roots=roots
+    )
+    discovery = PipelineDriver().discover_params(prepared)
+    program_a = next(
+        program for program in discovery.programs if program.qualified_path == "a::run_a"
     )
 
-    assert result.ok is False
-    assert result.error is None
-    assert result.diagnostics
+    assert [param.name for param in discovery.params_for(program_a)] == ["included"]
 
 
 # ---------------------------------------------------------------------------

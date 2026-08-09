@@ -231,11 +231,7 @@ def lower_program(
         cm = checked.modules[mid]
         lowerer = module_lowerers[mid]
         body = cm.resolved.program.body
-        initializers = lowerer.lower_initializers(
-            body,
-            top_level=True,
-            lower_params=mid.is_entry,
-        )
+        initializers = lowerer.lower_initializers(body, top_level=True)
         executable_modules[mid] = ExecutableModule(
             module_id=mid,
             initializers=initializers,
@@ -250,10 +246,6 @@ def lower_program(
         if isinstance(item, BuiltinVarDecl) and item.default is not None
     }
 
-    # M2 deliberately discovers and lowers only entry-module params. Legal
-    # non-entry declarations remain absent until M3 adds runtime handling;
-    # typecheck rejects their uses before they can reach this representation.
-    entry_lowerer = module_lowerers[checked.entry_id]
     payloads = contract_payloads if contract_payloads is not None else {}
     dry_run_entries: list[DryRunEntry] = []
     for cm in checked.modules.values():
@@ -302,7 +294,7 @@ def lower_program(
             ),
             None,
         ),
-        params=tuple(entry_lowerer._params),
+        params=tuple(param for mid in ordered_mids for param in module_lowerers[mid]._params),
         contracts=dict(link.contracts),
         dry_run_inventory=dry_run_inventory,
         builtin_nominals=link.builtin_nominals,

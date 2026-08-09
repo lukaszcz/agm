@@ -325,11 +325,64 @@ class TestExecDynamicHelp:
         assert exc_info.value.code == 0
         assert "--count" in capsys.readouterr().out
 
+    def test_exec_help_discovers_params_from_cli_module_roots(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        module_root = tmp_path / "modules"
+        module_root.mkdir()
+        (module_root / "settings.agl").write_text('param region: text = "eu"\n')
+        entry = tmp_path / "prog.agl"
+        entry.write_text("import settings\nprogram def main() -> unit = ()\n")
+
+        with pytest.raises(SystemExit):
+            cli._exec_print_help(file=str(entry), command=None, module_paths=[str(module_root)])
+
+        assert "--region" in capsys.readouterr().out
+
+    def test_exec_help_discovers_params_from_configured_module_roots(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from agm.config.context import ConfigContext
+
+        module_root = tmp_path / "modules"
+        module_root.mkdir()
+        (module_root / "settings.agl").write_text('param region: text = "eu"\n')
+        config_dir = tmp_path / ".agm"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text(f'[modules]\nroots = ["{module_root}"]\n')
+        monkeypatch.setattr(
+            "agm.config.context.current_config_context",
+            lambda: ConfigContext(home=tmp_path, proj_dir=None, cwd=tmp_path),
+        )
+        entry = tmp_path / "prog.agl"
+        entry.write_text("import settings\nprogram def main() -> unit = ()\n")
+
+        with pytest.raises(SystemExit):
+            cli._exec_print_help(file=str(entry), command=None)
+
+        assert "--region" in capsys.readouterr().out
+
     def test_exec_help_for_source_without_params_has_no_param_section(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         with pytest.raises(SystemExit) as exc_info:
             cli._exec_print_help(file=None, command='print "hi"')
+
+        assert exc_info.value.code == 0
+        assert "Program parameters:" not in capsys.readouterr().out
+
+    def test_exec_help_degrades_when_effective_root_loading_fails(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param msg: text\n")
+        monkeypatch.setattr(
+            "agm.cli_support.exec_roots.effective_exec_roots",
+            lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("unavailable roots")),
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            cli._exec_print_help(file=str(agl_file), command=None)
 
         assert exc_info.value.code == 0
         assert "Program parameters:" not in capsys.readouterr().out
@@ -1081,18 +1134,18 @@ class TestExecCommandExitCodes:
         assert exec_command.run(_exec_args(agl_file)) is None
         assert capsys.readouterr().out == "prod\n"
 
-    def test_param_flag_collision_exits_1(
+    def test_reserved_param_flag_accepts_its_qualified_spelling(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        # 'timeout' is an engine key name (kebab); param timeout → --timeout collides.
         agl_file = tmp_path / "test.agl"
         write_file_program(agl_file, 'param timeout: text = "30s"\nprint timeout\n')
 
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args(agl_file))
+        assert (
+            exec_command.run(_exec_args(agl_file, param_tokens=["--<entry>::timeout", "45s"]))
+            is None
+        )
 
-        assert exc_info.value.code == 1
-        assert "collides with a built-in exec option" in capsys.readouterr().err
+        assert capsys.readouterr().out == "45s\n"
 
     def test_undeclared_param_config_warns_but_runs(
         self,
@@ -2755,7 +2808,7 @@ class TestExecModuleRoots:
 
         with (
             patch(
-                "agm.commands.exec.load_module_roots",
+                "agm.cli_support.exec_roots.load_module_roots",
                 side_effect=ValueError("bad config"),
             ),
             pytest.raises(SystemExit) as exc_info,
@@ -2779,7 +2832,9 @@ class TestExecModuleRoots:
         def fake_resolve_stdlib_root(*, home: Path) -> Path:
             raise StaleStdlibError(stale_path)
 
-        monkeypatch.setattr(exec_command, "resolve_stdlib_root", fake_resolve_stdlib_root)
+        monkeypatch.setattr(
+            "agm.cli_support.exec_roots.resolve_stdlib_root", fake_resolve_stdlib_root
+        )
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_log(entry))
@@ -2807,8 +2862,7 @@ class TestExecModuleRoots:
         # Patch load_module_roots to return a ModuleRootsConfig with lib_root set.
         with monkeypatch.context() as mp:
             mp.setattr(
-                exec_command,
-                "load_module_roots",
+                "agm.cli_support.exec_roots.load_module_roots",
                 lambda *, home, proj_dir, cwd: ModuleRootsConfig(
                     lib_root=(str(lib_dir), tmp_path),  # absolute path
                     extra=(),
@@ -3064,6 +3118,53 @@ class TestFileStemProgramConfig:
 
         assert exec_command.run(_exec_args_no_log(agl_file)) is None
         assert capsys.readouterr().out == "7\n"
+
+    def test_file_stem_value_selects_entry_param_despite_imported_name_collision(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A bare file-stem key belongs to the entry module, not an import."""
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[workflow]\nregion = "configured"\n')
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+        (tmp_path / "settings.agl").write_text('param region: text = "imported"\n')
+        agl_file = tmp_path / "workflow.agl"
+        write_file_program(
+            agl_file,
+            "import settings\nparam region: text\nprogram def main() -> unit = print region\n",
+        )
+
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert capsys.readouterr().out == "configured\n"
+
+    def test_file_stem_value_for_engine_key_named_param_is_not_an_engine_override(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """An entry param keeps the file-stem config surface for its legal name."""
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[workflow]\ntimeout = "configured"\n')
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+        agl_file = tmp_path / "workflow.agl"
+        write_file_program(
+            agl_file,
+            "param timeout: text\nprogram def main() -> unit = print timeout\n",
+        )
+
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert capsys.readouterr().out == "configured\n"
 
 
 class TestSettingOverrideProvenanceWithNoStdlib:

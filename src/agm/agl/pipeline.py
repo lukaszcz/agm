@@ -80,6 +80,11 @@ class ParamDiscovery:
     warnings: tuple[Diagnostic, ...]
     compiled: "MatchCompiledProgram | None" = None
     programs: tuple[ProgramDeclInfo, ...] = ()
+    param_inventories: Mapping[int, tuple[ParamDeclInfo, ...]] = field(default_factory=dict)
+
+    def params_for(self, program: ProgramDeclInfo) -> tuple[ParamDeclInfo, ...]:
+        """Return the parameter inventory reachable from *program*'s module."""
+        return self.param_inventories.get(program.node_id, ())
 
 
 @dataclass(frozen=True, slots=True)
@@ -815,13 +820,12 @@ class PipelineDriver:
         *,
         compiled: "MatchCompiledProgram | None" = None,
     ) -> ParamDiscovery:
-        """Discover typed ``param`` declarations from a resolved program.
+        """Discover parameter inventories and linked ``program def`` declarations.
 
-        Runs typechecking and match compilation, then reads entry params and
-        every linked ``program def``. M2 deliberately ignores legal non-entry
-        params here; M3 will add their discovery. A supplied artifact is reused; otherwise
-        the successful artifact is returned for later
-        lowering by :meth:`run_prepared`.
+        Every program receives the params declared by its module and its
+        transitive imports. A supplied artifact is reused; otherwise the
+        successful artifact is returned for later lowering by
+        :meth:`run_prepared`.
         """
         from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.syntax.nodes import FuncDef, ParamDecl, scoped_public_name, static_items
@@ -878,24 +882,28 @@ class PipelineDriver:
                 warnings=all_warnings,
             )
 
-        infos: list[ParamDeclInfo] = []
-        for item in static_items(entry_cm.resolved.program.body.items):
-            if isinstance(item, ParamDecl):
-                param_type = entry_cm.type_env.get_binding_type(item.node_id)
+        infos_by_module: dict[ModuleId, tuple[ParamDeclInfo, ...]] = {}
+        for module_id, checked_module in checked.modules.items():
+            module_infos: list[ParamDeclInfo] = []
+            module_segments = module_id.segments if not module_id.is_entry else ("<entry>",)
+            for item in static_items(checked_module.resolved.program.body.items):
+                if not isinstance(item, ParamDecl):
+                    continue
+                param_type = checked_module.type_env.get_binding_type(item.node_id)
                 assert param_type is not None, (
                     f"Param {item.name!r} has no recorded binding type; checker invariant violated."
                 )
-                external_name = scoped_public_name(item.scope_path, item.name)
-                infos.append(
+                module_infos.append(
                     ParamDeclInfo(
-                        name=external_name,
+                        name=scoped_public_name(item.scope_path, item.name),
                         type=param_type,
                         has_default=item.default is not None,
                         line=item.span.start_line,
                         col=item.span.start_col,
+                        module_segments=module_segments,
                     )
                 )
-        infos.sort(key=lambda info: (info.line, info.col))
+            infos_by_module[module_id] = tuple(module_infos)
 
         program_infos: list[ProgramDeclInfo] = []
         for module_id, checked_module in checked.modules.items():
@@ -916,13 +924,20 @@ class PipelineDriver:
                 info.declaration_path,
             )
         )
+        inventories = {
+            program.node_id: _param_inventory(
+                program.module, prepared.resolved.graph, infos_by_module
+            )
+            for program in program_infos
+        }
         return ParamDiscovery(
-            params=tuple(infos),
+            params=_param_inventory(ENTRY_ID, prepared.resolved.graph, infos_by_module),
             checked=checked,
             diagnostics=(),
             warnings=all_warnings,
             compiled=compiled,
             programs=tuple(program_infos),
+            param_inventories=inventories,
         )
 
     def _wire_externs_or_fail(
@@ -1214,6 +1229,31 @@ def _append_checker_warnings(
 ) -> None:
     """Append one checked artifact's warnings at the typecheck phase boundary."""
     warnings.extend(checked.warnings)
+
+
+def _param_inventory(
+    module_id: "ModuleId",
+    graph: "ModuleGraph",
+    infos_by_module: "Mapping[ModuleId, tuple[ParamDeclInfo, ...]]",
+) -> tuple[ParamDeclInfo, ...]:
+    """Return params declared in *module_id*'s dependency subgraph.
+
+    The loader's adjacency is the sole reachability authority. In particular,
+    export declarations load dependency modules just like imports and therefore
+    contribute their params to a program inventory.
+    """
+    reachable: list[ModuleId] = []
+    seen: set[ModuleId] = set()
+    pending = [module_id]
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        reachable.append(current)
+        pending.extend(reversed(graph.adjacency[current]))
+
+    return tuple(info for mid in reachable for info in infos_by_module[mid])
 
 
 def apply_setting_overrides(

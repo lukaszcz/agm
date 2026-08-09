@@ -2046,7 +2046,6 @@ class _Resolver:
             decl_node_id=node.node_id,
             kind=BinderKind.param_binding,
             module_id=self._module_id,
-            is_module_param=True,
         )
         self._define(node.name, ref)
 

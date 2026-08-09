@@ -34,7 +34,8 @@ runner = "agm run pi -p '@%{PROMPT_FILE}'"
 # ``--topic``) override config values; config values for params suppress the
 # default expression. Inline ``-c`` programs with no declaration have no config
 # table. Engine-key overrides (e.g. ``timeout``) take precedence over ``[exec]``
-# (``[<program>].X > [exec].X > engine default``).
+# (``[<program>].X > [exec].X > engine default``), unless the key names an
+# entry param, in which case it supplies that param.
 #
 # ``agm repl`` does not use per-program tables or per-param CLI options.
 # REPL parameters require source defaults. This table does not override REPL

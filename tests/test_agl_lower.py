@@ -2309,7 +2309,7 @@ class TestLowerGraph:
         # lowering; call validate_ir explicitly so the test pins it regardless.
         validate_ir(prog, deep=True)
 
-    def test_lower_program_skips_non_entry_params_and_already_linked_modules(
+    def test_lower_program_keeps_module_params_and_already_linked_modules(
         self, tmp_path: Path
     ) -> None:
         import os
@@ -2348,6 +2348,10 @@ class TestLowerGraph:
                 item = items[origin.source_index]
                 assert origin.is_function == (isinstance(item, FuncDef) and not item.is_builtin)
 
+        library_params = [param for param in program.params if param.module == lib_mid]
+        assert [param.public_name for param in library_params] == ["retained"]
+        assert library_params[0].qualified_public_name == "lib::retained"
+
         library_origins = link.initializer_origins[lib_mid]
         assert len(library_origins) == 2
         sentinel = tuple(reversed(library_origins))
@@ -2360,14 +2364,12 @@ class TestLowerGraph:
         assert link.initializer_origins[lib_mid] == sentinel
         assert relinked.modules[lib_mid].initializers == ()
 
-        # Re-linking the current entry is unsupported: it owns the runtime
-        # params collected below, unlike already-linked dependency modules.
-        with pytest.raises(KeyError):
-            lower_program(
-                _compiled_checked(checked),
-                _link=link,
-                _already_linked=frozenset({checked.entry_id}),
-            )
+        entry_relinked = lower_program(
+            _compiled_checked(checked),
+            _link=link,
+            _already_linked=frozenset({checked.entry_id}),
+        )
+        assert entry_relinked.modules[checked.entry_id].initializers == ()
 
     def test_lower_program_type_alias_no_spurious_nominal(self, tmp_path: Path) -> None:
         """Type alias does not register a spurious NominalId in lower_program.

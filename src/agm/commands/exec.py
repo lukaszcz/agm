@@ -61,29 +61,21 @@ from typing import TypeVar
 
 from agm.agl import PipelineDriver
 from agm.agl.diagnostics import format_diagnostic
-from agm.agl.modules.roots import assemble_roots
 from agm.agl.runtime.agents import value_driven_agent_factory
 from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES
+from agm.agl.syntax.nodes import ParamDecl, scoped_public_name, static_items
 from agm.cli_support.args import ExecArgs
 from agm.cli_support.engine_seeds import build_host_engine_seeds, check_max_iters
-from agm.cli_support.exec_params import (
-    check_param_collisions,
-    parse_param_tokens,
-    resolve_param_values,
-)
+from agm.cli_support.exec_params import parse_param_tokens, resolve_param_values
+from agm.cli_support.exec_roots import effective_exec_roots
 from agm.config.context import current_config_context
 from agm.config.general import (
     exec_config_from_merged,
     file_config_from_merged,
     load_merged_config,
 )
-from agm.config.module_roots import (
-    StaleStdlibError,
-    load_module_roots,
-    resolve_lib_root,
-    resolve_stdlib_root,
-)
+from agm.config.module_roots import StaleStdlibError
 from agm.core import dry_run
 from agm.core.fs import read_text_arg
 from agm.core.log import (
@@ -135,14 +127,28 @@ def run(args: ExecArgs) -> None:
         program, next_id = wrap_inline_program(parsed.program, next_node_id=parsed.next_id)
         parsed = replace(parsed, program=program, next_id=next_id)
 
-    # Fetch the [<program_key>] table once. The same table feeds both the
-    # engine-key overlay in exec_config_from_merged and param resolution in
-    # resolve_param_values, so both always read the same program section.
+    # Fetch the [<program_key>] table once. A file-stem table belongs to the
+    # entry module: a key matching one of its params stays a param value even
+    # when its name also belongs to the engine-key catalog. The parser has all
+    # the entry declarations needed to keep that distinction before engine
+    # configuration is resolved.
     program_table: dict[str, object] = (
         file_config_from_merged(merged_config, program_key) if program_key is not None else {}
     )
+    parsed_entry_param_names = (
+        {
+            scoped_public_name(item.scope_path, item.name)
+            for item in static_items(parsed.program.body.items)
+            if isinstance(item, ParamDecl)
+        }
+        if parsed.program is not None
+        else set()
+    )
+    engine_program_table = {
+        key: value for key, value in program_table.items() if key not in parsed_entry_param_names
+    }
     try:
-        config = exec_config_from_merged(merged_config, program_table=program_table)
+        config = exec_config_from_merged(merged_config, program_table=engine_program_table)
     except ValueError as exc:
         print(f"Error: invalid exec configuration: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
@@ -220,7 +226,7 @@ def run(args: ExecArgs) -> None:
 
     engine_seeds = build_host_engine_seeds(
         config=config,
-        primary_table=program_table,
+        primary_table=engine_program_table,
         fallback_table=toml_dict(merged_config.get("exec")),
         cli_values=cli_values,
         agent=args.agent,
@@ -233,34 +239,16 @@ def run(args: ExecArgs) -> None:
     # overrides the CLI flag, which overrides the config-file layer.
     # ----------------------------------------------------------------
     try:
-        mr_config = load_module_roots(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
-    except ValueError as exc:
+        roots = effective_exec_roots(
+            entry_path=entry_path,
+            module_paths=args.module_paths,
+            cwd=ctx.cwd,
+            home=ctx.home,
+            proj_dir=ctx.proj_dir,
+        )
+    except (StaleStdlibError, ValueError) as exc:
         print(f"Error: invalid module roots configuration: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
-
-    # Resolve the lib_root path.
-    try:
-        stdlib_root = resolve_stdlib_root(home=ctx.home)
-    except StaleStdlibError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        raise SystemExit(1) from exc
-    resolved_lib_root = resolve_lib_root(mr_config, home=ctx.home)
-
-    # The invocation root is the entry file's directory (for file exec) or
-    # the cwd (for -c inline exec).
-    if entry_path is not None:
-        invocation_root = entry_path.parent
-    else:
-        invocation_root = ctx.cwd
-
-    roots = assemble_roots(
-        invocation_root=invocation_root,
-        stdlib_root=stdlib_root,
-        lib_root=resolved_lib_root,
-        configured=mr_config.extra,
-        cli=args.module_paths,
-        cwd=ctx.cwd,
-    )
 
     prepared = PipelineDriver.prepare_parsed_entry(
         parsed,
@@ -314,26 +302,39 @@ def run(args: ExecArgs) -> None:
             print(f"Error: no program matches '{args.program}'.{suffix}", file=sys.stderr)
             raise SystemExit(1)
 
+    selected_params = (
+        discovery.params if selected_program is None else discovery.params_for(selected_program)
+    )
     external_params: dict[str, object] = {}
-    collision_errors = check_param_collisions(discovery.params, source_name=diagnostic_source_name)
-    if collision_errors:
-        for err in collision_errors:
-            print(f"Error: {err}", file=sys.stderr)
-        raise SystemExit(1)
     try:
-        cli_params = parse_param_tokens(discovery.params, args.param_tokens)
+        cli_params = parse_param_tokens(selected_params, args.param_tokens)
     except ValueError as exc:
         exit_with_usage_error(["exec"], f"error: {exc}")
 
-    config_param_values = {k: v for k, v in program_table.items() if k not in ENGINE_KEY_NAMES}
-    declared_names = {p.name for p in discovery.params}
+    entry_params = {
+        param.name: param for param in selected_params if param.module_segments == ("<entry>",)
+    }
+    config_param_values = {
+        key: value
+        for key, value in program_table.items()
+        if key not in ENGINE_KEY_NAMES or key in entry_params
+    }
     resolved_params, config_warnings = resolve_param_values(
-        declared_names,
+        set(entry_params),
         config_param_values,
-        cli_params,
+        {},
         config_key=program_key,
     )
-    external_params.update(resolved_params)
+    param_name_counts: dict[str, int] = {}
+    for param in selected_params:
+        param_name_counts[param.name] = param_name_counts.get(param.name, 0) + 1
+    external_params.update(
+        {
+            (entry_params[name].qualified_name if param_name_counts[name] > 1 else name): value
+            for name, value in resolved_params.items()
+        }
+    )
+    external_params.update(cli_params)
     for msg in config_warnings:
         print(msg, file=sys.stderr)
 

@@ -474,6 +474,7 @@ def _single_module_graph(program: Program, *, origin_path: Path | None) -> Modul
         },
         entry_id=ENTRY_ID,
         sccs=((ENTRY_ID,),),
+        adjacency={ENTRY_ID: ()},
     )
 
 

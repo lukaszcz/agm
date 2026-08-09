@@ -943,7 +943,7 @@ class IrInterpreter:
     def run(self, *, program_symbol: SymbolId | None = None) -> dict[str, Value]:
         """Execute all modules in order and return the entry module's public bindings.
 
-        Installs entry-module params into the base frame BEFORE any module
+        Installs every linked module param into the base frame BEFORE any module
         initializer runs, then iterates over all modules in insertion order
         (library modules first, entry last) executing each module's initializers.
         When *program_symbol* is provided, invokes that selected ``program def``
@@ -972,7 +972,7 @@ class IrInterpreter:
                 # fixpoint — so no separate "did the entry frame start" gate is
                 # needed here.
                 self._install_entry_function_closures()
-                self._install_entry_params()
+                self._install_params()
 
                 for mod in self._program.modules.values():
                     for node in mod.initializers:
@@ -1001,8 +1001,8 @@ class IrInterpreter:
         self.initializer_values.append(value)
         self.module_initializer_values.setdefault(module_id, []).append(value)
 
-    def _install_entry_params(self) -> None:
-        """Install resolved entry parameters before evaluating initializers."""
+    def _install_params(self) -> None:
+        """Install resolved module parameters before evaluating initializers."""
         for ir_param in self._program.params:
             if ir_param.symbol in self._param_values:
                 self._frames[0][ir_param.symbol] = self._param_values[ir_param.symbol]

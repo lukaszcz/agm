@@ -3164,6 +3164,18 @@ class TestParams:
         _n, _t, val = s.declared_params()[0]
         assert val is not None
 
+    def test_imported_required_param_fails_before_interpreter_creation(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "settings.agl").write_text("param token: text\n")
+        session = ReplSession(lib_root=tmp_path, default_stdlib=False)
+
+        result = session.eval_entry("import settings\n()")
+
+        assert not result.ok
+        assert "Missing required param" in result.diagnostics[0].message
+        assert "token" in result.diagnostics[0].message
+
     def test_declared_param_typed_value(self) -> None:
         s = ReplSession()
         s.eval_entry("param count: int = 42")

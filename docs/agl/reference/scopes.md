@@ -124,12 +124,11 @@ program def main() -> unit =
 
 A scoped parameter follows the same member and duplicate rules as every other
 member: visible bare inside its region, by its exact path from outside, and
-through `open`. An entry-module parameter's **external key** — the name the
-CLI flag and the config table entry use to supply a value — is its full path
-spelling (`Deploy::region`), which is what makes grouping related parameters
-under one scope useful. A scoped parameter outside the file entry module has
-no external key or runtime binding, so reading it is a static error. See
-[Host environment](host-environment.md#params) for how the host resolves an
+through `open`. A parameter's **short external spelling** — the CLI flag name when it is
+unambiguous — is its full path spelling (`Deploy::region`), which is what makes
+grouping related parameters under one scope useful. A module-qualified spelling
+identifies the declaration when another inventory param shares that short name.
+See [Host environment](host-environment.md#params) for how the host resolves an
 external param value.
 
 ## Import and export

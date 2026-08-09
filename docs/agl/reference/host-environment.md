@@ -60,20 +60,14 @@ runtime surprise.
 
 ## Params
 
-Entry-module parameters are declared with `param`
-([Bindings and scope](bindings-and-scope.md)) and may be supplied by the
-host as named external values at run start. An entry-module param declared as a
-member of a named scope region ([Named scopes](scopes.md#parameters)) is
-supplied under its full path spelling — `param Deploy::region` is named
-`Deploy::region` by the host, e.g. `--Deploy::region` on the CLI. A parameter
-outside the file entry module has no host value or runtime binding, so reading
-it is a static error. In a config file the same key must be quoted, since `::`
-is not a legal bare TOML key:
-
-```toml
-[demo]
-"Deploy::region" = "prod"
-```
+Parameters are declared with `param` ([Bindings and scope](bindings-and-scope.md))
+and may be supplied by the host as named external values at run start. A
+program's inventory includes its module's params and those of its transitive
+imports. A scoped param is supplied under its full path spelling —
+`param Deploy::region` is named `Deploy::region` by the host, e.g.
+`--Deploy::region` on the CLI. The module-qualified CLI spelling is always
+accepted, for example `--review-tools/judge::Deploy::region`; it is required
+when inventory params have the same short spelling.
 
 Validation happens after type checking and **before any statement executes**:
 
@@ -129,8 +123,9 @@ is omitted. The `Option[text]` settings (`log-file`, `timeout`) take a
 `agm exec` resolves initial values as:
 
 ```
-setting X:  source (std/config::X := e)  >  CLI --X  >  [<program>].X  >  [exec].X  >  declared default
-param   Y:  CLI --Y                       >  [<program>].Y  >  source default (param Y = e) >  required error
+setting X:       source (std/config::X := e)  >  CLI --X  >  [<program>].X  >  [exec].X  >  declared default
+entry param Y:   CLI --Y                       >  [<program>].Y  >  source default (param Y = e) >  required error
+imported param Y: CLI --Y                       >  source default (param Y = e) >  required error
 ```
 
 The CLI flag and config-file layers supply a setting's **initial** value; a
@@ -146,8 +141,10 @@ parameters therefore require source defaults.
 
 `[exec]` holds global engine defaults with kebab field names (`strict-json`,
 `max-iters`, `log-file`). For `agm exec`, a `[<program>]` top-level section is
-keyed by the `.agl` file stem and overrides both engine settings and param
-values. Inline `-c` source has no per-program config section.
+keyed by the `.agl` file stem and overrides engine settings and params declared
+by the entry file. When its key names an entry param and an engine setting, it
+supplies the param. Params declared in imported modules receive a CLI value or a
+source default. Inline `-c` source has no per-program config section.
 
 `agm repl` does not read `[<program>]` tables. They never override REPL engine
 settings.

@@ -225,7 +225,7 @@ entry and its library modules.
 
 ```bash
 agm repl                        # launch; type :help for commands, :quit to exit
-agm repl --confirm-agents       # confirm each agent call; params from config/defaults
+agm repl --confirm-agents       # confirm each agent call; params use source defaults
 agl> let n = 21 * 2             # bindings persist across entries → "n : int = 42"
 ```
 

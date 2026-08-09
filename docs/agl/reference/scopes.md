@@ -45,11 +45,10 @@ print(Text::display("ready"))
 ```
 
 A region contains nested regions, header `open` and `import` declarations,
-`export` declarations, static declarations (`def`, `extern def`, `record`,
-`enum`, `exception`, `type`, every `builtin` form), `param` declarations, and
-`let`/`var` bindings. Bare expressions,
-`:=` assignments, program declarations, and infix declarations are not
-allowed there.
+`export` declarations, static declarations (`def`, `program def`, `extern def`,
+`record`, `enum`, `exception`, `type`, every `builtin` form), `param`
+declarations, and `let`/`var` bindings. Bare expressions, `:=` assignments,
+`program NAME` declarations, and infix declarations are not allowed there.
 
 ## Binder paths
 

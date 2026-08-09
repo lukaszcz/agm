@@ -307,6 +307,12 @@ class ExecutableProgram:
       ``nominals``     — map from ``NominalId`` to ``NominalDescriptor``.
       ``sources``      — map from ``SourceId`` to ``SourceFile``.
       ``functions``    — ordinary functions and externs, keyed by ``FunctionId``.
+      ``program_symbols`` — source declaration node id -> symbol for each linked
+        ``program def``. Its values are unique.
+      ``program_functions`` — public ``program def`` symbol -> zero-argument,
+        body-backed function id, used by the host invocation entry point. Its
+        keys are exactly the ``program_symbols`` values, making the two tables
+        a bidirectional index.
       ``builtin_nominals`` — bare built-in type name -> the ``NominalId`` a
         host mints for it (see ``agm.agl.ir.builtin_nominals``), built during
         lowering from the program's ``builtin`` declarations. Defaults to
@@ -326,6 +332,8 @@ class ExecutableProgram:
     nominals: dict[NominalId, NominalDescriptor]
     sources: dict[SourceId, SourceFile]
     functions: dict[FunctionId, FunctionDescriptor] = field(default_factory=dict)
+    program_symbols: dict[int, SymbolId] = field(default_factory=dict)
+    program_functions: dict[SymbolId, FunctionId] = field(default_factory=dict)
     params: tuple[IrParam, ...] = ()
     contracts: dict["ContractId", "ContractRequest"] = field(default_factory=dict)
     dry_run_inventory: "tuple[DryRunEntry, ...]" = ()

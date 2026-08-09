@@ -29,7 +29,8 @@ help for a single command or command group. Each command also accepts `--help`.
 | [Workspace and project lifecycle](workspaces.md) | `agm open`/`close`, `agm workspace`/`wsp`, `agm init`, `agm sync` |
 | [Agent workflows](agents.md) | `agm review`, `agm revise`, `agm refine` |
 | [Loop automation](loop.md) | `agm loop` run/step/select, prompts, selectors, logging |
-| [AgL workflow DSL](agl.md) | `agm exec`, `agm repl` |
+| [`agm exec`](exec.md) | Execute an AgL workflow program |
+| [AgL workflow DSL](agl.md) | `agm repl` |
 | [Configuration](config.md) | `agm config` copy/env/update |
 | [Dependencies](dependencies.md) | `agm dep` |
 | [Sandboxing](run.md) | `agm run` |

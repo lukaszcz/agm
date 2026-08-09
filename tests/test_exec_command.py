@@ -11,6 +11,7 @@ Covers:
 
 from __future__ import annotations
 
+import decimal
 import os
 import re
 import stat
@@ -170,6 +171,16 @@ class TestExecArgsParsing:
 
         args = recorded_runs[0]
         assert getattr(args, "no_log") is True
+
+    def test_exec_program_flag(
+        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
+    ) -> None:
+        agl_file = tmp_path / "test.agl"
+        agl_file.write_text("program def main() -> unit = ()\n")
+
+        result = invoke(runner, ["exec", "-p", "main", str(agl_file)])
+        assert result.exit_code == 0
+        assert getattr(recorded_runs[0], "program") == "main"
 
 
 class TestExecCommandArgParsing:
@@ -2033,6 +2044,7 @@ class TestExecTimeoutAndLogFileFlags:
     def _capture_timeout(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
         from collections.abc import Mapping
 
+        from agm.agl.ir.ids import SymbolId
         from agm.agl.ir.program import ExecutableProgram
         from agm.agl.matchcompile import MatchCompiledProgram
         from agm.agl.pipeline import PipelineDriver as RealRuntime
@@ -2054,6 +2066,7 @@ class TestExecTimeoutAndLogFileFlags:
                 executable: ExecutableProgram | None = None,
                 host_settings_policy: HostSettingsPolicy | None = None,
                 builtin_host_settings: Mapping[str, Value] | None = None,
+                program_symbol: SymbolId | None = None,
             ) -> RunResult:
                 captured["shell_exec_timeout"] = self._shell_exec_timeout
                 return super().run_prepared(
@@ -2065,6 +2078,7 @@ class TestExecTimeoutAndLogFileFlags:
                     executable=executable,
                     host_settings_policy=host_settings_policy,
                     builtin_host_settings=builtin_host_settings,
+                    program_symbol=program_symbol,
                 )
 
         monkeypatch.setattr(exec_command, "PipelineDriver", CapturingRuntime)
@@ -3188,6 +3202,7 @@ class TestF1StemVsProgramNameBug:
         """
         from collections.abc import Mapping
 
+        from agm.agl.ir.ids import SymbolId
         from agm.agl.ir.program import ExecutableProgram
         from agm.agl.matchcompile import MatchCompiledProgram
         from agm.agl.pipeline import PipelineDriver as RealRuntime
@@ -3226,6 +3241,7 @@ class TestF1StemVsProgramNameBug:
                 executable: ExecutableProgram | None = None,
                 host_settings_policy: HostSettingsPolicy | None = None,
                 builtin_host_settings: Mapping[str, Value] | None = None,
+                program_symbol: SymbolId | None = None,
             ) -> RunResult:
                 captured["shell_exec_timeout"] = self._shell_exec_timeout
                 return super().run_prepared(
@@ -3237,6 +3253,7 @@ class TestF1StemVsProgramNameBug:
                     executable=executable,
                     host_settings_policy=host_settings_policy,
                     builtin_host_settings=builtin_host_settings,
+                    program_symbol=program_symbol,
                 )
 
         monkeypatch.setattr(exec_command, "PipelineDriver", CapturingRuntime)
@@ -3247,6 +3264,103 @@ class TestF1StemVsProgramNameBug:
         # Engine shell-exec timeout must come from [bar] (60m = 3600s), not [exec] (30s).
         shell_timeout = captured["shell_exec_timeout"]
         assert shell_timeout == pytest.approx(3600.0)
+
+
+class TestExecProgramSelection:
+    """Program-def entry selection keeps legacy top-level execution intact."""
+
+    def test_runs_the_sole_program_implicitly(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "sole.agl"
+        agl_file.write_text('program def main() -> unit = print "sole"\n')
+
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert capsys.readouterr().out == "sole\n"
+
+    def test_requires_a_program_when_the_entry_declares_several(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "several.agl"
+        agl_file.write_text(
+            'program def first() -> unit = print "first"\n'
+            "scope review\n"
+            'program def main() -> unit = print "review"\n'
+            "end review\n"
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "first" in captured.err
+        assert "review::main" in captured.err
+        assert captured.out == ""
+
+    def test_rejects_an_unknown_program_path(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "sole.agl"
+        agl_file.write_text('program def main() -> unit = print "sole"\n')
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file, program="missing"))
+
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "main" in captured.err
+        assert captured.out == ""
+
+    def test_runs_legacy_top_level_when_no_program_is_declared(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "legacy.agl"
+        agl_file.write_text('print "legacy"\n')
+
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert capsys.readouterr().out == "legacy\n"
+
+    def test_selected_program_uses_and_restores_the_pinned_decimal_context(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "decimal.agl"
+        agl_file.write_text("program def main() -> unit = print(1.0 / 3.0)\n")
+        previous = decimal.getcontext().copy()
+        decimal.getcontext().prec = 4
+        try:
+            assert exec_command.run(_exec_args_no_log(agl_file)) is None
+            assert capsys.readouterr().out == "0.3333333333333333333333333333\n"
+            assert decimal.getcontext().prec == 4
+        finally:
+            decimal.setcontext(previous)
+
+    def test_selected_program_deep_recursion_uses_the_agl_call_limit(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "recursive.agl"
+        agl_file.write_text(
+            "def recurse(n: int) -> unit = recurse(n + 1)\n"
+            "program def main() -> unit = recurse(0)\n"
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file, max_call_depth=512))
+
+        assert exc_info.value.code == 2
+        assert "RecursionError" in capsys.readouterr().err
+
+    def test_selected_program_error_has_its_source_location(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "failure.agl"
+        agl_file.write_text("program def main() -> unit = print(1 / 0)\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+
+        assert exc_info.value.code == 2
+        assert "at line 1" in capsys.readouterr().err
 
 
 class TestProgramLogFilePathResolution:

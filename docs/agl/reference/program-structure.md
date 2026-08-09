@@ -24,6 +24,7 @@ item          ::= import_decl                     (* header position only *)
              | builtin_modifier? exception_def     (* root only *)
              | param_decl                          (* entry module root only *)
              | program_decl                        (* root only *)
+             | program_func_def                    (* root or scope region *)
              | infix_decl                          (* root only *)
              | builtin_var_def                     (* root only; std/config only *)
              | func_def                            (* root only *)
@@ -79,15 +80,23 @@ region.
   export re-roots its forwarded atoms under the region's path. See
   [Named scopes](scopes.md#import-and-export) and
   [Modules](modules.md#import-and-export-inside-a-scope-region).
-- **`program` declaration** — the program name used for params config lookup.
-  Entry-module only.
+- **`program NAME` declaration** — the program name used for params config
+  lookup. Entry-module only.
+- **`program def` declaration** — marks a non-generic, zero-argument,
+  `unit`-returning ordinary function as an executable entry point. It cannot be a
+  builtin, extern, or method. It may appear at the module root or as a non-method
+  member of a named scope region (never in an ordinary nested block or as a type
+  method), remains callable like any other function, and is addressed by its
+  declaration path (`main`, `review::main`). Entry selection considers only
+  `program def` declarations in the entry module; declarations in imported modules
+  remain ordinary callable functions.
 - **`builtin var` declarations** — body-less engine-backed mutable bindings.
   They are reserved to the canonical standard-library `std/config` module;
   entry programs and ordinary libraries cannot declare them. A `builtin var`
   may be a member of a named scope region inside `std/config`, read and
   written through its full path, exactly like any other scoped member.
 - **`infix` declarations** — root-only operator-fixity declarations.
-- **Function declarations** — ordinary `def`s and body-less companion-backed
+- **Function declarations** — ordinary `def`s, `program def` entry functions, and body-less companion-backed
   `extern def`s. They may be declared at the root or in named scope regions.
   Root and same-scope `def`s may refer to declarations that appear later,
   enabling mutual recursion (see [Functions](functions.md)). An ordinary `def`

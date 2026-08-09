@@ -55,6 +55,8 @@ _BUILTIN_EXEC_FLAGS: frozenset[str] = frozenset(
     {
         "--command",
         "-c",
+        "--program",
+        "-p",
         "--module-path",
         "-I",
         "--max-call-depth",

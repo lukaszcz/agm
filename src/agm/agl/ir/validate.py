@@ -31,6 +31,9 @@ Two tiers (validate_ir runs ONLY when explicitly called):
        engine-key catalog.
     9. Every ``IrField`` nominal is registered, field-bearing, and declares
        its projected field (on at least one enum payload shape for enums).
+    10. ``program_symbols`` and ``program_functions`` form a one-to-one,
+        bidirectional index of linked ``program def`` entries with registered
+        symbols and zero-argument ``IrFunctionBody`` functions.
 
 The expression dispatcher uses a closed structural ``match`` with a final
 ``assert_never(node)`` arm so that adding an ``IrExpr`` variant in a
@@ -1096,7 +1099,61 @@ def _validate_program_tables(ctx: _Context) -> None:
             case other:  # pragma: no cover
                 assert_never(other)
 
-    # 5. params table — each IrParam must reference a registered symbol, and
+    # 5. program-entry maps — each source declaration maps to a registered
+    #    symbol and its matching public function. Together the maps are a
+    #    bidirectional index of linked ``program def`` declarations.
+    program_entry_symbols: set[SymbolId] = set()
+    for declaration_id, symbol in program.program_symbols.items():
+        if symbol in program_entry_symbols:
+            raise InvalidIrError(
+                f"program_symbols entries map multiple declaration IDs to symbol_id={symbol!r}"
+            )
+        program_entry_symbols.add(symbol)
+        if symbol not in program.symbols:
+            raise InvalidIrError(
+                f"program_symbols entry for declaration_id={declaration_id!r} references"
+                f" symbol_id={symbol!r} which is not in program.symbols"
+            )
+        if symbol not in program.program_functions:
+            raise InvalidIrError(
+                f"program_symbols entry for declaration_id={declaration_id!r} references"
+                f" symbol_id={symbol!r} which has no program_functions entry"
+            )
+
+    for symbol, function_id in program.program_functions.items():
+        if symbol not in program.symbols:
+            raise InvalidIrError(
+                f"program_functions entry for symbol_id={symbol!r} is not in program.symbols"
+            )
+        function = program.functions.get(function_id)
+        if function is None:
+            raise InvalidIrError(
+                f"program_functions entry for symbol_id={symbol!r} references"
+                f" function_id={function_id!r} which is not in program.functions"
+            )
+        if function.function_symbol != symbol:
+            raise InvalidIrError(
+                f"program_functions entry for symbol_id={symbol!r} references"
+                f" function_id={function_id!r} whose function_symbol="
+                f"{function.function_symbol!r} differs"
+            )
+        if not isinstance(function.impl, IrFunctionBody):
+            raise InvalidIrError(
+                f"program_functions entry for symbol_id={symbol!r} references"
+                f" function_id={function_id!r} without an IrFunctionBody implementation"
+            )
+        if function.params:
+            raise InvalidIrError(
+                f"program_functions entry for symbol_id={symbol!r} references"
+                f" function_id={function_id!r} with parameters;"
+                " program entries require zero arguments"
+            )
+        if symbol not in program_entry_symbols:
+            raise InvalidIrError(
+                f"program_functions entry for symbol_id={symbol!r} has no program_symbols entry"
+            )
+
+    # 6. params table — each IrParam must reference a registered symbol, and
     #    the default expression (if present) must be structurally valid.
     for ir_param in program.params:
         _validate_ir_param(ir_param, ctx)

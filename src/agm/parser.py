@@ -533,12 +533,13 @@ _HELP_TEXTS: dict[str, str] = {
                  [--max-call-depth N] [--agent AGL_LITERAL]
                  [--timeout DURATION|--no-timeout] [--dry-run]
                  [--log|--log-file PATH|--no-log] [--no-log-file]
-                 [--no-stdlib] [-I DIR]...
+                 [--no-stdlib] [-I DIR]... [-p PATH]
                  (FILE | -c COMMAND) [--PARAM VALUE]...
 
         Execute an AgL (Agent Language) workflow program from FILE, or from
         the inline program text given with -c/--command.
 
+        A sole `program def` runs implicitly; select one of several with -p PATH.
         Each `param` declaration in the program becomes a `--<name>` option.
         Boolean params use the `--name/--no-name` flag form. Structured types
         take a JSON string. Run `agm exec FILE --help` to show discovered params.
@@ -550,6 +551,7 @@ _HELP_TEXTS: dict[str, str] = {
 
         Options:
           -c, --command COMMAND  Execute the program given as COMMAND instead of FILE.
+          -p, --program PATH     Select a program def by declaration path.
           --strict-json         Require bare JSON output from agents (no recovery).
           --no-strict-json      Use lenient JSON recovery (default).
           --max-iters N         Cap unbounded loops; off by default (CLI > config).

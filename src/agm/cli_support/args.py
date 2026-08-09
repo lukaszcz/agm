@@ -219,6 +219,7 @@ class ExecArgs:
     param_tokens: list[str] = field(default_factory=list)
     log: bool = False
     command: str | None = None
+    program: str | None = None
     module_paths: list[str] = field(default_factory=list)
     no_stdlib: bool = False
     max_iters: int | None = None

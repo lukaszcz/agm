@@ -23,6 +23,7 @@ from agm.agl.ir import (
     CompareKind,
     ExecutableModule,
     ExecutableProgram,
+    ExternFunctionBody,
     FunctionDescriptor,
     FunctionId,
     IndexKind,
@@ -153,6 +154,8 @@ def _make_program(
     nominals: dict[NominalId, NominalDescriptor] | None = None,
     sources: dict[SourceId, SourceFile] | None = None,
     functions: "dict[FunctionId, FunctionDescriptor] | None" = None,
+    program_symbols: dict[int, SymbolId] | None = None,
+    program_functions: dict[SymbolId, FunctionId] | None = None,
 ) -> ExecutableProgram:
     """Build a valid base program; callers override individual tables."""
     nom_desc = NominalDescriptor(
@@ -171,6 +174,8 @@ def _make_program(
         nominals={NOM0: nom_desc} if nominals is None else nominals,
         sources={SID0: sf} if sources is None else sources,
         functions=functions or {},
+        program_symbols={} if program_symbols is None else program_symbols,
+        program_functions={} if program_functions is None else program_functions,
     )
 
 
@@ -1476,6 +1481,106 @@ class TestFunctionDescriptorTable:
         fn_desc = _make_fn_desc(mod_id=MOD_B, fn_sym=SYM0)  # MOD_B not in default modules
         prog = _make_program(functions={FN0: fn_desc})
         with pytest.raises(InvalidIrError, match="module_id"):
+            validate_ir(prog)
+
+
+class TestProgramEntryMaps:
+    """Linked ``program def`` symbol/function maps must agree with each other."""
+
+    def test_valid_program_entry_maps_pass(self) -> None:
+        fn_desc = _make_fn_desc(fn_sym=SYM0)
+        prog = _make_program(
+            functions={FN0: fn_desc},
+            program_symbols={10: SYM0},
+            program_functions={SYM0: FN0},
+        )
+
+        validate_ir(prog)
+
+    def test_program_entry_cannot_target_extern_function(self) -> None:
+        extern = FunctionDescriptor(
+            function_id=FN0,
+            function_symbol=SYM0,
+            module_id=MOD_A,
+            params=(),
+            impl=ExternFunctionBody(name="main"),
+        )
+        prog = _make_program(
+            functions={FN0: extern},
+            program_symbols={10: SYM0},
+            program_functions={SYM0: FN0},
+        )
+
+        with pytest.raises(InvalidIrError, match="IrFunctionBody"):
+            validate_ir(prog)
+
+    def test_program_entry_cannot_target_parameterized_function(self) -> None:
+        fn_desc = _make_fn_desc(fn_sym=SYM0, params=(_make_fn_param(),))
+        prog = _make_program(
+            symbols={SYM0: _sym_desc_imm(), SYM1: _fn_sym_desc()},
+            functions={FN0: fn_desc},
+            program_symbols={10: SYM0},
+            program_functions={SYM0: FN0},
+        )
+
+        with pytest.raises(InvalidIrError, match="zero arguments"):
+            validate_ir(prog)
+
+    def test_program_symbol_must_be_registered(self) -> None:
+        prog = _make_program(program_symbols={10: SYM1})
+
+        with pytest.raises(InvalidIrError, match="program_symbols"):
+            validate_ir(prog)
+
+    def test_program_symbol_must_have_a_function_entry(self) -> None:
+        prog = _make_program(program_symbols={10: SYM0})
+
+        with pytest.raises(InvalidIrError, match="program_functions"):
+            validate_ir(prog)
+
+    def test_program_symbols_reject_duplicate_declarations_for_one_symbol(self) -> None:
+        fn_desc = _make_fn_desc(fn_sym=SYM0)
+        prog = _make_program(
+            functions={FN0: fn_desc},
+            program_symbols={10: SYM0, 11: SYM0},
+            program_functions={SYM0: FN0},
+        )
+
+        with pytest.raises(InvalidIrError, match="program_symbols"):
+            validate_ir(prog)
+
+    def test_program_function_symbol_must_be_registered(self) -> None:
+        prog = _make_program(program_functions={SYM1: FN0})
+
+        with pytest.raises(InvalidIrError, match="program_functions"):
+            validate_ir(prog)
+
+    def test_program_function_must_be_registered(self) -> None:
+        prog = _make_program(
+            program_symbols={10: SYM0},
+            program_functions={SYM0: FunctionId(99)},
+        )
+
+        with pytest.raises(InvalidIrError, match="program_functions"):
+            validate_ir(prog)
+
+    def test_program_function_must_match_its_function_descriptor(self) -> None:
+        fn_desc = _make_fn_desc(fn_sym=SYM0)
+        prog = _make_program(
+            symbols={SYM0: _sym_desc_imm(), SYM1: _fn_sym_desc()},
+            functions={FN0: fn_desc},
+            program_symbols={10: SYM1},
+            program_functions={SYM1: FN0},
+        )
+
+        with pytest.raises(InvalidIrError, match="function_symbol"):
+            validate_ir(prog)
+
+    def test_program_function_must_have_a_source_declaration(self) -> None:
+        fn_desc = _make_fn_desc(fn_sym=SYM0)
+        prog = _make_program(functions={FN0: fn_desc}, program_functions={SYM0: FN0})
+
+        with pytest.raises(InvalidIrError, match="program_symbols"):
             validate_ir(prog)
 
     def test_function_param_symbol_not_in_symbols_raises(self) -> None:

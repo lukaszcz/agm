@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from agm.agl.capabilities import HostCapabilities
+    from agm.agl.modules.ids import ModuleId
     from agm.agl.runtime.agents import AgentFn
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.externs import ExternRegistry
@@ -16,6 +17,7 @@ __all__ = [
     "CallSiteInfo",
     "HostEnvironment",
     "ParamDeclInfo",
+    "ProgramDeclInfo",
 ]
 
 
@@ -66,6 +68,33 @@ class CallSiteInfo:
     parse_policy: str
     line: int
     col: int
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramDeclInfo:
+    """Static summary of one ``program def`` declaration.
+
+    ``module`` and ``scope_path`` retain the declaration identity in structured
+    form. ``declaration_path`` is the external spelling within that module;
+    ``qualified_path`` prefixes it with a non-entry module route.
+    """
+
+    module: "ModuleId"
+    scope_path: tuple[str, ...]
+    name: str
+    node_id: int
+
+    @property
+    def declaration_path(self) -> str:
+        """Return the program's scope-qualified declaration spelling."""
+        return "::".join((*self.scope_path, self.name))
+
+    @property
+    def qualified_path(self) -> str:
+        """Return the program spelling qualified by its module when available."""
+        if self.module.is_entry:
+            return self.declaration_path
+        return f"{self.module.path_str()}::{self.declaration_path}"
 
 
 @dataclass(frozen=True, slots=True)

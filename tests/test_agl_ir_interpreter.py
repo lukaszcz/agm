@@ -67,6 +67,7 @@ from agm.agl.ir import (
     IrMakeJsonArray,
     IrMakeJsonObject,
     IrMakeRecord,
+    IrParam,
     IrPrint,
     IrRaise,
     IrSequence,
@@ -118,6 +119,9 @@ def _make_program(
     symbols: dict[SymbolId, SymbolDescriptor] | None = None,
     nominals: dict[NominalId, NominalDescriptor] | None = None,
     functions: "dict[FunctionId, FunctionDescriptor] | None" = None,
+    program_symbols: dict[int, SymbolId] | None = None,
+    program_functions: dict[SymbolId, FunctionId] | None = None,
+    params: tuple[IrParam, ...] = (),
 ) -> ExecutableProgram:
     """Build a minimal single-module ExecutableProgram."""
     sources = {_SOURCE_ID: SourceFile(display_name="<test>", normalized_text=_SOURCE_TEXT)}
@@ -128,6 +132,9 @@ def _make_program(
         nominals=nominals or {},
         sources=sources,
         functions=functions or {},
+        program_symbols={} if program_symbols is None else program_symbols,
+        program_functions={} if program_functions is None else program_functions,
+        params=params,
     )
 
 
@@ -1784,6 +1791,111 @@ class TestDirectCallInterpreterDefensivePaths:
 # ---------------------------------------------------------------------------
 # IrIndirectCall evaluation + defensive error paths
 # ---------------------------------------------------------------------------
+
+
+class TestSelectedProgramExecution:
+    """Selected entries remain inside the interpreter's managed run boundary."""
+
+    def test_python_recursion_from_selected_program_has_an_entry_span(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from agm.agl.semantics.exceptions import AglRaise
+
+        fn_id = FunctionId(99)
+        fn_symbol = SymbolId(99)
+        descriptor = FunctionDescriptor(
+            function_id=fn_id,
+            function_symbol=fn_symbol,
+            module_id=ENTRY_ID,
+            params=(),
+            impl=IrFunctionBody(body=IrConstUnit(_LOC)),
+        )
+        program = _make_program(
+            initializers=(IrBind(_LOC, fn_symbol, IrMakeClosure(_LOC, fn_id, ())),),
+            symbols={
+                fn_symbol: SymbolDescriptor(
+                    symbol_id=fn_symbol,
+                    mutable=False,
+                    public_name="main",
+                    owner=ENTRY_ID,
+                )
+            },
+            functions={fn_id: descriptor},
+            program_symbols={10: fn_symbol},
+            program_functions={fn_symbol: fn_id},
+        )
+
+        def raise_python_recursion(self: IrInterpreter, symbol: SymbolId) -> Value:
+            raise RecursionError
+
+        monkeypatch.setattr(IrInterpreter, "_invoke_program", raise_python_recursion)
+
+        with pytest.raises(AglRaise) as exc_info:
+            IrInterpreter(program).run(program_symbol=fn_symbol)
+
+        assert exc_info.value.exc.display_name == "RecursionError"
+        assert exc_info.value.span == _LOC
+
+    def test_python_recursion_during_param_setup_does_not_use_selected_entry_span(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The selected-entry fallback applies only after parameter setup succeeds."""
+        from agm.agl.semantics.exceptions import AglRaise
+
+        fn_id = FunctionId(98)
+        fn_symbol = SymbolId(98)
+        param_symbol = SymbolId(97)
+        param_default = IrConstUnit(_LOC)
+        descriptor = FunctionDescriptor(
+            function_id=fn_id,
+            function_symbol=fn_symbol,
+            module_id=ENTRY_ID,
+            params=(),
+            impl=IrFunctionBody(body=IrConstUnit(_LOC)),
+        )
+        program = _make_program(
+            initializers=(IrBind(_LOC, fn_symbol, IrMakeClosure(_LOC, fn_id, ())),),
+            symbols={
+                fn_symbol: SymbolDescriptor(
+                    symbol_id=fn_symbol,
+                    mutable=False,
+                    public_name="main",
+                    owner=ENTRY_ID,
+                ),
+                param_symbol: SymbolDescriptor(
+                    symbol_id=param_symbol,
+                    mutable=False,
+                    public_name="value",
+                    owner=ENTRY_ID,
+                ),
+            },
+            functions={fn_id: descriptor},
+            program_symbols={10: fn_symbol},
+            program_functions={fn_symbol: fn_id},
+            params=(
+                IrParam(
+                    symbol=param_symbol,
+                    public_name="value",
+                    required=False,
+                    default=param_default,
+                    location=_LOC,
+                ),
+            ),
+        )
+        original_eval = IrInterpreter._eval
+
+        def recurse_for_param_default(self: IrInterpreter, node: IrExpr) -> Value:
+            if node is param_default:
+                raise RecursionError
+            return original_eval(self, node)
+
+        monkeypatch.setattr(IrInterpreter, "_eval", recurse_for_param_default)
+
+        with pytest.raises(AglRaise) as exc_info:
+            IrInterpreter(program).run(program_symbol=fn_symbol)
+
+        assert exc_info.value.exc.display_name == "RecursionError"
+        assert exc_info.value.span is None
 
 
 class TestIndirectCallInterpreterDefensivePaths:

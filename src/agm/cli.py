@@ -1037,6 +1037,13 @@ def exec_cmd(
         "--command",
         help="Execute the AgL program given as COMMAND instead of reading from FILE.",
     ),
+    program: str | None = typer.Option(
+        None,
+        "-p",
+        "--program",
+        metavar="PATH",
+        help="Select a program def by its declaration path.",
+    ),
     strict_json: bool | None = typer.Option(
         None,
         "--strict-json/--no-strict-json",
@@ -1176,6 +1183,7 @@ def exec_cmd(
         ExecArgs(
             file=file,
             command=command,
+            program=program,
             param_tokens=param_tokens,
             strict_json=strict_json,
             max_iters=max_iters,

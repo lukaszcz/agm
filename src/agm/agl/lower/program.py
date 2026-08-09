@@ -32,7 +32,7 @@ from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.types import ExceptionType, RecordType
-from agm.agl.syntax.nodes import BuiltinVarDecl, static_items
+from agm.agl.syntax.nodes import BuiltinVarDecl, FuncDef, static_items
 from agm.util.text import normalize_newlines
 
 __all__ = ["lower_program"]
@@ -269,6 +269,18 @@ def lower_program(
         nominals=dict(link.nominals),
         sources=dict(link.sources),
         functions=dict(link.functions),
+        program_symbols={
+            item.node_id: link.fn_node_to_sym[item.node_id]
+            for checked_module in checked.modules.values()
+            for item in static_items(checked_module.resolved.program.body.items)
+            if isinstance(item, FuncDef) and item.is_program
+        },
+        program_functions={
+            link.fn_node_to_sym[item.node_id]: link.fn_node_to_id[item.node_id]
+            for checked_module in checked.modules.values()
+            for item in static_items(checked_module.resolved.program.body.items)
+            if isinstance(item, FuncDef) and item.is_program
+        },
         params=tuple(entry_lowerer._params),
         contracts=dict(link.contracts),
         dry_run_inventory=dry_run_inventory,

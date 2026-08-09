@@ -582,3 +582,36 @@ def test_scoped_builtin_hierarchy_declared_in_the_entry_module_catches_a_host_ra
     )
     assert result.error is None, f"expected the raised ExecError to be caught: {result.error}"
     assert capsys.readouterr().out == "caught\n"
+
+
+def test_program_def_entries_execute_via_agm_exec(tmp_path: Path) -> None:
+    """Exec runs a sole program and selects a declaration path among several."""
+    from click.testing import CliRunner
+    from typer.main import get_command
+
+    import agm.cli as cli
+
+    sole = tmp_path / "sole.agl"
+    sole.write_text('program def main() -> unit = print "sole"\n')
+    selected = tmp_path / "selected.agl"
+    selected.write_text(
+        'program def first() -> unit = print "first"\n'
+        "scope review\n"
+        'program def main() -> unit = print "review"\n'
+        "end review\n"
+    )
+
+    runner = CliRunner()
+    sole_result = runner.invoke(
+        get_command(cli.app), ["exec", "--no-log", str(sole)], catch_exceptions=False
+    )
+    selected_result = runner.invoke(
+        get_command(cli.app),
+        ["exec", "--no-log", "-p", "review::main", str(selected)],
+        catch_exceptions=False,
+    )
+
+    assert sole_result.exit_code == 0
+    assert sole_result.output == "sole\n"
+    assert selected_result.exit_code == 0
+    assert selected_result.output == "review\n"

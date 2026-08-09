@@ -4,7 +4,8 @@ Behaviour: read the ``.agl`` source — either from the inline ``-c/--command``
 argument or from the source file (exit 1 if unreadable), load the
 ``[exec]`` configuration, construct a ``PipelineDriver`` with the resolved
 settings, call ``runtime.run`` (or a static-only dry run under ``--dry-run``),
-print diagnostics to stderr, and exit per the exit-code contract.
+print diagnostics to stderr, invoke a selected ``program def`` after linked
+initializers when the entry declares one, and exit per the exit-code contract.
 
 Warnings (``result.warnings``) and error diagnostics (``result.diagnostics``)
 are two separate channels: warnings are printed to stderr like errors but never
@@ -31,6 +32,9 @@ Flag notes:
       constant Agent expression, taking precedence over ``[exec]``/
       ``[<program>] default-agent``, which in turn takes precedence over the
       bare host command in ``[exec] runner``.
+    - A sole entry-module ``program def`` runs after initializers; when several
+      are declared, ``-p``/``--program`` selects one by declaration path. With
+      no program definitions, legacy top-level execution is unchanged.
     - Every loaded entry and library module opens ``std/core`` by default
       (except ``std/core`` itself). ``--no-stdlib`` disables that automatic
       opening throughout the loaded program. Ordinary imports are qualified by
@@ -316,6 +320,29 @@ def run(args: ExecArgs) -> None:
             print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
         raise SystemExit(1)
 
+    entry_programs = tuple(program for program in discovery.programs if program.module.is_entry)
+    selected_program = None
+    if len(entry_programs) == 1:
+        selected_program = entry_programs[0]
+    elif len(entry_programs) > 1 and args.program is None:
+        candidates = ", ".join(program.declaration_path for program in entry_programs)
+        print(
+            f"Error: multiple programs declared; select one with -p: {candidates}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    if args.program is not None:
+        selected_program = next(
+            (program for program in entry_programs if program.declaration_path == args.program),
+            None,
+        )
+        if selected_program is None:
+            candidates = ", ".join(program.declaration_path for program in entry_programs)
+            suffix = f" Candidates: {candidates}" if candidates else ""
+            print(f"Error: no program matches '{args.program}'.{suffix}", file=sys.stderr)
+            raise SystemExit(1)
+
     external_params: dict[str, object] = {}
     collision_errors = check_param_collisions(discovery.params, source_name=diagnostic_source_name)
     if collision_errors:
@@ -367,6 +394,11 @@ def run(args: ExecArgs) -> None:
         resolve_trace_path=LiveTracePathResolver(command_name="exec", auto_path=log_file),
     )
 
+    program_symbol = None
+    if selected_program is not None:
+        assert param_preflight.executable is not None
+        program_symbol = param_preflight.executable.program_symbols[selected_program.node_id]
+
     # Reuse the ``PreparedProgram`` from above — no second parse/scope of the source.
     # Pass the already-computed compiled from discovery and the program the
     # preflight already lowered, so the graph is type-checked, match-compiled and
@@ -380,6 +412,7 @@ def run(args: ExecArgs) -> None:
         executable=param_preflight.executable,
         host_settings_policy=policy,
         builtin_host_settings=engine_seeds.values,
+        program_symbol=program_symbol,
     )
 
     # Warnings live on their own channel and never affect the exit code;

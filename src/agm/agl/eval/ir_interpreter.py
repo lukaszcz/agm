@@ -774,7 +774,7 @@ class IrInterpreter:
         self,
         fn_id: FunctionId,
         arguments: "tuple[IrExpr | UseDefault, ...]",
-        location: Location,
+        location: Location | None,
     ) -> Value:
         """Execute a direct call to a named user function or an extern.
 
@@ -903,13 +903,31 @@ class IrInterpreter:
     # Public entry point
     # ------------------------------------------------------------------
 
-    def run(self) -> dict[str, Value]:
+    def _program_entry_location(self, symbol: SymbolId) -> Location:
+        """Return the selected ``program def`` body's source location."""
+        descriptor = self._program.functions[self._program.program_functions[symbol]]
+        assert isinstance(descriptor.impl, IrFunctionBody)
+        return descriptor.impl.body.location
+
+    def _invoke_program(self, symbol: SymbolId) -> Value:
+        """Invoke a selected linked ``program def`` with an entry-point error span."""
+        location = self._program_entry_location(symbol)
+        try:
+            return self._execute_direct_call(self._program.program_functions[symbol], (), location)
+        except AglRaise as exc:
+            if exc.span is None:
+                exc.span = location
+            raise
+
+    def run(self, *, program_symbol: SymbolId | None = None) -> dict[str, Value]:
         """Execute all modules in order and return the entry module's public bindings.
 
         Installs entry-module params into the base frame BEFORE any module
         initializer runs, then iterates over all modules in insertion order
         (library modules first, entry last) executing each module's initializers.
-        All evaluation runs under the pinned AgL decimal context.
+        When *program_symbol* is provided, invokes that selected ``program def``
+        before leaving the same managed execution boundary. All evaluation runs
+        under the pinned AgL decimal context.
 
         Python's recursion limit is raised for the duration so the AgL
         ``max_call_depth`` guard is reached before Python's own limit; a Python
@@ -938,6 +956,13 @@ class IrInterpreter:
                 for mod in self._program.modules.values():
                     for node in mod.initializers:
                         self._eval_and_record_initializer(mod.module_id, node)
+                if program_symbol is not None:
+                    try:
+                        self._invoke_program(program_symbol)
+                    except RecursionError:
+                        error = self._recursion_error()
+                        error.span = self._program_entry_location(program_symbol)
+                        raise error from None
             return self._collect_results()
         except RecursionError:
             raise self._recursion_error() from None

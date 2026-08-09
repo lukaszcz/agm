@@ -28,6 +28,7 @@ from agm.agl.runtime.types import (
 from agm.agl.runtime.types import (
     HostEnvironment,
     ParamDeclInfo,
+    ProgramDeclInfo,
 )
 from agm.agl.self_validation import self_validation_enabled
 
@@ -36,7 +37,7 @@ if TYPE_CHECKING:
 
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.ir.contracts import ContractPayload
-    from agm.agl.ir.ids import NominalId
+    from agm.agl.ir.ids import NominalId, SymbolId
     from agm.agl.ir.program import ExecutableProgram, NominalDescriptor
     from agm.agl.matchcompile import MatchCompiledProgram
     from agm.agl.modules.ids import ModuleId
@@ -79,6 +80,7 @@ class ParamDiscovery:
     diagnostics: tuple[Diagnostic, ...]
     warnings: tuple[Diagnostic, ...]
     compiled: "MatchCompiledProgram | None" = None
+    programs: tuple[ProgramDeclInfo, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -376,6 +378,7 @@ class PipelineDriver:
         warnings: list[Diagnostic],
         host_settings_policy: "HostSettingsPolicy | None" = None,
         builtin_host_settings: "Mapping[str, Value] | None" = None,
+        program_symbol: "SymbolId | None" = None,
     ) -> RunResult:
         """Run a freshly lowered ``executable`` — the shared tail of the
         shared pipeline tail.
@@ -459,7 +462,11 @@ class PipelineDriver:
                 host_reconfigurer=reconfigurer,
                 builtin_host_settings=builtin_host_settings,
             )
-            entry_bindings = interp.run()
+            entry_bindings = (
+                interp.run()
+                if program_symbol is None
+                else interp.run(program_symbol=program_symbol)
+            )
         except AglRaise as exc:
             # Uncaught AgL exception (exit code 2 per the CLI contract).
             # ONLY the AgL exception carrier is caught here: an unexpected Python
@@ -839,12 +846,13 @@ class PipelineDriver:
     ) -> ParamDiscovery:
         """Discover typed ``param`` declarations from a resolved program.
 
-        Runs typechecking and match compilation, then reads the entry module. A supplied artifact is
-        reused; otherwise the successful artifact is returned for later
+        Runs typechecking and match compilation, then reads entry params and
+        every linked ``program def``. A supplied artifact is reused; otherwise
+        the successful artifact is returned for later
         lowering by :meth:`run_prepared`.
         """
         from agm.agl.modules.ids import ENTRY_ID
-        from agm.agl.syntax.nodes import ParamDecl, scoped_public_name, static_items
+        from agm.agl.syntax.nodes import FuncDef, ParamDecl, scoped_public_name, static_items
 
         if prepared.resolved is None:
             return ParamDiscovery(
@@ -920,6 +928,26 @@ class PipelineDriver:
                     )
                 )
         infos.sort(key=lambda info: (info.line, info.col))
+
+        program_infos: list[ProgramDeclInfo] = []
+        for module_id, checked_module in checked.modules.items():
+            for item in static_items(checked_module.resolved.program.body.items):
+                if isinstance(item, FuncDef) and item.is_program:
+                    program_infos.append(
+                        ProgramDeclInfo(
+                            module=module_id,
+                            scope_path=tuple(segment.name for segment in item.scope_path),
+                            name=item.name,
+                            node_id=item.node_id,
+                        )
+                    )
+        program_infos.sort(
+            key=lambda info: (
+                not info.module.is_entry,
+                info.module.path_str(),
+                info.declaration_path,
+            )
+        )
         return ParamDiscovery(
             params=tuple(infos),
             program_name=prepared.program_name,
@@ -927,6 +955,7 @@ class PipelineDriver:
             diagnostics=(),
             warnings=all_warnings,
             compiled=compiled,
+            programs=tuple(program_infos),
         )
 
     def _wire_externs_or_fail(
@@ -968,6 +997,7 @@ class PipelineDriver:
         executable: "ExecutableProgram | None" = None,
         host_settings_policy: "HostSettingsPolicy | None" = None,
         builtin_host_settings: "Mapping[str, Value] | None" = None,
+        program_symbol: "SymbolId | None" = None,
     ) -> RunResult:
         """Execute an already loaded and scoped program without reloading.
 
@@ -981,6 +1011,11 @@ class PipelineDriver:
             When the caller has already typechecked and match-compiled the program
             (for example via :meth:`discover_params`), pass the result
             here to skip those static passes. ``None`` runs them here.
+
+        ``program_symbol``
+            A selected linked ``program def`` symbol to invoke after module
+            initializers have run, within the interpreter's managed execution
+            boundary. ``None`` retains ordinary top-level execution.
 
         ``executable``
             When the caller has already lowered this exact program (via
@@ -999,6 +1034,7 @@ class PipelineDriver:
             executable=executable,
             host_settings_policy=host_settings_policy,
             builtin_host_settings=builtin_host_settings,
+            program_symbol=program_symbol,
         )
         return result
 
@@ -1038,6 +1074,7 @@ class PipelineDriver:
         executable: "ExecutableProgram | None" = None,
         host_settings_policy: "HostSettingsPolicy | None" = None,
         builtin_host_settings: "Mapping[str, Value] | None" = None,
+        program_symbol: "SymbolId | None" = None,
     ) -> "tuple[RunResult, ExecutableProgram | None]":
         """Back program execution and parameter preflight with one pipeline body.
 
@@ -1168,6 +1205,7 @@ class PipelineDriver:
                 warnings=warnings,
                 host_settings_policy=host_settings_policy,
                 builtin_host_settings=builtin_host_settings,
+                program_symbol=program_symbol,
             ),
             executable,
         )

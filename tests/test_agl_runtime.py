@@ -3114,6 +3114,38 @@ class TestDiscoverParamsGraph:
         assert len(discovery.params) == 1
         assert discovery.params[0].name == "name"
 
+    def test_discover_programs_records_module_and_paths(self, tmp_path: pathlib.Path) -> None:
+        from agm.agl.modules.roots import RootSet
+
+        (tmp_path / "helper.agl").write_text("program def helper() -> unit = ()\n")
+        source = (
+            "import helper\n"
+            "scope review\n"
+            "program def main() -> unit = ()\n"
+            "end review\n"
+            "program def top() -> unit = ()\n"
+        )
+        prepared = PipelineDriver.prepare_program(
+            source,
+            entry_path=tmp_path / "entry.agl",
+            roots=RootSet(roots=frozenset({tmp_path})),
+            default_stdlib=False,
+        )
+
+        discovery = PipelineDriver().discover_params(prepared)
+
+        assert discovery.diagnostics == ()
+        assert [
+            (program.module.display(), program.scope_path, program.name, program.declaration_path)
+            for program in discovery.programs
+        ] == [
+            ("<entry>", ("review",), "main", "review::main"),
+            ("<entry>", (), "top", "top"),
+            ("helper", (), "helper", "helper"),
+        ]
+        assert discovery.programs[0].qualified_path == "review::main"
+        assert discovery.programs[-1].qualified_path == "helper::helper"
+
     def test_discover_params_failure_returns_diagnostics(self, tmp_path: pathlib.Path) -> None:
         """discover_params returns diagnostics when the prepare phase failed."""
         from agm.agl.modules.roots import RootSet

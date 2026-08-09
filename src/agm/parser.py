@@ -449,10 +449,13 @@ _HELP_TEXTS: dict[str, str] = {
     """),
     "pkg": textwrap.dedent("""\
         agm pkg check [DIR]
+        agm pkg install [--editable] [--shadow] SRC
+        agm pkg uninstall NAME
+        agm pkg list
+        agm pkg info NAME
 
-        Validate package manifests, module-tree discipline, and registered program references.
-        DIR defaults to the current directory. This command validates only; it does not create,
-        install, or modify packages.
+        Validate, install, inspect, and remove AgL packages. Directory installs are copied into
+        AGM's versioned store; editable installs mount their live source directory.
     """),
     "run": textwrap.dedent("""\
         agm run [--no-sandbox] [--no-patch] [--memory LIMIT] [--swap LIMIT]
@@ -898,6 +901,29 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
 
         Validate the package manifest, module-tree discipline, and registered program references
         in DIR. DIR defaults to the current directory.
+    """),
+    ("pkg", "install"): textwrap.dedent("""\
+        agm pkg install [--editable] [--shadow] SRC
+
+        Install a package directory into AGM's versioned store and activate its version. --editable
+        mounts SRC directly; --shadow is retained for package command registration.
+    """),
+    ("pkg", "uninstall"): textwrap.dedent("""\
+        agm pkg uninstall NAME
+
+        Verify the active package RECORD, remove its installed tree, and clear its activation.
+        Editable packages only have their activation cleared.
+    """),
+    ("pkg", "list"): textwrap.dedent("""\
+        agm pkg list
+
+        List immutable installed versions and active editable packages.
+    """),
+    ("pkg", "info"): textwrap.dedent("""\
+        agm pkg info NAME
+
+        Show design metadata, command registrations, and direct dependency status for an active
+        package.
     """),
     ("tmux", "open"): textwrap.dedent("""\
         agm tmux open [-d|--detach] [-n|--num-panes PANES] [SESSION]

@@ -7184,6 +7184,16 @@ class TestTmuxLayout:
 # ── package validation ─────────────────────────────────────────────────────
 
 
+def _write_store_test_package(root: Path, name: str, version: str) -> Path:
+    root.mkdir()
+    (root / name).mkdir()
+    (root / "package.toml").write_text(
+        f'[package]\nname = "{name}"\nversion = "{version}"\n', encoding="utf-8"
+    )
+    (root / name / "main.agl").write_text("program def main() -> unit = ()\n", encoding="utf-8")
+    return root
+
+
 class TestPackageCheck:
     def test_checks_explicit_and_current_package_directory(
         self, tmp_path: Path, env: dict[str, str]
@@ -7288,6 +7298,134 @@ class TestPackageCheck:
         assert "check" in group.stdout
         assert "check" in help_command.stdout
         assert "DIR" in command_help.stdout
+
+
+class TestPackageInstall:
+    def test_install_import_uninstall_and_inspect_package(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["AGM_HOME"] = str(tmp_path / "agm-home")
+        package = _write_store_test_package(tmp_path / "alpha-source", "alpha", "1.0.0")
+        program = tmp_path / "program.agl"
+        program.write_text("import alpha/main\nprogram def main() -> unit = ()\n", encoding="utf-8")
+
+        install = run_agm(["pkg", "install", str(package)], env=env, cwd=tmp_path)
+        listing = run_agm(["pkg", "list"], env=env, cwd=tmp_path)
+        info = run_agm(["pkg", "info", "alpha"], env=env, cwd=tmp_path)
+        imported = run_agm(["exec", str(program)], env=env, cwd=tmp_path)
+        uninstall = run_agm(["pkg", "uninstall", "alpha"], env=env, cwd=tmp_path)
+        missing_import = run_agm(["exec", str(program)], env=env, cwd=tmp_path, check=False)
+        unknown = run_agm(["pkg", "uninstall", "alpha"], env=env, cwd=tmp_path, check=False)
+
+        assert install.returncode == 0
+        assert "alpha" in listing.stdout
+        assert "1.0.0" in info.stdout
+        assert imported.returncode == 0
+        assert uninstall.returncode == 0
+        assert missing_import.returncode == 1
+        assert unknown.returncode == 1
+
+    def test_editable_package_reflects_live_edits_and_dry_run_does_not_install(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["AGM_HOME"] = str(tmp_path / "agm-home")
+        package = _write_store_test_package(tmp_path / "alpha-source", "alpha", "1.0.0")
+
+        dry_run = run_agm(["--dry-run", "pkg", "install", str(package)], env=env, cwd=tmp_path)
+        editable = run_agm(["pkg", "install", "--editable", str(package)], env=env, cwd=tmp_path)
+        program = tmp_path / "program.agl"
+        program.write_text("import alpha/main\nprogram def main() -> unit = ()\n", encoding="utf-8")
+        before_edit = run_agm(["exec", str(program)], env=env, cwd=tmp_path)
+        (package / "alpha" / "main.agl").write_text("not valid AgL\n", encoding="utf-8")
+        after_edit = run_agm(["exec", str(program)], env=env, cwd=tmp_path, check=False)
+        listing = run_agm(["pkg", "list"], env=env, cwd=tmp_path)
+
+        assert not (tmp_path / "agm-home" / "packages" / "alpha" / "1.0.0").exists()
+        assert dry_run.returncode == 0
+        assert editable.returncode == 0
+        assert before_edit.returncode == 0
+        assert after_edit.returncode == 1
+        assert "editable" in listing.stdout
+
+    def test_uninstall_refuses_tampered_record_and_dry_run_keeps_an_active_package(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["AGM_HOME"] = str(tmp_path / "isolated-agm-home")
+        package = _write_store_test_package(tmp_path / "alpha-source", "alpha", "1.0.0")
+
+        installed = run_agm(["pkg", "install", str(package)], env=env, cwd=tmp_path)
+        root = tmp_path / "isolated-agm-home" / "packages" / "alpha" / "1.0.0"
+        (root / "alpha" / "main.agl").write_text("tampered", encoding="utf-8")
+        refused = run_agm(["pkg", "uninstall", "alpha"], env=env, cwd=tmp_path, check=False)
+
+        assert installed.returncode == 0
+        assert refused.returncode == 1
+        assert root.is_dir()
+
+        (root / "alpha" / "main.agl").write_text(
+            "program def main() -> unit = ()\n", encoding="utf-8"
+        )
+        restored = run_agm(["pkg", "install", str(package)], env=env, cwd=tmp_path)
+        dry_run = run_agm(["--dry-run", "pkg", "uninstall", "alpha"], env=env, cwd=tmp_path)
+        listing = run_agm(["pkg", "list"], env=env, cwd=tmp_path)
+
+        assert restored.returncode == 0
+        assert dry_run.returncode == 0
+        assert root.is_dir()
+        assert "alpha" in listing.stdout
+
+    def test_uninstall_refuses_an_unsatisfied_dependency_in_an_isolated_agm_home(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        agm_home = tmp_path / "isolated-agm-home"
+        env["AGM_HOME"] = str(agm_home)
+        bravo = _write_store_test_package(tmp_path / "bravo-source", "bravo", "1.0.0")
+        alpha = _write_store_test_package(tmp_path / "alpha-source", "alpha", "1.0.0")
+        (alpha / "package.toml").write_text(
+            '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
+            '[dependencies]\nbravo = { version = "1.0", path = "../bravo-source" }\n',
+            encoding="utf-8",
+        )
+
+        installed_bravo = run_agm(["pkg", "install", str(bravo)], env=env, cwd=tmp_path)
+        installed_alpha = run_agm(["pkg", "install", str(alpha)], env=env, cwd=tmp_path)
+        refused = run_agm(["pkg", "uninstall", "bravo"], env=env, cwd=tmp_path, check=False)
+
+        assert installed_bravo.returncode == 0
+        assert installed_alpha.returncode == 0
+        assert refused.returncode == 1
+        assert (agm_home / "packages" / "alpha" / "1.0.0").is_dir()
+        assert (agm_home / "packages" / "bravo" / "1.0.0").is_dir()
+
+    def test_store_keeps_versions_side_by_side_and_project_pin_overrides_active(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["AGM_HOME"] = str(tmp_path / "agm-home")
+        one = _write_store_test_package(tmp_path / "alpha-one", "alpha", "1.0.0")
+        two = _write_store_test_package(tmp_path / "alpha-two", "alpha", "2.0.0")
+        (two / "alpha" / "main.agl").write_text("not valid AgL\n", encoding="utf-8")
+        project = tmp_path / "project"
+        config = project / "config"
+        config.mkdir(parents=True)
+        (config / "config.toml").write_text('[packages]\nalpha = "1.0.0"\n', encoding="utf-8")
+        program = project / "program.agl"
+        program.write_text("import alpha/main\nprogram def main() -> unit = ()\n", encoding="utf-8")
+
+        run_agm(["pkg", "install", str(one)], env=env, cwd=tmp_path)
+        run_agm(["pkg", "install", str(two)], env=env, cwd=tmp_path)
+        listing = run_agm(["pkg", "list"], env=env, cwd=tmp_path)
+        env["PROJ_DIR"] = str(project)
+        pinned = run_agm(["exec", str(program)], env=env, cwd=project)
+        del env["PROJ_DIR"]
+        unpinned = run_agm(["exec", str(program)], env=env, cwd=tmp_path, check=False)
+
+        store = tmp_path / "agm-home" / "packages" / "alpha"
+        assert (store / "1.0.0").is_dir()
+        assert (store / "2.0.0").is_dir()
+        assert "1.0.0" in listing.stdout
+        assert "2.0.0" in listing.stdout
+        assert pinned.returncode == 0
+        assert unpinned.returncode == 1
 
 
 # ── help system ────────────────────────────────────────────────────────────

@@ -33,7 +33,7 @@ help for a single command or command group. Each command also accepts `--help`.
 | [AgL workflow DSL](agl.md) | `agm repl` |
 | [Configuration](config.md) | `agm config` copy/env/update |
 | [Dependencies](dependencies.md) | `agm dep` |
-| [Packages](pkg.md) | `agm pkg check` |
+| [Packages](pkg.md) | `agm pkg` check/install/uninstall/list/info |
 | [Sandboxing](run.md) | `agm run` |
 | [Worktrees](worktrees.md) | `agm worktree`/`wt` |
 | [tmux sessions](tmux.md) | `agm tmux` |

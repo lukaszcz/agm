@@ -6,17 +6,19 @@ import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from uuid import uuid4
 
 import semver
 from tomlkit.exceptions import TOMLKitError
 
 from agm.agl.modules.ids import ModuleId
 from agm.config.general import load_merged_config
+from agm.core import dry_run
 from agm.core.fs import mkdir, write_text
 from agm.core.toml import TomlDict, load_toml_file, toml_dict
 from agm.packages.manifest import ManifestError, PackageManifest, load_manifest
 from agm.packages.model import PackageInfo
-from agm.packages.store import package_store_path, store_root
+from agm.packages.store import canonical_package_store_path, store_root
 
 
 class PackageActivationError(ValueError):
@@ -70,10 +72,9 @@ def load_activation_index(*, home: Path, env: Mapping[str, str] | None = None) -
 def write_activation_index(
     index: ActivationIndex, *, home: Path, env: Mapping[str, str] | None = None
 ) -> Path:
-    """Write a canonical activation index and return its path."""
+    """Atomically write a canonical activation index and return its path."""
 
     path = activation_index_path(home=home, env=env)
-    mkdir(path.parent, parents=True, exist_ok=True)
     lines: list[str] = []
     for name, active in sorted(index.packages.items()):
         _validate_package_name(name)
@@ -88,8 +89,47 @@ def write_activation_index(
         if active.shadow:
             lines.append("shadow = true")
         lines.append("")
-    write_text(path, "\n".join(lines))
+    content = "\n".join(lines)
+    try:
+        mkdir(path.parent, parents=True, exist_ok=True)
+        if dry_run.enabled():
+            write_text(path, content)
+            return path
+        temporary_path = path.parent / f".{path.name}.{uuid4().hex}.tmp"
+        try:
+            with temporary_path.open("x", encoding="utf-8") as temporary:
+                temporary.write(content)
+            temporary_path.replace(path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
+    except OSError as exc:
+        raise PackageActivationError(
+            f"cannot write package activation index {path}: {exc}"
+        ) from exc
     return path
+
+
+def validate_activation_index(
+    index: ActivationIndex,
+    *,
+    home: Path,
+    env: Mapping[str, str] | None = None,
+    transient_packages: Mapping[str, PackageInfo] | None = None,
+) -> None:
+    """Ensure every activation resolves to matching packages with satisfied requirements.
+
+    ``transient_packages`` supplies validated package manifests for selections
+    that an install has planned but not yet written to the immutable store.
+    """
+
+    _validate_requirements(
+        _packages_from_index(
+            index,
+            home=home,
+            env=env,
+            transient_packages=transient_packages,
+        )
+    )
 
 
 def rebuild_activation_index(
@@ -269,20 +309,29 @@ def _parse_activation_index(raw: TomlDict) -> ActivationIndex:
 
 
 def _packages_from_index(
-    index: ActivationIndex, *, home: Path, env: Mapping[str, str] | None
+    index: ActivationIndex,
+    *,
+    home: Path,
+    env: Mapping[str, str] | None,
+    transient_packages: Mapping[str, PackageInfo] | None = None,
 ) -> tuple[PackageInfo, ...]:
     packages: list[PackageInfo] = []
     for name, active in sorted(index.packages.items()):
-        if active.editable is not None:
-            root = active.editable
+        transient = None if transient_packages is None else transient_packages.get(name)
+        if transient is not None:
+            manifest = transient.manifest
+            root = transient.root
         else:
-            root = package_store_path(name, active.version, home=home, env=env).resolve()
-            canonical_store_root = store_root(home=home, env=env).resolve()
-            if not root.is_relative_to(canonical_store_root):
-                raise PackageActivationError(
-                    f"active package {name!r} resolves outside the package store root"
-                )
-        manifest = _load_installed_manifest(root)
+            if active.editable is not None:
+                root = active.editable
+            else:
+                try:
+                    root = canonical_package_store_path(name, active.version, home=home, env=env)
+                except ValueError as exc:
+                    raise PackageActivationError(
+                        f"active package {name!r} resolves outside the package store root"
+                    ) from exc
+            manifest = _load_installed_manifest(root)
         if manifest.name != name:
             raise PackageActivationError(
                 f"active package {name!r} has a manifest for {manifest.name!r}"

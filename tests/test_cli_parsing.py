@@ -87,6 +87,49 @@ class TestConfigCopy:
         assert len(calls) == 1
 
 
+class TestPackageLifecycle:
+    def test_pkg_runner_helpers_lazy_load_command_adapters(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import agm.commands.pkg.info as info_command
+        import agm.commands.pkg.install as install_command
+        import agm.commands.pkg.list as list_command
+        import agm.commands.pkg.uninstall as uninstall_command
+
+        calls: list[object] = []
+        monkeypatch.setattr(install_command, "run", lambda args: calls.append(args))
+        monkeypatch.setattr(uninstall_command, "run", lambda args: calls.append(args))
+        monkeypatch.setattr(list_command, "run", lambda args: calls.append(args))
+        monkeypatch.setattr(info_command, "run", lambda args: calls.append(args))
+
+        cli._run_pkg_install(cli.PkgInstallArgs("source", editable=False, shadow=False))
+        cli._run_pkg_uninstall(cli.PkgUninstallArgs("alpha"))
+        cli._run_pkg_list(cli.PkgListArgs())
+        cli._run_pkg_info(cli.PkgInfoArgs("alpha"))
+
+        assert len(calls) == 4
+
+    def test_pkg_lifecycle_options_map_to_typed_arguments(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        install_calls = make_recorder(monkeypatch, cli, "_run_pkg_install")
+        uninstall_calls = make_recorder(monkeypatch, cli, "_run_pkg_uninstall")
+        list_calls = make_recorder(monkeypatch, cli, "_run_pkg_list")
+        info_calls = make_recorder(monkeypatch, cli, "_run_pkg_info")
+
+        assert invoke(runner, ["pkg", "install", "--editable", "--shadow", "source"]).exit_code == 0
+        assert invoke(runner, ["pkg", "uninstall", "alpha"]).exit_code == 0
+        assert invoke(runner, ["pkg", "list"]).exit_code == 0
+        assert invoke(runner, ["pkg", "info", "alpha"]).exit_code == 0
+
+        assert install_calls[0].source == "source"
+        assert install_calls[0].editable is True
+        assert install_calls[0].shadow is True
+        assert uninstall_calls[0].name == "alpha"
+        assert len(list_calls) == 1
+        assert info_calls[0].name == "alpha"
+
+
 class TestPackageCheck:
     def test_pkg_check_passes_optional_directory_to_command(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch

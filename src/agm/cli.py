@@ -52,6 +52,10 @@ from agm.cli_support.args import (
     LoopSelectArgs,
     OpenArgs,
     PkgCheckArgs,
+    PkgInfoArgs,
+    PkgInstallArgs,
+    PkgListArgs,
+    PkgUninstallArgs,
     RefineArgs,
     ReplArgs,
     ReviewArgs,
@@ -1501,6 +1505,30 @@ def _run_pkg_check(args: PkgCheckArgs) -> None:
     pkg_check_command.run(args)
 
 
+def _run_pkg_install(args: PkgInstallArgs) -> None:
+    import agm.commands.pkg.install as pkg_install_command
+
+    pkg_install_command.run(args)
+
+
+def _run_pkg_uninstall(args: PkgUninstallArgs) -> None:
+    import agm.commands.pkg.uninstall as pkg_uninstall_command
+
+    pkg_uninstall_command.run(args)
+
+
+def _run_pkg_list(args: PkgListArgs) -> None:
+    import agm.commands.pkg.list as pkg_list_command
+
+    pkg_list_command.run(args)
+
+
+def _run_pkg_info(args: PkgInfoArgs) -> None:
+    import agm.commands.pkg.info as pkg_info_command
+
+    pkg_info_command.run(args)
+
+
 @pkg_app.callback(invoke_without_command=True)
 def pkg_callback(
     ctx: typer.Context,
@@ -1527,6 +1555,61 @@ def pkg_check(
     del _help
     del _dry_run
     _run_pkg_check(PkgCheckArgs(directory=directory))
+
+
+@pkg_app.command(name="install")
+def pkg_install(
+    source: str | None = typer.Argument(
+        None, metavar="SRC", autocompletion=completion.complete_dir_argument
+    ),
+    editable: bool = typer.Option(False, "--editable", help="Activate a live package directory."),
+    shadow: bool = typer.Option(False, "--shadow", help="Record a command-shadow preference."),
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    del _dry_run
+    _run_pkg_install(
+        PkgInstallArgs(
+            source=_require_value(source, command_path=["pkg", "install"], name="source"),
+            editable=editable,
+            shadow=shadow,
+        )
+    )
+
+
+@pkg_app.command(name="uninstall")
+def pkg_uninstall(
+    name: str | None = typer.Argument(None, metavar="NAME"),
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    del _dry_run
+    _run_pkg_uninstall(
+        PkgUninstallArgs(name=_require_value(name, command_path=["pkg", "uninstall"], name="name"))
+    )
+
+
+@pkg_app.command(name="list")
+def pkg_list(
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    del _dry_run
+    _run_pkg_list(PkgListArgs())
+
+
+@pkg_app.command(name="info")
+def pkg_info(
+    name: str | None = typer.Argument(None, metavar="NAME"),
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    del _dry_run
+    _run_pkg_info(PkgInfoArgs(name=_require_value(name, command_path=["pkg", "info"], name="name")))
 
 
 @sync_app.callback(invoke_without_command=True)

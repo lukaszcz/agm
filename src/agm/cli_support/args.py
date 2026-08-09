@@ -28,6 +28,28 @@ class PkgCheckArgs:
 
 
 @dataclass(slots=True)
+class PkgInstallArgs:
+    source: str
+    editable: bool
+    shadow: bool
+
+
+@dataclass(slots=True)
+class PkgUninstallArgs:
+    name: str
+
+
+@dataclass(slots=True)
+class PkgListArgs:
+    pass
+
+
+@dataclass(slots=True)
+class PkgInfoArgs:
+    name: str
+
+
+@dataclass(slots=True)
 class ConfigUpdateArgs:
     pass
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Never
 
 import pytest
 import semver
@@ -65,6 +66,29 @@ def test_activation_index_round_trips_all_activation_markers(tmp_path: Path) -> 
 
     assert activation_index_path(home=home, env=env) == home / "packages" / "index.toml"
     assert load_activation_index(home=home, env=env) == index
+
+
+def test_activation_index_write_failure_keeps_the_previous_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "agm-home"
+    env = {"AGM_HOME": str(home)}
+    original = ActivationIndex({"alpha": ActivePackage(semver.Version.parse("1.0.0"))})
+    write_activation_index(original, home=home, env=env)
+
+    def fail_open(_: Path, *__: object, **___: object) -> Never:
+        raise OSError("full")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "open", fail_open)
+        with pytest.raises(PackageActivationError, match="cannot write"):
+            write_activation_index(
+                ActivationIndex({"alpha": ActivePackage(semver.Version.parse("2.0.0"))}),
+                home=home,
+                env=env,
+            )
+
+    assert load_activation_index(home=home, env=env) == original
 
 
 def test_rebuild_index_selects_latest_installed_manifest_per_package(tmp_path: Path) -> None:

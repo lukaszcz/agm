@@ -96,10 +96,16 @@ Use `agm help` for the command list and `agm help <command>` for detailed help. 
 
 ### `agm pkg`
 
-Validate a package directory's manifest, module tree, and registered program references.
+Validate, install, inspect, and remove AgL packages. Installations use a versioned store;
+editable packages mount their working directory directly.
 
 ```bash
 agm pkg check [DIR]
+agm pkg install path/to/package
+agm pkg install --editable path/to/package
+agm pkg list
+agm pkg info package-name
+agm pkg uninstall package-name
 ```
 
 ### `agm open`

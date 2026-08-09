@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import semver
 
-from agm.packages.manifest import ManifestError, load_manifest
+from agm.packages.manifest import ManifestError, distribution_manifest, load_manifest
 
 FIXTURES = Path(__file__).parent / "agl" / "packages"
 URL = "https://example.test/tools.agmpkg"
@@ -21,6 +21,31 @@ def _write_manifest(tmp_path: Path, text: str) -> Path:
 
 
 class TestPackageManifest:
+    def test_distribution_manifest_strips_path_sources_without_mutating_source(
+        self, tmp_path: Path
+    ) -> None:
+        manifest = load_manifest(
+            _write_manifest(
+                tmp_path,
+                """[package]
+name = "alpha"
+version = "1.0.0"
+
+[dependencies]
+bravo = { version = "2", path = "../bravo" }
+charlie = { version = "3", url = "https://example.test/charlie.agmpkg", hash = "sha256:abc" }
+""",
+            )
+        )
+
+        distribution = distribution_manifest(manifest)
+
+        assert manifest.dependencies["bravo"].path == "../bravo"
+        assert distribution.dependencies["bravo"].path is None
+        assert distribution.dependencies["bravo"].version == manifest.dependencies["bravo"].version
+        assert distribution.dependencies["charlie"] == manifest.dependencies["charlie"]
+        assert distribution is not manifest
+
     def test_loads_complete_manifest(self) -> None:
         manifest = load_manifest(FIXTURES / "valid" / "package.toml")
 

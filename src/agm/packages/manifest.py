@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from io import StringIO
 from pathlib import Path
 
 import semver
+import tomlkit
 from tomlkit.exceptions import TOMLKitError
 
 from agm.agl.modules.ids import ModuleId
@@ -49,6 +51,19 @@ class PackageManifest:
     commands: dict[str, CommandSpec] = field(default_factory=dict)
 
 
+def distribution_manifest(manifest: PackageManifest) -> PackageManifest:
+    """Return a publication-safe manifest without local dependency sources.
+
+    The source manifest remains untouched, so callers can render this view into
+    a distribution without changing a development package tree.
+    """
+
+    dependencies = {
+        name: replace(dependency, path=None) for name, dependency in manifest.dependencies.items()
+    }
+    return replace(manifest, dependencies=dependencies)
+
+
 def load_manifest(path: Path) -> PackageManifest:
     """Load and validate the ``package.toml`` at *path*."""
 
@@ -56,6 +71,16 @@ def load_manifest(path: Path) -> PackageManifest:
         raw = load_toml_file(path)
     except (OSError, TOMLKitError, UnicodeDecodeError) as exc:
         raise ManifestError(f"cannot load package manifest {path}: {exc}") from exc
+    return _parse_manifest(raw)
+
+
+def load_manifest_text(content: str) -> PackageManifest:
+    """Parse and validate package-manifest text without reading a filesystem path."""
+
+    try:
+        raw = toml_dict(tomlkit.load(StringIO(content)).unwrap())
+    except TOMLKitError as exc:
+        raise ManifestError(f"cannot parse package manifest: {exc}") from exc
     return _parse_manifest(raw)
 
 

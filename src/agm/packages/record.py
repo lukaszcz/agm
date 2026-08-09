@@ -38,7 +38,7 @@ def write_record(root: Path) -> Path:
         RecordEntry(_record_path(path.relative_to(root).as_posix()), _sha256(path))
         for path in _package_files(root)
     )
-    content = "".join(_serialize_entry(entry) for entry in entries)
+    content = serialize_record(entries)
     fs.write_text(record_path, content)
     return record_path
 
@@ -52,6 +52,18 @@ def read_record(root: Path) -> tuple[RecordEntry, ...]:
         content = fs.read_text(record_path)
     except (OSError, UnicodeDecodeError) as exc:
         raise RecordError(f"cannot read package record {record_path}: {exc}") from exc
+
+    return parse_record(content)
+
+
+def serialize_record(entries: tuple[RecordEntry, ...]) -> str:
+    """Serialize record entries in the canonical installed-package format."""
+
+    return "".join(_serialize_entry(entry) for entry in entries)
+
+
+def parse_record(content: str) -> tuple[RecordEntry, ...]:
+    """Parse and validate package ``RECORD`` content without reading a tree."""
 
     entries: list[RecordEntry] = []
     seen: set[str] = set()

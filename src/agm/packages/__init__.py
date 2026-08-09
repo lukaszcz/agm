@@ -13,19 +13,35 @@ from agm.packages.activation import (
     select_package_roots,
     write_activation_index,
 )
+from agm.packages.archive import (
+    ArchiveError,
+    ArchiveMetadata,
+    read_archive_manifest,
+    read_archive_metadata,
+    verify_archive,
+    write_archive,
+)
 from agm.packages.development import discover_development_packages
 from agm.packages.discipline import DisciplineError, validate_package
-from agm.packages.manifest import ManifestError, PackageManifest, load_manifest
+from agm.packages.manifest import (
+    ManifestError,
+    PackageManifest,
+    distribution_manifest,
+    load_manifest,
+)
 from agm.packages.model import PackageInfo, owning_package
 from agm.packages.record import RecordEntry, RecordError, read_record, verify_record, write_record
 from agm.packages.store import StorePathError, package_store_path, store_root
 
 __all__ = [
     "ActivationIndex",
+    "ArchiveError",
+    "ArchiveMetadata",
     "ActivePackage",
     "DisciplineError",
     "PackageActivationError",
     "discover_development_packages",
+    "distribution_manifest",
     "ManifestError",
     "PackageInfo",
     "PackageManifest",
@@ -33,6 +49,8 @@ __all__ = [
     "RecordError",
     "StorePathError",
     "load_activation_index",
+    "read_archive_manifest",
+    "read_archive_metadata",
     "load_manifest",
     "load_package_pins",
     "package_store_path",
@@ -43,7 +61,9 @@ __all__ = [
     "select_package_roots",
     "owning_package",
     "validate_package",
+    "verify_archive",
     "verify_record",
     "write_activation_index",
+    "write_archive",
     "write_record",
 ]

@@ -35,7 +35,6 @@ def wrap_inline_program(program: Program, *, next_node_id: int) -> tuple[Program
                 syntax.ExceptionDef,
                 syntax.TypeAlias,
                 syntax.ParamDecl,
-                syntax.ProgramDecl,
                 syntax.BuiltinVarDecl,
                 syntax.InfixDecl,
                 syntax.ImportDecl,

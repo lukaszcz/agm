@@ -3680,27 +3680,6 @@ class TestImportDeclScope:
         assert r
 
 
-# ---------------------------------------------------------------------------
-# Reserved program names
-# ---------------------------------------------------------------------------
-
-
-class TestReservedProgramNames:
-    def test_reserved_exec_rejected(self) -> None:
-        err = reject_scope("program exec\n()")
-        _, msg = diag(err)
-        assert "exec" in msg
-
-    def test_reserved_loop_rejected(self) -> None:
-        err = reject_scope("program loop\n()")
-        _, msg = diag(err)
-        assert "loop" in msg
-
-    def test_unreserved_program_name_ok(self) -> None:
-        r = parse_and_resolve("program myapp\n()")
-        assert r.program_name == "myapp"
-
-
 class TestScopedNominalAliases:
     """A scoped nominal alias follows the same constructibility rule as a root one."""
 

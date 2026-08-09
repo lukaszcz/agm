@@ -229,13 +229,17 @@ class ExecutableModule:
 
 
 # ---------------------------------------------------------------------------
-# Entry param descriptor
+# M2 entry-param descriptor
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
 class IrParam:
     """Descriptor for an entry-module ``param`` declaration.
+
+    M2 deliberately emits descriptors only for entry-module params; legal
+    non-entry declarations remain excluded until M3, and typecheck rejects
+    their uses before lowering.
 
     ``symbol``      — the linker-allocated ``SymbolId`` for this param binding.
     ``public_name`` — the user-facing param name (used as the key in the

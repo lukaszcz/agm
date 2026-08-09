@@ -6,10 +6,12 @@ from pathlib import Path
 
 import pytest
 
+from agm.agl.eval.ir_interpreter import IrInterpreter
 from agm.agl.ir.ids import FunctionId
 from agm.agl.ir.nodes import IrDirectCall, IrPrint
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.program import lower_program
+from agm.agl.modules.ids import STD_CONFIG_ID, ModuleId
 from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, RecordValue, TextValue
 from agm.agl.typecheck import AglTypeError
 from tests.agl.ir_harness import (
@@ -21,6 +23,48 @@ from tests.agl.ir_harness import (
     lower_ir,
     nominal_id_for,
 )
+
+
+def test_library_const_captured_by_library_function(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A library's static binding is initialized before its entry function is invoked."""
+    checked = _checked(
+        "import lib\nprogram def main() -> unit = print lib::read()\n",
+        {
+            "lib": (
+                "let constant = 4\nvar adjustment = 1\ndef read() -> int = constant + adjustment\n"
+            )
+        },
+        tmp_path,
+    )
+    executable = lower_program(_compiled_checked(checked))
+    (main_symbol,) = executable.program_functions
+
+    IrInterpreter(executable).run(program_symbol=main_symbol)
+
+    assert capsys.readouterr().out == "5\n"
+
+
+def test_library_binding_initializers_follow_import_dependency_order(tmp_path: Path) -> None:
+    """Library binding modules link after their dependencies and before entry."""
+    checked = _checked(
+        "import library\nprogram def main() -> unit = print library::read()\n",
+        {
+            "dependency": "let seed = 1\n",
+            "library": "import dependency\nlet value = 2\ndef read() -> int = value\n",
+        },
+        tmp_path,
+    )
+
+    executable = lower_program(_compiled_checked(checked))
+
+    assert list(executable.modules) == [
+        STD_CONFIG_ID,
+        ModuleId.from_path("dependency"),
+        ModuleId.from_path("library"),
+        executable.entry_module,
+    ]
 
 
 def test_imported_function_and_local_let(tmp_path: Path) -> None:

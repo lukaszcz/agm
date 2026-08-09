@@ -33,9 +33,9 @@ For AgL execution, four sources combine with a defined precedence:
   `source write (std/config::X := e) > CLI flag > [<program>].X > [exec].X > engine default`
   Their names, value kinds, and consuming side come from the pure shared catalog in `config/engine_keys.py`, also consumed by AgL semantics, deep IR validation, and the AgL evaluator/REPL.
 - **Param values** (`param NAME`):
-  `agm exec`: `CLI flag > [<program>].Y > source default (param Y = e) > required error`; `agm repl`: after `program NAME` establishes the active program, `[<program>].Y > source default (param Y = e) > required error`. A REPL param before that declaration cannot use program config.
+  `agm exec`: `CLI flag > [<program>].Y > source default (param Y = e) > required error`; `agm repl`: `source default (param Y = e) > required error`.
 
-`[exec]` holds global engine defaults with kebab field names (`default-agent`, `strict-json`, `max-iters`, `log-file`). `default-agent` is a quoted AgL `Agent` literal; it remains raw configuration data until `exec` or `repl` lazily parse and typecheck it. `[<program>]` is a **top-level** section keyed by the `program NAME` declaration or, for `agm exec`, the `.agl` file stem; it holds both engine-key overrides and param values for that specific program. The REPL loads its section only when `program NAME` establishes the active program, so the declaration must precede params that need config values. Inline `-c` programs with no `program` declaration have no config section. A file stem matching a reserved AGM section name (e.g. `loop`, `exec`) is a pre-execution error unless the source has an explicit `program NAME` declaration.
+`[exec]` holds global engine defaults with kebab field names (`default-agent`, `strict-json`, `max-iters`, `log-file`). `default-agent` is a quoted AgL `Agent` literal; it remains raw configuration data until `exec` or `repl` lazily parse and typecheck it. For `agm exec`, `[<program>]` is a **top-level** section keyed by the `.agl` file stem; it holds both engine-key overrides and param values for that file. Inline `-c` source has no such section. The REPL does not load per-program sections.
 
 ## Sandbox Configuration
 
@@ -46,7 +46,6 @@ Sandbox settings for `agm run` follow their own discovery and merge chain across
 - `src/agm/config/context.py` defines the config context and project-directory discovery.
 - `src/agm/config/general.py` loads and merges the layered config and exposes the per-feature config readers.
 - `src/agm/config/command_config.py` resolves per-command override sections.
-- `src/agm/config/sections.py` is the pure data-leaf source of truth for reserved structural config-section names (shared with the AgL reserved-program-name guard).
 - `src/agm/config/engine_keys.py` is the pure data-leaf catalog of engine keys: each key's name, value kind, config accessor, host default, and consuming side (runtime-live — backed by a live interpreter field — versus host-consumed registers). Shared with host seed/default resolution, the AgL engine-key type registry that maps each kind to an AgL type, and the evaluator/REPL, which route a write by its consuming side. Its named trace-register projection and trace coupling helper keep the `log`/`log-file` pair explicit; `default-agent` remains a register-only `Agent` value with no host default.
 - `src/agm/config/module_roots.py` resolves AgL module search roots from the `[modules]` config.
 - `src/agm/config/sandbox/` discovers and merges SRT sandbox settings.

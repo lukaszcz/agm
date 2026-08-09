@@ -32,7 +32,8 @@ class TestSourceDiscovery:
         from agm.cli_support.exec_params import discover_params_from_source
 
         params = discover_params_from_source(
-            "param selected: Option[bool] = Option::Some(value = true)\nselected"
+            "param selected: Option[bool] = Option::Some(value = true)\n"
+            "program def main() -> unit = ()"
         )
 
         assert [param.name for param in params] == ["selected"]
@@ -42,7 +43,7 @@ class TestSourceDiscovery:
         from agm.cli_support.exec_params import discover_params_from_source
 
         params = discover_params_from_source(
-            'scope Deploy\nparam region: text = "eu"\nend Deploy\nDeploy::region'
+            'scope Deploy\nparam region: text = "eu"\nend Deploy\nprogram def main() -> unit = ()'
         )
 
         assert [param.name for param in params] == ["Deploy::region"]
@@ -51,7 +52,7 @@ class TestSourceDiscovery:
         from agm.cli_support.exec_params import discover_params_from_source
 
         params = discover_params_from_source(
-            "scope A\nscope B\nparam x: int\nend B\nend A\nA::B::x"
+            "scope A\nscope B\nparam x: int\nend B\nend A\nprogram def main() -> unit = ()"
         )
 
         assert [param.name for param in params] == ["A::B::x"]
@@ -61,7 +62,7 @@ class TestSourceDiscovery:
 
         params = discover_params_from_source(
             'param increment: int\nscope Deploy\nparam region: text = "eu"\nend Deploy\n'
-            "print(Deploy::region)\nincrement"
+            "program def main() -> unit = ()"
         )
 
         assert {param.name for param in params} == {"increment", "Deploy::region"}
@@ -506,27 +507,27 @@ class TestResolveParamValues:
         assert any("a" in w for w in warnings)
         assert any("b" in w for w in warnings)
 
-    def test_program_name_in_warning_message(self) -> None:
+    def test_config_key_in_warning_message(self) -> None:
         from agm.cli_support.exec_params import resolve_param_values
 
         _, warnings = resolve_param_values(
             frozenset(),
             {"bad_key": "x"},
             {},
-            program_name="my_workflow",
+            config_key="my_workflow",
         )
         assert len(warnings) == 1
         assert "my_workflow" in warnings[0]
         assert "bad_key" in warnings[0]
 
-    def test_program_name_none_still_warns(self) -> None:
+    def test_config_key_none_still_warns(self) -> None:
         from agm.cli_support.exec_params import resolve_param_values
 
         _, warnings = resolve_param_values(
             frozenset(),
             {"bad_key": "x"},
             {},
-            program_name=None,
+            config_key=None,
         )
         assert len(warnings) == 1
         assert "bad_key" in warnings[0]

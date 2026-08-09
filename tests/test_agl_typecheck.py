@@ -8155,6 +8155,38 @@ class TestIndexTypechecking:
 
 
 # ---------------------------------------------------------------------------
+# Root binding initializers
+# ---------------------------------------------------------------------------
+
+
+class TestRootBindingInitializers:
+    def test_root_initializer_must_be_constant(self) -> None:
+        with pytest.raises(AglTypeError):
+            resolve_and_check_entry(
+                "def value() -> int = 1\nlet root = value()", default_capabilities()
+            )
+
+    def test_root_constructor_initializer_is_constant(self) -> None:
+        checked = resolve_and_check_entry(
+            "record Settings(value: int)\nlet settings = Settings(value = 1)",
+            default_capabilities(),
+        )
+
+        assert checked.resolved.program is not None
+
+    def test_function_body_initializer_remains_dynamic(self) -> None:
+        checked = resolve_and_check_entry(
+            "def value() -> int = 1\n"
+            "program def main() -> unit =\n"
+            "  let root = value()\n"
+            "  print root",
+            default_capabilities(),
+        )
+
+        assert checked.resolved.program is not None
+
+
+# ---------------------------------------------------------------------------
 # Program function definitions
 # ---------------------------------------------------------------------------
 

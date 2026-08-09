@@ -14,11 +14,12 @@ Design
   import declarations against the already-loaded graph (no re-reading files).
 - **Whole-program pre-pass tables**: ``all_public_funcs`` and ``all_public_types``
   collected BEFORE resolving any body, enabling cross-module mutual recursion.
-- **Declaration-only enforcement**: non-entry modules may only contain
-  declarations (``def``, ``record``, ``enum``, ``type``, ``infixl``/``infixr``,
-  ``import``).
-- **Entry-only enforcement**: ``param`` and ``program`` only in entry.
-- **Header-only imports** (non-entry): imports must appear before any
+- **Static module roots**: every file-backed module permits declarations,
+  parameters, and bindings but rejects root assignments and bare expressions;
+  the incremental REPL is the executable-root host. During M2, non-entry param
+  declarations resolve while typecheck rejects their uses until M3 adds runtime
+  support.
+- **Header-only imports** (every module root): imports must appear before any
   declaration.
 - **``::name`` self-reference**: resolved to the current module's own scope.
 """
@@ -610,7 +611,7 @@ def resolve_program(
             cross_module_constructible_types=cross_module_constructible_types,
             cross_module_type_scopes=frozenset(all_public_types),
             all_public_types=all_public_types,
-            is_entry=is_entry,
+            allow_root_statements=is_entry and entry_parent_scope is not None,
             repl_session_scope=entry_repl_session_scope if is_entry else None,
             repl_session_scope_nodes=entry_repl_session_scope_nodes if is_entry else None,
             repl_session_type_paths=entry_repl_session_type_paths if is_entry else None,

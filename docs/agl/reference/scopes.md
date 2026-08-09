@@ -47,8 +47,7 @@ print(Text::display("ready"))
 A region contains nested regions, header `open` and `import` declarations,
 `export` declarations, static declarations (`def`, `program def`, `extern def`,
 `record`, `enum`, `exception`, `type`, every `builtin` form), `param`
-declarations, and `let`/`var` bindings. Bare expressions, `:=` assignments,
-`program NAME` declarations, and infix declarations are not allowed there.
+declarations, and `let`/`var` bindings. Bare expressions, `:=` assignments, and infix declarations are not allowed there.
 
 ## Binder paths
 
@@ -125,11 +124,15 @@ print("%{Deploy::region} x %{Deploy::replicas}")
 
 A scoped parameter follows the same member and duplicate rules as every other
 member: visible bare inside its region, by its exact path from outside, and
-through `open`. Its **external key** — the name the CLI flag and the config
-table entry use to supply a value — is its full path spelling
-(`Deploy::region`), which is what makes grouping related parameters under one
-scope useful. See [Host environment](host-environment.md#params) for how the
-host resolves an external param value.
+through `open`. An entry-module parameter's **external key** — the name the
+CLI flag and the config table entry use to supply a value — is its full path
+spelling (`Deploy::region`), which is what makes grouping related parameters
+under one scope useful. During the M2 interim, a non-entry scoped param has no
+external key or runtime binding. Its declaration is accepted and type-checked,
+but each use is a static error; parameter discovery and lowering omit it until
+M3. See
+[Host environment](host-environment.md#params) for how the host resolves an
+external param value.
 
 ## Import and export
 
@@ -142,9 +145,9 @@ re-roots every atom it forwards under the region's own path. See
 [Modules](modules.md#import-and-export-inside-a-scope-region) for the
 complete semantics.
 
-Scoped bindings are never exported: library modules reject top-level `let`
-and `var` entirely, so a region's `let`/`var` members have no cross-module
-story.
+Scoped bindings are never exported. Library modules may use root or scoped
+`let`/`var` bindings as static state captured by their functions, but those
+bindings have no cross-module import or export story.
 
 ## Builtin declarations
 

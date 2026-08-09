@@ -4,11 +4,12 @@
 
 ## Programs
 
-An AgL program is a **block** — a sequence of items executed top to bottom.
-Items are separated by newlines or semicolons. There is no syntactic
-distinction between *statements* and *expressions*: every item is an
-expression with a well-defined type, and the program is an
-expression-oriented sequence.
+An AgL program is a module block. A file-backed module root is static: it
+holds declarations, parameters, and constant `let`/`var` initializers, while
+bare expressions and assignments belong in a `program def` body. Items are
+separated by newlines or semicolons. There is no syntactic distinction between
+*statements* and *expressions*: every item is an expression with a well-defined
+type, and executable bodies are expression-oriented sequences.
 
 ```ebnf
 program      ::= module_block EOF
@@ -22,8 +23,7 @@ item          ::= import_decl                     (* header position only *)
              | builtin_modifier? enum_def          (* root only *)
              | type_alias                          (* root only *)
              | builtin_modifier? exception_def     (* root only *)
-             | param_decl                          (* entry module root only *)
-             | program_decl                        (* root only *)
+             | param_decl                          (* root or scope region *)
              | program_func_def                    (* root or scope region *)
              | infix_decl                          (* root only *)
              | builtin_var_def                     (* root only; std/config only *)
@@ -69,27 +69,26 @@ region.
   nominal identity, exactly like an ordinary scoped type — but its complete
   scoped name is shared with the host across the whole program and may be
   declared only once at that path; see [Built-in functions](functions.md#built-in-functions).
-- **`param` declarations** — the program's host/config/CLI-supplied parameters.
-  Entry-module only; they may also be members of a named scope region in an
-  entry module, with no declaration-path shorthand. A scoped parameter's
-  external key is its full path spelling; see
-  [Named scopes](scopes.md#parameters).
+- **`param` declarations** — parameters are legal at a module root or in a
+  named scope region, with no declaration-path shorthand. A scoped
+  entry-module parameter's external key is its full path spelling; see
+  [Named scopes](scopes.md#parameters). During the M2 interim, non-entry
+  params are accepted, resolved, and type-checked but ignored by parameter
+  discovery and lowering until M3.
 - **`import`/`export` declarations** — module-system declarations; root-only
   or a member of a named scope region. A scoped import's bare contribution
   narrows to its own region; its qualifier route stays module-wide. A scoped
   export re-roots its forwarded atoms under the region's path. See
   [Named scopes](scopes.md#import-and-export) and
   [Modules](modules.md#import-and-export-inside-a-scope-region).
-- **`program NAME` declaration** — the program name used for params config
-  lookup. Entry-module only.
 - **`program def` declaration** — marks a non-generic, zero-argument,
   `unit`-returning ordinary function as an executable entry point. It cannot be a
   builtin, extern, or method. It may appear at the module root or as a non-method
   member of a named scope region (never in an ordinary nested block or as a type
   method), remains callable like any other function, and is addressed by its
-  declaration path (`main`, `review::main`). Entry selection considers only
-  `program def` declarations in the entry module; declarations in imported modules
-  remain ordinary callable functions.
+  declaration path (`main`, `review::main`). `agm exec` selects declarations
+  from its file entry module; declarations reached through imports remain ordinary
+  callable functions.
 - **`builtin var` declarations** — body-less engine-backed mutable bindings.
   They are reserved to the canonical standard-library `std/config` module;
   entry programs and ordinary libraries cannot declare them. A `builtin var`
@@ -146,11 +145,12 @@ to change a setting:
 ```agl
 import std/config
 
-std/config::max-iters := 10
-std/config::timeout := Some("30s")
-std/config::default-agent := AgentClaude("sonnet", "medium")
-let budget = std/config::max-iters      # settings are readable
-print budget
+program def main() -> unit =
+  std/config::max-iters := 10
+  std/config::timeout := Some("30s")
+  std/config::default-agent := AgentClaude("sonnet", "medium")
+  let budget = std/config::max-iters      # settings are readable
+  print budget
 ```
 
 The settings and their types are:

@@ -1248,15 +1248,6 @@ def resolved_public_name(scope_path: tuple[str, ...], name: str) -> str:
 
 
 @dataclass(frozen=True, slots=True)
-class ProgramDecl:
-    """``program NAME`` declaration used for host config lookup."""
-
-    name: str
-    span: SourceSpan = dc_field(compare=False)
-    node_id: int = dc_field(compare=False)
-
-
-@dataclass(frozen=True, slots=True)
 class BuiltinVarDecl:
     """``builtin var NAME : Type`` declaration — a body-less, runtime-backed,
     MUTABLE binding.
@@ -1368,7 +1359,6 @@ Declaration = (
     | ExceptionDef
     | TypeAlias
     | ParamDecl
-    | ProgramDecl
     | BuiltinVarDecl
     | InfixDecl
     | ImportDecl

@@ -28,7 +28,7 @@ from agm.agl.self_validation import self_validation_enabled
 from agm.config.engine_keys import HOST_CONSUMED_ENGINE_KEYS
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
+    from collections.abc import Iterable
     from pathlib import Path
 
     from agm.agl.eval.ir_interpreter import IrInterpreter
@@ -126,7 +126,6 @@ class ReplSession:
         agent_dispatcher: "AgentFn | None" = None,
         shell_exec_timeout: float | None = None,
         trace_path: "Path | None" = None,
-        params_config_loader: "Callable[[str], dict[str, object]] | None" = None,
         engine_base: "Mapping[str, Value] | None" = None,
         setting_overrides: "Mapping[str, SettingOverride] | None" = None,
         host_settings_policy: "HostSettingsPolicy | None" = None,
@@ -213,7 +212,6 @@ class ReplSession:
         # is writable but the no-op store tolerates failure (it disables itself).
         self._trace_path = trace_path
         self._initial_trace_path = trace_path
-        self._params_config_loader = params_config_loader
 
         # Internal runtime owns the registrations + host-environment assembly.
         # It never runs an entry on the session's behalf, so it is given none
@@ -239,8 +237,6 @@ class ReplSession:
         self._link_image = LinkImage()
         self._ir_base_frame: Frame = {}
         self._next_node_id: int = 0
-        self._program_name: str | None = None
-        self._active_config: dict[str, object] = {}
         # Keyed by external key (full path spelling for a scoped param, bare
         # name for a root param); value is (declared type, declaration node id).
         self._declared_params: dict[str, tuple[Type, int]] = {}
@@ -796,77 +792,27 @@ class ReplSession:
         program: "Program",
         checked: "CheckedModule",
         warnings: list[Diagnostic],
-    ) -> tuple[EntryResult | None, dict[str, Value], str | None, dict[str, object]]:
-        """Validate and convert config-backed params without mutating session state."""
-        from agm.agl.runtime.params import convert_param_value
-        from agm.agl.syntax.nodes import ParamDecl, ProgramDecl, scoped_public_name, static_items
+    ) -> tuple[EntryResult | None, dict[str, Value]]:
+        """Validate REPL params from source defaults without mutating session state."""
+        del checked
+        from agm.agl.syntax.nodes import ParamDecl, scoped_public_name, static_items
 
         def reject(message: str, span: "SourceSpan") -> EntryResult:
             return self._fail([diagnostic_from_span(message, span)], warnings)
 
         param_values: dict[str, Value] = {}
-        entry_program_name: str | None = None
-        effective_config = self._active_config
-
         for item in static_items(program.body.items):
-            if isinstance(item, ProgramDecl):
-                if self._program_name is not None and self._program_name != item.name:
-                    return (
-                        reject(
-                            f"Program name already set to {self._program_name!r}; "
-                            f"cannot redeclare as {item.name!r}. Use :reset first.",
-                            item.span,
-                        ),
-                        {},
-                        None,
-                        self._active_config,
-                    )
-                if self._program_name is None:
-                    entry_program_name = item.name
-                    effective_config = (
-                        self._params_config_loader(item.name)
-                        if self._params_config_loader is not None
-                        else {}
-                    )
-            elif isinstance(item, ParamDecl):
+            if isinstance(item, ParamDecl) and item.default is None:
                 external_name = scoped_public_name(item.scope_path, item.name)
-                raw_config = effective_config.get(external_name)
-                if raw_config is not None:
-                    declared_type = checked.type_env.get_binding_type(item.node_id)
-                    assert declared_type is not None
-                    try:
-                        param_values[external_name] = convert_param_value(
-                            external_name, raw_config, declared_type, checked.type_env.type_table
-                        )
-                    except (TypeError, ValueError) as exc:
-                        return (
-                            reject(
-                                f"Config value for param {external_name!r} is invalid: {exc}",
-                                item.span,
-                            ),
-                            {},
-                            None,
-                            self._active_config,
-                        )
-                elif item.default is None:
-                    effective_program_name = entry_program_name or self._program_name
-                    prog_hint = (
-                        f" via [{effective_program_name}] config"
-                        if effective_program_name is not None
-                        else ""
-                    )
-                    return (
-                        reject(
-                            f"Missing required param {external_name!r}: provide it"
-                            f"{prog_hint} or a default expression.",
-                            item.span,
-                        ),
-                        {},
-                        None,
-                        self._active_config,
-                    )
+                return (
+                    reject(
+                        f"Missing required param {external_name!r}: provide a default expression.",
+                        item.span,
+                    ),
+                    {},
+                )
 
-        return None, param_values, entry_program_name, effective_config
+        return None, param_values
 
     def _build_check_only_result(
         self,
@@ -905,8 +851,6 @@ class ReplSession:
         program: "Program",
         checked: "CheckedModule",
         next_start_id: int,
-        entry_program_name: str | None,
-        entry_active_config: dict[str, object],
         partial: bool,
         promoted_declaration_ids: frozenset[int],
     ) -> tuple[str, ...]:
@@ -920,7 +864,6 @@ class ReplSession:
             InfixDecl,
             LetDecl,
             ParamDecl,
-            ProgramDecl,
             RecordDef,
             TypeAlias,
             VarDecl,
@@ -942,7 +885,6 @@ class ReplSession:
             FuncDef,
             LetDecl,
             ParamDecl,
-            ProgramDecl,
             RecordDef,
             TypeAlias,
             VarDecl,
@@ -1147,9 +1089,6 @@ class ReplSession:
                     typ,
                     item.node_id,
                 )
-        if entry_program_name is not None and not partial:
-            self._program_name = entry_program_name
-            self._active_config = entry_active_config
         if not partial:
             self._source_log.append(text)
         promoted_infix = [
@@ -1255,7 +1194,6 @@ class ReplSession:
             FuncDef,
             LetDecl,
             ParamDecl,
-            ProgramDecl,
             RecordDef,
             ScopeRegion,
             TypeAlias,
@@ -1292,7 +1230,6 @@ class ReplSession:
                 ExceptionDef,
                 TypeAlias,
                 ParamDecl,
-                ProgramDecl,
                 FuncDef,
             ),
         ):
@@ -1446,10 +1383,6 @@ class ReplSession:
             result.append((name, typ, value))
         return result
 
-    def program_name(self) -> str | None:
-        """Return the active program name, if declared."""
-        return self._program_name
-
     def type_names(self) -> frozenset[str]:
         """Return the names of types declared in prior promoted entries.
 
@@ -1486,8 +1419,6 @@ class ReplSession:
         self._link_image = LinkImage()
         self._ir_base_frame = {}
         self._next_node_id = 0
-        self._program_name = None
-        self._active_config = {}
         self._declared_params = {}
         self._source_log = []
         self._ambient_constructor_candidates = {}

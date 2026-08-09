@@ -1522,7 +1522,7 @@ class TestAgentRequestBuiltinIdentity:
         assert not result.ok
         assert any("AgentRequest" in d.message and "agent" in d.message for d in result.diagnostics)
 
-    def test_ask_request_without_any_program_declaration_types_as_canonical_agent_request(
+    def test_ask_request_without_named_program_syntax_types_as_canonical_agent_request(
         self,
     ) -> None:
         """Regression: a program that declares none of its own builtin types
@@ -1832,7 +1832,7 @@ class TestParsePolicyBuiltinIdentity:
         assert result.ok, result.diagnostics
         assert result.value == IntValue(2)
 
-    def test_on_parse_error_without_any_program_declaration_still_accepts_canonical_forms(
+    def test_on_parse_error_without_named_program_syntax_still_accepts_canonical_forms(
         self,
     ) -> None:
         """Regression: a program that declares none of its own builtin types
@@ -3176,35 +3176,6 @@ class TestParams:
         s.eval_entry('param name: text = "hi"')
         assert any(n == "name" for n, _t, _v in s.bindings())
 
-    def test_program_name_loads_param_config(self) -> None:
-        s = ReplSession(params_config_loader=lambda name: {"count": 7} if name == "demo" else {})
-        r = s.eval_entry("program demo\nparam count: int\ncount + 1")
-        assert r.ok
-        assert _int(r.value) == 8
-        assert s.program_name() == "demo"
-
-    def test_param_config_conversion_error_rejects_entry(self) -> None:
-        s = ReplSession(params_config_loader=lambda _name: {"count": "not-json-int"})
-        r = s.eval_entry("program demo\nparam count: int\ncount")
-        assert not r.ok
-        assert "Config value for param 'count' is invalid" in r.diagnostics[0].message
-        assert s.program_name() is None
-
-    def test_redeclaring_different_program_name_rejects_entry(self) -> None:
-        s = ReplSession()
-        assert s.eval_entry("program demo\n1").ok
-        r = s.eval_entry("program other\n2")
-        assert not r.ok
-        assert "Program name already set" in r.diagnostics[0].message
-        assert s.program_name() == "demo"
-
-    def test_redeclaring_same_program_name_is_noop(self) -> None:
-        s = ReplSession()
-        assert s.eval_entry("program demo\n1").ok
-        r = s.eval_entry("program demo\n2")
-        assert r.ok
-        assert s.program_name() == "demo"
-
     def test_unset_scoped_param_reference_is_clean_error(self) -> None:
         # A required scoped param must report the same clean diagnostic as a
         # root param and leave the session alive for later entries, not crash
@@ -3218,20 +3189,6 @@ class TestParams:
         after = s.eval_entry('"still alive"')
         assert after.ok
         assert _text(after.value) == "still alive"
-
-    def test_program_name_loads_scoped_param_config(self) -> None:
-        # A config-file value for a scoped param must be applied by its full
-        # path spelling, exactly like a root param by its bare name.
-        s = ReplSession(
-            params_config_loader=lambda name: {"p": 42, "A::q": 77} if name == "demo" else {}
-        )
-        r = s.eval_entry("program demo\nparam p: int\nscope A\nparam q: int\nend A\n[p, A::q]")
-        assert r.ok
-        assert s.program_name() == "demo"
-        n1, t1, v1 = s.declared_params()[0]
-        n2, t2, v2 = s.declared_params()[1]
-        assert (n1, _int(v1)) == ("p", 42)
-        assert (n2, _int(v2)) == ("A::q", 77)
 
     def test_declared_params_lists_scoped_param_by_full_path(self) -> None:
         s = ReplSession()
@@ -4803,19 +4760,6 @@ class TestImports:
         )
         assert not r.ok
         assert any("Contract error" in d.message for d in r.diagnostics)
-
-    def test_program_decl_conflict_in_graph_mode(self, tmp_path: Path) -> None:
-        # _pre_eval_param_check returning non-None in program context:
-        # setting a different program name when one is already set.
-        lib = tmp_path / "mylib.agl"
-        lib.write_text("def add(a: int, b: int) -> int = a + b\n")
-        s = self._make_session_with_root(tmp_path)
-        r1 = s.eval_entry("program first\n1")
-        assert r1.ok, r1.diagnostics
-        # Now in program context, try to declare a different program name.
-        r2 = s.eval_entry("open import mylib\nprogram second\nadd(1, 2)")
-        assert not r2.ok
-        assert "Program name already set" in r2.diagnostics[0].message
 
     def test_parse_error_in_imported_module_has_source_label(self, tmp_path: Path) -> None:
         # Regression: parse error in an imported module must surface

@@ -2984,156 +2984,28 @@ class TestExecCliModulePaths:
         assert "Hello!" in captured.out
 
 
-class TestReservedFileStem:
-    """: a file stem matching a reserved AGM section name must exit 1."""
+class TestFileStemProgramConfig:
+    """A file program selects its config table from its file stem."""
 
-    @pytest.mark.parametrize("name", ("loop", "exec", "exec!", "ask!"))
-    def test_reserved_stem_no_program_decl_exits_1(
-        self, name: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """A reserved source stem without ``program NAME`` cannot select a config key."""
-        agl_file = tmp_path / f"{name}.agl"
-        agl_file.write_text("let x = 1\nx\n")
-
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file))
-
-        assert exc_info.value.code == 1
-
-    def test_reserved_stem_with_program_decl_ok(self, tmp_path: Path) -> None:
-        """A file named 'loop.agl' with an explicit ``program myapp`` decl runs fine."""
-        agl_file = tmp_path / "loop.agl"
-        agl_file.write_text("program myapp\nlet x = 1\nx\n")
-
-        # Should succeed (program decl provides a non-reserved key).
-        result = exec_command.run(_exec_args_no_log(agl_file))
-        assert result is None
-
-    def test_non_reserved_stem_runs_fine(self, tmp_path: Path) -> None:
-        """A file with a non-reserved stem works normally."""
-        agl_file = tmp_path / "myworkflow.agl"
-        agl_file.write_text("let x = 1\nx\n")
-
-        result = exec_command.run(_exec_args_no_log(agl_file))
-        assert result is None
-
-    def test_inline_c_with_reserved_name_unaffected(self, tmp_path: Path) -> None:
-        """Inline -c programs have no file stem and are never affected."""
-        from agm.cli_support.args import ExecArgs
-
-        args = ExecArgs(
-            file=None,
-            command="let x = 1\nx\n",
-            param_tokens=[],
-            strict_json=None,
-            max_iters=None,
-            no_log=True,
-            log_file=None,
-            log=False,
-        )
-        result = exec_command.run(args)
-        assert result is None
-
-
-class TestReservedDeclaredProgramName:
-    """regression: a reserved declared ``program NAME`` must be rejected up front.
-
-    Before the fix, ``parsed.program_name`` was adopted as ``program_key`` without
-    checking it against the reserved-name set, so a declaration like ``program
-    exec`` silently selected the ``[exec]`` config table and any bad engine-seed
-    literal there (e.g. ``default-agent = 42``) was reported as a config error
-    instead of the real problem: the declared name itself is reserved.
-    """
-
-    def test_reserved_declared_name_with_bad_config_reports_reserved_name(
+    def test_file_stem_selects_config_for_a_program_definition(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """'program exec' + a bad [exec] literal must surface the reserved-name error,
-        not the unrelated config-literal error the [exec] table happens to trigger."""
         from agm.config.context import ConfigContext
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text("[exec]\ndefault-agent = 42\n")
+        (home / ".agm" / "config.toml").write_text("[foo]\nlimit = 7\n")
         monkeypatch.setattr(
             exec_command,
             "current_config_context",
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
 
-        agl_file = tmp_path / "r.agl"
-        agl_file.write_text("program exec\nlet x = 1\nx\n")
+        agl_file = tmp_path / "foo.agl"
+        agl_file.write_text("param limit: int\nprogram def main() -> unit = print limit\n")
 
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file))
-
-        assert exc_info.value.code == 1
-        err = capsys.readouterr().err
-        assert "reserved" in err
-        assert "default-agent" not in err
-
-    def test_reserved_declared_name_without_config_reports_reserved_name(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """'program exec' with no config present still reports the reserved-name problem."""
-        agl_file = tmp_path / "r.agl"
-        agl_file.write_text("program exec\nlet x = 1\nx\n")
-
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file))
-
-        assert exc_info.value.code == 1
-        assert "reserved" in capsys.readouterr().err
-
-    def test_non_reserved_declared_name_still_selects_its_config_table(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A non-reserved declared name is not over-rejected and still picks up its
-        own [<name>] config table (guard against over-rejection)."""
-        from agm.config.context import ConfigContext
-
-        home = tmp_path / "home"
-        (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text("[myprog]\nmax-iters = 5\n")
-        monkeypatch.setattr(
-            exec_command,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-
-        agl_file = tmp_path / "r.agl"
-        agl_file.write_text("program myprog\nlet x = 1\nx\n")
-
-        result = exec_command.run(_exec_args_no_log(agl_file))
-        assert result is None
-
-    def test_reserved_file_stem_with_matching_config_still_reports_stem_error(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """Unchanged: a reserved *file stem* (no program decl) with a bad literal in
-        its matching config table still reports the reserved-stem error, not the
-        config-literal error — the existing file-stem guard keeps working."""
-        from agm.config.context import ConfigContext
-
-        home = tmp_path / "home"
-        (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text("[exec]\ndefault-agent = 42\n")
-        monkeypatch.setattr(
-            exec_command,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-
-        agl_file = tmp_path / "exec.agl"
-        agl_file.write_text("let x = 1\nx\n")
-
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file))
-
-        assert exc_info.value.code == 1
-        err = capsys.readouterr().err
-        assert "reserved" in err
-        assert "default-agent" not in err
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert capsys.readouterr().out == "7\n"
 
 
 class TestSettingOverrideProvenanceWithNoStdlib:
@@ -3167,7 +3039,7 @@ class TestSettingOverrideProvenanceWithNoStdlib:
         )
 
         agl_file = tmp_path / "plain.agl"
-        agl_file.write_text("let x = 1\n")
+        agl_file.write_text("let x = 1\nprogram def main() -> unit = ()\n")
 
         result = exec_command.run(_exec_args_no_log(agl_file, no_stdlib=True))
         assert result is None
@@ -3179,7 +3051,7 @@ class TestSettingOverrideProvenanceWithNoStdlib:
         must still fail (rather than be silently dropped) when the program
         never loads ``std/config``."""
         agl_file = tmp_path / "plain.agl"
-        agl_file.write_text("let x = 1\n")
+        agl_file.write_text("let x = 1\nprogram def main() -> unit = ()\n")
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_log(agl_file, no_stdlib=True, agent="("))
@@ -3188,86 +3060,8 @@ class TestSettingOverrideProvenanceWithNoStdlib:
         assert "--agent" in capsys.readouterr().err
 
 
-class TestF1StemVsProgramNameBug:
-    """regression: file stem != program NAME decl must not split engine/param key."""
-
-    def test_program_name_decl_used_for_engine_timeout(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """File foo.agl with 'program bar': [bar].timeout must feed the engine timeout.
-
-        With the bug, stem 'foo' selected the engine config table -> [foo] (empty)
-        -> 30s. The fix resolves the declared program name 'bar' -> 60m for both
-        engine config and params.
-        """
-        from collections.abc import Mapping
-
-        from agm.agl.ir.ids import SymbolId
-        from agm.agl.ir.program import ExecutableProgram
-        from agm.agl.matchcompile import MatchCompiledProgram
-        from agm.agl.pipeline import PipelineDriver as RealRuntime
-        from agm.agl.pipeline import PreparedProgram, RunResult
-        from agm.agl.runtime.host_settings import HostSettingsPolicy
-        from agm.agl.semantics.values import Value
-        from agm.config.context import ConfigContext
-
-        home = tmp_path / "home"
-        (home / ".agm").mkdir(parents=True)
-        # [exec] has 30s; [bar] (the declared program name) overrides with 60m.
-        (home / ".agm" / "config.toml").write_text(
-            '[exec]\ntimeout = "30s"\n\n[bar]\ntimeout = "60m"\n'
-        )
-        monkeypatch.setattr(
-            exec_command,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-
-        # File stem is 'foo', but program declares 'bar'.
-        agl_file = tmp_path / "foo.agl"
-        agl_file.write_text("program bar\nlet x = 1\nx\n")
-
-        captured: dict[str, object] = {}
-
-        class CapturingRuntime(RealRuntime):
-            def run_prepared(
-                self,
-                prepared: PreparedProgram,
-                *,
-                param_values: Mapping[str, object] | None = None,
-                check_only: bool = False,
-                log_file: Path | None = None,
-                compiled: MatchCompiledProgram | None = None,
-                executable: ExecutableProgram | None = None,
-                host_settings_policy: HostSettingsPolicy | None = None,
-                builtin_host_settings: Mapping[str, Value] | None = None,
-                program_symbol: SymbolId | None = None,
-            ) -> RunResult:
-                captured["shell_exec_timeout"] = self._shell_exec_timeout
-                return super().run_prepared(
-                    prepared,
-                    param_values=param_values,
-                    check_only=check_only,
-                    log_file=log_file,
-                    compiled=compiled,
-                    executable=executable,
-                    host_settings_policy=host_settings_policy,
-                    builtin_host_settings=builtin_host_settings,
-                    program_symbol=program_symbol,
-                )
-
-        monkeypatch.setattr(exec_command, "PipelineDriver", CapturingRuntime)
-
-        result = exec_command.run(_exec_args_no_log(agl_file))
-        assert result is None
-
-        # Engine shell-exec timeout must come from [bar] (60m = 3600s), not [exec] (30s).
-        shell_timeout = captured["shell_exec_timeout"]
-        assert shell_timeout == pytest.approx(3600.0)
-
-
 class TestExecProgramSelection:
-    """Program-def entry selection keeps legacy top-level execution intact."""
+    """Program-def entry selection requires file programs and wraps inline source."""
 
     def test_runs_the_sole_program_implicitly(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -3312,14 +3106,34 @@ class TestExecProgramSelection:
         assert "main" in captured.err
         assert captured.out == ""
 
-    def test_runs_legacy_top_level_when_no_program_is_declared(
+    def test_rejects_a_file_without_a_program_definition(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        agl_file = tmp_path / "legacy.agl"
-        agl_file.write_text('print "legacy"\n')
+        agl_file = tmp_path / "static-only.agl"
+        agl_file.write_text("let value = 1\n")
 
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
-        assert capsys.readouterr().out == "legacy\n"
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+
+        assert exc_info.value.code == 1
+        assert capsys.readouterr().out == ""
+
+    def test_runs_inline_statements_by_wrapping_them_in_a_program(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        args = ExecArgs(
+            file=None,
+            command='let value = "inline"\nprint value\n',
+            param_tokens=[],
+            strict_json=None,
+            max_iters=None,
+            no_log=True,
+            log_file=None,
+            log=False,
+        )
+
+        assert exec_command.run(args) is None
+        assert capsys.readouterr().out == "inline\n"
 
     def test_selected_program_uses_and_restores_the_pinned_decimal_context(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -3367,14 +3181,14 @@ class TestProgramLogFilePathResolution:
     """[<program>].log-file relative path is anchored to the config directory."""
 
     def test_program_log_file_relative_resolved_to_config_dir(self, tmp_path: Path) -> None:
-        from agm.config.general import load_merged_config, program_config_from_merged
+        from agm.config.general import file_config_from_merged, load_merged_config
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
         (home / ".agm" / "config.toml").write_text('[myprog]\nlog-file = "my.log"\n')
 
         merged = load_merged_config(home=home, proj_dir=None, cwd=tmp_path)
-        prog = program_config_from_merged(merged, "myprog")
+        prog = file_config_from_merged(merged, "myprog")
 
         log_file_val = prog.get("log-file")
         assert isinstance(log_file_val, str)

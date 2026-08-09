@@ -717,35 +717,17 @@ def load_refine_config(
     )
 
 
-def program_config_from_merged(merged: TomlDict, program_name: str) -> dict[str, object]:
-    """Return the top-level ``[<program_name>]`` table from an already-merged config.
+def file_config_from_merged(merged: TomlDict, file_stem: str) -> dict[str, object]:
+    """Return the top-level ``[<file_stem>]`` table from merged config.
 
-    Returns an empty dict when the section is absent or not a table.  Both
+    Returns an empty dict when the section is absent or not a table. Both
     engine-key overrides (e.g. ``timeout``) and param values (e.g. ``scope``)
-    live directly under ``[<program_name>]``; callers are responsible for
-    separating the two.
+    live directly under the table; callers separate the two.
     """
-    program_section = merged.get(program_name)
-    if isinstance(program_section, dict):
-        return dict(program_section)
+    section = merged.get(file_stem)
+    if isinstance(section, dict):
+        return dict(section)
     return {}
-
-
-def load_program_config(
-    program_name: str,
-    *,
-    home: Path,
-    proj_dir: Path | None,
-    cwd: Path,
-) -> dict[str, object]:
-    """Load and return the top-level ``[<program_name>]`` table from merged config.
-
-    Loads the merged config across all config-file layers (home → project → cwd)
-    and returns the ``[<program_name>]`` table as a dict of TOML-native values.
-    Returns an empty dict when the section is absent.
-    """
-    merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
-    return program_config_from_merged(merged, program_name)
 
 
 @dataclass(frozen=True)

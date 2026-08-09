@@ -69,6 +69,29 @@ def _run_program(
 
 
 # ---------------------------------------------------------------------------
+# Library-parameter interim boundary
+# ---------------------------------------------------------------------------
+
+
+def test_library_param_reference_is_a_static_failure(tmp_path: Path) -> None:
+    """M2 library params resolve but cannot reach the absent runtime binding."""
+    library_root = tmp_path / "library"
+    library_root.mkdir()
+    (library_root / "config.agl").write_text(
+        'param region: text = "eu"\ndef read() -> text = region\n'
+    )
+
+    result = _run_program(
+        "import config\nprogram def main() -> unit = print config::read()\n",
+        roots_dirs=[library_root],
+    )
+
+    assert result.ok is False
+    assert result.error is None
+    assert result.diagnostics
+
+
+# ---------------------------------------------------------------------------
 # Scenario 1: wildcard import (import utils/*)
 # ---------------------------------------------------------------------------
 

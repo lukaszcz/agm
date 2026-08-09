@@ -1,13 +1,10 @@
 """Canonical catalog of AGM top-level CLI commands.
 
 Single source of truth for the top-level command names and their one-line
-overview descriptions, shared by the CLI help layer (:mod:`agm.parser`) and the
-AgL reserved-program-name guard (:mod:`agm.agl.semantics.engine_keys`) so the
-two never drift.
+overview descriptions, consumed by the CLI help layer (:mod:`agm.parser`).
 
 This is a pure data leaf: it imports nothing from ``agm`` and pulls in no CLI
-machinery, so the AgL semantics layer can depend on it without breaching the
-AgL firewall (which forbids reaching the parser/CLI, not plain shared data).
+machinery.
 """
 
 from __future__ import annotations

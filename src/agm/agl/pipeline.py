@@ -75,7 +75,6 @@ class ParamDiscovery:
     """Result of ``PipelineDriver.discover_params``."""
 
     params: tuple[ParamDeclInfo, ...]
-    program_name: str | None
     checked: "CheckedProgram | None"
     diagnostics: tuple[Diagnostic, ...]
     warnings: tuple[Diagnostic, ...]
@@ -105,9 +104,9 @@ class ParsedEntry:
     """Result of :meth:`PipelineDriver.parse_entry`.
 
     The entry source parsed once, ahead of module-graph loading and scope
-    resolution. Lets a caller read the declared program name and choose
-    engine-setting overrides before :meth:`PipelineDriver.prepare_parsed_entry`
-    loads imports and resolves the whole program.
+    resolution. Lets a caller transform the entry AST before
+    :meth:`PipelineDriver.prepare_parsed_entry` loads imports and resolves the
+    whole program.
 
     ``program``
         The parsed entry AST, or ``None`` when parsing failed (in which case
@@ -115,10 +114,6 @@ class ParsedEntry:
     ``next_id``
         The first node id not yet consumed by this parse — the seed for
         module-graph loading.
-    ``program_name``
-        The declared ``program NAME``, read directly from the parsed AST
-        without requiring scope resolution; ``None`` when the entry declares
-        none (or parsing failed).
     ``spaced_qualifiers``
         Lexical advisories collected while parsing the entry, threaded into
         module-graph loading exactly as :func:`~agm.agl.modules.loader.load_graph`
@@ -133,7 +128,6 @@ class ParsedEntry:
     entry_path: "Path | None"
     program: "Program | None"
     next_id: int
-    program_name: str | None
     spaced_qualifiers: "tuple[SpacedQualifier, ...]"
     diagnostics: tuple[Diagnostic, ...]
     warnings: tuple[Diagnostic, ...]
@@ -169,18 +163,6 @@ class PreparedProgram:
     diagnostics: tuple[Diagnostic, ...]
     warnings: tuple[Diagnostic, ...]
     companion_paths: "dict[ModuleId, Path | None]" = field(default_factory=dict)
-
-    @property
-    def program_name(self) -> str | None:
-        """The declared program name from the entry module, or ``None``."""
-        from agm.agl.modules.ids import ENTRY_ID
-
-        if self.resolved is None:
-            return None
-        entry_mod = self.resolved.modules.get(ENTRY_ID)
-        if entry_mod is None:
-            return None
-        return entry_mod.resolved.program_name
 
 
 @dataclass(frozen=True, slots=True)
@@ -523,11 +505,9 @@ class PipelineDriver:
     ) -> ParsedEntry:
         """Parse *entry_source* once, ahead of module-graph loading.
 
-        The first half of :meth:`prepare_program`, split out so a caller can
-        read :attr:`ParsedEntry.program_name` — and so a host driving a
-        second program-point step (e.g. choosing engine-setting overrides)
-        never re-parses the entry to get there.  Collects TAB and
-        spaced-qualifier advisories exactly as
+        The first half of :meth:`prepare_program`, split out before module
+        loading so a host can transform an entry AST before scope resolution.
+        Collects TAB and spaced-qualifier advisories exactly as
         :func:`~agm.agl.modules.loader.load_graph` does for its own entry
         parse.  Non-raising: an ``AglSyntaxError`` is captured into
         :attr:`ParsedEntry.diagnostics` with ``program`` left ``None``.
@@ -535,7 +515,6 @@ class PipelineDriver:
         from agm.agl.lexer import tab_warning_collector
         from agm.agl.modules.loader import EntryParseSyntaxError, parse_entry_module
         from agm.agl.parser import AglSyntaxError
-        from agm.agl.syntax.nodes import ProgramDecl
 
         with tab_warning_collector() as tab_sink:
             try:
@@ -549,7 +528,6 @@ class PipelineDriver:
                     entry_path=entry_path,
                     program=None,
                     next_id=0,
-                    program_name=None,
                     spaced_qualifiers=spaced_qualifiers,
                     diagnostics=(exc.to_diagnostic(),),
                     warnings=tuple(tab_sink),
@@ -560,7 +538,6 @@ class PipelineDriver:
                     entry_path=entry_path,
                     program=None,
                     next_id=0,
-                    program_name=None,
                     spaced_qualifiers=(),
                     diagnostics=(exc.to_diagnostic(),),
                     warnings=tuple(tab_sink),
@@ -571,7 +548,6 @@ class PipelineDriver:
                     entry_path=entry_path,
                     program=None,
                     next_id=0,
-                    program_name=None,
                     spaced_qualifiers=(),
                     diagnostics=(Diagnostic(message=str(exc), line=1),),
                     warnings=tuple(tab_sink),
@@ -579,18 +555,11 @@ class PipelineDriver:
         program = parsed_module.program
         next_id = parsed_module.next_id
 
-        program_name: str | None = None
-        for item in program.body.items:
-            if isinstance(item, ProgramDecl):
-                program_name = item.name
-                break
-
         return ParsedEntry(
             source=entry_source,
             entry_path=entry_path,
             program=program,
             next_id=next_id,
-            program_name=program_name,
             spaced_qualifiers=parsed_module.spaced_qualifiers,
             diagnostics=(),
             warnings=tuple(tab_sink),
@@ -847,7 +816,8 @@ class PipelineDriver:
         """Discover typed ``param`` declarations from a resolved program.
 
         Runs typechecking and match compilation, then reads entry params and
-        every linked ``program def``. A supplied artifact is reused; otherwise
+        every linked ``program def``. M2 deliberately ignores legal non-entry
+        params here; M3 will add their discovery. A supplied artifact is reused; otherwise
         the successful artifact is returned for later
         lowering by :meth:`run_prepared`.
         """
@@ -857,7 +827,6 @@ class PipelineDriver:
         if prepared.resolved is None:
             return ParamDiscovery(
                 params=(),
-                program_name=prepared.program_name,
                 checked=None,
                 diagnostics=prepared.diagnostics,
                 warnings=prepared.warnings,
@@ -883,7 +852,6 @@ class PipelineDriver:
         if checked is None:
             return ParamDiscovery(
                 params=(),
-                program_name=prepared.program_name,
                 checked=None,
                 diagnostics=tc_diagnostics,
                 warnings=all_warnings,
@@ -894,7 +862,6 @@ class PipelineDriver:
             if compiled is None:
                 return ParamDiscovery(
                     params=(),
-                    program_name=prepared.program_name,
                     checked=checked,
                     diagnostics=match_diagnostics,
                     warnings=all_warnings,
@@ -904,7 +871,6 @@ class PipelineDriver:
         if entry_cm is None:
             return ParamDiscovery(
                 params=(),
-                program_name=prepared.program_name,
                 checked=None,
                 diagnostics=(Diagnostic(message="Entry module not found in program", line=1),),
                 warnings=all_warnings,
@@ -950,7 +916,6 @@ class PipelineDriver:
         )
         return ParamDiscovery(
             params=tuple(infos),
-            program_name=prepared.program_name,
             checked=checked,
             diagnostics=(),
             warnings=all_warnings,
@@ -1015,7 +980,7 @@ class PipelineDriver:
         ``program_symbol``
             A selected linked ``program def`` symbol to invoke after module
             initializers have run, within the interpreter's managed execution
-            boundary. ``None`` retains ordinary top-level execution.
+            boundary. ``None`` invokes no declared entry after initialization.
 
         ``executable``
             When the caller has already lowered this exact program (via

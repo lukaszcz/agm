@@ -336,15 +336,12 @@ def _is_stray_scope_end(item: syntax.Item) -> bool:
 _REJECTED_SCOPE_ITEM_NAMES: tuple[tuple[type, str], ...] = (
     (syntax.AssignStmt, "an assignment"),
     (syntax.InfixDecl, "an 'infix' declaration"),
-    (syntax.ProgramDecl, "a 'program' declaration"),
 )
 
 
 # ``scope_item ::= scope_region | declaration | binder | expr``; once the
 # admitted shapes are filtered out, only these remain.
-_RejectedScopeItem: TypeAlias = (
-    _RawInfixChain | syntax.ProgramDecl | syntax.InfixDecl | syntax.AssignStmt | syntax.Expr
-)
+_RejectedScopeItem: TypeAlias = _RawInfixChain | syntax.InfixDecl | syntax.AssignStmt | syntax.Expr
 
 
 def _rejected_scope_item(item: _RejectedScopeItem) -> tuple[str, SourceSpan]:
@@ -670,16 +667,6 @@ class AstBuilder(Transformer):
             name=str(name_tok),
             annotation=ann,
             default=default,
-            span=span,
-            node_id=self._next_id(),
-        )
-
-    def program_decl(self, meta: Meta, args: _Args) -> syntax.ProgramDecl:
-        # Grammar: "program" name
-        name_tok = _find_name_token(args)
-        span = self._span_from_meta(meta)
-        return syntax.ProgramDecl(
-            name=str(name_tok),
             span=span,
             node_id=self._next_id(),
         )

@@ -159,6 +159,9 @@ class CheckedProgram:
     ``warnings``
         All non-fatal type-check diagnostics collected across all modules, in
         module-traversal order.
+    ``import_sccs``
+        Loader-computed reverse-topological import components, retained for
+        dependency-ordered lowering after this pass's presentation ordering.
     """
 
     modules: dict[ModuleId, CheckedModule]
@@ -166,6 +169,7 @@ class CheckedProgram:
     program_type_table: dict[DeclKey, Type]
     warnings: tuple[Diagnostic, ...]
     capabilities: HostCapabilities | None = None
+    import_sccs: tuple[tuple[ModuleId, ...], ...] = ()
 
 
 def _assert_checked_module_closed(module: CheckedModule) -> None:
@@ -1032,6 +1036,7 @@ def check_program(
             warning for mid in presentation_order for warning in checked_modules[mid].warnings
         ),
         capabilities=capabilities,
+        import_sccs=resolved.import_sccs,
     )
     if self_validation_enabled():
         assert_checked_program_closed(checked)

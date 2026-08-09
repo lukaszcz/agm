@@ -254,10 +254,14 @@ rules.
 
 ## Library modules and cycles
 
-Imported modules are declaration-only: they may contain imports, exports,
-functions (including `program def`), type declarations, and infix declarations,
-but not executable top-level expressions, bindings, parameters, or `program NAME`
-declarations.
+Every file-backed module has a static root: imports, declarations, parameters,
+and `let`/`var` bindings are allowed there, while bare expressions and assignments
+are not. Root binding initializers must be constant expressions. Put executable
+workflow code in a `program def` body. Parameters are also legal in named scope
+regions in every module. During the M2 interim, non-entry param declarations
+are accepted and type-checked, but every use is a static error because parameter
+discovery and lowering omit them; only entry-module params receive host values
+and runtime bindings until M3.
 Imports and exports appear before other declarations at a module's root, in
 every module, entry or library; a named scope region is one declaration for
 this rule, so an import or export inside a region does not need to precede

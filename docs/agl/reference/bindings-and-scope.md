@@ -240,11 +240,16 @@ A `def` inside a nested block is a static error. See
 param_decl ::= "param" name (":" type_expr)? ("=" expr)?
 ```
 
-`param` declarations are entry-module only, at the program root or as a member
-of a named scope region ([Named scopes](scopes.md#parameters) — no
-declaration-path shorthand). Each enters its scope as an immutable binding. A
-param may declare a type, a default expression, both, or neither. Without an
+`param` declarations are legal at the module root or as a member of a named
+scope region in every entry and library module ([Named scopes](scopes.md#parameters)
+— no declaration-path shorthand). Each enters its scope as an immutable binding.
+A param may declare a type, a default expression, both, or neither. Without an
 explicit type or default, the param defaults to `text`.
+
+**M2 interim:** non-entry param declarations are accepted and type-checked,
+but every use is a static error because parameter discovery and lowering omit
+them. Only entry-module params have external values and runtime bindings until
+M3 adds library-param handling.
 
 ```agl
 param spec                 # same as: param spec: text
@@ -254,13 +259,14 @@ param limit: int = 10
 ```
 
 At run start, before any expression evaluates, the host validates provided
-param values. Required params without an external value or default, and params
-whose external values fail conversion, are *host invocation errors* — not AgL
-exceptions and not catchable in-language. Extra external values are ignored by
-the runtime after CLI/config resolution.
+values for discovered entry-module params. Required params without an external
+value or default, and params whose external values fail conversion, are *host
+invocation errors* — not AgL exceptions and not catchable in-language. Extra
+external values are ignored by the runtime after CLI/config resolution.
 
-Every program param must have a JSON-wire-serializable type, even when it has a
-default and the host does not supply a value. Supported param types are `text`,
+Every discovered entry-module param must have a JSON-wire-serializable type,
+even when it has a default and the host does not supply a value. Supported param
+types are `text`,
 `int`, `decimal`, `bool`, `json`, arrays, dictionaries, records, and enums.
 Runtime-only types such as `unit` and function types cannot be used as program
 param types. `Agent` is ordinary enum data and is valid wherever an enum is.
@@ -285,9 +291,10 @@ program's engine settings:
 ```agl
 open import std/config
 
-std/config::max-iters := 10           # write a setting (qualified target)
-default-agent := AgentClaude("sonnet", "medium") # open import allows a bare target
-let cap = std/config::max-iters       # read a setting
+program def main() -> unit =
+  std/config::max-iters := 10           # write a setting (qualified target)
+  default-agent := AgentClaude("sonnet", "medium") # open import allows a bare target
+  let cap = std/config::max-iters       # read a setting
 ```
 
 An engine setting is an ordinary mutable binding in another module, so an

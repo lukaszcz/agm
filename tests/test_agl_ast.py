@@ -92,7 +92,6 @@ from agm.agl.syntax import (
     PatternField,
     Placeholder,
     Program,
-    ProgramDecl,
     Raise,
     RecordDef,
     Return,
@@ -2299,14 +2298,6 @@ class TestVisitorWalk:
         visited: list[object] = []
         walk(node, visited.append)
         assert visited == [node, default]
-
-    def test_walk_program_decl_is_leaf(self) -> None:
-        from agm.agl.syntax.visitor import walk
-
-        node = ProgramDecl(name="demo", span=span(), node_id=1)
-        visited: list[object] = []
-        walk(node, visited.append)
-        assert visited == [node]
 
     def test_walk_return_visits_optional_value(self) -> None:
         from agm.agl.syntax.visitor import walk

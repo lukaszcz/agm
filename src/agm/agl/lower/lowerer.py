@@ -16,8 +16,7 @@ Supported AST nodes
   Items (top-level and block-level)
     LetDecl, VarDecl, AssignStmt (name target and indexed target)
     Declarations that have no runtime action:
-      RecordDef, EnumDef, TypeAlias, FuncDef, ParamDecl,
-      ProgramDecl, ImportDecl, ExportDecl
+      RecordDef, EnumDef, TypeAlias, FuncDef, ParamDecl, ImportDecl, ExportDecl
 
 Any AST node outside this set raises ``NotImplementedError`` with a clear
 message.  A missing checker side-table entry is a compiler bug and raises
@@ -226,7 +225,6 @@ from agm.agl.syntax.nodes import (
     ParamDecl,
     Pattern,
     Placeholder,
-    ProgramDecl,
     Raise,
     RecordDef,
     RecordUpdate,
@@ -477,6 +475,27 @@ class _Lowerer:
         )
         return sym
 
+    def _symbol_for_or_alloc_decl(
+        self,
+        decl_node_id: int,
+        *,
+        name: str,
+        mutable: bool,
+        public: bool,
+        owner: "ModuleId | FunctionId | None" = None,
+    ) -> SymbolId:
+        """Return a pre-allocated declaration symbol or allocate a nested one."""
+        sym = self._link.decl_to_sym.get(decl_node_id)
+        if sym is not None:
+            return sym
+        return self._alloc_sym(
+            decl_node_id,
+            name=name,
+            mutable=mutable,
+            public=public,
+            owner=owner,
+        )
+
     def _alloc_synthetic_sym(
         self,
         *,
@@ -632,7 +651,6 @@ class _Lowerer:
                 | ExceptionDef()
                 | TypeAlias()
                 | ParamDecl()
-                | ProgramDecl()
                 | ScopeRegion()
                 | BuiltinVarDecl()
                 | ImportDecl()
@@ -1048,8 +1066,18 @@ class _Lowerer:
         mutable: bool,
         public: bool,
     ) -> IrBind:
-        """Lower one named binding with its checker-selected coercion target."""
-        sym = self._alloc_sym(decl_node_id, name=name, mutable=mutable, public=public)
+        """Lower one named binding with its checker-selected coercion target.
+
+        Static module bindings receive their symbols during the linker's
+        pre-allocation phase, so function captures can refer to them while
+        function bodies are lowered. Nested bindings still allocate on demand.
+        """
+        sym = self._symbol_for_or_alloc_decl(
+            decl_node_id,
+            name=name,
+            mutable=mutable,
+            public=public,
+        )
         return IrBind(
             location=self._loc(span),
             symbol=sym,
@@ -2863,7 +2891,7 @@ class _Lowerer:
             assert binding is not None and binding.kind is BinderKind.let_binding, (
                 f"compiler bug: no selected immutable binding for let pattern node {node_id}"
             )
-            binder_symbols[node_id] = self._alloc_sym(
+            binder_symbols[node_id] = self._symbol_for_or_alloc_decl(
                 binding.decl_node_id,
                 name=scoped_public_name(let.scope_path, name),
                 mutable=False,
@@ -3321,9 +3349,10 @@ class _Lowerer:
                 return self._lower_funcdef(funcdef)
 
             case ParamDecl() as param_decl:
-                # Param declarations are only lowered for the entry module.
-                # program.py guards ensure this branch is only called for entry items,
-                # so _lower_param_decl is always applicable here.
+                # M2 deliberately calls this only for entry-module params.
+                # Typecheck rejects legal non-entry declarations when used, so
+                # they remain absent until M3 adds lowering.
+                # program.py ensures _lower_param_decl is applicable here.
                 self._lower_param_decl(param_decl)
                 return None
 
@@ -3332,7 +3361,6 @@ class _Lowerer:
                 | EnumDef()
                 | ExceptionDef()
                 | TypeAlias()
-                | ProgramDecl()
                 | ImportDecl()
                 | ExportDecl()
                 | OpenDecl()
@@ -3352,8 +3380,9 @@ class _Lowerer:
                 return self.lower_expr(item)
 
     def _lower_param_decl(self, param: "ParamDecl") -> None:
-        """Lower an entry-module ``ParamDecl`` to an ``IrParam`` descriptor.
+        """Lower a discovered entry-module ``ParamDecl`` to an ``IrParam``.
 
+        M2 deliberately excludes legal non-entry params from this path until M3.
         Allocates a PUBLIC ``SymbolId`` for the param (owner = entry module) and
         appends an ``IrParam`` to ``self._params``.  Does NOT emit an initializer
         into ``ir_items`` — params are installed by the evaluator's ``run()``
@@ -3450,18 +3479,40 @@ class _Lowerer:
     # Top-level entry point
     # ------------------------------------------------------------------
 
-    def prealloc_static_symbols(self, body: Block, *, public: bool) -> None:
-        """Pre-allocate static function symbols before lowering module bodies."""
+    def prealloc_static_symbols(self, body: Block) -> None:
+        """Pre-allocate runtime symbols for every static module declaration.
+
+        Function bodies lower before ordinary module initializers. Allocating
+        static ``let``/``var`` symbols in the same phase lets their references
+        lower as module-frame loads, while initialization remains in source
+        order after function closures. Parameters are intentionally absent:
+        only entry parameters have M2 runtime handling.
+        """
         for item in static_items(body.items):
             if isinstance(item, FuncDef) and not item.is_builtin:
                 self._prealloc_funcdef(item)
+            elif isinstance(item, VarDecl) and item.name != "_":
+                self._alloc_sym(
+                    item.node_id,
+                    name=scoped_public_name(item.scope_path, item.name),
+                    mutable=True,
+                )
+            elif isinstance(item, LetDecl) and simple_let_pattern_name(item.pattern) != "_":
+                for candidate in pattern_binder_candidates(item.pattern):
+                    binding = self._checked.pattern_binding_for(candidate.node_id)
+                    if binding is not None:
+                        self._alloc_sym(
+                            binding.decl_node_id,
+                            name=scoped_public_name(item.scope_path, binding.name),
+                            mutable=False,
+                        )
 
     def lower_initializers(
         self,
         body: Block,
         *,
         top_level: bool,
-        handles_only: bool = False,
+        lower_params: bool,
     ) -> tuple[IrExpr, ...]:
         """Lower one module body and publish its initializer origins.
 
@@ -3472,8 +3523,8 @@ class _Lowerer:
         ``static_items``: each of its members gets its own source index, the
         same as a root item, so a region is not one promotable declaration
         group — a binder inside a region completes and promotes independently
-        of its siblings. ``handles_only`` keeps a library module to function
-        initializers, which are the only declarations requiring runtime handles.
+        of its siblings. Static ``let``/``var`` initializers run in every
+        module; only entry-module params are lowered during the M2 interim.
         """
         function_initializers: list[IrExpr] = []
         function_origins: list[InitializerOrigin] = []
@@ -3481,7 +3532,7 @@ class _Lowerer:
         other_origins: list[InitializerOrigin] = []
         for source_index, member in enumerate(static_items(body.items)):
             is_function = isinstance(member, FuncDef) and not member.is_builtin
-            if handles_only and not is_function:
+            if isinstance(member, ParamDecl) and not lower_params:
                 continue
             ir = self.lower_item(member, top_level=top_level)
             if ir is None:

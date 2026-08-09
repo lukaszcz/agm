@@ -15,7 +15,6 @@ Agent calls are gated: a single shared :class:`AgentMode` (``confirm`` by
 default, ``auto``; ``confirm`` under ``--confirm-agents``) is passed to BOTH the confirming
 wrapper and the console, so the ``:agent`` meta-command, an ``always`` answer,
 and the wrapper all stay in sync.  Trace logging (``--log-file`` / ``--no-log``)
-and param config loading are wired from the same config stack as ``agm exec``.
 Each REPL entry and its loaded library modules open ``std/core`` by default;
 ``--no-stdlib`` disables that automatic opening throughout every loaded REPL
 program. Imports are qualified by default, with ``open import`` and ``using``
@@ -39,7 +38,6 @@ from agm.config.general import (
     agm_home_dir,
     exec_config_from_merged,
     load_merged_config,
-    load_program_config,
     load_repl_config,
     save_repl_theme,
 )
@@ -117,9 +115,6 @@ def run(args: ReplArgs) -> None:
         resolve_trace_path=LiveTracePathResolver(command_name="repl", auto_path=trace_path),
     )
 
-    def _params_config_loader(program_name: str) -> dict[str, object]:
-        return load_program_config(program_name, home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
-
     mod_roots_cfg = load_module_roots(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
     try:
         stdlib_root = resolve_stdlib_root(home=ctx.home)
@@ -159,7 +154,6 @@ def run(args: ReplArgs) -> None:
         agent_dispatcher=confirming_agent,
         shell_exec_timeout=config.timeout,
         trace_path=trace_path,
-        params_config_loader=_params_config_loader,
         engine_base=engine_seeds.values,
         setting_overrides=engine_seeds.overrides,
         host_settings_policy=host_settings_policy,

@@ -9,10 +9,9 @@ import pytest
 from agm.config.general import (
     ExecConfig,
     exec_config_from_merged,
+    file_config_from_merged,
     load_exec_config,
     load_merged_config,
-    load_program_config,
-    program_config_from_merged,
 )
 
 
@@ -91,7 +90,7 @@ class TestLoadExecConfig:
         config.write_text('[exec]\nrunner = "claude"\n\n[myprog]\nrunner = "codex"\n')
         merged = load_merged_config(home=home, proj_dir=None, cwd=tmp_path)
         cfg = exec_config_from_merged(
-            merged, program_table=program_config_from_merged(merged, "myprog")
+            merged, program_table=file_config_from_merged(merged, "myprog")
         )
         assert cfg.runner == "claude"
 
@@ -178,26 +177,27 @@ class TestLoadExecConfig:
         assert nested.log_file == str(literal_dir / "nested.jsonl")
 
 
-class TestProgramConfig:
-    def test_load_program_config_from_toml(self, tmp_path: Path) -> None:
+class TestFileConfig:
+    def test_file_config_from_merged(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
         config = home / ".agm" / "config.toml"
         config.parent.mkdir(parents=True)
         config.write_text('[demo]\ntopic = "docs"\ncount = 3\n')
-        assert load_program_config("demo", home=home, proj_dir=None, cwd=tmp_path) == {
+        merged = load_merged_config(home=home, proj_dir=None, cwd=tmp_path)
+        assert file_config_from_merged(merged, "demo") == {
             "topic": "docs",
             "count": 3,
         }
 
-    def test_program_config_from_merged_non_table_is_empty(self) -> None:
-        assert program_config_from_merged({"demo": "not-a-table"}, "demo") == {}
+    def test_file_config_from_merged_non_table_is_empty(self) -> None:
+        assert file_config_from_merged({"demo": "not-a-table"}, "demo") == {}
 
-    def test_program_config_from_merged_absent_is_empty(self) -> None:
-        assert program_config_from_merged({}, "demo") == {}
+    def test_file_config_from_merged_absent_is_empty(self) -> None:
+        assert file_config_from_merged({}, "demo") == {}
 
-    def test_program_config_from_merged_returns_all_keys(self) -> None:
+    def test_file_config_from_merged_returns_all_keys(self) -> None:
         merged = {"demo": {"topic": "docs", "timeout": "60s", "count": 3}}
-        assert program_config_from_merged(merged, "demo") == {
+        assert file_config_from_merged(merged, "demo") == {
             "topic": "docs",
             "timeout": "60s",
             "count": 3,
@@ -212,14 +212,14 @@ class TestExecConfigProgramTableOverride:
         config.write_text("[exec]\nmax-iters = 5\n\n[myprog]\nmax-iters = 10\n")
         merged = load_merged_config(home=home, proj_dir=None, cwd=tmp_path)
         cfg = exec_config_from_merged(
-            merged, program_table=program_config_from_merged(merged, "myprog")
+            merged, program_table=file_config_from_merged(merged, "myprog")
         )
         assert cfg.default_loop_limit == 10
 
     def test_program_table_partial_override(self, tmp_path: Path) -> None:
         merged = {"exec": {"max-iters": 7, "strict-json": False}, "myprog": {"strict-json": True}}
         cfg = exec_config_from_merged(
-            merged, program_table=program_config_from_merged(merged, "myprog")
+            merged, program_table=file_config_from_merged(merged, "myprog")
         )
         assert cfg.default_loop_limit == 7
         assert cfg.strict_json is True

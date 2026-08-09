@@ -86,7 +86,7 @@ class EntryPipelineCtx(Protocol):
 
     def _pre_eval_param_check(
         self, program: Program, checked: CheckedModule, warnings: list[Diagnostic]
-    ) -> tuple[EntryResult | None, dict[str, Value], str | None, dict[str, object]]: ...
+    ) -> tuple[EntryResult | None, dict[str, Value]]: ...
 
     def _record_declared_engine_defaults(
         self, declared_keys: frozenset[str], interp: IrInterpreter
@@ -103,8 +103,6 @@ class EntryPipelineCtx(Protocol):
         program: Program,
         checked: CheckedModule,
         next_start_id: int,
-        entry_program_name: str | None,
-        entry_active_config: dict[str, object],
         partial: bool,
         promoted_declaration_ids: frozenset[int],
     ) -> tuple[str, ...]: ...
@@ -335,8 +333,8 @@ class EntryPipeline:
         if check_only:
             return self._ctx._build_check_only_result(orig_program, checked, warnings)
 
-        pre_eval_result, param_values, entry_program_name, entry_active_config = (
-            self._ctx._pre_eval_param_check(orig_program, checked, warnings)
+        pre_eval_result, param_values = self._ctx._pre_eval_param_check(
+            orig_program, checked, warnings
         )
         if pre_eval_result is not None:
             return pre_eval_result
@@ -364,8 +362,6 @@ class EntryPipeline:
             entry_imports=entry_imports,
             entry_opens=entry_opens,
             param_values=param_values,
-            entry_program_name=entry_program_name,
-            entry_active_config=entry_active_config,
             contract_payloads=contract_payloads,
         )
 
@@ -600,8 +596,6 @@ class EntryPipeline:
         entry_imports: tuple[ImportDecl, ...],
         entry_opens: tuple[OpenDecl | ImportDecl | ScopeRegion, ...],
         param_values: dict[str, Value],
-        entry_program_name: str | None,
-        entry_active_config: dict[str, object],
         contract_payloads: Mapping[int, "ContractPayload"],
     ) -> EntryResult:
         """Lower and execute one program entry in the persistent IR image."""
@@ -752,8 +746,6 @@ class EntryPipeline:
                 program=orig_program,
                 checked=checked,
                 next_start_id=new_next_id,
-                entry_program_name=entry_program_name,
-                entry_active_config=entry_active_config,
                 partial=partial,
                 promoted_declaration_ids=promoted_declaration_ids,
             )

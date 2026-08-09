@@ -33,8 +33,9 @@ Flag notes:
       ``[<program>] default-agent``, which in turn takes precedence over the
       bare host command in ``[exec] runner``.
     - A sole entry-module ``program def`` runs after initializers; when several
-      are declared, ``-p``/``--program`` selects one by declaration path. With
-      no program definitions, legacy top-level execution is unchanged.
+      are declared, ``-p``/``--program`` selects one by declaration path. A file
+      must declare at least one program; inline ``-c`` statements are wrapped in
+      a synthetic ``program def main`` before scope resolution.
     - Every loaded entry and library module opens ``std/core`` by default
       (except ``std/core`` itself). ``--no-stdlib`` disables that automatic
       opening throughout the loaded program. Ordinary imports are qualified by
@@ -54,6 +55,7 @@ Flag notes:
 from __future__ import annotations
 
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import TypeVar
 
@@ -62,7 +64,7 @@ from agm.agl.diagnostics import format_diagnostic
 from agm.agl.modules.roots import assemble_roots
 from agm.agl.runtime.agents import value_driven_agent_factory
 from agm.agl.runtime.host_settings import HostSettingsPolicy
-from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES, RESERVED_PROGRAM_NAMES
+from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES
 from agm.cli_support.args import ExecArgs
 from agm.cli_support.engine_seeds import build_host_engine_seeds, check_max_iters
 from agm.cli_support.exec_params import (
@@ -73,8 +75,8 @@ from agm.cli_support.exec_params import (
 from agm.config.context import current_config_context
 from agm.config.general import (
     exec_config_from_merged,
+    file_config_from_merged,
     load_merged_config,
-    program_config_from_merged,
 )
 from agm.config.module_roots import (
     StaleStdlibError,
@@ -118,61 +120,26 @@ def run(args: ExecArgs) -> None:
         print("Error: exec requires either a FILE or -c/--command", file=sys.stderr)
         raise SystemExit(1)
 
-    # Load the merged config once; program_table and exec config are deferred until
-    # after the entry is parsed so the declared program name is available.
+    # Load the merged config once. For this interim milestone a file's stem is
+    # the sole config key; inline source has no config table.
     ctx = current_config_context()
-    raw_stem: str | None = Path(args.file).stem if args.file is not None else None
+    program_key: str | None = Path(args.file).stem if args.file is not None else None
     merged_config = load_merged_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
 
-    # Parse the entry ONCE, ahead of module loading, so its declared ``program
-    # NAME`` can drive config-table resolution (below) before overrides are
-    # built and threaded into the single module-load-and-scope pass.
+    # Inline source remains a statement-oriented host. Its AST is wrapped before
+    # scope resolution whenever it has no explicit program entry.
     parsed = PipelineDriver.parse_entry(source, entry_path=entry_path)
+    if args.command is not None and parsed.program is not None:
+        from agm.agl.parser import wrap_inline_program
 
-    # Reserved declared-name check: a ``program NAME`` declaration naming a reserved
-    # AGM command or config-section name must be rejected here, before it is ever
-    # adopted as ``program_key`` and used to select a config table or build engine
-    # seeds. Without this, the reserved name would silently select its own config
-    # table and any bad value there would be misreported as a config error instead
-    # of the real problem. The resolver enforces the same rule during scope
-    # resolution (using the same ``RESERVED_PROGRAM_NAMES`` set); this check only
-    # gives a clean, up-front error before config/engine-seed work happens.
-    if parsed.program_name is not None and parsed.program_name in RESERVED_PROGRAM_NAMES:
-        print(
-            f"Error: declared program name '{parsed.program_name}' is a reserved "
-            "program name. Use a non-reserved name in the 'program NAME' declaration.",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
+        program, next_id = wrap_inline_program(parsed.program, next_node_id=parsed.next_id)
+        parsed = replace(parsed, program=program, next_id=next_id)
 
-    # Resolve the single final program key for BOTH engine-key overrides and param
-    # resolution. The declared ``program NAME`` takes precedence over the file stem;
-    # a stem in the stable reserved-program-name set produces no key (and triggers
-    # the reserved-stem error below when no ``program NAME`` declaration exists).
-    if parsed.program_name is not None:
-        program_key: str | None = parsed.program_name
-    elif raw_stem is not None and raw_stem not in RESERVED_PROGRAM_NAMES:
-        program_key = raw_stem
-    else:
-        program_key = None
-
-    # Reserved file-stem check: when no ``program NAME`` declaration is present,
-    # a reserved stem would select a conflicting or invalid program config key.
-    # Require an explicit non-reserved name instead. Inline ``-c`` (no file stem)
-    # is unaffected.
-    if raw_stem is not None and raw_stem in RESERVED_PROGRAM_NAMES and parsed.program_name is None:
-        print(
-            f"Error: file stem '{raw_stem}' is a reserved program name. "
-            "Add a 'program NAME' declaration with a non-reserved name.",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
-
-    # Fetch the [<program_key>] table once.  The same table feeds both the
+    # Fetch the [<program_key>] table once. The same table feeds both the
     # engine-key overlay in exec_config_from_merged and param resolution in
     # resolve_param_values, so both always read the same program section.
     program_table: dict[str, object] = (
-        program_config_from_merged(merged_config, program_key) if program_key is not None else {}
+        file_config_from_merged(merged_config, program_key) if program_key is not None else {}
     )
     try:
         config = exec_config_from_merged(merged_config, program_table=program_table)
@@ -321,6 +288,10 @@ def run(args: ExecArgs) -> None:
         raise SystemExit(1)
 
     entry_programs = tuple(program for program in discovery.programs if program.module.is_entry)
+    if args.file is not None and not entry_programs:
+        print("Error: file must declare at least one program.", file=sys.stderr)
+        raise SystemExit(1)
+
     selected_program = None
     if len(entry_programs) == 1:
         selected_program = entry_programs[0]
@@ -360,7 +331,7 @@ def run(args: ExecArgs) -> None:
         declared_names,
         config_param_values,
         cli_params,
-        program_name=program_key,
+        config_key=program_key,
     )
     external_params.update(resolved_params)
     for msg in config_warnings:

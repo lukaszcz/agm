@@ -25,7 +25,8 @@ Scope rules
    ``_`` is always a discard wildcard and never resolves as a readable name.
 4. Pattern variables and catch binders are immutable and branch-local.
 5. ``loop`` body bindings are visible to the ``until`` condition but not after.
-6. ``param`` and ``program`` declarations are only valid at the module root.
+6. ``param`` declarations are valid at the module root and in named scope
+   regions in every module; ``program def`` follows the same placement rule.
 7. ``def`` declarations are valid at the module root and in named scope
    regions; a pre-pass collects them by path so root and same-scope members
    support mutual recursion.
@@ -88,7 +89,6 @@ from agm.agl.scope.symbols import (
 )
 from agm.agl.scope.symbols import to_bare_atom as _bare_atom
 from agm.agl.scope.symbols import to_bare_path as _bare_path
-from agm.agl.semantics.engine_keys import RESERVED_PROGRAM_NAMES
 from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
@@ -145,7 +145,6 @@ from agm.agl.syntax.nodes import (
     Pattern,
     Placeholder,
     Program,
-    ProgramDecl,
     QualifierAnchor,
     QualifierChain,
     Raise,
@@ -264,7 +263,7 @@ class _Resolver:
         | None = None,
         cross_module_constructible_types: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
         cross_module_type_scopes: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
-        is_entry: bool = True,
+        allow_root_statements: bool = False,
         repl_session_scope: ScopeNode | None = None,
         repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
         repl_session_type_paths: Mapping[ScopePath, str | None] | None = None,
@@ -295,8 +294,9 @@ class _Resolver:
         self._all_public_types: dict[
             tuple[ModuleId, NameAtom], RecordDef | EnumDef | ExceptionDef | TypeAlias
         ] = all_public_types
-        # Whether this module is the entry module (program context only).
-        self._is_entry: bool = is_entry
+        # The REPL is an incremental host and intentionally retains root
+        # statements. File and inline exec entries use static roots.
+        self._allow_root_statements = allow_root_statements
         # Optional REPL session scope for ``::name`` self-ref fallback.
         # When set, ``_lookup_own_root`` falls back to this scope for names not
         # in the entry's own root scope, allowing ``::name`` to resolve to a
@@ -343,8 +343,6 @@ class _Resolver:
         self._at_root: bool = False
         # Top-level function defs.
         self._declared_functions: dict[str, FuncDef] = {}
-        # Source-declared program name.
-        self._program_name: str | None = None
         # Names of all root-level type declarations (RecordDef/EnumDef/TypeAlias).
         self._declared_type_names: set[str] = set()
         # Named declarations are keyed uniformly by module and scope path; the
@@ -521,7 +519,7 @@ class _Resolver:
             declarations=dict(self._declarations),
             scope_nodes=dict(self._scope_nodes),
             declared_functions=dict(self._declared_functions),
-            program_name=self._program_name,
+            allows_root_statements=self._allow_root_statements,
             declared_type_names=frozenset(self._declared_type_names),
             declared_type_paths=frozenset(self._type_paths),
             constructor_candidates={
@@ -1449,12 +1447,8 @@ class _Resolver:
 
         Additional enforcement:
 
-        - Non-entry modules: only ``FuncDef``, ``RecordDef``, ``EnumDef``,
-          ``TypeAlias``, ``InfixDecl``, ``ImportDecl``, and ``ExportDecl`` are
-          allowed at the module root.
-          ``LetDecl``, ``VarDecl``, ``AssignStmt``, bare expressions, and
-          entry-only constructs (``ParamDecl``, ``ProgramDecl``)
-          are rejected with a scope error.
+        - Every static module root rejects assignments and bare expressions.
+          The REPL is the sole incremental-host exception.
         - Every module root and every region's own item sequence: ``ImportDecl``
           and ``ExportDecl`` must precede all other items *in that same items
           sequence* (header-only; ``seen_non_import_item`` tracks this locally
@@ -1464,7 +1458,6 @@ class _Resolver:
           tracked by the recursive call this function makes for the region's
           body -- governs the region's own items independently.
         """
-        is_non_entry_root = not self._is_entry and self._at_root
         seen_non_import_item = False
 
         for item in items:
@@ -1518,57 +1511,23 @@ class _Resolver:
             elif isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
                 self._resolve_type_decl(item)
             elif isinstance(item, LetDecl):
-                if is_non_entry_root:
-                    raise AglScopeError(
-                        "Library modules may only contain declarations "
-                        "('def', 'record', 'enum', 'type', 'import'); "
-                        "'let' bindings are not allowed at the top level of a "
-                        "library module.",
-                        span=item.span,
-                    )
                 self._resolve_let(item)
             elif isinstance(item, VarDecl):
-                if is_non_entry_root:
-                    raise AglScopeError(
-                        "Library modules may only contain declarations "
-                        "('def', 'record', 'enum', 'type', 'import'); "
-                        "'var' bindings are not allowed at the top level of a "
-                        "library module.",
-                        span=item.span,
-                    )
                 self._resolve_var(item)
             elif isinstance(item, AssignStmt):
-                if is_non_entry_root:
+                if self._at_root and not self._allow_root_statements:
                     raise AglScopeError(
-                        "Library modules may only contain declarations; "
-                        "assignment statements are not allowed at the top level.",
+                        "Assignment statements are not allowed at a static module root.",
                         span=item.span,
                     )
                 self._resolve_assign(item)
             elif isinstance(item, ParamDecl):
-                if is_non_entry_root:
-                    raise AglScopeError(
-                        "'param' declarations are only allowed in the entry module, "
-                        f"not in library modules (found 'param {item.name}' here).",
-                        span=item.span,
-                    )
                 self._resolve_param(item)
-            elif isinstance(item, ProgramDecl):
-                if is_non_entry_root:
-                    raise AglScopeError(
-                        "'program' declarations are only allowed in the entry module, "
-                        f"not in library modules (found 'program {item.name}' here).",
-                        span=item.span,
-                    )
-                self._resolve_program_decl(item)
             else:
                 # Pure expression item (Expr union).
-                if is_non_entry_root:
+                if self._at_root and not self._allow_root_statements:
                     raise AglScopeError(
-                        "Library modules may only contain declarations "
-                        "('def', 'record', 'enum', 'type', 'import'); "
-                        "bare expressions are not allowed at the top level of a "
-                        "library module.",
+                        "Bare expressions are not allowed at a static module root.",
                         span=item.span,
                     )
                 self._resolve_expr(item)
@@ -2061,7 +2020,7 @@ class _Resolver:
         self._resolve_expr(node.value)
 
     def _resolve_param(self, node: ParamDecl) -> None:
-        """Resolve a ``param`` declaration, root or a region member alike.
+        """Resolve a ``param`` declaration in any module, root or region alike.
 
         A region does not clear ``_at_root`` (see ``_resolve_scope_region``),
         so this single check admits both a root ``param`` and one declared
@@ -2073,8 +2032,8 @@ class _Resolver:
         """
         if not self._at_root:
             raise AglScopeError(
-                f"'param' declarations are only allowed at the program root, "
-                f"not inside a nested block (found 'param {node.name}' here).",
+                f"'param' declarations are only allowed at a static module root or "
+                f"inside a named scope region (found 'param {node.name}' in a nested block).",
                 span=node.span,
             )
         self._check_not_reserved(node.name, node.span)
@@ -2089,27 +2048,6 @@ class _Resolver:
             module_id=self._module_id,
         )
         self._define(node.name, ref)
-
-    def _resolve_program_decl(self, node: ProgramDecl) -> None:
-        if not self._at_root:
-            raise AglScopeError(
-                f"'program' declarations are only allowed at the program root, "
-                f"not inside a nested block (found 'program {node.name}' here).",
-                span=node.span,
-            )
-        if node.name in RESERVED_PROGRAM_NAMES:
-            raise AglScopeError(
-                f"'program {node.name}' is not allowed: '{node.name}' is a reserved AGM "
-                f"command or config-section name.",
-                span=node.span,
-            )
-        if self._program_name is not None:
-            raise AglScopeError(
-                f"'program' is already declared as '{self._program_name}'; "
-                "at most one 'program' declaration is allowed per program.",
-                span=node.span,
-            )
-        self._program_name = node.name
 
     # ------------------------------------------------------------------
     # Expression resolution

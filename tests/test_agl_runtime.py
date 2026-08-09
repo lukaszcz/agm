@@ -3167,27 +3167,6 @@ class TestDiscoverParamsGraph:
 class TestPreparedProgramDefensivePaths:
     """Edge-case coverage for PreparedProgram properties and prepare_program error paths."""
 
-    def test_program_name_no_entry_module_in_graph(self, tmp_path: pathlib.Path) -> None:
-        """program_name returns None when resolved has no ENTRY_ID module."""
-        from unittest.mock import MagicMock
-
-        from agm.agl.modules.roots import RootSet
-        from agm.agl.pipeline import PreparedProgram
-
-        fake_graph = MagicMock()
-        fake_graph.modules = {}
-
-        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        pg = PreparedProgram(
-            source="let x = 1",
-            entry_path=None,
-            roots=roots,
-            resolved=fake_graph,
-            diagnostics=(),
-            warnings=(),
-        )
-        assert pg.program_name is None
-
     def test_prepare_single_program_agl_error_retains_related_notes(self) -> None:
         """The module parse path uses AglError.to_diagnostic()."""
         from unittest.mock import patch

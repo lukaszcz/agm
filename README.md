@@ -188,9 +188,10 @@ and typed `Agent` values. `ask` receives an `Agent` value — for example
 `AgentCommand("claude -p")` or `AgentClaude("sonnet", "medium")` — explicitly or from
 `std/config::default-agent`. The selected value determines the invoked command.
 
-A `program def` marks a zero-argument workflow entry: `agm exec` invokes the sole
-one after initialization, or selects one of several with `-p`/`--program PATH`
-(for example, `review::main`). Programs can span multiple `.agl` files via the
+A file workflow declares one or more zero-argument `program def` entries: `agm exec`
+invokes the sole one after initialization, or selects one of several with
+`-p`/`--program PATH` (for example, `review::main`). Inline `-c` source is wrapped
+in a synthetic entry when needed. Programs can span multiple `.agl` files via the
 module system (`import utils/math`). Every loaded entry and library module,
 except `std/core` itself, opens `std/core` by default; `--no-stdlib` disables
 that automatic opening throughout the loaded program.

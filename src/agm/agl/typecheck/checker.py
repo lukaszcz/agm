@@ -154,7 +154,6 @@ from agm.agl.syntax.nodes import (
     Pattern,
     Placeholder,
     Program,
-    ProgramDecl,
     QualifierAnchor,
     QualifierChain,
     Raise,
@@ -864,13 +863,19 @@ class _Checker:
                 with self._env.type_scope(self._declaration_scope_path(item)):
                     self._preregister_funcdef(item)
 
-        self._check_block(program.body, expected=None)
+        self._check_block(
+            program.body,
+            expected=None,
+            static_root=not self._resolved.allows_root_statements,
+        )
 
     # ------------------------------------------------------------------
     # Block and item dispatch
     # ------------------------------------------------------------------
 
-    def _check_block(self, block: Block, *, expected: Type | None) -> Type:
+    def _check_block(
+        self, block: Block, *, expected: Type | None, static_root: bool = False
+    ) -> Type:
         """Type-check a block, discarding non-final bare expression values."""
         if not block.items:
             return UnitType()
@@ -880,10 +885,12 @@ class _Checker:
         for item in block.items:
             is_final = item is last
             if not is_final and isinstance(item, Expr):
-                item_type = self._check_item(item, expected=UnitType())
+                item_type = self._check_item(item, expected=UnitType(), static_root=static_root)
                 self._assert_assignable_from(item_type, UnitType(), item.span, item)
             else:
-                item_type = self._check_item(item, expected=expected if is_final else None)
+                item_type = self._check_item(
+                    item, expected=expected if is_final else None, static_root=static_root
+                )
             if is_final:
                 result_type = item_type
         if isinstance(last, Expr):
@@ -896,11 +903,11 @@ class _Checker:
             )
         return result_type
 
-    def _check_item(self, item: Item, *, expected: Type | None) -> Type:
+    def _check_item(self, item: Item, *, expected: Type | None, static_root: bool = False) -> Type:
         """Dispatch a single block item, returning its type contribution."""
         if isinstance(item, ScopeRegion):
             for child in item.items:
-                self._check_item(cast(Item, child), expected=None)
+                self._check_item(cast(Item, child), expected=None, static_root=static_root)
             return UnitType()
         # --- Declarations ---
         if isinstance(item, FuncDef):
@@ -918,14 +925,22 @@ class _Checker:
             with self._own_type_scope(item):
                 self._check_param(item)
             return UnitType()
-        if isinstance(item, ProgramDecl):
-            return UnitType()
         if isinstance(item, (ImportDecl, ExportDecl, OpenDecl, InfixDecl)):
             return UnitType()  # The program module-system pass processes imports/exports.
         # --- Binders ---
         if isinstance(item, (LetDecl, VarDecl)):
             with self._own_type_scope(item):
-                return self._check_binding(item)
+                binding_type = self._check_binding(item)
+            if static_root and not is_constant_expression(
+                item.value,
+                is_constructor=lambda node_id: self._constructor_ref_for(node_id) is not None,
+            ):
+                raise AglTypeError(
+                    "Root let and var initializers must be constant expressions "
+                    "(constructors and literals only).",
+                    span=item.value.span,
+                )
+            return binding_type
         if isinstance(item, AssignStmt):
             return self._check_assign_stmt(item)
         # --- Expr ---
@@ -1637,6 +1652,11 @@ class _Checker:
                 owner=owner, variant=ctor_ref.variant, span=node.span
             )
         ref = self._binding_for(node.node_id)
+        if ref.kind is BinderKind.param_binding and not ref.module_id.is_entry:
+            raise AglTypeError(
+                "Parameters declared in library modules are not available at runtime during M2.",
+                span=node.span,
+            )
         # A constructor_binding resolves to a type declaration, not a value.
         # Catch bare type name references (e.g. ``mylib::Color``) and raise a
         # user-facing error instead of an internal assertion failure.

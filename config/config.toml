@@ -30,17 +30,15 @@ runner = "agm run pi -p '@%{PROMPT_FILE}'"
 
 # [<program>] — per-program settings.
 #
-# For ``agm exec``, the table key is the ``program NAME`` declaration, or the
-# .agl file stem when no declaration is present. CLI param options (e.g.
+# For ``agm exec``, the table key is the ``.agl`` file stem. CLI param options (e.g.
 # ``--topic``) override config values; config values for params suppress the
 # default expression. Inline ``-c`` programs with no declaration have no config
 # table. Engine-key overrides (e.g. ``timeout``) take precedence over ``[exec]``
 # (``[<program>].X > [exec].X > engine default``).
 #
-# In ``agm repl``, only ``program NAME`` selects this table; there is no file-stem
-# fallback or per-param CLI option. The name applies to params declared after it
-# in that entry and, after a successful entry, to later entries. This table does
-# not override REPL engine settings.
+# ``agm repl`` does not use per-program tables or per-param CLI options.
+# REPL parameters require source defaults. This table does not override REPL
+# engine settings.
 #
 # [review-workflow]
 # timeout  = "60s"              # engine-key override for agm exec

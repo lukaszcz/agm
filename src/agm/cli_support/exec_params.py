@@ -238,7 +238,7 @@ def resolve_param_values(
     config_values: Mapping[str, object],
     cli_values: Mapping[str, object],
     *,
-    program_name: str | None = None,
+    config_key: str | None = None,
 ) -> tuple[dict[str, object], list[str]]:
     """Merge config and CLI param values, with CLI taking precedence.
 
@@ -252,8 +252,8 @@ def resolve_param_values(
         config_values: Raw TOML-native values from ``[<program>]`` config (engine keys
             already stripped by the caller; only undeclared param keys will warn).
         cli_values: Values parsed from CLI ``--param`` tokens.
-        program_name: The program name used for the config table key, used in
-            warning messages.  When ``None``, the table name is omitted.
+        config_key: The file-stem config-table key, used in warning messages.
+            When ``None``, the table name is omitted.
 
     Returns:
         A ``(external_dict, warning_messages)`` tuple where:
@@ -265,7 +265,7 @@ def resolve_param_values(
     warnings: list[str] = []
     # Start from config values that ARE declared, warn on undeclared.
     external: dict[str, object] = {}
-    table_ref = f"[{program_name}]" if program_name is not None else "<program config>"
+    table_ref = f"[{config_key}]" if config_key is not None else "<program config>"
     for key, value in config_values.items():
         if key in declared_names:
             external[key] = value

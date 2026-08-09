@@ -763,9 +763,9 @@ class ModuleResolution:
     ``declared_functions``
         Maps each top-level ``def`` name to its :class:`FuncDef` node.
         Populated in the pre-pass; useful for downstream typecheck and eval.
-    ``program_name``
-        The source-declared program name from a ``program NAME`` declaration,
-        or ``None`` when undeclared.
+    ``allows_root_statements``
+        Whether this entry is an incremental REPL entry, whose root retains
+        executable items instead of enforcing a static module root.
     ``declarations``
         Every named declaration keyed by ``(module_id, scope_path, name)``.
         Root declarations use the empty path just like any other scope.
@@ -812,7 +812,7 @@ class ModuleResolution:
     declarations: dict[DeclarationKey, BindingRef] = field(default_factory=dict)
     scope_nodes: dict[ScopePath, ScopeNode] = field(default_factory=dict)
     declared_functions: dict[str, FuncDef] = field(default_factory=dict)
-    program_name: str | None = None
+    allows_root_statements: bool = False
     declared_type_names: frozenset[str] = frozenset()
     declared_type_paths: frozenset[ScopePath] = frozenset()
     constructor_candidates: dict[str, tuple[ConstructorRef, ...]] = field(default_factory=dict)

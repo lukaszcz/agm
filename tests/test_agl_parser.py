@@ -87,7 +87,6 @@ from agm.agl.syntax import (
     PatternField,
     Placeholder,
     Program,
-    ProgramDecl,
     Raise,
     RecordDef,
     Return,
@@ -780,10 +779,9 @@ class TestDeclarations:
         assert len(exc.fields) == 2
         assert [f.name for f in exc.fields] == ["code", "reason"]
 
-    def test_program_decl(self) -> None:
-        pd = first(parse("program myapp\n()"))
-        assert isinstance(pd, ProgramDecl)
-        assert pd.name == "myapp"
+    def test_named_program_syntax_is_rejected(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse("program myapp\n()")
 
     def test_builtin_func_def(self) -> None:
         fd = first(parse("builtin def encode(x: text) -> int"))
@@ -1122,38 +1120,18 @@ class TestParseTypeExpr:
         assert result.node_id >= 100
 
 
-# ---------------------------------------------------------------------------
-# program NAME declaration — side-table assertions via scope resolve
-# ---------------------------------------------------------------------------
+class TestBuiltinResolution:
+    """Builtin and pattern resolution through a real entry module graph."""
 
-
-class TestProgramDeclScopeSideTables:
-    """Parse a 'program NAME' source and assert the side tables on ModuleResolution."""
-
-    def _parse_and_resolve(self, source: str) -> object:
+    @staticmethod
+    def _parse_and_resolve(source: str) -> object:
         from tests.agl.module_graph import resolve_entry
 
         return resolve_entry(source)
 
-    def test_program_name_set_in_resolved_program(self) -> None:
-        """Parsing 'program myapp' sets program_name on ModuleResolution."""
-        r = self._parse_and_resolve("program myapp\n()")
-        from agm.agl.scope.symbols import ModuleResolution
-
-        assert isinstance(r, ModuleResolution)
-        assert r.program_name == "myapp"
-
-    def test_no_program_decl_gives_none(self) -> None:
-        """No 'program' declaration → program_name is None."""
-        r = self._parse_and_resolve("()")
-        from agm.agl.scope.symbols import ModuleResolution
-
-        assert isinstance(r, ModuleResolution)
-        assert r.program_name is None
-
     def test_builtin_calls_populated_for_print(self) -> None:
         """A 'print' call is classified in builtin_calls."""
-        r = self._parse_and_resolve('print "hello"')
+        r = self._parse_and_resolve('program def main() -> unit = print "hello"')
         from agm.agl.scope import BuiltinKind
         from agm.agl.scope.symbols import ModuleResolution
 
@@ -1162,7 +1140,7 @@ class TestProgramDeclScopeSideTables:
 
     def test_builtin_calls_populated_for_exec(self) -> None:
         """An 'exec' call is classified in builtin_calls."""
-        r = self._parse_and_resolve('let x = exec "ls"\nx')
+        r = self._parse_and_resolve('program def main() -> unit =\n  let x = exec "ls"\n  ()')
         from agm.agl.scope import BuiltinKind
         from agm.agl.scope.symbols import ModuleResolution
 
@@ -1172,7 +1150,14 @@ class TestProgramDeclScopeSideTables:
     def test_bare_pattern_constructor_candidates_populated(self) -> None:
         """A bare constructor pattern records its candidates for field-directed checking."""
         source = (
-            "enum Status\n  | Ok\n  | Fail\nlet s = Ok()\ncase s of\n  | Ok => 1\n  | Fail => 0\n"
+            "enum Status\n"
+            "  | Ok\n"
+            "  | Fail\n"
+            "program def main() -> unit =\n"
+            "  let s = Ok()\n"
+            "  case s of\n"
+            "    | Ok => ()\n"
+            "    | Fail => ()\n"
         )
         r = self._parse_and_resolve(source)
         from agm.agl.scope.symbols import ModuleResolution
@@ -4513,7 +4498,7 @@ print exec! true
             pytest.param("var exec! = 1", id="var_binder"),
             pytest.param("record R\n  exec!: int", id="record_field_name"),
             pytest.param("enum E\n  | ask!", id="enum_variant_name"),
-            pytest.param("program exec!\n()", id="program_name"),
+            pytest.param("program exec!\n()", id="legacy_program"),
             pytest.param("for exec! in [] do 1 done", id="for_binder"),
             pytest.param("type exec! = int", id="type_name"),
         ),

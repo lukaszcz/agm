@@ -186,9 +186,10 @@ def lower_program(
                     bears_name_path=bears_name_path,
                 )
 
-    # Step 3: Phase 1 — pre-allocate FunctionId + symbol for every static
-    # FuncDef across all modules before any body is lowered (enables calls
-    # across root and named-scope declaration paths).
+    # Step 3: Phase 1 — pre-allocate every static runtime symbol before any
+    # body is lowered. Function ids enable calls across root and named-scope
+    # declaration paths; binding symbols make library lets/vars available to
+    # their functions while their initializers retain dependency order below.
     module_lowerers: dict[ModuleId, _Lowerer] = {}
     for mid, cm in checked.modules.items():
         if mid in _already_linked or mid == STD_CORE_ID:
@@ -206,14 +207,22 @@ def lower_program(
             contract_payloads=contract_payloads,
         )
         module_lowerers[mid] = lowerer
-        lowerer.prealloc_static_symbols(cm.resolved.program.body, public=mid.is_entry)
+        lowerer.prealloc_static_symbols(cm.resolved.program.body)
 
-    # Step 4: Phase 2 — lower bodies.
-    # Library modules first, entry last, so the insertion order of
-    # executable_modules matches dependency order (Python dicts preserve order).
-    ordered_mids = [mid for mid in checked.modules if not mid.is_entry and mid != STD_CORE_ID]
-    ordered_mids = [mid for mid in ordered_mids if mid not in _already_linked]
-    ordered_mids.append(checked.entry_id)
+    # Step 4: Phase 2 — lower bodies in the loader's dependency/SCC order.
+    # Type checking intentionally preserves its own presentation order, so it
+    # retains the loader's reverse-topological components separately for this
+    # execution-sensitive pass. Within an import cycle, the loader's stable
+    # member ordering is the only valid tie-break; the entry remains last.
+    import_sccs = checked.import_sccs or (tuple(checked.modules),)
+    ordered_mids = [
+        mid
+        for component in import_sccs
+        for mid in component
+        if not mid.is_entry and mid != STD_CORE_ID and mid not in _already_linked
+    ]
+    if checked.entry_id not in _already_linked:
+        ordered_mids.append(checked.entry_id)
 
     executable_modules: dict[ModuleId, ExecutableModule] = {
         mid: ExecutableModule(module_id=mid, initializers=()) for mid in _already_linked
@@ -224,8 +233,8 @@ def lower_program(
         body = cm.resolved.program.body
         initializers = lowerer.lower_initializers(
             body,
-            top_level=mid.is_entry,
-            handles_only=not mid.is_entry,
+            top_level=True,
+            lower_params=mid.is_entry,
         )
         executable_modules[mid] = ExecutableModule(
             module_id=mid,
@@ -241,7 +250,9 @@ def lower_program(
         if isinstance(item, BuiltinVarDecl) and item.default is not None
     }
 
-    # Collect entry-module params (only the entry module contributes params).
+    # M2 deliberately discovers and lowers only entry-module params. Legal
+    # non-entry declarations remain absent until M3 adds runtime handling;
+    # typecheck rejects their uses before they can reach this representation.
     entry_lowerer = module_lowerers[checked.entry_id]
     payloads = contract_payloads if contract_payloads is not None else {}
     dry_run_entries: list[DryRunEntry] = []

@@ -30,8 +30,7 @@ item       ::= import_decl                  (* header position only; scope_item 
              | type_alias                   (* root only *)
              | builtin_modifier? exception_def (* root only *)
              | export_decl                  (* root only; scope_item also permits it *)
-             | param_decl                   (* root only *)
-             | program_decl                 (* root only *)
+             | param_decl                   (* module root or scope region *)
              | program_func_def             (* root or scope region *)
              | infix_decl                   (* root only *)
              | func_def                     (* root only *)
@@ -74,8 +73,7 @@ nested single-segment regions. Scope
 regions contain nested regions, header `open` and `import` declarations,
 `export` declarations, static declarations (including every `builtin` form),
 `param` declarations, `program def` declarations, and `let`/`var` bindings;
-bare expressions, `:=` assignments, infix declarations, and `program NAME`
-declarations are not permitted. `scope` is contextual at item start before a scope path, and `end`
+bare expressions, `:=` assignments, and infix declarations are not permitted. `scope` is contextual at item start before a scope path, and `end`
 is contextual only for a complete closer at an open region's layout level;
 both remain ordinary names in expression positions.
 
@@ -242,7 +240,6 @@ type_param       ::= name | "_"
 param_marker     ::= "/" | "*" | "@" NAME    (* NAME must be pos, std, or named *)
 
 param_decl       ::= "param" name type_ann? ("=" expr)?
-program_decl     ::= "program" name
 program_func_def ::= "program" "def" decl_head "(" ")" ("->" "unit")? ("=" func_body | suite)
 
 ```

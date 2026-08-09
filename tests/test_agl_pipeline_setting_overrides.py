@@ -65,14 +65,6 @@ class TestParseEntry:
         assert parsed.program is not None
         assert parsed.next_id > 0
 
-    def test_exposes_program_name_without_scope_resolution(self) -> None:
-        parsed = PipelineDriver.parse_entry("program my-tool\nlet x = 1\nx")
-        assert parsed.program_name == "my-tool"
-
-    def test_no_program_declaration_is_none(self) -> None:
-        parsed = PipelineDriver.parse_entry("let x = 1\nx")
-        assert parsed.program_name is None
-
     def test_syntax_error_is_captured_as_a_diagnostic(self) -> None:
         parsed = PipelineDriver.parse_entry("let x = (")
         assert parsed.program is None
@@ -94,7 +86,7 @@ class TestParseEntry:
 
     def test_prepare_parsed_entry_matches_prepare_program(self) -> None:
         """``prepare_program`` is a thin wrapper: same result either way."""
-        source = "open import std/config\nlet value = std/config::default-agent\nvalue"
+        source = "open import std/config\nprogram def main() -> unit = ()"
         driver = PipelineDriver()
 
         parsed = PipelineDriver.parse_entry(source, entry_path=None)

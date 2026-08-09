@@ -136,8 +136,10 @@ write takes effect from its program point onward:
 
 ```agl
 import std/config
-std/config::default-agent := AgentClaude("sonnet", "medium")
-let answer: text = ask("Summarize")
+
+program def main() -> unit =
+  std/config::default-agent := AgentClaude("sonnet", "medium")
+  let answer: text = ask("Summarize")
 ```
 
 ## Target types: types as contracts

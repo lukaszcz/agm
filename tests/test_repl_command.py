@@ -750,50 +750,7 @@ class TestReplAgentMode:
         assert mode.mode == "confirm"
 
 
-class TestReplParamsConfigLoader:
-    def test_params_config_loader_wired_from_context(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-        fake_console: list[dict[str, object]],
-    ) -> None:
-        # The session built by repl.run should have a params_config_loader
-        # that reads from the config context.  We verify by checking the
-        # session can be used normally (the loader is injected, not null).
-        _isolated_home(monkeypatch, tmp_path)
-        repl_command.run(_args())
-        session = fake_console[0]["session"]
-        assert isinstance(session, ReplSession)
-        # Params with defaults resolve eagerly (no pre-seed needed).
-        r = session.eval_entry('param greeting = "hi"')
-        assert r.ok
-
-    def test_params_config_loader_invoked_on_program_decl(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-        fake_console: list[dict[str, object]],
-    ) -> None:
-        # The loader closure must actually be called when a program decl is
-        # entered, exercising the load_program_config wiring.
-        _isolated_home(monkeypatch, tmp_path)
-        # Patch load_program_config to track calls and return an empty table.
-        loader_calls: list[str] = []
-
-        def fake_load_program_config(
-            program_name: str, *, home: Path, proj_dir: object, cwd: Path
-        ) -> dict[str, object]:
-            loader_calls.append(program_name)
-            return {}
-
-        monkeypatch.setattr(repl_command, "load_program_config", fake_load_program_config)
-        repl_command.run(_args())
-        session = fake_console[0]["session"]
-        assert isinstance(session, ReplSession)
-        r = session.eval_entry("program myapp")
-        assert r.ok
-        assert loader_calls == ["myapp"]
-
+class TestReplModuleRoots:
     def test_configured_lib_root_wired_into_session(
         self,
         monkeypatch: pytest.MonkeyPatch,

@@ -77,7 +77,6 @@ from agm.agl.syntax.nodes import (
     PatternField,
     Placeholder,
     Program,
-    ProgramDecl,
     QualifierChain,
     QualifierSegment,
     Raise,
@@ -186,7 +185,6 @@ class Visitor:
     def visit_ExceptionDef(self, node: ExceptionDef) -> None: ...
     def visit_TypeAlias(self, node: TypeAlias) -> None: ...
     def visit_ParamDecl(self, node: ParamDecl) -> None: ...
-    def visit_ProgramDecl(self, node: ProgramDecl) -> None: ...
     def visit_FuncDef(self, node: FuncDef) -> None: ...
     def visit_BuiltinVarDecl(self, node: BuiltinVarDecl) -> None: ...
     def visit_InfixDecl(self, node: InfixDecl) -> None: ...
@@ -295,7 +293,6 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         ExceptionDef,
         TypeAlias,
         ParamDecl,
-        ProgramDecl,
         FuncDef,
         BuiltinVarDecl,
         InfixDecl,
@@ -486,9 +483,6 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
             walk(node.annotation, callback)
         if node.default is not None:
             walk(node.default, callback)
-
-    elif isinstance(node, ProgramDecl):
-        pass  # leaf — name is a plain string
 
     elif isinstance(node, FuncDef):
         for scope_segment in node.scope_path:

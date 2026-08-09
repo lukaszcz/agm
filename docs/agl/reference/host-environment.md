@@ -60,13 +60,16 @@ runtime surprise.
 
 ## Params
 
-Program parameters are declared with `param`
+Entry-module parameters are declared with `param`
 ([Bindings and scope](bindings-and-scope.md)) and may be supplied by the
-host as named external values at run start. A param declared as a member of a
-named scope region ([Named scopes](scopes.md#parameters)) is supplied under
-its full path spelling — `param Deploy::region` is named `Deploy::region` by
-the host, e.g. `--Deploy::region` on the CLI. In a config file the same key
-must be quoted, since `::` is not a legal bare TOML key:
+host as named external values at run start. An entry-module param declared as a
+member of a named scope region ([Named scopes](scopes.md#parameters)) is
+supplied under its full path spelling — `param Deploy::region` is named
+`Deploy::region` by the host, e.g. `--Deploy::region` on the CLI. During the
+M2 interim, non-entry param declarations are accepted and type-checked, but
+every use is a static error because discovery and lowering omit them until M3.
+In a config file the same key must be quoted, since `::` is not a legal bare
+TOML key:
 
 ```toml
 [demo]
@@ -137,24 +140,18 @@ A program that never writes a setting keeps the value chosen by the CLI/config
 layers.
 
 `agm repl` resolves engine settings as source writes > CLI > `[exec]` > declared
-default. It has no per-param CLI options. Its params resolve as `[<program>].Y`
-> source default > required error, but only after `program NAME` selects the
-config table. That name applies to params declared after it in the same entry
-and, once the entry succeeds, to later entries; earlier params use only their
-source default or produce a required-param error.
+default. It has no per-param CLI options or per-program config table. REPL
+parameters therefore require source defaults.
 
 ### Config-file schema
 
 `[exec]` holds global engine defaults with kebab field names (`strict-json`,
 `max-iters`, `log-file`). For `agm exec`, a `[<program>]` top-level section is
-keyed by the `program name` declaration or the `.agl` file stem and overrides
-both engine settings and param values. A file stem that matches a reserved host
-section name (e.g. `exec`, `loop`) is an error unless an explicit `program name`
-declaration is present. Inline `-c` programs with no `program` declaration have
-no config section.
+keyed by the `.agl` file stem and overrides both engine settings and param
+values. Inline `-c` source has no per-program config section.
 
-For `agm repl`, `[<program>]` is selected only by `program NAME`, never by a
-file stem. It supplies param values, not REPL engine-setting overrides.
+`agm repl` does not read `[<program>]` tables. They never override REPL engine
+settings.
 
 ### Positional effect
 

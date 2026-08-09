@@ -17,11 +17,11 @@ Execute an AgL workflow program, either from a source `FILE` or from inline prog
 text given with `-c`/`--command`. The two are mutually exclusive, and exactly one is
 required.
 
-When the entry declares `program def` functions, `exec` initializes the linked
-program and then invokes its sole entry implicitly. If it declares several,
-select one with `-p`/`--program` using its declaration path (for example,
-`review::main`); the error lists the available paths. Source with no `program def`
-continues to execute its top-level items as before.
+A file must declare at least one `program def` function. `exec` initializes the
+linked program and invokes its sole entry implicitly; if it declares several, select
+one with `-p`/`--program` using its declaration path (for example,
+`review::main`). Inline `-c` source is wrapped in a synthetic `program def main`
+when it does not declare an entry itself.
 
 ### Module resolution
 
@@ -183,9 +183,8 @@ first, is `--agent` > `[<program>]`/`[exec] default-agent` > `[exec] runner` > t
 as configuration is read, before the module graph loads; a malformed command exits 1
 with nothing run.
 
-A top-level `[<program>]` table provides per-program overrides of `[exec]`
-engine settings (`runner` excepted — it is read from `[exec]` only) and supplies
-that program's param values.
+A top-level `[<program>]` table is keyed by an `agm exec` file's `.agl` stem. It provides per-program overrides of `[exec]` engine settings
+(`runner` excepted — it is read from `[exec]` only) and supplies that program's param values. Inline `-c` source has no per-program table.
 
 #### Source-level engine settings (`std/config`)
 
@@ -196,16 +195,18 @@ by the live engine. Each setting is also readable through a qualified reference:
 ```agl
 import std/config
 
-std/config::log := true             # enable trace logging for this program
-std/config::log-file := Some("trace.jsonl")  # explicit trace path
-std/config::strict-json := true     # require bare JSON from agents
-std/config::max-iters := 10         # host safety valve cap for unbounded loops
-std/config::default-agent := AgentClaude("sonnet", "medium")
-std/config::timeout := Some("30s")  # shell-exec idle timeout
-
 param spec
-let result = ask "Process %{spec}"
-print result
+
+program def main() -> unit =
+  std/config::log := true             # enable trace logging for this program
+  std/config::log-file := Some("trace.jsonl")  # explicit trace path
+  std/config::strict-json := true     # require bare JSON from agents
+  std/config::max-iters := 10         # host safety valve cap for unbounded loops
+  std/config::default-agent := AgentClaude("sonnet", "medium")
+  std/config::timeout := Some("30s")  # shell-exec idle timeout
+
+  let result = ask "Process %{spec}"
+  print result
 ```
 
 Because the settings live in another module, a write must use a qualified target

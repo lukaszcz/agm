@@ -539,8 +539,10 @@ _HELP_TEXTS: dict[str, str] = {
         Execute an AgL (Agent Language) workflow program from FILE, or from
         the inline program text given with -c/--command.
 
-        A sole `program def` runs implicitly; select one of several with -p PATH.
-        Each `param` declaration in the program becomes a `--<name>` option.
+        A file must declare at least one `program def`; select one of several
+        with -p PATH. Inline source is wrapped in a synthetic `program def main`
+        when it does not declare one. Each `param` declaration in the program
+        becomes a `--<name>` option.
         Boolean params use the `--name/--no-name` flag form. Structured types
         take a JSON string. Run `agm exec FILE --help` to show discovered params.
 
@@ -611,10 +613,9 @@ _HELP_TEXTS: dict[str, str] = {
         the session; :reset clears it.  Set session-wide defaults via CLI flags
         or [exec] config.
 
-        Params (`param NAME: T`) resolve eagerly when entered: first from
-        [<program>] config when a `program NAME` declaration is active,
-        then from the param default expression. There is no CLI param seeding.
-        Use :params to list declared params and their resolved values.
+        Params (`param NAME: T`) resolve eagerly from their source default
+        expression. There is no CLI or per-program config seeding. Use :params
+        to list declared params and their resolved values.
 
         Options:
           --strict-json         Require bare JSON output from agents (no recovery).

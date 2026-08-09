@@ -9,8 +9,8 @@ These tests drive multi-module AgL programs through ``resolve_program`` and asse
 - multiple import declarations merging
 - duplicate-alias and alias-root-collision static errors
 - ``::name`` self-reference
-- declaration-only enforcement for non-entry modules
-- entry-only enforcement (agent, param, program)
+- static-root enforcement for entry and library modules
+- parameter scope legality in entry and library modules
 - header-only import placement
 - wildcard subtree expansion and re-rooting
 - wildcard overlap (idempotent same module, clash different modules)
@@ -979,138 +979,57 @@ class TestBuiltinVarPlacement:
         assert assignment_ref.module_id == STD_CONFIG_ID
 
 
-class TestDeclarationOnly:
-    def test_let_in_non_entry_errors(self, tmp_path: Path) -> None:
-        """A 'let' declaration in a non-entry module is an error."""
+class TestStaticModuleRoots:
+    def test_let_var_and_param_are_allowed_at_library_root_and_in_scope_regions(
+        self, tmp_path: Path
+    ) -> None:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "open import mylib\n()",
-                "mylib": "let x = 1",
-            },
-        )
-        with pytest.raises(AglScopeError):
-            resolve_program(graph)
-
-    def test_var_in_non_entry_errors(self, tmp_path: Path) -> None:
-        """A 'var' declaration in a non-entry module is an error."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "open import mylib\n()",
-                "mylib": "var x = 1",
-            },
-        )
-        with pytest.raises(AglScopeError):
-            resolve_program(graph)
-
-    def test_scoped_let_in_non_entry_region_errors(self, tmp_path: Path) -> None:
-        """A scoped 'let' inside a region in a non-entry module is an error.
-
-        The library-module ban tests position, not scope path, so a binder
-        inside a region is rejected exactly like one at plain top level.
-        """
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "open import mylib\n()",
-                "mylib": "scope Team\nlet x = 1\nend Team",
-            },
-        )
-        with pytest.raises(AglScopeError):
-            resolve_program(graph)
-
-    def test_scoped_var_in_non_entry_region_errors(self, tmp_path: Path) -> None:
-        """A scoped 'var' inside a region in a non-entry module is an error."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "open import mylib\n()",
-                "mylib": "scope Team\nvar x = 1\nend Team",
-            },
-        )
-        with pytest.raises(AglScopeError):
-            resolve_program(graph)
-
-    def test_scoped_param_in_non_entry_region_errors(self, tmp_path: Path) -> None:
-        """A scoped 'param' inside a region in a non-entry module is an error."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "open import mylib\n()",
-                "mylib": "scope Team\nparam x\nend Team",
-            },
-        )
-        with pytest.raises(AglScopeError, match="param"):
-            resolve_program(graph)
-
-    def test_bare_expr_in_non_entry_errors(self, tmp_path: Path) -> None:
-        """A bare expression in a non-entry module is an error."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "open import mylib\n()",
-                "mylib": "def foo() -> int = 1\n42",
-            },
-        )
-        with pytest.raises(AglScopeError):
-            resolve_program(graph)
-
-    def test_funcdef_in_non_entry_allowed(self, tmp_path: Path) -> None:
-        """A 'def' in a non-entry module is allowed."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "open import mylib\n()",
-                "mylib": "def foo() -> int = 42",
-            },
-        )
-        result = resolve_program(graph)
-        assert ENTRY_ID in result.modules
-        mylib_id = ModuleId.from_path("mylib")
-        assert "foo" in result.modules[mylib_id].exports
-
-    def test_empty_scope_region_in_library_is_allowed(self, tmp_path: Path) -> None:
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "open import mylib\n()",
-                "mylib": "scope Team\nend Team",
+                "entry": "import mylib\nprogram def main() -> unit = ()",
+                "mylib": (
+                    "let root = 1\n"
+                    "var total = 0\n"
+                    "param retry: int = 3\n"
+                    "scope Review\n"
+                    'let title = "review"\n'
+                    "var attempts = 0\n"
+                    "param limit: int = 2\n"
+                    "end Review"
+                ),
             },
         )
 
         assert ModuleId.from_path("mylib") in resolve_program(graph).modules
 
-
-# ---------------------------------------------------------------------------
-# Test: entry-only constructs
-# ---------------------------------------------------------------------------
-
-
-class TestEntryOnlyConstructs:
-    def test_param_in_non_entry_errors(self, tmp_path: Path) -> None:
-        """A 'param' declaration in a non-entry module is an error."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "open import mylib\n()",
-                "mylib": "param x",
-            },
+    @pytest.mark.parametrize("module", ("entry", "library"))
+    def test_bare_expression_at_root_is_rejected_for_every_module(
+        self, tmp_path: Path, module: str
+    ) -> None:
+        modules = (
+            {"entry": "42"}
+            if module == "entry"
+            else {"entry": "import mylib\nprogram def main() -> unit = ()", "mylib": "42"}
         )
-        with pytest.raises(AglScopeError, match="param"):
-            resolve_program(graph)
 
-    def test_program_decl_in_non_entry_errors(self, tmp_path: Path) -> None:
-        """A 'program' declaration in a non-entry module is an error."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "open import mylib\n()",
-                "mylib": "program myname",
-            },
+        with pytest.raises(AglScopeError):
+            resolve_program(_make_graph_from_files(tmp_path, modules))
+
+    @pytest.mark.parametrize("module", ("entry", "library"))
+    def test_assignment_at_root_is_rejected_for_every_module(
+        self, tmp_path: Path, module: str
+    ) -> None:
+        modules = (
+            {"entry": "var value = 1\nvalue := 2"}
+            if module == "entry"
+            else {
+                "entry": "import mylib\nprogram def main() -> unit = ()",
+                "mylib": "var value = 1\nvalue := 2",
+            }
         )
-        with pytest.raises(AglScopeError, match="program"):
-            resolve_program(graph)
+
+        with pytest.raises(AglScopeError):
+            resolve_program(_make_graph_from_files(tmp_path, modules))
 
 
 # ---------------------------------------------------------------------------

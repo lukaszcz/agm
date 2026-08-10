@@ -405,16 +405,22 @@ def test_exec_runs_an_installed_reference(monkeypatch: pytest.MonkeyPatch, tmp_p
     (package_root / "package.toml").write_text(
         '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
     )
-    module.write_text('program def main() -> unit = print "installed"\n', encoding="utf-8")
+    (package_root / "tools" / "settings.agl").write_text(
+        'param level: text = "default"\n', encoding="utf-8"
+    )
+    module.write_text(
+        "import tools/settings\nparam level: text\nprogram def main() -> unit = print level\n",
+        encoding="utf-8",
+    )
     write_activation_index(
         ActivationIndex({"tools": ActivePackage(semver.Version.parse("1.0.0"))}), home=home
     )
     monkeypatch.setenv("HOME", str(home))
 
-    result = invoke(CliRunner(), ["exec", "tools/review::main"])
+    result = invoke(CliRunner(), ["exec", "tools/review::main", "--tools/review::level", "set"])
 
     assert result.exit_code == 0
-    assert result.stdout == "installed\n"
+    assert result.stdout == "set\n"
 
 
 def test_exec_help_for_an_installed_reference_includes_program_params(

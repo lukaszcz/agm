@@ -1153,6 +1153,13 @@ def test_archive_readers_enforce_explicit_entry_and_size_limits(
         read_archive_metadata(archive_path)
 
 
+def test_archive_limit_preflight_ignores_invalid_end_records(tmp_path: Path) -> None:
+    archive_path = tmp_path / "invalid.agmpkg"
+    archive_path.write_bytes(b"PK\x05\x06" + b"\0" * 16 + b"\x01\0")
+
+    package_archive._validate_central_directory_limits(archive_path)
+
+
 def test_archive_entry_limit_is_checked_before_zipfile_loads_the_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -25,7 +25,12 @@ def wrap_inline_program(program: Program, *, next_node_id: int) -> tuple[Program
 
     root_items: list[syntax.Item] = []
     main_items: list[syntax.Item] = []
+    has_executable_item = False
     for item in program.body.items:
+        is_import = isinstance(item, syntax.ImportDecl)
+        if is_import and has_executable_item:
+            main_items.append(item)
+            continue
         if isinstance(
             item,
             (
@@ -46,6 +51,7 @@ def wrap_inline_program(program: Program, *, next_node_id: int) -> tuple[Program
             root_items.append(item)
         else:
             main_items.append(item)
+            has_executable_item = True
 
     main_body = syntax.Block(
         items=tuple(main_items),

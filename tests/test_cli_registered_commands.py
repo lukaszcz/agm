@@ -185,6 +185,78 @@ def test_help_command_renders_registered_command_help(
     assert "Lint package inputs" in result.output
 
 
+def test_registered_command_help_degrades_when_param_discovery_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agm.cli_dispatch as dispatch
+    import agm.commands.exec_program as exec_program
+
+    monkeypatch.setattr(
+        exec_program,
+        "registered_program_param_flags",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("unavailable")),
+    )
+
+    text = dispatch.registered_command_help(
+        "tools lint", CommandRegistration("tools", "tools/lint::main")
+    )
+
+    assert "Run the registered AgL program." in text
+    assert "Program parameters:" not in text
+
+    monkeypatch.setattr(exec_program, "registered_program_param_flags", lambda *_args: ("--level",))
+
+    text = dispatch.registered_command_help(
+        "tools lint", CommandRegistration("tools", "tools/lint::main")
+    )
+
+    assert "Program parameters:\n  --level" in text
+
+
+def test_registered_command_help_returns_false_when_index_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import agm.cli_dispatch as dispatch
+
+    monkeypatch.setattr(
+        dispatch,
+        "current_config_context",
+        lambda: ConfigContext(tmp_path / "home", None, tmp_path),
+    )
+    monkeypatch.setattr(
+        dispatch,
+        "load_activation_index",
+        lambda **_: (_ for _ in ()).throw(ValueError("bad index")),
+    )
+
+    assert not dispatch.print_registered_command_help(["tools", "lint"])
+
+
+def test_registered_param_flags_reject_invalid_or_mismatched_references() -> None:
+    import agm.commands.exec_program as exec_program
+
+    assert exec_program.registered_program_param_flags("not-a-reference", "tools") == ()
+    assert exec_program.registered_program_param_flags("other/lint::main", "tools") == ()
+
+
+def test_registered_param_flags_degrade_when_selection_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import agm.commands.exec_program as exec_program
+
+    context = ConfigContext(tmp_path / "home", None, tmp_path)
+    monkeypatch.setattr(
+        exec_program,
+        "select_active_packages",
+        lambda **_: (_ for _ in ()).throw(RuntimeError("unavailable")),
+    )
+
+    assert (
+        exec_program.registered_program_param_flags("tools/lint::main", "tools", context=context)
+        == ()
+    )
+
+
 def test_unknown_command_without_registered_entry_keeps_click_error(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -86,6 +86,28 @@ review-tools = { program = "tools/review::main" }
     assert shell_complete.get_completions(["tools", "lint", "--level"], "") == []
 
 
+def test_registered_param_completion_degrades_on_unknown_or_unavailable_commands(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import agm.cli_dispatch as dispatch
+    from agm.config.context import ConfigContext
+    from agm.packages.activation import ActivationIndex
+
+    context = ConfigContext(tmp_path / "home", None, tmp_path)
+    monkeypatch.setattr(completion, "current_config_context", lambda: context)
+    monkeypatch.setattr(dispatch, "load_activation_index", lambda **_: ActivationIndex())
+
+    assert completion.registered_command_param_completion(["tools", "lint"], "--") == []
+
+    monkeypatch.setattr(
+        dispatch,
+        "load_activation_index",
+        lambda **_: (_ for _ in ()).throw(RuntimeError("unavailable")),
+    )
+
+    assert completion.registered_command_param_completion(["tools", "lint"], "--") == []
+
+
 def test_complete_registered_commands_silently_degrades_on_bad_index(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

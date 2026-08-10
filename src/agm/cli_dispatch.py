@@ -121,20 +121,6 @@ class RegisteredProgramCommand(TyperCommand):
         self._path_name = path_name
         self._registration = registration
 
-    def shell_complete(self, ctx: click.Context, incomplete: str) -> list[CompletionItem]:
-        base = super().shell_complete(ctx, incomplete)
-        if not incomplete.startswith("--"):
-            return base
-        from agm.commands.exec_program import registered_program_param_flags
-
-        items_by_value: dict[str, CompletionItem] = {cast(str, item.value): item for item in base}
-        for flag in registered_program_param_flags(
-            self._registration.program, self._registration.package
-        ):
-            if flag.startswith(incomplete):
-                items_by_value[flag] = CompletionItem(flag)
-        return list(items_by_value.values())
-
     def invoke(self, ctx: click.Context) -> None:
         if "--help" in ctx.args or "-h" in ctx.args:
             print(registered_command_help(self._path_name, self._registration), end="")

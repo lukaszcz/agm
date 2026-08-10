@@ -163,7 +163,14 @@ def _package_files(root: Path) -> tuple[Path, ...]:
     """Return sorted package files, excluding the root ``RECORD`` itself."""
 
     _validate_package_tree(root)
-    files = [path for path in fs.rglob(root, "*") if path.is_file() and path != root / _RECORD_NAME]
+    try:
+        files = [
+            path
+            for path in fs.rglob(root, "*")
+            if path.is_file() and path != root / _RECORD_NAME
+        ]
+    except OSError as exc:
+        raise RecordError(f"cannot traverse package tree {root}: {exc}") from exc
     return tuple(sorted(files, key=_posix_relative_path(root)))
 
 
@@ -179,22 +186,28 @@ def _posix_relative_path(root: Path) -> Callable[[Path], str]:
 def _validate_package_tree(root: Path) -> None:
     """Reject package roots and descendants that are symbolic links."""
 
-    if root.is_symlink():
-        raise RecordError(f"package root is a symlink {root}")
-    for path in fs.rglob(root, "*"):
-        if path.is_symlink():
-            raise RecordError(f"package contains symlink {path}")
-        if any(character in _LINE_BREAKS for character in path.relative_to(root).as_posix()):
-            raise RecordError(f"package path contains a line break {path}")
+    try:
+        if root.is_symlink():
+            raise RecordError(f"package root is a symlink {root}")
+        for path in fs.rglob(root, "*"):
+            if path.is_symlink():
+                raise RecordError(f"package contains symlink {path}")
+            if any(character in _LINE_BREAKS for character in path.relative_to(root).as_posix()):
+                raise RecordError(f"package path contains a line break {path}")
+    except OSError as exc:
+        raise RecordError(f"cannot inspect package tree {root}: {exc}") from exc
 
 
 def _sha256(path: Path) -> str:
     """Return the lowercase SHA-256 hexadecimal digest of *path*."""
 
     digest = hashlib.sha256()
-    with path.open("rb") as file:
-        while chunk := file.read(1024 * 1024):
-            digest.update(chunk)
+    try:
+        with path.open("rb") as file:
+            while chunk := file.read(1024 * 1024):
+                digest.update(chunk)
+    except OSError as exc:
+        raise RecordError(f"cannot hash package file {path}: {exc}") from exc
     return digest.hexdigest()
 
 

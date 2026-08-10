@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Never
 
 import pytest
 
+from agm.core import fs
 from agm.packages.record import RecordError, read_record, verify_record, write_record
 
 
@@ -174,6 +176,29 @@ def test_record_reading_and_verification_reject_symlink_descendants(
 
     with pytest.raises(RecordError):
         operation(root)
+
+
+def test_record_wraps_traversal_io_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _package_tree(tmp_path)
+    def fail_rglob(_root: Path, _pattern: str) -> Iterator[Path]:
+        raise OSError("blocked")
+
+    monkeypatch.setattr(fs, "rglob", fail_rglob)
+
+    with pytest.raises(RecordError, match="blocked"):
+        write_record(root)
+
+
+def test_record_wraps_hash_io_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _package_tree(tmp_path)
+    def fail_open(_path: Path, *_args: object, **_kwargs: object) -> Never:
+        raise OSError("blocked")
+
+    monkeypatch.setattr(Path, "open", fail_open)
+    with pytest.raises(RecordError, match="blocked"):
+        write_record(root)
 
 
 def _change_recorded_file(root: Path) -> None:

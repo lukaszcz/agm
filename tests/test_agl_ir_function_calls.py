@@ -454,6 +454,22 @@ def test_param_default_function_assigns_prior_static_var() -> None:
     assert ir["result"] == IntValue(1)
 
 
+def test_param_default_reads_prior_destructured_static_let() -> None:
+    """A parameter default may read binders from a preceding destructuring let."""
+    source = (
+        "record Pair(left: int, right: int)\n"
+        "let Pair(left, right) = Pair(left = 20, right = 22)\n"
+        "param result: int = left + right\n"
+        "program def main() -> unit = ()"
+    )
+
+    ir = evaluate_ir(source)
+
+    assert ir["left"] == IntValue(20)
+    assert ir["right"] == IntValue(22)
+    assert ir["result"] == IntValue(42)
+
+
 # ---------------------------------------------------------------------------
 # B1/capture fix tests (review-fixes task)
 # ---------------------------------------------------------------------------

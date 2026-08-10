@@ -401,6 +401,17 @@ def _apply_coercion(value: Value, coercion: Coercion) -> Value:
 # ---------------------------------------------------------------------------
 
 
+def _static_initializer_symbols(initializer: IrExpr) -> tuple[SymbolId, ...]:
+    """Return the binding symbols materialized by one module initializer."""
+    match initializer:
+        case IrBind(symbol=sym, value=value):
+            return () if isinstance(value, IrMakeClosure) else (sym,)
+        case IrSequence(items=items):
+            return tuple(symbol for item in items for symbol in _static_initializer_symbols(item))
+        case _:
+            return ()
+
+
 class IrInterpreter:
     """Evaluates an ``ExecutableProgram`` using the frame/cell model.
 
@@ -436,11 +447,11 @@ class IrInterpreter:
         self.initializer_values: list[Value] = []
         self.module_initializer_values: dict[ModuleId, list[Value]] = {}
         self.entry_param_symbols_installed: set[SymbolId] = set()
-        self._static_bindings: dict[SymbolId, tuple[ModuleId, IrBind]] = {
-            node.symbol: (module.module_id, node)
+        self._static_bindings: dict[SymbolId, tuple[ModuleId, IrExpr]] = {
+            symbol: (module.module_id, initializer)
             for module in program.modules.values()
-            for node in module.initializers
-            if isinstance(node, IrBind) and not isinstance(node.value, IrMakeClosure)
+            for initializer in module.initializers
+            for symbol in _static_initializer_symbols(initializer)
         }
         self._evaluated_static_binding_ids: set[int] = set()
         self._resolving_param_defaults = False
@@ -1028,7 +1039,7 @@ class IrInterpreter:
                 )
             self.entry_param_symbols_installed.add(ir_param.symbol)
 
-    def _eval_static_binding(self, module_id: ModuleId, initializer: IrBind) -> None:
+    def _eval_static_binding(self, module_id: ModuleId, initializer: IrExpr) -> None:
         """Evaluate a parameter-default dependency in the module base frame."""
         self._frames.append(self._frames[0])
         try:

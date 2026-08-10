@@ -235,15 +235,15 @@ def registered_command_param_completion(
         resolution = resolve_registered_command(command_path, index.commands)
         if resolution is None:
             return []
-        return [
-            CompletionItem(flag)
-            for flag in registered_program_param_flags(
+        flags = (
+            "--dry-run",
+            *registered_program_param_flags(
                 resolution.registration.program,
                 resolution.registration.package,
                 context=context,
-            )
-            if flag.startswith(incomplete)
-        ]
+            ),
+        )
+        return [CompletionItem(flag) for flag in flags if flag.startswith(incomplete)]
     except (Exception, SystemExit):
         return []
 

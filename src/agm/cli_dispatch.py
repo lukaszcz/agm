@@ -9,9 +9,10 @@ from typing import Protocol, cast
 
 import click
 from click.shell_completion import CompletionItem
-from typer.core import TyperCommand, TyperGroup
+from typer.core import TyperCommand, TyperGroup, TyperOption
 
 from agm.config.context import current_config_context
+from agm.core import dry_run
 
 
 class CommandRegistrationLike(Protocol):
@@ -54,6 +55,18 @@ def load_activation_index(
     return activation.load_activation_index(home=home)
 
 
+def set_dry_run(ctx: object, param: object, value: bool) -> None:
+    """Set invocation-wide dry-run state from any command level."""
+    del param
+    root = cast(click.Context, ctx)
+    while root.parent is not None:
+        root = root.parent
+    root_meta = cast(dict[str, bool], root.meta)
+    enabled = value or bool(root_meta.get("dry_run"))
+    root_meta["dry_run"] = enabled
+    dry_run.set_enabled(enabled)
+
+
 def _is_usage_error(error: Exception) -> bool:
     """Recognize Click errors across Typer's bundled-Click compatibility boundary."""
 
@@ -69,7 +82,14 @@ def _path_length(item: tuple[str, CommandRegistrationLike]) -> int:
 def registered_command_help(path_name: str, registration: CommandRegistrationLike) -> str:
     """Render help for one package-registered command."""
     description = registration.description or "Run the registered AgL program."
-    lines = [f"agm {path_name} [--PARAM VALUE]...", "", description]
+    lines = [
+        f"agm {path_name} [--PARAM VALUE]... [--dry-run]",
+        "",
+        description,
+        "",
+        "Options:",
+        "  --dry-run  Statically check the program without executing it.",
+    ]
     try:
         from agm.commands.exec_program import registered_program_param_flags
 
@@ -118,6 +138,17 @@ class RegisteredProgramCommand(TyperCommand):
             "help_option_names": [],
         }
         super().__init__(name="registered-program", context_settings=context_settings)
+        self.params.append(
+            TyperOption(
+                param_decls=["--dry-run"],
+                default=False,
+                is_flag=True,
+                is_eager=True,
+                expose_value=False,
+                callback=set_dry_run,
+                help="Statically check the program without executing it.",
+            )
+        )
         self._path_name = path_name
         self._registration = registration
 

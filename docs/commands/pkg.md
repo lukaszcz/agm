@@ -83,7 +83,9 @@ no immutable copy or `RECORD` is created. Manifest `[commands]` registrations ar
 activation index. Invoke a registered single- or multi-word command directly as `agm COMMAND ...`;
 the longest matching path wins and trailing words are passed to its AgL program. Registered commands
 accept the same parameter flags and qualified configuration/engine-setting tables as `agm exec`.
-They appear in `agm help` and shell completion while active. An editable command re-reads its live
+The global `--dry-run` flag can appear before or after a registered command path; it runs the static
+pipeline and parameter validation without executing the program. They appear in `agm help` and
+shell completion while active. An editable command re-reads its live
 manifest when dispatched, so nonconflicting command edits take effect without reinstalling. Live
 command additions are rechecked against the activation's recorded `--shadow` intent; an editable
 package activated without `--shadow` cannot acquire a conflict. A command path cannot begin with an

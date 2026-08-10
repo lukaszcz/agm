@@ -140,6 +140,34 @@ def test_registered_command_dispatches_trailing_arguments(
     assert calls == [("tools/lint::main", ["--level", "strict"], "tools", "tools lint")]
 
 
+def test_registered_command_treats_only_standalone_dry_run_as_global(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import agm.cli_dispatch as dispatch
+    import agm.commands.exec_program as exec_program
+    from agm.core import dry_run
+
+    context = ConfigContext(home=tmp_path / "home", proj_dir=None, cwd=tmp_path)
+    index = ActivationIndex(
+        commands={"tools lint": CommandRegistration("tools", "tools/lint::main")}
+    )
+    monkeypatch.setattr(dispatch, "current_config_context", lambda: context)
+    monkeypatch.setattr(dispatch, "load_activation_index", lambda **_: index)
+    calls: list[tuple[list[str], bool]] = []
+    monkeypatch.setattr(
+        exec_program,
+        "run_registered",
+        lambda _program, param_tokens, **_kwargs: calls.append((param_tokens, dry_run.enabled())),
+    )
+
+    value_result = invoke(CliRunner(), ["tools", "lint", "--level=--dry-run"])
+    flag_result = invoke(CliRunner(), ["tools", "lint", "--level", "strict", "--dry-run"])
+
+    assert value_result.exit_code == 0
+    assert flag_result.exit_code == 0
+    assert calls == [(["--level=--dry-run"], False), (["--level", "strict"], True)]
+
+
 def test_registered_command_help_does_not_dispatch_program(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -162,6 +190,7 @@ def test_registered_command_help_does_not_dispatch_program(
     assert result.exit_code == 0
     assert "agm tools lint" in result.output
     assert "Lint package inputs" in result.output
+    assert "--dry-run" in result.output
     assert calls == []
 
 

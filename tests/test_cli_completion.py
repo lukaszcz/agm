@@ -82,9 +82,11 @@ review-tools = { program = "tools/review::main" }
     assert next_segments == ["lint"]
 
     assert shell_complete.get_completions(["tools", "lint"], "") == []
-    assert "--level" in [
+    registered_options = [
         item.value for item in shell_complete.get_completions(["tools", "lint"], "--")
     ]
+    assert "--level" in registered_options
+    assert "--dry-run" in registered_options
     assert shell_complete.get_completions(["tools", "lint", "--level"], "") == []
 
 

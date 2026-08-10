@@ -7467,6 +7467,7 @@ class TestPackageInstall:
         published = run_agm(["publish", "--subject", "flag"], env=env, cwd=tmp_path)
         configured = run_agm(["publish"], env=env, cwd=tmp_path)
         inspected = run_agm(["tools", "inspect", "--subject", "trailing"], env=env, cwd=tmp_path)
+        dry_run = run_agm(["publish", "--dry-run"], env=env, cwd=tmp_path)
         uninstalled = run_agm(["pkg", "uninstall", "tools"], env=env, cwd=tmp_path)
         unknown = run_agm(["publish"], env=env, cwd=tmp_path, check=False)
 
@@ -7478,6 +7479,7 @@ class TestPackageInstall:
         assert published.stdout == "flag\n9\n"
         assert configured.stdout == "configured\n9\n"
         assert inspected.stdout == "trailing\n"
+        assert dry_run.stdout == ""
         assert uninstalled.returncode == 0
         assert unknown.returncode != 0
 

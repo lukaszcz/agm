@@ -2,8 +2,24 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import click
 from click.shell_completion import CompletionItem
+
+
+class TyperOption(click.Option):
+    def __init__(
+        self,
+        *,
+        param_decls: list[str],
+        default: object = ...,
+        callback: Callable[[object, object, bool], None] | None = ...,
+        expose_value: bool = ...,
+        is_eager: bool = ...,
+        is_flag: bool | None = ...,
+        help: str | None = ...,
+    ) -> None: ...
 
 
 class TyperGroup:
@@ -15,6 +31,8 @@ class TyperGroup:
 
 class TyperCommand:
     """Typed façade for Typer's Click command base."""
+
+    params: list[click.Parameter]
 
     def __init__(
         self,

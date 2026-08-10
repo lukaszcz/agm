@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import cast
 
 import typer
 
@@ -38,7 +37,7 @@ import agm.commands.worktree.new as worktree_new_command
 import agm.commands.worktree.remove as worktree_remove_command
 from agm import completion
 from agm import parser as parser_helpers
-from agm.cli_dispatch import RegisteredCommandGroup
+from agm.cli_dispatch import RegisteredCommandGroup, set_dry_run
 from agm.cli_support.args import (
     CloseArgs,
     ConfigCopyArgs,
@@ -71,7 +70,6 @@ from agm.cli_support.args import (
 )
 from agm.command_catalog import COMMAND_OVERVIEW
 from agm.config.general import parse_timeout
-from agm.core import dry_run
 from agm.parser import (
     exit_with_usage_error,
     print_command_help,
@@ -106,13 +104,6 @@ def _command_path_from_context(ctx: typer.Context) -> list[str]:
     return path
 
 
-def _root_context(ctx: typer.Context) -> typer.Context:
-    current = ctx
-    while current.parent is not None:
-        current = current.parent
-    return current
-
-
 def _print_context_help(ctx: typer.Context, param: object, value: bool) -> None:
     del param
     if not value or ctx.resilient_parsing:
@@ -136,20 +127,11 @@ def _help_option() -> bool:
     )
 
 
-def _set_dry_run(ctx: typer.Context, param: object, value: bool) -> None:
-    del param
-    root = _root_context(ctx)
-    root_meta = cast(dict[str, bool], getattr(root, "meta"))
-    enabled = value or bool(root_meta.get("dry_run"))
-    root_meta["dry_run"] = enabled
-    dry_run.set_enabled(enabled)
-
-
 def _dry_run_option() -> bool:
     return typer.Option(
         False,
         "--dry-run",
-        callback=_set_dry_run,
+        callback=set_dry_run,
         expose_value=False,
         is_eager=True,
         help="Print commands and AGM operations without executing them.",

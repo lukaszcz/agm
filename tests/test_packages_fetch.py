@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import requests
@@ -78,6 +79,32 @@ def test_fetch_streams_with_explicit_timeout_hashes_and_hands_off_archive(tmp_pa
     assert session.calls == [("https://example.test/tools.agmpkg", True, 30.0)]
     assert response.status_checked
     assert handed_off == [content]
+    assert not tuple(tmp_path.iterdir())
+
+
+def test_fetch_stops_a_trickling_response_at_the_total_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    content = b"archive bytes"
+    monkeypatch.setattr(package_fetch, "_FETCH_TIMEOUT_SECONDS", 1.0)
+    monotonic_values = iter((0.0, 0.0, 1.0))
+    monkeypatch.setattr(
+        package_fetch,
+        "time",
+        SimpleNamespace(monotonic=monotonic_values.__next__),
+        raising=False,
+    )
+
+    with pytest.raises(FetchError, match=r"fetch timed out.*tools >= 1\.0\.0"):
+        fetch_archive(
+            requirement="tools >= 1.0.0",
+            url="https://example.test/tools.agmpkg",
+            expected_hash="sha256=" + hashlib.sha256(content).hexdigest(),
+            handoff=lambda _: pytest.fail("archive handoff must not run"),
+            session=_Session(_Response([content])),
+            scratch_dir=tmp_path,
+        )
+
     assert not tuple(tmp_path.iterdir())
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import tempfile
+import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Protocol
@@ -58,6 +59,7 @@ def fetch_archive(
     client: Session = requests.Session() if session is None else session
     archive: Path | None = None
     primary_failure = False
+    deadline = time.monotonic() + _FETCH_TIMEOUT_SECONDS
     try:
         try:
             with tempfile.NamedTemporaryFile(
@@ -69,7 +71,9 @@ def fetch_archive(
                 try:
                     with client.get(url, stream=True, timeout=_FETCH_TIMEOUT_SECONDS) as response:
                         response.raise_for_status()
+                        _check_timeout(requirement, deadline)
                         for chunk in response.iter_content(_CHUNK_SIZE):
+                            _check_timeout(requirement, deadline)
                             if chunk:
                                 downloaded_size += len(chunk)
                                 if downloaded_size > MAX_ARCHIVE_DOWNLOAD_SIZE:
@@ -99,6 +103,13 @@ def fetch_archive(
                 if not primary_failure:
                     error = FetchError(f"fetch failed for {requirement}: cleanup failed: {exc}")
                     raise error from exc
+
+
+def _check_timeout(requirement: str, deadline: float) -> None:
+    """Raise when the archive transfer has exceeded its total deadline."""
+
+    if time.monotonic() >= deadline:
+        raise FetchError(f"fetch timed out for {requirement}")
 
 
 def _expected_digest(requirement: str, expected_hash: str) -> str:

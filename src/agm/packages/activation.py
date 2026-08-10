@@ -309,9 +309,17 @@ def rebuild_activation_index(
         for name, package in active.items()
     }
     _validate_rebuild_provenance(provenance)
+    persisted_orders = {
+        item.registration_order for item in provenance.values() if item is not None
+    }
     next_order = max(
-        (package.registration_order for package in previous.packages.values()), default=0
+        (
+            *(package.registration_order for package in previous.packages.values()),
+            *persisted_orders,
+        ),
+        default=0,
     )
+    used_orders = set(persisted_orders)
     rebuilt: dict[str, ActivePackage] = {}
     for name, package in sorted(active.items()):
         persisted = provenance[name]
@@ -325,6 +333,7 @@ def rebuild_activation_index(
         elif (
             previous_package is not None
             and previous_package.editable is None
+            and previous_package.registration_order not in used_orders
             and canonical_package_identity(name, previous_package.version)
             == canonical_package_identity(name, package.version)
         ):
@@ -333,9 +342,11 @@ def rebuild_activation_index(
                 shadow=previous_package.shadow,
                 registration_order=previous_package.registration_order,
             )
+            used_orders.add(previous_package.registration_order)
         else:
             next_order += 1
             rebuilt[name] = ActivePackage(package.version, registration_order=next_order)
+            used_orders.add(next_order)
     index = ActivationIndex(packages=rebuilt)
     packages = _packages_from_index(index, home=home, env=env)
     _validate_requirements(packages)

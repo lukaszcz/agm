@@ -477,6 +477,28 @@ def test_rebuild_uses_the_previous_index_only_for_legacy_packages_without_sideca
     assert rebuilt.packages["alpha"].registration_order == 4
 
 
+def test_rebuild_allocates_legacy_orders_after_provenance_without_an_index(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "agm-home"
+    _write_package(home, "alpha", "1.0.0")
+    _write_package(home, "bravo", "1.0.0")
+    env = {"AGM_HOME": str(home)}
+    write_package_provenance(
+        "alpha",
+        ActivePackage(semver.Version.parse("1.0.0"), registration_order=1),
+        home=home,
+        env=env,
+    )
+
+    rebuilt = rebuild_activation_index(home=home, env=env)
+    write_activation_index(rebuilt, home=home, env=env)
+
+    assert rebuilt.packages["alpha"].registration_order == 1
+    assert rebuilt.packages["bravo"].registration_order == 2
+    assert rebuild_activation_index(home=home, env=env) == rebuilt
+
+
 def test_rebuild_rejects_duplicate_or_missing_command_provenance(tmp_path: Path) -> None:
     home = tmp_path / "agm-home"
     alpha = _write_package(home, "alpha", "1.0.0")

@@ -56,7 +56,10 @@ charlie = { version = "3", url = "https://example.test/charlie.agmpkg", hash = "
         assert manifest.dependencies["std"].version == semver.Version.parse("0.1.0")
         assert manifest.dependencies["judge"].path == "../judge"
         assert manifest.dependencies["tools"].url == "https://example.test/tools.agmpkg"
-        assert manifest.dependencies["tools"].hash == "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        assert (
+            manifest.dependencies["tools"].hash
+            == "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        )
         assert manifest.commands["review-loop"].program == "review_tools/review::main"
         assert manifest.commands["review-loop lint"].description == "Lint review configurations"
 

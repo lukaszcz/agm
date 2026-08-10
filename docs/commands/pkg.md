@@ -74,14 +74,50 @@ store, without creating archive, package-store, or activation-index files. It ne
 dependencies, so an installation that needs one fails in dry-run mode.
 Versions are retained side by side. A package identity includes the complete canonical version,
 including build metadata, so versions such as `1.0.0+linux` and `1.0.0+macos` are distinct store
-entries and activation selections. `[packages]` configuration pins select that exact identity.
-Dependencies use semantic-version precedence for
-minimum-version resolution, where build metadata does not affect whether a version satisfies a
-range: a satisfying stored version is selected first, otherwise a declared
-local `path` source is installed. URL dependencies are fetched with a required SHA-256 hash, then
-the downloaded archive's normalized manifest and `RECORD` are verified before atomic extraction and
-activation. Downloads have a 128 MiB size limit and a 30-second wall-clock deadline, including
-blocked connection and body reads; partial temporary archives are removed on failure.
+entries and activation selections. Dependencies use semantic-version precedence for minimum-version
+resolution, where build metadata does not affect whether a version satisfies a range: a satisfying
+stored version is selected first, otherwise a declared local `path` source is installed. URL
+dependencies are fetched with a required SHA-256 hash, then the downloaded archive's normalized
+manifest and `RECORD` are verified before atomic extraction and activation. Downloads have a 128 MiB
+size limit and a 30-second wall-clock deadline, including blocked connection and body reads; partial
+temporary archives are removed on failure.
+
+## Package version pins
+
+Use `[packages]` in a layered `config.toml` to select an installed package version for the current
+invocation:
+
+```toml
+[packages]
+review_tools = "1.2.3"
+platform_tools = "1.0.0+linux"
+```
+
+Each value must be a quoted, complete semantic version (`MAJOR.MINOR.PATCH`, with optional
+prerelease and build metadata). A pin selects the exact package identity: `1.0.0+linux` does not
+match `1.0.0+macos`, even though build metadata is ignored when checking a dependency's minimum
+version.
+
+Pins follow the normal general-config precedence: installation-prefix config, AGM-home config,
+shared project `config/config.toml`, then the invocation directory's `.agm/config.toml`. The
+`[packages]` tables merge by package name, with a later project or workspace value overriding the
+same earlier pin. AGM discovers the current project from the invocation directory or `PROJ_DIR`, so
+leaving that project restores the less-specific selection. A pin overlays the globally active
+version only for package-aware operations; it does not install, fetch, or globally activate that
+version, and does not change `agm pkg list` or `agm pkg info`.
+
+The exact pinned version must already be an immutable, valid `RECORD`-verified entry in the selected
+AGM home's package store; a global editable activation is not a substitute. Invalid pin syntax, a
+missing or corrupt store entry, a manifest identity mismatch, or unsatisfied dependencies fail when
+AGM resolves package roots or registered commands. AGM does not fall back to the globally active
+version or fetch a dependency. For module-root selection, a discovered development package with the
+same name takes precedence over the stored selection.
+
+Pins determine the effective package module roots used by `agm exec`, `agm repl`, installed program
+references, and their parameter discovery. They also rebuild the invocation's registered-command
+registry from the selected manifests, so command dispatch, `agm help`, registered-command `--help`,
+and shell completion all reflect the pinned versions. Built-in commands remain reserved and take
+precedence over package registrations.
 
 `--editable` activates the source directory directly, so its edits are visible immediately and
 no immutable copy or `RECORD` is created. Manifest `[commands]` registrations are merged into the

@@ -91,7 +91,7 @@ def test_package_provenance_is_a_record_external_sidecar(tmp_path: Path) -> None
         "alpha", active.version, home=home, env={"AGM_HOME": str(home)}
     )
 
-    assert path == package.parent / "1.2.3.provenance.toml"
+    assert path == package.parent / ".provenance" / "1.2.3.toml"
     assert not path.is_relative_to(package)
     assert provenance is not None
     assert provenance.registration_order == 4
@@ -113,6 +113,7 @@ def test_package_provenance_rejects_invalid_state(tmp_path: Path, content: str) 
     path = package_provenance_path(
         "alpha", semver.Version.parse("1.0.0"), home=home, env={"AGM_HOME": str(home)}
     )
+    path.parent.mkdir()
     path.write_text(content, encoding="utf-8")
 
     with pytest.raises(PackageActivationError, match="provenance"):

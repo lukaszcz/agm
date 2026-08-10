@@ -107,10 +107,24 @@ def test_install_copies_package_writes_record_and_activates_it(tmp_path: Path) -
 
     assert installed.root == home / ".agm" / "packages" / "alpha" / "1.0.0"
     assert (installed.root / "alpha" / "main.agl").is_file()
-    assert (installed.root.parent / "1.0.0.provenance.toml").is_file()
+    assert (installed.root.parent / ".provenance" / "1.0.0.toml").is_file()
     assert verify_record(installed.root)
     active = load_activation_index(home=home, env={}).packages["alpha"]
     assert active.version == installed.manifest.version
+
+
+def test_install_keeps_provenance_separate_from_colliding_version_names(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    first = _package(tmp_path / "first", "alpha", "1.0.0+build")
+    second = _package(tmp_path / "second", "alpha", "1.0.0+build.provenance.toml")
+
+    install_directory(first, home=home, env={})
+    install_directory(second, home=home, env={})
+
+    versions = home / ".agm" / "packages" / "alpha"
+    assert (versions / "1.0.0+build").is_dir()
+    assert (versions / "1.0.0+build.provenance.toml").is_dir()
+    assert (versions / ".provenance" / "1.0.0+build.toml").is_file()
 
 
 def test_uninstall_refuses_the_managed_standard_library(tmp_path: Path) -> None:
@@ -218,11 +232,11 @@ def test_dry_run_archive_install_refuses_a_package_requiring_a_newer_agm(
         install_archive(archive, home=tmp_path / "home", env={})
 
 
-def test_uninstall_tolerates_an_absent_legacy_provenance_sidecar(tmp_path: Path) -> None:
+def test_uninstall_tolerates_an_absent_provenance_sidecar(tmp_path: Path) -> None:
     source = _package(tmp_path / "source", "alpha", "1.0.0")
     home = tmp_path / "home"
     installed = install_directory(source, home=home, env={})
-    (installed.root.parent / "1.0.0.provenance.toml").unlink()
+    (installed.root.parent / ".provenance" / "1.0.0.toml").unlink()
 
     uninstall_package("alpha", home=home, env={})
 
@@ -239,7 +253,7 @@ def test_uninstall_reports_a_provenance_cleanup_failure(
     original_unlink = package_install.fs.unlink
 
     def fail_provenance_unlink(path: Path, *, missing_ok: bool = False) -> None:
-        if path.name.endswith(".provenance.toml"):
+        if path.parent.name == ".provenance":
             raise OSError("blocked")
         original_unlink(path)
 
@@ -376,7 +390,7 @@ def test_rebuild_after_index_loss_refuses_corrupt_command_provenance(tmp_path: P
     home = tmp_path / "home"
     install_directory(source, home=home, env={})
     (home / ".agm" / "packages" / "index.toml").unlink()
-    (home / ".agm" / "packages" / "alpha" / "1.0.0.provenance.toml").write_text(
+    (home / ".agm" / "packages" / "alpha" / ".provenance" / "1.0.0.toml").write_text(
         "not valid = [", encoding="utf-8"
     )
 
@@ -647,7 +661,9 @@ def test_install_and_uninstall_refuse_store_paths_redirected_outside_the_store(
     installed = install_directory(source, home=home, env={})
     external_version = external / "1.0.0"
     installed.root.rename(external_version)
-    (store / "alpha" / "1.0.0.provenance.toml").unlink()
+    provenance = store / "alpha" / ".provenance" / "1.0.0.toml"
+    provenance.unlink()
+    provenance.parent.rmdir()
     (store / "alpha").rmdir()
     (store / "alpha").symlink_to(external, target_is_directory=True)
 

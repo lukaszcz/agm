@@ -275,7 +275,11 @@ def rebuild_activation_index(
             continue
         _validate_package_name(name_dir.name)
         for version_dir in sorted(name_dir.iterdir()):
-            if not version_dir.is_dir() or version_dir.is_symlink():
+            if (
+                not version_dir.is_dir()
+                or version_dir.is_symlink()
+                or version_dir.name.startswith(".")
+            ):
                 continue
             manifest = _load_installed_manifest(version_dir)
             if manifest.name != name_dir.name or str(manifest.version) != version_dir.name:

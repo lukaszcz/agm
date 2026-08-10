@@ -37,12 +37,13 @@ def package_provenance_path(
 ) -> Path:
     """Return the package-local sidecar path for activation provenance.
 
-    The sidecar is a sibling of the immutable installed tree, keeping mutable
-    activation history out of the payload covered by ``RECORD``.
+    The sidecar lives in its own namespace below the package name, keeping
+    mutable activation history out of the payload covered by ``RECORD`` and
+    avoiding collisions with semantic-version directory names.
     """
 
     package_path = package_store_path(name, version, home=home, env=env)
-    return package_path.parent / f"{package_path.name}.provenance.toml"
+    return package_path.parent / ".provenance" / f"{package_path.name}.toml"
 
 
 def canonical_package_provenance_path(
@@ -51,11 +52,8 @@ def canonical_package_provenance_path(
     """Return the canonical, unlinked provenance sidecar path."""
 
     logical_store_root = store_root(home=home, env=env)
-    logical_package_path = package_store_path(name, version, home=home, env=env)
-    _reject_managed_tree_symlinks(logical_package_path, logical_store_root)
     logical_candidate = package_provenance_path(name, version, home=home, env=env)
-    if logical_candidate.is_symlink():
-        raise StorePathError(f"package provenance path is a symlink: {logical_candidate}")
+    _reject_managed_tree_symlinks(logical_candidate, logical_store_root)
     return logical_candidate.resolve()
 
 

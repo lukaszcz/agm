@@ -219,7 +219,11 @@ def installed_packages(
         if not name_dir.is_dir() or name_dir.is_symlink():
             continue
         for version_dir in sorted(name_dir.iterdir()):
-            if not version_dir.is_dir() or version_dir.is_symlink():
+            if (
+                not version_dir.is_dir()
+                or version_dir.is_symlink()
+                or version_dir.name.startswith(".")
+            ):
                 continue
             try:
                 package = PackageInfo(version_dir, load_manifest(version_dir / "package.toml"))

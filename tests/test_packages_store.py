@@ -12,6 +12,7 @@ from agm.packages.store import (
     StorePathError,
     canonical_package_provenance_path,
     canonical_package_store_path,
+    package_provenance_path,
     package_store_path,
     store_root,
 )
@@ -51,10 +52,20 @@ def test_canonical_store_path_refuses_an_in_store_symlinked_tree_target(tmp_path
         canonical_package_store_path("std", semver.Version.parse("1.2.3"), home=home, env={})
 
 
+def test_provenance_paths_do_not_collide_with_valid_package_versions(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    version = semver.Version.parse("1.0.0+alpha")
+    colliding_version = semver.Version.parse("1.0.0+alpha.provenance.toml")
+
+    assert package_provenance_path("alpha", version, home=home, env={}) != package_store_path(
+        "alpha", colliding_version, home=home, env={}
+    )
+
+
 def test_canonical_provenance_path_refuses_a_symlinked_sidecar(tmp_path: Path) -> None:
     home = tmp_path / "home"
     store = home / ".agm" / "packages"
-    logical_sidecar = store / "std" / "1.2.3.provenance.toml"
+    logical_sidecar = store / "std" / ".provenance" / "1.2.3.toml"
     logical_sidecar.parent.mkdir(parents=True)
     target = store / "other-package" / "provenance.toml"
     target.parent.mkdir()

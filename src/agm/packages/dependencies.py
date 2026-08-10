@@ -6,10 +6,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import semver
+
 from agm.packages.install import PackageInstallError, installed_packages
 from agm.packages.manifest import DependencySpec, ManifestError, load_manifest
 from agm.packages.model import PackageInfo
 from agm.packages.record import RecordError, verify_record
+from agm.version import AGM_VERSION
 
 
 class DependencyError(ValueError):
@@ -44,9 +47,14 @@ def _validate_package_dependencies(package: PackageInfo, state: _CheckState) -> 
     state.checking.add(root)
     try:
         for name, requirement in package.manifest.dependencies.items():
-            # The standard library is supplied by AGM rather than the package
-            # store, and therefore has no package-store manifest to inspect.
+            # The standard library is supplied by the running AGM binary
+            # rather than the package store.
             if name == "std":
+                if requirement.version > semver.Version.parse(AGM_VERSION):
+                    raise DependencyError(
+                        f"package {package.manifest.name!r} requires AGM at least "
+                        f"{requirement.version} via std, but running AGM is {AGM_VERSION}"
+                    )
                 continue
             selected = _stored_satisfying(name, requirement, state)
             if selected is None and requirement.path is not None:

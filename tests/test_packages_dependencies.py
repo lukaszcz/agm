@@ -5,11 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import semver
 
 from agm.packages.dependencies import DependencyError, validate_dependencies
 from agm.packages.install import install_directory
 from agm.packages.manifest import distribution_manifest, load_manifest
 from agm.packages.model import PackageInfo
+from agm.version import AGM_VERSION
 
 
 def _package(root: Path, name: str, version: str, dependencies: str = "") -> PackageInfo:
@@ -72,10 +74,26 @@ def test_dependency_check_rejects_an_unsatisfied_store_requirement(tmp_path: Pat
         validate_dependencies(package, home=tmp_path / "home", env={})
 
 
-def test_dependency_check_accepts_the_bundled_standard_library(tmp_path: Path) -> None:
-    package = _package(tmp_path / "alpha", "alpha", "1.0.0", '\n[dependencies]\nstd = "0.4"\n')
+def test_dependency_check_validates_std_against_the_running_agm(tmp_path: Path) -> None:
+    package = _package(
+        tmp_path / "alpha", "alpha", "1.0.0", f'\n[dependencies]\nstd = "{AGM_VERSION}"\n'
+    )
 
     validate_dependencies(package, home=tmp_path / "home", env={})
+
+    newer_agm = semver.Version.parse(AGM_VERSION).bump_major()
+    package = _package(
+        tmp_path / "newer-alpha", "newer_alpha", "1.0.0", f'\n[dependencies]\nstd = "{newer_agm}"\n'
+    )
+
+    with pytest.raises(DependencyError, match="AGM"):
+        validate_dependencies(package, home=tmp_path / "home", env={})
+    with pytest.raises(DependencyError, match="AGM"):
+        validate_dependencies(
+            PackageInfo(package.root, distribution_manifest(package.manifest)),
+            home=tmp_path / "home",
+            env={},
+        )
 
 
 def test_dependency_check_rejects_cyclic_missing_and_mismatched_path_sources(

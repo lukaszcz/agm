@@ -5,7 +5,12 @@ CLI dispatch. A package directory has a `package.toml` manifest and a module tre
 the package; its `PackageInfo` is the source-agnostic input module-root assembly mounts for
 development directories now and installed packages later. The shipped `std` directory is a
 package whose manifest version is locked to `agm.version.AGM_VERSION`; `just install` refreshes
-its immutable store tree and makes that version active. Resource references declared by a
+its immutable store tree and makes that version active. Its active store version must exactly
+match the running binary; it is installed only from AGM's shipped directory, never editable or
+from an archive, package `std` minimum requirements reject newer AGM binaries, and the managed
+package cannot be uninstalled. Standard-library resolution mounts this selected root exclusively,
+so active package-root assembly never also mounts `std` when an override or source fallback wins.
+Resource references declared by a
 package-owned module are anchored to this package root, while loose-module resources remain
 anchored to their source directory; package discipline validates the package-relative targets.
 The versioned store layout helpers
@@ -33,9 +38,9 @@ contents and stream-verify bounded archive layout, canonical ZIP entry metadata,
 digests before a later install path extracts anything. Writers apply the same content limits before
 publication and fail closed when any source directory cannot be traversed. Archive installation stages
 under the AGM home but outside the scanned package-store root, so temporary trees cannot be mistaken
-for installed package versions. Directory installation resolves direct
-minimum-version requirements store-first, then through declared local
-path sources, copies and records immutable trees, and validates then atomically rewrites the complete
+for installed package versions. Directory installation validates a `std` minimum requirement against the running AGM binary without
+requiring an active store package; it resolves other direct minimum-version requirements store-first, then
+through declared local path sources, copies and records immutable trees, and validates then atomically rewrites the complete
 activation selection; dry-run validates the same selection from transient source manifests without
 creating a store tree; editable installs instead record a live root. Failed activation leaves copied
 trees inactive, while removal validates the remaining selection before it clears activation and
@@ -59,7 +64,7 @@ outside a source tree that another same-user writer can rename, nor prevent a wr
 after any snapshot. Concurrent source or namespace mutation is therefore unsupported. An existing
 destination must be hard-linkable within that parent for detected-race rollback; platforms without the
 required directory-relative operations fail before publication rather than using a pathname fallback.
-`agm pkg check` exposes the validation boundary without modifying or installing a package: every package module is parsed to verify literal `resource(...)` targets remain inside the package and exist, and `agm pkg create` applies the same check to its selected portable archive contents, rejecting resources removed by archive filtering before publication. It resolves requirements store-first, then through local paths, while URL sources remain deferred. `agm pkg create`
+`agm pkg check` exposes the validation boundary without modifying or installing a package: every package module is parsed to verify literal `resource(...)` targets remain inside the package and exist, and `agm pkg create` applies the same check to its selected portable archive contents, rejecting resources removed by archive filtering before publication. Both validate `std` minimum requirements against the running AGM version, then resolve other requirements store-first and through local paths while URL sources remain deferred. `agm pkg create`
 checks the portable distribution view instead, so stripped local paths cannot make an archive's requirements
 unsatisfiable. `agm exec` discovers the package
 containing its file (or its current directory for inline source), while `agm repl` discovers

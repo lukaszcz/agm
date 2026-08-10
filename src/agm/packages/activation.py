@@ -24,6 +24,7 @@ from agm.packages.store import (
     canonical_package_store_path,
     store_root,
 )
+from agm.version import AGM_VERSION
 
 
 class PackageActivationError(ValueError):
@@ -379,18 +380,23 @@ def select_package_roots(
     are resolved, so a valid development root shadows stale store state.
     """
 
-    development = tuple(development_packages)
+    development = tuple(
+        package for package in development_packages if package.manifest.name != "std"
+    )
     development_names = {package.manifest.name for package in development}
+    # ``std`` is selected exclusively by ``resolve_stdlib_root`` so an
+    # override or source-checkout fallback cannot also mount an active tree.
+    excluded_names = {*development_names, "std"}
     activated = _selected_active_packages(
         home=home,
         proj_dir=proj_dir,
         cwd=cwd,
-        excluded_names=development_names,
+        excluded_names=excluded_names,
         env=env,
     )
     selected = (
         *development,
-        *(package for package in activated if package.manifest.name not in development_names),
+        *(package for package in activated if package.manifest.name not in excluded_names),
     )
     _validate_requirements(selected)
     return selected
@@ -784,6 +790,13 @@ def _validate_requirements(packages: tuple[PackageInfo, ...]) -> None:
     selected = {package.manifest.name: package for package in packages}
     for package in packages:
         for name, requirement in package.manifest.dependencies.items():
+            if name == "std":
+                if requirement.version > semver.Version.parse(AGM_VERSION):
+                    raise PackageActivationError(
+                        f"selected package {package.manifest.name!r} requires AGM at least "
+                        f"{requirement.version} via std, but running AGM is {AGM_VERSION}"
+                    )
+                continue
             dependency = selected.get(name)
             if dependency is None:
                 raise PackageActivationError(

@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import mkdtemp
 
+import semver
+
 from agm.core import dry_run, fs
 from agm.packages.activation import (
     ActivationIndex,
@@ -39,10 +41,34 @@ from agm.packages.record import (
     write_record,
 )
 from agm.packages.store import canonical_package_store_path, store_root
+from agm.version import AGM_VERSION
 
 
 class PackageInstallError(ValueError):
     """Raised when package installation or removal cannot safely proceed."""
+
+
+def _managed_stdlib_source() -> Path:
+    """Return the shipped standard-library source managed by ``just install``."""
+    return Path(__file__).resolve().parents[3] / "stdlib"
+
+
+def _validate_managed_stdlib_install(
+    manifest: PackageManifest, *, source: Path | None, editable: bool
+) -> None:
+    """Require ``std`` to be the immutable, lockstep shipped package."""
+    if manifest.name != "std":
+        return
+    if manifest.version != semver.Version.parse(AGM_VERSION):
+        raise PackageInstallError(
+            f"managed std package version must exactly match AGM version {AGM_VERSION}"
+        )
+    if editable:
+        raise PackageInstallError("the managed std package cannot be installed editable")
+    if source is None or source.resolve() != _managed_stdlib_source().resolve():
+        raise PackageInstallError(
+            "the managed std package must be installed from AGM's shipped stdlib"
+        )
 
 
 @dataclass(slots=True)
@@ -120,6 +146,8 @@ def uninstall_package(name: str, *, home: Path, env: Mapping[str, str] | None = 
         index = load_activation_index(home=home, env=env)
     except PackageActivationError as exc:
         raise PackageInstallError(f"cannot load package activation: {exc}") from exc
+    if name == "std":
+        raise PackageInstallError("the AGM-managed std package cannot be uninstalled")
     active = index.packages.get(name)
     if active is None:
         raise PackageInstallError(f"package {name!r} is not installed")
@@ -194,6 +222,8 @@ def _install_directory(
     except (ManifestError, DisciplineError) as exc:
         raise PackageInstallError(f"cannot install package from {source}: {exc}") from exc
 
+    _validate_managed_stdlib_install(package.manifest, source=root, editable=editable)
+    _validate_minimum_agm(package.manifest)
     state.installing.add(root)
     try:
         _resolve_dependencies(package, state)
@@ -262,6 +292,8 @@ def _install_archive(archive: Path, *, state: _InstallState, shadow: bool) -> Pa
     if dry_run.enabled():
         try:
             metadata = verify_archive_discipline(archive_path)
+            _validate_managed_stdlib_install(metadata.manifest, source=None, editable=False)
+            _validate_minimum_agm(metadata.manifest)
             destination = canonical_package_store_path(
                 metadata.manifest.name, metadata.manifest.version, home=state.home, env=state.env
             )
@@ -280,11 +312,13 @@ def _install_archive(archive: Path, *, state: _InstallState, shadow: bool) -> Pa
             # extract_archive verifies and extracts through one ZipFile instance,
             # so a pathname swap cannot separate accepted data from extracted data.
             metadata = extract_archive(archive_path, staging)
+            _validate_managed_stdlib_install(metadata.manifest, source=None, editable=False)
             destination = canonical_package_store_path(
                 metadata.manifest.name, metadata.manifest.version, home=state.home, env=state.env
             )
             package = PackageInfo(staging, metadata.manifest)
             validate_package(package)
+            _validate_minimum_agm(package.manifest)
             verify_record(staging)
             if destination.exists():
                 _verify_existing_install(destination, metadata.manifest, metadata.package_hash)
@@ -333,8 +367,24 @@ def _install_archive(archive: Path, *, state: _InstallState, shadow: bool) -> Pa
         raise PackageInstallError(f"cannot install package archive {archive}: {exc}") from exc
 
 
+def _validate_minimum_agm(manifest: PackageManifest) -> None:
+    """Reject packages whose ``std`` requirement needs a newer AGM binary."""
+    requirement = manifest.dependencies.get("std")
+    if requirement is None:
+        return
+    if requirement.version > semver.Version.parse(AGM_VERSION):
+        raise PackageInstallError(
+            f"package {manifest.name!r} requires AGM at least {requirement.version} via std, "
+            f"but running AGM is {AGM_VERSION}"
+        )
+
+
 def _resolve_dependencies(package: PackageInfo, state: _InstallState) -> None:
     for name, requirement in package.manifest.dependencies.items():
+        # ``std`` is a minimum AGM-version contract, already checked before
+        # dependency resolution. It is not a package-store dependency.
+        if name == "std":
+            continue
         selected = _installed_satisfying(name, requirement, state)
         if selected is None and requirement.path is not None:
             selected = _install_directory(

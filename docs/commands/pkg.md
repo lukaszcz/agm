@@ -11,12 +11,14 @@
 
 `agm pkg check` validates the `package.toml` manifest, module-tree naming discipline, program
 references used by manifest command registrations, and literal resource targets. It also checks
-dependencies without modifying packages: a matching stored version is used first, then a declared
-local `path`; a URL with its required hash is a deferred satisfiable source and is not fetched.
+dependencies without modifying packages: a `std` requirement is checked against the running AGM
+version; a matching stored version is used first for other packages, then a declared local `path`;
+a URL with its required hash is a deferred satisfiable source and is not fetched.
 `DIR` defaults to the current directory.
 
 `agm pkg create` validates the selected portable archive contents, including literal resource
-targets, then checks the *distribution* dependencies before writing a deterministic
+targets, then checks the *distribution* dependencies, including its `std` requirement against the
+running AGM version, before writing a deterministic
 `<name>-<version>.agmpkg` archive. A resource excluded by archive filtering causes creation to fail
 rather than producing a broken package.
 `DIR` defaults to the current directory; without `-o`, the archive is written beside `DIR`. The
@@ -52,7 +54,10 @@ displaced command owners. Command precedence is persisted in a sidecar beside ea
 tree, never in the `RECORD`-covered payload, so rebuilding a lost activation index preserves it.
 
 The built-in `std` package is installed and activated with AGM itself at the same version as the
-running binary. Its managed store tree is refreshed by `just install` rather than edited directly.
+running binary. Its managed store tree is refreshed only from AGM's shipped `stdlib/` directory
+by `just install`; editable and archive installs are rejected, and `agm pkg uninstall std` always
+refuses. A package's `std` minimum-version requirement is also its minimum AGM version, so
+installation refuses a package that requires a newer AGM binary.
 
 `agm pkg uninstall` verifies the active immutable package's `RECORD`, validates the remaining
 activation selection, then clears activation before removing every recorded file. Remaining
@@ -61,4 +66,5 @@ whose resolved ancestors leave the canonical store root. For an editable package
 activation. `agm pkg list` shows every immutable installed version as `active` or `installed`,
 plus active editable packages and commands only beneath their active owner, annotating commands
 that shadow another active package; `agm pkg info` shows package design metadata, command registrations, and whether each direct requirement is active,
-unsatisfied, or missing.
+unsatisfied, or missing; `std` is reported against the running AGM version rather than the active
+package store.

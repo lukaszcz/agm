@@ -62,8 +62,9 @@ def assemble_roots(
         The cwd (for ``exec -c``) or the entry file's directory (for
         ``exec <file>``).
     stdlib_root:
-        The selected standard-library module root (e.g. ``~/.agm/stdlib``), or
-        ``None`` if the caller does not want to add one.
+        The selected standard-library module root (normally the active
+        ``<AGM home>/packages/std/<AGM version>`` tree), or ``None`` if the
+        caller does not want to add one.
     lib_root:
         The global library root (e.g. ``~/.agm/lib``), or ``None`` if not
         configured.  Applied as-is; caller supplies the default if desired.
@@ -78,10 +79,10 @@ def assemble_roots(
     cwd:
         Current working directory; used to resolve relative CLI paths.
     package_roots:
-        Mounted packages, regardless of whether their roots come from a
-        development directory or a future package store. Each package root is
-        searched like every other root while its manifest remains available
-        for package import visibility.
+        Mounted non-``std`` packages, regardless of whether their roots come
+        from a development directory or a future package store. A supplied
+        ``std`` package is ignored because ``stdlib_root`` is its exclusive
+        mounting seam.
 
     All roots are user-expanded, made absolute, and canonicalized before
     de-duplication.  Non-existent roots are dropped silently (resolution
@@ -131,6 +132,10 @@ def assemble_roots(
     # mounted, so ownership policy and resolver see the same selection.
     mounted_packages: list[PackageInfo] = []
     for package in package_roots:
+        # ``std`` is mounted only through ``stdlib_root``. This keeps an
+        # override or source-checkout fallback exclusive of active packages.
+        if package.manifest.name == "std":
+            continue
         package_root = _canonicalize(package.root)
         if package_root.exists():
             canonical_roots.add(package_root)

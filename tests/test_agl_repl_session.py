@@ -6095,35 +6095,27 @@ class TestSessionOpen:
 
 
 class TestDeferredStdlibResolution:
-    """Constructing a session without an explicit ``stdlib_root`` stays total.
+    """Constructing a session without an explicit ``stdlib_root`` stays total."""
 
-    ``resolve_stdlib_root`` can raise ``StaleStdlibError`` when the default
-    search chain finds nothing usable. Resolving it eagerly in the
-    constructor would let that raise escape before any session exists to
-    report a diagnostic through, so it is deferred to first use
-    (``_ensure_roots``) instead.
-    """
-
-    def test_construction_does_not_raise_against_a_stale_default_stdlib(
+    def test_construction_does_not_raise_against_a_version_mismatch(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import agm.config.module_roots as module_roots
-        from agm.config.module_roots import StaleStdlibError
+        from agm.config.module_roots import StdlibVersionMismatchError
 
-        def _raise_stale(*, home: Path) -> Path:
-            raise StaleStdlibError(home / ".agm" / "stdlib")
+        def _raise_version_mismatch(*, home: Path) -> Path:
+            raise StdlibVersionMismatchError("0.0.1", "0.1.0")
 
         monkeypatch.delenv("AGM_STDLIB", raising=False)
-        monkeypatch.setattr(module_roots, "resolve_stdlib_root", _raise_stale)
+        monkeypatch.setattr(module_roots, "resolve_stdlib_root", _raise_version_mismatch)
 
         # Must not raise: resolution has not happened yet.
         s = ReplSession()
 
-        # The raise, reached lazily on first use, is caught by ``open``'s own
-        # "Never raises" contract rather than propagating.
+        # The lazy failure is caught by ``open``'s own "Never raises" contract.
         diagnostics = s.open()
         assert diagnostics
-        assert "out of date" in diagnostics[0].message
+        assert "0.0.1" in diagnostics[0].message
 
     def test_default_stdlib_resolution_honors_agm_home(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -6136,18 +6128,29 @@ class TestDeferredStdlibResolution:
         ``Path.home()``, so a relocated ``AGM_HOME`` is honored here exactly
         as it is for every other AGM home lookup.
         """
-        from agm.config.module_roots import STDLIB_CONTRACT_ID
+        import semver
+
+        from agm.packages.activation import ActivationIndex, ActivePackage, write_activation_index
+        from agm.packages.record import write_record
+        from agm.version import AGM_VERSION
 
         agm_home = tmp_path / "relocated-agm"
-        stdlib_root = agm_home / "stdlib"
+        stdlib_root = agm_home / "packages" / "std" / AGM_VERSION
         std_dir = stdlib_root / "std"
         std_dir.mkdir(parents=True)
         real_stdlib = Path(__file__).resolve().parents[1] / "stdlib" / "std"
-        for name in ("core.agl", "config.agl"):
-            (std_dir / name).write_text(
-                (real_stdlib / name).read_text(encoding="utf-8"), encoding="utf-8"
-            )
-        (stdlib_root / "STDLIB_CONTRACT").write_text(STDLIB_CONTRACT_ID, encoding="utf-8")
+        for name in ("core.agl", "config.agl", "fs.agl", "fs.py", "text.agl", "text.py"):
+            source = real_stdlib / name
+            (std_dir / name).write_bytes(source.read_bytes())
+        (stdlib_root / "package.toml").write_bytes(
+            (Path(__file__).resolve().parents[1] / "stdlib" / "package.toml").read_bytes()
+        )
+        write_record(stdlib_root)
+        write_activation_index(
+            ActivationIndex({"std": ActivePackage(semver.Version.parse(AGM_VERSION))}),
+            home=tmp_path / "unused-home",
+            env={"AGM_HOME": str(agm_home)},
+        )
 
         monkeypatch.delenv("AGM_STDLIB", raising=False)
         monkeypatch.setenv("AGM_HOME", str(agm_home))

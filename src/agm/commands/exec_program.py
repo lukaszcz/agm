@@ -71,7 +71,7 @@ from agm.cli_support.exec_params import parse_param_tokens
 from agm.cli_support.exec_roots import effective_exec_roots
 from agm.config.context import ConfigContext, current_config_context
 from agm.config.general import ExecConfig, exec_config_from_merged, load_general_config
-from agm.config.module_roots import StaleStdlibError
+from agm.config.module_roots import StdlibResolutionError
 from agm.config.qualified_keys import (
     RESERVED_CONFIG_SECTION_NAMES,
     QualifiedConfigKey,
@@ -338,7 +338,7 @@ def run(
             proj_dir=ctx.proj_dir,
             package_roots=discover_development_packages(entry_path or ctx.cwd),
         )
-    except (StaleStdlibError, ValueError) as exc:
+    except (StdlibResolutionError, ValueError) as exc:
         print(f"Error: invalid module roots configuration: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 

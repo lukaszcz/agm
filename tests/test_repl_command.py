@@ -690,21 +690,20 @@ class TestReplRun:
 
         assert len(fake_console) == 1
 
-    def test_stale_stdlib_exits_1(
+    def test_stdlib_version_mismatch_exits_1(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
         fake_console: list[dict[str, object]],
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """A StaleStdlibError from resolve_stdlib_root causes exit 1 with its message."""
-        from agm.config.module_roots import StaleStdlibError
+        """A stdlib version mismatch from root resolution causes exit 1."""
+        from agm.config.module_roots import StdlibVersionMismatchError
 
         _isolated_home(monkeypatch, tmp_path)
-        stale_path = tmp_path / "stale" / "stdlib"
 
         def fake_resolve_stdlib_root(*, home: Path) -> Path:
-            raise StaleStdlibError(stale_path)
+            raise StdlibVersionMismatchError("0.0.1", "0.1.0")
 
         monkeypatch.setattr(repl_command, "resolve_stdlib_root", fake_resolve_stdlib_root)
 
@@ -714,7 +713,7 @@ class TestReplRun:
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         assert "Error:" in captured.err
-        assert str(stale_path) in captured.err
+        assert "0.0.1" in captured.err
         assert "just install" in captured.err
         assert fake_console == []
 

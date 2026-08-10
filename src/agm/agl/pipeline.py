@@ -627,7 +627,7 @@ class PipelineDriver:
             from agm.agl.modules.roots import RootSet, assemble_roots
             from agm.config.module_roots import (
                 ModuleRootsConfig,
-                StaleStdlibError,
+                StdlibResolutionError,
                 resolve_lib_root,
                 resolve_stdlib_root,
             )
@@ -635,7 +635,7 @@ class PipelineDriver:
             cwd = Path.cwd()
             try:
                 default_stdlib_root = resolve_stdlib_root(home=Path.home())
-            except StaleStdlibError as exc:
+            except StdlibResolutionError as exc:
                 return PreparedProgram(
                     entry_source,
                     entry_path,

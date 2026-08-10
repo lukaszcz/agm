@@ -26,9 +26,9 @@ just setup
 
 Install the CLI into an isolated `uv tool` environment and copy AGM config files,
 prompts, and sandbox templates into `$AGM_HOME` (or `$HOME/.agm/` by default).
-It also installs and activates the lockstep `std` package at
-`$AGM_HOME/packages/std/<version>/`, refreshes the standard-library compatibility
-mirror, and installs the AgL Micro syntax file into `$HOME/.config/micro/syntax/`:
+It also installs and activates the lockstep immutable `std` package at
+`$AGM_HOME/packages/std/<version>/` and installs the AgL Micro syntax file into
+`$HOME/.config/micro/syntax/`:
 
 ```bash
 just install
@@ -220,8 +220,8 @@ module system (`import utils/math`). Every loaded entry and library module,
 except `std/core` itself, opens `std/core` by default; `--no-stdlib` disables
 that automatic opening throughout the loaded program.
 Other imports are qualified by default and use `open import` or `using` to make names
-bare. `agm exec` searches the entry file's directory, the managed stdlib compatibility root
-(`~/.agm/stdlib`),
+bare. `agm exec` searches the entry file's directory, the selected standard library
+(the active `$AGM_HOME/packages/std/<AGM_VERSION>/` package or the source-checkout fallback),
 the global library root (`~/.agm/lib`, relocated by `AGM_HOME`), and any configured
 `[modules] roots` for imported modules.
 

@@ -132,7 +132,6 @@ def install_user_config(
     agm_config_dir = agm_home_dir(home=install_root)
     sandbox_dir = agm_config_dir / "sandbox"
     prompts_dir = agm_config_dir / "prompts"
-    stdlib_dir = agm_config_dir / "stdlib"
     micro_syntax_dir = install_root / ".config" / "micro" / "syntax"
     sandbox_dir.mkdir(parents=True, exist_ok=True)
     prompts_dir.mkdir(parents=True, exist_ok=True)
@@ -166,24 +165,10 @@ def install_user_config(
         else:
             skipped.append(prompt_destination)
 
-    # Keep the compatibility mirror managed while the current STDLIB_CONTRACT
-    # resolver still reads it. It is always force-refreshed and pruned so stale
-    # sources cannot survive the marker check.
+    # The installed stdlib is one managed, immutable store package. The
+    # package domain owns activation and its index; this installer owns its
+    # force-refresh, pruning, and destination symlink refusal.
     stdlib_source = repo_root / "stdlib"
-    _prepare_managed_destination(stdlib_dir)
-    _install_tree_files(
-        source_dir=stdlib_source,
-        destination_dir=stdlib_dir,
-        force=True,
-        installed=installed,
-        skipped=skipped,
-        pruned=pruned,
-    )
-
-    # Install the same managed tree as the active store package. The package
-    # domain owns activation and its index, while this installer retains the
-    # force-refresh, pruning, and destination symlink refusal of its managed
-    # artifact copy.
     manifest = load_manifest(stdlib_source / "package.toml")
     store_destination = canonical_package_store_path(
         manifest.name, manifest.version, home=install_root

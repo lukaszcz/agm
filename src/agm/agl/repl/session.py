@@ -264,11 +264,10 @@ class ReplSession:
         # Module roots configuration.
         # These are stored so _ensure_roots() can assemble the RootSet lazily.
         self._cwd: Path | None = cwd
-        # Left unresolved when not given explicitly: resolving it here would
-        # let a stale on-disk stdlib's ``StaleStdlibError`` (see
-        # :func:`agm.config.module_roots.resolve_stdlib_root`) escape the
-        # constructor, which must stay total -- many callers construct a
-        # session with no surrounding try/except. :meth:`_ensure_roots`
+        # Left unresolved when not given explicitly: resolving it here could
+        # let a stdlib version mismatch escape the constructor, which must
+        # stay total -- many callers construct a session with no surrounding
+        # try/except. :meth:`_ensure_roots`
         # resolves it lazily on first use instead, inside the same try/except
         # every other module-loading failure already goes through
         # (:meth:`open`, :meth:`eval_entry`).
@@ -321,9 +320,9 @@ class ReplSession:
         one explicitly, using the same AGM-home seam ``commands/repl.py`` uses
         (:func:`agm.config.context.current_config_context`) rather than a
         hardcoded ``Path.home()``, so a relocated ``AGM_HOME`` is honored the
-        same way here as everywhere else. A stale on-disk stdlib's
-        ``StaleStdlibError`` therefore surfaces from inside the caller's own
-        try/except (:meth:`open`, :meth:`eval_entry`) instead of from
+        same way here as everywhere else. A stdlib version mismatch therefore
+        surfaces from inside the caller's own try/except
+        (:meth:`open`, :meth:`eval_entry`) instead of from
         construction. The resolved path is cached back onto ``_stdlib_root``
         once found, so a later :reset -- which only clears ``_roots`` -- reuses
         it rather than re-resolving.
@@ -390,8 +389,8 @@ class ReplSession:
         carrying its diagnostics directly); a bare ``except Exception``
         beneath those two also adapts an unchecked failure reading a module
         file (a permission error, invalid UTF-8) or resolving the default
-        stdlib root (:class:`~agm.config.module_roots.StaleStdlibError`, raised
-        lazily by :meth:`_ensure_roots` the first time it runs) -- exactly as
+        stdlib root, raised lazily by :meth:`_ensure_roots` the first time it
+        runs -- exactly as
         :meth:`EntryPipeline.eval_entry` adapts the same raises for an
         ordinary entry.
         """

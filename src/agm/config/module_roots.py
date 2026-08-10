@@ -27,15 +27,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from agm.config.general import (
-    agm_home_dir,
-    agm_path_candidates,
-    config_file_candidates,
-    expand_env_root,
-)
+from agm.config.general import agm_home_dir, config_file_candidates, expand_env_root
 from agm.core.env import resolve_env
 from agm.core.toml import load_toml_file, toml_dict
 from agm.util.interp import interp_preserving
+from agm.version import AGM_VERSION
 
 
 @dataclass(frozen=True)
@@ -139,80 +135,69 @@ def resolve_lib_root(
     return agm_home_dir(home=default_home, env=env) / "lib"
 
 
-STDLIB_CONTRACT_MARKER_NAME = "STDLIB_CONTRACT"
-
-# The contract id the running code expects a selected stdlib tree to declare
-# in its top-level ``STDLIB_CONTRACT`` marker file. Bump this whenever a
-# shipped stdlib change (a builtin type, a runtime-checked field, a public
-# module surface, ...) is incompatible with an older installed tree, and update
-# ``stdlib/STDLIB_CONTRACT`` in the same change so a fresh ``just install``
-# ships a matching marker.
-STDLIB_CONTRACT_ID = "2"
+class StdlibResolutionError(RuntimeError):
+    """Raised when the selected managed standard library cannot be used."""
 
 
-class StaleStdlibError(RuntimeError):
-    """Raised when no candidate AgL standard-library root matches the current contract.
+class StdlibVersionMismatchError(StdlibResolutionError):
+    """Raised when the active store ``std`` version differs from AGM's version."""
 
-    Every default search-chain candidate (home, installation prefix, and the
-    repository checkout) either was absent or carried a missing/mismatched
-    ``STDLIB_CONTRACT`` marker, so returning one anyway would defer an opaque
-    frontend failure to program load time instead of failing fast here.
-    """
-
-    def __init__(self, stale_path: Path) -> None:
-        self.stale_path = stale_path
+    def __init__(self, installed_version: str, running_version: str) -> None:
+        self.installed_version = installed_version
+        self.running_version = running_version
         super().__init__(
-            f"AgL standard library at {stale_path} is out of date. Re-run `just install` "
-            "to refresh it."
+            f"Active std package version {installed_version} does not match running AGM version "
+            f"{running_version}. Re-run `just install` to install the matching std package."
         )
-
-
-def _stdlib_contract_matches(stdlib_root: Path) -> bool:
-    """Return whether *stdlib_root* declares the expected ``STDLIB_CONTRACT`` id."""
-    marker = stdlib_root / STDLIB_CONTRACT_MARKER_NAME
-    if not marker.is_file():
-        return False
-    return marker.read_text(encoding="utf-8").strip() == STDLIB_CONTRACT_ID
 
 
 def resolve_stdlib_root(*, home: Path, env: Mapping[str, str] | None = None) -> Path:
     """Return the selected AgL standard-library module root.
 
-    The stdlib is a normal module tree installed under ``.agm/stdlib``.  An
-    explicit ``AGM_STDLIB`` environment override wins outright (a leading ``~``
-    is expanded and a relative override is anchored to the current directory)
-    and is deliberately never marker-checked: it is the escape hatch for
-    pointing at a synthetic or in-progress tree, which tests and manual
-    debugging both rely on.
-
-    Otherwise a user-writable home stdlib wins when present (honouring
-    ``AGM_HOME``), then an installation-prefix stdlib, then the repository
-    ``stdlib/`` tree for source-checkout workflows. Every one of those
-    candidates is checked against :data:`STDLIB_CONTRACT_ID` via its
-    top-level ``STDLIB_CONTRACT`` marker file, regardless of which other
-    candidates exist; a candidate whose marker is missing or does not match
-    is skipped in favour of the next one in precedence order. If none exists
-    yet, return the home destination so diagnostics mention the path that
-    ``just install`` populates. If at least one candidate directory exists
-    but none is compatible, raise :class:`StaleStdlibError` naming the
-    highest-precedence stale path instead of silently returning it.
+    ``AGM_STDLIB`` is an unchecked escape hatch for synthetic and in-progress
+    trees. Otherwise an active immutable store ``std`` package wins only when
+    its version exactly matches the running AGM binary. Without an active
+    store package, source checkouts use the repository ``stdlib/`` tree.
     """
     override = resolve_env(env).get("AGM_STDLIB")
     if override is not None and override.strip():
         return expand_env_root(override)
-    candidates = agm_path_candidates(home=home, relative_path=Path("stdlib"), env=env)
-    repo_stdlib = Path(__file__).resolve().parents[3] / "stdlib"
-    search_order = [*reversed(candidates), repo_stdlib]
 
-    stale_path: Path | None = None
-    for candidate in search_order:
-        if not candidate.is_dir():
-            continue
-        if _stdlib_contract_matches(candidate):
-            return candidate
-        if stale_path is None:
-            stale_path = candidate
+    from agm.packages.activation import PackageActivationError, load_activation_index
+    from agm.packages.manifest import ManifestError, load_manifest
+    from agm.packages.record import RecordError, verify_record
+    from agm.packages.store import canonical_package_store_path
 
-    if stale_path is not None:
-        raise StaleStdlibError(stale_path)
-    return candidates[-1]
+    try:
+        active = load_activation_index(home=home, env=env).packages.get("std")
+    except PackageActivationError as exc:
+        raise StdlibResolutionError(f"cannot resolve active std package: {exc}") from exc
+    if active is not None:
+        if active.editable is not None:
+            raise StdlibResolutionError("the managed std package cannot be editable")
+        installed_version = str(active.version)
+        if installed_version != AGM_VERSION:
+            raise StdlibVersionMismatchError(installed_version, AGM_VERSION)
+        try:
+            store_stdlib = canonical_package_store_path("std", active.version, home=home, env=env)
+        except ValueError as exc:
+            raise StdlibResolutionError(f"cannot resolve active std package: {exc}") from exc
+        if store_stdlib.exists():
+            if not store_stdlib.is_dir():
+                raise StdlibResolutionError(
+                    f"active std package at {store_stdlib} is not a directory"
+                )
+            try:
+                manifest = load_manifest(store_stdlib / "package.toml")
+                if manifest.name != "std" or manifest.version != active.version:
+                    raise StdlibResolutionError(
+                        f"active std package at {store_stdlib} does not match its activation"
+                    )
+                verify_record(store_stdlib)
+            except (ManifestError, RecordError) as exc:
+                raise StdlibResolutionError(
+                    f"active std package integrity check failed at {store_stdlib}: {exc}"
+                ) from exc
+            return store_stdlib
+
+    return Path(__file__).resolve().parents[3] / "stdlib"

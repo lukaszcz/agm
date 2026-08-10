@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import sys
 
+import semver
+
 from agm.cli_support.args import PkgInfoArgs
 from agm.config.context import current_config_context
 from agm.packages.activation import PackageActivationError, load_activation_index
 from agm.packages.manifest import ManifestError, load_manifest
 from agm.packages.store import StorePathError, canonical_package_store_path
+from agm.version import AGM_VERSION
 
 
 def run(args: PkgInfoArgs) -> None:
@@ -53,12 +56,17 @@ def run(args: PkgInfoArgs) -> None:
             description = "" if command.description is None else f" ({command.description})"
             print(f"  {path}: {command.program}{description}")
     for name, dependency in sorted(manifest.dependencies.items()):
-        selected = index.packages.get(name)
-        if selected is None:
-            status = "missing"
-        elif selected.version < dependency.version:
-            status = f"active {selected.version} (unsatisfied)"
+        if name == "std":
+            status = f"running AGM {AGM_VERSION}"
+            if semver.Version.parse(AGM_VERSION) < dependency.version:
+                status += " (unsatisfied)"
         else:
-            kind = "editable" if selected.editable is not None else "active"
-            status = f"{kind} {selected.version}"
+            selected = index.packages.get(name)
+            if selected is None:
+                status = "missing"
+            elif selected.version < dependency.version:
+                status = f"active {selected.version} (unsatisfied)"
+            else:
+                kind = "editable" if selected.editable is not None else "active"
+                status = f"{kind} {selected.version}"
         print(f"requires {name} >= {dependency.version}: {status}")

@@ -107,6 +107,26 @@ class TestAssembleRoots:
         assert package.root in roots.roots
         assert roots.packages == (package,)
 
+    def test_std_package_root_is_not_mounted_outside_the_stdlib_seam(self, tmp_path: Path) -> None:
+        invocation_root = tmp_path / "inv"
+        invocation_root.mkdir()
+        package_root = tmp_path / "package"
+        (package_root / "std").mkdir(parents=True)
+        (package_root / "package.toml").write_text('[package]\nname = "std"\nversion = "1.0.0"\n')
+        package = PackageInfo(package_root, load_manifest(package_root / "package.toml"))
+
+        roots = assemble_roots(
+            invocation_root=invocation_root,
+            lib_root=None,
+            configured=[],
+            cli=[],
+            cwd=tmp_path,
+            package_roots=(package,),
+        )
+
+        assert package.root not in roots.roots
+        assert roots.packages == ()
+
     def test_missing_package_root_is_not_mounted(self, tmp_path: Path) -> None:
         invocation_root = tmp_path / "inv"
         invocation_root.mkdir()

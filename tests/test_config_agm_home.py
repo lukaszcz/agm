@@ -2,27 +2,30 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
+import semver
 
 from agm.config.general import agm_home_dir, agm_path_candidates
-from agm.config.module_roots import (
-    STDLIB_CONTRACT_ID,
-    STDLIB_CONTRACT_MARKER_NAME,
-    ModuleRootsConfig,
-    resolve_lib_root,
-    resolve_stdlib_root,
-)
+from agm.config.module_roots import ModuleRootsConfig, resolve_lib_root, resolve_stdlib_root
+from agm.packages.activation import ActivationIndex, ActivePackage, write_activation_index
+from agm.packages.record import write_record
+from agm.version import AGM_VERSION
 
 
-def _write_stdlib_marker(stdlib_dir: Path) -> None:
-    """Give a synthetic stdlib tree a matching ``STDLIB_CONTRACT`` marker.
-
-    Used by tests whose intent is to check override/relocation path selection,
-    not the contract compatibility check itself.
-    """
-    (stdlib_dir / STDLIB_CONTRACT_MARKER_NAME).write_text(STDLIB_CONTRACT_ID, encoding="utf-8")
+def _activate_stdlib(home: Path, version: str = AGM_VERSION) -> Path:
+    """Create and activate a store ``std`` package at *version*."""
+    root = home / "packages" / "std" / version
+    shutil.copytree(Path(__file__).resolve().parent.parent / "stdlib", root)
+    write_record(root)
+    write_activation_index(
+        ActivationIndex({"std": ActivePackage(semver.Version.parse(version))}),
+        home=home,
+        env={"AGM_HOME": str(home)},
+    )
+    return root
 
 
 class TestAgmHomeDir:
@@ -108,18 +111,18 @@ class TestResolveStdlibRootEnvOverride:
         assert result.is_absolute()
         assert result == Path.cwd() / "rel-stdlib"
 
-    def test_blank_override_ignored(self, tmp_path: Path) -> None:
+    def test_blank_override_falls_back_to_the_repository_checkout(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
-        stdlib = home / ".agm" / "stdlib"
-        stdlib.mkdir(parents=True)
-        _write_stdlib_marker(stdlib)
-        assert resolve_stdlib_root(home=home, env={"AGM_STDLIB": ""}) == stdlib
 
-    def test_agm_home_override_relocates_stdlib_candidate(self, tmp_path: Path) -> None:
+        assert resolve_stdlib_root(home=home, env={"AGM_STDLIB": ""}) == (
+            Path(__file__).resolve().parent.parent / "stdlib"
+        )
+
+    def test_agm_home_override_relocates_active_store_stdlib(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
         override = tmp_path / "custom-agm"
-        stdlib = override / "stdlib"
-        stdlib.mkdir(parents=True)
-        _write_stdlib_marker(stdlib)
+        stdlib = _activate_stdlib(override)
+
         result = resolve_stdlib_root(home=home, env={"AGM_HOME": str(override)})
-        assert result == stdlib
+
+        assert result == stdlib.resolve()

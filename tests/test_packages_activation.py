@@ -30,6 +30,7 @@ from agm.packages.activation import (
 )
 from agm.packages.manifest import load_manifest
 from agm.packages.model import PackageInfo
+from agm.version import AGM_VERSION
 
 
 def _write_package(
@@ -587,6 +588,89 @@ def test_effective_exec_roots_mounts_indexed_packages_under_agm_home(
 
     assert tuple(package.manifest.name for package in roots.packages) == ("alpha",)
     assert roots.packages[0].root == package_root.resolve()
+
+
+def test_effective_exec_roots_treats_stdlib_override_as_exclusive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An override must not also mount the active managed std package."""
+    home = tmp_path / "agm-home"
+    active_std = _write_package(home, "std", AGM_VERSION)
+    _write_package(home, "alpha", "1.0.0", '\n[dependencies]\nstd = "0.1"\n')
+    override = tmp_path / "override"
+    (override / "std").mkdir(parents=True)
+    write_activation_index(
+        ActivationIndex(
+            packages={
+                "std": ActivePackage(semver.Version.parse(AGM_VERSION)),
+                "alpha": ActivePackage(semver.Version.parse("1.0.0")),
+            }
+        ),
+        home=home,
+        env={"AGM_HOME": str(home)},
+    )
+    monkeypatch.setenv("AGM_HOME", str(home))
+    monkeypatch.setenv("AGM_STDLIB", str(override))
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+
+    roots = effective_exec_roots(
+        entry_path=None,
+        module_paths=[],
+        cwd=cwd,
+        home=tmp_path / "user-home",
+        proj_dir=None,
+    )
+
+    assert roots.stdlib_roots == {override.resolve()}
+    assert tuple(package.manifest.name for package in roots.packages) == ("alpha",)
+    assert active_std.resolve() not in roots.roots
+
+
+def test_effective_exec_roots_falls_back_when_active_std_tree_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing managed tree does not block the source-checkout fallback."""
+    home = tmp_path / "agm-home"
+    write_activation_index(
+        ActivationIndex({"std": ActivePackage(semver.Version.parse(AGM_VERSION))}),
+        home=home,
+        env={"AGM_HOME": str(home)},
+    )
+    monkeypatch.setenv("AGM_HOME", str(home))
+    monkeypatch.delenv("AGM_STDLIB", raising=False)
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+
+    roots = effective_exec_roots(
+        entry_path=None,
+        module_paths=[],
+        cwd=cwd,
+        home=tmp_path / "user-home",
+        proj_dir=None,
+    )
+
+    assert roots.stdlib_roots == {Path(__file__).resolve().parents[1] / "stdlib"}
+    assert roots.packages == ()
+
+
+def test_package_root_selection_rejects_a_std_requirement_newer_than_agm(tmp_path: Path) -> None:
+    home = tmp_path / "agm-home"
+    newer_agm = semver.Version.parse(AGM_VERSION).bump_major()
+    _write_package(home, "alpha", "1.0.0", f'\n[dependencies]\nstd = "{newer_agm}"\n')
+    write_activation_index(
+        ActivationIndex({"alpha": ActivePackage(semver.Version.parse("1.0.0"))}),
+        home=home,
+        env={"AGM_HOME": str(home)},
+    )
+
+    with pytest.raises(PackageActivationError, match="AGM"):
+        select_package_roots(
+            home=home,
+            proj_dir=None,
+            cwd=tmp_path,
+            env={"AGM_HOME": str(home)},
+        )
 
 
 def test_missing_activation_index_and_store_rebuild_to_empty(tmp_path: Path) -> None:

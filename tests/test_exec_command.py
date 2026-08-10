@@ -2861,18 +2861,17 @@ class TestExecModuleRoots:
         assert "Error:" in captured.err
         assert "module roots" in captured.err.lower()
 
-    def test_stale_stdlib_exits_1(
+    def test_stdlib_version_mismatch_exits_1(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A StaleStdlibError from resolve_stdlib_root causes exit 1 with its message."""
-        from agm.config.module_roots import StaleStdlibError
+        """A stdlib version mismatch from root resolution causes exit 1."""
+        from agm.config.module_roots import StdlibVersionMismatchError
 
         entry = tmp_path / "prog.agl"
         write_file_program(entry, "let x = 1\nx\n")
-        stale_path = tmp_path / "stale" / "stdlib"
 
         def fake_resolve_stdlib_root(*, home: Path) -> Path:
-            raise StaleStdlibError(stale_path)
+            raise StdlibVersionMismatchError("0.0.1", "0.1.0")
 
         monkeypatch.setattr(
             "agm.cli_support.exec_roots.resolve_stdlib_root", fake_resolve_stdlib_root
@@ -2883,7 +2882,7 @@ class TestExecModuleRoots:
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         assert "Error:" in captured.err
-        assert str(stale_path) in captured.err
+        assert "0.0.1" in captured.err
         assert "just install" in captured.err
 
     def test_configured_lib_root_is_resolved(

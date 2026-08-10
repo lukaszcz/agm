@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -31,6 +32,7 @@ from agm.packages.archive import ArchiveError
 from agm.packages.install import PackageInstallError
 from agm.packages.manifest import CommandSpec, DependencySpec, PackageManifest
 from agm.packages.model import PackageInfo
+from agm.version import AGM_VERSION
 
 
 def _context(tmp_path: Path) -> ConfigContext:
@@ -297,6 +299,7 @@ def test_info_command_renders_metadata_and_reports_unknown_package(
         repository="https://example.test/alpha",
         keywords=("agents", "tools"),
         dependencies={
+            "std": DependencySpec(semver.Version.parse(AGM_VERSION)),
             "bravo": DependencySpec(semver.Version.parse("1.0.0")),
             "charlie": DependencySpec(semver.Version.parse("2.0.0")),
             "delta": DependencySpec(semver.Version.parse("1.0.0")),
@@ -329,10 +332,24 @@ def test_info_command_renders_metadata_and_reports_unknown_package(
     assert "keywords: agents, tools" in output
     assert "commands:" in output
     assert "run: alpha/main::main (Run Alpha)" in output
+    assert f"requires std >= {AGM_VERSION}: running AGM {AGM_VERSION}" in output
     assert "requires bravo >= 1.0.0: missing" in output
     assert "requires charlie >= 2.0.0: active 1.0.0 (unsatisfied)" in output
     assert "requires delta >= 1.0.0: editable 1.0.0" in output
     assert "requires echo >= 1.0.0: active 1.0.0" in output
+
+    newer_agm = semver.Version.parse(AGM_VERSION).bump_major()
+    monkeypatch.setattr(
+        info_command,
+        "load_manifest",
+        lambda _: replace(manifest, dependencies={"std": DependencySpec(newer_agm)}),
+    )
+    info_command.run(PkgInfoArgs("alpha"))
+    assert (
+        f"requires std >= {newer_agm}: running AGM {AGM_VERSION} (unsatisfied)"
+        in capsys.readouterr().out
+    )
+
     no_description = PackageManifest(name="alpha", version=manifest.version)
     monkeypatch.setattr(info_command, "load_manifest", lambda _: no_description)
     info_command.run(PkgInfoArgs("alpha"))

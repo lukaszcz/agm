@@ -6,6 +6,7 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
+import semver
 
 import agm.packages.archive as package_archive
 import agm.packages.install as package_install
@@ -37,6 +38,11 @@ def _restore_dry_run() -> Generator[None, None, None]:
     dry_run.set_enabled(False)
     yield
     dry_run.set_enabled(previous)
+
+
+def _newer_agm_requirement() -> str:
+    """Return a valid minimum version no running AGM release can satisfy."""
+    return str(semver.Version.parse(AGM_VERSION).bump_major())
 
 
 def _package(root: Path, name: str, version: str, dependencies: str = "") -> Path:
@@ -79,6 +85,111 @@ def test_install_copies_package_writes_record_and_activates_it(tmp_path: Path) -
     assert verify_record(installed.root)
     active = load_activation_index(home=home, env={}).packages["alpha"]
     assert active.version == installed.manifest.version
+
+
+def test_uninstall_refuses_the_managed_standard_library(tmp_path: Path) -> None:
+    source = Path(__file__).resolve().parent.parent / "stdlib"
+    home = tmp_path / "home"
+    installed = install_directory(source, home=home, env={})
+
+    with pytest.raises(PackageInstallError, match="std"):
+        uninstall_package("std", home=home, env={})
+
+    assert installed.root.is_dir()
+    assert "std" in load_activation_index(home=home, env={}).packages
+
+
+def test_install_refuses_an_unmanaged_standard_library_source(tmp_path: Path) -> None:
+    source = _package(tmp_path / "source", "std", AGM_VERSION)
+
+    with pytest.raises(PackageInstallError, match="managed"):
+        install_directory(source, home=tmp_path / "home", env={})
+
+
+def test_install_refuses_a_standard_library_at_an_arbitrary_version(tmp_path: Path) -> None:
+    source = _package(tmp_path / "source", "std", "0.0.1")
+
+    with pytest.raises(PackageInstallError, match="AGM version"):
+        install_directory(source, home=tmp_path / "home", env={})
+
+
+def test_install_refuses_an_editable_standard_library(tmp_path: Path) -> None:
+    source = Path(__file__).resolve().parent.parent / "stdlib"
+
+    with pytest.raises(PackageInstallError, match="editable"):
+        install_directory(source, home=tmp_path / "home", env={}, editable=True)
+
+
+def test_archive_install_refuses_the_managed_standard_library(tmp_path: Path) -> None:
+    source = Path(__file__).resolve().parent.parent / "stdlib"
+    archive = tmp_path / "std.agmpkg"
+    write_archive(source, archive)
+
+    with pytest.raises(PackageInstallError, match="managed"):
+        install_archive(archive, home=tmp_path / "home", env={})
+
+
+def test_install_refuses_a_package_requiring_a_newer_agm(tmp_path: Path) -> None:
+    source = _package(
+        tmp_path / "source",
+        "alpha",
+        "1.0.0",
+        f'\n[dependencies]\nstd = "{_newer_agm_requirement()}"\n',
+    )
+    home = tmp_path / "home"
+
+    with pytest.raises(PackageInstallError, match="AGM"):
+        install_directory(source, home=home, env={})
+
+    assert not (home / ".agm" / "packages" / "alpha").exists()
+
+
+def test_install_accepts_a_package_requiring_the_running_agm_without_active_stdlib(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    source = _package(
+        tmp_path / "source",
+        "alpha",
+        "1.0.0",
+        f'\n[dependencies]\nstd = "{AGM_VERSION}"\n',
+    )
+
+    installed = install_directory(source, home=home, env={})
+
+    assert installed.manifest.name == "alpha"
+    assert load_activation_index(home=home, env={}).packages.keys() == {"alpha"}
+
+
+def test_install_archive_refuses_a_package_requiring_a_newer_agm(tmp_path: Path) -> None:
+    source = _package(
+        tmp_path / "source",
+        "alpha",
+        "1.0.0",
+        f'\n[dependencies]\nstd = "{_newer_agm_requirement()}"\n',
+    )
+    archive = tmp_path / "alpha.agmpkg"
+    write_archive(source, archive)
+
+    with pytest.raises(PackageInstallError, match="AGM"):
+        install_archive(archive, home=tmp_path / "home", env={})
+
+
+def test_dry_run_archive_install_refuses_a_package_requiring_a_newer_agm(
+    tmp_path: Path,
+) -> None:
+    source = _package(
+        tmp_path / "source",
+        "alpha",
+        "1.0.0",
+        f'\n[dependencies]\nstd = "{_newer_agm_requirement()}"\n',
+    )
+    archive = tmp_path / "alpha.agmpkg"
+    write_archive(source, archive)
+    dry_run.set_enabled(True)
+
+    with pytest.raises(PackageInstallError, match="AGM"):
+        install_archive(archive, home=tmp_path / "home", env={})
 
 
 def test_uninstall_tolerates_an_absent_legacy_provenance_sidecar(tmp_path: Path) -> None:
@@ -502,13 +613,13 @@ def test_install_and_uninstall_refuse_store_paths_redirected_outside_the_store(
     assert "alpha" in load_activation_index(home=home, env={}).packages
 
 
-def test_install_refuses_an_in_store_symlinked_managed_package_path(tmp_path: Path) -> None:
+def test_install_refuses_an_in_store_symlinked_package_path(tmp_path: Path) -> None:
     home = tmp_path / "home"
-    source = _package(tmp_path / "source", "std", "1.0.0")
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
     store = home / ".agm" / "packages"
     internal_target = store / "other-package"
     internal_target.mkdir(parents=True)
-    (store / "std").symlink_to(internal_target, target_is_directory=True)
+    (store / "alpha").symlink_to(internal_target, target_is_directory=True)
 
     with pytest.raises(PackageInstallError, match="symlink"):
         install_directory(source, home=home, env={})

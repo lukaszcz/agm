@@ -43,7 +43,7 @@ from agm.config.general import (
     save_repl_theme,
 )
 from agm.config.module_roots import (
-    StaleStdlibError,
+    StdlibResolutionError,
     load_module_roots,
     resolve_lib_root,
     resolve_stdlib_root,
@@ -126,7 +126,7 @@ def run(args: ReplArgs) -> None:
     mod_roots_cfg = load_module_roots(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
     try:
         stdlib_root = resolve_stdlib_root(home=ctx.home)
-    except StaleStdlibError as exc:
+    except StdlibResolutionError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
     lib_root = resolve_lib_root(mod_roots_cfg, home=ctx.home)

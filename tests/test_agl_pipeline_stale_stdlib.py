@@ -1,13 +1,9 @@
-"""Regression tests for the default (``roots=None``) stdlib-resolution path.
+"""Regression tests for default stdlib version-mismatch diagnostics.
 
-``PipelineDriver.prepare_program``/``prepare_parsed_entry`` are documented as
-non-raising: every load, override, or scope failure must be captured into
-``PreparedProgram.diagnostics`` rather than raised.  When no explicit
-``roots`` is supplied, the pipeline resolves default module roots itself via
-``resolve_stdlib_root``, which can raise ``StaleStdlibError`` for a stdlib
-tree whose ``STDLIB_CONTRACT`` marker is missing or mismatched.  That raise
-happened outside every ``try`` block, breaking the non-raising contract for
-this one failure mode; these tests guard against a regression.
+``PipelineDriver.prepare_program``/``prepare_parsed_entry`` are non-raising:
+every load, override, or scope failure becomes a ``PreparedProgram``
+diagnostic. A mismatched active store ``std`` package must follow that same
+contract rather than escaping from default root resolution.
 """
 
 from __future__ import annotations
@@ -18,59 +14,60 @@ import pytest
 
 import agm.config.module_roots as module_roots
 from agm.agl.pipeline import PipelineDriver
-from agm.config.module_roots import StaleStdlibError
+from agm.config.module_roots import StdlibResolutionError, StdlibVersionMismatchError
 
 
-def _raise_stale(*, home: Path) -> Path:
-    raise StaleStdlibError(home / ".agm" / "stdlib")
+def _raise_version_mismatch(*, home: Path) -> Path:
+    raise StdlibVersionMismatchError("0.0.1", "0.1.0")
 
 
-class TestPrepareProgramDefaultRootsStaleStdlib:
-    def test_stale_stdlib_is_captured_as_a_diagnostic_not_raised(
+class TestPrepareProgramDefaultRootsVersionMismatch:
+    def test_version_mismatch_is_captured_as_a_diagnostic_not_raised(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """``prepare_program(source)`` with ``roots=None`` must not raise."""
-        monkeypatch.setattr(module_roots, "resolve_stdlib_root", _raise_stale)
+        monkeypatch.setattr(module_roots, "resolve_stdlib_root", _raise_version_mismatch)
 
         prepared = PipelineDriver.prepare_program("program def main() -> unit = ()")
 
         assert prepared.resolved is None
         assert prepared.diagnostics
-        assert "out of date" in prepared.diagnostics[0].message
+        assert "0.0.1" in prepared.diagnostics[0].message
 
-    def test_stale_stdlib_diagnostic_surfaces_from_discover_params(
+    def test_activation_resolution_error_is_captured_as_a_diagnostic_not_raised(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``discover_params`` on a stale-stdlib ``PreparedProgram`` reports why.
+        def raise_resolution_error(*, home: Path) -> Path:
+            raise StdlibResolutionError("corrupt active std package")
 
-        Params genuinely cannot be discovered without a usable stdlib (type
-        checking depends on it), so the empty result must carry the
-        diagnostic explaining the failure rather than looking identical to a
-        clean, param-less program.
-        """
-        monkeypatch.setattr(module_roots, "resolve_stdlib_root", _raise_stale)
+        monkeypatch.setattr(module_roots, "resolve_stdlib_root", raise_resolution_error)
+
+        prepared = PipelineDriver.prepare_program("program def main() -> unit = ()")
+
+        assert prepared.resolved is None
+        assert prepared.diagnostics
+        assert "corrupt active std package" in prepared.diagnostics[0].message
+
+    def test_version_mismatch_diagnostic_surfaces_from_discover_params(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``discover_params`` reports why its default stdlib could not load."""
+        monkeypatch.setattr(module_roots, "resolve_stdlib_root", _raise_version_mismatch)
 
         prepared = PipelineDriver.prepare_program("param x: int\nprogram def main() -> unit = ()")
         discovery = PipelineDriver().discover_params(prepared)
 
         assert discovery.params == ()
         assert discovery.diagnostics
-        assert "out of date" in discovery.diagnostics[0].message
+        assert "0.0.1" in discovery.diagnostics[0].message
 
 
-class TestDiscoverParamsFromSourceStaleStdlib:
+class TestDiscoverParamsFromSourceVersionMismatch:
     def test_help_param_discovery_degrades_to_empty_without_crashing(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The ``--help``/completion path still degrades gracefully, not by luck.
-
-        Before the fix, ``discover_params_from_source``'s broad
-        ``except (Exception, SystemExit)`` happened to swallow the raised
-        ``StaleStdlibError`` too; now the underlying pipeline call already
-        returns cleanly, so this path no longer depends on catching a raise
-        that was never supposed to happen.
-        """
-        monkeypatch.setattr(module_roots, "resolve_stdlib_root", _raise_stale)
+        """The ``--help``/completion path degrades gracefully on a mismatch."""
+        monkeypatch.setattr(module_roots, "resolve_stdlib_root", _raise_version_mismatch)
         from agm.cli_support.exec_params import discover_params_from_source
 
         params = discover_params_from_source("param x: int\nprogram def main() -> unit = ()")

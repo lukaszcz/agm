@@ -1138,6 +1138,11 @@ def test_archive_readers_enforce_explicit_entry_and_size_limits(
         read_archive_metadata(archive_path)
 
     monkeypatch.setattr(package_archive, "MAX_ARCHIVE_ENTRIES", 10_000)
+    monkeypatch.setattr(package_archive, "MAX_ARCHIVE_CENTRAL_DIRECTORY_SIZE", 1)
+    with pytest.raises(ArchiveError, match="central directory"):
+        read_archive_metadata(archive_path)
+
+    monkeypatch.setattr(package_archive, "MAX_ARCHIVE_CENTRAL_DIRECTORY_SIZE", 16 * 1024 * 1024)
     monkeypatch.setattr(package_archive, "MAX_ARCHIVE_ENTRY_SIZE", 1)
     with pytest.raises(ArchiveError, match="size"):
         verify_archive(archive_path)

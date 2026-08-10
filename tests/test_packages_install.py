@@ -1186,6 +1186,46 @@ def test_failed_activation_restores_existing_package_provenance(
     assert provenance.read_bytes() == original
 
 
+def test_active_editable_manifest_errors_are_install_errors(
+    tmp_path: Path,
+) -> None:
+    editable = tmp_path / "editable"
+    editable.mkdir()
+    (editable / "package.toml").write_text("invalid", encoding="utf-8")
+    state = package_install._InstallState(
+        home=tmp_path / "home",
+        env={},
+        index=ActivationIndex(
+            {"alpha": ActivePackage(semver.Version.parse("1.0.0"), editable=editable)}, {}
+        ),
+    )
+
+    with pytest.raises(PackageInstallError, match="active editable"):
+        package_install._installed_satisfying(
+            "alpha", package_install.DependencySpec(semver.Version.parse("1.0.0")), state
+        )
+
+
+def test_provenance_snapshot_and_restore_wrap_io_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    index = ActivationIndex({"alpha": ActivePackage(semver.Version.parse("1.0.0"))}, {})
+    provenance = tmp_path / "home" / ".agm" / "packages" / "alpha" / ".provenance" / "1.0.0.toml"
+    provenance.parent.mkdir(parents=True)
+    provenance.write_text("original", encoding="utf-8")
+    monkeypatch.setattr(Path, "read_bytes", lambda _: (_ for _ in ()).throw(OSError("broken")))
+
+    with pytest.raises(PackageActivationError, match="snapshot"):
+        package_install._snapshot_package_provenance(index, home=tmp_path / "home", env={})
+
+    path = tmp_path / "provenance.toml"
+    monkeypatch.setattr(
+        Path, "unlink", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("broken"))
+    )
+    with pytest.raises(PackageActivationError, match="restore"):
+        package_install._restore_package_provenance({path: None})
+
+
 def test_fetch_and_activation_failures_become_package_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

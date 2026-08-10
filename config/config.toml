@@ -28,7 +28,8 @@ runner = "agm run pi -p '@%{PROMPT_FILE}'"
 # [repl]
 # theme = "auto"    # syntax-highlighting theme: "dark", "light", or "auto" (detect from $COLORFGBG)
 
-# [packages] — project-local pins for installed package versions.
+# [packages] — pins for installed package versions. In this home-level template,
+# uncommented pins apply globally; project or workspace config can override them.
 #
 # review_tools = "0.2.0"
 

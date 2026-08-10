@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import TypeVar
 
-from agm.agl.modules.ids import ModuleId
+from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.parser import AglSyntaxError, parse_program
 from agm.agl.scope import BuiltinKind
 from agm.agl.scope.reexports import ReexportCycleError, converge_reexports
@@ -154,11 +154,14 @@ def _resource_exports(programs: Mapping[ModuleId, Program]) -> dict[ModuleId, _R
         for module_id, module_declarations in declarations.items():
             module_exports = exports[module_id]
             for declaration in module_declarations:
-                target = _resource_export_target(declaration.module_path, exports)
-                for path, kind in _select_resource_paths(declaration, target).items():
-                    if module_exports.get(path) != kind:
-                        module_exports[path] = kind
-                        changed = True
+                targets = _resource_export_targets(
+                    declaration.module_path, wildcard=declaration.wildcard, exports=exports
+                )
+                for _, target in targets:
+                    for path, kind in _select_resource_paths(declaration, target).items():
+                        if module_exports.get(path) != kind:
+                            module_exports[path] = kind
+                            changed = True
         return changed
 
     try:
@@ -168,12 +171,22 @@ def _resource_exports(programs: Mapping[ModuleId, Program]) -> dict[ModuleId, _R
     return exports
 
 
-def _resource_export_target(
-    module_path: tuple[str, ...], exports: Mapping[ModuleId, _ResourcePaths]
-) -> Mapping[tuple[str, ...], BuiltinKind]:
-    if module_path == ("std", "core"):
-        return _RESOURCE_BUILTINS
-    return exports.get(ModuleId(module_path), {})
+def _resource_export_targets(
+    module_path: tuple[str, ...],
+    *,
+    wildcard: bool,
+    exports: Mapping[ModuleId, _ResourcePaths],
+) -> tuple[tuple[ModuleId, Mapping[tuple[str, ...], BuiltinKind]], ...]:
+    """Return concrete resource-bearing modules matched by an import or export."""
+    known = {**exports, STD_CORE_ID: _RESOURCE_BUILTINS}
+    if not wildcard:
+        module_id = ModuleId(module_path)
+        return ((module_id, known.get(module_id, {})),)
+    return tuple(
+        (module_id, paths)
+        for module_id, paths in known.items()
+        if module_id.segments[: len(module_path)] == module_path
+    )
 
 
 def _select_resource_paths(
@@ -216,25 +229,26 @@ def _resource_imports(
     for declaration in static_items(program.body.items):
         if not isinstance(declaration, ImportDecl):
             continue
-        target = _resource_export_target(declaration.module_path, exports)
-        prefix = tuple(segment.name for segment in declaration.scope_path)
-        selected = _select_resource_paths(declaration, target)
-        # A scoped import limits bare reach but leaves its module route global.
-        route_paths = {path[len(prefix) :]: kind for path, kind in selected.items()}
-        routes = (
-            ((declaration.alias,),)
-            if declaration.alias is not None
-            else tuple(
-                declaration.module_path[index:] for index in range(len(declaration.module_path))
-            )
+        targets = _resource_export_targets(
+            declaration.module_path, wildcard=declaration.wildcard, exports=exports
         )
-        for route in routes:
-            for path, kind in route_paths.items():
-                paths[(*route, *path)] = kind
-        if declaration.is_open or declaration.mode is ImportMode.USING:
-            paths.update(
-                {path: kind for path, kind in selected.items() if len(path) == len(prefix) + 1}
+        prefix = tuple(segment.name for segment in declaration.scope_path)
+        for module_id, target in targets:
+            selected = _select_resource_paths(declaration, target)
+            # A scoped import limits bare reach but leaves its module route global.
+            route_paths = {path[len(prefix) :]: kind for path, kind in selected.items()}
+            routes = (
+                ((declaration.alias,),)
+                if declaration.alias is not None
+                else tuple(module_id.segments[index:] for index in range(len(module_id.segments)))
             )
+            for route in routes:
+                for path, kind in route_paths.items():
+                    paths[(*route, *path)] = kind
+            if declaration.is_open or declaration.mode is ImportMode.USING:
+                paths.update(
+                    {path: kind for path, kind in selected.items() if len(path) == len(prefix) + 1}
+                )
 
     for function in static_function_items(program.body.items):
         if not function.scope_path:

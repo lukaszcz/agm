@@ -42,7 +42,12 @@ def _context(tmp_path: Path) -> ConfigContext:
 def _package(tmp_path: Path, name: str = "alpha") -> PackageInfo:
     root = tmp_path / name
     root.mkdir()
-    return PackageInfo(root, PackageManifest(name=name, version=semver.Version.parse("1.0.0")))
+    manifest = PackageManifest(name=name, version=semver.Version.parse("1.0.0"))
+    (root / "package.toml").write_text(
+        f'[package]\nname = "{manifest.name}"\nversion = "{manifest.version}"\n',
+        encoding="utf-8",
+    )
+    return PackageInfo(root, manifest)
 
 
 def test_create_command_validates_and_writes_the_default_archive_beside_its_package(
@@ -202,7 +207,7 @@ def test_list_command_prints_commands_only_below_their_active_or_editable_owner(
     index = ActivationIndex(
         {
             "alpha": ActivePackage(alpha.manifest.version),
-            "bravo": ActivePackage(bravo.manifest.version, editable=bravo.root),
+            "bravo": ActivePackage(semver.Version.parse("2.0.0"), editable=bravo.root),
         },
         {
             "launch": CommandRegistration("alpha", "alpha/main::main"),
@@ -245,6 +250,33 @@ def test_list_command_reports_index_or_store_errors(
         )
     with pytest.raises(SystemExit):
         list_command.run(PkgListArgs())
+
+
+def test_info_command_uses_live_editable_dependency_versions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    alpha = _package(tmp_path, "alpha")
+    bravo = _package(tmp_path, "bravo")
+    (alpha.root / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
+        '[dependencies]\nbravo = "1"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(info_command, "current_config_context", lambda: _context(tmp_path))
+    monkeypatch.setattr(
+        info_command,
+        "load_activation_index",
+        lambda **_: ActivationIndex(
+            {
+                "alpha": ActivePackage(alpha.manifest.version, editable=alpha.root),
+                "bravo": ActivePackage(semver.Version.parse("2.0.0"), editable=bravo.root),
+            }
+        ),
+    )
+
+    info_command.run(PkgInfoArgs("alpha"))
+
+    assert "requires bravo >= 1.0.0: editable 1.0.0" in capsys.readouterr().out
 
 
 def test_info_command_rejects_immutable_store_escapes_and_identity_mismatches(

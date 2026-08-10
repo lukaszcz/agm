@@ -9,10 +9,12 @@ from agm.config.context import current_config_context
 from agm.packages.activation import (
     CommandShadow,
     PackageActivationError,
+    active_package_version,
     command_shadow_diagnostics,
     load_activation_index,
 )
 from agm.packages.install import PackageInstallError, installed_packages
+from agm.packages.manifest import ManifestError
 
 
 def run(args: PkgListArgs) -> None:
@@ -28,7 +30,12 @@ def run(args: PkgListArgs) -> None:
     try:
         packages = installed_packages(home=context.home)
         shadows = command_shadow_diagnostics(index, home=context.home)
-    except (PackageActivationError, PackageInstallError) as exc:
+        editable_versions = {
+            name: active_package_version(active)
+            for name, active in index.packages.items()
+            if active.editable is not None
+        }
+    except (ManifestError, PackageActivationError, PackageInstallError) as exc:
         print(f"pkg list: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
     active_versions = {
@@ -48,7 +55,7 @@ def run(args: PkgListArgs) -> None:
             )
     for name, active in sorted(index.packages.items()):
         if active.editable is not None:
-            print(f"{name} {active.version} editable")
+            print(f"{name} {editable_versions[name]} editable")
             _print_package_commands(commands_by_package.get(name, []), shadows.get(name, ()))
 
 

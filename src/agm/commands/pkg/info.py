@@ -8,7 +8,11 @@ import semver
 
 from agm.cli_support.args import PkgInfoArgs
 from agm.config.context import current_config_context
-from agm.packages.activation import PackageActivationError, load_activation_index
+from agm.packages.activation import (
+    PackageActivationError,
+    active_package_version,
+    load_activation_index,
+)
 from agm.packages.manifest import ManifestError, load_manifest
 from agm.packages.store import StorePathError, canonical_package_store_path
 from agm.version import AGM_VERSION
@@ -36,6 +40,9 @@ def run(args: PkgInfoArgs) -> None:
             raise PackageActivationError(
                 f"active package {args.name!r} has a mismatched installed version"
             )
+        active_versions = {
+            name: active_package_version(selected) for name, selected in index.packages.items()
+        }
     except (ManifestError, PackageActivationError, StorePathError) as exc:
         print(f"pkg info: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
@@ -64,9 +71,9 @@ def run(args: PkgInfoArgs) -> None:
             selected = index.packages.get(name)
             if selected is None:
                 status = "missing"
-            elif selected.version < dependency.version:
-                status = f"active {selected.version} (unsatisfied)"
+            elif active_versions[name] < dependency.version:
+                status = f"active {active_versions[name]} (unsatisfied)"
             else:
                 kind = "editable" if selected.editable is not None else "active"
-                status = f"{kind} {selected.version}"
+                status = f"{kind} {active_versions[name]}"
         print(f"requires {name} >= {dependency.version}: {status}")

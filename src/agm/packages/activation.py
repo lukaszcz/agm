@@ -50,6 +50,14 @@ class ActivePackage:
             object.__setattr__(self, "editable", self.editable.resolve())
 
 
+def active_package_version(active: ActivePackage) -> semver.Version:
+    """Return an active package's current version from its immutable or editable source."""
+
+    if active.editable is None:
+        return active.version
+    return load_manifest(active.editable / "package.toml").version
+
+
 @dataclass(frozen=True, slots=True)
 class CommandRegistration:
     """One installed package command recorded in the activation index."""

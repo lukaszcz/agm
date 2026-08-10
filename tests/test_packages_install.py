@@ -482,6 +482,33 @@ def test_uninstall_reports_a_provenance_cleanup_failure(
     assert not (home / ".agm" / "packages" / "alpha" / ".uninstalling").exists()
 
 
+def test_uninstall_retries_when_interrupted_before_activation_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    home = tmp_path / "home"
+    installed = install_directory(source, home=home, env={})
+    original_commit = package_install._commit_activation
+
+    def interrupt_commit(*args: object, **kwargs: object) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(package_install, "_commit_activation", interrupt_commit)
+    with pytest.raises(KeyboardInterrupt):
+        uninstall_package("alpha", home=home, env={})
+
+    tombstone = installed.root.parent / ".uninstalling"
+    assert tombstone.is_dir()
+    assert not installed.root.exists()
+    assert "alpha" in load_activation_index(home=home, env={}).packages
+
+    monkeypatch.setattr(package_install, "_commit_activation", original_commit)
+    uninstall_package("alpha", home=home, env={})
+
+    assert not tombstone.exists()
+    assert "alpha" not in load_activation_index(home=home, env={}).packages
+
+
 def test_partial_uninstall_cleanup_is_hidden_and_retryable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

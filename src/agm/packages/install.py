@@ -275,8 +275,18 @@ def _uninstall_package(name: str, *, home: Path, env: Mapping[str, str] | None =
     if active.editable is None:
         try:
             root = canonical_package_store_path(name, active.version, home=home, env=env)
-            entries = verify_record(root)
-        except (RecordError, ValueError) as exc:
+            if not root.exists() and tombstone.exists():
+                entries = verify_record(tombstone)
+                manifest = load_manifest(tombstone / "package.toml")
+                if canonical_package_identity(manifest.name, manifest.version) != (
+                    name,
+                    str(active.version),
+                ):
+                    raise RecordError("uninstall tombstone identity does not match activation")
+                tombstone.replace(root)
+            else:
+                entries = verify_record(root)
+        except (ManifestError, OSError, RecordError, ValueError) as exc:
             raise PackageInstallError(
                 f"package integrity check failed for {name!r}: {exc}"
             ) from exc

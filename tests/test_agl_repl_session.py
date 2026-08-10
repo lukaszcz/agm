@@ -558,6 +558,19 @@ class TestPersistence:
         assert later.value == IntValue(55)
         assert s.type_of("fib") == "int -> int"
 
+    def test_partial_promotion_tracks_lazy_initializers_by_identity(self) -> None:
+        session = ReplSession()
+
+        failed = session.eval_entry(
+            "let broken: decimal = 1 / 0\nlet later = 7\nparam p: int = later"
+        )
+
+        assert not failed.ok
+        bindings = {name: value for name, _type, value in session.bindings()}
+        assert bindings == {"later": IntValue(7), "p": IntValue(7)}
+        assert session.eval_entry("later + p").value == IntValue(14)
+        assert not session.eval_entry("broken").ok
+
     def test_failed_recursive_candidate_entry_promotes_nothing(self) -> None:
         s = ReplSession()
         assert s.eval_entry("let stable = 1").ok

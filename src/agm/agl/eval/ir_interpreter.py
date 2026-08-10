@@ -446,6 +446,12 @@ class IrInterpreter:
         self._frames: list[Frame] = [base_frame if base_frame is not None else {}]
         self.initializer_values: list[Value] = []
         self.module_initializer_values: dict[ModuleId, list[Value]] = {}
+        self.module_completed_initializer_indices: dict[ModuleId, set[int]] = {}
+        self._initializer_indices = {
+            id(initializer): index
+            for module in program.modules.values()
+            for index, initializer in enumerate(module.initializers)
+        }
         self.entry_param_symbols_installed: set[SymbolId] = set()
         self._static_bindings: dict[SymbolId, tuple[ModuleId, IrExpr]] = {
             symbol: (module.module_id, initializer)
@@ -759,6 +765,9 @@ class IrInterpreter:
                             continue
                         value = self._eval(closure_node)
                         self._frames[0][sym] = value
+                        self.module_completed_initializer_indices.setdefault(
+                            module.module_id, set()
+                        ).add(self._initializer_indices[id(node)])
                     case _:
                         continue
 
@@ -1024,6 +1033,9 @@ class IrInterpreter:
             raise
         self.initializer_values.append(value)
         self.module_initializer_values.setdefault(module_id, []).append(value)
+        self.module_completed_initializer_indices.setdefault(module_id, set()).add(
+            self._initializer_indices[id(node)]
+        )
 
     def _install_params(self) -> None:
         """Install resolved module parameters before evaluating initializers."""

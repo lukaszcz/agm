@@ -253,7 +253,7 @@ def test_repl_promotion_excludes_uninstalled_params_before_dependency_closure() 
         declaration_dependencies={},
     )
 
-    assert plan.completed_declaration_ids(0, set()) == frozenset()
+    assert plan.completed_declaration_ids(set(), set()) == frozenset()
 
 
 def test_lower_repl_trailing_binder_has_no_expression_marker() -> None:

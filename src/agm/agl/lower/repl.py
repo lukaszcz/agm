@@ -121,7 +121,7 @@ class ReplPromotionPlan:
 
     def completed_declaration_ids(
         self,
-        completed_initializer_count: int,
+        completed_initializer_indices: Collection[int],
         installed_param_symbols: Collection[SymbolId],
     ) -> frozenset[int]:
         """Return complete declarations, including only installed params.
@@ -130,21 +130,27 @@ class ReplPromotionPlan:
         Parameters are installed by a pre-pass rather than an initializer, so
         their source position cannot establish completion.
         """
-        assert 0 <= completed_initializer_count <= len(self.initializers)
+        completed_indices = set(completed_initializer_indices)
+        assert all(0 <= index < len(self.initializers) for index in completed_indices)
         completed: set[int] = set()
-        for origin in self.initializers[:completed_initializer_count]:
-            completed.update(self.source_declaration_ids[origin.source_index])
-        source_frontier = next(
+        for index in sorted(completed_indices):
+            completed.update(self.source_declaration_ids[self.initializers[index].source_index])
+        source_frontier = min(
             (
                 origin.source_index
-                for origin in self.initializers[completed_initializer_count:]
-                if not origin.is_function
+                for index, origin in enumerate(self.initializers)
+                if index not in completed_indices and not origin.is_function
             ),
-            len(self.source_declaration_ids),
+            default=len(self.source_declaration_ids),
         )
         for declaration_ids in self.source_declaration_ids[:source_frontier]:
             completed.update(declaration_ids)
 
+        completed.update(
+            origin.declaration_id
+            for origin in self.params
+            if origin.symbol in installed_param_symbols
+        )
         completed.difference_update(
             origin.declaration_id
             for origin in self.params

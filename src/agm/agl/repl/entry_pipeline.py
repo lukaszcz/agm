@@ -774,7 +774,9 @@ class EntryPipeline:
             trace.run_end(ok=False)
             self._persist_interpreter_settings(interp, trace)
             promoted = lowered.promotion_plan.completed_declaration_ids(
-                len(interp.module_initializer_values.get(lowered.program.entry_module, ())),
+                interp.module_completed_initializer_indices.get(
+                    lowered.program.entry_module, set()
+                ),
                 interp.entry_param_symbols_installed,
             )
             installed = promote(partial=True, promoted_declaration_ids=promoted)
@@ -818,7 +820,7 @@ class EntryPipeline:
         promote(
             partial=False,
             promoted_declaration_ids=lowered.promotion_plan.completed_declaration_ids(
-                len(lowered.program.modules[lowered.program.entry_module].initializers),
+                range(len(lowered.program.modules[lowered.program.entry_module].initializers)),
                 interp.entry_param_symbols_installed,
             ),
         )

@@ -155,6 +155,20 @@ class TestPackageDiscipline:
         with pytest.raises(DisciplineError, match="escapes"):
             validate_package(package)
 
+    def test_rejects_missing_resource_through_a_scoped_using_alias(self, tmp_path: Path) -> None:
+        package = _custom_package(tmp_path)
+        (package.module_root / "main.agl").write_text(
+            "scope Assets\n"
+            "import std/core using resource as asset, resource-dir as assets\n"
+            "let root = assets()\n"
+            'let prompt = asset("prompts/missing.md")\n'
+            "end Assets\n"
+            "program def main() -> unit = ()\n"
+        )
+
+        with pytest.raises(DisciplineError):
+            validate_package(package)
+
     def test_rejects_invalid_utf8_referenced_source_fixture(self) -> None:
         with pytest.raises(DisciplineError):
             validate_package(_package("invalid_utf8_source"))

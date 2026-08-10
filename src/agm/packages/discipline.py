@@ -12,8 +12,12 @@ from agm.agl.scope import BuiltinKind
 from agm.agl.syntax.nodes import (
     Call,
     ExportDecl,
+    FuncDef,
     ImportDecl,
+    LetDecl,
+    ParamDecl,
     Program,
+    VarDecl,
     VarRef,
     static_function_items,
     static_items,
@@ -202,6 +206,7 @@ def _resource_imports(
         if not isinstance(declaration, ImportDecl):
             continue
         target = _resource_export_target(declaration.module_path, exports)
+        prefix = tuple(segment.name for segment in declaration.scope_path)
         selected = _select_resource_paths(declaration, target)
         routes = (
             ((declaration.alias,),)
@@ -214,7 +219,9 @@ def _resource_imports(
             for path, kind in selected.items():
                 paths[(*route, *path)] = kind
         if declaration.is_open or declaration.mode is ImportMode.USING:
-            paths.update({path: kind for path, kind in selected.items() if len(path) == 1})
+            paths.update(
+                {path: kind for path, kind in selected.items() if len(path) == len(prefix) + 1}
+            )
 
     for function in static_function_items(program.body.items):
         if not function.scope_path:
@@ -229,23 +236,31 @@ def _resource_calls(
 
     calls: list[tuple[Call, bool]] = []
 
-    def collect_resource_call(node: object) -> None:
-        if isinstance(node, Call) and isinstance(node.callee, VarRef):
-            callee_path: tuple[str, ...]
-            if node.callee.qualifier is None:
-                callee_path = (node.callee.name,)
-            else:
-                route = tuple(
-                    part
-                    for segment in node.callee.qualifier.segments
-                    for part in segment.name.split("/")
-                )
-                callee_path = (*route, node.callee.name)
-            kind = paths.get(callee_path)
-            if kind in {BuiltinKind.RESOURCE, BuiltinKind.RESOURCE_DIR}:
-                calls.append((node, kind is BuiltinKind.RESOURCE_DIR))
+    def collect_resource_call(node: object, scope_path: tuple[str, ...]) -> None:
+        if not isinstance(node, Call) or not isinstance(node.callee, VarRef):
+            return
+        route = (
+            ()
+            if node.callee.qualifier is None
+            else tuple(
+                part
+                for segment in node.callee.qualifier.segments
+                for part in segment.name.split("/")
+            )
+        )
+        callee_paths = ((*route, *scope_path, node.callee.name), (*route, node.callee.name))
+        kind = next((paths.get(path) for path in callee_paths if paths.get(path) is not None), None)
+        if kind in {BuiltinKind.RESOURCE, BuiltinKind.RESOURCE_DIR}:
+            calls.append((node, kind is BuiltinKind.RESOURCE_DIR))
 
-    walk(program, collect_resource_call)
+    scoped_items = (FuncDef, LetDecl, ParamDecl, VarDecl)
+    for item in static_items(program.body.items):
+        scope_path = (
+            tuple(segment.name for segment in item.scope_path)
+            if isinstance(item, scoped_items)
+            else ()
+        )
+        walk(item, lambda node: collect_resource_call(node, scope_path))
     return calls
 
 

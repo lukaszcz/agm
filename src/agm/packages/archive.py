@@ -47,6 +47,7 @@ _DIR_FD_PUBLICATION_OPERATIONS = (os.open, os.rename, os.unlink, os.link)
 # These limits apply before decompression and while reading, so untrusted archives
 # cannot make metadata inspection or verification consume unbounded resources.
 MAX_ARCHIVE_ENTRIES = 10_000
+MAX_ARCHIVE_CENTRAL_DIRECTORY_SIZE = 16 * 1024 * 1024
 MAX_ARCHIVE_ENTRY_SIZE = 64 * 1024 * 1024
 MAX_ARCHIVE_TOTAL_SIZE = 512 * 1024 * 1024
 
@@ -417,6 +418,7 @@ def _read_archive(archive_path: Path, operation: Callable[[zipfile.ZipFile], T])
     """Run an archive read operation while presenting ZIP failures as domain errors."""
 
     try:
+        _validate_central_directory_limits(archive_path)
         with zipfile.ZipFile(archive_path) as archive:
             if archive.comment:
                 raise ArchiveError("package archive has noncanonical ZIP metadata")
@@ -435,6 +437,31 @@ def _read_archive(archive_path: Path, operation: Callable[[zipfile.ZipFile], T])
         zlib.error,
     ) as exc:
         raise ArchiveError(f"cannot read package archive {archive_path}: {exc}") from exc
+
+
+def _validate_central_directory_limits(archive_path: Path) -> None:
+    """Reject oversized ZIP directories before :mod:`zipfile` reads them into memory."""
+
+    with archive_path.open("rb") as archive:
+        archive.seek(0, os.SEEK_END)
+        file_size = archive.tell()
+        tail_size = min(file_size, 65_557)
+        archive.seek(-tail_size, os.SEEK_END)
+        tail = archive.read(tail_size)
+    signature = b"PK\x05\x06"
+    search_end = len(tail)
+    while (offset := tail.rfind(signature, 0, search_end)) >= 0:
+        if offset + 22 <= len(tail):
+            entries = int.from_bytes(tail[offset + 10 : offset + 12], "little")
+            directory_size = int.from_bytes(tail[offset + 12 : offset + 16], "little")
+            comment_size = int.from_bytes(tail[offset + 20 : offset + 22], "little")
+            if offset + 22 + comment_size == len(tail):
+                if entries == 0xFFFF or entries > MAX_ARCHIVE_ENTRIES:
+                    raise ArchiveError("package archive exceeds the entries limit")
+                if directory_size > MAX_ARCHIVE_CENTRAL_DIRECTORY_SIZE:
+                    raise ArchiveError("package archive central directory exceeds the size limit")
+                return
+        search_end = offset
 
 
 def _package_root(path: Path) -> Path:

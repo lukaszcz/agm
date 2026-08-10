@@ -1148,6 +1148,22 @@ def test_archive_readers_enforce_explicit_entry_and_size_limits(
         read_archive_metadata(archive_path)
 
 
+def test_archive_entry_limit_is_checked_before_zipfile_loads_the_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _package_tree(tmp_path)
+    archive_path = tmp_path / "package.agmpkg"
+    write_archive(root, archive_path)
+    monkeypatch.setattr(package_archive, "MAX_ARCHIVE_ENTRIES", 2)
+
+    def fail_open(*_: object, **__: object) -> zipfile.ZipFile:
+        pytest.fail("the ZIP central directory must not be loaded before rejecting its entry count")
+
+    monkeypatch.setattr(zipfile, "ZipFile", fail_open)
+    with pytest.raises(ArchiveError, match="entries"):
+        read_archive_metadata(archive_path)
+
+
 def test_archive_readers_reject_directory_entries(tmp_path: Path) -> None:
     archive_path = tmp_path / "directory.agmpkg"
     with zipfile.ZipFile(archive_path, "w") as archive:

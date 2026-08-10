@@ -3374,6 +3374,32 @@ class TestDiscoverParamsDefensivePaths:
 
         assert discovery.diagnostics[0].related[0].message == "constraint"
 
+    def test_package_entry_param_qualifier_uses_the_module_route(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        import semver
+
+        from agm.agl.modules.roots import RootSet
+        from agm.agl.pipeline import PreparedProgram, _entry_param_module_qualifier
+        from agm.packages.manifest import PackageManifest
+        from agm.packages.model import PackageInfo
+
+        package_root = tmp_path / "package"
+        entry_path = package_root / "tools" / "review.agl"
+        entry_path.parent.mkdir(parents=True)
+        entry_path.touch()
+        package = PackageInfo(package_root, PackageManifest("tools", semver.Version.parse("1.0.0")))
+        prepared = PreparedProgram(
+            source="",
+            entry_path=entry_path,
+            roots=RootSet(frozenset({package.module_root}), packages=(package,)),
+            resolved=None,
+            diagnostics=(),
+            warnings=(),
+        )
+
+        assert _entry_param_module_qualifier(prepared) == "tools/review"
+
     def test_run_typecheck_program_generic_exception_captured(self, tmp_path: pathlib.Path) -> None:
         """_run_typecheck_program captures generic exceptions as diagnostics."""
         from unittest.mock import MagicMock, patch

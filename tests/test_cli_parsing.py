@@ -2120,6 +2120,12 @@ class TestParserHelpers:
             assert option in result
         assert "--runner" not in result
 
+    def test_exec_help_lists_installed_program_reference(self) -> None:
+        output = io.StringIO()
+        parser_helpers.print_help_for_command_path(["exec"], file=output)
+
+        assert "PACKAGE/MODULE::PROGRAM" in output.getvalue()
+
     def test_repl_help_lists_max_iters(self) -> None:
         output = io.StringIO()
         parser_helpers.print_help_for_command_path(["repl"], file=output)

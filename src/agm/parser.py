@@ -546,10 +546,11 @@ _HELP_TEXTS: dict[str, str] = {
                  [--timeout DURATION|--no-timeout] [--dry-run]
                  [--log|--log-file PATH|--no-log] [--no-log-file]
                  [--no-stdlib] [-I DIR]... [-p PATH]
-                 (FILE | -c COMMAND) [--PARAM VALUE]...
+                 (FILE | PACKAGE/MODULE::PROGRAM | -c COMMAND) [--PARAM VALUE]...
 
-        Execute an AgL (Agent Language) workflow program from FILE, or from
-        the inline program text given with -c/--command.
+        Execute an AgL (Agent Language) workflow program from FILE, an installed
+        PACKAGE/MODULE::PROGRAM reference, or the inline program text given with
+        -c/--command.
 
         A file must declare at least one `program def`; select one of several
         with -p PATH. Inline source is wrapped in a synthetic `program def main`

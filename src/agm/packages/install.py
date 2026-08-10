@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import fcntl
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import mkdtemp
@@ -47,6 +49,28 @@ from agm.version import AGM_VERSION
 
 class PackageInstallError(ValueError):
     """Raised when package installation or removal cannot safely proceed."""
+
+
+@contextmanager
+def _package_operation_lock(
+    *, home: Path, env: Mapping[str, str] | None
+) -> Iterator[None]:
+    """Serialize package-store mutations through a persistent advisory lock."""
+
+    if dry_run.enabled():
+        yield
+        return
+    root = store_root(home=home, env=env)
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        with (root / ".lock").open("a+", encoding="utf-8") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+    except OSError as exc:
+        raise PackageInstallError(f"cannot lock package store {root}: {exc}") from exc
 
 
 def _managed_stdlib_source() -> Path:
@@ -97,19 +121,20 @@ def install_directory(
     is fetched, hash-verified, and installed.
     """
 
-    state = _InstallState(home=home, env=env, index=_load_install_index(home=home, env=env))
-    try:
-        package = _install_directory(source, state=state, editable=editable, shadow=shadow)
-        _commit_activation(
-            state.index,
-            home=home,
-            env=env,
-            transient_packages=state.transient_packages if dry_run.enabled() else None,
-        )
-    except PackageInstallError:
-        _rollback_created_trees(state)
-        raise
-    return package
+    with _package_operation_lock(home=home, env=env):
+        state = _InstallState(home=home, env=env, index=_load_install_index(home=home, env=env))
+        try:
+            package = _install_directory(source, state=state, editable=editable, shadow=shadow)
+            _commit_activation(
+                state.index,
+                home=home,
+                env=env,
+                transient_packages=state.transient_packages if dry_run.enabled() else None,
+            )
+        except PackageInstallError:
+            _rollback_created_trees(state)
+            raise
+        return package
 
 
 def install_archive(
@@ -121,19 +146,20 @@ def install_archive(
 ) -> PackageInfo:
     """Verify, atomically extract, and activate a portable package archive."""
 
-    state = _InstallState(home=home, env=env, index=_load_install_index(home=home, env=env))
-    try:
-        package = _install_archive(archive, state=state, shadow=shadow)
-        _commit_activation(
-            state.index,
-            home=home,
-            env=env,
-            transient_packages=state.transient_packages if dry_run.enabled() else None,
-        )
-    except PackageInstallError:
-        _rollback_created_trees(state)
-        raise
-    return package
+    with _package_operation_lock(home=home, env=env):
+        state = _InstallState(home=home, env=env, index=_load_install_index(home=home, env=env))
+        try:
+            package = _install_archive(archive, state=state, shadow=shadow)
+            _commit_activation(
+                state.index,
+                home=home,
+                env=env,
+                transient_packages=state.transient_packages if dry_run.enabled() else None,
+            )
+        except PackageInstallError:
+            _rollback_created_trees(state)
+            raise
+        return package
 
 
 def uninstall_package(name: str, *, home: Path, env: Mapping[str, str] | None = None) -> None:
@@ -143,6 +169,11 @@ def uninstall_package(name: str, *, home: Path, env: Mapping[str, str] | None = 
     their activation selection.
     """
 
+    with _package_operation_lock(home=home, env=env):
+        _uninstall_package(name, home=home, env=env)
+
+
+def _uninstall_package(name: str, *, home: Path, env: Mapping[str, str] | None = None) -> None:
     try:
         index = load_activation_index(home=home, env=env)
     except PackageActivationError as exc:

@@ -73,6 +73,18 @@ def test_install_registers_stdlib_package_under_an_isolated_agm_home(tmp_path: P
     assert index.packages["std"].version == installed.manifest.version
 
 
+def test_package_operations_create_a_store_lock(tmp_path: Path) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    home = tmp_path / "home"
+
+    install_directory(source, home=home, env={})
+
+    lock = home / ".agm" / "packages" / ".lock"
+    assert lock.is_file()
+    uninstall_package("alpha", home=home, env={})
+    assert lock.is_file()
+
+
 def test_install_copies_package_writes_record_and_activates_it(tmp_path: Path) -> None:
     source = _package(tmp_path / "source", "alpha", "1.0.0")
     home = tmp_path / "home"

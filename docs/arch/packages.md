@@ -13,10 +13,11 @@ validates dependencies, records immutable installations in the AGM-home package 
 activates one version of each package; editable installations instead mount their live source
 tree. `agm pkg uninstall` removes an active selection and its registered commands.
 
-The activation index selects global package versions and caches registered commands. Project
-`[packages]` pins override those selections for that invocation, and their selected manifests
-derive that invocation's effective command registry. Package-root assembly mounts
-the selected packages alongside ordinary module roots, while the module loader enforces that a
+The activation index selects global package versions and caches registered commands. Package
+installations and removals serialize their store and activation-index changes with a store lock.
+Project `[packages]` pins override global selections for that invocation, and their selected
+manifests derive that invocation's effective command registry. Package-root assembly mounts the
+selected packages alongside ordinary module roots, while the module loader enforces that a
 package module imports only itself, its declared dependencies, and the selected standard
 library. A source file inside a development package similarly gives its package and local path
 dependency closure precedence for that invocation. Development discovery rejects distinct local

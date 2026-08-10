@@ -69,8 +69,8 @@ like any other static error.
   `--Deploy::region`. The module-qualified spelling, such as
   `--review-tools/judge::Deploy::region`, is always accepted and disambiguates
   params with the same short spelling. For an entry-file param that needs
-  qualification, use `--@entry::Deploy::region`; this avoids exposing the
-  pipeline's internal entry sentinel. Qualified config tables supply values
+  qualification, use its file stem, such as `--workflow::Deploy::region` for
+  `workflow.agl`. Qualified config tables supply values
   for every parameter in the selected inventory. Values for `text` params are taken verbatim; every other
   scalar or structured type (`int`/`decimal`/`bool`/`json`/`array`/`dict`/`record`/
   `enum`) is parsed as exactly one strict JSON value and validated against the

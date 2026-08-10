@@ -930,6 +930,9 @@ class PipelineDriver:
                         col=item.span.start_col,
                         module_segments=module_segments,
                         is_entry=module_id.is_entry,
+                        entry_qualifier=(
+                            _entry_param_module_qualifier(prepared) if module_id.is_entry else None
+                        ),
                     )
                 )
             infos_by_module[module_id] = tuple(module_infos)
@@ -1481,6 +1484,19 @@ def _apply_setting_overrides(
         modules[STD_CONFIG_ID] = std_config
 
     return dc_replace(graph, modules=modules), next_id, diagnostics
+
+
+def _entry_param_module_qualifier(prepared: PreparedProgram) -> str | None:
+    """Return the user-facing module route for a file-backed entry module."""
+
+    if prepared.entry_path is None:
+        return None
+    entry_path = prepared.entry_path.resolve()
+    for package in prepared.roots.packages:
+        if entry_path.is_relative_to(package.module_root):
+            relative = entry_path.relative_to(package.module_root).with_suffix("")
+            return "/".join((package.manifest.name, *relative.parts))
+    return entry_path.stem
 
 
 def _check_artifact_provenance(

@@ -106,7 +106,8 @@ class ParamDeclInfo:
     bare name, or a scoped param's full ``::``-joined path spelling. The
     module-qualified spelling disambiguates same-named params in one program
     inventory. ``is_entry`` keeps the synthetic entry-module identity separate
-    from its user-facing option spelling.
+    from its user-facing option spelling. ``entry_qualifier`` supplies that
+    spelling for file-backed entries without changing their internal identity.
     """
 
     name: str
@@ -116,6 +117,7 @@ class ParamDeclInfo:
     col: int
     module_segments: tuple[str, ...] = ()
     is_entry: bool = False
+    entry_qualifier: str | None = None
 
     @property
     def qualified_name(self) -> str:

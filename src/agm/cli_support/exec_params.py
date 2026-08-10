@@ -2,10 +2,10 @@
 
 Each ``param`` declaration in a program becomes a ``--<scope-path>`` option
 on ``agm exec``. The module-qualified spelling is always accepted; it is
-required when two inventory params share their scope-path spelling. An entry
-module is rendered as ``@entry`` rather than the pipeline's internal
-``<entry>`` sentinel, so its qualified flags are shell-safe. Bool
-params use ``--name/--no-name`` flag form. This module provides pure,
+required when two inventory params share their scope-path spelling. A file
+entry is rendered by its file-stem module route rather than the pipeline's
+internal ``<entry>`` sentinel; inline entries use ``@entry``. Bool params use
+``--name/--no-name`` flag form. This module provides pure,
 unit-testable functions used by both the exec command and the help/completion
 machinery.
 
@@ -89,7 +89,8 @@ _ENTRY_PARAM_QUALIFIER = "@entry"
 def _external_qualified_name(param: ParamDeclInfo) -> str:
     """Return a shell-safe qualified spelling for a parameter flag."""
     if param.is_entry:
-        return f"{_ENTRY_PARAM_QUALIFIER}::{param.name}"
+        qualifier = param.entry_qualifier or _ENTRY_PARAM_QUALIFIER
+        return f"{qualifier}::{param.name}"
     return param.qualified_name
 
 

@@ -790,12 +790,12 @@ keywords = ["review"]
 [dependencies]
 alpha = "1"
 tools = { version = "2", path = "../tools" }
-remote = { version = "3", url = "https://example.test/remote.agmpkg", hash = "sha256:abc" }
+remote = { version = "3", url = "https://example.test/remote.agmpkg", hash = "sha256:<HASH>" }
 
 [commands]
 "review all" = { program = "review_tools/main::main", description = "Review all" }
 quick = { program = "review_tools/main::main" }
-""",
+""".replace("<HASH>", "a" * 64),
         encoding="utf-8",
     )
     nested = root / "nested"
@@ -825,7 +825,9 @@ quick = { program = "review_tools/main::main" }
         b"[dependencies]\n"
         b'alpha = "1.0.0"\n'
         b'remote = { version = "3.0.0", url = "https://example.test/remote.agmpkg", '
-        b'hash = "sha256:abc" }\n'
+        + b'hash = "sha256:'
+        + b"a" * 64
+        + b'" }\n'
         b'tools = "2.0.0"\n\n'
         b"[commands]\n"
         b'quick = { program = "review_tools/main::main" }\n'

@@ -369,6 +369,7 @@ class PipelineDriver:
         host_settings_policy: "HostSettingsPolicy | None" = None,
         builtin_host_settings: "Mapping[str, Value] | None" = None,
         program_symbol: "SymbolId | None" = None,
+        select_default_program: bool = False,
     ) -> RunResult:
         """Run a freshly lowered ``executable`` — the shared tail of the
         shared pipeline tail.
@@ -452,7 +453,7 @@ class PipelineDriver:
                 host_reconfigurer=reconfigurer,
                 builtin_host_settings=builtin_host_settings,
             )
-            if program_symbol is None:
+            if select_default_program and program_symbol is None:
                 entry_programs = tuple(
                     symbol
                     for symbol, function_id in executable.program_functions.items()
@@ -825,6 +826,7 @@ class PipelineDriver:
             param_values=param_values,
             check_only=check_only,
             log_file=log_file,
+            select_default_program=True,
         )
 
     def discover_params(
@@ -993,6 +995,7 @@ class PipelineDriver:
         host_settings_policy: "HostSettingsPolicy | None" = None,
         builtin_host_settings: "Mapping[str, Value] | None" = None,
         program_symbol: "SymbolId | None" = None,
+        select_default_program: bool = False,
     ) -> RunResult:
         """Execute an already loaded and scoped program without reloading.
 
@@ -1030,6 +1033,7 @@ class PipelineDriver:
             host_settings_policy=host_settings_policy,
             builtin_host_settings=builtin_host_settings,
             program_symbol=program_symbol,
+            select_default_program=select_default_program,
         )
         return result
 
@@ -1070,6 +1074,7 @@ class PipelineDriver:
         host_settings_policy: "HostSettingsPolicy | None" = None,
         builtin_host_settings: "Mapping[str, Value] | None" = None,
         program_symbol: "SymbolId | None" = None,
+        select_default_program: bool = False,
     ) -> "tuple[RunResult, ExecutableProgram | None]":
         """Back program execution and parameter preflight with one pipeline body.
 
@@ -1218,6 +1223,7 @@ class PipelineDriver:
                 host_settings_policy=host_settings_policy,
                 builtin_host_settings=builtin_host_settings,
                 program_symbol=program_symbol,
+                select_default_program=select_default_program,
             ),
             executable,
         )

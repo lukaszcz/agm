@@ -145,7 +145,7 @@ def test_program_inventory_excludes_params_outside_its_import_subgraph(tmp_path:
     (library_root / "a.agl").write_text(
         "param included: int = 1\nprogram def run_a() -> unit = ()\n"
     )
-    (library_root / "b.agl").write_text("param excluded: int = 2\n")
+    (library_root / "b.agl").write_text("param excluded: int\n")
 
     from agm.agl import PipelineDriver
     from agm.agl.modules.roots import RootSet
@@ -160,6 +160,24 @@ def test_program_inventory_excludes_params_outside_its_import_subgraph(tmp_path:
     )
 
     assert [param.name for param in discovery.params_for(program_a)] == ["included"]
+
+    runtime = PipelineDriver()
+    preflight = runtime.preflight_params(
+        prepared,
+        compiled=discovery.compiled,
+        program=program_a,
+    )
+
+    assert preflight.result.ok, preflight.result.diagnostics
+    assert preflight.executable is not None
+    assert [param.public_name for param in preflight.executable.params] == ["included"]
+    result = runtime.run_prepared(
+        prepared,
+        compiled=discovery.compiled,
+        executable=preflight.executable,
+        program_symbol=preflight.executable.program_symbols[program_a.node_id],
+    )
+    assert result.ok, result.diagnostics
 
 
 # ---------------------------------------------------------------------------

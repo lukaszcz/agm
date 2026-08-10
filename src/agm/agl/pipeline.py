@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, TypeVar
 
 from agm.agl.diagnostics import AglError, Diagnostic, diagnostic_from_span
@@ -1060,6 +1060,7 @@ class PipelineDriver:
         *,
         param_values: Mapping[str, object] | None = None,
         compiled: "MatchCompiledProgram | None" = None,
+        program: ProgramDeclInfo | None = None,
     ) -> ParamPreflight:
         """Validate external params against the program without executing it.
 
@@ -1075,6 +1076,7 @@ class PipelineDriver:
             param_values=param_values,
             check_only=True,
             compiled=compiled,
+            selected_program=program,
         )
         return ParamPreflight(result=result, executable=executable)
 
@@ -1092,6 +1094,7 @@ class PipelineDriver:
         builtin_host_settings: "Mapping[str, Value] | None" = None,
         program_symbol: "SymbolId | None" = None,
         select_default_program: bool = False,
+        selected_program: ProgramDeclInfo | None = None,
     ) -> "tuple[RunResult, ExecutableProgram | None]":
         """Back program execution and parameter preflight with one pipeline body.
 
@@ -1207,6 +1210,11 @@ class PipelineDriver:
                     None,
                 )
 
+        if selected_program is not None:
+            executable = _select_program_inventory(
+                executable, resolved.graph, selected_program.module
+            )
+
         if not check_only:
             # Extern (Python FFI) companions: import and resolve every declared
             # extern up front, gated by capability — fail-fast, before evaluation,
@@ -1284,6 +1292,34 @@ def _append_checker_warnings(
     warnings.extend(checked.warnings)
 
 
+def _reachable_modules(module_id: "ModuleId", graph: "ModuleGraph") -> tuple[ModuleId, ...]:
+    """Return *module_id* and its dependency subgraph in deterministic order."""
+    reachable: list[ModuleId] = []
+    seen: set[ModuleId] = set()
+    pending = [module_id]
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        reachable.append(current)
+        pending.extend(reversed(graph.adjacency[current]))
+    return tuple(reachable)
+
+
+def _select_program_inventory(
+    executable: "ExecutableProgram", graph: "ModuleGraph", module_id: "ModuleId"
+) -> "ExecutableProgram":
+    """Restrict runtime initialization and params to a selected program's graph."""
+    reachable = frozenset(_reachable_modules(module_id, graph))
+    return replace(
+        executable,
+        entry_module=module_id,
+        modules={mid: module for mid, module in executable.modules.items() if mid in reachable},
+        params=tuple(param for param in executable.params if param.module in reachable),
+    )
+
+
 def _param_inventory(
     module_id: "ModuleId",
     graph: "ModuleGraph",
@@ -1295,18 +1331,9 @@ def _param_inventory(
     export declarations load dependency modules just like imports and therefore
     contribute their params to a program inventory.
     """
-    reachable: list[ModuleId] = []
-    seen: set[ModuleId] = set()
-    pending = [module_id]
-    while pending:
-        current = pending.pop()
-        if current in seen:
-            continue
-        seen.add(current)
-        reachable.append(current)
-        pending.extend(reversed(graph.adjacency[current]))
-
-    return tuple(info for mid in reachable for info in infos_by_module[mid])
+    return tuple(
+        info for mid in _reachable_modules(module_id, graph) for info in infos_by_module[mid]
+    )
 
 
 def apply_setting_overrides(

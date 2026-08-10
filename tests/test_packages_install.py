@@ -99,6 +99,20 @@ def test_package_operations_report_store_lock_failures(
         install_directory(source, home=tmp_path / "home", env={})
 
 
+def test_package_operations_report_advisory_lock_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    monkeypatch.setattr(
+        package_install.fcntl,
+        "flock",
+        lambda *_: (_ for _ in ()).throw(OSError("denied")),
+    )
+
+    with pytest.raises(PackageInstallError, match="lock"):
+        install_directory(source, home=tmp_path / "home", env={})
+
+
 def test_install_copies_package_writes_record_and_activates_it(tmp_path: Path) -> None:
     source = _package(tmp_path / "source", "alpha", "1.0.0")
     home = tmp_path / "home"
@@ -258,8 +272,142 @@ def test_uninstall_reports_a_provenance_cleanup_failure(
         original_unlink(path)
 
     monkeypatch.setattr(package_install.fs, "unlink", fail_provenance_unlink)
-    with pytest.raises(PackageInstallError, match="provenance"):
+    with pytest.raises(PackageInstallError, match="provenance") as error:
         uninstall_package("alpha", home=home, env={})
+
+    assert "cannot lock package store" not in str(error.value)
+    assert (home / ".agm" / "packages" / "alpha" / ".uninstalling").is_dir()
+    assert "alpha" not in load_activation_index(home=home, env={}).packages
+
+    monkeypatch.setattr(package_install.fs, "unlink", original_unlink)
+    uninstall_package("alpha", home=home, env={})
+
+    assert not (home / ".agm" / "packages" / "alpha" / ".uninstalling").exists()
+
+
+def test_partial_uninstall_cleanup_is_hidden_and_retryable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    home = tmp_path / "home"
+    installed = install_directory(source, home=home, env={})
+    original_unlink = package_install.fs.unlink
+    removed_files = 0
+
+    def interrupt_tree_cleanup(path: Path, *, missing_ok: bool = False) -> None:
+        nonlocal removed_files
+        if ".uninstalling" in path.parts and path.name != "RECORD":
+            removed_files += 1
+            if removed_files == 2:
+                raise OSError("cleanup interrupted")
+        original_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(package_install.fs, "unlink", interrupt_tree_cleanup)
+
+    with pytest.raises(PackageInstallError, match="remove") as error:
+        uninstall_package("alpha", home=home, env={})
+
+    tombstone = installed.root.parent / ".uninstalling"
+    assert "cannot lock package store" not in str(error.value)
+    assert removed_files == 2
+    assert tombstone.is_dir()
+    assert not installed.root.exists()
+    assert "alpha" not in load_activation_index(home=home, env={}).packages
+    assert installed_packages(home=home, env={}) == ()
+
+    monkeypatch.setattr(package_install.fs, "unlink", original_unlink)
+    uninstall_package("alpha", home=home, env={})
+
+    assert not tombstone.exists()
+    assert "alpha" not in load_activation_index(home=home, env={}).packages
+
+
+def test_uninstall_retries_after_payload_removal_but_before_tombstone_removal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    installed = install_directory(
+        _package(tmp_path / "source", "alpha", "1.0.0"), home=home, env={}
+    )
+    original_rmdir = package_install.fs.rmdir
+    interrupted = False
+
+    def interrupt_directory_cleanup(path: Path) -> None:
+        nonlocal interrupted
+        if path == installed.root.parent / ".uninstalling" and not interrupted:
+            interrupted = True
+            raise OSError("cleanup interrupted")
+        original_rmdir(path)
+
+    monkeypatch.setattr(package_install.fs, "rmdir", interrupt_directory_cleanup)
+
+    with pytest.raises(PackageInstallError, match="remove"):
+        uninstall_package("alpha", home=home, env={})
+
+    tombstone = installed.root.parent / ".uninstalling"
+    assert interrupted
+    assert tombstone.is_dir()
+    assert not (tombstone / "package.toml").exists()
+    assert not (tombstone / "RECORD").exists()
+
+    monkeypatch.setattr(package_install.fs, "rmdir", original_rmdir)
+    uninstall_package("alpha", home=home, env={})
+
+    assert not tombstone.exists()
+
+
+def test_uninstall_refuses_a_malformed_retry_tombstone(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    tombstone = home / ".agm" / "packages" / "alpha" / ".uninstalling"
+    tombstone.mkdir(parents=True)
+    (tombstone / "package.toml").write_text("invalid", encoding="utf-8")
+
+    with pytest.raises(PackageInstallError, match="remove"):
+        uninstall_package("alpha", home=home, env={})
+
+
+def test_uninstall_refuses_an_invalid_package_path(tmp_path: Path) -> None:
+    with pytest.raises(PackageInstallError, match="not installed"):
+        uninstall_package("../alpha", home=tmp_path / "home", env={})
+
+
+def test_uninstall_refuses_a_redirected_retry_tombstone(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    marker = outside / "keep"
+    marker.write_text("keep", encoding="utf-8")
+    package_root = home / ".agm" / "packages" / "alpha"
+    package_root.mkdir(parents=True)
+    (package_root / ".uninstalling").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(PackageInstallError, match="tombstone"):
+        uninstall_package("alpha", home=home, env={})
+
+    assert marker.read_text(encoding="utf-8") == "keep"
+
+
+def test_uninstall_rename_failure_preserves_the_active_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    installed = install_directory(
+        _package(tmp_path / "source", "alpha", "1.0.0"), home=home, env={}
+    )
+    original_replace = Path.replace
+
+    def fail_tombstone_rename(path: Path, target: Path) -> Path:
+        if path == installed.root and target.name == ".uninstalling":
+            raise OSError("rename failed")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_tombstone_rename)
+
+    with pytest.raises(PackageInstallError, match="remove"):
+        uninstall_package("alpha", home=home, env={})
+
+    assert installed.root.is_dir()
+    assert "alpha" in load_activation_index(home=home, env={}).packages
 
 
 def test_legacy_activation_orders_are_assigned_when_an_editable_package_is_present(
@@ -1383,6 +1531,10 @@ def test_uninstall_reports_activation_write_failure(
     )
     with pytest.raises(PackageInstallError, match="activation"):
         uninstall_package("alpha", home=home, env={})
+
+    assert (home / ".agm" / "packages" / "alpha" / "1.0.0").is_dir()
+    assert not (home / ".agm" / "packages" / "alpha" / ".uninstalling").exists()
+    assert "alpha" in load_activation_index(home=home, env={}).packages
 
 
 def test_installed_package_enumeration_skips_non_package_entries_and_bad_manifests(

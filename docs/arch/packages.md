@@ -14,8 +14,11 @@ activates one version of each package; editable installations instead mount thei
 tree. `agm pkg uninstall` removes an active selection and its registered commands.
 
 The activation index selects global package versions and caches registered commands. Package
-installations and removals serialize their store and activation-index changes with a store lock.
-Project `[packages]` pins override global selections for that invocation, and their selected
+installations and removals serialize their store and activation-index changes with a store lock;
+only lock acquisition failures are reported as lock errors. Immutable removal first renames the
+verified active tree to a hidden tombstone, restores it if activation publication fails, and keeps
+interrupted cleanup retryable by a later uninstall. Project `[packages]` pins override global
+selections for that invocation, and their selected
 manifests derive that invocation's effective command registry. Package-root assembly mounts
 only each selected package's declared module tree alongside ordinary loose module roots, while
 the module loader enforces that a package module imports only itself, its declared dependencies,

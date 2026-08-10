@@ -39,11 +39,12 @@ from agm.packages.record import (
     RecordEntry,
     RecordError,
     content_hash,
+    read_record,
     record_entries,
     verify_record,
     write_record,
 )
-from agm.packages.store import canonical_package_store_path, store_root
+from agm.packages.store import canonical_package_store_path, package_store_path, store_root
 from agm.version import AGM_VERSION
 
 
@@ -61,14 +62,18 @@ def _package_operation_lock(*, home: Path, env: Mapping[str, str] | None) -> Ite
     root = store_root(home=home, env=env)
     try:
         root.mkdir(parents=True, exist_ok=True)
-        with (root / ".lock").open("a+", encoding="utf-8") as lock:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        lock = (root / ".lock").open("a+", encoding="utf-8")
     except OSError as exc:
         raise PackageInstallError(f"cannot lock package store {root}: {exc}") from exc
+    with lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        except OSError as exc:
+            raise PackageInstallError(f"cannot lock package store {root}: {exc}") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def _managed_stdlib_source() -> Path:
@@ -178,8 +183,23 @@ def _uninstall_package(name: str, *, home: Path, env: Mapping[str, str] | None =
         raise PackageInstallError(f"cannot load package activation: {exc}") from exc
     if name == "std":
         raise PackageInstallError("the AGM-managed std package cannot be uninstalled")
+    placeholder_version = semver.Version(0, 0, 0)
+    try:
+        package_store_path(name, placeholder_version, home=home, env=env)
+    except ValueError as exc:
+        raise PackageInstallError(f"package {name!r} is not installed") from exc
+    try:
+        tombstone = (
+            canonical_package_store_path(name, placeholder_version, home=home, env=env).parent
+            / ".uninstalling"
+        )
+    except ValueError as exc:
+        raise PackageInstallError(f"package store path is invalid for {name!r}: {exc}") from exc
     active = index.packages.get(name)
     if active is None:
+        if tombstone.exists():
+            _finish_uninstall(name, tombstone, home=home, env=env)
+            return
         raise PackageInstallError(f"package {name!r} is not installed")
     root: Path | None = None
     entries: tuple[RecordEntry, ...] = ()
@@ -193,17 +213,23 @@ def _uninstall_package(name: str, *, home: Path, env: Mapping[str, str] | None =
             ) from exc
     packages = dict(index.packages)
     del packages[name]
-    _commit_activation(ActivationIndex(packages), home=home, env=env)
-    if root is not None:
-        _remove_recorded_tree(root, entries)
-        try:
-            fs.unlink(
-                package_provenance_path(name, active.version, home=home, env=env), missing_ok=True
-            )
-        except (OSError, PackageActivationError) as exc:
-            raise PackageInstallError(
-                f"cannot remove package provenance for {name!r}: {exc}"
-            ) from exc
+    if root is None or dry_run.enabled():
+        _commit_activation(ActivationIndex(packages), home=home, env=env)
+        if root is not None:
+            _remove_recorded_tree(root, entries)
+            _remove_package_provenance(name, active.version, home=home, env=env)
+        return
+
+    try:
+        root.replace(tombstone)
+    except OSError as exc:
+        raise PackageInstallError(f"cannot remove package {name!r}: {exc}") from exc
+    try:
+        _commit_activation(ActivationIndex(packages), home=home, env=env)
+    except PackageInstallError:
+        tombstone.replace(root)
+        raise
+    _finish_uninstall(name, tombstone, version=active.version, home=home, env=env)
 
 
 def installed_packages(
@@ -668,12 +694,54 @@ def _rollback_created_trees(state: _InstallState) -> None:
         fs.rmtree(root)
 
 
+def _finish_uninstall(
+    name: str,
+    tombstone: Path,
+    *,
+    home: Path,
+    env: Mapping[str, str] | None,
+    version: semver.Version | None = None,
+) -> None:
+    """Finish cleanup of a hidden immutable tree, including after an interrupted attempt."""
+
+    if tombstone.is_symlink() or not tombstone.is_dir():
+        raise PackageInstallError(f"cannot remove package {name!r}: invalid uninstall tombstone")
+    if version is None and (tombstone / "package.toml").is_file():
+        try:
+            manifest = load_manifest(tombstone / "package.toml")
+        except ManifestError as exc:
+            raise PackageInstallError(f"cannot remove package {name!r}: {exc}") from exc
+        version = manifest.version
+    if version is not None:
+        _remove_package_provenance(name, version, home=home, env=env)
+    try:
+        entries = read_record(tombstone) if (tombstone / "RECORD").exists() else ()
+        _remove_recorded_tree(tombstone, entries)
+    except (OSError, RecordError) as exc:
+        raise PackageInstallError(f"cannot remove package {name!r}: {exc}") from exc
+
+
+def _remove_package_provenance(
+    name: str,
+    version: semver.Version,
+    *,
+    home: Path,
+    env: Mapping[str, str] | None,
+) -> None:
+    """Remove one immutable package's activation sidecar."""
+
+    try:
+        fs.unlink(package_provenance_path(name, version, home=home, env=env), missing_ok=True)
+    except (OSError, PackageActivationError) as exc:
+        raise PackageInstallError(f"cannot remove package provenance for {name!r}: {exc}") from exc
+
+
 def _remove_recorded_tree(root: Path, entries: tuple[RecordEntry, ...]) -> None:
-    """Remove an already-verified immutable tree using only core fs primitives."""
+    """Idempotently remove a verified or partially removed immutable tree."""
 
     for entry in entries:
-        fs.unlink(root / entry.path)
-    fs.unlink(root / "RECORD")
+        fs.unlink(root / entry.path, missing_ok=True)
+    fs.unlink(root / "RECORD", missing_ok=True)
     directories = sorted((path for path in fs.rglob(root, "*") if path.is_dir()), reverse=True)
     for directory in directories:
         fs.rmdir(directory)

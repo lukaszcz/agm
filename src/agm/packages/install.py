@@ -587,12 +587,46 @@ def _commit_activation(
             env=env,
             transient_packages=transient_packages,
         )
-        for name, active in reconciled.packages.items():
-            if active.editable is None:
-                write_package_provenance(name, active, home=home, env=env)
-        write_activation_index(reconciled, home=home, env=env)
+        provenance = _snapshot_package_provenance(reconciled, home=home, env=env)
+        try:
+            for name, active in reconciled.packages.items():
+                if active.editable is None:
+                    write_package_provenance(name, active, home=home, env=env)
+            write_activation_index(reconciled, home=home, env=env)
+        except PackageActivationError:
+            _restore_package_provenance(provenance)
+            raise
     except PackageActivationError as exc:
         raise PackageInstallError(f"cannot write package activation: {exc}") from exc
+
+
+def _snapshot_package_provenance(
+    index: ActivationIndex, *, home: Path, env: Mapping[str, str] | None
+) -> dict[Path, bytes | None]:
+    """Capture immutable-package sidecars before publishing an activation."""
+
+    try:
+        return {
+            path: path.read_bytes() if path.exists() else None
+            for name, active in index.packages.items()
+            if active.editable is None
+            for path in (package_provenance_path(name, active.version, home=home, env=env),)
+        }
+    except OSError as exc:
+        raise PackageActivationError(f"cannot snapshot package provenance: {exc}") from exc
+
+
+def _restore_package_provenance(provenance: Mapping[Path, bytes | None]) -> None:
+    """Restore sidecars changed by an activation that could not be published."""
+
+    try:
+        for path, content in provenance.items():
+            if content is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_bytes(content)
+    except OSError as exc:
+        raise PackageActivationError(f"cannot restore package provenance: {exc}") from exc
 
 
 def _assign_missing_registration_orders(index: ActivationIndex) -> ActivationIndex:

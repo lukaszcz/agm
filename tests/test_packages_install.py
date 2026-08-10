@@ -1149,6 +1149,43 @@ def test_archive_install_wraps_activation_and_extraction_failures(
         install_archive(archive, home=tmp_path / "home", env={})
 
 
+def test_failed_activation_does_not_leave_package_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    home = tmp_path / "home"
+    monkeypatch.setattr(
+        package_install,
+        "write_activation_index",
+        lambda *_, **__: (_ for _ in ()).throw(PackageActivationError("broken")),
+    )
+
+    with pytest.raises(PackageInstallError, match="activation"):
+        install_directory(source, home=home, env={})
+
+    assert not (home / ".agm" / "packages" / "alpha" / ".provenance" / "1.0.0.toml").exists()
+
+
+def test_failed_activation_restores_existing_package_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    home = tmp_path / "home"
+    install_directory(source, home=home, env={})
+    provenance = home / ".agm" / "packages" / "alpha" / ".provenance" / "1.0.0.toml"
+    original = provenance.read_bytes()
+    monkeypatch.setattr(
+        package_install,
+        "write_activation_index",
+        lambda *_, **__: (_ for _ in ()).throw(PackageActivationError("broken")),
+    )
+
+    with pytest.raises(PackageInstallError, match="activation"):
+        install_directory(source, home=home, env={})
+
+    assert provenance.read_bytes() == original
+
+
 def test_fetch_and_activation_failures_become_package_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

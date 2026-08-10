@@ -242,6 +242,38 @@ def test_effective_command_index_preserves_global_cached_commands_without_change
     assert effective_command_index(home=home, proj_dir=None, cwd=tmp_path, env=env) == index
 
 
+def test_effective_command_index_rebuilds_for_a_pin_with_different_build_metadata(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "agm-home"
+    old = _write_package(home, "alpha", "1.0.0+old")
+    new = _write_package(home, "alpha", "1.0.0+new")
+    for root, program in ((old, "old"), (new, "new")):
+        (root / "package.toml").write_text(
+            f'[package]\nname = "alpha"\nversion = "{root.name}"\n\n'
+            f'[commands]\nlaunch = {{ program = "alpha/main::{program}" }}\n',
+            encoding="utf-8",
+        )
+    project = tmp_path / "project"
+    (project / "config").mkdir(parents=True)
+    (project / "config" / "config.toml").write_text(
+        '[packages]\nalpha = "1.0.0+new"\n', encoding="utf-8"
+    )
+    env = {"AGM_HOME": str(home)}
+    write_activation_index(
+        ActivationIndex(
+            {"alpha": ActivePackage(semver.Version.parse("1.0.0+old"))},
+            {"launch": CommandRegistration("alpha", "alpha/main::old")},
+        ),
+        home=home,
+        env=env,
+    )
+
+    assert effective_command_index(home=home, proj_dir=project, cwd=project, env=env).commands == {
+        "launch": CommandRegistration("alpha", "alpha/main::new")
+    }
+
+
 def test_rebuild_uses_the_previous_index_only_for_legacy_packages_without_sidecars(
     tmp_path: Path,
 ) -> None:

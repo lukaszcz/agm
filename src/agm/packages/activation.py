@@ -391,9 +391,16 @@ def effective_command_index(
         index=index,
     )
     _validate_requirements(packages)
-    if {package.manifest.name: package.manifest.version for package in packages} == {
-        name: active.version for name, active in index.packages.items()
-    }:
+    selected_roots = {package.manifest.name: package.root for package in packages}
+    indexed_roots = {
+        name: (
+            active.editable
+            if active.editable is not None
+            else canonical_package_store_path(name, active.version, home=home, env=env)
+        )
+        for name, active in index.packages.items()
+    }
+    if selected_roots == indexed_roots:
         return index
     selections: dict[str, ActivePackage] = {}
     for package in packages:

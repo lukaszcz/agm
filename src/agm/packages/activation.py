@@ -389,11 +389,12 @@ def effective_command_index(
 
     The persistent activation index caches commands for the global selection.
     A project pin changes that selection, so derive its command registry from
-    the selected manifests while retaining the global registration priority of
-    each package name.
+    the selected manifests and the persisted registration priority of each
+    selected immutable version.
     """
 
     index = load_activation_index(home=home, env=env)
+    pins = load_package_pins(home=home, proj_dir=proj_dir, cwd=cwd, env=env)
     packages = _selected_active_packages(
         home=home,
         proj_dir=proj_dir,
@@ -401,6 +402,7 @@ def effective_command_index(
         excluded_names=set(),
         env=env,
         index=index,
+        pins=pins,
     )
     _validate_requirements(packages)
     selected_roots = {package.manifest.name: package.root for package in packages}
@@ -412,19 +414,46 @@ def effective_command_index(
         )
         for name, active in index.packages.items()
     }
-    if selected_roots == indexed_roots and all(
-        active.editable is None for active in index.packages.values()
+    if (
+        not pins
+        and selected_roots == indexed_roots
+        and all(active.editable is None for active in index.packages.values())
     ):
         return index
     selections: dict[str, ActivePackage] = {}
+    provenance: dict[str, ActivePackage | PackageProvenance | None] = {}
     for package in packages:
-        previous = index.packages.get(package.manifest.name)
-        selections[package.manifest.name] = ActivePackage(
+        name = package.manifest.name
+        previous = index.packages.get(name)
+        retains_global_selection = previous is not None and name not in pins
+        metadata: ActivePackage | PackageProvenance | None
+        if retains_global_selection:
+            metadata = previous
+        else:
+            metadata = load_package_provenance(
+                name,
+                package.manifest.version,
+                home=home,
+                env=env,
+            )
+            if metadata is None:
+                # Pre-provenance installations have only package-name priority
+                # in the activation index. Preserve that compatibility fallback.
+                metadata = previous
+        provenance[name] = metadata
+        selections[name] = ActivePackage(
             package.manifest.version,
-            shadow=previous.shadow if previous is not None else False,
-            registration_order=previous.registration_order if previous is not None else 0,
+            editable=(
+                previous.editable if previous is not None and retains_global_selection else None
+            ),
+            shadow=metadata.shadow if metadata is not None else False,
+            registration_order=metadata.registration_order if metadata is not None else 0,
         )
-    return _reconciled_commands(ActivationIndex(selections), packages)
+    return _reconciled_commands(
+        ActivationIndex(selections),
+        packages,
+        provenance=provenance,
+    )
 
 
 def select_package_roots(
@@ -471,13 +500,16 @@ def _selected_active_packages(
     excluded_names: set[str],
     env: Mapping[str, str] | None,
     index: ActivationIndex | None = None,
+    pins: Mapping[str, semver.Version] | None = None,
 ) -> tuple[PackageInfo, ...]:
     """Load global selections with pins, excluding development names before resolution."""
 
     if index is None:
         index = load_activation_index(home=home, env=env)
+    if pins is None:
+        pins = load_package_pins(home=home, proj_dir=proj_dir, cwd=cwd, env=env)
     selections = dict(index.packages)
-    for name, version in load_package_pins(home=home, proj_dir=proj_dir, cwd=cwd, env=env).items():
+    for name, version in pins.items():
         selections[name] = ActivePackage(version)
     for name in excluded_names:
         selections.pop(name, None)

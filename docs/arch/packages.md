@@ -46,8 +46,9 @@ depends on AgL scope resolution.
 A manifest `[commands]` table maps a single- or multi-word CLI path to a package-owned
 `program def`. Activation rejects command conflicts unless the later installation uses
 `--shadow`; registry reconciliation applies the same provenance check to live editable manifests.
-Each invocation derives its effective registry from its selected package manifests, preserving
-global registration priority, so project pins affect dispatch, help, and completion. New
+Each invocation derives its effective registry from its selected package manifests and the
+persisted priority of each selected immutable version, while editable and legacy selections retain
+their activation-index priority. Project pins therefore affect dispatch, help, and completion. New
 registrations advance beyond provenance retained by inactive immutable package versions, keeping
 later activation-index rebuilds unambiguous.
 When a built-in root command does not match, CLI dispatch resolves the longest registered path

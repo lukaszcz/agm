@@ -296,6 +296,115 @@ def test_effective_command_index_rejects_a_live_editable_command_conflict_withou
         effective_command_index(home=home, proj_dir=None, cwd=tmp_path, env=env)
 
 
+@pytest.mark.parametrize("active_kind", ("editable", "legacy"))
+def test_effective_command_index_uses_pinned_version_provenance_without_losing_active_metadata(
+    tmp_path: Path, active_kind: str
+) -> None:
+    home = tmp_path / "agm-home"
+    old = _write_package(home, "alpha", "1.0.0")
+    current = _write_package(home, "alpha", "2.0.0")
+    for root in (old, current):
+        (root / "package.toml").write_text(
+            f'[package]\nname = "alpha"\nversion = "{root.name}"\n\n'
+            '[commands]\nlaunch = { program = "alpha/main::main" }\n',
+            encoding="utf-8",
+        )
+        write_record(root)
+    if active_kind == "editable":
+        bravo = tmp_path / "editable"
+        (bravo / "bravo").mkdir(parents=True)
+        (bravo / "package.toml").write_text(
+            '[package]\nname = "bravo"\nversion = "1.0.0"\n\n'
+            '[commands]\nlaunch = { program = "bravo/main::main" }\n',
+            encoding="utf-8",
+        )
+        editable = bravo
+    else:
+        bravo = _write_package(home, "bravo", "1.0.0")
+        (bravo / "package.toml").write_text(
+            '[package]\nname = "bravo"\nversion = "1.0.0"\n\n'
+            '[commands]\nlaunch = { program = "bravo/main::main" }\n',
+            encoding="utf-8",
+        )
+        write_record(bravo)
+        editable = None
+
+    env = {"AGM_HOME": str(home)}
+    version = semver.Version.parse("1.0.0")
+    write_package_provenance(
+        "alpha", ActivePackage(version, registration_order=1), home=home, env=env
+    )
+    write_activation_index(
+        ActivationIndex(
+            {
+                "alpha": ActivePackage(
+                    semver.Version.parse("2.0.0"), shadow=True, registration_order=3
+                ),
+                "bravo": ActivePackage(
+                    version, editable=editable, shadow=True, registration_order=2
+                ),
+            },
+            {"launch": CommandRegistration("alpha", "alpha/main::main")},
+        ),
+        home=home,
+        env=env,
+    )
+    project = tmp_path / "project"
+    (project / "config").mkdir(parents=True)
+    (project / "config" / "config.toml").write_text(
+        '[packages]\nalpha = "1.0.0"\n', encoding="utf-8"
+    )
+
+    effective = effective_command_index(home=home, proj_dir=project, cwd=project, env=env)
+
+    assert effective.packages["alpha"] == ActivePackage(version, registration_order=1)
+    assert effective.commands == {"launch": CommandRegistration("bravo", "bravo/main::main")}
+
+
+@pytest.mark.parametrize(("indexed", "registration_order"), ((True, 4), (False, 0)))
+def test_effective_command_index_supports_legacy_pins_without_version_provenance(
+    tmp_path: Path, indexed: bool, registration_order: int
+) -> None:
+    home = tmp_path / "agm-home"
+    old = _write_package(home, "alpha", "1.0.0")
+    (old / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
+        '[commands]\nlaunch = { program = "alpha/main::main" }\n',
+        encoding="utf-8",
+    )
+    write_record(old)
+    env = {"AGM_HOME": str(home)}
+    if indexed:
+        _write_package(home, "alpha", "2.0.0")
+        write_activation_index(
+            ActivationIndex(
+                {
+                    "alpha": ActivePackage(
+                        semver.Version.parse("2.0.0"),
+                        shadow=True,
+                        registration_order=registration_order,
+                    )
+                }
+            ),
+            home=home,
+            env=env,
+        )
+    project = tmp_path / "project"
+    (project / "config").mkdir(parents=True)
+    (project / "config" / "config.toml").write_text(
+        '[packages]\nalpha = "1.0.0"\n', encoding="utf-8"
+    )
+
+    effective = effective_command_index(home=home, proj_dir=project, cwd=project, env=env)
+
+    assert effective.packages["alpha"] == ActivePackage(
+        semver.Version.parse("1.0.0"),
+        shadow=indexed,
+        registration_order=registration_order,
+    )
+    assert effective.commands == {"launch": CommandRegistration("alpha", "alpha/main::main")}
+
+
 def test_effective_command_index_rebuilds_for_a_pin_with_different_build_metadata(
     tmp_path: Path,
 ) -> None:

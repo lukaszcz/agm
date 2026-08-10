@@ -451,6 +451,12 @@ def _install_directory(
                 if staging is not None and staging.exists():
                     fs.rmtree(staging)
         else:
+            try:
+                record_entries(root)
+            except (OSError, RecordError) as exc:
+                raise PackageInstallError(
+                    f"cannot install package {package.manifest.name!r}: {exc}"
+                ) from exc
             fs.mkdir(destination.parent, parents=True, exist_ok=True)
             fs.copy_tree(root, destination)
 

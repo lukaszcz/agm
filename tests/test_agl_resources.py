@@ -206,6 +206,48 @@ program def main() -> unit =
         validate_package(package)
 
 
+def test_package_validation_rejects_missing_resource_through_an_ancestor_scoped_alias(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "package"
+    module_root = root / "package"
+    module_root.mkdir(parents=True)
+    (module_root / "main.agl").write_text(
+        "scope Assets\n"
+        "import std/core using resource as asset\n"
+        "scope Templates\n"
+        'let prompt = asset("prompts/missing.md")\n'
+        "end Templates\n"
+        "end Assets\n"
+        "program def main() -> unit = ()\n",
+        encoding="utf-8",
+    )
+    package = PackageInfo(root, PackageManifest("package", semver.Version.parse("1.0.0")))
+
+    with pytest.raises(DisciplineError):
+        validate_package(package)
+
+
+def test_package_validation_rejects_missing_resource_through_a_scoped_import_route(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "package"
+    module_root = root / "package"
+    module_root.mkdir(parents=True)
+    (module_root / "main.agl").write_text(
+        "scope Assets\n"
+        "import std/core using resource as asset\n"
+        "end Assets\n"
+        'let prompt = core::asset("prompts/missing.md")\n'
+        "program def main() -> unit = ()\n",
+        encoding="utf-8",
+    )
+    package = PackageInfo(root, PackageManifest("package", semver.Version.parse("1.0.0")))
+
+    with pytest.raises(DisciplineError):
+        validate_package(package)
+
+
 def test_package_validation_uses_the_resolved_resource_declaration(tmp_path: Path) -> None:
     root = tmp_path / "package"
     module_root = root / "package"

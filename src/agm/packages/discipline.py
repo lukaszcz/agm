@@ -208,6 +208,8 @@ def _resource_imports(
         target = _resource_export_target(declaration.module_path, exports)
         prefix = tuple(segment.name for segment in declaration.scope_path)
         selected = _select_resource_paths(declaration, target)
+        # A scoped import limits bare reach but leaves its module route global.
+        route_paths = {path[len(prefix) :]: kind for path, kind in selected.items()}
         routes = (
             ((declaration.alias,),)
             if declaration.alias is not None
@@ -216,7 +218,7 @@ def _resource_imports(
             )
         )
         for route in routes:
-            for path, kind in selected.items():
+            for path, kind in route_paths.items():
                 paths[(*route, *path)] = kind
         if declaration.is_open or declaration.mode is ImportMode.USING:
             paths.update(
@@ -248,7 +250,11 @@ def _resource_calls(
                 for part in segment.name.split("/")
             )
         )
-        callee_paths = ((*route, *scope_path, node.callee.name), (*route, node.callee.name))
+        # Bare imports reach every lexically nested named scope.
+        callee_paths = tuple(
+            (*route, *scope_path[:index], node.callee.name)
+            for index in range(len(scope_path), -1, -1)
+        )
         kind = next((paths.get(path) for path in callee_paths if paths.get(path) is not None), None)
         if kind in {BuiltinKind.RESOURCE, BuiltinKind.RESOURCE_DIR}:
             calls.append((node, kind is BuiltinKind.RESOURCE_DIR))

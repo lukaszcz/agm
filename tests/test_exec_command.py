@@ -325,6 +325,23 @@ class TestExecDynamicHelp:
         assert "Program parameters:" in out
         assert "--msg" in out
 
+    def test_exec_help_uses_a_shell_safe_entry_qualifier_for_colliding_params(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "settings.agl").write_text('param region: text = "eu"\n')
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "import settings\nparam region: text\nprogram def main() -> unit = print region\n"
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            cli._exec_print_help(file=str(agl_file), command=None)
+
+        assert exc_info.value.code == 0
+        output = capsys.readouterr().out
+        assert "--@entry::region" in output
+        assert "--<entry>::region" not in output
+
     def test_exec_help_for_inline_command_includes_discovered_params(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:

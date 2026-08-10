@@ -3144,6 +3144,7 @@ class TestDiscoverParamsGraph:
         assert discovery.diagnostics == ()
         assert len(discovery.params) == 1
         assert discovery.params[0].name == "name"
+        assert discovery.params[0].is_entry
 
     def test_discover_programs_records_module_and_paths(self, tmp_path: pathlib.Path) -> None:
         from agm.agl.modules.roots import RootSet

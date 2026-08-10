@@ -929,6 +929,7 @@ class PipelineDriver:
                         line=item.span.start_line,
                         col=item.span.start_col,
                         module_segments=module_segments,
+                        is_entry=module_id.is_entry,
                     )
                 )
             infos_by_module[module_id] = tuple(module_infos)

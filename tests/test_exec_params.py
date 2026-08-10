@@ -18,6 +18,7 @@ def _make_param(
     line: int = 1,
     col: int = 1,
     module_segments: tuple[str, ...] = (),
+    is_entry: bool = False,
 ) -> ParamDeclInfo:
     """Build a ``ParamDeclInfo`` for testing."""
     if typ is None:
@@ -29,6 +30,7 @@ def _make_param(
         line=line,
         col=col,
         module_segments=module_segments,
+        is_entry=is_entry,
     )
 
 
@@ -75,6 +77,19 @@ class TestSourceDiscovery:
         from agm.cli_support.exec_params import discover_params_from_source
 
         assert discover_params_from_source("param count: int =", inline_source=True) == ()
+
+    def test_invalid_installed_reference_degrades_to_no_params(self, tmp_path: Path) -> None:
+        from agm.cli_support.exec_params import discover_params_from_installed_reference
+
+        assert (
+            discover_params_from_installed_reference(
+                "tools/bad-name::main",
+                home=tmp_path / "home",
+                proj_dir=None,
+                cwd=tmp_path,
+            )
+            == ()
+        )
 
     def test_scoped_param_discovers_under_its_full_path_spelling(self) -> None:
         """A scoped param's external key is its full path, e.g. 'Deploy::region'."""
@@ -332,6 +347,19 @@ class TestParseParamTokens:
         with pytest.raises(ValueError, match="pkg/one::verbose"):
             parse_param_tokens(params, ["--no-verbose"])
 
+    def test_entry_param_collision_uses_a_shell_safe_qualified_flag(self) -> None:
+        from agm.cli_support.exec_params import param_option_flags, parse_param_tokens
+
+        params = (
+            self._text_param("region", module_segments=("<entry>",), is_entry=True),
+            self._text_param("region", module_segments=("settings",)),
+        )
+
+        assert "--@entry::region" in param_option_flags(params)
+        assert parse_param_tokens(params, ["--@entry::region", "local"]) == {
+            "<entry>::region": "local"
+        }
+
 
 # ---------------------------------------------------------------------------
 # render_param_help_section
@@ -409,3 +437,16 @@ class TestRenderParamHelpSection:
         section = render_param_help_section(params)
         assert "--pkg/one::region" in section
         assert "--pkg/two::region" in section
+
+    def test_entry_param_collision_renders_a_shell_safe_qualified_spelling(self) -> None:
+        from agm.cli_support.exec_params import render_param_help_section
+
+        section = render_param_help_section(
+            (
+                _make_param("region", TextType(), module_segments=("<entry>",), is_entry=True),
+                _make_param("region", TextType(), module_segments=("settings",)),
+            )
+        )
+
+        assert "--@entry::region" in section
+        assert "--<entry>::region" not in section

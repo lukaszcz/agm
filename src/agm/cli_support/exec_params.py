@@ -2,7 +2,9 @@
 
 Each ``param`` declaration in a program becomes a ``--<scope-path>`` option
 on ``agm exec``. The module-qualified spelling is always accepted; it is
-required when two inventory params share their scope-path spelling. Bool
+required when two inventory params share their scope-path spelling. An entry
+module is rendered as ``@entry`` rather than the pipeline's internal
+``<entry>`` sentinel, so its qualified flags are shell-safe. Bool
 params use ``--name/--no-name`` flag form. This module provides pure,
 unit-testable functions used by both the exec command and the help/completion
 machinery.
@@ -81,6 +83,16 @@ def negative_param_flag(name: str) -> str:
     return f"--no-{name}"
 
 
+_ENTRY_PARAM_QUALIFIER = "@entry"
+
+
+def _external_qualified_name(param: ParamDeclInfo) -> str:
+    """Return a shell-safe qualified spelling for a parameter flag."""
+    if param.is_entry:
+        return f"{_ENTRY_PARAM_QUALIFIER}::{param.name}"
+    return param.qualified_name
+
+
 def _add_flag_candidates(
     candidates: dict[str, list[tuple[ParamDeclInfo, bool | None]]],
     param: ParamDeclInfo,
@@ -131,7 +143,7 @@ def _param_flag_selection(
     flags: dict[str, tuple[ParamDeclInfo, bool | None]] = {}
     for param in params:
         qualified_candidates: dict[str, list[tuple[ParamDeclInfo, bool | None]]] = {}
-        _add_flag_candidates(qualified_candidates, param, param.qualified_name)
+        _add_flag_candidates(qualified_candidates, param, _external_qualified_name(param))
         flags.update({flag: candidates[0] for flag, candidates in qualified_candidates.items()})
         short_candidates: dict[str, list[tuple[ParamDeclInfo, bool | None]]] = {}
         _add_flag_candidates(short_candidates, param, param.name)
@@ -201,6 +213,61 @@ def discover_params_from_source(
         return ()
 
 
+def discover_params_from_installed_reference(
+    reference: str,
+    *,
+    home: Path,
+    proj_dir: Path | None,
+    cwd: Path,
+    default_stdlib: bool = True,
+) -> tuple[ParamDeclInfo, ...]:
+    """Discover params for an active package program reference.
+
+    Help and completion must resolve ``PACKAGE/MODULE::PROGRAM`` through the
+    same active package selection as execution.  They are advisory surfaces,
+    so malformed, inactive, or unreadable references degrade to no params.
+    """
+    try:
+        from agm.agl.modules.ids import ModuleId
+        from agm.cli_support.exec_roots import effective_exec_roots
+        from agm.packages.activation import select_active_packages
+        from agm.packages.development import discover_development_packages
+
+        module_path, separator, declaration_path = reference.partition("::")
+        if not separator or not declaration_path:
+            return ()
+        module_id = ModuleId.from_path(module_path)
+        packages = select_active_packages(home=home, proj_dir=proj_dir, cwd=cwd)
+        package = next(
+            (
+                candidate
+                for candidate in packages
+                if candidate.manifest.name == module_id.segments[0]
+            ),
+            None,
+        )
+        if package is None:
+            return ()
+        entry_path = package.root / module_id.relpath()
+        source = entry_path.read_text(encoding="utf-8")
+        roots = effective_exec_roots(
+            entry_path=entry_path,
+            module_paths=[],
+            cwd=cwd,
+            home=home,
+            proj_dir=proj_dir,
+            package_roots=discover_development_packages(entry_path),
+        )
+        return discover_params_from_source(
+            source,
+            entry_path=entry_path,
+            roots=roots,
+            default_stdlib=default_stdlib,
+        )
+    except (Exception, SystemExit):
+        return ()
+
+
 def parse_param_tokens(
     params: tuple[ParamDeclInfo, ...],
     tokens: list[str],
@@ -236,7 +303,7 @@ def parse_param_tokens(
             flag, _, value = token.partition("=")
             if flag in ambiguous_flags:
                 spellings = ", ".join(
-                    param_flag(param.qualified_name) for param in ambiguous_flags[flag]
+                    param_flag(_external_qualified_name(param)) for param in ambiguous_flags[flag]
                 )
                 raise ValueError(f"Option {flag!r} is ambiguous; use one of: {spellings}")
             if flag not in flag_to_param:
@@ -254,7 +321,7 @@ def parse_param_tokens(
         # Handle ``--name`` form.
         if token in ambiguous_flags:
             spellings = ", ".join(
-                param_flag(param.qualified_name) for param in ambiguous_flags[token]
+                param_flag(_external_qualified_name(param)) for param in ambiguous_flags[token]
             )
             raise ValueError(f"Option {token!r} is ambiguous; use one of: {spellings}")
         if token not in flag_to_param:
@@ -292,7 +359,11 @@ def render_param_help_section(params: tuple[ParamDeclInfo, ...]) -> str:
     ambiguous = _ambiguous_short_flags(params)
     lines: list[str] = ["Program parameters:"]
     for p in params:
-        display_name = _param_value_name(p, ambiguous)
+        display_name = (
+            _external_qualified_name(p)
+            if any(p in candidates for candidates in ambiguous.values())
+            else p.name
+        )
         is_bool = isinstance(p.type, BoolType)
         if is_bool:
             flag_str = f"{param_flag(display_name)}/{negative_param_flag(display_name)}"

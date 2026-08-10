@@ -1020,6 +1020,7 @@ def _exec_print_help(
     on any error (syntax errors, unreadable files, etc.).
     """
     from agm.cli_support.exec_params import (
+        discover_params_from_installed_reference,
         discover_params_from_source,
         render_param_help_section,
     )
@@ -1030,19 +1031,20 @@ def _exec_print_help(
     source: str | None = None
     if command is not None:
         source = command
-    elif file is not None:
+    elif file is not None and ("::" not in file or Path(file).is_file()):
         try:
             source = read_text_arg(Path(file))
         except SystemExit:
             source = None
 
-    if source is not None:
-        try:
+    try:
+        from agm.config.context import current_config_context
+
+        context = current_config_context()
+        if source is not None:
             from agm.cli_support.exec_roots import effective_exec_roots
-            from agm.config.context import current_config_context
             from agm.packages.development import discover_development_packages
 
-            context = current_config_context()
             entry_path = None if file is None else Path(file)
             roots = effective_exec_roots(
                 entry_path=entry_path,
@@ -1059,10 +1061,20 @@ def _exec_print_help(
                 roots=roots,
                 default_stdlib=not no_stdlib,
             )
-        except (Exception, SystemExit):
+        elif file is not None:
+            params = discover_params_from_installed_reference(
+                file,
+                home=context.home,
+                proj_dir=context.proj_dir,
+                cwd=context.cwd,
+                default_stdlib=not no_stdlib,
+            )
+        else:
             params = ()
-        if params:
-            print(render_param_help_section(params), end="")
+    except (Exception, SystemExit):
+        params = ()
+    if params:
+        print(render_param_help_section(params), end="")
 
     raise SystemExit(0)
 

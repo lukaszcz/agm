@@ -68,7 +68,7 @@ from agm.agl.syntax.nodes import FuncDef, ParamDecl, static_items
 from agm.cli_support.args import ExecArgs
 from agm.cli_support.engine_seeds import build_host_engine_seeds, check_max_iters
 from agm.cli_support.exec_params import (
-    discover_params_from_source,
+    discover_params_from_installed_reference,
     param_option_flags,
     parse_param_tokens,
 )
@@ -168,26 +168,13 @@ def registered_program_param_flags(
             return ()
         if context is None:
             context = current_config_context()
-        packages = select_active_packages(
-            home=context.home, proj_dir=context.proj_dir, cwd=context.cwd
-        )
-        package = next(
-            (candidate for candidate in packages if candidate.manifest.name == package_name), None
-        )
-        if package is None:
-            return ()
-        entry_path = package.root / module_id.relpath()
-        source = entry_path.read_text(encoding="utf-8")
-        roots = effective_exec_roots(
-            entry_path=entry_path,
-            module_paths=[],
-            cwd=context.cwd,
-            home=context.home,
-            proj_dir=context.proj_dir,
-            package_roots=discover_development_packages(entry_path),
-        )
         return param_option_flags(
-            discover_params_from_source(source, entry_path=entry_path, roots=roots)
+            discover_params_from_installed_reference(
+                program,
+                home=context.home,
+                proj_dir=context.proj_dir,
+                cwd=context.cwd,
+            )
         )
     except (Exception, SystemExit):
         return ()

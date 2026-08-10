@@ -236,6 +236,7 @@ def test_registered_param_flags_reject_invalid_or_mismatched_references() -> Non
     import agm.commands.exec_program as exec_program
 
     assert exec_program.registered_program_param_flags("not-a-reference", "tools") == ()
+    assert exec_program.registered_program_param_flags("tools/bad-name::main", "tools") == ()
     assert exec_program.registered_program_param_flags("other/lint::main", "tools") == ()
 
 
@@ -414,6 +415,28 @@ def test_exec_runs_an_installed_reference(monkeypatch: pytest.MonkeyPatch, tmp_p
 
     assert result.exit_code == 0
     assert result.stdout == "installed\n"
+
+
+def test_exec_help_for_an_installed_reference_includes_program_params(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    home = tmp_path / "home"
+    package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
+    module = package_root / "tools" / "review.agl"
+    module.parent.mkdir(parents=True)
+    (package_root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    module.write_text("param level: text\nprogram def main() -> unit = ()\n", encoding="utf-8")
+    write_activation_index(
+        ActivationIndex({"tools": ActivePackage(semver.Version.parse("1.0.0"))}), home=home
+    )
+    monkeypatch.setenv("HOME", str(home))
+
+    result = invoke(CliRunner(), ["exec", "tools/review::main", "--help"])
+
+    assert result.exit_code == 0
+    assert "--level" in result.output
 
 
 def test_exec_program_option_overrides_an_installed_reference(

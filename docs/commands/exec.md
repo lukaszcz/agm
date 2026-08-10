@@ -68,7 +68,9 @@ like any other static error.
   declared inside a named scope region uses its full path spelling, e.g.
   `--Deploy::region`. The module-qualified spelling, such as
   `--review-tools/judge::Deploy::region`, is always accepted and disambiguates
-  params with the same short spelling. Qualified config tables supply values
+  params with the same short spelling. For an entry-file param that needs
+  qualification, use `--@entry::Deploy::region`; this avoids exposing the
+  pipeline's internal entry sentinel. Qualified config tables supply values
   for every parameter in the selected inventory. Values for `text` params are taken verbatim; every other
   scalar or structured type (`int`/`decimal`/`bool`/`json`/`array`/`dict`/`record`/
   `enum`) is parsed as exactly one strict JSON value and validated against the

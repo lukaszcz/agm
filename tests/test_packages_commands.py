@@ -199,11 +199,23 @@ def test_list_command_prints_commands_only_below_their_active_or_editable_owner(
         tmp_path / "alpha-old",
         PackageManifest(name="alpha", version=semver.Version.parse("1.0.0")),
     )
+    context = _context(tmp_path)
     alpha = PackageInfo(
-        tmp_path / "alpha-current",
+        context.home / ".agm" / "packages" / "alpha" / "2.0.0",
         PackageManifest(name="alpha", version=semver.Version.parse("2.0.0")),
     )
+    alpha.root.mkdir(parents=True)
+    (alpha.root / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "2.0.0"\n\n'
+        '[commands.launch]\nprogram = "alpha/main::main"\n',
+        encoding="utf-8",
+    )
     bravo = _package(tmp_path, "bravo")
+    (bravo.root / "package.toml").write_text(
+        '[package]\nname = "bravo"\nversion = "1.0.0"\n\n'
+        '[commands."bravo updated"]\nprogram = "bravo/main::main"\n',
+        encoding="utf-8",
+    )
     index = ActivationIndex(
         {
             "alpha": ActivePackage(alpha.manifest.version),
@@ -214,7 +226,7 @@ def test_list_command_prints_commands_only_below_their_active_or_editable_owner(
             "bravo run": CommandRegistration("bravo", "bravo/main::main"),
         },
     )
-    monkeypatch.setattr(list_command, "current_config_context", lambda: _context(tmp_path))
+    monkeypatch.setattr(list_command, "current_config_context", lambda: context)
     monkeypatch.setattr(list_command, "load_activation_index", lambda **_: index)
     monkeypatch.setattr(list_command, "installed_packages", lambda **_: (alpha_old, alpha))
     monkeypatch.setattr(
@@ -230,7 +242,7 @@ def test_list_command_prints_commands_only_below_their_active_or_editable_owner(
         "alpha 2.0.0 active",
         "  command launch (shadows bravo)",
         "bravo 1.0.0 editable",
-        "  command bravo run",
+        "  command bravo updated",
     ]
 
 

@@ -12,13 +12,14 @@ from agm.packages.activation import (
     active_package_version,
     command_shadow_diagnostics,
     load_activation_index,
+    reconcile_package_commands,
 )
 from agm.packages.install import PackageInstallError, installed_packages
 from agm.packages.manifest import ManifestError
 
 
 def run(args: PkgListArgs) -> None:
-    """Print each globally active package and its activation kind."""
+    """Print each globally active package and its current registrations."""
 
     del args
     context = current_config_context()
@@ -29,6 +30,7 @@ def run(args: PkgListArgs) -> None:
         raise SystemExit(1) from exc
     try:
         packages = installed_packages(home=context.home)
+        index = reconcile_package_commands(index, home=context.home)
         shadows = command_shadow_diagnostics(index, home=context.home)
         editable_versions = {
             name: active_package_version(active)

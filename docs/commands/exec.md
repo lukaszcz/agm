@@ -223,10 +223,10 @@ program def main() -> unit =
   print result
 ```
 
-Because the settings live in another module, a write must use a qualified target
-(`std/config::KEY := …`); a bare `KEY := …` is not a valid way to set one. The
-`Option[text]` settings (`log-file`, `timeout`) take a `Some("…")` or `None`
-value.
+A qualified target (`std/config::KEY := …`) always writes a setting. After an
+`open import std/config`, its names are also in scope, so a bare `KEY := …` write
+is valid. The `Option[text]` settings (`log-file`, `timeout`) take a `Some("…")`
+or `None` value.
 
 Precedence differs by kind:
 

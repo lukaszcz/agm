@@ -37,9 +37,10 @@ contents to `$AGM_HOME/packages/<name>/<version>/` (or
 `$HOME/.agm/packages/` when `AGM_HOME` is unset), writes and verifies its SHA-256 `RECORD`,
 and makes that version globally active only after the complete resulting selection validates.
 Activation updates are atomically published, so a failed install leaves newly copied trees inactive.
-With `--dry-run`, AGM reports the planned archive creation or archive installation and validates the
-same resulting activation selection and archive module/command discipline without creating archive,
-package-store, or activation-index files, or fetching URL dependencies.
+With `--dry-run`, AGM reports the planned archive creation or archive installation and validates its
+archive module/command discipline and any resulting selection resolvable from local sources and the
+store, without creating archive, package-store, or activation-index files. It never fetches URL
+dependencies, so an installation that needs one fails in dry-run mode.
 Versions are retained side by side. Dependencies use
 minimum-version resolution: a satisfying stored version is selected first, otherwise a declared
 local `path` source is installed. URL dependencies are fetched with a required SHA-256 hash, then

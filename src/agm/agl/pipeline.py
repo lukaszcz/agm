@@ -414,6 +414,26 @@ class PipelineDriver:
         # ----------------------------------------------------------------
         # Build and run the interpreter
         # ----------------------------------------------------------------
+        if select_default_program and program_symbol is None:
+            entry_programs = tuple(
+                symbol
+                for symbol, function_id in executable.program_functions.items()
+                if executable.functions[function_id].module_id == executable.entry_module
+            )
+            if len(entry_programs) > 1:
+                return RunResult(
+                    ok=False,
+                    diagnostics=[
+                        Diagnostic(message="multiple programs declared; select one", line=1)
+                    ],
+                    error=None,
+                    warnings=list(warnings),
+                    bindings={},
+                    trace_path=None,
+                )
+            if len(entry_programs) == 1:
+                program_symbol = entry_programs[0]
+
         from agm.agl.runtime.trace import TraceStore
         from agm.agl.semantics.exceptions import AglRaise
 
@@ -453,13 +473,6 @@ class PipelineDriver:
                 host_reconfigurer=reconfigurer,
                 builtin_host_settings=builtin_host_settings,
             )
-            if select_default_program and program_symbol is None:
-                entry_programs = tuple(
-                    symbol
-                    for symbol, function_id in executable.program_functions.items()
-                    if executable.functions[function_id].module_id == executable.entry_module
-                )
-                program_symbol = entry_programs[0] if len(entry_programs) == 1 else None
             entry_bindings = interp.run(program_symbol=program_symbol)
         except AglRaise as exc:
             # Uncaught AgL exception (exit code 2 per the CLI contract).

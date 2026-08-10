@@ -15,6 +15,7 @@ from agm.packages.activation import (
 )
 from agm.packages.manifest import ManifestError, load_manifest
 from agm.packages.model import canonical_package_identity
+from agm.packages.record import RecordError, verify_record
 from agm.packages.store import StorePathError, canonical_package_store_path
 from agm.version import AGM_VERSION
 
@@ -32,6 +33,7 @@ def run(args: PkgInfoArgs) -> None:
             root = active.editable
         else:
             root = canonical_package_store_path(args.name, active.version, home=context.home)
+            verify_record(root)
         manifest = load_manifest(root / "package.toml")
         if manifest.name != args.name:
             raise PackageActivationError(
@@ -46,7 +48,7 @@ def run(args: PkgInfoArgs) -> None:
         active_versions = {
             name: active_package_version(selected) for name, selected in index.packages.items()
         }
-    except (ManifestError, PackageActivationError, StorePathError) as exc:
+    except (ManifestError, PackageActivationError, RecordError, StorePathError) as exc:
         print(f"pkg info: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
     print(f"{manifest.name} {manifest.version}")

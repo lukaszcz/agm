@@ -138,6 +138,8 @@ def _dependency_table(name: str, raw: TomlDict) -> DependencySpec:
     path = _optional_str(raw, "path", context)
     url = _optional_str(raw, "url", context)
     content_hash = _optional_str(raw, "hash", context)
+    if path is not None and Path(path).is_absolute():
+        raise ManifestError(f"dependency {name!r} path must be relative")
     if path is not None and url is not None:
         raise ManifestError(f"dependency {name!r} cannot specify both path and url")
     if url is not None and content_hash is None:

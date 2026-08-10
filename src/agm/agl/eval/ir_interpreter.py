@@ -404,8 +404,8 @@ def _apply_coercion(value: Value, coercion: Coercion) -> Value:
 def _static_initializer_symbols(initializer: IrExpr) -> tuple[SymbolId, ...]:
     """Return the binding symbols materialized by one module initializer."""
     match initializer:
-        case IrBind(symbol=sym, value=value):
-            return () if isinstance(value, IrMakeClosure) else (sym,)
+        case IrBind(symbol=sym):
+            return (sym,)
         case IrSequence(items=items):
             return tuple(symbol for item in items for symbol in _static_initializer_symbols(item))
         case _:

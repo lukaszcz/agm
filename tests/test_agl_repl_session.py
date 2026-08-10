@@ -363,6 +363,17 @@ class TestPersistence:
         assert len(session._ir_base_frame) == 2
         assert session.bindings() == [("value", IntType(), IntValue(2))]
 
+    def test_lambda_binding_initializes_repl_parameter_default(self) -> None:
+        session = ReplSession()
+
+        result = session.eval_entry("let f = fn() -> int => 7\nparam value: int = f()")
+
+        assert result.ok, result.diagnostics
+        bindings = {name: value for name, _type, value in session.bindings()}
+        assert set(bindings) == {"f", "value"}
+        assert bindings["value"] == IntValue(7)
+        assert session.eval_entry("f()").value == IntValue(7)
+
     def test_top_level_return_rejected_and_session_continues(self) -> None:
         s = ReplSession()
         bad = s.eval_entry("return 1")

@@ -16,10 +16,11 @@ tree. `agm pkg uninstall` removes an active selection and its registered command
 The activation index selects global package versions and caches registered commands. Package
 installations and removals serialize their store and activation-index changes with a store lock.
 Project `[packages]` pins override global selections for that invocation, and their selected
-manifests derive that invocation's effective command registry. Package-root assembly mounts the
-selected packages alongside ordinary module roots, while the module loader enforces that a
-package module imports only itself, its declared dependencies, and the selected standard
-library. A source file inside a development package similarly gives its package and local path
+manifests derive that invocation's effective command registry. Package-root assembly mounts
+only each selected package's declared module tree alongside ordinary loose module roots, while
+the module loader enforces that a package module imports only itself, its declared dependencies,
+and the selected standard library. A source file inside a development package similarly gives
+its package and local path
 dependency closure precedence for that invocation and retains its package-qualified module path
 for execution configuration. Development discovery rejects distinct local
 roots with the same package identity, so mounted imports remain unambiguous.

@@ -33,9 +33,10 @@ def resolve_module(
 ) -> Path:
     """Resolve *module_id* to its unique canonical file path.
 
-    Searches every root in *roots* for ``<root>/<module_id.relpath()>``,
-    canonicalizes each hit, and deduplicates by canonical identity (so the
-    same file reached via symlinked roots counts once).
+    Searches every root in *roots* whose mount scope admits *module_id* for
+    ``<root>/<module_id.relpath()>``, canonicalizes each hit, and deduplicates
+    by canonical identity (so the same file reached via symlinked roots counts
+    once).
 
     Parameters
     ----------
@@ -64,7 +65,8 @@ def resolve_module(
     canonical_hits: dict[Path, Path] = {}
 
     rel = module_id.relpath().replace("/", os.sep)
-    for root in roots.sorted_roots():
+    search_roots = roots.sorted_roots_for(module_id.segments)
+    for root in search_roots:
         candidate = root / rel
         if fs.exists(candidate):
             canon = candidate.resolve()
@@ -73,7 +75,7 @@ def resolve_module(
     if not canonical_hits:
         raise ModuleNotFound(
             module_id,
-            roots.sorted_roots(),
+            search_roots,
             span=span,
         )
 
@@ -94,7 +96,8 @@ def expand_wildcard(
     """Expand a wildcard prefix to all matching module ids and their canonical paths.
 
     Globs ``<root>/<prefix>.agl`` (the prefix module itself, if it exists) and
-    ``<root>/<prefix>/**/*.agl`` (the full subtree) across **all** roots.
+    ``<root>/<prefix>/**/*.agl`` (the full subtree) across every root whose
+    mount scope admits *prefix*.
 
     Each discovered file is mapped to its slash-path :class:`~agm.agl.modules.ids.ModuleId`
     via the inverse of ``ModuleId.relpath()``.  Global uniqueness is enforced: if
@@ -151,7 +154,7 @@ def expand_wildcard(
             hits[mid] = set()
         hits[mid].add(canon)
 
-    for root in roots.sorted_roots():
+    for root in roots.sorted_roots_for(prefix):
         # Pattern 1: <root>/<prefix>.agl — the prefix module itself
         direct = root / (prefix_dir + ".agl")
         if fs.is_file(direct):

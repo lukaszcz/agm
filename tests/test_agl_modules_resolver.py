@@ -10,7 +10,9 @@ import pytest
 from agm.agl.modules.errors import AmbiguousModule, ModuleNotFound, ModulePrefixNotFound
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.resolver import expand_wildcard, resolve_module
-from agm.agl.modules.roots import RootSet
+from agm.agl.modules.roots import RootSet, assemble_roots
+from agm.packages.manifest import load_manifest
+from agm.packages.model import PackageInfo
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -29,6 +31,26 @@ def _make_module(root: Path, module_path: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("")
     return path
+
+
+def _mounted_package_roots(tmp_path: Path, *, also_loose: bool = False) -> RootSet:
+    """Mount a package whose root also contains an undeclared AgL module."""
+    invocation = tmp_path / "invocation"
+    invocation.mkdir()
+    package_root = tmp_path / "package"
+    (package_root / "demo").mkdir(parents=True)
+    manifest_path = package_root / "package.toml"
+    manifest_path.write_text('[package]\nname = "demo"\nversion = "1.0.0"\n')
+    package = PackageInfo(package_root, load_manifest(manifest_path))
+    _make_module(package_root, "assets/rogue")
+    return assemble_roots(
+        invocation_root=invocation,
+        lib_root=None,
+        configured=(),
+        cli=(str(package_root),) if also_loose else (),
+        cwd=tmp_path,
+        package_roots=(package,),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +116,14 @@ class TestResolveModuleFound:
 
 
 class TestResolveModuleNotFound:
+    def test_package_mount_does_not_expose_modules_outside_its_module_tree(
+        self, tmp_path: Path
+    ) -> None:
+        roots = _mounted_package_roots(tmp_path)
+
+        with pytest.raises(ModuleNotFound):
+            resolve_module(ModuleId.from_path("assets/rogue"), roots)
+
     def test_not_found_raises_module_not_found(self, tmp_path: Path) -> None:
         root = tmp_path / "lib"
         root.mkdir()
@@ -226,6 +256,21 @@ class TestResolveModuleDeterminism:
 
 
 class TestExpandWildcard:
+    def test_package_mount_scoping_applies_to_wildcards(self, tmp_path: Path) -> None:
+        roots = _mounted_package_roots(tmp_path)
+
+        with pytest.raises(ModulePrefixNotFound):
+            expand_wildcard(("assets",), roots)
+
+    def test_explicit_loose_root_still_exposes_all_modules(self, tmp_path: Path) -> None:
+        roots = _mounted_package_roots(tmp_path, also_loose=True)
+
+        module_id = ModuleId.from_path("assets/rogue")
+        assert resolve_module(module_id, roots).name == "rogue.agl"
+        assert expand_wildcard(("assets",), roots) == {
+            module_id: (tmp_path / "package" / "assets" / "rogue.agl").resolve()
+        }
+
     def test_single_root_single_file(self, tmp_path: Path) -> None:
         root = tmp_path / "lib"
         root.mkdir()

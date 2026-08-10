@@ -21,16 +21,39 @@ class RootSet:
     module id must resolve to *at most one* file across all roots (ambiguity
     is an error).
 
-    Use :meth:`sorted_roots` for deterministic output in diagnostics.
+    Package-only roots are scoped to their declared top-level module segment.
+    :attr:`loose_roots` records ordinary roots that overlap package roots, so
+    their unrestricted semantics win. Use :meth:`sorted_roots` for deterministic
+    output in diagnostics and :meth:`sorted_roots_for` for resolution.
     """
 
     roots: frozenset[Path]
     packages: tuple[PackageInfo, ...] = ()
     stdlib_roots: frozenset[Path] = frozenset()
+    loose_roots: frozenset[Path] = frozenset()
 
     def sorted_roots(self) -> tuple[Path, ...]:
         """Return roots sorted lexicographically for deterministic diagnostics."""
         return tuple(sorted(self.roots))
+
+    def sorted_roots_for(self, prefix: tuple[str, ...]) -> tuple[Path, ...]:
+        """Return roots whose mount scope admits a module *prefix*.
+
+        Ordinary roots are loose. A root supplied only by a package mount
+        admits that package's declared top-level module segment; explicitly
+        supplying the same path as an ordinary root keeps it loose.
+        """
+        package_names_by_root: dict[Path, set[str]] = {}
+        for package in self.packages:
+            package_names_by_root.setdefault(package.root, set()).add(package.manifest.name)
+        first_segment = prefix[0]
+        return tuple(
+            root
+            for root in self.sorted_roots()
+            if root in self.loose_roots
+            or root not in package_names_by_root
+            or first_segment in package_names_by_root[root]
+        )
 
     def is_standard_library_path(self, path: Path) -> bool:
         """Return whether *path* belongs to a host-selected standard-library root."""
@@ -82,18 +105,21 @@ def assemble_roots(
         Mounted non-``std`` packages, regardless of whether their roots come
         from a development directory or a future package store. A supplied
         ``std`` package is ignored because ``stdlib_root`` is its exclusive
-        mounting seam.
+        mounting seam. Package mounts expose only the package's declared
+        module tree unless the same path is also supplied as an ordinary root.
 
     All roots are user-expanded, made absolute, and canonicalized before
     de-duplication.  Non-existent roots are dropped silently (resolution
     errors are reported later by the resolver, which lists the searched set).
     """
     canonical_roots: set[Path] = set()
+    loose_roots: set[Path] = set()
 
     def _add(path: Path) -> Path | None:
         canonical_path = _canonicalize(path)
         if canonical_path.exists():
             canonical_roots.add(canonical_path)
+            loose_roots.add(canonical_path)
             return canonical_path
         return None
 
@@ -145,4 +171,5 @@ def assemble_roots(
         roots=frozenset(canonical_roots),
         packages=tuple(mounted_packages),
         stdlib_roots=frozenset(stdlib_roots),
+        loose_roots=frozenset(loose_roots),
     )

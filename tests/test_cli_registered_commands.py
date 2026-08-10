@@ -104,7 +104,7 @@ def test_command_index_loader_uses_project_selected_package_commands(
             commands={"old": CommandRegistration("tools", "tools/old::main")},
         ),
     )
-    monkeypatch.setattr(activation, "select_active_packages", lambda **_: (pinned_package,))
+    monkeypatch.setattr(activation, "_selected_active_packages", lambda **_: (pinned_package,))
 
     index = dispatch.load_activation_index(home=home, proj_dir=tmp_path, cwd=tmp_path)
 

@@ -85,6 +85,20 @@ def test_package_operations_create_a_store_lock(tmp_path: Path) -> None:
     assert lock.is_file()
 
 
+def test_package_operations_report_store_lock_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    monkeypatch.setattr(
+        Path,
+        "mkdir",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("denied")),
+    )
+
+    with pytest.raises(PackageInstallError):
+        install_directory(source, home=tmp_path / "home", env={})
+
+
 def test_install_copies_package_writes_record_and_activates_it(tmp_path: Path) -> None:
     source = _package(tmp_path / "source", "alpha", "1.0.0")
     home = tmp_path / "home"

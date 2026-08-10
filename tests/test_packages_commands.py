@@ -258,8 +258,7 @@ def test_info_command_uses_live_editable_dependency_versions(
     alpha = _package(tmp_path, "alpha")
     bravo = _package(tmp_path, "bravo")
     (alpha.root / "package.toml").write_text(
-        '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
-        '[dependencies]\nbravo = "1"\n',
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n\n[dependencies]\nbravo = "1"\n',
         encoding="utf-8",
     )
     monkeypatch.setattr(info_command, "current_config_context", lambda: _context(tmp_path))

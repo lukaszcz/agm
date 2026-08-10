@@ -52,9 +52,7 @@ class PackageInstallError(ValueError):
 
 
 @contextmanager
-def _package_operation_lock(
-    *, home: Path, env: Mapping[str, str] | None
-) -> Iterator[None]:
+def _package_operation_lock(*, home: Path, env: Mapping[str, str] | None) -> Iterator[None]:
     """Serialize package-store mutations through a persistent advisory lock."""
 
     if dry_run.enabled():

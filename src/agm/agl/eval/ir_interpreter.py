@@ -1028,6 +1028,15 @@ class IrInterpreter:
                 )
             self.entry_param_symbols_installed.add(ir_param.symbol)
 
+    def _eval_static_binding(self, module_id: ModuleId, initializer: IrBind) -> None:
+        """Evaluate a parameter-default dependency in the module base frame."""
+        self._frames.append(self._frames[0])
+        try:
+            self._eval_and_record_initializer(module_id, initializer)
+        finally:
+            self._frames.pop()
+        self._evaluated_static_binding_ids.add(id(initializer))
+
     def _eval_initializer(self, node: IrExpr) -> Value:
         match node:
             case IrBind(symbol=sym, value=IrMakeClosure(function_id=fn_id)):
@@ -1118,9 +1127,8 @@ class IrInterpreter:
                     binding = self._static_bindings.pop(sym, None)
                     if binding is not None:
                         module_id, initializer = binding
-                        self._eval_and_record_initializer(module_id, initializer)
-                        self._evaluated_static_binding_ids.add(id(initializer))
-                        slot = self._frame.get(sym)
+                        self._eval_static_binding(module_id, initializer)
+                        slot = self._frames[0].get(sym)
                 if slot is None:
                     raise InvalidIrError(
                         f"IrLoad: symbol_id={sym.value!r} is not bound in the frame"

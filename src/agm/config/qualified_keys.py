@@ -12,7 +12,9 @@ from agm.core.toml import TomlDict
 # These tables describe AGM's configuration schema rather than AgL modules.
 # ``params`` is retained here to prevent the removed legacy ``[params.*]``
 # namespace from being interpreted as an AgL module route.
-RESERVED_CONFIG_SECTION_NAMES = RESERVED_COMMAND_NAMES | frozenset({"modules", "params"})
+RESERVED_CONFIG_SECTION_NAMES = RESERVED_COMMAND_NAMES | frozenset(
+    {"deps", "modules", "packages", "params"}
+)
 _MISSING = object()
 
 

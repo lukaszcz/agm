@@ -52,6 +52,7 @@ def _validate_relative_path(path: str) -> None:
     windows = PureWindowsPath(path)
     if (
         not path
+        or "\0" in path
         or "\\" in path
         or posix.is_absolute()
         or windows.is_absolute()

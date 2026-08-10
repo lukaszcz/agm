@@ -309,9 +309,7 @@ def rebuild_activation_index(
         for name, package in active.items()
     }
     _validate_rebuild_provenance(provenance)
-    persisted_orders = {
-        item.registration_order for item in provenance.values() if item is not None
-    }
+    persisted_orders = {item.registration_order for item in provenance.values() if item is not None}
     next_order = max(
         (
             *(package.registration_order for package in previous.packages.values()),

@@ -165,9 +165,7 @@ def _package_files(root: Path) -> tuple[Path, ...]:
     _validate_package_tree(root)
     try:
         files = [
-            path
-            for path in fs.rglob(root, "*")
-            if path.is_file() and path != root / _RECORD_NAME
+            path for path in fs.rglob(root, "*") if path.is_file() and path != root / _RECORD_NAME
         ]
     except OSError as exc:
         raise RecordError(f"cannot traverse package tree {root}: {exc}") from exc

@@ -182,6 +182,7 @@ def test_record_wraps_traversal_io_failures(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _package_tree(tmp_path)
+
     def fail_rglob(_root: Path, _pattern: str) -> Iterator[Path]:
         raise OSError("blocked")
 
@@ -193,6 +194,7 @@ def test_record_wraps_traversal_io_failures(
 
 def test_record_wraps_hash_io_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _package_tree(tmp_path)
+
     def fail_open(_path: Path, *_args: object, **_kwargs: object) -> Never:
         raise OSError("blocked")
 

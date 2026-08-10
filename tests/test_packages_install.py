@@ -135,7 +135,10 @@ def test_managed_stdlib_refresh_retries_post_commit_cleanup(
 
     assert refreshed.root == installed.root
     assert verify_record(refreshed.root)
-    assert load_activation_index(home=home, env={}).packages["std"].version == refreshed.manifest.version
+    assert (
+        load_activation_index(home=home, env={}).packages["std"].version
+        == refreshed.manifest.version
+    )
     assert tuple(installed.root.parent.glob(".agm-previous-*"))
 
     monkeypatch.setattr(package_install.fs, "rmtree", original_rmtree)

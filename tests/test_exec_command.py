@@ -1168,6 +1168,18 @@ class TestExecCommandExitCodes:
         assert exec_command.run(_exec_args(agl_file)) is None
         assert capsys.readouterr().out == "1\n"
 
+    def test_param_default_can_read_a_mutable_static_binding(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "test.agl"
+        write_file_program(
+            agl_file,
+            "var base = 1\nparam value: int = base\nprogram def demo() -> unit = print value\n",
+        )
+
+        assert exec_command.run(_exec_args(agl_file)) is None
+        assert capsys.readouterr().out == "1\n"
+
     def test_legacy_params_section_does_not_supply_values(
         self,
         tmp_path: Path,

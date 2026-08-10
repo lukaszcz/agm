@@ -440,9 +440,7 @@ class IrInterpreter:
             node.symbol: (module.module_id, node)
             for module in program.modules.values()
             for node in module.initializers
-            if isinstance(node, IrBind)
-            and not program.symbols[node.symbol].mutable
-            and not isinstance(node.value, IrMakeClosure)
+            if isinstance(node, IrBind) and not isinstance(node.value, IrMakeClosure)
         }
         self._evaluated_static_binding_ids: set[int] = set()
         self._resolving_param_defaults = False

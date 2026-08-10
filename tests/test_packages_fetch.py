@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import signal
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -45,6 +47,21 @@ class _Response:
             raise self.stream_error
 
 
+class _BlockingResponse(_Response):
+    def __init__(self) -> None:
+        super().__init__([])
+        self.exited = False
+
+    def __exit__(self, *_: object) -> None:
+        self.exited = True
+
+    def iter_content(self, chunk_size: int) -> Iterator[bytes]:
+        del chunk_size
+        time.sleep(0.2)
+        raise AssertionError("the fetch deadline did not interrupt the blocked body")
+        yield b""
+
+
 class _Session:
     def __init__(
         self, response: _Response | None = None, *, get_error: Exception | None = None
@@ -79,6 +96,107 @@ def test_fetch_streams_with_explicit_timeout_hashes_and_hands_off_archive(tmp_pa
     assert session.calls == [("https://example.test/tools.agmpkg", True, 30.0)]
     assert response.status_checked
     assert handed_off == [content]
+    assert not tuple(tmp_path.iterdir())
+
+
+def test_fetch_preserves_an_existing_process_alarm(tmp_path: Path) -> None:
+    content = b"archive bytes"
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    previous_timer = signal.setitimer(signal.ITIMER_REAL, 0)
+
+    def existing_handler(_signum: int, _frame: object) -> None:
+        return None
+
+    signal.signal(signal.SIGALRM, existing_handler)
+    signal.setitimer(signal.ITIMER_REAL, 10.0)
+    try:
+        fetch_archive(
+            requirement="tools >= 1.0",
+            url="https://example.test/tools.agmpkg",
+            expected_hash="sha256=" + hashlib.sha256(content).hexdigest(),
+            handoff=lambda _: None,
+            session=_Session(_Response([content])),
+            scratch_dir=tmp_path,
+        )
+
+        restored_remaining, restored_interval = signal.getitimer(signal.ITIMER_REAL)
+        assert signal.getsignal(signal.SIGALRM) is existing_handler
+        assert 0 < restored_remaining <= 10.0
+        assert restored_interval == 0
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        signal.setitimer(signal.ITIMER_REAL, *previous_timer)
+
+
+def test_fetch_deadline_interrupts_a_blocked_connect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(package_fetch, "_FETCH_TIMEOUT_SECONDS", 0.01)
+
+    class BlockingSession(_Session):
+        def get(self, url: str, *, stream: bool, timeout: float) -> _Response:
+            del url, stream, timeout
+            time.sleep(0.2)
+            raise AssertionError("the fetch deadline did not interrupt the blocked connect")
+
+    with pytest.raises(FetchError, match=r"fetch timed out.*tools >= 1\.0\.0"):
+        fetch_archive(
+            requirement="tools >= 1.0.0",
+            url="https://example.test/tools.agmpkg",
+            expected_hash="sha256=" + "0" * 64,
+            handoff=lambda _: pytest.fail("archive handoff must not run"),
+            session=BlockingSession(),
+            scratch_dir=tmp_path,
+        )
+
+    assert not tuple(tmp_path.iterdir())
+
+
+def test_fetch_deadline_interrupts_a_blocked_body_and_closes_the_response(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(package_fetch, "_FETCH_TIMEOUT_SECONDS", 0.01)
+    response = _BlockingResponse()
+
+    with pytest.raises(FetchError, match=r"fetch timed out.*tools >= 1\.0\.0"):
+        fetch_archive(
+            requirement="tools >= 1.0.0",
+            url="https://example.test/tools.agmpkg",
+            expected_hash="sha256=" + "0" * 64,
+            handoff=lambda _: pytest.fail("archive handoff must not run"),
+            session=_Session(response),
+            scratch_dir=tmp_path,
+        )
+
+    assert response.exited
+    assert not tuple(tmp_path.iterdir())
+
+
+def test_fetch_times_out_if_the_deadline_expires_before_connect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(package_fetch, "_FETCH_TIMEOUT_SECONDS", 1.0)
+    monotonic_values = iter((0.0, 1.0))
+    monkeypatch.setattr(
+        package_fetch,
+        "time",
+        SimpleNamespace(monotonic=monotonic_values.__next__),
+        raising=False,
+    )
+    session = _Session(_Response([b"unused"]))
+
+    with pytest.raises(FetchError, match=r"fetch timed out.*tools >= 1\.0\.0"):
+        fetch_archive(
+            requirement="tools >= 1.0.0",
+            url="https://example.test/tools.agmpkg",
+            expected_hash="sha256=" + "0" * 64,
+            handoff=lambda _: pytest.fail("archive handoff must not run"),
+            session=session,
+            scratch_dir=tmp_path,
+        )
+
+    assert session.calls == []
     assert not tuple(tmp_path.iterdir())
 
 

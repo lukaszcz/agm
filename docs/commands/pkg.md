@@ -75,7 +75,8 @@ Versions are retained side by side. Dependencies use
 minimum-version resolution: a satisfying stored version is selected first, otherwise a declared
 local `path` source is installed. URL dependencies are fetched with a required SHA-256 hash, then
 the downloaded archive's normalized manifest and `RECORD` are verified before atomic extraction and
-activation.
+activation. Downloads have a 128 MiB size limit and a 30-second wall-clock deadline, including
+blocked connection and body reads; partial temporary archives are removed on failure.
 
 `--editable` activates the source directory directly, so its edits are visible immediately and
 no immutable copy or `RECORD` is created. Manifest `[commands]` registrations are merged into the

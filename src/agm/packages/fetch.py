@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import signal
 import tempfile
 import time
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Protocol
 
@@ -69,20 +71,23 @@ def fetch_archive(
                 digest = hashlib.sha256()
                 downloaded_size = 0
                 try:
-                    with client.get(url, stream=True, timeout=_FETCH_TIMEOUT_SECONDS) as response:
-                        response.raise_for_status()
-                        _check_timeout(requirement, deadline)
-                        for chunk in response.iter_content(_CHUNK_SIZE):
+                    with _wall_clock_deadline(requirement, deadline):
+                        with client.get(
+                            url, stream=True, timeout=_FETCH_TIMEOUT_SECONDS
+                        ) as response:
+                            response.raise_for_status()
                             _check_timeout(requirement, deadline)
-                            if chunk:
-                                downloaded_size += len(chunk)
-                                if downloaded_size > MAX_ARCHIVE_DOWNLOAD_SIZE:
-                                    raise FetchError(
-                                        f"fetch failed for {requirement}: "
-                                        "package archive exceeds the download size limit"
-                                    )
-                                file.write(chunk)
-                                digest.update(chunk)
+                            for chunk in response.iter_content(_CHUNK_SIZE):
+                                _check_timeout(requirement, deadline)
+                                if chunk:
+                                    downloaded_size += len(chunk)
+                                    if downloaded_size > MAX_ARCHIVE_DOWNLOAD_SIZE:
+                                        raise FetchError(
+                                            f"fetch failed for {requirement}: "
+                                            "package archive exceeds the download size limit"
+                                        )
+                                    file.write(chunk)
+                                    digest.update(chunk)
                 except FetchError:
                     raise
                 except Exception as exc:
@@ -103,6 +108,33 @@ def fetch_archive(
                 if not primary_failure:
                     error = FetchError(f"fetch failed for {requirement}: cleanup failed: {exc}")
                     raise error from exc
+
+
+@contextmanager
+def _wall_clock_deadline(requirement: str, deadline: float) -> Iterator[None]:
+    """Interrupt a blocked transport operation at its absolute deadline."""
+
+    started = time.monotonic()
+    remaining = deadline - started
+    if remaining <= 0:
+        raise FetchError(f"fetch timed out for {requirement}")
+
+    def raise_timeout(_signum: int, _frame: object) -> None:
+        raise FetchError(f"fetch timed out for {requirement}")
+
+    previous_handler = signal.signal(signal.SIGALRM, raise_timeout)
+    previous_timer = (0.0, 0.0)
+    try:
+        previous_timer = signal.setitimer(signal.ITIMER_REAL, remaining)
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        previous_remaining, previous_interval = previous_timer
+        if previous_remaining > 0:
+            elapsed = time.monotonic() - started
+            restored_remaining = max(previous_remaining - elapsed, 1e-6)
+            signal.setitimer(signal.ITIMER_REAL, restored_remaining, previous_interval)
 
 
 def _check_timeout(requirement: str, deadline: float) -> None:

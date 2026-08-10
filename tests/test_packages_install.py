@@ -730,6 +730,92 @@ def test_install_refuses_cyclic_and_mismatched_path_dependencies(tmp_path: Path)
     assert wrong.is_dir()
 
 
+def test_directory_install_stages_beside_the_final_store_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    destination = home / ".agm" / "packages" / "alpha" / "1.0.0"
+    original_copy_tree = package_install.fs.copy_tree
+    staged: list[Path] = []
+
+    def observe_copy(source_root: Path, staging: Path, *, dirs_exist_ok: bool = False) -> None:
+        assert staging != destination
+        assert staging.parent == destination.parent
+        assert staging.stat().st_dev == destination.parent.stat().st_dev
+        assert not destination.exists()
+        assert installed_packages(home=home, env={}) == ()
+        staged.append(staging)
+        original_copy_tree(source_root, staging, dirs_exist_ok=dirs_exist_ok)
+
+    monkeypatch.setattr(package_install.fs, "copy_tree", observe_copy)
+
+    installed = install_directory(source, home=home, env={})
+
+    assert installed.root == destination
+    assert staged
+    assert not staged[0].exists()
+    assert verify_record(destination)
+
+
+def test_directory_install_revalidates_the_staged_package_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    destination = home / ".agm" / "packages" / "alpha" / "1.0.0"
+    original_copy_tree = package_install.fs.copy_tree
+    staging_path: Path | None = None
+
+    def change_copied_identity(
+        source_root: Path, staging: Path, *, dirs_exist_ok: bool = False
+    ) -> None:
+        nonlocal staging_path
+        staging_path = staging
+        original_copy_tree(source_root, staging, dirs_exist_ok=dirs_exist_ok)
+        (staging / "alpha").rename(staging / "bravo")
+        (staging / "package.toml").write_text(
+            '[package]\nname = "bravo"\nversion = "1.0.0"\n', encoding="utf-8"
+        )
+
+    monkeypatch.setattr(package_install.fs, "copy_tree", change_copied_identity)
+
+    with pytest.raises(PackageInstallError, match="cannot install"):
+        install_directory(source, home=home, env={})
+
+    assert not destination.exists()
+    assert staging_path is not None
+    assert not staging_path.exists()
+    assert installed_packages(home=home, env={}) == ()
+
+
+def test_directory_install_cleans_staging_when_atomic_publication_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    destination = home / ".agm" / "packages" / "alpha" / "1.0.0"
+    original_replace = Path.replace
+    staging_path: Path | None = None
+
+    def fail_publication(path: Path, target: Path) -> Path:
+        nonlocal staging_path
+        if target == destination:
+            staging_path = path
+            assert verify_record(path)
+            raise OSError("publication failed")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_publication)
+
+    with pytest.raises(PackageInstallError, match="cannot install"):
+        install_directory(source, home=home, env={})
+
+    assert not destination.exists()
+    assert staging_path is not None
+    assert not staging_path.exists()
+
+
 def test_install_refuses_tampered_existing_tree_and_cleans_failed_copy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

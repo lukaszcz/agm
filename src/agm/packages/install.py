@@ -277,18 +277,29 @@ def _install_directory(
                 content_hash(record_entries(root)),
             )
         elif not dry_run.enabled():
-            fs.mkdir(destination.parent, parents=True, exist_ok=True)
+            staging: Path | None = None
             try:
-                fs.copy_tree(root, destination)
-                write_record(destination)
-                verify_record(destination)
+                fs.mkdir(destination.parent, parents=True, exist_ok=True)
+                staging = Path(mkdtemp(prefix=".agm-package-", dir=destination.parent))
+                fs.copy_tree(root, staging, dirs_exist_ok=True)
+                staged = PackageInfo(staging, load_manifest(staging / "package.toml"))
+                validate_package(staged)
+                if staged.manifest != package.manifest:
+                    raise PackageInstallError(
+                        "copied package manifest changed after source validation"
+                    )
+                write_record(staging)
+                verify_record(staging)
+                staging.replace(destination)
                 state.created.append(destination)
-            except (OSError, ValueError, RecordError) as exc:
-                if destination.exists():
-                    fs.rmtree(destination)
+                staging = None
+            except (DisciplineError, ManifestError, OSError, RecordError, ValueError) as exc:
                 raise PackageInstallError(
                     f"cannot install package {package.manifest.name!r}: {exc}"
                 ) from exc
+            finally:
+                if staging is not None and staging.exists():
+                    fs.rmtree(staging)
         else:
             fs.mkdir(destination.parent, parents=True, exist_ok=True)
             fs.copy_tree(root, destination)

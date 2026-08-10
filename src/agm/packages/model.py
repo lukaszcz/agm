@@ -33,10 +33,15 @@ def owning_package(path: Path, packages: tuple[PackageInfo, ...]) -> PackageInfo
     """
 
     canonical_path = path.resolve()
-    for package in packages:
+    for package in sorted(packages, key=_module_root_length, reverse=True):
         try:
             canonical_path.relative_to(package.module_root)
         except ValueError:
             continue
         return package
     return None
+
+
+def _module_root_length(package: PackageInfo) -> int:
+    """Order nested module roots before their containing roots."""
+    return len(str(package.module_root))

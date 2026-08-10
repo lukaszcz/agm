@@ -124,6 +124,22 @@ class TestPackageDiscipline:
             is None
         )
 
+    def test_prefers_the_most_specific_nested_package(self, tmp_path: Path) -> None:
+        outer = PackageInfo(
+            tmp_path,
+            PackageManifest("outer", semver.Version.parse("1.0.0")),
+        )
+        inner_root = tmp_path / "outer" / "vendor"
+        inner = PackageInfo(
+            inner_root,
+            PackageManifest("inner", semver.Version.parse("1.0.0")),
+        )
+        module = inner.module_root / "main.agl"
+        module.parent.mkdir(parents=True)
+        module.touch()
+
+        assert owning_package(module, (outer, inner)) == inner
+
     def test_maps_files_under_a_symlinked_module_tree_to_their_owning_package(
         self, tmp_path: Path
     ) -> None:

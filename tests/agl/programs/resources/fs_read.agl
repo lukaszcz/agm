@@ -1,0 +1,7 @@
+# A resource path composes with std/fs because both are ordinary text values.
+import std/fs
+
+let prompt = resource("prompt.md")
+
+program def main() -> unit =
+  print(fs::read(prompt))

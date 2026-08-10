@@ -563,14 +563,46 @@ package-owned module are anchored at the package root, so they remain stable whe
 module is imported from another project. Both calls are constant expressions and may
 initialize root bindings and `builtin var` defaults. They resolve during linking; a
 missing target is a static error. Package checks and package creation verify each
-literal resource target. AgL intentionally exposes paths only: it has no filesystem
-read/write API.
+literal resource target. `resource` produces a path only; use [`std/fs`](#stdfs) to
+perform filesystem effects.
 
 <!-- agl-check: fragment -->
 ```agl
 let prompt_path = resource("prompts/review.md")
 let package_root = resource-dir()
 ```
+
+## `std/fs`
+
+`std/fs` provides explicit UTF-8 filesystem effects. Import it and call its
+functions through the module route or an `open import`:
+
+<!-- agl-check: fragment -->
+```agl
+import std/fs
+
+program def main() -> unit =
+  let prompt = fs::read(resource("prompts/review.md"))
+  fs::write("draft.md", prompt)
+  fs::append("draft.md", "\n")
+  let names = fs::list(".")
+  print(fs::exists("draft.md"))
+```
+
+| Function | Result |
+| --- | --- |
+| `read(path: text)` | Reads and returns the file's text. |
+| `write(path: text, content: text)` | Replaces a file's text and returns `unit`. |
+| `append(path: text, content: text)` | Appends text to a file and returns `unit`. |
+| `exists(path: text)` | Returns whether the path exists. |
+| `list(path: text)` | Returns an `array[text]` of immediate child paths. |
+
+Every relative path is resolved against the invocation working directory, not
+the importing module or a resource anchor. A relative `list` result remains
+relative; an absolute input yields absolute child paths. `read`, `write`,
+`append`, and `list` surface filesystem failures as `ExternError`; `exists`
+returns `false` for a missing path. Hosts may suppress filesystem mutations in
+dry-run mode.
 
 ## `copy` and `shallow_copy`
 

@@ -1,0 +1,5 @@
+extern def read(path: text) -> text
+extern def write(path: text, content: text) -> unit
+extern def append(path: text, content: text) -> unit
+extern def exists(path: text) -> bool
+extern def list(path: text) -> array[text]

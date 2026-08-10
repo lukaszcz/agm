@@ -143,10 +143,11 @@ STDLIB_CONTRACT_MARKER_NAME = "STDLIB_CONTRACT"
 
 # The contract id the running code expects a selected stdlib tree to declare
 # in its top-level ``STDLIB_CONTRACT`` marker file. Bump this whenever a
-# shipped stdlib change (a builtin type, a runtime-checked field, ...) is
-# incompatible with an older installed tree, and update ``stdlib/STDLIB_CONTRACT``
-# in the same change so a fresh ``just install`` ships a matching marker.
-STDLIB_CONTRACT_ID = "1"
+# shipped stdlib change (a builtin type, a runtime-checked field, a public
+# module surface, ...) is incompatible with an older installed tree, and update
+# ``stdlib/STDLIB_CONTRACT`` in the same change so a fresh ``just install``
+# ships a matching marker.
+STDLIB_CONTRACT_ID = "2"
 
 
 class StaleStdlibError(RuntimeError):

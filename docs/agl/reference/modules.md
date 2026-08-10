@@ -251,6 +251,8 @@ rules.
 - `std/config` exposes the host engine settings as `builtin var` bindings.
 - `std/text` exposes `interp(template, vars) -> text` for name-only runtime
   interpolation; see [Strings and interpolation](strings-and-interpolation.md#runtime-interpolation).
+- `std/fs` exposes explicit text filesystem operations: `read`, `write`,
+  `append`, `exists`, and `list`; see [`std/fs`](expressions.md#stdfs).
 
 ## Library modules and cycles
 

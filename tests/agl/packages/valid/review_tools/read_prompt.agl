@@ -1,0 +1,6 @@
+import std/fs
+
+let prompt = resource("prompts/package-prompt.md")
+
+program def main() -> unit =
+  print(fs::read(prompt))

@@ -337,6 +337,34 @@ class TestResolveStdlibRoot:
 
         assert result == compatible_install_stdlib
 
+    def test_previous_contract_home_stdlib_is_bypassed_for_matching_install(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An installed tree from the previous std/fs contract cannot shadow a new one."""
+        _break_repo_stdlib_lookup(monkeypatch, tmp_path)
+        home = tmp_path / "home"
+        stale_home_stdlib = home / ".agm" / "stdlib"
+        _write_stdlib_marker(stale_home_stdlib, "1")
+
+        install_prefix = tmp_path / "prefix"
+        matching_install_stdlib = install_prefix / ".agm" / "stdlib"
+        _write_stdlib_marker(matching_install_stdlib, STDLIB_CONTRACT_ID)
+        monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: install_prefix)
+
+        assert resolve_stdlib_root(home=home, env={}) == matching_install_stdlib
+
+    def test_previous_contract_only_is_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An installed tree from the previous std/fs contract is rejected without a fallback."""
+        _break_repo_stdlib_lookup(monkeypatch, tmp_path)
+        home = tmp_path / "home"
+        stale_home_stdlib = home / ".agm" / "stdlib"
+        _write_stdlib_marker(stale_home_stdlib, "1")
+
+        with pytest.raises(StaleStdlibError):
+            resolve_stdlib_root(home=home, env={})
+
     def test_all_candidates_incompatible_raises_stale_stdlib_error(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "name": "reads_a_resource_path_with_std_fs",
+      "expect": {
+        "stdout": "Resource fixture prompt.\n\n"
+      }
+    }
+  ]
+}

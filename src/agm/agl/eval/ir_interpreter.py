@@ -721,28 +721,27 @@ class IrInterpreter:
 
         return result
 
-    def _install_entry_function_closures(self) -> None:
-        """Pre-install every entry-module zero-capture function closure.
+    def _install_function_closures(self) -> None:
+        """Pre-install every module's zero-capture function closures.
 
-        Runs before :meth:`_install_entry_params` so a param default that calls
-        an entry-declared function (or simply references its symbol) sees it
-        already bound, and so a closure installed here is promoted even when a
-        later param default fails.
+        Runs before parameter defaults so a default can call a function from
+        its declaring module, including an imported module whose initializers
+        have not yet run.
         """
-        entry_module = self._program.modules[self._program.entry_module]
-        for node in entry_module.initializers:
-            match node:
-                case IrBind(
-                    symbol=sym,
-                    value=IrMakeClosure(function_id=fn_id, captures=()) as closure_node,
-                ):
-                    desc = self._program.functions.get(fn_id)
-                    if desc is None or desc.function_symbol != sym:
+        for module in self._program.modules.values():
+            for node in module.initializers:
+                match node:
+                    case IrBind(
+                        symbol=sym,
+                        value=IrMakeClosure(function_id=fn_id, captures=()) as closure_node,
+                    ):
+                        desc = self._program.functions.get(fn_id)
+                        if desc is None or desc.function_symbol != sym:
+                            continue
+                        value = self._eval(closure_node)
+                        self._frames[0][sym] = value
+                    case _:
                         continue
-                    value = self._eval(closure_node)
-                    self._frames[0][sym] = value
-                case _:
-                    continue
 
     def _recursion_error(self) -> AglRaise:
         """Build the catchable AgL ``RecursionError`` for an exceeded call depth.
@@ -972,7 +971,7 @@ class IrInterpreter:
                 # never installed and applies the declaration-dependency
                 # fixpoint — so no separate "did the entry frame start" gate is
                 # needed here.
-                self._install_entry_function_closures()
+                self._install_function_closures()
                 self._install_params()
 
                 for mod in self._program.modules.values():

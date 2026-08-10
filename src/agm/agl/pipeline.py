@@ -393,6 +393,26 @@ class PipelineDriver:
                 warnings=list(warnings),
             )
 
+        if select_default_program and program_symbol is None:
+            entry_programs = tuple(
+                symbol
+                for symbol, function_id in executable.program_functions.items()
+                if executable.functions[function_id].module_id == executable.entry_module
+            )
+            if len(entry_programs) > 1:
+                return RunResult(
+                    ok=False,
+                    diagnostics=[
+                        Diagnostic(message="multiple programs declared; select one", line=1)
+                    ],
+                    error=None,
+                    warnings=list(warnings),
+                    bindings={},
+                    trace_path=None,
+                )
+            if len(entry_programs) == 1:
+                program_symbol = entry_programs[0]
+
         # ----------------------------------------------------------------
         # [check_only] --dry-run stop: the full static pipeline, param
         # validation, and contract materialization have all succeeded.  Stop
@@ -414,26 +434,6 @@ class PipelineDriver:
         # ----------------------------------------------------------------
         # Build and run the interpreter
         # ----------------------------------------------------------------
-        if select_default_program and program_symbol is None:
-            entry_programs = tuple(
-                symbol
-                for symbol, function_id in executable.program_functions.items()
-                if executable.functions[function_id].module_id == executable.entry_module
-            )
-            if len(entry_programs) > 1:
-                return RunResult(
-                    ok=False,
-                    diagnostics=[
-                        Diagnostic(message="multiple programs declared; select one", line=1)
-                    ],
-                    error=None,
-                    warnings=list(warnings),
-                    bindings={},
-                    trace_path=None,
-                )
-            if len(entry_programs) == 1:
-                program_symbol = entry_programs[0]
-
         from agm.agl.runtime.trace import TraceStore
         from agm.agl.semantics.exceptions import AglRaise
 

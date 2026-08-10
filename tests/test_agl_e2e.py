@@ -396,6 +396,21 @@ def test_pipeline_run_invokes_the_single_entry_program(capsys: pytest.CaptureFix
     assert capsys.readouterr().out == "hello\n"
 
 
+def test_pipeline_check_only_rejects_ambiguous_default_program() -> None:
+    from agm.agl import PipelineDriver
+
+    result = PipelineDriver().run(
+        "program def first() -> unit = ()\nprogram def second() -> unit = ()\n",
+        check_only=True,
+    )
+
+    assert not result.ok
+    assert result.error is None
+    assert [diagnostic.message for diagnostic in result.diagnostics] == [
+        "multiple programs declared; select one"
+    ]
+
+
 def test_qualified_std_core_print_still_works(capsys: pytest.CaptureFixture[str]) -> None:
     """A fully qualified ``std/core::print(...)`` call still runs, exactly as
     the bare form does — a built-in call is classified once its callee

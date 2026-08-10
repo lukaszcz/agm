@@ -256,6 +256,10 @@ def _validate_package_name(name: str) -> None:
 
 def _module_files(package: PackageInfo) -> dict[ModuleId, Path]:
     module_root = package.module_root
+    if not module_root.is_relative_to(package.root):
+        raise DisciplineError(
+            f"package {package.manifest.name!r} module tree escapes the package root"
+        )
     if not fs.is_dir(module_root):
         raise DisciplineError(
             f"package {package.manifest.name!r} requires module tree {module_root.name!r}"

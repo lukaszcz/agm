@@ -136,6 +136,8 @@ class TestPackageDiscipline:
         module.write_text("program def main() -> unit = ()\n")
 
         assert owning_package(module, (package,)) == package
+        with pytest.raises(DisciplineError, match="escapes"):
+            validate_package(package)
 
     def test_rejects_invalid_utf8_referenced_source_fixture(self) -> None:
         with pytest.raises(DisciplineError):

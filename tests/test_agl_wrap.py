@@ -98,9 +98,7 @@ print value
 
 
 def test_wrap_inline_program_keeps_late_exports_with_the_executable_body() -> None:
-    program, next_node_id = parse_program_seeded(
-        "let value = 1\nexport helpers\n", start_id=0
-    )
+    program, next_node_id = parse_program_seeded("let value = 1\nexport helpers\n", start_id=0)
 
     wrapped, _ = wrap_inline_program(program, next_node_id=next_node_id)
 

@@ -317,6 +317,27 @@ class TestParseParamTokens:
             "pkg/tuning::max-iters": "5"
         }
 
+    def test_enum_engine_key_does_not_reserve_a_synthetic_negative_flag(self) -> None:
+        from agm.cli_support.exec_params import parse_param_tokens
+
+        params = (self._text_param("no-default-agent", module_segments=("pkg", "settings")),)
+
+        assert parse_param_tokens(params, ["--no-default-agent", "custom"]) == {
+            "no-default-agent": "custom"
+        }
+
+    @pytest.mark.parametrize("name", ("no-log", "no-strict-json", "no-log-file", "no-timeout"))
+    def test_actual_negative_engine_flags_require_module_qualification(self, name: str) -> None:
+        from agm.cli_support.exec_params import parse_param_tokens
+
+        params = (self._text_param(name, module_segments=("pkg", "settings")),)
+
+        with pytest.raises(ValueError, match=f"pkg/settings::{name}"):
+            parse_param_tokens(params, [f"--{name}", "value"])
+        assert parse_param_tokens(params, [f"--pkg/settings::{name}", "value"]) == {
+            f"pkg/settings::{name}": "value"
+        }
+
     def test_short_spelling_collision_requires_module_qualification(self) -> None:
         from agm.cli_support.exec_params import parse_param_tokens
 

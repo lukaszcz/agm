@@ -35,19 +35,17 @@ def _build_engine_key_flags() -> frozenset[str]:
     - Adds ``--no-<name>`` for bool-typed keys and Option-typed keys (which have
       an explicit ``--no-<name>`` negation to set the binding to ``none``).
 
-    Derived at import time from ``ENGINE_KEY_NAMES`` + ``get_engine_key_type``
-    so that adding a new engine key automatically appears here.
+    Derived at import time from the engine-key catalog so that adding a new
+    engine key automatically appears here.
     """
-    from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES, get_engine_key_type
-    from agm.agl.semantics.types import EnumType
+    from agm.config.engine_keys import ENGINE_KEYS, EngineKeyKind
 
     flags: set[str] = set()
-    for name in ENGINE_KEY_NAMES:
-        flags.add(f"--{name}")
-        key_type = get_engine_key_type(name)
-        # Both bool keys and Option[T] keys have a ``--no-<name>`` counterpart.
-        if key_type is not None and isinstance(key_type, (BoolType, EnumType)):
-            flags.add(f"--no-{name}")
+    for spec in ENGINE_KEYS:
+        flags.add(f"--{spec.name}")
+        # Only bool and Option[text] engine keys have a negative CLI flag.
+        if spec.kind in {EngineKeyKind.BOOL, EngineKeyKind.OPTION_TEXT}:
+            flags.add(f"--no-{spec.name}")
     return frozenset(flags)
 
 

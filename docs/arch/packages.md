@@ -38,7 +38,9 @@ boundary. Active immutable selections verify `RECORD` again when resolved for ac
 Editable selections remain live and are exempt. The shipped
 `std` package is a managed store package whose
 version must exactly match the running AGM version. It is refreshed by `just install`, not by
-the ordinary package-install paths, and cannot be uninstalled.
+the ordinary package-install paths, and cannot be uninstalled. Its package-domain refresh holds
+the store lock while staging and validating a complete replacement beside the active version;
+rename publication replaces the whole tree rather than exposing an in-place copy.
 
 The `agm.packages` public façade resolves domain exports lazily. This keeps package model
 leaves available to AgL module loading without pulling in package discipline validation, which

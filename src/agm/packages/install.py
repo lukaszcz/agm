@@ -140,6 +140,77 @@ def install_directory(
         return package
 
 
+def refresh_managed_stdlib(
+    source: Path,
+    *,
+    home: Path,
+    env: Mapping[str, str] | None = None,
+) -> PackageInfo:
+    """Safely replace and activate AGM's shipped standard-library package.
+
+    The complete replacement is staged beside its versioned store path while
+    holding the package-operation lock. Publication only renames complete
+    trees, so readers can never observe files being copied into the active
+    package directory.
+    """
+
+    with _package_operation_lock(home=home, env=env):
+        package = _validated_directory_package(source)
+        _validate_managed_stdlib_install(package.manifest, source=package.root, editable=False)
+        _validate_minimum_agm(package.manifest)
+        try:
+            destination = canonical_package_store_path(
+                package.manifest.name, package.manifest.version, home=home, env=env
+            )
+        except ValueError as exc:
+            raise PackageInstallError(f"cannot refresh managed std package: {exc}") from exc
+        installed = PackageInfo(destination, package.manifest)
+        if dry_run.enabled():
+            dry_run.print_operation("refresh-managed-stdlib", str(source))
+            return installed
+
+        staging: Path | None = None
+        published: tuple[Path, Path | None] | None = None
+        try:
+            staging = _stage_directory_package(package.root, package, destination)
+            previous = _publish_staged_refresh(staging, destination)
+            published = (staging, previous)
+            state = _InstallState(
+                home=home,
+                env=env,
+                index=_load_install_index(home=home, env=env),
+            )
+            _resolve_dependencies(package, state)
+            _activate_package(installed, state, editable_root=None, shadow=False)
+            _commit_activation(state.index, home=home, env=env)
+            published = None
+            if previous is not None:
+                fs.rmtree(previous)
+                previous = None
+            return installed
+        except (
+            DisciplineError,
+            ManifestError,
+            OSError,
+            PackageInstallError,
+            RecordError,
+            ValueError,
+        ) as exc:
+            if published is not None:
+                published_staging, previous = published
+                try:
+                    _rollback_managed_refresh(destination, published_staging, previous)
+                except OSError as rollback_exc:
+                    raise PackageInstallError(
+                        f"cannot refresh managed std package and restore its previous tree: "
+                        f"{rollback_exc}"
+                    ) from rollback_exc
+            raise PackageInstallError(f"cannot refresh managed std package: {exc}") from exc
+        finally:
+            if staging is not None and staging.exists():
+                fs.rmtree(staging)
+
+
 def install_archive(
     archive: Path,
     *,
@@ -268,9 +339,9 @@ def installed_packages(
     return tuple(packages)
 
 
-def _install_directory(
-    source: Path, *, state: _InstallState, editable: bool, shadow: bool
-) -> PackageInfo:
+def _validated_directory_package(source: Path) -> PackageInfo:
+    """Load and validate one package source directory."""
+
     if source.is_symlink():
         raise PackageInstallError(f"cannot install symbolic-link package root {source}")
     root = source.resolve()
@@ -279,6 +350,60 @@ def _install_directory(
         validate_package(package)
     except (ManifestError, DisciplineError) as exc:
         raise PackageInstallError(f"cannot install package from {source}: {exc}") from exc
+    return package
+
+
+def _stage_directory_package(source: Path, package: PackageInfo, destination: Path) -> Path:
+    """Copy and fully validate a package in a sibling staging directory."""
+
+    fs.mkdir(destination.parent, parents=True, exist_ok=True)
+    staging = Path(mkdtemp(prefix=".agm-package-", dir=destination.parent))
+    try:
+        fs.copy_tree(source, staging, dirs_exist_ok=True)
+        staged = PackageInfo(staging, load_manifest(staging / "package.toml"))
+        validate_package(staged)
+        if staged.manifest != package.manifest:
+            raise PackageInstallError("copied package manifest changed after source validation")
+        write_record(staging)
+        verify_record(staging)
+        return staging
+    except (DisciplineError, ManifestError, OSError, PackageInstallError, RecordError, ValueError):
+        fs.rmtree(staging)
+        raise
+
+
+def _publish_staged_refresh(staging: Path, destination: Path) -> Path | None:
+    """Publish a complete replacement, restoring the old tree if publication fails."""
+
+    previous: Path | None = None
+    if destination.exists():
+        previous = Path(mkdtemp(prefix=".agm-previous-", dir=destination.parent))
+        fs.rmdir(previous)
+        destination.replace(previous)
+    try:
+        staging.replace(destination)
+    except OSError:
+        if previous is not None:
+            previous.replace(destination)
+        raise
+    return previous
+
+
+def _rollback_managed_refresh(destination: Path, staging: Path, previous: Path | None) -> None:
+    """Restore the tree displaced by a refresh whose activation failed."""
+
+    if previous is None:
+        fs.rmtree(destination)
+        return
+    destination.replace(staging)
+    previous.replace(destination)
+
+
+def _install_directory(
+    source: Path, *, state: _InstallState, editable: bool, shadow: bool
+) -> PackageInfo:
+    package = _validated_directory_package(source)
+    root = package.root
 
     _validate_managed_stdlib_install(package.manifest, source=root, editable=editable)
     _validate_minimum_agm(package.manifest)
@@ -305,21 +430,18 @@ def _install_directory(
         elif not dry_run.enabled():
             staging: Path | None = None
             try:
-                fs.mkdir(destination.parent, parents=True, exist_ok=True)
-                staging = Path(mkdtemp(prefix=".agm-package-", dir=destination.parent))
-                fs.copy_tree(root, staging, dirs_exist_ok=True)
-                staged = PackageInfo(staging, load_manifest(staging / "package.toml"))
-                validate_package(staged)
-                if staged.manifest != package.manifest:
-                    raise PackageInstallError(
-                        "copied package manifest changed after source validation"
-                    )
-                write_record(staging)
-                verify_record(staging)
+                staging = _stage_directory_package(root, package, destination)
                 staging.replace(destination)
                 state.created.append(destination)
                 staging = None
-            except (DisciplineError, ManifestError, OSError, RecordError, ValueError) as exc:
+            except (
+                DisciplineError,
+                ManifestError,
+                OSError,
+                PackageInstallError,
+                RecordError,
+                ValueError,
+            ) as exc:
                 raise PackageInstallError(
                     f"cannot install package {package.manifest.name!r}: {exc}"
                 ) from exc

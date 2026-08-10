@@ -10,10 +10,7 @@ from pathlib import Path
 from typing import Protocol, cast
 
 from agm.config.general import agm_home_dir
-from agm.packages.install import install_directory
-from agm.packages.manifest import load_manifest
-from agm.packages.record import verify_record, write_record
-from agm.packages.store import canonical_package_store_path
+from agm.packages.install import refresh_managed_stdlib
 
 
 class _InstallArgs(Protocol):
@@ -51,25 +48,6 @@ def _install_file(*, source: Path, destination: Path, force: bool) -> bool:
     return True
 
 
-def _path_depth(path: Path) -> int:
-    """Return *path*'s depth (its number of components), for deepest-first sorting."""
-    return len(path.parts)
-
-
-def _prepare_managed_destination(destination_dir: Path) -> None:
-    """Create *destination_dir*, refusing trees that contain symlinks."""
-    if destination_dir.is_symlink():
-        raise RuntimeError(f"Refusing to refresh symlinked directory: {destination_dir}")
-
-    destination_dir.mkdir(parents=True, exist_ok=True)
-    symlink = next(
-        (path for path in destination_dir.rglob("*") if path.is_symlink()),
-        None,
-    )
-    if symlink is not None:
-        raise RuntimeError(f"Refusing to refresh directory containing symlink: {symlink}")
-
-
 def _install_tree_files(
     *,
     source_dir: Path,
@@ -77,51 +55,18 @@ def _install_tree_files(
     force: bool,
     installed: list[Path],
     skipped: list[Path],
-    pruned: list[Path] | None = None,
 ) -> None:
-    """Copy every file under *source_dir* into *destination_dir*.
-
-    When *pruned* is given, *destination_dir* is additionally made an exact
-    mirror of *source_dir*: any file under *destination_dir* with no
-    corresponding file under *source_dir* is removed (appended to *pruned*),
-    followed by any directory left empty as a result. Both the copy and the
-    prune walk are confined strictly to *destination_dir* — nothing outside
-    it is ever touched. Used for managed-artifact trees (the stdlib) that
-    AGM owns outright, as opposed to user-editable config the caller may
-    have customized.
-    """
-    source_relatives: set[Path] = set()
+    """Copy every file under *source_dir* into *destination_dir*."""
     for source in sorted(source_dir.rglob("*")):
         if not source.is_file():
             continue
         relative = source.relative_to(source_dir)
-        source_relatives.add(relative)
         destination = destination_dir / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         if _install_file(source=source, destination=destination, force=force):
             installed.append(destination)
         else:
             skipped.append(destination)
-
-    if pruned is None:
-        return
-
-    for destination in sorted(destination_dir.rglob("*")):
-        if not destination.is_file():
-            continue
-        stale = destination.relative_to(destination_dir) not in source_relatives
-        if stale:
-            destination.unlink()
-            pruned.append(destination)
-
-    # Remove directories left empty by pruning, deepest first.
-    stale_dirs = [d for d in destination_dir.rglob("*") if d.is_dir()]
-    stale_dirs.sort(key=_path_depth, reverse=True)
-    for directory in stale_dirs:
-        try:
-            directory.rmdir()
-        except OSError:
-            pass  # not empty (still holds files that were never pruned)
 
 
 def install_user_config(
@@ -167,26 +112,10 @@ def install_user_config(
         else:
             skipped.append(prompt_destination)
 
-    # The installed stdlib is one managed, immutable store package. The
-    # package domain owns activation and its index; this installer owns its
-    # force-refresh, pruning, and destination symlink refusal.
-    stdlib_source = repo_root / "stdlib"
-    manifest = load_manifest(stdlib_source / "package.toml")
-    store_destination = canonical_package_store_path(
-        manifest.name, manifest.version, home=install_root, env=env
-    )
-    _prepare_managed_destination(store_destination)
-    _install_tree_files(
-        source_dir=stdlib_source,
-        destination_dir=store_destination,
-        force=True,
-        installed=installed,
-        skipped=skipped,
-        pruned=pruned,
-    )
-    write_record(store_destination)
-    verify_record(store_destination)
-    install_directory(stdlib_source, home=install_root, env=env)
+    # The package domain owns the managed stdlib's locked staging,
+    # publication, integrity record, activation, and stale-file replacement.
+    stdlib = refresh_managed_stdlib(repo_root / "stdlib", home=install_root, env=env)
+    installed.append(stdlib.root)
 
     micro_source_dir = repo_root / "config" / "micro"
     if micro_source_dir.exists():

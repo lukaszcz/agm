@@ -26,9 +26,10 @@ from agm.packages.install import (
     install_archive,
     install_directory,
     installed_packages,
+    refresh_managed_stdlib,
     uninstall_package,
 )
-from agm.packages.record import verify_record
+from agm.packages.record import verify_record, write_record
 from agm.version import AGM_VERSION
 
 
@@ -56,11 +57,11 @@ def _package(root: Path, name: str, version: str, dependencies: str = "") -> Pat
     return root
 
 
-def test_install_registers_stdlib_package_under_an_isolated_agm_home(tmp_path: Path) -> None:
+def test_refresh_registers_stdlib_package_under_an_isolated_agm_home(tmp_path: Path) -> None:
     source = Path(__file__).resolve().parent.parent / "stdlib"
     agm_home = tmp_path / "agm-home"
 
-    installed = install_directory(
+    installed = refresh_managed_stdlib(
         source,
         home=tmp_path / "ignored-home",
         env={"AGM_HOME": str(agm_home)},
@@ -71,6 +72,187 @@ def test_install_registers_stdlib_package_under_an_isolated_agm_home(tmp_path: P
     assert verify_record(installed.root)
     index = load_activation_index(home=tmp_path / "ignored-home", env={"AGM_HOME": str(agm_home)})
     assert index.packages["std"].version == installed.manifest.version
+
+
+def test_managed_stdlib_refresh_stages_under_the_store_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = Path(__file__).resolve().parent.parent / "stdlib"
+    home = tmp_path / "home"
+    installed = install_directory(source, home=home, env={})
+    core = installed.root / "std" / "core.agl"
+    stale = installed.root / "std" / "stale.agl"
+    core.write_text("old complete tree\n", encoding="utf-8")
+    stale.write_text("stale\n", encoding="utf-8")
+    write_record(installed.root)
+    original_copy_tree = package_install.fs.copy_tree
+    observed_staging: Path | None = None
+
+    def observe_copy(source_root: Path, staging: Path, *, dirs_exist_ok: bool = False) -> None:
+        nonlocal observed_staging
+        observed_staging = staging
+        assert staging != installed.root
+        assert core.read_text(encoding="utf-8") == "old complete tree\n"
+        assert stale.is_file()
+        with (home / ".agm" / "packages" / ".lock").open("a+", encoding="utf-8") as lock:
+            with pytest.raises(BlockingIOError):
+                package_install.fcntl.flock(
+                    lock.fileno(), package_install.fcntl.LOCK_EX | package_install.fcntl.LOCK_NB
+                )
+        original_copy_tree(source_root, staging, dirs_exist_ok=dirs_exist_ok)
+
+    monkeypatch.setattr(package_install.fs, "copy_tree", observe_copy)
+
+    refreshed = refresh_managed_stdlib(source, home=home, env={})
+
+    assert refreshed.root == installed.root
+    assert observed_staging is not None
+    assert not observed_staging.exists()
+    assert core.read_bytes() == (source / "std" / "core.agl").read_bytes()
+    assert not stale.exists()
+    assert verify_record(refreshed.root)
+    active = load_activation_index(home=home, env={}).packages["std"]
+    assert active.version == refreshed.manifest.version
+
+
+def test_managed_stdlib_refresh_restores_the_complete_tree_when_activation_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = Path(__file__).resolve().parent.parent / "stdlib"
+    home = tmp_path / "home"
+    installed = install_directory(source, home=home, env={})
+    core = installed.root / "std" / "core.agl"
+    core.write_text("old complete tree\n", encoding="utf-8")
+    write_record(installed.root)
+
+    def fail_activation(*_args: object, **_kwargs: object) -> None:
+        raise PackageInstallError("activation failed")
+
+    monkeypatch.setattr(package_install, "_commit_activation", fail_activation)
+
+    with pytest.raises(PackageInstallError, match="refresh"):
+        refresh_managed_stdlib(source, home=home, env={})
+
+    assert core.read_text(encoding="utf-8") == "old complete tree\n"
+    assert verify_record(installed.root)
+    assert not tuple(installed.root.parent.glob(".agm-package-*"))
+    assert not tuple(installed.root.parent.glob(".agm-previous-*"))
+
+
+def test_initial_managed_stdlib_refresh_removes_publication_when_activation_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = Path(__file__).resolve().parent.parent / "stdlib"
+    home = tmp_path / "home"
+
+    def fail_activation(*_args: object, **_kwargs: object) -> None:
+        raise PackageInstallError("activation failed")
+
+    monkeypatch.setattr(package_install, "_commit_activation", fail_activation)
+
+    with pytest.raises(PackageInstallError, match="refresh"):
+        refresh_managed_stdlib(source, home=home, env={})
+
+    assert not (home / ".agm" / "packages" / "std" / AGM_VERSION).exists()
+
+
+def test_managed_stdlib_refresh_reports_a_failed_activation_rollback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = Path(__file__).resolve().parent.parent / "stdlib"
+    home = tmp_path / "home"
+
+    def fail_activation(*_args: object, **_kwargs: object) -> None:
+        raise PackageInstallError("activation failed")
+
+    monkeypatch.setattr(package_install, "_commit_activation", fail_activation)
+    monkeypatch.setattr(
+        package_install.fs,
+        "rmtree",
+        lambda _path: (_ for _ in ()).throw(OSError("rollback failed")),
+    )
+
+    with pytest.raises(PackageInstallError, match="restore"):
+        refresh_managed_stdlib(source, home=home, env={})
+
+
+def test_initial_managed_stdlib_refresh_cleans_staging_when_publication_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = Path(__file__).resolve().parent.parent / "stdlib"
+    home = tmp_path / "home"
+    destination = home / ".agm" / "packages" / "std" / AGM_VERSION
+    original_replace = Path.replace
+
+    def fail_publication(path: Path, target: Path) -> Path:
+        if target == destination and path.name.startswith(".agm-package-"):
+            raise OSError("publication failed")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_publication)
+
+    with pytest.raises(PackageInstallError, match="refresh"):
+        refresh_managed_stdlib(source, home=home, env={})
+
+    assert not destination.exists()
+    assert not tuple(destination.parent.glob(".agm-package-*"))
+
+
+def test_managed_stdlib_refresh_restores_the_complete_tree_when_publication_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = Path(__file__).resolve().parent.parent / "stdlib"
+    home = tmp_path / "home"
+    installed = install_directory(source, home=home, env={})
+    core = installed.root / "std" / "core.agl"
+    core.write_text("old complete tree\n", encoding="utf-8")
+    write_record(installed.root)
+    original_replace = Path.replace
+
+    def fail_publication(path: Path, target: Path) -> Path:
+        if target == installed.root and path.name.startswith(".agm-package-"):
+            assert verify_record(path)
+            raise OSError("publication failed")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_publication)
+
+    with pytest.raises(PackageInstallError, match="refresh"):
+        refresh_managed_stdlib(source, home=home, env={})
+
+    assert core.read_text(encoding="utf-8") == "old complete tree\n"
+    assert verify_record(installed.root)
+    assert not tuple(installed.root.parent.glob(".agm-package-*"))
+    assert not tuple(installed.root.parent.glob(".agm-previous-*"))
+
+
+def test_managed_stdlib_refresh_dry_run_only_reports_the_planned_refresh(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = Path(__file__).resolve().parent.parent / "stdlib"
+    home = tmp_path / "home"
+    dry_run.set_enabled(True)
+
+    planned = refresh_managed_stdlib(source, home=home, env={})
+
+    assert planned.root == home / ".agm" / "packages" / "std" / AGM_VERSION
+    assert "refresh-managed-stdlib" in capsys.readouterr().out
+    assert not (home / ".agm").exists()
+
+
+def test_managed_stdlib_refresh_refuses_a_symlinked_store_destination(tmp_path: Path) -> None:
+    source = Path(__file__).resolve().parent.parent / "stdlib"
+    home = tmp_path / "home"
+    std_versions = home / ".agm" / "packages" / "std"
+    outside = tmp_path / "outside"
+    std_versions.parent.mkdir(parents=True)
+    outside.mkdir()
+    std_versions.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(PackageInstallError, match="refresh"):
+        refresh_managed_stdlib(source, home=home, env={})
+
+    assert not tuple(outside.iterdir())
 
 
 def test_package_operations_create_a_store_lock(tmp_path: Path) -> None:

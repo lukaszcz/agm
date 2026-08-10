@@ -117,6 +117,33 @@ def test_managed_stdlib_refresh_stages_under_the_store_lock(
     assert active.version == refreshed.manifest.version
 
 
+def test_managed_stdlib_refresh_retries_post_commit_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = Path(__file__).resolve().parent.parent / "stdlib"
+    home = tmp_path / "home"
+    installed = install_directory(source, home=home, env={})
+    original_rmtree = package_install.fs.rmtree
+
+    def fail_previous_cleanup(path: Path) -> None:
+        if path.name.startswith(".agm-previous-"):
+            raise OSError("blocked")
+        original_rmtree(path)
+
+    monkeypatch.setattr(package_install.fs, "rmtree", fail_previous_cleanup)
+    refreshed = refresh_managed_stdlib(source, home=home, env={})
+
+    assert refreshed.root == installed.root
+    assert verify_record(refreshed.root)
+    assert load_activation_index(home=home, env={}).packages["std"].version == refreshed.manifest.version
+    assert tuple(installed.root.parent.glob(".agm-previous-*"))
+
+    monkeypatch.setattr(package_install.fs, "rmtree", original_rmtree)
+    refresh_managed_stdlib(source, home=home, env={})
+
+    assert not tuple(installed.root.parent.glob(".agm-previous-*"))
+
+
 def test_managed_stdlib_refresh_restores_the_complete_tree_when_activation_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -182,9 +182,7 @@ def refresh_managed_stdlib(
             _activate_package(installed, state, editable_root=None, shadow=False)
             _commit_activation(state.index, home=home, env=env)
             published = None
-            if previous is not None:
-                fs.rmtree(previous)
-                previous = None
+            _cleanup_previous_refreshes(destination.parent)
             return installed
         except (
             DisciplineError,
@@ -399,6 +397,19 @@ def _publish_staged_refresh(staging: Path, destination: Path) -> Path | None:
             previous.replace(destination)
         raise
     return previous
+
+
+def _cleanup_previous_refreshes(parent: Path) -> None:
+    """Best-effort cleanup after a managed refresh has committed."""
+    try:
+        previous_paths = tuple(parent.glob(".agm-previous-*"))
+    except OSError:
+        return
+    for previous in previous_paths:
+        try:
+            fs.rmtree(previous)
+        except OSError:
+            continue
 
 
 def _rollback_managed_refresh(destination: Path, staging: Path, previous: Path | None) -> None:

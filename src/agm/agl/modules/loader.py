@@ -298,11 +298,14 @@ def _check_package_import_visibility(
     if roots.is_standard_library_path(target_path):
         return
     target_package = owning_package(target_path, roots.packages)
-    if target_package == source_package:
+    if target_package == source_package and target_id.segments[0] == source_package.manifest.name:
         return
-    target_name = (
-        target_package.manifest.name if target_package is not None else target_id.segments[0]
-    )
+    if target_package == source_package:
+        target_name = target_id.segments[0]
+    elif target_package is not None:
+        target_name = target_package.manifest.name
+    else:
+        target_name = target_id.segments[0]
     if target_package is not None and target_name in source_package.manifest.dependencies:
         return
     raise PackageImportVisibilityError(source_package.manifest.name, target_name, span=span)

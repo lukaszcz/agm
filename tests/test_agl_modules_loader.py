@@ -487,6 +487,23 @@ class TestPackageRootsAndVisibility:
         assert ModuleId.from_path("std/config") in graph.modules
         assert ModuleId.from_path("bravo/shared") in graph.modules
 
+    def test_package_module_rejects_own_file_under_an_unqualified_identity(
+        self, tmp_path: Path
+    ) -> None:
+        alpha = _package(tmp_path, "alpha")
+        _write_module(alpha.root, "alpha/main", "import helper")
+        _write_module(alpha.root, "alpha/helper")
+
+        with pytest.raises(PackageImportVisibilityError) as exc_info:
+            load_graph(
+                "import alpha/main",
+                entry_path=None,
+                roots=_package_roots(tmp_path, alpha, loose_roots=(alpha.module_root,)),
+                default_stdlib=False,
+            )
+
+        assert exc_info.value.target == "helper"
+
     def test_package_module_rejects_undeclared_cross_package_import(self, tmp_path: Path) -> None:
         alpha = _package(tmp_path, "alpha")
         bravo = _package(tmp_path, "bravo")

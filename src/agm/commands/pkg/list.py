@@ -16,6 +16,7 @@ from agm.packages.activation import (
 )
 from agm.packages.install import PackageInstallError, installed_packages
 from agm.packages.manifest import ManifestError
+from agm.packages.model import canonical_package_identity
 
 
 def run(args: PkgListArgs) -> None:
@@ -40,14 +41,19 @@ def run(args: PkgListArgs) -> None:
     except (ManifestError, PackageActivationError, PackageInstallError) as exc:
         print(f"pkg list: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
-    active_versions = {
-        (name, active.version) for name, active in index.packages.items() if active.editable is None
+    active_identities = {
+        canonical_package_identity(name, active.version)
+        for name, active in index.packages.items()
+        if active.editable is None
     }
     commands_by_package: dict[str, list[str]] = {}
     for path_name, command in index.commands.items():
         commands_by_package.setdefault(command.package, []).append(path_name)
     for package in packages:
-        is_active = (package.manifest.name, package.manifest.version) in active_versions
+        is_active = (
+            canonical_package_identity(package.manifest.name, package.manifest.version)
+            in active_identities
+        )
         kind = "active" if is_active else "installed"
         print(f"{package.manifest.name} {package.manifest.version} {kind}")
         if is_active:

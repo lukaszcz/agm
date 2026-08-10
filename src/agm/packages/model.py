@@ -5,7 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import semver
+
 from agm.packages.manifest import PackageManifest
+
+PackageIdentity = tuple[str, str]
+
+
+def canonical_package_identity(name: str, version: semver.Version) -> PackageIdentity:
+    """Return an exact canonical identity, including semantic-version build metadata."""
+
+    return name, str(version)
 
 
 @dataclass(frozen=True, slots=True)

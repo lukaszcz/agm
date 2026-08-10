@@ -25,7 +25,7 @@ Later layers override earlier ones; table-valued sections merge by key rather th
 
 ## Sections and Per-Command Overrides
 
-Configuration is organized into sections consumed by specific features — for example loop, run, exec, module-root, and package-pin settings. `[packages]` maps package names to exact semantic versions; its merged pins override the global package activation selection for that invocation, and malformed pins fail when package roots are selected without making unrelated sections strict. Some commands additionally support per-command override sections (such as a per-command review or revise table) that merge over the base section, so a default can be set once and specialized for a particular command.
+Configuration is organized into sections consumed by specific features — for example loop, run, exec, module-root, and package-pin settings. `[packages]` maps package names to exact semantic versions, including build metadata; its merged pins override the global package activation selection for that invocation, and malformed pins fail when package roots are selected without making unrelated sections strict. Some commands additionally support per-command override sections (such as a per-command review or revise table) that merge over the base section, so a default can be set once and specialized for a particular command.
 
 For AgL execution, four sources combine with a defined precedence:
 

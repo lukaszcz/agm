@@ -34,7 +34,7 @@ from agm.packages.archive import (
 from agm.packages.discipline import DisciplineError, validate_package
 from agm.packages.fetch import FetchError, fetch_archive
 from agm.packages.manifest import DependencySpec, ManifestError, PackageManifest, load_manifest
-from agm.packages.model import PackageInfo
+from agm.packages.model import PackageInfo, canonical_package_identity
 from agm.packages.record import (
     RecordEntry,
     RecordError,
@@ -83,7 +83,9 @@ def _validate_managed_stdlib_install(
     """Require ``std`` to be the immutable, lockstep shipped package."""
     if manifest.name != "std":
         return
-    if manifest.version != semver.Version.parse(AGM_VERSION):
+    if canonical_package_identity(manifest.name, manifest.version) != canonical_package_identity(
+        "std", semver.Version.parse(AGM_VERSION)
+    ):
         raise PackageInstallError(
             f"managed std package version must exactly match AGM version {AGM_VERSION}"
         )
@@ -324,9 +326,9 @@ def installed_packages(
                 raise PackageInstallError(
                     f"cannot load installed package at {version_dir}: {exc}"
                 ) from exc
-            if (
-                package.manifest.name != name_dir.name
-                or str(package.manifest.version) != version_dir.name
+            if canonical_package_identity(package.manifest.name, package.manifest.version) != (
+                name_dir.name,
+                version_dir.name,
             ):
                 raise PackageInstallError(
                     f"installed package at {version_dir} does not match its store identity"
@@ -358,7 +360,11 @@ def _stage_directory_package(source: Path, package: PackageInfo, destination: Pa
         fs.copy_tree(source, staging, dirs_exist_ok=True)
         staged = PackageInfo(staging, load_manifest(staging / "package.toml"))
         validate_package(staged)
-        if staged.manifest != package.manifest:
+        if (
+            canonical_package_identity(staged.manifest.name, staged.manifest.version)
+            != canonical_package_identity(package.manifest.name, package.manifest.version)
+            or staged.manifest != package.manifest
+        ):
             raise PackageInstallError("copied package manifest changed after source validation")
         write_record(staging)
         verify_record(staging)
@@ -564,7 +570,9 @@ def _resolve_dependency_requirements(package: PackageInfo, state: _InstallState)
             )
         current = state.index.packages.get(name)
         if current is not None and current.editable == selected.root:
-            if current.version != selected.manifest.version:
+            if canonical_package_identity(name, current.version) != canonical_package_identity(
+                selected.manifest.name, selected.manifest.version
+            ):
                 packages = dict(state.index.packages)
                 packages[name] = ActivePackage(
                     selected.manifest.version,
@@ -576,7 +584,8 @@ def _resolve_dependency_requirements(package: PackageInfo, state: _InstallState)
             state.transient_packages[name] = selected
         elif (
             current is None
-            or current.version != selected.manifest.version
+            or canonical_package_identity(name, current.version)
+            != canonical_package_identity(selected.manifest.name, selected.manifest.version)
             or current.editable is not None
         ):
             _activate_package(selected, state, editable_root=None, shadow=False)
@@ -700,7 +709,11 @@ def _verify_existing_install(
 ) -> None:
     try:
         installed = load_manifest(root / "package.toml")
-        if installed != manifest:
+        if (
+            canonical_package_identity(installed.name, installed.version)
+            != canonical_package_identity(manifest.name, manifest.version)
+            or installed != manifest
+        ):
             raise PackageInstallError(
                 f"installed package at {root} disagrees with the source manifest"
             )

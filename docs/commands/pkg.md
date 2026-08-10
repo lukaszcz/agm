@@ -72,8 +72,12 @@ With `--dry-run`, AGM reports the planned archive creation or archive installati
 archive module/command discipline and any resulting selection resolvable from local sources and the
 store, without creating archive, package-store, or activation-index files. It never fetches URL
 dependencies, so an installation that needs one fails in dry-run mode.
-Versions are retained side by side. Dependencies use
-minimum-version resolution: a satisfying stored version is selected first, otherwise a declared
+Versions are retained side by side. A package identity includes the complete canonical version,
+including build metadata, so versions such as `1.0.0+linux` and `1.0.0+macos` are distinct store
+entries and activation selections. `[packages]` configuration pins select that exact identity.
+Dependencies use semantic-version precedence for
+minimum-version resolution, where build metadata does not affect whether a version satisfies a
+range: a satisfying stored version is selected first, otherwise a declared
 local `path` source is installed. URL dependencies are fetched with a required SHA-256 hash, then
 the downloaded archive's normalized manifest and `RECORD` are verified before atomic extraction and
 activation. Downloads have a 128 MiB size limit and a 30-second wall-clock deadline, including

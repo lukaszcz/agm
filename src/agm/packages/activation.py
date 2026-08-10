@@ -18,7 +18,7 @@ from agm.core import dry_run
 from agm.core.fs import mkdir, write_text
 from agm.core.toml import TomlDict, load_toml_file, toml_dict
 from agm.packages.manifest import ManifestError, PackageManifest, load_manifest
-from agm.packages.model import PackageInfo
+from agm.packages.model import PackageInfo, canonical_package_identity
 from agm.packages.record import RecordError, verify_record
 from agm.packages.store import (
     canonical_package_provenance_path,
@@ -283,7 +283,10 @@ def rebuild_activation_index(
             ):
                 continue
             manifest = _load_installed_manifest(version_dir)
-            if manifest.name != name_dir.name or str(manifest.version) != version_dir.name:
+            if canonical_package_identity(manifest.name, manifest.version) != (
+                name_dir.name,
+                version_dir.name,
+            ):
                 raise PackageActivationError(
                     f"installed package at {version_dir} does not match its store identity"
                 )
@@ -312,7 +315,8 @@ def rebuild_activation_index(
         elif (
             previous_package is not None
             and previous_package.editable is None
-            and previous_package.version == package.version
+            and canonical_package_identity(name, previous_package.version)
+            == canonical_package_identity(name, package.version)
         ):
             rebuilt[name] = ActivePackage(
                 package.version,
@@ -887,7 +891,9 @@ def _packages_from_index(
             raise PackageActivationError(
                 f"active package {name!r} has a manifest for {manifest.name!r}"
             )
-        if active.editable is None and manifest.version != active.version:
+        if active.editable is None and canonical_package_identity(
+            manifest.name, manifest.version
+        ) != canonical_package_identity(name, active.version):
             raise PackageActivationError(
                 f"active package {name!r} has a mismatched installed version"
             )

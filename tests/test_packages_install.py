@@ -914,8 +914,18 @@ def test_install_accepts_an_active_editable_dependency(tmp_path: Path) -> None:
     assert active.editable == bravo.resolve()
 
 
+@pytest.mark.parametrize(
+    ("initial_version", "changed_version", "requirement"),
+    (
+        ("1.0.0", "2.0.0", "2"),
+        ("1.0.0+old", "1.0.0+new", "1"),
+    ),
+)
 def test_changed_editable_dependency_version_preserves_its_root_and_command_provenance(
     tmp_path: Path,
+    initial_version: str,
+    changed_version: str,
+    requirement: str,
 ) -> None:
     home = tmp_path / "home"
     alpha = _package(
@@ -927,7 +937,7 @@ def test_changed_editable_dependency_version_preserves_its_root_and_command_prov
     bravo = _package(
         tmp_path / "bravo",
         "bravo",
-        "1.0.0",
+        initial_version,
         '\n[commands]\nlaunch = { program = "bravo/main::main" }\n',
     )
     install_directory(alpha, home=home, env={})
@@ -935,25 +945,26 @@ def test_changed_editable_dependency_version_preserves_its_root_and_command_prov
     original = load_activation_index(home=home, env={}).packages["bravo"]
     manifest = bravo / "package.toml"
     manifest.write_text(
-        manifest.read_text(encoding="utf-8").replace('version = "1.0.0"', 'version = "2.0.0"'),
+        manifest.read_text(encoding="utf-8").replace(
+            f'version = "{initial_version}"', f'version = "{changed_version}"'
+        ),
         encoding="utf-8",
     )
     charlie = _package(
         tmp_path / "charlie",
         "charlie",
         "1.0.0",
-        '\n[dependencies]\nbravo = "2"\n',
+        f'\n[dependencies]\nbravo = "{requirement}"\n',
     )
 
     install_directory(charlie, home=home, env={})
 
     index = load_activation_index(home=home, env={})
-    assert index.packages["bravo"] == ActivePackage(
-        semver.Version.parse("2.0.0"),
-        editable=bravo,
-        shadow=original.shadow,
-        registration_order=original.registration_order,
-    )
+    active_bravo = index.packages["bravo"]
+    assert str(active_bravo.version) == changed_version
+    assert active_bravo.editable == bravo.resolve()
+    assert active_bravo.shadow == original.shadow
+    assert active_bravo.registration_order == original.registration_order
     assert index.commands["launch"] == CommandRegistration("bravo", "bravo/main::main")
 
 

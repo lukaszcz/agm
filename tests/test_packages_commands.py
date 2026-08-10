@@ -248,6 +248,33 @@ def test_list_command_prints_commands_only_below_their_active_or_editable_owner(
     ]
 
 
+def test_list_command_marks_only_the_exact_build_identity_active(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    context = _context(tmp_path)
+    selected = semver.Version.parse("1.0.0+selected")
+    packages = tuple(
+        PackageInfo(
+            tmp_path / build,
+            PackageManifest(name="alpha", version=semver.Version.parse(f"1.0.0+{build}")),
+        )
+        for build in ("other", "selected")
+    )
+    index = ActivationIndex({"alpha": ActivePackage(selected)})
+    monkeypatch.setattr(list_command, "current_config_context", lambda: context)
+    monkeypatch.setattr(list_command, "load_activation_index", lambda **_: index)
+    monkeypatch.setattr(list_command, "installed_packages", lambda **_: packages)
+    monkeypatch.setattr(list_command, "reconcile_package_commands", lambda *_args, **_kwargs: index)
+    monkeypatch.setattr(list_command, "command_shadow_diagnostics", lambda *_args, **_kwargs: {})
+
+    list_command.run(PkgListArgs())
+
+    assert capsys.readouterr().out.splitlines() == [
+        "alpha 1.0.0+other installed",
+        "alpha 1.0.0+selected active",
+    ]
+
+
 @pytest.mark.parametrize("error", [PackageActivationError("bad"), PackageInstallError("bad")])
 def test_list_command_reports_index_or_store_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception
@@ -327,6 +354,27 @@ def test_info_command_rejects_immutable_store_escapes_and_identity_mismatches(
     (root / "package.toml").write_text(
         '[package]\nname = "alpha"\nversion = "2.0.0"\n', encoding="utf-8"
     )
+    with pytest.raises(SystemExit):
+        info_command.run(PkgInfoArgs("alpha"))
+
+
+def test_info_command_rejects_different_build_metadata_for_immutable_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    context = _context(tmp_path)
+    active = ActivePackage(semver.Version.parse("1.0.0+selected"))
+    root = context.home / ".agm" / "packages" / "alpha" / str(active.version)
+    root.mkdir(parents=True)
+    (root / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0+other"\n', encoding="utf-8"
+    )
+    monkeypatch.setattr(info_command, "current_config_context", lambda: context)
+    monkeypatch.setattr(
+        info_command,
+        "load_activation_index",
+        lambda **_: ActivationIndex({"alpha": active}),
+    )
+
     with pytest.raises(SystemExit):
         info_command.run(PkgInfoArgs("alpha"))
 

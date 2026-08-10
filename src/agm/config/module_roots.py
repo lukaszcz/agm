@@ -27,6 +27,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+import semver
+
 from agm.config.general import agm_home_dir, config_file_candidates, expand_env_root
 from agm.core.env import resolve_env
 from agm.core.toml import load_toml_file, toml_dict
@@ -167,6 +169,7 @@ def resolve_stdlib_root(*, home: Path, env: Mapping[str, str] | None = None) -> 
 
     from agm.packages.activation import PackageActivationError, load_activation_index
     from agm.packages.manifest import ManifestError, load_manifest
+    from agm.packages.model import canonical_package_identity
     from agm.packages.record import RecordError, verify_record
     from agm.packages.store import canonical_package_store_path
 
@@ -178,7 +181,9 @@ def resolve_stdlib_root(*, home: Path, env: Mapping[str, str] | None = None) -> 
         if active.editable is not None:
             raise StdlibResolutionError("the managed std package cannot be editable")
         installed_version = str(active.version)
-        if installed_version != AGM_VERSION:
+        if canonical_package_identity("std", active.version) != canonical_package_identity(
+            "std", semver.Version.parse(AGM_VERSION)
+        ):
             raise StdlibVersionMismatchError(installed_version, AGM_VERSION)
         try:
             store_stdlib = canonical_package_store_path("std", active.version, home=home, env=env)
@@ -191,7 +196,9 @@ def resolve_stdlib_root(*, home: Path, env: Mapping[str, str] | None = None) -> 
                 )
             try:
                 manifest = load_manifest(store_stdlib / "package.toml")
-                if manifest.name != "std" or manifest.version != active.version:
+                if canonical_package_identity(
+                    manifest.name, manifest.version
+                ) != canonical_package_identity("std", active.version):
                     raise StdlibResolutionError(
                         f"active std package at {store_stdlib} does not match its activation"
                     )

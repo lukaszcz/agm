@@ -14,6 +14,7 @@ from agm.packages.activation import (
     load_activation_index,
 )
 from agm.packages.manifest import ManifestError, load_manifest
+from agm.packages.model import canonical_package_identity
 from agm.packages.store import StorePathError, canonical_package_store_path
 from agm.version import AGM_VERSION
 
@@ -36,7 +37,9 @@ def run(args: PkgInfoArgs) -> None:
             raise PackageActivationError(
                 f"active package {args.name!r} has a manifest for {manifest.name!r}"
             )
-        if active.editable is None and manifest.version != active.version:
+        if active.editable is None and canonical_package_identity(
+            manifest.name, manifest.version
+        ) != canonical_package_identity(args.name, active.version):
             raise PackageActivationError(
                 f"active package {args.name!r} has a mismatched installed version"
             )

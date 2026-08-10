@@ -438,6 +438,26 @@ def test_effective_command_index_rebuilds_for_a_pin_with_different_build_metadat
     }
 
 
+def test_rebuild_does_not_reuse_legacy_metadata_for_different_build_metadata(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "agm-home"
+    _write_package(home, "alpha", "1.0.0+new")
+    env = {"AGM_HOME": str(home)}
+    write_activation_index(
+        ActivationIndex(
+            {"alpha": ActivePackage(semver.Version.parse("1.0.0+old"), registration_order=4)}
+        ),
+        home=home,
+        env=env,
+    )
+
+    rebuilt = rebuild_activation_index(home=home, env=env)
+
+    assert str(rebuilt.packages["alpha"].version) == "1.0.0+new"
+    assert rebuilt.packages["alpha"].registration_order == 5
+
+
 def test_rebuild_uses_the_previous_index_only_for_legacy_packages_without_sidecars(
     tmp_path: Path,
 ) -> None:
@@ -1090,6 +1110,24 @@ def test_active_package_must_exist_and_match_its_selected_identity(tmp_path: Pat
     )
     write_record(root)
     with pytest.raises(PackageActivationError):
+        select_active_packages(home=home, proj_dir=None, cwd=tmp_path, env=env)
+
+
+def test_active_immutable_package_must_match_exact_build_metadata(tmp_path: Path) -> None:
+    home = tmp_path / "agm-home"
+    root = _write_package(home, "alpha", "1.0.0+selected")
+    (root / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0+other"\n', encoding="utf-8"
+    )
+    write_record(root)
+    env = {"AGM_HOME": str(home)}
+    write_activation_index(
+        ActivationIndex({"alpha": ActivePackage(semver.Version.parse("1.0.0+selected"))}),
+        home=home,
+        env=env,
+    )
+
+    with pytest.raises(PackageActivationError, match="mismatched"):
         select_active_packages(home=home, proj_dir=None, cwd=tmp_path, env=env)
 
 

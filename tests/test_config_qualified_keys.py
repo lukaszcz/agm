@@ -51,6 +51,15 @@ class TestQualifiedConfigKeys:
         assert "review-tools/judge::review::max-tries" in str(exc_info.value)
         assert "quality-tools/judge::review::max-tries" in str(exc_info.value)
 
+    def test_resolves_distinct_leaves_from_an_otherwise_ambiguous_table(self) -> None:
+        first = QualifiedConfigKey(("review-tools", "judge"), ("review",), "max-tries")
+        second = QualifiedConfigKey(("quality-tools", "judge"), ("review",), "region")
+
+        assert resolve_qualified_values(
+            _config({"judge": {"review": {"max-tries": 1, "region": "eu"}}}),
+            (first, second),
+        ) == {first: 1, second: "eu"}
+
     def test_quoted_module_route_is_an_exact_anchor(self) -> None:
         first = QualifiedConfigKey(("review-tools", "judge"), ("review",), "max-tries")
         second = QualifiedConfigKey(("quality-tools", "judge"), ("review",), "max-tries")

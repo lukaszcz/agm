@@ -71,8 +71,9 @@ def resolve_qualified_values(
 def _resolve_layer(
     layer: TomlDict, keys: tuple[QualifiedConfigKey, ...]
 ) -> dict[QualifiedConfigKey, object]:
-    matches_by_table: dict[
-        tuple[str, ...], dict[tuple[tuple[str, ...], tuple[str, ...]], list[QualifiedConfigKey]]
+    matches_by_value: dict[
+        tuple[tuple[str, ...], str],
+        dict[tuple[tuple[str, ...], tuple[str, ...]], list[QualifiedConfigKey]],
     ] = {}
     values_by_key: dict[QualifiedConfigKey, list[tuple[tuple[str, ...], object]]] = {}
 
@@ -82,10 +83,10 @@ def _resolve_layer(
             if table is None or key.leaf not in table:
                 continue
             route = (key.module_segments, key.scope_path)
-            matches_by_table.setdefault(path, {}).setdefault(route, []).append(key)
+            matches_by_value.setdefault((path, key.leaf), {}).setdefault(route, []).append(key)
             values_by_key.setdefault(key, []).append((path, table[key.leaf]))
 
-    for path, candidates_by_route in matches_by_table.items():
+    for (path, leaf), candidates_by_route in matches_by_value.items():
         if len(candidates_by_route) > 1:
             names = ", ".join(
                 key.display_name()
@@ -93,7 +94,7 @@ def _resolve_layer(
                 for key in candidates
             )
             raise QualifiedConfigLookupError(
-                f"table {_display_table_path(path)} matches multiple config routes: {names}"
+                f"config key {_display_table_path(path)}.{leaf} matches multiple routes: {names}"
             )
 
     resolved: dict[QualifiedConfigKey, object] = {}

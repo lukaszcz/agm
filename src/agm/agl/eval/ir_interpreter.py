@@ -436,6 +436,16 @@ class IrInterpreter:
         self.initializer_values: list[Value] = []
         self.module_initializer_values: dict[ModuleId, list[Value]] = {}
         self.entry_param_symbols_installed: set[SymbolId] = set()
+        self._static_bindings: dict[SymbolId, tuple[ModuleId, IrBind]] = {
+            node.symbol: (module.module_id, node)
+            for module in program.modules.values()
+            for node in module.initializers
+            if isinstance(node, IrBind)
+            and not program.symbols[node.symbol].mutable
+            and not isinstance(node.value, IrMakeClosure)
+        }
+        self._evaluated_static_binding_ids: set[int] = set()
+        self._resolving_param_defaults = False
         self._synthetic_main_frame: Frame | None = None
         self._call_depth: int = 0
         self._trace: TraceStore = trace if trace is not None else noop_trace()
@@ -972,11 +982,16 @@ class IrInterpreter:
                 # fixpoint — so no separate "did the entry frame start" gate is
                 # needed here.
                 self._install_function_closures()
-                self._install_params()
+                self._resolving_param_defaults = True
+                try:
+                    self._install_params()
+                finally:
+                    self._resolving_param_defaults = False
 
                 for mod in self._program.modules.values():
                     for node in mod.initializers:
-                        self._eval_and_record_initializer(mod.module_id, node)
+                        if id(node) not in self._evaluated_static_binding_ids:
+                            self._eval_and_record_initializer(mod.module_id, node)
                 if program_symbol is not None:
                     try:
                         self._invoke_program(program_symbol)
@@ -1101,6 +1116,13 @@ class IrInterpreter:
                     (frame[sym] for frame in reversed(self._frames) if sym in frame),
                     None,
                 )
+                if slot is None and self._resolving_param_defaults:
+                    binding = self._static_bindings.pop(sym, None)
+                    if binding is not None:
+                        module_id, initializer = binding
+                        self._eval_and_record_initializer(module_id, initializer)
+                        self._evaluated_static_binding_ids.add(id(initializer))
+                        slot = self._frame.get(sym)
                 if slot is None:
                     raise InvalidIrError(
                         f"IrLoad: symbol_id={sym.value!r} is not bound in the frame"

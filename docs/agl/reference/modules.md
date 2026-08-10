@@ -110,7 +110,8 @@ end Geo
 publishes the atom `Geo::Point`, forwarding to `geom/planar`'s `Point`. An
 importer reaches it as `facade::Geo::Point`. Wildcard and `hiding` forms
 re-root every forwarded atom the same way, and a rename composes with the
-re-rooting.
+re-rooting. Ordinary re-export cycles that preserve names are allowed, but a
+cycle that repeatedly expands a scoped path is rejected as a scope error.
 
 ## Opening scopes
 

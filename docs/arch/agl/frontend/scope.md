@@ -90,7 +90,9 @@ pass snapshots that per-declaration set onto the importing region's own `ScopeNo
 eager `contribute_bare` path a cross-module `open` already uses, so the narrowing rides existing
 machinery rather than a new one. A region-scoped export re-roots the atoms it forwards under the
 region's own scope path before they enter the module's export map (`scope/program.py`), mirroring
-how a `using … as` rename already re-roots a selected atom. The header-only ordering check for
+how a `using … as` rename already re-roots a selected atom. Re-export propagation is bounded by
+simple module paths: ordinary cycles converge, while a cycle that keeps expanding a scoped path
+is a static error instead of an unbounded fixed point. The header-only ordering check for
 imports and exports applies uniformly to every module root and region, local to each
 block-resolution call, so a region is one item for its enclosing block's ordering while its own
 items get an independent check.

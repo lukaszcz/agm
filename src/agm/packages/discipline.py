@@ -9,6 +9,7 @@ from typing import TypeVar
 from agm.agl.modules.ids import ModuleId
 from agm.agl.parser import AglSyntaxError, parse_program
 from agm.agl.scope import BuiltinKind
+from agm.agl.scope.reexports import ReexportCycleError, converge_reexports
 from agm.agl.syntax.nodes import (
     Call,
     ExportDecl,
@@ -141,19 +142,29 @@ def _resource_exports(programs: Mapping[ModuleId, Program]) -> dict[ModuleId, _R
     """Resolve package re-exports that preserve a standard resource builtin."""
 
     exports: dict[ModuleId, _ResourcePaths] = {module_id: {} for module_id in programs}
-    changed = True
-    while changed:
+    declarations = {
+        module_id: tuple(
+            item for item in static_items(program.body.items) if isinstance(item, ExportDecl)
+        )
+        for module_id, program in programs.items()
+    }
+
+    def propagate() -> bool:
         changed = False
-        for module_id, program in programs.items():
+        for module_id, module_declarations in declarations.items():
             module_exports = exports[module_id]
-            for declaration in static_items(program.body.items):
-                if not isinstance(declaration, ExportDecl):
-                    continue
+            for declaration in module_declarations:
                 target = _resource_export_target(declaration.module_path, exports)
                 for path, kind in _select_resource_paths(declaration, target).items():
                     if module_exports.get(path) != kind:
                         module_exports[path] = kind
                         changed = True
+        return changed
+
+    try:
+        converge_reexports(sum(map(len, declarations.values())), propagate)
+    except ReexportCycleError as exc:
+        raise DisciplineError(str(exc)) from exc
     return exports
 
 

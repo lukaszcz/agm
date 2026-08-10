@@ -45,7 +45,8 @@ creation excludes hidden paths, VCS and cache directories, `.agmpkg` files, and 
 root or nested `.gitignore` files.
 
 `agm pkg check` validates the `package.toml` manifest, module-tree naming discipline, program
-references used by manifest command registrations, and literal resource targets. It also checks
+references used by manifest command registrations, and literal resource targets (rejecting scoped
+resource re-export cycles that keep expanding their paths). It also checks
 dependencies without modifying packages: a `std` requirement is checked against the running AGM
 version; a matching stored version is used first for other packages, then a declared local `path`;
 a URL with its required hash is a deferred satisfiable source and is not fetched.

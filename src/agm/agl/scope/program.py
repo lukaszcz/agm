@@ -41,6 +41,7 @@ from agm.agl.scope.imports import (
     build_import_env,
     resolve_alias_target,
 )
+from agm.agl.scope.reexports import ReexportCycleError, converge_reexports
 from agm.agl.scope.resolver import _Resolver
 from agm.agl.scope.symbols import (
     AglScopeError,
@@ -325,8 +326,10 @@ def _resolve_reexports(
     Re-export name conflicts (same exposed name → different origin QNames)
     raise :class:`~agm.agl.scope.symbols.AglScopeError`.
     """
-    changed = True
-    while changed:
+    last_changed_decl: ExportDecl | None = None
+
+    def propagate() -> bool:
+        nonlocal last_changed_decl
         changed = False
         for mid, loaded in graph.modules.items():
             for decl in loaded.export_decls:
@@ -347,8 +350,19 @@ def _resolve_reexports(
                         if existing is None:
                             current_exports[exposed] = qname
                             changed = True
+                            last_changed_decl = decl
                         elif existing != qname:
                             _raise_reexport_conflict(exposed, existing, qname, decl)
+        return changed
+
+    try:
+        converge_reexports(
+            sum(len(loaded.export_decls) for loaded in graph.modules.values()), propagate
+        )
+    except ReexportCycleError as exc:
+        raise AglScopeError(
+            str(exc), span=last_changed_decl.span if last_changed_decl else None
+        ) from exc
 
     # A selection may target a re-export which is populated later in the
     # fixed point. Validate only after every reachable export has propagated.

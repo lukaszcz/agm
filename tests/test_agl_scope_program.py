@@ -29,6 +29,7 @@ from agm.agl.scope.program import ResolvedModule, ResolvedProgram, resolve_progr
 from agm.agl.scope.symbols import AglScopeError, BinderKind
 from agm.agl.semantics.values import IntValue
 from agm.agl.syntax.nodes import AssignStmt, Case, ConstructorPattern, FuncDef, VarPattern, VarRef
+from tests._timeouts import fail_if_slow
 from tests.agl.ir_harness import (
     evaluate_ir_graph,
     make_file_graph_from_files,
@@ -2323,6 +2324,41 @@ class TestExportDecl:
         facade_exports = result.modules[facade_id].exports
         assert "foo" not in facade_exports
         assert "local" in facade_exports
+
+    def test_nonexpanding_reexport_cycle_converges(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import a\n()",
+                "a": "export c\nexport b",
+                "b": "export a",
+                "c": "def value() -> int = 1",
+            },
+        )
+
+        result = resolve_program(graph)
+
+        assert result.modules[ModuleId.from_path("b")].exports["value"] == (
+            ModuleId.from_path("c"),
+            "value",
+        )
+
+    def test_cyclic_scoped_reexports_are_rejected_without_hanging(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import a\n()",
+                "a": "export c\nscope Loop\nexport b\nend Loop",
+                "b": "scope Loop\nexport a\nend Loop",
+                "c": "def resource() -> int = 1",
+            },
+        )
+
+        with (
+            fail_if_slow("AgL re-export resolution did not terminate"),
+            pytest.raises(AglScopeError),
+        ):
+            resolve_program(graph)
 
     def test_reexport_chain_multi_hop(self, tmp_path: Path) -> None:
         """A re-exports from B which re-exports from C — A's consumers get C's origin."""

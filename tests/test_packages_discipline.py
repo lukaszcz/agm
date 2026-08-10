@@ -10,6 +10,7 @@ import semver
 from agm.packages.discipline import DisciplineError, validate_package
 from agm.packages.manifest import CommandSpec, PackageManifest, load_manifest
 from agm.packages.model import PackageInfo, owning_package
+from tests._timeouts import fail_if_slow
 
 FIXTURES = Path(__file__).parent / "agl" / "packages"
 
@@ -153,6 +154,28 @@ class TestPackageDiscipline:
 
         assert owning_package(module, (package,)) == package
         with pytest.raises(DisciplineError, match="escapes"):
+            validate_package(package)
+
+    def test_accepts_nonexpanding_resource_reexport_cycle(self, tmp_path: Path) -> None:
+        package = _custom_package(tmp_path)
+        (package.module_root / "a.agl").write_text(
+            "export std/core using resource\nexport custom/b\n"
+        )
+        (package.module_root / "b.agl").write_text("export custom/a\n")
+
+        validate_package(package)
+
+    def test_rejects_cyclic_scoped_resource_reexports_without_hanging(self, tmp_path: Path) -> None:
+        package = _custom_package(tmp_path)
+        (package.module_root / "a.agl").write_text(
+            "export std/core using resource\nscope Loop\nexport custom/b\nend Loop\n"
+        )
+        (package.module_root / "b.agl").write_text("scope Loop\nexport custom/a\nend Loop\n")
+
+        with (
+            fail_if_slow("resource re-export resolution did not terminate"),
+            pytest.raises(DisciplineError),
+        ):
             validate_package(package)
 
     def test_rejects_missing_resource_through_a_scoped_using_alias(self, tmp_path: Path) -> None:

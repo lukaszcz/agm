@@ -410,8 +410,8 @@ def _resolve_dependency_requirements(package: PackageInfo, state: _InstallState)
         current = state.index.packages.get(name)
         if (
             current is None
-            or current.editable is not None
             or current.version != selected.manifest.version
+            or (current.editable is not None and current.editable != selected.root)
         ):
             _activate_package(selected, state, editable_root=None, shadow=False)
         else:
@@ -465,7 +465,16 @@ def _installed_satisfying(
             if package.manifest.name == name and package.manifest.version >= requirement.version
         )
     if not candidates:
-        return None
+        active = state.index.packages.get(name)
+        if active is None or active.editable is None:
+            return None
+        try:
+            selected = PackageInfo(active.editable, load_manifest(active.editable / "package.toml"))
+        except ManifestError as exc:
+            raise PackageInstallError(
+                f"cannot load active editable package {name!r}: {exc}"
+            ) from exc
+        return selected if selected.manifest.version >= requirement.version else None
     selected, verify_selected = candidates[0]
     for candidate, verify_candidate in candidates[1:]:
         if candidate.manifest.version > selected.manifest.version:

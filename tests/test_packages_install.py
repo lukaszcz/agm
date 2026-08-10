@@ -540,6 +540,18 @@ def test_install_activates_the_closure_of_a_stored_dependency(tmp_path: Path) ->
     assert set(load_activation_index(home=home, env={}).packages) == {"alpha", "bravo", "charlie"}
 
 
+def test_install_accepts_an_active_editable_dependency(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    bravo = _package(tmp_path / "bravo", "bravo", "1.0.0")
+    alpha = _package(tmp_path / "alpha", "alpha", "1.0.0", '\n[dependencies]\nbravo = "1"\n')
+    install_directory(bravo, home=home, env={}, editable=True)
+
+    install_directory(alpha, home=home, env={})
+
+    active = load_activation_index(home=home, env={}).packages["bravo"]
+    assert active.editable == bravo.resolve()
+
+
 def test_editable_install_mounts_live_tree_without_a_record(tmp_path: Path) -> None:
     source = _package(tmp_path / "source", "alpha", "1.0.0")
     home = tmp_path / "home"

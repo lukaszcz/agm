@@ -3389,10 +3389,16 @@ class TestDiscoverParamsDefensivePaths:
         entry_path.parent.mkdir(parents=True)
         entry_path.touch()
         package = PackageInfo(package_root, PackageManifest("tools", semver.Version.parse("1.0.0")))
+        other_package = PackageInfo(
+            tmp_path / "other", PackageManifest("other", semver.Version.parse("1.0.0"))
+        )
         prepared = PreparedProgram(
             source="",
             entry_path=entry_path,
-            roots=RootSet(frozenset({package.module_root}), packages=(package,)),
+            roots=RootSet(
+                frozenset({package.module_root, other_package.module_root}),
+                packages=(other_package, package),
+            ),
             resolved=None,
             diagnostics=(),
             warnings=(),

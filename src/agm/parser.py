@@ -596,7 +596,9 @@ _HELP_TEXTS: dict[str, str] = {
                                 working directory. Joins the unordered root set;
                                 a module id found in two roots is an ambiguity error.
 
-        FILE and -c/--command are mutually exclusive; exactly one is required.
+        Select a FILE, an installed PACKAGE/MODULE::PROGRAM reference, or -c/--command.
+        The positional file/reference selector and -c/--command are mutually exclusive;
+        exactly one source selector is required.
 
         Exit codes:
           0  The workflow completed successfully.

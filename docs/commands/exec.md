@@ -13,9 +13,10 @@ agm exec [--strict-json|--no-strict-json]
          (FILE | PACKAGE/MODULE::PROGRAM | -c COMMAND) [--PARAM VALUE]...
 ```
 
-Execute an AgL workflow program, either from a source `FILE` or from inline program
-text given with `-c`/`--command`. The two are mutually exclusive, and exactly one is
-required. `PACKAGE/MODULE::PROGRAM` resolves its module through the active package
+Execute an AgL workflow program from a source `FILE`, an installed
+`PACKAGE/MODULE::PROGRAM` reference, or inline text given with `-c`/`--command`. Exactly one
+source selector is required; `-c` is mutually exclusive with the positional file/reference
+selector. `PACKAGE/MODULE::PROGRAM` resolves its module through the active package
 selection, for example `agm exec review_tools/review::main`. An existing `FILE` path always
 takes precedence, even when its name contains `::`.
 

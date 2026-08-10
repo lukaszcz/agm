@@ -83,8 +83,10 @@ activation index. Invoke a registered single- or multi-word command directly as 
 the longest matching path wins and trailing words are passed to its AgL program. Registered commands
 accept the same parameter flags and qualified configuration/engine-setting tables as `agm exec`.
 They appear in `agm help` and shell completion while active. An editable command re-reads its live
-manifest when dispatched, so a changed registered program takes effect without reinstalling. A
-command path cannot begin with an AGM built-in command or alias (`wsp`, `wt`,
+manifest when dispatched, so nonconflicting command edits take effect without reinstalling. Live
+command additions are rechecked against the activation's recorded `--shadow` intent; an editable
+package activated without `--shadow` cannot acquire a conflict. A command path cannot begin with an
+AGM built-in command or alias (`wsp`, `wt`,
 `cp`, or `copy`). A conflicting registration refuses installation unless `--shadow` is supplied;
 the replacing package becomes the active command owner, and successful shadow installs identify the
 displaced command owners. Command precedence is persisted in a sidecar beside each immutable store

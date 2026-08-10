@@ -248,6 +248,54 @@ def test_effective_command_index_uses_live_editable_manifest_commands(tmp_path: 
     }
 
 
+def test_effective_command_index_rejects_a_live_editable_command_conflict_without_shadow(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "agm-home"
+    alpha = _write_package(home, "alpha", "1.0.0")
+    (alpha / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
+        '[commands]\nlaunch = { program = "alpha/main::main" }\n',
+        encoding="utf-8",
+    )
+    write_record(alpha)
+    bravo = tmp_path / "editable"
+    (bravo / "bravo").mkdir(parents=True)
+    (bravo / "package.toml").write_text(
+        '[package]\nname = "bravo"\nversion = "1.0.0"\n\n'
+        '[commands]\ninspect = { program = "bravo/main::main" }\n',
+        encoding="utf-8",
+    )
+    env = {"AGM_HOME": str(home)}
+    write_activation_index(
+        ActivationIndex(
+            {
+                "alpha": ActivePackage(semver.Version.parse("1.0.0"), registration_order=1),
+                "bravo": ActivePackage(
+                    semver.Version.parse("1.0.0"),
+                    editable=bravo,
+                    registration_order=2,
+                ),
+            },
+            {
+                "launch": CommandRegistration("alpha", "alpha/main::main"),
+                "inspect": CommandRegistration("bravo", "bravo/main::main"),
+            },
+        ),
+        home=home,
+        env=env,
+    )
+    (bravo / "package.toml").write_text(
+        '[package]\nname = "bravo"\nversion = "1.0.0"\n\n'
+        '[commands]\ninspect = { program = "bravo/main::main" }\n'
+        'launch = { program = "bravo/main::main" }\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PackageActivationError, match="launch.*shadow"):
+        effective_command_index(home=home, proj_dir=None, cwd=tmp_path, env=env)
+
+
 def test_effective_command_index_rebuilds_for_a_pin_with_different_build_metadata(
     tmp_path: Path,
 ) -> None:

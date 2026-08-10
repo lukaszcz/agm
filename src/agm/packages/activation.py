@@ -325,8 +325,7 @@ def rebuild_activation_index(
     index = ActivationIndex(packages=rebuilt)
     packages = _packages_from_index(index, home=home, env=env)
     _validate_requirements(packages)
-    _validate_rebuild_command_provenance(packages, provenance)
-    return _reconciled_commands(index, packages)
+    return _reconciled_commands(index, packages, provenance=provenance)
 
 
 def load_package_pins(
@@ -571,13 +570,22 @@ def reconcile_package_commands(
 
 
 def _reconciled_commands(
-    index: ActivationIndex, packages: Iterable[PackageInfo]
+    index: ActivationIndex,
+    packages: Iterable[PackageInfo],
+    *,
+    provenance: Mapping[str, ActivePackage | PackageProvenance | None] | None = None,
 ) -> ActivationIndex:
+    package_list = tuple(packages)
+    _validate_command_conflict_provenance(
+        package_list,
+        index.packages if provenance is None else provenance,
+    )
+
     def registration_key(package: PackageInfo) -> tuple[int, str]:
         return index.packages[package.manifest.name].registration_order, package.manifest.name
 
     commands: dict[str, CommandRegistration] = {}
-    for package in sorted(packages, key=registration_key):
+    for package in sorted(package_list, key=registration_key):
         for path_name, spec in sorted(package.manifest.commands.items()):
             commands[path_name] = CommandRegistration(
                 package.manifest.name,
@@ -598,10 +606,7 @@ def command_shadow_diagnostics(
     """Return active winners and the package owners each one shadows."""
 
     packages = _packages_from_index(index, home=home, env=env)
-    by_path: dict[str, list[PackageInfo]] = {}
-    for package in packages:
-        for path_name in package.manifest.commands:
-            by_path.setdefault(path_name, []).append(package)
+    by_path = _command_owners(packages)
     diagnostics: dict[str, list[CommandShadow]] = {}
     for path_name, owners in by_path.items():
         if len(owners) < 2:
@@ -656,36 +661,45 @@ def _validate_rebuild_provenance(provenance: Mapping[str, PackageProvenance | No
         raise PackageActivationError("package provenance has duplicate registration order")
 
 
-def _validate_rebuild_command_provenance(
-    packages: Iterable[PackageInfo], provenance: Mapping[str, PackageProvenance | None]
-) -> None:
-    """Reject command collisions without a coherent durable shadow history."""
-
-    owners: dict[str, list[str]] = {}
+def _command_owners(packages: Iterable[PackageInfo]) -> dict[str, list[PackageInfo]]:
+    owners: dict[str, list[PackageInfo]] = {}
     for package in packages:
         for path_name in package.manifest.commands:
-            owners.setdefault(path_name, []).append(package.manifest.name)
-    for path_name, names in owners.items():
-        if len(names) < 2:
+            owners.setdefault(path_name, []).append(package)
+    return owners
+
+
+def _validate_command_conflict_provenance(
+    packages: Iterable[PackageInfo],
+    provenance: Mapping[str, ActivePackage | PackageProvenance | None],
+) -> None:
+    """Reject command collisions without a coherent shadow history."""
+
+    for path_name, owners in _command_owners(packages).items():
+        if len(owners) < 2:
             continue
-        registered_owners: list[tuple[str, PackageProvenance]] = []
-        for name in names:
-            metadata = provenance[name]
+        registered_owners: list[tuple[str, ActivePackage | PackageProvenance]] = []
+        for owner in owners:
+            name = owner.manifest.name
+            metadata = provenance.get(name)
             if metadata is None:
                 raise PackageActivationError(
-                    f"cannot rebuild command {path_name!r}: its installed provenance is missing"
+                    f"cannot reconcile command {path_name!r}: its package provenance is missing"
                 )
             registered_owners.append((name, metadata))
-        for name, metadata in sorted(registered_owners, key=_rebuild_provenance_order)[1:]:
+        registered_owners.sort(key=_command_provenance_order)
+        for name, metadata in registered_owners[1:]:
             if not metadata.shadow:
                 raise PackageActivationError(
-                    f"cannot rebuild command {path_name!r}: later registration from "
+                    f"cannot reconcile command {path_name!r}: later registration from "
                     f"package {name!r} lacks shadow intent"
                 )
 
 
-def _rebuild_provenance_order(owner: tuple[str, PackageProvenance]) -> int:
-    return owner[1].registration_order
+def _command_provenance_order(
+    owner: tuple[str, ActivePackage | PackageProvenance],
+) -> tuple[int, str]:
+    return owner[1].registration_order, owner[0]
 
 
 def _parse_activation_index(raw: TomlDict) -> ActivationIndex:

@@ -88,6 +88,8 @@ review-tools = { program = "tools/review::main" }
     assert "--level" in registered_options
     assert "--dry-run" in registered_options
     assert shell_complete.get_completions(["tools", "lint", "--level"], "") == []
+    assert completion.complete_help_path(_make_ctx(help_command=[]), "to") == ["tools"]
+    assert completion.complete_help_path(_make_ctx(help_command=["tools"]), "li") == ["lint"]
 
 
 def test_installed_exec_reference_offers_program_param_completion(

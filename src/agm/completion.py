@@ -194,7 +194,9 @@ def complete_help_path(ctx: click.Context, incomplete: str) -> list[str]:
         raw_help = params.get("help_command")
         help_command = cast(list[str], raw_help) if isinstance(raw_help, list) else []
         path_key = help_command[-1] if help_command else ""
-        return _match(_HELP_TREE.get(path_key, []), incomplete)
+        static = _match(_HELP_TREE.get(path_key, []), incomplete)
+        registered = complete_registered_commands(help_command, incomplete)
+        return sorted(set(static) | set(registered))
     except (Exception, SystemExit):
         return []
 

@@ -13,6 +13,7 @@ from click.shell_completion import ShellComplete
 
 import agm.completion as completion
 import agm.vcs.git as git_helpers
+from agm.packages.record import write_record
 
 
 def _make_ctx(**params: Any) -> click.Context:
@@ -53,6 +54,7 @@ review-tools = { program = "tools/review::main" }
 """,
         encoding="utf-8",
     )
+    write_record(package_root)
     write_activation_index(
         ActivationIndex(
             packages={"tools": ActivePackage(semver.Version.parse("1.0.0"))},
@@ -102,6 +104,7 @@ def test_installed_exec_reference_offers_program_param_completion(
         '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
     )
     module.write_text("param level: text\nprogram def main() -> unit = ()\n", encoding="utf-8")
+    write_record(package_root)
     write_activation_index(
         ActivationIndex({"tools": ActivePackage(semver.Version.parse("1.0.0"))}), home=home
     )

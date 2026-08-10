@@ -31,6 +31,7 @@ from agm.packages.activation import (
 )
 from agm.packages.manifest import load_manifest
 from agm.packages.model import PackageInfo
+from agm.packages.record import write_record
 from agm.version import AGM_VERSION
 
 
@@ -46,6 +47,7 @@ def _write_package(
         f'[package]\nname = "{name}"\nversion = "{version}"\n' + dependencies,
         encoding="utf-8",
     )
+    write_record(root)
     return root
 
 
@@ -210,6 +212,8 @@ def test_rebuild_index_merges_registered_commands_from_active_manifests(tmp_path
         '[commands]\n"bravo run" = { program = "bravo/main::main" }\n',
         encoding="utf-8",
     )
+    write_record(alpha)
+    write_record(bravo)
 
     assert rebuild_activation_index(home=home, env={"AGM_HOME": str(home)}) == ActivationIndex(
         packages={
@@ -256,6 +260,7 @@ def test_effective_command_index_rebuilds_for_a_pin_with_different_build_metadat
             f'[commands]\nlaunch = {{ program = "alpha/main::{program}" }}\n',
             encoding="utf-8",
         )
+        write_record(root)
     project = tmp_path / "project"
     (project / "config").mkdir(parents=True)
     (project / "config" / "config.toml").write_text(
@@ -306,6 +311,7 @@ def test_rebuild_rejects_duplicate_or_missing_command_provenance(tmp_path: Path)
             f'[commands]\nlaunch = {{ program = "{name}/main::main" }}\n',
             encoding="utf-8",
         )
+        write_record(package)
 
     with pytest.raises(PackageActivationError, match="missing"):
         rebuild_activation_index(home=home, env=env)
@@ -335,6 +341,7 @@ def test_rebuild_rejects_a_later_colliding_registration_without_shadow_intent(
             f'[commands]\nlaunch = {{ program = "{name}/main::main" }}\n',
             encoding="utf-8",
         )
+        write_record(package)
     version = semver.Version.parse("1.0.0")
     write_package_provenance(
         "alpha", ActivePackage(version, registration_order=1), home=home, env=env
@@ -362,6 +369,7 @@ def test_command_shadow_diagnostics_and_registry_merge_are_deterministic(tmp_pat
             f'[commands]\nlaunch = {{ program = "{name}/main::main" }}\n{extra}',
             encoding="utf-8",
         )
+        write_record(package)
     version = semver.Version.parse("1.0.0")
     index = ActivationIndex(
         {
@@ -893,18 +901,92 @@ def test_active_package_must_exist_and_match_its_selected_identity(tmp_path: Pat
     with pytest.raises(PackageActivationError):
         select_active_packages(home=home, proj_dir=None, cwd=tmp_path, env=env)
 
+    write_activation_index(
+        ActivationIndex(
+            packages={
+                "alpha": ActivePackage(
+                    semver.Version.parse("1.0.0"), editable=tmp_path / "missing-editable"
+                )
+            }
+        ),
+        home=home,
+        env=env,
+    )
+    with pytest.raises(PackageActivationError):
+        select_active_packages(home=home, proj_dir=None, cwd=tmp_path, env=env)
+
+    write_activation_index(
+        ActivationIndex(packages={"alpha": ActivePackage(semver.Version.parse("1.0.0"))}),
+        home=home,
+        env=env,
+    )
     root = _write_package(home, "alpha", "1.0.0")
     (root / "package.toml").write_text(
         '[package]\nname = "bravo"\nversion = "1.0.0"\n', encoding="utf-8"
     )
+    write_record(root)
     with pytest.raises(PackageActivationError):
         select_active_packages(home=home, proj_dir=None, cwd=tmp_path, env=env)
 
     (root / "package.toml").write_text(
         '[package]\nname = "alpha"\nversion = "2.0.0"\n', encoding="utf-8"
     )
+    write_record(root)
     with pytest.raises(PackageActivationError):
         select_active_packages(home=home, proj_dir=None, cwd=tmp_path, env=env)
+
+
+def test_active_immutable_package_must_match_its_record(tmp_path: Path) -> None:
+    home = tmp_path / "agm-home"
+    package = _write_package(home, "alpha", "1.0.0")
+    (package / "alpha" / "main.agl").write_text("changed", encoding="utf-8")
+    env = {"AGM_HOME": str(home)}
+    write_activation_index(
+        ActivationIndex({"alpha": ActivePackage(semver.Version.parse("1.0.0"))}),
+        home=home,
+        env=env,
+    )
+
+    with pytest.raises(PackageActivationError, match="integrity"):
+        select_active_packages(home=home, proj_dir=None, cwd=tmp_path, env=env)
+
+
+def test_active_immutable_package_record_read_failure_is_wrapped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import agm.packages.activation as activation
+
+    home = tmp_path / "agm-home"
+    _write_package(home, "alpha", "1.0.0")
+    env = {"AGM_HOME": str(home)}
+    write_activation_index(
+        ActivationIndex({"alpha": ActivePackage(semver.Version.parse("1.0.0"))}),
+        home=home,
+        env=env,
+    )
+    monkeypatch.setattr(
+        activation,
+        "verify_record",
+        lambda _root: (_ for _ in ()).throw(OSError("unreadable")),
+    )
+
+    with pytest.raises(PackageActivationError, match="integrity"):
+        select_active_packages(home=home, proj_dir=None, cwd=tmp_path, env=env)
+
+
+def test_editable_package_does_not_require_a_record(tmp_path: Path) -> None:
+    home = tmp_path / "agm-home"
+    editable = _write_development_package(tmp_path / "editable", "alpha", "1.0.0")
+    env = {"AGM_HOME": str(home)}
+    write_activation_index(
+        ActivationIndex(
+            {"alpha": ActivePackage(semver.Version.parse("1.0.0"), editable=editable.root)}
+        ),
+        home=home,
+        env=env,
+    )
+
+    assert select_active_packages(home=home, proj_dir=None, cwd=tmp_path, env=env) == (editable,)
 
 
 def test_editable_package_uses_its_live_manifest_for_requirement_checks(tmp_path: Path) -> None:

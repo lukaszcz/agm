@@ -737,8 +737,12 @@ def test_install_refuses_tampered_existing_tree_and_cleans_failed_copy(
     source = _package(tmp_path / "source", "alpha", "1.0.0")
     installed = install_directory(source, home=home, env={})
     (installed.root / "alpha" / "main.agl").write_text("tampered", encoding="utf-8")
+    write_activation_index(ActivationIndex(), home=home, env={})
     with pytest.raises(PackageInstallError, match="integrity"):
         install_directory(source, home=home, env={})
+    (installed.root / "alpha" / "main.agl").write_bytes(
+        (source / "alpha" / "main.agl").read_bytes()
+    )
 
     fresh = _package(tmp_path / "fresh", "bravo", "1.0.0")
 
@@ -778,6 +782,7 @@ def test_store_dependency_integrity_error_is_reported(tmp_path: Path) -> None:
     home = tmp_path / "home"
     installed = install_directory(_package(tmp_path / "bravo", "bravo", "1.0.0"), home=home, env={})
     (installed.root / "bravo" / "main.agl").write_text("tampered", encoding="utf-8")
+    write_activation_index(ActivationIndex(), home=home, env={})
     source = _package(tmp_path / "alpha", "alpha", "1.0.0", '\n[dependencies]\nbravo = "1"\n')
     with pytest.raises(PackageInstallError, match="integrity"):
         install_directory(source, home=home, env={})

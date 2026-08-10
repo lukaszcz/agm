@@ -22,6 +22,7 @@ from agm.packages.activation import (
 )
 from agm.packages.manifest import CommandSpec, PackageManifest
 from agm.packages.model import PackageInfo
+from agm.packages.record import write_record
 
 
 def invoke(runner: CliRunner, argv: list[str], *, env: dict[str, str] | None = None) -> Result:
@@ -310,6 +311,7 @@ version = "1.0.0"
             "tools lint": CommandRegistration("tools", "tools/lint::main", "Lint package inputs")
         },
     )
+    write_record(package_root)
     write_activation_index(index, home=home)
 
     result = invoke(CliRunner(), ["help"], env={"HOME": str(home)})
@@ -412,6 +414,7 @@ def test_exec_runs_an_installed_reference(monkeypatch: pytest.MonkeyPatch, tmp_p
         "import tools/settings\nparam level: text\nprogram def main() -> unit = print level\n",
         encoding="utf-8",
     )
+    write_record(package_root)
     write_activation_index(
         ActivationIndex({"tools": ActivePackage(semver.Version.parse("1.0.0"))}), home=home
     )
@@ -440,6 +443,7 @@ def test_exec_help_for_an_installed_reference_includes_program_params(
         "import tools/settings\nparam level: text\nprogram def main() -> unit = ()\n",
         encoding="utf-8",
     )
+    write_record(package_root)
     write_activation_index(
         ActivationIndex({"tools": ActivePackage(semver.Version.parse("1.0.0"))}), home=home
     )
@@ -466,6 +470,7 @@ def test_exec_program_option_overrides_an_installed_reference(
         'program def alternate() -> unit = print "alternate"\n',
         encoding="utf-8",
     )
+    write_record(package_root)
     write_activation_index(
         ActivationIndex({"tools": ActivePackage(semver.Version.parse("1.0.0"))}), home=home
     )

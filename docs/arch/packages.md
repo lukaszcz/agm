@@ -24,7 +24,9 @@ dependency closure precedence for that invocation. Development discovery rejects
 roots with the same package identity, so mounted imports remain unambiguous.
 
 Installed package contents have a SHA-256 `RECORD`; archive creation and installation verify
-that content before publication. The shipped `std` package is a managed store package whose
+that content before publication, and active immutable selections verify it again when they are
+resolved for activation or execution. Editable selections remain live and are exempt. The shipped
+`std` package is a managed store package whose
 version must exactly match the running AGM version. It is refreshed by `just install`, not by
 the ordinary package-install paths, and cannot be uninstalled.
 

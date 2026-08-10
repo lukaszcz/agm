@@ -32,6 +32,7 @@ from agm.packages.archive import ArchiveError
 from agm.packages.install import PackageInstallError
 from agm.packages.manifest import CommandSpec, DependencySpec, PackageManifest
 from agm.packages.model import PackageInfo
+from agm.packages.record import write_record
 from agm.version import AGM_VERSION
 
 
@@ -210,6 +211,7 @@ def test_list_command_prints_commands_only_below_their_active_or_editable_owner(
         '[commands.launch]\nprogram = "alpha/main::main"\n',
         encoding="utf-8",
     )
+    write_record(alpha.root)
     bravo = _package(tmp_path, "bravo")
     (bravo.root / "package.toml").write_text(
         '[package]\nname = "bravo"\nversion = "1.0.0"\n\n'

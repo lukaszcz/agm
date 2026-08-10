@@ -19,6 +19,7 @@ from agm.core.fs import mkdir, write_text
 from agm.core.toml import TomlDict, load_toml_file, toml_dict
 from agm.packages.manifest import ManifestError, PackageManifest, load_manifest
 from agm.packages.model import PackageInfo
+from agm.packages.record import RecordError, verify_record
 from agm.packages.store import (
     canonical_package_provenance_path,
     canonical_package_store_path,
@@ -828,6 +829,12 @@ def _packages_from_index(
                 except ValueError as exc:
                     raise PackageActivationError(
                         f"active package {name!r} resolves outside the package store root"
+                    ) from exc
+                try:
+                    verify_record(root)
+                except (OSError, RecordError) as exc:
+                    raise PackageActivationError(
+                        f"package integrity check failed for active package {name!r}: {exc}"
                     ) from exc
             manifest = _load_installed_manifest(root)
         if manifest.name != name:

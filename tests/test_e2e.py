@@ -32,6 +32,7 @@ from typing import TypedDict, cast
 
 import pytest
 
+from agm.packages.record import write_record
 from agm.project.workspace_shell import _sanitize_session_key
 from tests._agl_helpers import write_file_program
 from tests._proc_helpers import wait_for_path
@@ -8492,6 +8493,7 @@ def _write_pinned_package_project(parent: Path) -> tuple[Path, Path, Path]:
             f'[package]\nname = "alpha"\nversion = "{version}"\n', encoding="utf-8"
         )
         (package / "alpha" / "value.agl").write_text(f"def answer() -> int = {answer}\n")
+        write_record(package)
     (home / "packages" / "index.toml").write_text(
         '[packages.alpha]\nversion = "1.0.0"\n', encoding="utf-8"
     )

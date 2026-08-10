@@ -8,7 +8,13 @@ from typing import cast
 import pytest
 import semver
 
-from agm.packages.store import StorePathError, package_store_path, store_root
+from agm.packages.store import (
+    StorePathError,
+    canonical_package_provenance_path,
+    canonical_package_store_path,
+    package_store_path,
+    store_root,
+)
 
 
 def test_store_paths_use_the_agm_home_override(tmp_path: Path, env: dict[str, str]) -> None:
@@ -19,6 +25,44 @@ def test_store_paths_use_the_agm_home_override(tmp_path: Path, env: dict[str, st
     assert package_store_path(
         "review-tools", semver.Version.parse("1.2.3"), home=Path(env["HOME"]), env=env
     ) == (agm_home / "packages" / "review-tools" / "1.2.3")
+
+
+def test_canonical_store_path_refuses_an_in_store_symlinked_tree_ancestor(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    store = home / ".agm" / "packages"
+    internal_target = store / "other-package"
+    internal_target.mkdir(parents=True)
+    (store / "std").symlink_to(internal_target, target_is_directory=True)
+
+    with pytest.raises(StorePathError, match="symlink"):
+        canonical_package_store_path("std", semver.Version.parse("1.2.3"), home=home, env={})
+
+
+def test_canonical_store_path_refuses_an_in_store_symlinked_tree_target(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    store = home / ".agm" / "packages"
+    target = store / "other-package" / "1.2.3"
+    target.mkdir(parents=True)
+    logical_target = store / "std" / "1.2.3"
+    logical_target.parent.mkdir()
+    logical_target.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(StorePathError, match="symlink"):
+        canonical_package_store_path("std", semver.Version.parse("1.2.3"), home=home, env={})
+
+
+def test_canonical_provenance_path_refuses_a_symlinked_sidecar(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    store = home / ".agm" / "packages"
+    logical_sidecar = store / "std" / "1.2.3.provenance.toml"
+    logical_sidecar.parent.mkdir(parents=True)
+    target = store / "other-package" / "provenance.toml"
+    target.parent.mkdir()
+    target.write_text("", encoding="utf-8")
+    logical_sidecar.symlink_to(target)
+
+    with pytest.raises(StorePathError, match="symlink"):
+        canonical_package_provenance_path("std", semver.Version.parse("1.2.3"), home=home, env={})
 
 
 @pytest.mark.parametrize(

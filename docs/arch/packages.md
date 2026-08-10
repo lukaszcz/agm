@@ -3,13 +3,16 @@
 The package domain defines the portable package boundary independently of installation and
 CLI dispatch. A package directory has a `package.toml` manifest and a module tree named after
 the package; its `PackageInfo` is the source-agnostic input module-root assembly mounts for
-development directories now and installed packages later. Resource references declared by a
+development directories now and installed packages later. The shipped `std` directory is a
+package whose manifest version is locked to `agm.version.AGM_VERSION`; `just install` refreshes
+its immutable store tree and makes that version active. Resource references declared by a
 package-owned module are anchored to this package root, while loose-module resources remain
 anchored to their source directory; package discipline validates the package-relative targets.
 The versioned store layout helpers
 place extracted package trees under `<AGM home>/packages/<name>/<version>/`, rejecting path
-components that could leave the AGM home and resolving every install/removal/info path before it can
-follow an ancestor link outside the canonical store. Its activation index selects one store version per
+components that could leave the AGM home and refusing links in a logical package-name/version tree
+before canonicalization, so install/removal/info paths cannot follow an ancestor link outside the
+canonical store. Its activation index selects one store version per
 package (or records an editable root) and caches manifest-declared command registrations. Command
 priority is instead durable package-local provenance: each immutable tree has a sibling store sidecar
 that records its activation order and `--shadow` intent, outside the tree and therefore outside its

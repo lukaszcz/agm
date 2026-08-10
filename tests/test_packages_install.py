@@ -28,6 +28,7 @@ from agm.packages.install import (
     uninstall_package,
 )
 from agm.packages.record import verify_record
+from agm.version import AGM_VERSION
 
 
 @pytest.fixture(autouse=True)
@@ -47,6 +48,23 @@ def _package(root: Path, name: str, version: str, dependencies: str = "") -> Pat
     )
     (root / name / "main.agl").write_text("program def main() -> unit = ()\n", encoding="utf-8")
     return root
+
+
+def test_install_registers_stdlib_package_under_an_isolated_agm_home(tmp_path: Path) -> None:
+    source = Path(__file__).resolve().parent.parent / "stdlib"
+    agm_home = tmp_path / "agm-home"
+
+    installed = install_directory(
+        source,
+        home=tmp_path / "ignored-home",
+        env={"AGM_HOME": str(agm_home)},
+    )
+
+    assert installed.root == agm_home / "packages" / "std" / AGM_VERSION
+    assert (installed.root / "std" / "core.agl").is_file()
+    assert verify_record(installed.root)
+    index = load_activation_index(home=tmp_path / "ignored-home", env={"AGM_HOME": str(agm_home)})
+    assert index.packages["std"].version == installed.manifest.version
 
 
 def test_install_copies_package_writes_record_and_activates_it(tmp_path: Path) -> None:
@@ -482,6 +500,21 @@ def test_install_and_uninstall_refuse_store_paths_redirected_outside_the_store(
 
     assert external_version.is_dir()
     assert "alpha" in load_activation_index(home=home, env={}).packages
+
+
+def test_install_refuses_an_in_store_symlinked_managed_package_path(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    source = _package(tmp_path / "source", "std", "1.0.0")
+    store = home / ".agm" / "packages"
+    internal_target = store / "other-package"
+    internal_target.mkdir(parents=True)
+    (store / "std").symlink_to(internal_target, target_is_directory=True)
+
+    with pytest.raises(PackageInstallError, match="symlink"):
+        install_directory(source, home=home, env={})
+
+    assert not (internal_target / "1.0.0").exists()
+    assert load_activation_index(home=home, env={}).packages == {}
 
 
 def test_install_refuses_cyclic_and_mismatched_path_dependencies(tmp_path: Path) -> None:

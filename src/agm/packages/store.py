@@ -48,32 +48,41 @@ def package_provenance_path(
 def canonical_package_provenance_path(
     name: str, version: semver.Version, *, home: Path, env: Mapping[str, str] | None = None
 ) -> Path:
-    """Return a provenance sidecar path only when it remains within the store."""
+    """Return the canonical, unlinked provenance sidecar path."""
 
-    canonical_store_root = store_root(home=home, env=env).resolve()
-    candidate = package_provenance_path(name, version, home=home, env=env).resolve()
-    if not candidate.is_relative_to(canonical_store_root):
-        raise StorePathError(
-            f"package provenance path resolves outside the store root: {candidate}"
-        )
-    return candidate
+    logical_store_root = store_root(home=home, env=env)
+    logical_package_path = package_store_path(name, version, home=home, env=env)
+    _reject_managed_tree_symlinks(logical_package_path, logical_store_root)
+    logical_candidate = package_provenance_path(name, version, home=home, env=env)
+    if logical_candidate.is_symlink():
+        raise StorePathError(f"package provenance path is a symlink: {logical_candidate}")
+    return logical_candidate.resolve()
 
 
 def canonical_package_store_path(
     name: str, version: semver.Version, *, home: Path, env: Mapping[str, str] | None = None
 ) -> Path:
-    """Return an installed-tree path only when it resolves within the store.
+    """Return an installed-tree path only when it is an unlinked store tree.
 
-    Resolving both paths catches a name or version ancestor that is a symbolic
-    link to an external location before installation writes there or uninstall
-    removes there.  The canonical store root may itself be relocated by a link.
+    The logical package-name directory and version target must not be symbolic
+    links, even if resolving them would remain in the store. The store root
+    itself may be relocated by a link.
     """
 
-    canonical_store_root = store_root(home=home, env=env).resolve()
-    candidate = package_store_path(name, version, home=home, env=env).resolve()
-    if not candidate.is_relative_to(canonical_store_root):
-        raise StorePathError(f"package store path resolves outside the store root: {candidate}")
-    return candidate
+    logical_store_root = store_root(home=home, env=env)
+    logical_candidate = package_store_path(name, version, home=home, env=env)
+    _reject_managed_tree_symlinks(logical_candidate, logical_store_root)
+    return logical_candidate.resolve()
+
+
+def _reject_managed_tree_symlinks(logical_target: Path, logical_store_root: Path) -> None:
+    """Reject links in a logical package tree while permitting a relocated store root."""
+
+    candidate = logical_target
+    while candidate != logical_store_root:
+        if candidate.is_symlink():
+            raise StorePathError(f"package store path contains a symlink: {candidate}")
+        candidate = candidate.parent
 
 
 def _store_component(value: str, label: str) -> str:

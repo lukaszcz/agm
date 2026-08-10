@@ -32,7 +32,7 @@ when it does not declare an entry itself.
 
 - the directory of `FILE` (or the working directory for `-c`),
 - when that directory is inside a development package, its containing package and the recursive closure of dependencies declared with relative `path` sources in their manifests,
-- the standard-library root (`~/.agm/stdlib` after `just install`, or the in-repo `stdlib/` for a source checkout; override with the `AGM_STDLIB` environment variable),
+- the standard-library compatibility root (`~/.agm/stdlib` after `just install`, or the in-repo `stdlib/` for a source checkout; `just install` also activates its lockstep store package; override the root with the `AGM_STDLIB` environment variable),
 - the global library root (`~/.agm/lib`, relocated with `AGM_HOME` and overridable via `[modules] lib_root` in config),
 - any roots declared under `[modules] roots` in any config layer,
 - any roots added with `-I`/`--module-path`.

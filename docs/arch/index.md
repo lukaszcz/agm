@@ -41,6 +41,7 @@ AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-c
 - `src/agm/commands/` contains the command implementations, one subtree per command group; `commands/pkg/` exposes package validation without coupling the package domain to CLI wiring.
 - `src/agm/cli_support/` holds the typed argument containers that bridge the CLI layer and command implementations, plus the host-side AgL constant-expression parser used for engine-setting literals (imported lazily, so non-AgL commands stay free of AgL imports).
 - `src/agm/core/` contains the cross-cutting process, environment, filesystem, and TOML primitives plus the dry-run facility; `src/agm/util/` holds pure, `agm`-import-free generic helpers (graph algorithms, text normalization).
+- `src/agm/version.py` defines AGM's release version; package and project metadata keep it in lockstep.
 - `src/agm/config/` implements loading and resolving general and sandbox configuration.
 - `src/agm/project/` implements project/worktree setup and layout management.
 - `src/agm/packages/` implements package manifests, package identity, and package discipline validation.

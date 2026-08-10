@@ -51,6 +51,9 @@ the replacing package becomes the active command owner, and successful shadow in
 displaced command owners. Command precedence is persisted in a sidecar beside each immutable store
 tree, never in the `RECORD`-covered payload, so rebuilding a lost activation index preserves it.
 
+The built-in `std` package is installed and activated with AGM itself at the same version as the
+running binary. Its managed store tree is refreshed by `just install` rather than edited directly.
+
 `agm pkg uninstall` verifies the active immutable package's `RECORD`, validates the remaining
 activation selection, then clears activation before removing every recorded file. Remaining
 active manifests are reconciled so their command owners are restored. It refuses any store path

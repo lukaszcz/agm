@@ -8,6 +8,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
 
+from agm.config.general import agm_home_dir
+from agm.packages.install import install_directory
+from agm.packages.manifest import load_manifest
+from agm.packages.record import verify_record, write_record
+from agm.packages.store import canonical_package_store_path
+
 
 class _InstallArgs(Protocol):
     force: bool
@@ -123,7 +129,7 @@ def install_user_config(
     install_root: Path,
     force: bool = False,
 ) -> InstallUserConfigResult:
-    agm_config_dir = install_root / ".agm"
+    agm_config_dir = agm_home_dir(home=install_root)
     sandbox_dir = agm_config_dir / "sandbox"
     prompts_dir = agm_config_dir / "prompts"
     stdlib_dir = agm_config_dir / "stdlib"
@@ -160,20 +166,40 @@ def install_user_config(
         else:
             skipped.append(prompt_destination)
 
-    # The stdlib is a managed artifact AGM owns outright, not user-editable
-    # configuration: it is always force-refreshed (regardless of the caller's
-    # `force`) and pruned to an exact mirror of the shipped tree, so a stale
-    # destination file can never survive to satisfy the STDLIB_CONTRACT gate
-    # in `agm.config.module_roots.resolve_stdlib_root` with old sources.
+    # Keep the compatibility mirror managed while the current STDLIB_CONTRACT
+    # resolver still reads it. It is always force-refreshed and pruned so stale
+    # sources cannot survive the marker check.
+    stdlib_source = repo_root / "stdlib"
     _prepare_managed_destination(stdlib_dir)
     _install_tree_files(
-        source_dir=repo_root / "stdlib",
+        source_dir=stdlib_source,
         destination_dir=stdlib_dir,
         force=True,
         installed=installed,
         skipped=skipped,
         pruned=pruned,
     )
+
+    # Install the same managed tree as the active store package. The package
+    # domain owns activation and its index, while this installer retains the
+    # force-refresh, pruning, and destination symlink refusal of its managed
+    # artifact copy.
+    manifest = load_manifest(stdlib_source / "package.toml")
+    store_destination = canonical_package_store_path(
+        manifest.name, manifest.version, home=install_root
+    )
+    _prepare_managed_destination(store_destination)
+    _install_tree_files(
+        source_dir=stdlib_source,
+        destination_dir=store_destination,
+        force=True,
+        installed=installed,
+        skipped=skipped,
+        pruned=pruned,
+    )
+    write_record(store_destination)
+    verify_record(store_destination)
+    install_directory(stdlib_source, home=install_root)
 
     micro_source_dir = repo_root / "config" / "micro"
     if micro_source_dir.exists():

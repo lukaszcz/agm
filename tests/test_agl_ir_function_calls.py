@@ -437,6 +437,23 @@ def test_function_reads_static_root_var() -> None:
     assert ir["result"] == IntValue(0)
 
 
+def test_param_default_function_assigns_prior_static_var() -> None:
+    """A parameter default may call a function that assigns a preceding static var."""
+    source = (
+        "var counter = 0\n"
+        "def increment() -> int =\n"
+        "  counter := counter + 1\n"
+        "  counter\n"
+        "param result: int = increment()\n"
+        "program def main() -> unit = ()"
+    )
+
+    ir = evaluate_ir(source)
+
+    assert ir["counter"] == IntValue(1)
+    assert ir["result"] == IntValue(1)
+
+
 # ---------------------------------------------------------------------------
 # B1/capture fix tests (review-fixes task)
 # ---------------------------------------------------------------------------

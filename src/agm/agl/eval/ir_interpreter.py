@@ -1150,6 +1150,10 @@ class IrInterpreter:
                     # Module vars live in the base frame and are intentionally
                     # not closure captures.
                     slot = self._frames[0].get(sym)
+                if slot is None and self._resolving_param_defaults:
+                    module_id, initializer = self._static_bindings.pop(sym)
+                    self._eval_static_binding(module_id, initializer)
+                    slot = self._frames[0][sym]
                 if not isinstance(slot, Cell):
                     desc = self._program.symbols.get(sym)
                     if desc is None:

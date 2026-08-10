@@ -538,6 +538,24 @@ class TestPackageRootsAndVisibility:
 
         assert "loose" in str(exc_info.value)
 
+    def test_declared_dependency_does_not_authorize_a_package_under_an_unqualified_identity(
+        self, tmp_path: Path
+    ) -> None:
+        alpha = _package(tmp_path, "alpha", dependencies=("bravo",))
+        bravo = _package(tmp_path, "bravo")
+        _write_module(alpha.root, "alpha/main", "import shared")
+        _write_module(bravo.root, "bravo/shared")
+
+        with pytest.raises(PackageImportVisibilityError) as exc_info:
+            load_graph(
+                "import alpha/main",
+                entry_path=None,
+                roots=_package_roots(tmp_path, alpha, bravo, loose_roots=(bravo.module_root,)),
+                default_stdlib=False,
+            )
+
+        assert exc_info.value.target == "bravo"
+
     def test_declared_dependency_does_not_authorize_an_unowned_loose_target(
         self, tmp_path: Path
     ) -> None:

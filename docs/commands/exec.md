@@ -192,7 +192,7 @@ with nothing run.
 
 Qualified tables address declarations by module suffix and scope path. The entry
 file's `.agl` stem is its module component. For example, a `review::main` program
-in `review-tools/review` reads engine overrides from `[review-tools.review.main]`,
+in `review-tools/review` reads engine overrides from `[review-tools.review.review]`,
 and a `review::max-tries` param in `review-tools/judge` reads `[judge.review]` when
 that suffix is unambiguous. Use a longer suffix or an exact quoted module route
 such as `["review-tools/judge".review]` to disambiguate. `runner` remains an
@@ -239,8 +239,8 @@ Precedence differs by kind:
   `::` is not a legal bare key:
 
   ```toml
-  [demo]
-  "Deploy::region" = "prod"
+  [demo.Deploy]
+  region = "prod"
   ```
 
 The CLI flags and the config-file layers supply the setting's **initial** value; a

@@ -722,6 +722,7 @@ def _archive_layout(
     if len(names) != len(set(names)):
         raise ArchiveError("package archive repeats an entry")
     _reject_casefolding_collisions(names)
+    _reject_file_descendant_conflicts(names)
     paths = tuple(PurePosixPath(name) for name in names)
     prefix_part = paths[0].parts[0]
     if any(path.parts[0] != prefix_part or len(path.parts) < 2 for path in paths):
@@ -881,6 +882,16 @@ def _record_path_key(entry: RecordEntry) -> str:
     """Return the canonical ordering key for one record entry."""
 
     return entry.path
+
+
+def _reject_file_descendant_conflicts(paths: Iterable[str]) -> None:
+    """Reject ZIP entries that require one path to be both file and directory."""
+
+    names = set(paths)
+    for name in names:
+        path = PurePosixPath(name)
+        if any(parent.as_posix() in names for parent in path.parents):
+            raise ArchiveError(f"package archive file conflicts with descendant entry {name!r}")
 
 
 def _reject_casefolding_collisions(paths: Iterable[str]) -> None:

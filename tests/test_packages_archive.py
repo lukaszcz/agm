@@ -951,6 +951,22 @@ def test_read_archive_metadata_rejects_unsafe_layouts(
         read_archive_metadata(archive_path)
 
 
+def test_read_archive_metadata_rejects_file_descendant_conflicts(tmp_path: Path) -> None:
+    archive_path = tmp_path / "conflict.agmpkg"
+    _write_zip(
+        archive_path,
+        [
+            ("review_tools-1.2.3/RECORD", b""),
+            ("review_tools-1.2.3/package.toml", b""),
+            ("review_tools-1.2.3/review_tools/custom", b""),
+            ("review_tools-1.2.3/review_tools/custom/main.agl", b""),
+        ],
+    )
+
+    with pytest.raises(ArchiveError, match="file conflicts"):
+        read_archive_metadata(archive_path)
+
+
 def test_read_archive_metadata_rejects_repeated_entries(tmp_path: Path) -> None:
     archive_path = tmp_path / "duplicate.agmpkg"
     with pytest.warns(UserWarning, match="Duplicate name"):

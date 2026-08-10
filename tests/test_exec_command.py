@@ -342,6 +342,23 @@ class TestExecDynamicHelp:
         assert "--@entry::region" in output
         assert "--<entry>::region" not in output
 
+    def test_exec_accepts_a_shell_safe_entry_qualifier_for_colliding_params(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "settings.agl").write_text('param region: text = "eu"\n')
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "import settings\nparam region: text\nprogram def main() -> unit = print region\n"
+        )
+
+        assert (
+            exec_command.run(
+                _exec_args_no_log(agl_file, param_tokens=["--@entry::region", "local"])
+            )
+            is None
+        )
+        assert capsys.readouterr().out == "local\n"
+
     def test_exec_help_for_inline_command_includes_discovered_params(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:

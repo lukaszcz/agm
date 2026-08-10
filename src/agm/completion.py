@@ -222,6 +222,32 @@ def registered_command_completion(
         return [], False
 
 
+def registered_command_param_completion(
+    command_path: Sequence[str], incomplete: str
+) -> list[CompletionItem]:
+    """Complete parameters for an already resolved registered command."""
+    try:
+        from agm.cli_dispatch import load_activation_index, resolve_registered_command
+        from agm.commands.exec_program import registered_program_param_flags
+
+        context = current_config_context()
+        index = load_activation_index(home=context.home, proj_dir=context.proj_dir, cwd=context.cwd)
+        resolution = resolve_registered_command(command_path, index.commands)
+        if resolution is None:
+            return []
+        return [
+            CompletionItem(flag)
+            for flag in registered_program_param_flags(
+                resolution.registration.program,
+                resolution.registration.package,
+                context=context,
+            )
+            if flag.startswith(incomplete)
+        ]
+    except (Exception, SystemExit):
+        return []
+
+
 def complete_registered_commands(command_path: Sequence[str], incomplete: str) -> list[str]:
     """Complete the next active registered-command path segment."""
     return registered_command_completion(command_path, incomplete)[0]

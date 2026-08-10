@@ -7462,6 +7462,7 @@ class TestPackageInstall:
 
         installed = run_agm(["pkg", "install", str(package)], env=env, cwd=tmp_path)
         help_result = run_agm(["help"], env=env, cwd=tmp_path)
+        command_help = run_agm(["publish", "--help"], env=env, cwd=tmp_path)
         published = run_agm(["publish", "--subject", "flag"], env=env, cwd=tmp_path)
         configured = run_agm(["publish"], env=env, cwd=tmp_path)
         inspected = run_agm(["tools", "inspect", "--subject", "trailing"], env=env, cwd=tmp_path)
@@ -7471,6 +7472,8 @@ class TestPackageInstall:
         assert installed.returncode == 0
         assert "publish" in help_result.stdout
         assert "Publish a subject" in help_result.stdout
+        assert "Program parameters:" in command_help.stdout
+        assert "--subject" in command_help.stdout
         assert published.stdout == "flag\n9\n"
         assert configured.stdout == "configured\n9\n"
         assert inspected.stdout == "trailing\n"

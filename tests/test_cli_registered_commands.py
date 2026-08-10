@@ -139,6 +139,52 @@ def test_registered_command_dispatches_trailing_arguments(
     assert calls == [("tools/lint::main", ["--level", "strict"], "tools", "tools lint")]
 
 
+def test_registered_command_help_does_not_dispatch_program(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import agm.cli_dispatch as dispatch
+    import agm.commands.exec_program as exec_program
+
+    context = ConfigContext(home=tmp_path / "home", proj_dir=None, cwd=tmp_path)
+    index = ActivationIndex(
+        commands={
+            "tools lint": CommandRegistration("tools", "tools/lint::main", "Lint package inputs")
+        }
+    )
+    monkeypatch.setattr(dispatch, "current_config_context", lambda: context)
+    monkeypatch.setattr(dispatch, "load_activation_index", lambda **_: index)
+    calls: list[object] = []
+    monkeypatch.setattr(exec_program, "run_registered", lambda *args, **kwargs: calls.append(args))
+
+    result = invoke(CliRunner(), ["tools", "lint", "--help"])
+
+    assert result.exit_code == 0
+    assert "agm tools lint" in result.output
+    assert "Lint package inputs" in result.output
+    assert calls == []
+
+
+def test_help_command_renders_registered_command_help(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import agm.cli_dispatch as dispatch
+
+    context = ConfigContext(home=tmp_path / "home", proj_dir=None, cwd=tmp_path)
+    index = ActivationIndex(
+        commands={
+            "tools lint": CommandRegistration("tools", "tools/lint::main", "Lint package inputs")
+        }
+    )
+    monkeypatch.setattr(dispatch, "current_config_context", lambda: context)
+    monkeypatch.setattr(dispatch, "load_activation_index", lambda **_: index)
+
+    result = invoke(CliRunner(), ["help", "tools", "lint"])
+
+    assert result.exit_code == 0
+    assert "agm tools lint" in result.output
+    assert "Lint package inputs" in result.output
+
+
 def test_unknown_command_without_registered_entry_keeps_click_error(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

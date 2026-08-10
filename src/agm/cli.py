@@ -625,7 +625,10 @@ def help(
     try:
         print_help_for_command_path(help_command)
     except ValueError:
-        print_command_help(" ".join(help_command))
+        from agm.cli_dispatch import print_registered_command_help
+
+        if not print_registered_command_help(help_command):
+            print_command_help(" ".join(help_command))
     raise typer.Exit()
 
 

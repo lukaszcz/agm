@@ -66,6 +66,36 @@ def _path_length(item: tuple[str, CommandRegistrationLike]) -> int:
     return len(item[0].split())
 
 
+def registered_command_help(path_name: str, registration: CommandRegistrationLike) -> str:
+    """Render help for one package-registered command."""
+    description = registration.description or "Run the registered AgL program."
+    lines = [f"agm {path_name} [--PARAM VALUE]...", "", description]
+    try:
+        from agm.commands.exec_program import registered_program_param_flags
+
+        flags = registered_program_param_flags(registration.program, registration.package)
+    except (Exception, SystemExit):
+        flags = ()
+    if flags:
+        lines.extend(("", "Program parameters:", *(f"  {flag}" for flag in flags)))
+    return "\n".join(lines) + "\n"
+
+
+def print_registered_command_help(command_path: Sequence[str]) -> bool:
+    """Print registered-command help when *command_path* names one exactly."""
+    try:
+        context = current_config_context()
+        index = load_activation_index(home=context.home, proj_dir=context.proj_dir, cwd=context.cwd)
+    except (OSError, ValueError, SystemExit):
+        return False
+    path_name = " ".join(command_path)
+    registration = index.commands.get(path_name)
+    if registration is None:
+        return False
+    print(registered_command_help(path_name, registration), end="")
+    return True
+
+
 def resolve_registered_command(
     args: Sequence[str], commands: Mapping[str, CommandRegistrationLike]
 ) -> RegisteredCommandResolution | None:
@@ -91,7 +121,24 @@ class RegisteredProgramCommand(TyperCommand):
         self._path_name = path_name
         self._registration = registration
 
+    def shell_complete(self, ctx: click.Context, incomplete: str) -> list[CompletionItem]:
+        base = super().shell_complete(ctx, incomplete)
+        if not incomplete.startswith("--"):
+            return base
+        from agm.commands.exec_program import registered_program_param_flags
+
+        items_by_value: dict[str, CompletionItem] = {cast(str, item.value): item for item in base}
+        for flag in registered_program_param_flags(
+            self._registration.program, self._registration.package
+        ):
+            if flag.startswith(incomplete):
+                items_by_value[flag] = CompletionItem(flag)
+        return list(items_by_value.values())
+
     def invoke(self, ctx: click.Context) -> None:
+        if "--help" in ctx.args or "-h" in ctx.args:
+            print(registered_command_help(self._path_name, self._registration), end="")
+            return
         # This is the first point at which an unknown command has been proven
         # to be registered, so AgL remains unloaded for all builtin commands.
         from agm.commands.exec_program import run_registered
@@ -113,7 +160,13 @@ class RegisteredCommandGroup(TyperGroup):
 
         command_path = [*ctx._protected_args, *ctx.args]
         registered_segments, is_registered = registered_command_completion(command_path, incomplete)
-        if command_path and (registered_segments or is_registered):
+        if command_path and is_registered:
+            if incomplete.startswith("--"):
+                from agm.completion import registered_command_param_completion
+
+                return registered_command_param_completion(command_path, incomplete)
+            return [CompletionItem(segment) for segment in registered_segments]
+        if command_path and registered_segments:
             return [CompletionItem(segment) for segment in registered_segments]
 
         items_by_value: dict[str, CompletionItem] = {

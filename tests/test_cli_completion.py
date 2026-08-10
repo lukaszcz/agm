@@ -38,6 +38,10 @@ def test_complete_registered_commands_reads_active_index(
     home = tmp_path / "home"
     package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
     package_root.mkdir(parents=True)
+    (package_root / "tools").mkdir()
+    (package_root / "tools" / "lint.agl").write_text(
+        "param level: text\nprogram def main() -> unit = ()\n", encoding="utf-8"
+    )
     (package_root / "package.toml").write_text(
         """[package]
 name = "tools"
@@ -76,6 +80,9 @@ review-tools = { program = "tools/review::main" }
     assert next_segments == ["lint"]
 
     assert shell_complete.get_completions(["tools", "lint"], "") == []
+    assert "--level" in [
+        item.value for item in shell_complete.get_completions(["tools", "lint"], "--")
+    ]
     assert shell_complete.get_completions(["tools", "lint", "--level"], "") == []
 
 

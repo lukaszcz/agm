@@ -67,7 +67,11 @@ from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES
 from agm.agl.syntax.nodes import FuncDef, ParamDecl, static_items
 from agm.cli_support.args import ExecArgs
 from agm.cli_support.engine_seeds import build_host_engine_seeds, check_max_iters
-from agm.cli_support.exec_params import parse_param_tokens
+from agm.cli_support.exec_params import (
+    discover_params_from_source,
+    param_option_flags,
+    parse_param_tokens,
+)
 from agm.cli_support.exec_roots import effective_exec_roots
 from agm.config.context import ConfigContext, current_config_context
 from agm.config.general import ExecConfig, exec_config_from_merged, load_general_config
@@ -147,6 +151,46 @@ def _registered_command_mismatch(command_path: str) -> NoReturn:
         file=sys.stderr,
     )
     raise SystemExit(1)
+
+
+def registered_program_param_flags(
+    program: str, package_name: str, *, context: ConfigContext | None = None
+) -> tuple[str, ...]:
+    """Discover parameter flags for a registered program, degrading on failure."""
+    try:
+        from agm.agl.modules.ids import ModuleId
+
+        module_path, separator, _declaration_path = program.partition("::")
+        if not separator or not _declaration_path:
+            return ()
+        module_id = ModuleId.from_path(module_path)
+        if module_id.segments[0] != package_name:
+            return ()
+        if context is None:
+            context = current_config_context()
+        packages = select_active_packages(
+            home=context.home, proj_dir=context.proj_dir, cwd=context.cwd
+        )
+        package = next(
+            (candidate for candidate in packages if candidate.manifest.name == package_name), None
+        )
+        if package is None:
+            return ()
+        entry_path = package.root / module_id.relpath()
+        source = entry_path.read_text(encoding="utf-8")
+        roots = effective_exec_roots(
+            entry_path=entry_path,
+            module_paths=[],
+            cwd=context.cwd,
+            home=context.home,
+            proj_dir=context.proj_dir,
+            package_roots=discover_development_packages(entry_path),
+        )
+        return param_option_flags(
+            discover_params_from_source(source, entry_path=entry_path, roots=roots)
+        )
+    except (Exception, SystemExit):
+        return ()
 
 
 def run(

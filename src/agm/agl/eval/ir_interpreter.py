@@ -1124,11 +1124,9 @@ class IrInterpreter:
                     None,
                 )
                 if slot is None and self._resolving_param_defaults:
-                    binding = self._static_bindings.pop(sym, None)
-                    if binding is not None:
-                        module_id, initializer = binding
-                        self._eval_static_binding(module_id, initializer)
-                        slot = self._frames[0].get(sym)
+                    module_id, initializer = self._static_bindings.pop(sym)
+                    self._eval_static_binding(module_id, initializer)
+                    slot = self._frames[0][sym]
                 if slot is None:
                     raise InvalidIrError(
                         f"IrLoad: symbol_id={sym.value!r} is not bound in the frame"

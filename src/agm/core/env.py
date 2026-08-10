@@ -65,7 +65,7 @@ def agm_installation_prefix() -> Path | None:
     agm_executable = shutil.which("agm")
     if agm_executable is None:
         return None
-    return Path(agm_executable).resolve().parent.parent
+    return Path(agm_executable).absolute().parent.parent
 
 
 def source_env_files(

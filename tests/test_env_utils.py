@@ -29,6 +29,21 @@ def test_agm_installation_prefix_uses_agm_binary_location(
     assert agm_installation_prefix() == prefix
 
 
+def test_agm_installation_prefix_uses_symlink_location_without_resolving_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prefix = tmp_path / "prefix"
+    tool_executable = tmp_path / "uv-tools" / "agm"
+    tool_executable.parent.mkdir(parents=True)
+    tool_executable.write_text("", encoding="utf-8")
+    agm_executable = prefix / "bin" / "agm"
+    agm_executable.parent.mkdir(parents=True)
+    agm_executable.symlink_to(tool_executable)
+    monkeypatch.setattr("agm.core.env.shutil.which", lambda _name: str(agm_executable))
+
+    assert agm_installation_prefix() == prefix
+
+
 def test_agm_installation_prefix_returns_none_when_agm_is_not_on_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

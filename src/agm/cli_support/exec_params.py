@@ -211,10 +211,8 @@ def parse_param_tokens(
     - bool params: native ``bool`` (``True`` for ``--name``, ``False`` for ``--no-name``)
     - all others: raw ``str`` (runtime ``convert_param_value`` handles type coercion)
 
-    Non-option tokens (not starting with ``--``) are silently skipped so that
-    the FILE positional argument landing in ``ctx.args`` does not cause errors.
-
     Raises ``ValueError`` for:
+    - Unexpected positional or short-option tokens
     - Unknown ``--xxx`` flags
     - Missing value for a non-bool flag
     - Duplicate param flags
@@ -231,8 +229,7 @@ def parse_param_tokens(
     while i < len(tokens):
         token = tokens[i]
         if not token.startswith("--"):
-            i += 1
-            continue  # skip positional tokens (e.g. FILE)
+            raise ValueError(f"Unexpected argument: {token!r}")
 
         # Handle ``--name=value`` form.
         if "=" in token:

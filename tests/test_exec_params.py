@@ -241,14 +241,12 @@ class TestParseParamTokens:
         result = parse_param_tokens(params, ["--no-flag"])
         assert result == {"flag": False}
 
-    def test_positional_tokens_ignored(self) -> None:
-        """Non-option tokens (like the FILE arg) are silently skipped."""
+    def test_positional_tokens_are_rejected(self) -> None:
         from agm.cli_support.exec_params import parse_param_tokens
 
         params = (self._text_param("name"),)
-        # 'some_file.agl' does not start with '--', should be ignored
-        result = parse_param_tokens(params, ["some_file.agl", "--name", "hello"])
-        assert result == {"name": "hello"}
+        with pytest.raises(ValueError, match="Unexpected argument"):
+            parse_param_tokens(params, ["some_file.agl", "--name", "hello"])
 
     def test_no_params_empty_tokens(self) -> None:
         from agm.cli_support.exec_params import parse_param_tokens

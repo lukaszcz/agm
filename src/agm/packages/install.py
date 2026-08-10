@@ -244,8 +244,6 @@ def _install_directory(
     if source.is_symlink():
         raise PackageInstallError(f"cannot install symbolic-link package root {source}")
     root = source.resolve()
-    if root in state.installing:
-        raise PackageInstallError(f"cyclic path dependency at {root}")
     try:
         package = PackageInfo(root, load_manifest(root / "package.toml"))
         validate_package(package)
@@ -254,11 +252,7 @@ def _install_directory(
 
     _validate_managed_stdlib_install(package.manifest, source=root, editable=editable)
     _validate_minimum_agm(package.manifest)
-    state.installing.add(root)
-    try:
-        _resolve_dependencies(package, state)
-    finally:
-        state.installing.remove(root)
+    _resolve_dependencies(package, state)
 
     if editable:
         installed = package
@@ -351,11 +345,7 @@ def _install_archive(archive: Path, *, state: _InstallState, shadow: bool) -> Pa
                 fs.rmtree(staging)
 
     try:
-        state.installing.add(archive_path)
-        try:
-            _resolve_dependencies(installed, state)
-        finally:
-            state.installing.remove(archive_path)
+        _resolve_dependencies(installed, state)
         _activate_package(installed, state, editable_root=None, shadow=shadow)
         return installed
     except (DisciplineError, PackageInstallError, ValueError) as exc:
@@ -375,6 +365,17 @@ def _validate_minimum_agm(manifest: PackageManifest) -> None:
 
 
 def _resolve_dependencies(package: PackageInfo, state: _InstallState) -> None:
+    root = package.root.resolve()
+    if root in state.installing:
+        raise PackageInstallError(f"cyclic package dependency at {root}")
+    state.installing.add(root)
+    try:
+        _resolve_dependency_requirements(package, state)
+    finally:
+        state.installing.remove(root)
+
+
+def _resolve_dependency_requirements(package: PackageInfo, state: _InstallState) -> None:
     for name, requirement in package.manifest.dependencies.items():
         # ``std`` is a minimum AGM-version contract, already checked before
         # dependency resolution. It is not a package-store dependency.
@@ -397,6 +398,7 @@ def _resolve_dependencies(package: PackageInfo, state: _InstallState) -> None:
             raise PackageInstallError(
                 f"unsatisfied package requirement {name!r} >= {requirement.version}"
             )
+        _resolve_dependencies(selected, state)
         if selected.manifest.name != name or selected.manifest.version < requirement.version:
             raise PackageInstallError(
                 f"unsatisfied package requirement {name!r} >= {requirement.version}"

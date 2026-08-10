@@ -507,6 +507,25 @@ def test_install_uses_an_installed_satisfying_dependency_before_path_source(tmp_
     assert load_activation_index(home=home, env={}).packages["bravo"].version.major == 2
 
 
+def test_install_activates_the_closure_of_a_stored_dependency(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    charlie = _package(tmp_path / "charlie", "charlie", "1.0.0")
+    bravo = _package(
+        tmp_path / "bravo",
+        "bravo",
+        "1.0.0",
+        '\n[dependencies]\ncharlie = "1"\n',
+    )
+    install_directory(charlie, home=home, env={})
+    install_directory(bravo, home=home, env={})
+    write_activation_index(ActivationIndex(), home=home, env={})
+    alpha = _package(tmp_path / "alpha", "alpha", "1.0.0", '\n[dependencies]\nbravo = "1"\n')
+
+    install_directory(alpha, home=home, env={})
+
+    assert set(load_activation_index(home=home, env={}).packages) == {"alpha", "bravo", "charlie"}
+
+
 def test_editable_install_mounts_live_tree_without_a_record(tmp_path: Path) -> None:
     source = _package(tmp_path / "source", "alpha", "1.0.0")
     home = tmp_path / "home"

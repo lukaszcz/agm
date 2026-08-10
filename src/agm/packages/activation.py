@@ -382,7 +382,15 @@ def effective_command_index(
     """
 
     index = load_activation_index(home=home, env=env)
-    packages = select_active_packages(home=home, proj_dir=proj_dir, cwd=cwd, env=env)
+    packages = _selected_active_packages(
+        home=home,
+        proj_dir=proj_dir,
+        cwd=cwd,
+        excluded_names=set(),
+        env=env,
+        index=index,
+    )
+    _validate_requirements(packages)
     if {package.manifest.name: package.manifest.version for package in packages} == {
         name: active.version for name, active in index.packages.items()
     }:
@@ -441,10 +449,12 @@ def _selected_active_packages(
     cwd: Path,
     excluded_names: set[str],
     env: Mapping[str, str] | None,
+    index: ActivationIndex | None = None,
 ) -> tuple[PackageInfo, ...]:
     """Load global selections with pins, excluding development names before resolution."""
 
-    index = load_activation_index(home=home, env=env)
+    if index is None:
+        index = load_activation_index(home=home, env=env)
     selections = dict(index.packages)
     for name, version in load_package_pins(home=home, proj_dir=proj_dir, cwd=cwd, env=env).items():
         selections[name] = ActivePackage(version)

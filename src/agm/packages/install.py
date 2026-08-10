@@ -266,27 +266,7 @@ def _install_directory(
             fs.mkdir(destination.parent, parents=True, exist_ok=True)
             fs.copy_tree(root, destination)
 
-    try:
-        validate_package_command_conflicts(
-            state.index,
-            package.manifest,
-            shadow=shadow,
-            home=state.home,
-            env=state.env,
-            transient_packages=state.transient_packages,
-        )
-    except PackageActivationError as exc:
-        raise PackageInstallError(f"cannot register package commands: {exc}") from exc
-    packages = dict(state.index.packages)
-    packages[package.manifest.name] = ActivePackage(
-        package.manifest.version,
-        editable=root if editable else None,
-        shadow=shadow,
-        registration_order=_next_registration_order(state.index),
-    )
-    state.index = ActivationIndex(packages, state.index.commands)
-    state.index = merge_package_commands(state.index, package.manifest, shadow=shadow)
-    state.transient_packages[package.manifest.name] = installed
+    _activate_package(installed, state, editable_root=root if editable else None, shadow=shadow)
     return installed
 
 
@@ -347,26 +327,7 @@ def _install_archive(archive: Path, *, state: _InstallState, shadow: bool) -> Pa
             _resolve_dependencies(installed, state)
         finally:
             state.installing.remove(archive_path)
-        try:
-            validate_package_command_conflicts(
-                state.index,
-                installed.manifest,
-                shadow=shadow,
-                home=state.home,
-                env=state.env,
-                transient_packages=state.transient_packages,
-            )
-        except PackageActivationError as exc:
-            raise PackageInstallError(f"cannot register package commands: {exc}") from exc
-        packages = dict(state.index.packages)
-        packages[installed.manifest.name] = ActivePackage(
-            installed.manifest.version,
-            shadow=shadow,
-            registration_order=_next_registration_order(state.index),
-        )
-        state.index = ActivationIndex(packages, state.index.commands)
-        state.index = merge_package_commands(state.index, installed.manifest, shadow=shadow)
-        state.transient_packages[installed.manifest.name] = installed
+        _activate_package(installed, state, editable_root=None, shadow=shadow)
         return installed
     except (DisciplineError, PackageInstallError, ValueError) as exc:
         raise PackageInstallError(f"cannot install package archive {archive}: {exc}") from exc
@@ -417,25 +378,41 @@ def _resolve_dependencies(package: PackageInfo, state: _InstallState) -> None:
             or current.editable is not None
             or current.version != selected.manifest.version
         ):
-            try:
-                validate_package_command_conflicts(
-                    state.index,
-                    selected.manifest,
-                    shadow=False,
-                    home=state.home,
-                    env=state.env,
-                    transient_packages=state.transient_packages,
-                )
-            except PackageActivationError as exc:
-                raise PackageInstallError(f"cannot register package commands: {exc}") from exc
-            packages = dict(state.index.packages)
-            packages[name] = ActivePackage(
-                selected.manifest.version,
-                registration_order=_next_registration_order(state.index),
-            )
-            state.index = ActivationIndex(packages, state.index.commands)
-            state.index = merge_package_commands(state.index, selected.manifest, shadow=False)
-        state.transient_packages[name] = selected
+            _activate_package(selected, state, editable_root=None, shadow=False)
+        else:
+            state.transient_packages[name] = selected
+
+
+def _activate_package(
+    package: PackageInfo,
+    state: _InstallState,
+    *,
+    editable_root: Path | None,
+    shadow: bool,
+) -> None:
+    """Select a package, register its commands, and retain it for this install."""
+
+    try:
+        validate_package_command_conflicts(
+            state.index,
+            package.manifest,
+            shadow=shadow,
+            home=state.home,
+            env=state.env,
+            transient_packages=state.transient_packages,
+        )
+    except PackageActivationError as exc:
+        raise PackageInstallError(f"cannot register package commands: {exc}") from exc
+    packages = dict(state.index.packages)
+    packages[package.manifest.name] = ActivePackage(
+        package.manifest.version,
+        editable=editable_root,
+        shadow=shadow,
+        registration_order=_next_registration_order(state.index),
+    )
+    state.index = ActivationIndex(packages, state.index.commands)
+    state.index = merge_package_commands(state.index, package.manifest, shadow=shadow)
+    state.transient_packages[package.manifest.name] = package
 
 
 def _installed_satisfying(

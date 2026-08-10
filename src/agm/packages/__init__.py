@@ -1,46 +1,53 @@
-"""Pure domain types and validation for AGM packages."""
+"""Lazy public façade for AGM package-domain types and operations."""
 
 from __future__ import annotations
 
-from agm.packages.activation import (
-    ActivationIndex,
-    ActivePackage,
-    CommandRegistration,
-    CommandShadow,
-    PackageActivationError,
-    PackageProvenance,
-    command_shadow_diagnostics,
-    load_activation_index,
-    load_package_pins,
-    load_package_provenance,
-    merge_package_commands,
-    rebuild_activation_index,
-    select_active_packages,
-    select_package_roots,
-    validate_package_command_conflicts,
-    write_activation_index,
-    write_package_provenance,
-)
-from agm.packages.archive import (
-    ArchiveError,
-    ArchiveMetadata,
-    extract_archive,
-    read_archive_manifest,
-    read_archive_metadata,
-    verify_archive,
-    write_archive,
-)
-from agm.packages.development import discover_development_packages
-from agm.packages.discipline import DisciplineError, validate_package
-from agm.packages.manifest import (
-    ManifestError,
-    PackageManifest,
-    distribution_manifest,
-    load_manifest,
-)
-from agm.packages.model import PackageInfo, owning_package
-from agm.packages.record import RecordEntry, RecordError, read_record, verify_record, write_record
-from agm.packages.store import StorePathError, package_store_path, store_root
+from importlib import import_module
+from typing import Final, cast
+
+_EXPORT_MODULES: Final = {
+    "ActivationIndex": "activation",
+    "ActivePackage": "activation",
+    "ArchiveError": "archive",
+    "ArchiveMetadata": "archive",
+    "CommandRegistration": "activation",
+    "CommandShadow": "activation",
+    "DisciplineError": "discipline",
+    "PackageActivationError": "activation",
+    "PackageInfo": "model",
+    "PackageManifest": "manifest",
+    "PackageProvenance": "activation",
+    "ManifestError": "manifest",
+    "RecordEntry": "record",
+    "RecordError": "record",
+    "StorePathError": "store",
+    "command_shadow_diagnostics": "activation",
+    "discover_development_packages": "development",
+    "distribution_manifest": "manifest",
+    "extract_archive": "archive",
+    "load_activation_index": "activation",
+    "load_manifest": "manifest",
+    "load_package_pins": "activation",
+    "load_package_provenance": "activation",
+    "merge_package_commands": "activation",
+    "owning_package": "model",
+    "package_store_path": "store",
+    "read_archive_manifest": "archive",
+    "read_archive_metadata": "archive",
+    "read_record": "record",
+    "rebuild_activation_index": "activation",
+    "select_active_packages": "activation",
+    "select_package_roots": "activation",
+    "store_root": "store",
+    "validate_package": "discipline",
+    "validate_package_command_conflicts": "activation",
+    "verify_archive": "archive",
+    "verify_record": "record",
+    "write_activation_index": "activation",
+    "write_archive": "archive",
+    "write_package_provenance": "activation",
+    "write_record": "record",
+}
 
 __all__ = [
     "ActivationIndex",
@@ -85,3 +92,12 @@ __all__ = [
     "write_archive",
     "write_record",
 ]
+
+
+def __getattr__(name: str) -> object:
+    """Load a package-domain export only when a caller requests it."""
+
+    module_name = _EXPORT_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return cast(object, getattr(import_module(f"{__name__}.{module_name}"), name))

@@ -60,6 +60,13 @@ class TestPackageDiscipline:
         with pytest.raises(DisciplineError):
             validate_package(package)
 
+    def test_rejects_command_path_starting_with_an_option(self, tmp_path: Path) -> None:
+        package = _custom_package(tmp_path, command_path="--launch")
+        (package.module_root / "main.agl").write_text("program def main() -> unit = ()\n")
+
+        with pytest.raises(DisciplineError):
+            validate_package(package)
+
     @pytest.mark.parametrize(
         "reference",
         (

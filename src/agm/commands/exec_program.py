@@ -234,10 +234,14 @@ def run(
         engine_keys = tuple(
             QualifiedConfigKey(config_entry_segments, program_path, key) for key in ENGINE_KEY_NAMES
         )
-        engine_program_table = {
-            key.leaf: value
-            for key, value in resolve_qualified_values(config_view, engine_keys).items()
-        }
+        try:
+            engine_program_table = {
+                key.leaf: value
+                for key, value in resolve_qualified_values(config_view, engine_keys).items()
+            }
+        except QualifiedConfigLookupError as exc:
+            print(f"Error: invalid exec configuration: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
     try:
         config = exec_config_loader(merged_config, program_table=engine_program_table)
     except ValueError as exc:

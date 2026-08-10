@@ -26,6 +26,10 @@ that content before publication. The shipped `std` package is a managed store pa
 version must exactly match the running AGM version. It is refreshed by `just install`, not by
 the ordinary package-install paths, and cannot be uninstalled.
 
+The `agm.packages` public façade resolves domain exports lazily. This keeps package model
+leaves available to AgL module loading without pulling in package discipline validation, which
+depends on AgL scope resolution.
+
 ## Registered Commands
 
 A manifest `[commands]` table maps a single- or multi-word CLI path to a package-owned
@@ -39,6 +43,7 @@ selected manifest and module ownership before executing it.
 ## Code Entry Points
 
 - `src/agm/packages/manifest.py` — manifest schema and distribution-manifest view.
+- `src/agm/packages/__init__.py` — lazy public package-domain façade.
 - `src/agm/packages/discipline.py` — module-tree, command, and resource validation.
 - `src/agm/packages/model.py` and `development.py` — package identity, ownership, and
   development-package discovery.

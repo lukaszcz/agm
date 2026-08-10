@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 import requests
 
+import agm.packages.fetch as package_fetch
 from agm.packages.fetch import FetchError, fetch_archive
 
 
@@ -219,6 +220,25 @@ def test_fetch_reports_scratch_creation_failure(tmp_path: Path) -> None:
             session=session,
             scratch_dir=tmp_path / "missing",
         )
+
+
+def test_fetch_rejects_an_archive_larger_than_the_download_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(package_fetch, "MAX_ARCHIVE_DOWNLOAD_SIZE", 4)
+    content = b"oversized"
+
+    with pytest.raises(FetchError, match=r"fetch failed.*tools >= 1\.0\.0"):
+        fetch_archive(
+            requirement="tools >= 1.0.0",
+            url="https://example.test/tools.agmpkg",
+            expected_hash="sha256=" + hashlib.sha256(content).hexdigest(),
+            handoff=lambda _: pytest.fail("archive handoff must not run"),
+            session=_Session(_Response([content])),
+            scratch_dir=tmp_path,
+        )
+
+    assert not tuple(tmp_path.iterdir())
 
 
 @pytest.mark.parametrize("expected_hash", ["md5=bad", "sha256=short"])

@@ -17,6 +17,7 @@ from agm.packages.activation import (
     PackageActivationError,
     activation_index_path,
     command_shadow_diagnostics,
+    effective_command_index,
     load_activation_index,
     load_package_pins,
     load_package_provenance,
@@ -219,6 +220,26 @@ def test_rebuild_index_merges_registered_commands_from_active_manifests(tmp_path
             "bravo run": CommandRegistration("bravo", "bravo/main::main"),
         },
     )
+
+
+def test_effective_command_index_preserves_global_cached_commands_without_changed_pins(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "agm-home"
+    root = _write_package(home, "alpha", "1.0.0")
+    (root / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
+        '[commands]\nlaunch = { program = "alpha/main::current" }\n',
+        encoding="utf-8",
+    )
+    env = {"AGM_HOME": str(home)}
+    index = ActivationIndex(
+        {"alpha": ActivePackage(semver.Version.parse("1.0.0"))},
+        {"launch": CommandRegistration("alpha", "alpha/main::stale")},
+    )
+    write_activation_index(index, home=home, env=env)
+
+    assert effective_command_index(home=home, proj_dir=None, cwd=tmp_path, env=env) == index
 
 
 def test_rebuild_uses_the_previous_index_only_for_legacy_packages_without_sidecars(

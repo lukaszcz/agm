@@ -12,6 +12,7 @@ import requests
 
 _FETCH_TIMEOUT_SECONDS = 30.0
 _CHUNK_SIZE = 1024 * 1024
+MAX_ARCHIVE_DOWNLOAD_SIZE = 128 * 1024 * 1024
 _SHA256_PREFIXES = ("sha256=", "sha256:", "sha256-")
 
 
@@ -64,13 +65,22 @@ def fetch_archive(
             ) as file:
                 archive = Path(file.name)
                 digest = hashlib.sha256()
+                downloaded_size = 0
                 try:
                     with client.get(url, stream=True, timeout=_FETCH_TIMEOUT_SECONDS) as response:
                         response.raise_for_status()
                         for chunk in response.iter_content(_CHUNK_SIZE):
                             if chunk:
+                                downloaded_size += len(chunk)
+                                if downloaded_size > MAX_ARCHIVE_DOWNLOAD_SIZE:
+                                    raise FetchError(
+                                        f"fetch failed for {requirement}: "
+                                        "package archive exceeds the download size limit"
+                                    )
                                 file.write(chunk)
                                 digest.update(chunk)
+                except FetchError:
+                    raise
                 except Exception as exc:
                     raise FetchError(f"fetch failed for {requirement}: {exc}") from exc
         except OSError as exc:

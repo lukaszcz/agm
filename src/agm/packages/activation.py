@@ -383,6 +383,10 @@ def effective_command_index(
 
     index = load_activation_index(home=home, env=env)
     packages = select_active_packages(home=home, proj_dir=proj_dir, cwd=cwd, env=env)
+    if {package.manifest.name: package.manifest.version for package in packages} == {
+        name: active.version for name, active in index.packages.items()
+    }:
+        return index
     selections: dict[str, ActivePackage] = {}
     for package in packages:
         previous = index.packages.get(package.manifest.name)

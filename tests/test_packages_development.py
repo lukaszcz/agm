@@ -46,6 +46,29 @@ def test_agl_facade_lazily_exposes_its_public_api() -> None:
         getattr(agl, "missing")
 
 
+@pytest.mark.parametrize(
+    "module",
+    ("agm.agl.pipeline", "agm.agl.runtime.agents"),
+)
+def test_agl_modules_import_in_a_fresh_process_before_the_package_facade(module: str) -> None:
+    script = f"""
+import {module}
+"""
+
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_package_facade_lazily_exposes_its_public_api() -> None:
+    import agm.packages as packages
+
+    assert packages.PackageInfo.__name__ == "PackageInfo"
+    assert callable(packages.validate_package)
+    with pytest.raises(AttributeError):
+        getattr(packages, "missing")
+
+
 def test_discovery_ignores_a_directory_without_a_containing_manifest(tmp_path: Path) -> None:
     assert discover_development_packages(tmp_path) == ()
 

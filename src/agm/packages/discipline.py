@@ -194,30 +194,54 @@ def _select_resource_paths(
 
 def _resource_imports(
     program: Program, exports: Mapping[ModuleId, _ResourcePaths]
-) -> dict[str, BuiltinKind]:
-    """Resolve bare resource builtin names introduced by imports in one module."""
+) -> _ResourcePaths:
+    """Resolve the visible paths that identify standard resource declarations."""
 
-    names = {path[-1]: kind for path, kind in _RESOURCE_BUILTINS.items()}
+    paths = dict(_RESOURCE_BUILTINS)
     for declaration in static_items(program.body.items):
-        if not isinstance(declaration, ImportDecl) or (
-            not declaration.is_open and declaration.mode is not ImportMode.USING
-        ):
+        if not isinstance(declaration, ImportDecl):
             continue
         target = _resource_export_target(declaration.module_path, exports)
-        for path, kind in _select_resource_paths(declaration, target).items():
-            if len(path) == 1:
-                names[path[0]] = kind
-    return names
+        selected = _select_resource_paths(declaration, target)
+        routes = (
+            ((declaration.alias,),)
+            if declaration.alias is not None
+            else tuple(
+                declaration.module_path[index:] for index in range(len(declaration.module_path))
+            )
+        )
+        for route in routes:
+            for path, kind in selected.items():
+                paths[(*route, *path)] = kind
+        if declaration.is_open or declaration.mode is ImportMode.USING:
+            paths.update({path: kind for path, kind in selected.items() if len(path) == 1})
+
+    for function in static_function_items(program.body.items):
+        if not function.scope_path:
+            paths.pop((function.name,), None)
+    return paths
 
 
-def _resource_calls(program: Program, names: Mapping[str, BuiltinKind]) -> list[tuple[Call, bool]]:
-    """Return calls whose resolved imported name denotes a resource builtin."""
+def _resource_calls(
+    program: Program, paths: Mapping[tuple[str, ...], BuiltinKind]
+) -> list[tuple[Call, bool]]:
+    """Return calls whose resolved declaration denotes a resource builtin."""
 
     calls: list[tuple[Call, bool]] = []
 
     def collect_resource_call(node: object) -> None:
         if isinstance(node, Call) and isinstance(node.callee, VarRef):
-            kind = names.get(node.callee.name) if node.callee.qualifier is None else None
+            callee_path: tuple[str, ...]
+            if node.callee.qualifier is None:
+                callee_path = (node.callee.name,)
+            else:
+                route = tuple(
+                    part
+                    for segment in node.callee.qualifier.segments
+                    for part in segment.name.split("/")
+                )
+                callee_path = (*route, node.callee.name)
+            kind = paths.get(callee_path)
             if kind in {BuiltinKind.RESOURCE, BuiltinKind.RESOURCE_DIR}:
                 calls.append((node, kind is BuiltinKind.RESOURCE_DIR))
 
@@ -264,6 +288,8 @@ def _validate_command_path(command_path: str) -> None:
         raise DisciplineError(f"command path {command_path!r} must be space-separated words")
     if words[0] in RESERVED_COMMAND_NAMES:
         raise DisciplineError(f"command path {command_path!r} begins with a reserved AGM command")
+    if words[0].startswith("-"):
+        raise DisciplineError(f"command path {command_path!r} begins with an option")
 
 
 def _validate_program_reference(

@@ -206,6 +206,64 @@ program def main() -> unit =
         validate_package(package)
 
 
+def test_package_validation_uses_the_resolved_resource_declaration(tmp_path: Path) -> None:
+    root = tmp_path / "package"
+    module_root = root / "package"
+    module_root.mkdir(parents=True)
+    (module_root / "main.agl").write_text(
+        """def resource(path: text) -> text = path
+let local = resource("prompts/missing.md")
+program def main() -> unit = ()
+""",
+        encoding="utf-8",
+    )
+    package = PackageInfo(root, PackageManifest("package", semver.Version.parse("1.0.0")))
+
+    validate_package(package)
+
+    (module_root / "main.agl").write_text(
+        """import std/core as core
+let builtin = core::resource("prompts/missing.md")
+program def main() -> unit = ()
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(DisciplineError):
+        validate_package(package)
+
+
+def test_package_validation_follows_an_unaliased_qualified_resource_import(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "package"
+    module_root = root / "package"
+    module_root.mkdir(parents=True)
+    (module_root / "main.agl").write_text(
+        """import std/core
+let builtin = core::resource("prompts/missing.md")
+program def main() -> unit = ()
+""",
+        encoding="utf-8",
+    )
+    package = PackageInfo(root, PackageManifest("package", semver.Version.parse("1.0.0")))
+
+    with pytest.raises(DisciplineError):
+        validate_package(package)
+
+
+def test_package_validation_accepts_a_reexport_that_hides_resource_builtins(tmp_path: Path) -> None:
+    root = tmp_path / "package"
+    module_root = root / "package"
+    module_root.mkdir(parents=True)
+    (module_root / "resources.agl").write_text(
+        "export std/core hiding resource\n", encoding="utf-8"
+    )
+    (module_root / "main.agl").write_text("program def main() -> unit = ()\n", encoding="utf-8")
+    package = PackageInfo(root, PackageManifest("package", semver.Version.parse("1.0.0")))
+
+    validate_package(package)
+
+
 @pytest.mark.parametrize(
     "source",
     (

@@ -3160,6 +3160,33 @@ class TestEntryModuleConfig:
         assert exec_command.run(_exec_args_no_log(agl_file)) is None
         assert capsys.readouterr().out == "7\n"
 
+    def test_qualified_engine_config_conflict_exits_cleanly(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from agm.commands import exec_program
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            '[main.main]\nmax-iters = 1\n\n["tools/main".main]\nmax-iters = 1\n'
+        )
+        agl_file = tmp_path / "main.agl"
+        write_file_program(agl_file, 'program def main() -> unit = print "unreached"\n')
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_program.run(
+                _exec_args_no_log(agl_file),
+                entry_module_segments=("tools", "main"),
+                config_context_loader=lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+            )
+
+        assert exc_info.value.code == 1
+        assert "Error: invalid exec configuration" in capsys.readouterr().err
+
     def test_entry_module_config_selects_param_despite_imported_name_collision(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:

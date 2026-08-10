@@ -1,6 +1,6 @@
 # AgL Match Compilation
 
-The match compiler turns every checked source match site — a `case` or destructuring immutable `let` — into an immutable decision DAG. Lowering consumes the same decisions in action mode for cases and binding mode for lets. It is the last static pass: it runs after type checking, consumes checked pattern metadata only, and depends on nothing downstream — not lowering, the IR, the evaluator, or runtime services. See [index.md](agl/index.md) for the surrounding pipeline.
+The match compiler turns every checked source match site — a `case` or destructuring immutable `let` — into an immutable decision DAG. Lowering consumes the same decisions in action mode for cases and binding mode for lets. It is the last static pass: it runs after type checking, consumes checked pattern metadata only, and depends on nothing downstream — not lowering, the IR, the evaluator, or runtime services. See [index.md](../index.md) for the surrounding pipeline.
 
 ## Compilation Model
 
@@ -36,5 +36,5 @@ The implementation follows Luc Maranget's pattern-matching compilation work:
 - `src/agm/agl/matchcompile/matrix.py` — matrix decomposition and column selection.
 - `src/agm/agl/matchcompile/compiler.py` and `diagnostics.py` — decision DAGs, issues, and witnesses.
 - `src/agm/agl/matchcompile/stage.py` — whole-program artifacts and diagnostic adaptation.
-- `src/agm/agl/lower/` — the consumer side: decision DAGs lowered into switches, projections, case actions, or immutable let bindings ([execution/lowering.md](agl/execution/lowering.md)).
+- `src/agm/agl/lower/` — the consumer side: decision DAGs lowered into switches, projections, case actions, or immutable let bindings ([execution/lowering.md](../execution/lowering.md)).
 - Tests: `tests/test_agl_matchcompile_*.py`.

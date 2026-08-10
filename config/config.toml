@@ -28,6 +28,10 @@ runner = "agm run pi -p '@%{PROMPT_FILE}'"
 # [repl]
 # theme = "auto"    # syntax-highlighting theme: "dark", "light", or "auto" (detect from $COLORFGBG)
 
+# [packages] — project-local pins for installed package versions.
+#
+# review_tools = "0.2.0"
+
 # Qualified AgL program and parameter settings.
 #
 # Config tables use a module suffix followed by a declaration scope path. The

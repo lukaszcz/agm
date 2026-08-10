@@ -124,7 +124,7 @@ externs are only allowed in file-backed modules.
 Program resolution extends this pass across modules and preserves the loader's immutable,
 reverse-topological import-SCC sequence on `ResolvedProgram`. Typecheck consumes that exact sequence
 to publish closed inferred function signatures from dependency SCCs before importers, without
-rebuilding the module graph. See [modules.md](agl/modules.md).
+rebuilding the module graph. See [modules.md](../modules.md).
 
 ## Code Entry Points
 

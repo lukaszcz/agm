@@ -29,7 +29,7 @@ AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-c
 - Read [core.md](core.md) for the shared process, environment, filesystem, TOML, and dry-run primitives, and the pure utility helpers.
 - Read [config.md](config.md) for configuration loading, layering precedence, and command/sandbox config sections.
 - Read [workspaces.md](workspaces.md) for project layout, git worktrees, dependencies, sync, and tmux — the project-management half of AGM.
-- Read [packages.md](packages.md) for package manifests, mounted roots, ownership-based import visibility, and validation discipline.
+- Read [packages.md](packages.md) for package manifests, the store and activation model, mounted roots, import visibility, and registered commands.
 - Read [sandbox.md](sandbox.md) for `agm run`, the SRT sandbox, and resource limits.
 - Read [agents.md](agents.md) for the agent runner and the loop/review/revise/refine workflows.
 - Read [agl/index.md](agl/index.md) first for any AgL language task; it links to the AgL frontend, execution, modules, and REPL documents.

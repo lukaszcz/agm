@@ -1,122 +1,52 @@
 # Packages
 
-The package domain defines the portable package boundary independently of installation and
-CLI dispatch. A package directory has a `package.toml` manifest and a module tree named after
-the package; its `PackageInfo` is the source-agnostic input module-root assembly mounts for
-development directories now and installed packages later. The shipped `std` directory is a
-package whose manifest version is locked to `agm.version.AGM_VERSION`; `just install` refreshes
-its immutable store tree and makes that version active. Its active store version must exactly
-match the running binary; it is installed only from AGM's shipped directory, never editable or
-from an archive, package `std` minimum requirements reject newer AGM binaries, and the managed
-package cannot be uninstalled. Standard-library resolution mounts this selected root exclusively,
-so active package-root assembly never also mounts `std` when an override or source fallback wins.
-Resource references declared by a
-package-owned module are anchored to this package root, while loose-module resources remain
-anchored to their source directory; package discipline validates the package-relative targets.
-The versioned store layout helpers
-place extracted package trees under `<AGM home>/packages/<name>/<version>/`, rejecting path
-components that could leave the AGM home and refusing links in a logical package-name/version tree
-before canonicalization, so install/removal/info paths cannot follow an ancestor link outside the
-canonical store. Its activation index selects one store version per
-package (or records an editable root) and caches manifest-declared command registrations. Command
-priority is instead durable package-local provenance: each immutable tree has a sibling store sidecar
-that records its activation order and `--shadow` intent, outside the tree and therefore outside its
-immutable `RECORD` payload. Rebuild reads those sidecars before reconciling command owners, so an
-index loss retains temporal shadow precedence rather than inventing an order from manifests. Missing
-legacy provenance is tolerated only when no command collision needs it; malformed or contradictory
-provenance, or a collision with missing provenance, stops rebuilding. Editable selections remain
-index-only and cannot be recovered from the store. It validates every selected package's direct minimum-version requirements after development
-roots exclude same-name active or pinned selections before store resolution. Non-editable selections
-must canonically remain within the store root, including when a store path traverses a link. Project
-package pins override global versions before
-the selected packages are passed through the existing root seam.
-`RECORD` helpers write and verify the complete relative file set with SHA-256 digests while refusing
-linked package trees, providing the integrity and removal manifest for installed trees. Archive helpers
-first derive an in-memory distribution manifest that removes local dependency `path` sources, leaving
-the development tree unchanged. They use the same canonical record format for deterministic portable ZIP
-contents and stream-verify bounded archive layout, canonical ZIP entry metadata, manifest, and file
-digests before a later install path extracts anything. Writers apply the same content limits before
-publication and fail closed when any source directory cannot be traversed. Archive installation stages
-under the AGM home but outside the scanned package-store root, so temporary trees cannot be mistaken
-for installed package versions. Directory installation validates a `std` minimum requirement against the running AGM binary without
-requiring an active store package; it resolves other direct minimum-version requirements store-first, then
-through declared local path sources, copies and records immutable trees, and validates then atomically rewrites the complete
-activation selection; dry-run validates the same selection from transient source manifests without
-creating a store tree; editable installs instead record a live root. Failed activation leaves copied
-trees inactive, while removal validates the remaining selection before it clears activation and
-deletes an immutable tree. URL sources stream
-through a hash-verifying `requests` fetch seam, whose verified archive handoff installs within the
-same activation transaction. Archive extraction verifies canonical ZIP metadata, the normalized
-manifest, and every `RECORD` digest through one opened archive stream before writing a private store
-sibling; validation and record verification complete before the sibling is atomically published and
-activated. Existing archive identities, including dry-run plans, must also match the installed content
-hash. Dry-run archive creation and installation report their planned operations without writing; dry-run
-archive installation also validates archived module and command discipline directly from the verified
-stream. The archive
-writer rejects output whose canonical destination belongs to the source tree or aliases one of its
-files. Creation retains an opened source-root capability, rejects ordinary source links, renders
-into a private temporary sibling, and atomically replaces the requested destination through an opened
-parent-directory capability. It compares that parent capability against the source before and after
-publication; a detected containment race restores any replaced destination (or removes new output) and
-raises an archive error. This protects a quiescent source tree and reports verifiable races, not an
-adversarially mutating namespace: POSIX cannot atomically prove that an already-open output parent remains
-outside a source tree that another same-user writer can rename, nor prevent a writer from creating a target
-after any snapshot. Concurrent source or namespace mutation is therefore unsupported. An existing
-destination must be hard-linkable within that parent for detected-race rollback; platforms without the
-required directory-relative operations fail before publication rather than using a pathname fallback.
-`agm pkg check` exposes the validation boundary without modifying or installing a package: every package module is parsed to verify literal `resource(...)` targets remain inside the package and exist, and `agm pkg create` applies the same check to its selected portable archive contents, rejecting resources removed by archive filtering before publication. Both validate `std` minimum requirements against the running AGM version, then resolve other requirements store-first and through local paths while URL sources remain deferred. `agm pkg create`
-checks the portable distribution view instead, so stripped local paths cannot make an archive's requirements
-unsatisfiable. `agm exec` discovers the package
-containing its file (or its current directory for inline source), while `agm repl` discovers
-one at its current directory; each gives that explicitly path-sourced dependency closure
-precedence over the selected active roots.
+The package domain defines portable, versioned AgL module collections. A package has a
+`package.toml` manifest and a module tree named after the package, so its modules import
+under a stable package-qualified path. Packages may declare minimum-version dependencies,
+literal resources, and CLI commands backed by `program def` entries.
 
-## Manifest and Identity
+## Package Lifecycle
 
-`packages/manifest.py` loads manifests through the shared TOML primitive and validates
-package metadata, semantic versions, dependency source declarations, and command metadata.
-Package versions are complete SemVer; dependency minimum versions may omit trailing minor and
-patch components and are normalized through the `semver` runtime library, preserving SemVer
-precedence. The model
-in `packages/model.py` pairs a manifest with a canonical package root and identifies which
-package owns a canonical path inside a module tree. The AgL loader uses that ownership map at
-its dependency edge seam: package modules may import their own modules, declared dependencies,
-and the host-selected standard library, while ad-hoc modules retain open visibility.
+`agm pkg check` validates a development package without modifying it. `agm pkg create`
+produces a deterministic `.agmpkg` archive from that validated package. `agm pkg install`
+validates dependencies, records immutable installations in the AGM-home package store, and
+activates one version of each package; editable installations instead mount their live source
+tree. `agm pkg uninstall` removes an active selection and its registered commands.
 
-## Discipline
+The activation index selects global package versions and caches registered commands. Project
+`[packages]` pins override those selections for that invocation. Package-root assembly mounts
+the selected packages alongside ordinary module roots, while the module loader enforces that a
+package module imports only itself, its declared dependencies, and the selected standard
+library. A source file inside a development package similarly gives its package and local path
+dependency closure precedence for that invocation.
 
-`packages/discipline.py` validates package naming, module-tree naming, manifest command
-paths, and that each registered command names an actual `program def` in the package. It
-uses the existing AgL module and identifier rules plus the built-in command catalog, so
-package names and command registrations cannot claim AGM's command namespace. Activation
-merges valid manifest commands in `packages/activation.py`; `cli_dispatch.py` consumes the active
-index only after a built-in root command misses, then forwards the longest matching command's
-remaining words to its registered AgL program. Help and shell completion also read this lightweight
-index; completion suppresses suggestions if it cannot be read. The index is only a lookup cache:
-before execution, the host verifies the registration against the selected active or project-pinned
-manifest and that the resolved module is owned by its selected package. Editable registrations are
-re-read from their live manifest at dispatch, while immutable cached mismatches are rejected.
-Conflicts with every active manifest,
-including an owner displaced by an earlier shadow, refuse an install unless its `--shadow` request
-replaces them. Reconciliation restores a remaining active owner when a winner is removed and records
-only current owners. Install and list render the resulting shadow relationships explicitly. Command
-dispatch remains a CLI concern.
+Installed package contents have a SHA-256 `RECORD`; archive creation and installation verify
+that content before publication. The shipped `std` package is a managed store package whose
+version must exactly match the running AGM version. It is refreshed by `just install`, not by
+the ordinary package-install paths, and cannot be uninstalled.
+
+## Registered Commands
+
+A manifest `[commands]` table maps a single- or multi-word CLI path to a package-owned
+`program def`. Activation rejects command conflicts unless the later installation uses
+`--shadow`. When a built-in root command does not match, CLI dispatch resolves the longest
+registered path and runs its program through the same execution host as `agm exec`. Help and
+shell completion read the activation index; dispatch verifies the selected manifest and module
+ownership before executing it.
 
 ## Code Entry Points
 
-- `src/agm/packages/manifest.py` — manifest schema, SemVer parsing, and the non-mutating distribution-manifest view.
-- `src/agm/packages/model.py` — package-root identity and canonical module ownership.
-- `src/agm/packages/development.py` — containing development-package and path-dependency discovery.
-- `src/agm/packages/store.py` — AGM-home-relative versioned store and provenance-sidecar paths.
-- `src/agm/packages/activation.py` — activation index, durable command provenance, project pins, requirement validation, and store-root selection.
-- `src/agm/packages/record.py` — deterministic SHA-256 `RECORD` writing, verification, and content identity.
-- `src/agm/packages/dependencies.py` — non-mutating store/path/URL dependency satisfiability checks.
-- `src/agm/packages/archive.py` — deterministic `.agmpkg` writing, bounded metadata reads, streaming integrity and dry-run discipline verification, and safe private-tree extraction.
-- `src/agm/packages/install.py` — directory and archive installation, MVS dependency activation, URL archive handoff, and verified removal.
-- `src/agm/packages/fetch.py` — explicit-timeout streaming URL download and SHA-256 handoff seam.
-- `src/agm/agl/modules/roots.py` and `loader.py` — root mounting and ownership-based import visibility.
-- `src/agm/packages/discipline.py` — directory and command/program validation.
-- `src/agm/commands/pkg/` — CLI-facing validation, archive creation, installation, inspection, and removal commands.
-- `src/agm/cli_dispatch.py` and `src/agm/commands/exec_program.py` — lazy registered-command lookup and shared AgL program execution.
-- `tests/test_packages_manifest.py`, `tests/test_packages_discipline.py`, and
-  `tests/agl/packages/` — focused validation tests and reusable package fixtures.
+- `src/agm/packages/manifest.py` — manifest schema and distribution-manifest view.
+- `src/agm/packages/discipline.py` — module-tree, command, and resource validation.
+- `src/agm/packages/model.py` and `development.py` — package identity, ownership, and
+  development-package discovery.
+- `src/agm/packages/store.py`, `record.py`, and `archive.py` — store layout, integrity records,
+  and portable archives.
+- `src/agm/packages/activation.py`, `dependencies.py`, `fetch.py`, and `install.py` — active
+  selections, dependency resolution, downloads, and lifecycle operations.
+- `src/agm/agl/modules/roots.py` and `loader.py` — package-root mounting and import visibility.
+- `src/agm/commands/pkg/` — package CLI commands.
+- `src/agm/cli_dispatch.py` and `src/agm/commands/exec_program.py` — registered-command lookup
+  and shared program execution.
+- `tests/test_packages_*.py` and `tests/agl/packages/` — package-domain and package-program
+  coverage.

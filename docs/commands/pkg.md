@@ -9,6 +9,12 @@
 | `agm pkg list` | List immutable installed versions and active editable packages |
 | `agm pkg info NAME` | Show active package details and dependency status |
 
+A package directory contains `package.toml` and a module tree whose directory matches
+`[package] name`. The manifest requires a complete semantic `version`; optional
+`[dependencies]` entries state minimum versions and may provide a local `path` or a URL with
+its SHA-256 hash. `[commands]` maps a one- or multi-word command path to a package-owned
+`MODULE::PROGRAM` reference, where `PROGRAM` is a `program def` declaration.
+
 `agm pkg check` validates the `package.toml` manifest, module-tree naming discipline, program
 references used by manifest command registrations, and literal resource targets. It also checks
 dependencies without modifying packages: a `std` requirement is checked against the running AGM

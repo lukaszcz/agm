@@ -20,7 +20,8 @@ manifests derive that invocation's effective command registry. Package-root asse
 selected packages alongside ordinary module roots, while the module loader enforces that a
 package module imports only itself, its declared dependencies, and the selected standard
 library. A source file inside a development package similarly gives its package and local path
-dependency closure precedence for that invocation. Development discovery rejects distinct local
+dependency closure precedence for that invocation and retains its package-qualified module path
+for execution configuration. Development discovery rejects distinct local
 roots with the same package identity, so mounted imports remain unambiguous.
 
 Installed package contents have a SHA-256 `RECORD`; archive creation and installation verify

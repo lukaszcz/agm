@@ -93,7 +93,7 @@ from agm.core.parse import parse_timeout
 from agm.core.toml import TomlDict, toml_dict
 from agm.packages.activation import load_activation_index, select_active_packages
 from agm.packages.development import discover_development_packages
-from agm.packages.model import owning_package
+from agm.packages.model import PackageInfo, owning_package
 from agm.parser import exit_with_usage_error
 
 
@@ -134,6 +134,19 @@ def _entry_module_segments(
     if module_segments == ("<entry>",):
         return entry_module_segments
     return module_segments
+
+
+def _development_entry_segments(
+    entry_path: Path | None, packages: tuple[PackageInfo, ...]
+) -> tuple[str, ...] | None:
+    """Return a development-package entry's package-qualified module path."""
+    if entry_path is None:
+        return None
+    package = owning_package(entry_path, packages)
+    if package is None:
+        return None
+    relative = entry_path.resolve().relative_to(package.root).with_suffix("")
+    return relative.parts
 
 
 _T = TypeVar("_T")
@@ -206,12 +219,21 @@ def run(
         raise SystemExit(1)
 
     ctx = config_context_loader()
+    try:
+        development_packages = discover_development_packages(entry_path or ctx.cwd)
+    except ValueError as exc:
+        print(f"Error: invalid module roots configuration: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
     entry_stem: str | None = Path(args.file).stem if args.file is not None else None
+    development_entry_segments = _development_entry_segments(entry_path, development_packages)
     config_entry_segments: tuple[str, ...]
-    if entry_module_segments is None:
-        config_entry_segments = () if entry_stem is None else (entry_stem,)
-    else:
+    if entry_module_segments is not None:
         config_entry_segments = entry_module_segments
+    elif development_entry_segments is not None:
+        config_entry_segments = development_entry_segments
+    else:
+        config_entry_segments = () if entry_stem is None else (entry_stem,)
     config_view = load_general_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
     merged_config = config_view.merged
 
@@ -224,12 +246,12 @@ def run(
         program, next_id = wrap_inline_program(parsed.program, next_node_id=parsed.next_id)
         parsed = replace(parsed, program=program, next_id=next_id)
 
-    # File-backed entries address their declarations under the file stem. A
-    # stem that would consume AGM's own configuration namespace is harmless
-    # until that entry actually exposes params.
+    # Loose file entries address declarations under the file stem; package
+    # entries retain their package-qualified route. A loose stem that would
+    # consume AGM's configuration namespace is harmless until it exposes params.
     parsed_items = static_items(parsed.program.body.items) if parsed.program is not None else ()
     if (
-        entry_module_segments is None
+        len(config_entry_segments) == 1
         and entry_stem in RESERVED_CONFIG_SECTION_NAMES
         and any(isinstance(item, ParamDecl) for item in parsed_items)
     ):
@@ -371,7 +393,7 @@ def run(
             cwd=ctx.cwd,
             home=ctx.home,
             proj_dir=ctx.proj_dir,
-            package_roots=discover_development_packages(entry_path or ctx.cwd),
+            package_roots=development_packages,
         )
     except (StdlibResolutionError, ValueError) as exc:
         print(f"Error: invalid module roots configuration: {exc}", file=sys.stderr)

@@ -3723,6 +3723,48 @@ class TestProgramLogFilePathResolution:
 
 
 class TestExecDevelopmentPackages:
+    def test_direct_exec_uses_the_package_qualified_config_identity(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            '["alpha/main"]\nmessage = "package-qualified"\n'
+        )
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        alpha = tmp_path / "alpha"
+        (alpha / "alpha").mkdir(parents=True)
+        (alpha / "package.toml").write_text('[package]\nname = "alpha"\nversion = "1.0.0"\n')
+        entry = alpha / "alpha" / "main.agl"
+        entry.write_text(
+            'param message: text = "default"\nprogram def main() -> unit = print message\n'
+        )
+
+        assert exec_command.run(_exec_args_no_log(entry)) is None
+        assert capsys.readouterr().out == "package-qualified\n"
+
+    def test_direct_exec_reports_an_invalid_development_manifest(self, tmp_path: Path) -> None:
+        alpha = tmp_path / "alpha"
+        (alpha / "alpha").mkdir(parents=True)
+        (alpha / "package.toml").write_text('[package]\nname = "alpha"\n')
+        entry = alpha / "alpha" / "main.agl"
+        entry.write_text("program def main() -> unit = ()\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(entry))
+
+        assert exc_info.value.code == 1
+
     def test_exec_mounts_the_containing_package_and_its_path_dependencies(
         self, tmp_path: Path
     ) -> None:

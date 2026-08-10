@@ -11,10 +11,12 @@ import pytest
 from agm.packages.development import discover_development_packages
 
 
-def _write_package(root: Path, name: str, dependencies: str = "") -> None:
+def _write_package(
+    root: Path, name: str, dependencies: str = "", *, version: str = "1.0.0"
+) -> None:
     root.mkdir()
     (root / "package.toml").write_text(
-        f'[package]\nname = "{name}"\nversion = "1.0.0"\n' + dependencies
+        f'[package]\nname = "{name}"\nversion = "{version}"\n' + dependencies
     )
     (root / name).mkdir()
 
@@ -95,6 +97,26 @@ def test_discovery_uses_path_dependencies_recursively_and_ignores_unavailable_so
     packages = discover_development_packages(alpha / "alpha" / "main.agl")
 
     assert tuple(package.manifest.name for package in packages) == ("alpha", "bravo")
+
+
+@pytest.mark.parametrize(
+    ("dependency", "actual_name", "actual_version"),
+    (("bravo", "charlie", "1.0.0"), ("bravo", "bravo", "0.9.0")),
+)
+def test_discovery_validates_path_dependency_identity(
+    tmp_path: Path, dependency: str, actual_name: str, actual_version: str
+) -> None:
+    alpha = tmp_path / "alpha"
+    target = tmp_path / "target"
+    _write_package(
+        alpha,
+        "alpha",
+        f'\n[dependencies]\n{dependency} = {{ version = "1", path = "../target" }}\n',
+    )
+    _write_package(target, actual_name, version=actual_version)
+
+    with pytest.raises(ValueError, match="bravo"):
+        discover_development_packages(alpha / "alpha" / "main.agl")
 
 
 def test_discovery_rejects_different_roots_with_the_same_package_identity(tmp_path: Path) -> None:

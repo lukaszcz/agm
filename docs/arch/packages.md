@@ -29,8 +29,9 @@ the module loader enforces that a package module imports only itself, its declar
 and the selected standard library. A source file inside a development package similarly gives
 its package and local path
 dependency closure precedence for that invocation and retains its package-qualified module path
-for execution configuration. Development discovery rejects distinct local
-roots with the same package identity, so mounted imports remain unambiguous.
+for execution configuration. Development discovery validates each path source against its
+named dependency and minimum version, and rejects distinct local roots with the same package
+identity, so mounted imports remain unambiguous.
 
 Installed package contents have a SHA-256 `RECORD`. Archive readers bind metadata-limit
 preflight, ZIP parsing, verification, and extraction to one opened file. Immutable directory installs

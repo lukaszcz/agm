@@ -13,7 +13,36 @@ A package directory contains `package.toml` and a module tree whose directory ma
 `[package] name`. The manifest requires a complete semantic `version`; optional
 `[dependencies]` entries state minimum versions and may provide a local `path` or a URL with
 its SHA-256 hash. `[commands]` maps a one- or multi-word command path to a package-owned
-`MODULE::PROGRAM` reference, where `PROGRAM` is a `program def` declaration.
+`MODULE::PROGRAM` reference, where `PROGRAM` is a `program def` declaration. For example:
+
+```toml
+[package]
+name = "review_tools"
+version = "1.0.0"
+description = "Review workflows"
+license = "MIT"
+authors = ["Ada <ada@example.test>"]
+repository = "https://example.test/review-tools"
+keywords = ["review", "workflow"]
+
+[dependencies]
+std = "1.0.0"
+helpers = { version = "1.2.0", path = "../helpers" }
+
+[dependencies.remote]
+version = "2.0.0"
+url = "https://example.test/remote.agmpkg"
+hash = "sha256=0000000000000000000000000000000000000000000000000000000000000000"
+
+[commands]
+review = { program = "review_tools/main::review", description = "Review a change" }
+"review batch" = { program = "review_tools/main::batch" }
+```
+
+A dependency `path` is relative to the package and cannot be combined with `url`. A URL
+requires a 64-hex-digit SHA-256 hash prefixed with `sha256=`, `sha256:`, or `sha256-`. Archive
+creation excludes hidden paths, VCS and cache directories, `.agmpkg` files, and files ignored by
+root or nested `.gitignore` files.
 
 `agm pkg check` validates the `package.toml` manifest, module-tree naming discipline, program
 references used by manifest command registrations, and literal resource targets. It also checks

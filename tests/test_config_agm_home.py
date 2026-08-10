@@ -57,6 +57,31 @@ class TestAgmHomeDir:
         home = tmp_path / "home"
         assert agm_home_dir(home=home, env={"AGM_HOME": "   "}) == home / ".agm"
 
+    def test_uses_populated_installation_prefix_without_override(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        prefix = tmp_path / "prefix"
+        activation_index = prefix / ".agm" / "packages" / "index.toml"
+        activation_index.parent.mkdir(parents=True)
+        activation_index.write_text("")
+        monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: prefix)
+
+        assert agm_home_dir(home=home, env={}) == prefix / ".agm"
+
+    def test_agm_home_override_wins_over_installation_prefix(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        override = tmp_path / "custom-agm"
+        prefix = tmp_path / "prefix"
+        activation_index = prefix / ".agm" / "packages" / "index.toml"
+        activation_index.parent.mkdir(parents=True)
+        activation_index.write_text("")
+        monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: prefix)
+
+        assert agm_home_dir(home=home, env={"AGM_HOME": str(override)}) == override
+
     def test_reads_process_env_by_default(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

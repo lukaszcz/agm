@@ -11,7 +11,9 @@ literal resources, and CLI commands backed by `program def` entries.
 produces a deterministic `.agmpkg` archive from that validated package. `agm pkg install`
 validates dependencies, records immutable installations in the AGM-home package store, and
 activates one version of each package; editable installations instead mount their live source
-tree. `agm pkg uninstall` removes an active selection and its registered commands.
+tree. The store follows the single runtime AGM home: `AGM_HOME`, otherwise a populated
+installation-prefix `.agm`, otherwise `~/.agm`. `agm pkg uninstall` removes an active selection
+and its registered commands.
 
 The activation index selects global package versions and caches registered commands. Package
 installations and removals serialize their store and activation-index changes with a store lock;

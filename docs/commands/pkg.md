@@ -63,8 +63,9 @@ unchanged, so a package that relies only on a local path must have a matching st
 URL source) before it can be archived.
 
 `agm pkg install` accepts either a package directory or a `.agmpkg` archive and copies its verified
-contents to `$AGM_HOME/packages/<name>/<version>/` (or
-`$HOME/.agm/packages/` when `AGM_HOME` is unset), writes and verifies its SHA-256 `RECORD`,
+contents to `<AGM-home>/packages/<name>/<version>/`, where the runtime home is
+`$AGM_HOME`, otherwise a populated `<install-prefix>/.agm`, otherwise `$HOME/.agm`. It writes
+and verifies the package's SHA-256 `RECORD`,
 and makes that version globally active only after the complete resulting selection validates.
 Activation updates are atomically published, so a failed install leaves newly copied trees inactive.
 With `--dry-run`, AGM reports the planned archive creation or archive installation and validates its

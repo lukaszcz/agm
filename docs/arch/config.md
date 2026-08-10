@@ -8,16 +8,16 @@ A config context locates the directories that contribute configuration. The proj
 
 ## Home Directory Overrides
 
-The AGM home directory defaults to `~/.agm` but is relocatable through the environment. `AGM_HOME` overrides the whole directory — config, prompts, sandbox settings, the AgL global library, and the stdlib all resolve beneath it. `AGM_STDLIB` overrides just the AgL standard-library root, taking precedence over every other stdlib candidate and skipping the store-version check described below (the deliberate escape hatch for synthetic or in-progress trees). Both accept a leading `~`. These env overrides are the only way to redirect the home layer, since it is where `config.toml` itself lives; project and workspace layers remain path-discovered as usual.
+The runtime selects one AGM home for config, prompts, sandbox settings, the AgL global library, and the package store. `AGM_HOME` selects it explicitly; otherwise AGM uses a populated `<install-prefix>/.agm` beside the executable, then falls back to `~/.agm`. This gives an explicit prefix installation one reachable runtime tree while preserving the user-home default. `AGM_STDLIB` overrides just the AgL standard-library root, taking precedence over every other stdlib candidate and skipping the store-version check described below (the deliberate escape hatch for synthetic or in-progress trees). Both environment overrides accept a leading `~`; project and workspace layers remain path-discovered as usual.
 
-Stdlib resolution uses `AGM_STDLIB` as an unchecked escape hatch, then the active immutable `std` store package, then the repository checkout for source development. The active package must exactly match the running AGM version; a missing selected tree falls back to the checkout, while malformed activation or corrupt present tree fails cleanly and a version mismatch names both versions and directs the user to `just install`. `just install` force-refreshes and activates the managed lockstep `std` store tree, refusing symlinks and pruning stale files. It normally honors `AGM_HOME`, while an explicit install prefix deliberately selects that installation's destination. Unlike `config.toml`, sandbox templates, and prompts, this tree is not user-editable.
+Stdlib resolution uses `AGM_STDLIB` as an unchecked escape hatch, then the active immutable `std` store package, then the repository checkout for source development. The active package must exactly match the running AGM version; a missing selected tree falls back to the checkout, while malformed activation or corrupt present tree fails cleanly and a version mismatch names both versions and directs the user to `just install`. `just install` force-refreshes and activates the managed lockstep `std` store tree, refusing symlinks and pruning stale files. With no prefix it honors `AGM_HOME`; an explicit prefix installs both the executable link and runtime tree under that prefix so runtime prefix discovery reaches the same package store. Unlike `config.toml`, sandbox templates, and prompts, this tree is not user-editable.
 
 ## Layering and Precedence
 
 General configuration merges across scopes, from least to most specific:
 
 1. the installation prefix's `.agm/config.toml`
-2. the user's `~/.agm/config.toml`
+2. the selected AGM home's `config.toml` when distinct
 3. the project's config directory
 4. the workspace-local `.agm/config.toml`
 

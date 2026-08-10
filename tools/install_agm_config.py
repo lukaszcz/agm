@@ -207,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
         repo_root=Path(__file__).resolve().parents[1],
         install_root=Path.home() if args.prefix is None else Path(args.prefix),
         force=args.force,
-        env={} if args.prefix is not None else None,
+        env={"AGM_HOME": str(Path(args.prefix) / ".agm")} if args.prefix is not None else None,
     )
     for path in result.installed:
         print(f"Installed {path}")

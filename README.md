@@ -25,10 +25,10 @@ just setup
 ```
 
 Install the CLI into an isolated `uv tool` environment and copy AGM config files,
-prompts, and sandbox templates into `$AGM_HOME` (or `$HOME/.agm/` by default).
-It also installs and activates the lockstep immutable `std` package at
-`$AGM_HOME/packages/std/<version>/` and installs the AgL Micro syntax file into
-`$HOME/.config/micro/syntax/`:
+prompts, and sandbox templates into the selected AGM home (`$AGM_HOME`, or
+`$HOME/.agm/` by default). It also installs and activates the lockstep immutable
+`std` package at `<AGM-home>/packages/std/<version>/` and installs the AgL Micro
+syntax file into `$HOME/.config/micro/syntax/`:
 
 ```bash
 just install
@@ -42,7 +42,11 @@ just install /usr/local
 just install /usr/local --force
 ```
 
-An explicit install prefix takes precedence over `AGM_HOME` for that installation.
+An explicit prefix installs the executable link into `<prefix>/bin` and the complete
+runtime tree into `<prefix>/.agm`; add `<prefix>/bin` to `PATH`. That prefix takes
+precedence over `AGM_HOME` while installing. At runtime, `AGM_HOME` explicitly overrides
+an installation-local tree; otherwise AGM uses the populated `.agm` beside its executable,
+then falls back to `$HOME/.agm`.
 
 ## Project layouts
 
@@ -224,8 +228,8 @@ except `std/core` itself, opens `std/core` by default; `--no-stdlib` disables
 that automatic opening throughout the loaded program.
 Other imports are qualified by default and use `open import` or `using` to make names
 bare. `agm exec` searches the entry file's directory, the selected standard library
-(the active `$AGM_HOME/packages/std/<AGM_VERSION>/` package or the source-checkout fallback),
-the global library root (`~/.agm/lib`, relocated by `AGM_HOME`), and any configured
+(the active `<AGM-home>/packages/std/<AGM_VERSION>/` package or the source-checkout fallback),
+the selected AGM home's global `lib` directory, and any configured
 `[modules] roots` for imported modules.
 
 ```bash
@@ -322,9 +326,11 @@ agm run --no-sandbox --memory 8G make lint
 
 `agm run` loads config from:
 
-1. `<install-prefix>/.agm/config.toml` when present, otherwise `$HOME/.agm/config.toml`
-2. `<project-config-dir>/config.toml`
-3. `./.agm/config.toml`
+1. `<install-prefix>/.agm/config.toml` when present
+2. the selected AGM home's `config.toml` when distinct (`$AGM_HOME`, otherwise
+   `<install-prefix>/.agm` when populated, otherwise `$HOME/.agm`)
+3. `<project-config-dir>/config.toml`
+4. `./.agm/config.toml`
 
 Sandbox settings are resolved from the global sandbox directory, the project sandbox config
 directory, and `./.sandbox/`, with later files merged over earlier ones.

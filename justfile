@@ -39,6 +39,15 @@ check: typecheck lint vulture test
 install-agm:
     uv tool install --reinstall "{{justfile_directory()}}"
 
-install *args: install-agm
+install *args:
     test -d "{{prompts_dir}}"
+    install_prefix=""; \
+    for arg in {{args}}; do \
+        if [[ "$arg" != -* ]]; then install_prefix="$arg"; break; fi; \
+    done; \
+    if [[ -n "$install_prefix" ]]; then \
+        UV_TOOL_BIN_DIR="$install_prefix/bin" uv tool install --reinstall "{{justfile_directory()}}"; \
+    else \
+        uv tool install --reinstall "{{justfile_directory()}}"; \
+    fi
     uv run python tools/install_agm_config.py {{args}}

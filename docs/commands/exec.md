@@ -32,8 +32,8 @@ when it does not declare an entry itself.
 
 - the directory of `FILE` (or the working directory for `-c`),
 - when that directory is inside a development package, its containing package and the recursive closure of dependencies declared with relative `path` sources in their manifests,
-- the selected standard library: the active immutable `$AGM_HOME/packages/std/<AGM_VERSION>/` package when it matches the running binary, otherwise the in-repo `stdlib/` source-checkout fallback; `AGM_STDLIB` overrides this selection without mounting the active package as an additional root,
-- the global library root (`~/.agm/lib`, relocated with `AGM_HOME` and overridable via `[modules] lib_root` in config),
+- the selected standard library: the active immutable `<AGM-home>/packages/std/<AGM_VERSION>/` package when it matches the running binary, otherwise the in-repo `stdlib/` source-checkout fallback; `AGM_STDLIB` overrides this selection without mounting the active package as an additional root,
+- the selected AGM home's global `lib` directory (overridable via `[modules] lib_root` in config),
 - any roots declared under `[modules] roots` in any config layer,
 - any roots added with `-I`/`--module-path`.
 
@@ -41,7 +41,7 @@ The independently loaded `[modules] lib_root` and `roots` settings expand `%{VAR
 leniently as other path-valued settings; see
 [Path-valued settings](config.md#path-valued-settings) for the exact rule.
 
-Set `AGM_HOME` to relocate the entire `~/.agm` directory (config, prompts, sandbox settings, global library, and managed package store); set `AGM_STDLIB` to point only the standard-library root elsewhere.
+Set `AGM_HOME` to select the complete runtime home (config, prompts, sandbox settings, global library, and managed package store). Without it, AGM uses a populated `.agm` beside the installed executable, then falls back to `~/.agm`. Set `AGM_STDLIB` to point only the standard-library root elsewhere.
 
 A module name that resolves to exactly one file across all roots succeeds; zero files,
 or two or more distinct files, are static errors (exit 1 with a diagnostic).

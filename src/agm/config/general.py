@@ -137,16 +137,25 @@ def expand_env_root(override: str) -> Path:
 def agm_home_dir(*, home: Path, env: Mapping[str, str] | None = None) -> Path:
     """Return the AGM home directory (the ``.agm`` data/config root).
 
-    Defaults to ``home/.agm``.  When the ``AGM_HOME`` environment variable is
-    set to a non-blank value it overrides that default entirely, so the whole
-    ``.agm`` tree — config, prompts, sandbox settings, and stdlib — can be
-    relocated.  A leading ``~`` in the override is expanded and a relative
-    override is anchored to the current directory, so the resolved home is
-    always absolute.
+    ``AGM_HOME`` selects the directory explicitly. Otherwise, an installed
+    package activation index beneath the executable's installation prefix
+    identifies a complete prefix-local runtime tree. The fallback is
+    ``home/.agm``.
+
+    A leading ``~`` in ``AGM_HOME`` is expanded and a relative override is
+    anchored to the current directory, so the resolved home is always
+    absolute.
     """
     override = resolve_env(env).get("AGM_HOME")
     if override is not None and override.strip():
         return expand_env_root(override)
+
+    install_prefix = agm_installation_prefix()
+    if install_prefix is not None:
+        installation_home = install_prefix / ".agm"
+        if (installation_home / "packages" / "index.toml").is_file():
+            return installation_home
+
     return home / ".agm"
 
 

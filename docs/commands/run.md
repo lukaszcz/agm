@@ -7,7 +7,8 @@
 `agm run` config lookup merges all matching layers in order (later layers override earlier ones):
 
 1. `<install-prefix>/.agm/config.toml` when AGM is installed with one
-2. `$AGM_HOME/config.toml`, or `$HOME/.agm/config.toml` when `AGM_HOME` is unset
+2. the selected AGM home's `config.toml` when distinct (`$AGM_HOME`, otherwise the
+   populated installation home, otherwise `$HOME/.agm`)
 3. `<project-config-dir>/config.toml`
 4. `./.agm/config.toml`
 
@@ -35,7 +36,7 @@ Sandbox settings resolution:
 - if that file does not exist there, AGM tries the aliased command name's settings file
 - if neither exists, AGM falls back to `default.json`
 - AGM merges matching files in this order:
-  1. `$AGM_HOME/sandbox/` (or `$HOME/.agm/sandbox/` when `AGM_HOME` is unset)
+  1. `<AGM-home>/sandbox/`, using the same runtime-home selection described above
   2. the project sandbox config directory
   3. `./.sandbox/`
 - later files are merged over earlier ones

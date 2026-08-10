@@ -28,6 +28,18 @@ def test_store_paths_use_the_agm_home_override(tmp_path: Path, env: dict[str, st
     ) == (agm_home / "packages" / "review-tools" / "1.2.3")
 
 
+def test_store_root_uses_the_installed_executable_prefix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prefix = tmp_path / "prefix"
+    index = prefix / ".agm" / "packages" / "index.toml"
+    index.parent.mkdir(parents=True)
+    index.write_text("")
+    monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: prefix)
+
+    assert store_root(home=tmp_path / "home", env={}) == prefix / ".agm" / "packages"
+
+
 def test_canonical_store_path_refuses_an_in_store_symlinked_tree_ancestor(tmp_path: Path) -> None:
     home = tmp_path / "home"
     store = home / ".agm" / "packages"

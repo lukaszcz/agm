@@ -146,11 +146,6 @@ class ReplPromotionPlan:
         for declaration_ids in self.source_declaration_ids[:source_frontier]:
             completed.update(declaration_ids)
 
-        completed.update(
-            origin.declaration_id
-            for origin in self.params
-            if origin.symbol in installed_param_symbols
-        )
         completed.difference_update(
             origin.declaration_id
             for origin in self.params

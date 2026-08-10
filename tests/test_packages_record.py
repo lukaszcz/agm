@@ -192,6 +192,26 @@ def test_record_wraps_traversal_io_failures(
         write_record(root)
 
 
+def test_record_wraps_second_traversal_io_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _package_tree(tmp_path)
+    original_rglob = fs.rglob
+    calls = 0
+
+    def fail_second_rglob(path: Path, pattern: str) -> Iterator[Path]:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("blocked")
+        return original_rglob(path, pattern)
+
+    monkeypatch.setattr(fs, "rglob", fail_second_rglob)
+
+    with pytest.raises(RecordError, match="blocked"):
+        write_record(root)
+
+
 def test_record_wraps_hash_io_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _package_tree(tmp_path)
 

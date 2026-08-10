@@ -567,9 +567,10 @@ class TestPersistence:
 
         assert not failed.ok
         bindings = {name: value for name, _type, value in session.bindings()}
-        assert bindings == {"later": IntValue(7), "p": IntValue(7)}
-        assert session.eval_entry("later + p").value == IntValue(14)
+        assert bindings == {"later": IntValue(7)}
+        assert session.eval_entry("later").value == IntValue(7)
         assert not session.eval_entry("broken").ok
+        assert not session.eval_entry("p").ok
 
     def test_failed_recursive_candidate_entry_promotes_nothing(self) -> None:
         s = ReplSession()

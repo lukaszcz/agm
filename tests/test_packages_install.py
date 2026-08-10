@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import shutil
-from collections.abc import Generator
+from collections.abc import Generator, Iterator
 from pathlib import Path
 
 import pytest
@@ -142,6 +142,16 @@ def test_managed_stdlib_refresh_retries_post_commit_cleanup(
     assert tuple(installed.root.parent.glob(".agm-previous-*"))
 
     monkeypatch.setattr(package_install.fs, "rmtree", original_rmtree)
+    original_glob = Path.glob
+
+    def fail_cleanup_glob(path: Path, pattern: str, **kwargs: object) -> Iterator[Path]:
+        if path == installed.root.parent and pattern == ".agm-previous-*":
+            raise OSError("blocked")
+        return original_glob(path, pattern, **kwargs)
+
+    monkeypatch.setattr(Path, "glob", fail_cleanup_glob)
+    refresh_managed_stdlib(source, home=home, env={})
+    monkeypatch.setattr(Path, "glob", original_glob)
     refresh_managed_stdlib(source, home=home, env={})
 
     assert not tuple(installed.root.parent.glob(".agm-previous-*"))
@@ -537,6 +547,31 @@ def test_uninstall_retries_when_interrupted_before_activation_commit(
 
     assert not tombstone.exists()
     assert "alpha" not in load_activation_index(home=home, env={}).packages
+
+
+def test_uninstall_rejects_interrupted_tombstone_with_wrong_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    home = tmp_path / "home"
+    installed = install_directory(source, home=home, env={})
+
+    monkeypatch.setattr(
+        package_install,
+        "_commit_activation",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(KeyboardInterrupt),
+    )
+    with pytest.raises(KeyboardInterrupt):
+        uninstall_package("alpha", home=home, env={})
+
+    tombstone = installed.root.parent / ".uninstalling"
+    (tombstone / "package.toml").write_text(
+        '[package]\nname = "bravo"\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    write_record(tombstone)
+
+    with pytest.raises(PackageInstallError, match="identity"):
+        uninstall_package("alpha", home=home, env={})
 
 
 def test_partial_uninstall_cleanup_is_hidden_and_retryable(

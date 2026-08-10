@@ -343,6 +343,7 @@ def test_info_command_rejects_immutable_store_escapes_and_identity_mismatches(
         info_command.run(PkgInfoArgs("alpha"))
 
     (store / "alpha").unlink()
+    monkeypatch.setattr(info_command, "verify_record", lambda _root: ())
     root = store / "alpha" / "1.0.0"
     root.mkdir(parents=True)
     (root / "package.toml").write_text(
@@ -369,6 +370,7 @@ def test_info_command_rejects_different_build_metadata_for_immutable_package(
         '[package]\nname = "alpha"\nversion = "1.0.0+other"\n', encoding="utf-8"
     )
     monkeypatch.setattr(info_command, "current_config_context", lambda: context)
+    monkeypatch.setattr(info_command, "verify_record", lambda _root: ())
     monkeypatch.setattr(
         info_command,
         "load_activation_index",

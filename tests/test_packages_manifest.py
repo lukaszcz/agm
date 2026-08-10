@@ -202,6 +202,44 @@ charlie = { version = "3", url = "https://example.test/charlie.agmpkg", hash = "
         with pytest.raises(ManifestError):
             load_manifest(path)
 
+    @pytest.mark.parametrize("dependency_path", ("../judge", "sources/judge", r"..\judge"))
+    def test_accepts_relative_dependency_paths_for_all_platforms(
+        self, tmp_path: Path, dependency_path: str
+    ) -> None:
+        manifest = load_manifest(
+            _write_manifest(
+                tmp_path,
+                '[package]\nname = "review_tools"\nversion = "1.2.3"\n\n[dependencies]\n'
+                f"judge = {{ version = \"1.1.0\", path = '{dependency_path}' }}\n",
+            )
+        )
+
+        assert manifest.dependencies["judge"].path == dependency_path
+
+    @pytest.mark.parametrize(
+        "dependency_path",
+        (
+            "/judge",
+            r"\judge",
+            "C:/judge",
+            r"C:\judge",
+            "C:judge",
+            "//server/share/judge",
+            r"\\server\share\judge",
+        ),
+    )
+    def test_rejects_absolute_dependency_paths_for_all_platforms(
+        self, tmp_path: Path, dependency_path: str
+    ) -> None:
+        path = _write_manifest(
+            tmp_path,
+            '[package]\nname = "review_tools"\nversion = "1.2.3"\n\n[dependencies]\n'
+            f"judge = {{ version = \"1.1.0\", path = '{dependency_path}' }}\n",
+        )
+
+        with pytest.raises(ManifestError):
+            load_manifest(path)
+
     @pytest.mark.parametrize(
         "entry",
         (

@@ -424,11 +424,13 @@ def _install_directory(
             ) from exc
         installed = PackageInfo(destination, package.manifest)
         if destination.exists():
-            _verify_existing_install(
-                destination,
-                package.manifest,
-                content_hash(record_entries(root)),
-            )
+            try:
+                package_hash = content_hash(record_entries(root))
+            except (OSError, RecordError) as exc:
+                raise PackageInstallError(
+                    f"cannot install package {package.manifest.name!r}: {exc}"
+                ) from exc
+            _verify_existing_install(destination, package.manifest, package_hash)
         elif not dry_run.enabled():
             staging: Path | None = None
             try:

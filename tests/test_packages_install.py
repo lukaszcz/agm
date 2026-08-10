@@ -1267,6 +1267,18 @@ def test_install_refuses_tampered_existing_tree_and_cleans_failed_copy(
         install_directory(another, home=home, env={})
 
 
+def test_reinstall_reports_an_invalid_source_tree_as_a_package_install_error(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    install_directory(source, home=home, env={})
+    (source / "linked-manifest").symlink_to(source / "package.toml")
+
+    with pytest.raises(PackageInstallError, match="symlink"):
+        install_directory(source, home=home, env={})
+
+
 def test_install_rejects_changed_directory_content_for_an_existing_identity(tmp_path: Path) -> None:
     home = tmp_path / "home"
     source = _package(tmp_path / "source", "alpha", "1.0.0")

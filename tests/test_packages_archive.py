@@ -1155,13 +1155,34 @@ def test_archive_readers_enforce_explicit_entry_and_size_limits(
 
 def test_archive_limit_preflight_ignores_invalid_end_records(tmp_path: Path) -> None:
     archive_path = tmp_path / "invalid.agmpkg"
-    archive_path.write_bytes(b"PK\x05\x06" + b"\0" * 16 + b"\x01\0")
+    for content in (b"PK\x05\x06" + b"\0" * 16 + b"\x01\0", b"not a ZIP", b"PK\x05\x06"):
+        archive_path.write_bytes(content)
+        with archive_path.open("rb") as archive:
+            package_archive._validate_central_directory_limits(archive)
 
-    package_archive._validate_central_directory_limits(archive_path)
-    archive_path.write_bytes(b"not a ZIP")
-    package_archive._validate_central_directory_limits(archive_path)
-    archive_path.write_bytes(b"PK\x05\x06")
-    package_archive._validate_central_directory_limits(archive_path)
+
+def test_archive_metadata_preflight_and_zip_parsing_share_one_open_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _package_tree(tmp_path)
+    archive_path = tmp_path / "package.agmpkg"
+    replacement = tmp_path / "replacement.agmpkg"
+    original_metadata = write_archive(root, archive_path)
+    (root / "review_tools" / "main.agl").write_text(
+        "program def changed() -> unit = ()\n", encoding="utf-8"
+    )
+    write_archive(root, replacement)
+    validate_limits = package_archive._validate_central_directory_limits
+
+    def replace_path_after_preflight(archive: IO[bytes]) -> None:
+        validate_limits(archive)
+        os.replace(replacement, archive_path)
+
+    monkeypatch.setattr(
+        package_archive, "_validate_central_directory_limits", replace_path_after_preflight
+    )
+
+    assert read_archive_metadata(archive_path) == original_metadata
 
 
 def test_archive_entry_limit_is_checked_before_zipfile_loads_the_directory(

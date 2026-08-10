@@ -28,10 +28,11 @@ dependency closure precedence for that invocation and retains its package-qualif
 for execution configuration. Development discovery rejects distinct local
 roots with the same package identity, so mounted imports remain unambiguous.
 
-Installed package contents have a SHA-256 `RECORD`. Immutable directory installs stage beside
-the final store path, revalidate the copied manifest, package discipline, and `RECORD`, then publish
-with an atomic rename; archive installation follows the same verify-before-publication boundary.
-Active immutable selections verify `RECORD` again when resolved for activation or execution.
+Installed package contents have a SHA-256 `RECORD`. Archive readers bind metadata-limit
+preflight, ZIP parsing, verification, and extraction to one opened file. Immutable directory installs
+stage beside the final store path, revalidate the copied manifest, package discipline, and `RECORD`,
+then publish with an atomic rename; archive installation follows the same verify-before-publication
+boundary. Active immutable selections verify `RECORD` again when resolved for activation or execution.
 Editable selections remain live and are exempt. The shipped
 `std` package is a managed store package whose
 version must exactly match the running AGM version. It is refreshed by `just install`, not by

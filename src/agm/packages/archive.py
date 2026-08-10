@@ -418,11 +418,12 @@ def _read_archive(archive_path: Path, operation: Callable[[zipfile.ZipFile], T])
     """Run an archive read operation while presenting ZIP failures as domain errors."""
 
     try:
-        _validate_central_directory_limits(archive_path)
-        with zipfile.ZipFile(archive_path) as archive:
-            if archive.comment:
-                raise ArchiveError("package archive has noncanonical ZIP metadata")
-            return operation(archive)
+        with archive_path.open("rb") as archive_file:
+            _validate_central_directory_limits(archive_file)
+            with zipfile.ZipFile(archive_file) as archive:
+                if archive.comment:
+                    raise ArchiveError("package archive has noncanonical ZIP metadata")
+                return operation(archive)
     except ArchiveError:
         raise
     except (
@@ -439,15 +440,14 @@ def _read_archive(archive_path: Path, operation: Callable[[zipfile.ZipFile], T])
         raise ArchiveError(f"cannot read package archive {archive_path}: {exc}") from exc
 
 
-def _validate_central_directory_limits(archive_path: Path) -> None:
+def _validate_central_directory_limits(archive: IO[bytes]) -> None:
     """Reject oversized ZIP directories before :mod:`zipfile` reads them into memory."""
 
-    with archive_path.open("rb") as archive:
-        archive.seek(0, os.SEEK_END)
-        file_size = archive.tell()
-        tail_size = min(file_size, 65_557)
-        archive.seek(-tail_size, os.SEEK_END)
-        tail = archive.read(tail_size)
+    archive.seek(0, os.SEEK_END)
+    file_size = archive.tell()
+    tail_size = min(file_size, 65_557)
+    archive.seek(-tail_size, os.SEEK_END)
+    tail = archive.read(tail_size)
     signature = b"PK\x05\x06"
     search_end = len(tail)
     while (offset := tail.rfind(signature, 0, search_end)) >= 0:

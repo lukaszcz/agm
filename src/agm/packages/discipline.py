@@ -338,8 +338,8 @@ def _validate_command_path(command_path: str) -> None:
         raise DisciplineError(f"command path {command_path!r} must be space-separated words")
     if words[0] in RESERVED_COMMAND_NAMES:
         raise DisciplineError(f"command path {command_path!r} begins with a reserved AGM command")
-    if words[0].startswith("-"):
-        raise DisciplineError(f"command path {command_path!r} begins with an option")
+    if any(word.startswith("-") for word in words):
+        raise DisciplineError(f"command path {command_path!r} contains an option")
 
 
 def _validate_program_reference(

@@ -846,6 +846,8 @@ def _validate_command_registration(
         raise PackageActivationError(
             f"command path {path_name!r} begins with a reserved AGM command"
         )
+    if any(word.startswith("-") for word in words):
+        raise PackageActivationError(f"command path {path_name!r} contains an option")
     _validate_package_name(command.package)
     if command.package not in packages:
         raise PackageActivationError(

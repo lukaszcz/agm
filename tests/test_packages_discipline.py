@@ -61,8 +61,11 @@ class TestPackageDiscipline:
         with pytest.raises(DisciplineError):
             validate_package(package)
 
-    def test_rejects_command_path_starting_with_an_option(self, tmp_path: Path) -> None:
-        package = _custom_package(tmp_path, command_path="--launch")
+    @pytest.mark.parametrize("command_path", ("--launch", "tools --help", "tools --dry-run"))
+    def test_rejects_command_path_containing_an_option(
+        self, tmp_path: Path, command_path: str
+    ) -> None:
+        package = _custom_package(tmp_path, command_path=command_path)
         (package.module_root / "main.agl").write_text("program def main() -> unit = ()\n")
 
         with pytest.raises(DisciplineError):

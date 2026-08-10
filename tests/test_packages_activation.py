@@ -1012,6 +1012,18 @@ def test_activation_index_rejects_invalid_in_memory_command_registration(
         )
 
 
+def test_activation_index_rejects_option_shaped_command_segment(tmp_path: Path) -> None:
+    with pytest.raises(PackageActivationError):
+        write_activation_index(
+            ActivationIndex(
+                packages={"alpha": ActivePackage(semver.Version.parse("1.0.0"))},
+                commands={"tools --help": CommandRegistration("alpha", "alpha/main::main")},
+            ),
+            home=tmp_path / "home",
+            env={},
+        )
+
+
 def test_activation_index_rejects_invalid_toml(tmp_path: Path) -> None:
     home = tmp_path / "agm-home"
     index_path = home / "packages" / "index.toml"

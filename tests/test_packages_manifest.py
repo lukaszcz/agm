@@ -207,6 +207,8 @@ charlie = { version = "3", url = "https://example.test/charlie.agmpkg", hash = "
         (
             'judge = { path = "../judge" }',
             f'tools = {{ version = "1.1.0", url = "{URL}" }}',
+            f'tools = {{ version = "1.1.0", url = "{URL}", hash = "bogus" }}',
+            f'tools = {{ version = "1.1.0", url = "{URL}", hash = "sha256:abc" }}',
             'tools = { version = "1.1.0", hash = "sha256:abc" }',
             (
                 f'tools = {{ version = "1.1.0", path = "../tools", url = "{URL}", '

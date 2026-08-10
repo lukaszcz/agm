@@ -39,7 +39,7 @@ AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-c
 
 - `src/agm/cli.py` defines the Typer app and every command group; `src/agm/parser.py` holds help text and command-overview resolution; `src/agm/completion.py` provides shell completions. `src/agm/command_catalog.py` and `src/agm/raw_tail_catalog.py` are pure data leaves for CLI help and raw-tail parsing.
 - `src/agm/commands/` contains the command implementations, one subtree per command group; `commands/pkg/` exposes package validation without coupling the package domain to CLI wiring.
-- `src/agm/cli_support/` holds the typed argument containers that bridge the CLI layer and command implementations, plus the host-side AgL constant-expression parser used for engine-setting literals (imported lazily, so non-AgL commands stay free of AgL imports).
+- `src/agm/cli_support/` holds the typed argument containers that bridge the CLI layer and command implementations, plus shared AgL CLI support for engine seeds, dynamic parameters, and execution roots. Host-supplied engine-setting literals are validated through the program compilation pipeline.
 - `src/agm/core/` contains the cross-cutting process, environment, filesystem, and TOML primitives plus the dry-run facility; `src/agm/util/` holds pure, `agm`-import-free generic helpers (graph algorithms, text normalization).
 - `src/agm/version.py` defines AGM's release version; package and project metadata keep it in lockstep.
 - `src/agm/config/` implements loading and resolving general and sandbox configuration.

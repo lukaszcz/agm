@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import Generator
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import semver
 
 import agm.packages.archive as package_archive
 import agm.packages.install as package_install
+import agm.stdlib_locator as stdlib_locator
 from agm.core import dry_run
 from agm.packages.activation import (
     ActivationIndex,
@@ -340,6 +342,19 @@ def test_install_refuses_an_unmanaged_standard_library_source(tmp_path: Path) ->
 
     with pytest.raises(PackageInstallError, match="managed"):
         install_directory(source, home=tmp_path / "home", env={})
+
+
+def test_install_accepts_shipped_standard_library_from_wheel_layout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    locator = tmp_path / "site-packages" / "agm" / "stdlib_locator.py"
+    source = locator.parent / "stdlib"
+    shutil.copytree(Path(__file__).resolve().parent.parent / "stdlib", source)
+    monkeypatch.setattr(stdlib_locator, "__file__", str(locator))
+
+    installed = install_directory(source, home=tmp_path / "home", env={})
+
+    assert installed.manifest.name == "std"
 
 
 def test_install_refuses_a_standard_library_at_an_arbitrary_version(tmp_path: Path) -> None:

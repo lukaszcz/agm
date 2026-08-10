@@ -34,6 +34,9 @@ syntax file into `$HOME/.config/micro/syntax/`:
 just install
 ```
 
+Built wheels also contain a bundled standard-library fallback, so a direct wheel
+installation can execute AgL before an AGM home or managed `std` store is populated.
+
 Pass arguments through to the config installer when needed:
 
 ```bash
@@ -228,7 +231,8 @@ except `std/core` itself, opens `std/core` by default; `--no-stdlib` disables
 that automatic opening throughout the loaded program.
 Other imports are qualified by default and use `open import` or `using` to make names
 bare. `agm exec` searches the entry file's directory, the selected standard library
-(the active `<AGM-home>/packages/std/<AGM_VERSION>/` package or the source-checkout fallback),
+(the active `<AGM-home>/packages/std/<AGM_VERSION>/` package, then the wheel-bundled or
+source-checkout fallback),
 the selected AGM home's global `lib` directory, and any configured
 `[modules] roots` for imported modules.
 

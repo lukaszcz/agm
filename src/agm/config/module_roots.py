@@ -30,6 +30,7 @@ from pathlib import Path
 from agm.config.general import agm_home_dir, config_file_candidates, expand_env_root
 from agm.core.env import resolve_env
 from agm.core.toml import load_toml_file, toml_dict
+from agm.stdlib_locator import shipped_stdlib_root
 from agm.util.interp import interp_preserving
 from agm.version import AGM_VERSION
 
@@ -157,7 +158,8 @@ def resolve_stdlib_root(*, home: Path, env: Mapping[str, str] | None = None) -> 
     ``AGM_STDLIB`` is an unchecked escape hatch for synthetic and in-progress
     trees. Otherwise an active immutable store ``std`` package wins only when
     its version exactly matches the running AGM binary. Without an active
-    store package, source checkouts use the repository ``stdlib/`` tree.
+    store package, AGM uses the stdlib bundled in an installed wheel or the
+    repository ``stdlib/`` tree in a source checkout.
     """
     override = resolve_env(env).get("AGM_STDLIB")
     if override is not None and override.strip():
@@ -200,4 +202,4 @@ def resolve_stdlib_root(*, home: Path, env: Mapping[str, str] | None = None) -> 
                 ) from exc
             return store_stdlib
 
-    return Path(__file__).resolve().parents[3] / "stdlib"
+    return shipped_stdlib_root()

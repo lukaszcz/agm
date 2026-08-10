@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 import semver
 
+import agm.stdlib_locator as stdlib_locator
 from agm.config.module_roots import (
     ModuleRootsConfig,
     StdlibResolutionError,
@@ -411,3 +412,13 @@ class TestResolveStdlibRoot:
         home.mkdir()
 
         assert resolve_stdlib_root(home=home, env={}) == _REPO_ROOT / "stdlib"
+
+    def test_clean_wheel_context_falls_back_to_bundled_stdlib(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        locator = tmp_path / "site-packages" / "agm" / "stdlib_locator.py"
+        bundled_stdlib = locator.parent / "stdlib"
+        bundled_stdlib.mkdir(parents=True)
+        monkeypatch.setattr(stdlib_locator, "__file__", str(locator))
+
+        assert resolve_stdlib_root(home=tmp_path / "home", env={}) == bundled_stdlib

@@ -45,6 +45,7 @@ from agm.packages.record import (
     write_record,
 )
 from agm.packages.store import canonical_package_store_path, package_store_path, store_root
+from agm.stdlib_locator import shipped_stdlib_root
 from agm.version import AGM_VERSION
 
 
@@ -76,11 +77,6 @@ def _package_operation_lock(*, home: Path, env: Mapping[str, str] | None) -> Ite
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
-def _managed_stdlib_source() -> Path:
-    """Return the shipped standard-library source managed by ``just install``."""
-    return Path(__file__).resolve().parents[3] / "stdlib"
-
-
 def _validate_managed_stdlib_install(
     manifest: PackageManifest, *, source: Path | None, editable: bool
 ) -> None:
@@ -93,7 +89,7 @@ def _validate_managed_stdlib_install(
         )
     if editable:
         raise PackageInstallError("the managed std package cannot be installed editable")
-    if source is None or source.resolve() != _managed_stdlib_source().resolve():
+    if source is None or source.resolve() != shipped_stdlib_root().resolve():
         raise PackageInstallError(
             "the managed std package must be installed from AGM's shipped stdlib"
         )

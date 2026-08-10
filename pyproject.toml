@@ -30,6 +30,9 @@ agm = "agm.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/agm"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"stdlib" = "agm/stdlib"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["--cov=agm", "--cov-branch", "--cov-fail-under=100"]

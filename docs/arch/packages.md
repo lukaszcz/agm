@@ -37,10 +37,13 @@ then publish with an atomic rename; archive installation follows the same verify
 boundary. Active immutable selections verify `RECORD` again when resolved for activation or execution.
 Editable selections remain live and are exempt. The shipped
 `std` package is a managed store package whose
-version must exactly match the running AGM version. It is refreshed by `just install`, not by
-the ordinary package-install paths, and cannot be uninstalled. Its package-domain refresh holds
-the store lock while staging and validating a complete replacement beside the active version;
-rename publication replaces the whole tree rather than exposing an in-place copy.
+version must exactly match the running AGM version. A shared locator finds its source at the
+repository root during development and inside the installed `agm` package in a wheel. It is
+refreshed by `just install`, not by the ordinary package-install paths, and cannot be uninstalled.
+Its package-domain refresh holds the store lock while staging and validating a complete replacement
+beside the active version; rename publication replaces the whole tree rather than exposing an
+in-place copy. A wheel can use its bundled copy directly when the managed store has not been
+populated.
 
 The `agm.packages` public façade resolves domain exports lazily. This keeps package model
 leaves available to AgL module loading without pulling in package discipline validation, which

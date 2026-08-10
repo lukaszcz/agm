@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
@@ -128,8 +129,9 @@ def install_user_config(
     repo_root: Path,
     install_root: Path,
     force: bool = False,
+    env: Mapping[str, str] | None = None,
 ) -> InstallUserConfigResult:
-    agm_config_dir = agm_home_dir(home=install_root)
+    agm_config_dir = agm_home_dir(home=install_root, env=env)
     sandbox_dir = agm_config_dir / "sandbox"
     prompts_dir = agm_config_dir / "prompts"
     micro_syntax_dir = install_root / ".config" / "micro" / "syntax"
@@ -171,7 +173,7 @@ def install_user_config(
     stdlib_source = repo_root / "stdlib"
     manifest = load_manifest(stdlib_source / "package.toml")
     store_destination = canonical_package_store_path(
-        manifest.name, manifest.version, home=install_root
+        manifest.name, manifest.version, home=install_root, env=env
     )
     _prepare_managed_destination(store_destination)
     _install_tree_files(
@@ -184,7 +186,7 @@ def install_user_config(
     )
     write_record(store_destination)
     verify_record(store_destination)
-    install_directory(stdlib_source, home=install_root)
+    install_directory(stdlib_source, home=install_root, env=env)
 
     micro_source_dir = repo_root / "config" / "micro"
     if micro_source_dir.exists():
@@ -205,6 +207,7 @@ def main(argv: list[str] | None = None) -> int:
         repo_root=Path(__file__).resolve().parents[1],
         install_root=Path.home() if args.prefix is None else Path(args.prefix),
         force=args.force,
+        env={} if args.prefix is not None else None,
     )
     for path in result.installed:
         print(f"Installed {path}")

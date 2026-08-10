@@ -42,6 +42,8 @@ just install /usr/local
 just install /usr/local --force
 ```
 
+An explicit install prefix takes precedence over `AGM_HOME` for that installation.
+
 ## Project layouts
 
 `agm init` supports two layouts.

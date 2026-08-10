@@ -452,11 +452,14 @@ class PipelineDriver:
                 host_reconfigurer=reconfigurer,
                 builtin_host_settings=builtin_host_settings,
             )
-            entry_bindings = (
-                interp.run()
-                if program_symbol is None
-                else interp.run(program_symbol=program_symbol)
-            )
+            if program_symbol is None:
+                entry_programs = tuple(
+                    symbol
+                    for symbol, function_id in executable.program_functions.items()
+                    if executable.functions[function_id].module_id == executable.entry_module
+                )
+                program_symbol = entry_programs[0] if len(entry_programs) == 1 else None
+            entry_bindings = interp.run(program_symbol=program_symbol)
         except AglRaise as exc:
             # Uncaught AgL exception (exit code 2 per the CLI contract).
             # ONLY the AgL exception carrier is caught here: an unexpected Python

@@ -33,8 +33,9 @@ version = "1.0.0"
 
 [dependencies]
 bravo = { version = "2", path = "../bravo" }
-charlie = { version = "3", url = "https://example.test/charlie.agmpkg", hash = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
-""",
+charlie = { version = "3", url = "https://example.test/charlie.agmpkg", hash = "sha256:"""
+                + "a" * 64
+                + '" }\n',
             )
         )
 

@@ -61,7 +61,7 @@ _HELP_TREE: dict[str, list[str]] = {
     "wt": ["new", "rm", "remove"],
     "worktree": ["new", "rm", "remove"],
     "dep": ["list", "new", "switch", "rm", "remove"],
-    "pkg": ["check", "install", "uninstall", "list", "info"],
+    "pkg": ["check", "create", "install", "uninstall", "list", "info"],
     "tmux": ["open", "close", "layout"],
 }
 
@@ -399,6 +399,19 @@ def complete_dir_argument(ctx: click.Context, args: list[str], incomplete: str) 
     del ctx, args
     try:
         return [c for c in _path_candidates(incomplete) if c.endswith("/")]
+    except (Exception, SystemExit):
+        return []
+
+
+def complete_package_source(ctx: click.Context, args: list[str], incomplete: str) -> list[str]:
+    """Complete package directories and portable package archives."""
+    del ctx, args
+    try:
+        return [
+            candidate
+            for candidate in _path_candidates(incomplete)
+            if candidate.endswith("/") or candidate.endswith(".agmpkg")
+        ]
     except (Exception, SystemExit):
         return []
 

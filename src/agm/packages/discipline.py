@@ -69,9 +69,13 @@ def validate_archive_package(
 
 
 def _archive_resource_exists(relative: str, paths: frozenset[str]) -> bool:
-    """Return whether a package-root-relative archive resource is present."""
+    """Return whether an archive contains a file or nonempty directory resource."""
     normalized = PurePosixPath(relative).as_posix()
-    return normalized == "." or normalized in paths
+    return (
+        normalized == "."
+        or normalized in paths
+        or any(path.startswith(normalized + "/") for path in paths)
+    )
 
 
 def _resource_exists(root: Path, relative: str) -> bool:

@@ -105,6 +105,21 @@ def test_archive_discipline_resolves_resources_relative_to_the_package_root(
     assert verify_archive_discipline(archive_path) == metadata
 
 
+def test_archive_discipline_accepts_a_nonempty_directory_resource(tmp_path: Path) -> None:
+    root = _package_tree(tmp_path)
+    (root / "assets").mkdir()
+    (root / "assets" / "logo.txt").write_text("logo", encoding="utf-8")
+    (root / "review_tools" / "main.agl").write_text(
+        'let assets = resource("assets")\nprogram def main() -> unit = ()\n', encoding="utf-8"
+    )
+
+    archive_path = tmp_path / "package.agmpkg"
+
+    metadata = write_archive(root, archive_path)
+
+    assert verify_archive_discipline(archive_path) == metadata
+
+
 def test_write_archive_refuses_symlinks_and_casefolding_collisions(tmp_path: Path) -> None:
     root = _package_tree(tmp_path)
     (root / "linked.agl").symlink_to(root / "review_tools" / "main.agl")

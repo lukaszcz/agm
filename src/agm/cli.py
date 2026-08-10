@@ -1590,7 +1590,7 @@ def pkg_create(
 @pkg_app.command(name="install")
 def pkg_install(
     source: str | None = typer.Argument(
-        None, metavar="SRC", autocompletion=completion.complete_dir_argument
+        None, metavar="SRC", autocompletion=completion.complete_package_source
     ),
     editable: bool = typer.Option(False, "--editable", help="Activate a live package directory."),
     shadow: bool = typer.Option(False, "--shadow", help="Replace conflicting package commands."),

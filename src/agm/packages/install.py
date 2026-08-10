@@ -37,6 +37,7 @@ from agm.packages.record import (
     RecordEntry,
     RecordError,
     content_hash,
+    record_entries,
     verify_record,
     write_record,
 )
@@ -243,7 +244,11 @@ def _install_directory(
             ) from exc
         installed = PackageInfo(destination, package.manifest)
         if destination.exists():
-            _verify_existing_install(destination, package.manifest)
+            _verify_existing_install(
+                destination,
+                package.manifest,
+                content_hash(record_entries(root)),
+            )
         elif not dry_run.enabled():
             fs.mkdir(destination.parent, parents=True, exist_ok=True)
             try:
@@ -514,7 +519,7 @@ def _verify_existing_install(
         entries = verify_record(root)
         if package_hash is not None and content_hash(entries) != package_hash:
             raise PackageInstallError(
-                f"installed package at {root} conflicts with the archive content hash"
+                f"installed package at {root} conflicts with the package content hash"
             )
     except (ManifestError, RecordError) as exc:
         raise PackageInstallError(

@@ -190,6 +190,7 @@ def test_complete_help_path_suggests_subcommands() -> None:
     assert completion.complete_help_path(_make_ctx(help_command=["config"]), "e") == ["env"]
     assert completion.complete_help_path(_make_ctx(help_command=["pkg"]), "") == [
         "check",
+        "create",
         "info",
         "install",
         "list",
@@ -1722,3 +1723,35 @@ class TestCompleteDirArgument:
         ctx = click.Context(click.Command("test"))
         result = completion.complete_dir_argument(ctx, [], "x")
         assert result == []
+
+
+def test_pkg_install_completion_includes_directories_and_archives(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "package").mkdir()
+    (work / "package.agmpkg").write_bytes(b"archive")
+    (work / "notes.txt").write_text("not a package", encoding="utf-8")
+    monkeypatch.chdir(work)
+
+    from agm.cli import app
+
+    cli = typer.main.get_command(app)
+    shell_complete = ShellComplete(cli, {}, "agm", "_TYPER_COMPLETE_ARGS")
+    candidates = [
+        item.value for item in shell_complete.get_completions(["pkg", "install"], "package")
+    ]
+
+    assert "package/" in candidates
+    assert "package.agmpkg" in candidates
+
+
+def test_complete_package_source_degrades_on_path_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        completion,
+        "_path_candidates",
+        lambda incomplete: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    assert completion.complete_package_source(_make_ctx(), [], "package") == []

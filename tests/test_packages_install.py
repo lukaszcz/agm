@@ -688,6 +688,19 @@ def test_install_refuses_tampered_existing_tree_and_cleans_failed_copy(
         install_directory(another, home=home, env={})
 
 
+def test_install_rejects_changed_directory_content_for_an_existing_identity(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    installed = install_directory(source, home=home, env={})
+    changed_source = "program def main() -> unit = ()\n// changed\n"
+    (source / "alpha" / "main.agl").write_text(changed_source, encoding="utf-8")
+
+    with pytest.raises(PackageInstallError, match="content"):
+        install_directory(source, home=home, env={})
+
+    assert (installed.root / "alpha" / "main.agl").read_text(encoding="utf-8") != changed_source
+
+
 def test_store_dependency_integrity_error_is_reported(tmp_path: Path) -> None:
     home = tmp_path / "home"
     installed = install_directory(_package(tmp_path / "bravo", "bravo", "1.0.0"), home=home, env={})

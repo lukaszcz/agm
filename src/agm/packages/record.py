@@ -34,13 +34,19 @@ def write_record(root: Path) -> Path:
     """
 
     record_path = root / _RECORD_NAME
-    entries = tuple(
-        RecordEntry(_record_path(path.relative_to(root).as_posix()), _sha256(path))
-        for path in _package_files(root)
-    )
+    entries = record_entries(root)
     content = serialize_record(entries)
     fs.write_text(record_path, content)
     return record_path
+
+
+def record_entries(root: Path) -> tuple[RecordEntry, ...]:
+    """Return the canonical record entries for a package tree without writing it."""
+
+    return tuple(
+        RecordEntry(_record_path(path.relative_to(root).as_posix()), _sha256(path))
+        for path in _package_files(root)
+    )
 
 
 def read_record(root: Path) -> tuple[RecordEntry, ...]:

@@ -400,7 +400,9 @@ def effective_command_index(
         )
         for name, active in index.packages.items()
     }
-    if selected_roots == indexed_roots:
+    if selected_roots == indexed_roots and all(
+        active.editable is None for active in index.packages.values()
+    ):
         return index
     selections: dict[str, ActivePackage] = {}
     for package in packages:

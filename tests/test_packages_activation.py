@@ -222,11 +222,10 @@ def test_rebuild_index_merges_registered_commands_from_active_manifests(tmp_path
     )
 
 
-def test_effective_command_index_preserves_global_cached_commands_without_changed_pins(
-    tmp_path: Path,
-) -> None:
+def test_effective_command_index_uses_live_editable_manifest_commands(tmp_path: Path) -> None:
     home = tmp_path / "agm-home"
-    root = _write_package(home, "alpha", "1.0.0")
+    root = tmp_path / "editable"
+    (root / "alpha").mkdir(parents=True)
     (root / "package.toml").write_text(
         '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
         '[commands]\nlaunch = { program = "alpha/main::current" }\n',
@@ -234,12 +233,14 @@ def test_effective_command_index_preserves_global_cached_commands_without_change
     )
     env = {"AGM_HOME": str(home)}
     index = ActivationIndex(
-        {"alpha": ActivePackage(semver.Version.parse("1.0.0"))},
+        {"alpha": ActivePackage(semver.Version.parse("1.0.0"), editable=root)},
         {"launch": CommandRegistration("alpha", "alpha/main::stale")},
     )
     write_activation_index(index, home=home, env=env)
 
-    assert effective_command_index(home=home, proj_dir=None, cwd=tmp_path, env=env) == index
+    assert effective_command_index(home=home, proj_dir=None, cwd=tmp_path, env=env).commands == {
+        "launch": CommandRegistration("alpha", "alpha/main::current")
+    }
 
 
 def test_effective_command_index_rebuilds_for_a_pin_with_different_build_metadata(

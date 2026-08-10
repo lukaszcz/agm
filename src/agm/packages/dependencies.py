@@ -57,6 +57,8 @@ def _validate_package_dependencies(package: PackageInfo, state: _CheckState) -> 
                     )
                 continue
             selected = _stored_satisfying(name, requirement, state)
+            if selected is not None:
+                _validate_package_dependencies(selected, state)
             if selected is None and requirement.path is not None:
                 selected = _path_package(package, name, requirement, state)
             if selected is None and requirement.url is not None:

@@ -87,6 +87,25 @@ class TestQualifiedConfigKeys:
 
         assert resolve_qualified_values(_config(lower, higher), (key,)) == {key: 2}
 
+    @pytest.mark.parametrize(
+        "higher",
+        ({"judge": "off"}, {"judge": {"review": "off"}}),
+    )
+    def test_higher_scalar_removes_a_lower_qualified_value(
+        self, higher: Mapping[str, object]
+    ) -> None:
+        key = QualifiedConfigKey(("review-tools", "judge"), ("review",), "max-tries")
+        lower = {"judge": {"review": {"max-tries": 1}}}
+
+        assert resolve_qualified_values(_config(lower, higher), (key,)) == {}
+
+    def test_higher_table_omitting_leaf_retains_lower_qualified_value(self) -> None:
+        key = QualifiedConfigKey(("review-tools", "judge"), ("review",), "max-tries")
+        lower = {"judge": {"review": {"max-tries": 1}}}
+        higher = {"judge": {"review": {"region": "eu"}}}
+
+        assert resolve_qualified_values(_config(lower, higher), (key,)) == {key: 1}
+
     def test_names_a_quoted_anchor_in_a_same_layer_conflict(self) -> None:
         key = QualifiedConfigKey(("review-tools", "judge"), ("review",), "max-tries")
         config = {

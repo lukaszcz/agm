@@ -63,8 +63,12 @@ def resolve_qualified_values(
             unique_keys_list.append(key)
 
     resolved: dict[QualifiedConfigKey, object] = {}
+    unique_keys = tuple(unique_keys_list)
     for layer in layers:
-        resolved.update(_resolve_layer(layer, tuple(unique_keys_list)))
+        for key in unique_keys:
+            if any(_table_path_replaced(layer, path) for path in _table_paths_for(key)):
+                resolved.pop(key, None)
+        resolved.update(_resolve_layer(layer, unique_keys))
     return resolved
 
 
@@ -132,6 +136,18 @@ def _table_at(config: TomlDict, path: tuple[str, ...]) -> dict[str, object] | No
         if current is _MISSING:
             return None
     return current if isinstance(current, dict) else None
+
+
+def _table_path_replaced(config: TomlDict, path: tuple[str, ...]) -> bool:
+    """Return whether *config* explicitly makes *path* non-tabular."""
+    current: object = config
+    for segment in path:
+        if not isinstance(current, dict) or segment not in current:
+            return False
+        current = current[segment]
+        if not isinstance(current, dict):
+            return True
+    return False
 
 
 def _display_table_path(path: tuple[str, ...]) -> str:

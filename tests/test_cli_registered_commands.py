@@ -186,12 +186,16 @@ def test_registered_command_help_does_not_dispatch_program(
     monkeypatch.setattr(exec_program, "run_registered", lambda *args, **kwargs: calls.append(args))
 
     result = invoke(CliRunner(), ["tools", "lint", "--help"])
+    short_result = invoke(CliRunner(), ["tools", "lint", "-h"])
+    value_result = invoke(CliRunner(), ["tools", "lint", "--message", "-h"])
 
     assert result.exit_code == 0
+    assert short_result.exit_code == 0
+    assert value_result.exit_code == 0
     assert "agm tools lint" in result.output
     assert "Lint package inputs" in result.output
     assert "--dry-run" in result.output
-    assert calls == []
+    assert calls == [("tools/lint::main", ["--message", "-h"])]
 
 
 def test_help_command_renders_registered_command_help(

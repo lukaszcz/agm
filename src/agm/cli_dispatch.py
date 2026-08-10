@@ -153,7 +153,7 @@ class RegisteredProgramCommand(TyperCommand):
         self._registration = registration
 
     def invoke(self, ctx: click.Context) -> None:
-        if "--help" in ctx.args or "-h" in ctx.args:
+        if "--help" in ctx.args or (ctx.args and ctx.args[0] == "-h"):
             print(registered_command_help(self._path_name, self._registration), end="")
             return
         # This is the first point at which an unknown command has been proven

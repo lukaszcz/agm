@@ -642,6 +642,12 @@ def run_registered(
         else args
     )
     run(
-        replace(execution_args, file=str(entry_path.resolve()), program=declaration_path),
+        replace(
+            execution_args,
+            file=str(entry_path.resolve()),
+            program=(
+                declaration_path if execution_args.program is None else execution_args.program
+            ),
+        ),
         entry_module_segments=module_id.segments,
     )

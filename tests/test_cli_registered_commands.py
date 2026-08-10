@@ -298,6 +298,32 @@ def test_exec_runs_an_installed_reference(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert result.stdout == "installed\n"
 
 
+def test_exec_program_option_overrides_an_installed_reference(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    home = tmp_path / "home"
+    package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
+    module = package_root / "tools" / "review.agl"
+    module.parent.mkdir(parents=True)
+    (package_root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    module.write_text(
+        'program def main() -> unit = print "main"\n'
+        'program def alternate() -> unit = print "alternate"\n',
+        encoding="utf-8",
+    )
+    write_activation_index(
+        ActivationIndex({"tools": ActivePackage(semver.Version.parse("1.0.0"))}), home=home
+    )
+    monkeypatch.setenv("HOME", str(home))
+
+    result = invoke(CliRunner(), ["exec", "-p", "alternate", "tools/review::main"])
+
+    assert result.exit_code == 0
+    assert result.stdout == "alternate\n"
+
+
 @pytest.mark.parametrize("reference", ["not-a-reference", "bad-name/main::main"])
 def test_exec_rejects_malformed_installed_references(reference: str) -> None:
     import agm.commands.exec_program as exec_program

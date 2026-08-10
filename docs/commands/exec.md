@@ -59,7 +59,9 @@ like any other static error.
 - `-c COMMAND`, `--command COMMAND`: Execute the AgL program given as `COMMAND`
   directly, instead of reading the program from `FILE`.
 - `-p PATH`, `--program PATH`: Select a `program def` entry by its declaration
-  path. This accepts entry-file paths such as `main` or `review::main`.
+  path. This accepts entry-file paths such as `main` or `review::main`; with an
+  installed `PACKAGE/MODULE::PROGRAM` reference, it overrides that reference's
+  program path while retaining its module.
 - `--PARAM VALUE`: Provide a value for a `param` declaration. The selected
   program exposes params from its module and transitive imports; each becomes a
   program-specific option. Booleans use `--name` / `--no-name`. A param

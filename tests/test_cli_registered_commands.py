@@ -427,7 +427,13 @@ def test_exec_help_for_an_installed_reference_includes_program_params(
     (package_root / "package.toml").write_text(
         '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
     )
-    module.write_text("param level: text\nprogram def main() -> unit = ()\n", encoding="utf-8")
+    (package_root / "tools" / "settings.agl").write_text(
+        'param level: text = "default"\n', encoding="utf-8"
+    )
+    module.write_text(
+        "import tools/settings\nparam level: text\nprogram def main() -> unit = ()\n",
+        encoding="utf-8",
+    )
     write_activation_index(
         ActivationIndex({"tools": ActivePackage(semver.Version.parse("1.0.0"))}), home=home
     )
@@ -436,7 +442,7 @@ def test_exec_help_for_an_installed_reference_includes_program_params(
     result = invoke(CliRunner(), ["exec", "tools/review::main", "--help"])
 
     assert result.exit_code == 0
-    assert "--level" in result.output
+    assert "--tools/review::level" in result.output
 
 
 def test_exec_program_option_overrides_an_installed_reference(

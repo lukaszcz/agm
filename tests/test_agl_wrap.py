@@ -97,6 +97,20 @@ print value
     assert transformed_next_node_id == next_node_id + 3
 
 
+def test_wrap_inline_program_keeps_late_exports_with_the_executable_body() -> None:
+    program, next_node_id = parse_program_seeded(
+        "let value = 1\nexport helpers\n", start_id=0
+    )
+
+    wrapped, _ = wrap_inline_program(program, next_node_id=next_node_id)
+
+    assert len(wrapped.body.items) == 1
+    main = wrapped.body.items[0]
+    assert isinstance(main, FuncDef)
+    assert main.body.items == program.body.items
+    assert isinstance(main.body.items[1], ExportDecl)
+
+
 def test_wrap_inline_program_wraps_an_empty_declaration_only_source() -> None:
     program, next_node_id = parse_program_seeded("def helper() -> unit = ()", start_id=0)
 

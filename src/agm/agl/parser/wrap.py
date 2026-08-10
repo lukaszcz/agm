@@ -27,8 +27,8 @@ def wrap_inline_program(program: Program, *, next_node_id: int) -> tuple[Program
     main_items: list[syntax.Item] = []
     has_executable_item = False
     for item in program.body.items:
-        is_import = isinstance(item, syntax.ImportDecl)
-        if is_import and has_executable_item:
+        is_module_header = isinstance(item, (syntax.ImportDecl, syntax.ExportDecl))
+        if is_module_header and has_executable_item:
             main_items.append(item)
             continue
         if isinstance(

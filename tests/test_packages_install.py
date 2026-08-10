@@ -717,6 +717,49 @@ def test_install_accepts_an_active_editable_dependency(tmp_path: Path) -> None:
     assert active.editable == bravo.resolve()
 
 
+def test_changed_editable_dependency_version_preserves_its_root_and_command_provenance(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    alpha = _package(
+        tmp_path / "alpha",
+        "alpha",
+        "1.0.0",
+        '\n[commands]\nlaunch = { program = "alpha/main::main" }\n',
+    )
+    bravo = _package(
+        tmp_path / "bravo",
+        "bravo",
+        "1.0.0",
+        '\n[commands]\nlaunch = { program = "bravo/main::main" }\n',
+    )
+    install_directory(alpha, home=home, env={})
+    install_directory(bravo, home=home, env={}, editable=True, shadow=True)
+    original = load_activation_index(home=home, env={}).packages["bravo"]
+    manifest = bravo / "package.toml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace('version = "1.0.0"', 'version = "2.0.0"'),
+        encoding="utf-8",
+    )
+    charlie = _package(
+        tmp_path / "charlie",
+        "charlie",
+        "1.0.0",
+        '\n[dependencies]\nbravo = "2"\n',
+    )
+
+    install_directory(charlie, home=home, env={})
+
+    index = load_activation_index(home=home, env={})
+    assert index.packages["bravo"] == ActivePackage(
+        semver.Version.parse("2.0.0"),
+        editable=bravo,
+        shadow=original.shadow,
+        registration_order=original.registration_order,
+    )
+    assert index.commands["launch"] == CommandRegistration("bravo", "bravo/main::main")
+
+
 def test_editable_install_mounts_live_tree_without_a_record(tmp_path: Path) -> None:
     source = _package(tmp_path / "source", "alpha", "1.0.0")
     home = tmp_path / "home"

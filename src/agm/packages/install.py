@@ -445,10 +445,21 @@ def _resolve_dependency_requirements(package: PackageInfo, state: _InstallState)
                 f"unsatisfied package requirement {name!r} >= {requirement.version}"
             )
         current = state.index.packages.get(name)
-        if (
+        if current is not None and current.editable == selected.root:
+            if current.version != selected.manifest.version:
+                packages = dict(state.index.packages)
+                packages[name] = ActivePackage(
+                    selected.manifest.version,
+                    editable=current.editable,
+                    shadow=current.shadow,
+                    registration_order=current.registration_order,
+                )
+                state.index = ActivationIndex(packages, state.index.commands)
+            state.transient_packages[name] = selected
+        elif (
             current is None
             or current.version != selected.manifest.version
-            or (current.editable is not None and current.editable != selected.root)
+            or current.editable is not None
         ):
             _activate_package(selected, state, editable_root=None, shadow=False)
         else:

@@ -68,7 +68,7 @@ def resolve_module(
     search_roots = roots.sorted_roots_for(module_id.segments)
     for root in search_roots:
         candidate = root / rel
-        if fs.exists(candidate):
+        if fs.exists(candidate) and roots.admits_path(root, candidate):
             canon = candidate.resolve()
             canonical_hits[canon] = root
 
@@ -157,14 +157,14 @@ def expand_wildcard(
     for root in roots.sorted_roots_for(prefix):
         # Pattern 1: <root>/<prefix>.agl — the prefix module itself
         direct = root / (prefix_dir + ".agl")
-        if fs.is_file(direct):
+        if fs.is_file(direct) and roots.admits_path(root, direct):
             _record_file(direct, root)
 
         # Pattern 2: <root>/<prefix>/**/*.agl — the full subtree
         subtree_root = root / prefix_dir
         if fs.is_dir(subtree_root):
             for file_path in fs.rglob(subtree_root, "*.agl"):
-                if fs.is_file(file_path):
+                if fs.is_file(file_path) and roots.admits_path(root, file_path):
                     _record_file(file_path, root)
 
     if not hits:

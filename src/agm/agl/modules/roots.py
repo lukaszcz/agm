@@ -55,6 +55,16 @@ class RootSet:
             or first_segment in package_names_by_root[root]
         )
 
+    def admits_path(self, root: Path, path: Path) -> bool:
+        """Return whether *path* is exposed by *root*'s mount policy."""
+        if root in self.loose_roots:
+            return True
+        mounted = tuple(package for package in self.packages if package.root == root)
+        if not mounted:
+            return True
+        canonical_path = path.resolve()
+        return any(canonical_path.is_relative_to(package.module_root) for package in mounted)
+
     def is_standard_library_path(self, path: Path) -> bool:
         """Return whether *path* belongs to a host-selected standard-library root."""
         canonical_path = path.resolve()

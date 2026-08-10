@@ -43,6 +43,8 @@ def _mounted_package_roots(tmp_path: Path, *, also_loose: bool = False) -> RootS
     manifest_path.write_text('[package]\nname = "demo"\nversion = "1.0.0"\n')
     package = PackageInfo(package_root, load_manifest(manifest_path))
     _make_module(package_root, "assets/rogue")
+    _make_module(package_root, "demo")
+    _make_module(package_root, "demo/main")
     return assemble_roots(
         invocation_root=invocation,
         lib_root=None,
@@ -123,6 +125,8 @@ class TestResolveModuleNotFound:
 
         with pytest.raises(ModuleNotFound):
             resolve_module(ModuleId.from_path("assets/rogue"), roots)
+        with pytest.raises(ModuleNotFound):
+            resolve_module(ModuleId.from_path("demo"), roots)
 
     def test_not_found_raises_module_not_found(self, tmp_path: Path) -> None:
         root = tmp_path / "lib"
@@ -261,6 +265,9 @@ class TestExpandWildcard:
 
         with pytest.raises(ModulePrefixNotFound):
             expand_wildcard(("assets",), roots)
+        assert expand_wildcard(("demo",), roots) == {
+            ModuleId.from_path("demo/main"): (tmp_path / "package" / "demo" / "main.agl").resolve()
+        }
 
     def test_explicit_loose_root_still_exposes_all_modules(self, tmp_path: Path) -> None:
         roots = _mounted_package_roots(tmp_path, also_loose=True)

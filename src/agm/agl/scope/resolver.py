@@ -2219,8 +2219,8 @@ class _Resolver:
         """Raise if *ref* is a scoped ``builtin def``'s binding used as a value.
 
         Mirrors :meth:`_resolve_call`'s own resolved-binding classification:
-        once a reference resolves to a ``function_binding`` under a built-in
-        name, a call site turns it into a host-dispatch classification
+        once a reference resolves to a ``function_binding`` for a built-in
+        declaration, a call site turns it into a host-dispatch classification
         (*is_call_target* is set), while every other value context has no
         host dispatch to offer. A non-``builtin`` ``def`` can never reach here
         under a built-in name — that is rejected at declaration
@@ -2230,10 +2230,10 @@ class _Resolver:
             not is_call_target
             and ref is not None
             and ref.kind is BinderKind.function_binding
-            and node.name in _BUILTIN_CALL_NAMES
+            and ref.name in _BUILTIN_CALL_NAMES
         ):
             raise AglScopeError(
-                f"Built-in function '{node.name}' cannot be used as a value.", span=node.span
+                f"Built-in function '{ref.name}' cannot be used as a value.", span=node.span
             )
 
     def _record_varref_binding(
@@ -2927,10 +2927,11 @@ class _Resolver:
         callee = node.callee
         if isinstance(callee, VarRef):
             self._resolve_varref(callee, is_call_target=True)
-            if callee.name in _BUILTIN_CALL_NAMES:
-                ref = self._resolution.get(callee.node_id)
-                if ref is not None and ref.kind is BinderKind.function_binding:
-                    self._builtin_calls[node.node_id] = _BUILTIN_CALL_NAMES[callee.name]
+            ref = self._resolution.get(callee.node_id)
+            if ref is not None and ref.kind is BinderKind.function_binding:
+                kind = _BUILTIN_CALL_NAMES.get(ref.name)
+                if kind is not None:
+                    self._builtin_calls[node.node_id] = kind
         elif isinstance(callee, FieldAccess):
             self._resolve_field_access(callee)
             # Member selection is type-directed, so scope cannot yet know

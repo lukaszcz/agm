@@ -42,12 +42,16 @@ class RegisteredCommandResolution:
     trailing_args: tuple[str, ...]
 
 
-def load_activation_index(*, home: Path) -> CommandIndexLike:
-    """Load the package index only after built-in command lookup has failed."""
+def load_activation_index(
+    *, home: Path, proj_dir: Path | None = None, cwd: Path | None = None
+) -> CommandIndexLike:
+    """Load the command index for the global or project-selected packages."""
 
-    from agm.packages.activation import load_activation_index as load_index
+    from agm.packages import activation
 
-    return load_index(home=home)
+    if cwd is not None:
+        return activation.effective_command_index(home=home, proj_dir=proj_dir, cwd=cwd)
+    return activation.load_activation_index(home=home)
 
 
 def _is_usage_error(error: Exception) -> bool:
@@ -130,7 +134,9 @@ class RegisteredCommandGroup(TyperGroup):
                 raise
             context = current_config_context()
             try:
-                index = load_activation_index(home=context.home)
+                index = load_activation_index(
+                    home=context.home, proj_dir=context.proj_dir, cwd=context.cwd
+                )
             except ValueError as index_error:
                 ctx.fail(f"cannot load package command index: {index_error}")
             resolution = resolve_registered_command(args, index.commands)

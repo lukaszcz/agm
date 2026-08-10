@@ -59,6 +59,22 @@ program def main() -> unit =
     assert result.bindings["prompt"] == TextValue(str(resource.resolve()))
 
 
+def test_renamed_resource_builtin_runs_through_its_original_declaration(tmp_path: Path) -> None:
+    entry = tmp_path / "main.agl"
+    resource = tmp_path / "prompt.md"
+    resource.write_text("prompt", encoding="utf-8")
+    source = """import std/core using resource as asset
+let prompt = asset("prompt.md")
+program def main() -> unit =
+  print prompt
+"""
+
+    result = _run_file(source, entry, roots=RootSet(roots=frozenset({_STDLIB})))
+
+    assert result.ok
+    assert result.bindings["prompt"] == TextValue(str(resource.resolve()))
+
+
 def test_resource_and_resource_dir_anchor_package_modules_to_the_package_root(
     tmp_path: Path,
 ) -> None:
@@ -159,6 +175,28 @@ def test_package_validation_rejects_a_missing_resource(tmp_path: Path) -> None:
     module.write_text(
         """program def main() -> unit =
   print resource("prompts/missing.md")
+""",
+        encoding="utf-8",
+    )
+    package = PackageInfo(root, PackageManifest("package", semver.Version.parse("1.0.0")))
+
+    with pytest.raises(DisciplineError):
+        validate_package(package)
+
+
+def test_package_validation_rejects_missing_resource_reached_through_a_reexport(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "package"
+    module_root = root / "package"
+    module_root.mkdir(parents=True)
+    (module_root / "resources.agl").write_text(
+        "export std/core using resource as asset\n", encoding="utf-8"
+    )
+    (module_root / "main.agl").write_text(
+        """import package/resources using asset
+program def main() -> unit =
+  print asset("prompts/missing.md")
 """,
         encoding="utf-8",
     )

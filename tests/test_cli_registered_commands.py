@@ -81,6 +81,36 @@ def test_command_index_loader_reads_the_active_index(tmp_path: Path) -> None:
     assert load_activation_index(home=tmp_path / "home").commands == {}
 
 
+def test_command_index_loader_uses_project_selected_package_commands(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import agm.cli_dispatch as dispatch
+    import agm.packages.activation as activation
+
+    home = tmp_path / "home"
+    pinned_package = PackageInfo(
+        tmp_path / "pinned",
+        PackageManifest(
+            "tools",
+            semver.Version.parse("2.0.0"),
+            commands={"new": CommandSpec("tools/new::main")},
+        ),
+    )
+    monkeypatch.setattr(
+        activation,
+        "load_activation_index",
+        lambda **_: ActivationIndex(
+            packages={"tools": ActivePackage(semver.Version.parse("1.0.0"))},
+            commands={"old": CommandRegistration("tools", "tools/old::main")},
+        ),
+    )
+    monkeypatch.setattr(activation, "select_active_packages", lambda **_: (pinned_package,))
+
+    index = dispatch.load_activation_index(home=home, proj_dir=tmp_path, cwd=tmp_path)
+
+    assert index.commands == {"new": CommandRegistration("tools", "tools/new::main")}
+
+
 def test_registered_command_dispatches_trailing_arguments(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -143,6 +173,18 @@ def test_builtin_commands_do_not_load_the_package_index(monkeypatch: pytest.Monk
 
 def test_help_overview_appends_registered_commands(tmp_path: Path) -> None:
     home = tmp_path / "home"
+    package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
+    package_root.mkdir(parents=True)
+    (package_root / "package.toml").write_text(
+        """[package]
+name = "tools"
+version = "1.0.0"
+
+[commands]
+"tools lint" = { program = "tools/lint::main", description = "Lint package inputs" }
+""",
+        encoding="utf-8",
+    )
     index = ActivationIndex(
         packages={"tools": ActivePackage(semver.Version.parse("1.0.0"))},
         commands={

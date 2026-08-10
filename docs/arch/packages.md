@@ -14,7 +14,8 @@ activates one version of each package; editable installations instead mount thei
 tree. `agm pkg uninstall` removes an active selection and its registered commands.
 
 The activation index selects global package versions and caches registered commands. Project
-`[packages]` pins override those selections for that invocation. Package-root assembly mounts
+`[packages]` pins override those selections for that invocation, and their selected manifests
+derive that invocation's effective command registry. Package-root assembly mounts
 the selected packages alongside ordinary module roots, while the module loader enforces that a
 package module imports only itself, its declared dependencies, and the selected standard
 library. A source file inside a development package similarly gives its package and local path
@@ -29,10 +30,11 @@ the ordinary package-install paths, and cannot be uninstalled.
 
 A manifest `[commands]` table maps a single- or multi-word CLI path to a package-owned
 `program def`. Activation rejects command conflicts unless the later installation uses
-`--shadow`. When a built-in root command does not match, CLI dispatch resolves the longest
-registered path and runs its program through the same execution host as `agm exec`. Help and
-shell completion read the activation index; dispatch verifies the selected manifest and module
-ownership before executing it.
+`--shadow`. Each invocation derives its effective registry from its selected package manifests,
+preserving global registration priority, so project pins affect dispatch, help, and completion.
+When a built-in root command does not match, CLI dispatch resolves the longest registered path
+and runs its program through the same execution host as `agm exec`. Dispatch verifies the
+selected manifest and module ownership before executing it.
 
 ## Code Entry Points
 

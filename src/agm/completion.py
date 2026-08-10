@@ -207,7 +207,7 @@ def registered_command_completion(
         from agm.cli_dispatch import load_activation_index, resolve_registered_command
 
         context = current_config_context()
-        index = load_activation_index(home=context.home)
+        index = load_activation_index(home=context.home, proj_dir=context.proj_dir, cwd=context.cwd)
         prefix = tuple(command_path)
         candidates = {
             words[len(prefix)]

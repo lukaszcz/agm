@@ -366,6 +366,34 @@ def select_active_packages(
     return packages
 
 
+def effective_command_index(
+    *,
+    home: Path,
+    proj_dir: Path | None,
+    cwd: Path,
+    env: Mapping[str, str] | None = None,
+) -> ActivationIndex:
+    """Return selected-package commands with project pins applied.
+
+    The persistent activation index caches commands for the global selection.
+    A project pin changes that selection, so derive its command registry from
+    the selected manifests while retaining the global registration priority of
+    each package name.
+    """
+
+    index = load_activation_index(home=home, env=env)
+    packages = select_active_packages(home=home, proj_dir=proj_dir, cwd=cwd, env=env)
+    selections: dict[str, ActivePackage] = {}
+    for package in packages:
+        previous = index.packages.get(package.manifest.name)
+        selections[package.manifest.name] = ActivePackage(
+            package.manifest.version,
+            shadow=previous.shadow if previous is not None else False,
+            registration_order=previous.registration_order if previous is not None else 0,
+        )
+    return _reconciled_commands(ActivationIndex(selections), packages)
+
+
 def select_package_roots(
     *,
     home: Path,

@@ -36,6 +36,19 @@ def test_complete_registered_commands_reads_active_index(
     )
 
     home = tmp_path / "home"
+    package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
+    package_root.mkdir(parents=True)
+    (package_root / "package.toml").write_text(
+        """[package]
+name = "tools"
+version = "1.0.0"
+
+[commands]
+"tools lint" = { program = "tools/lint::main" }
+review-tools = { program = "tools/review::main" }
+""",
+        encoding="utf-8",
+    )
     write_activation_index(
         ActivationIndex(
             packages={"tools": ActivePackage(semver.Version.parse("1.0.0"))},

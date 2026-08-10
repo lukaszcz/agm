@@ -8,8 +8,18 @@ from typing import TypeVar
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.parser import AglSyntaxError, parse_program
-from agm.agl.syntax.nodes import Call, VarRef, static_function_items
+from agm.agl.scope import BuiltinKind
+from agm.agl.syntax.nodes import (
+    Call,
+    ExportDecl,
+    ImportDecl,
+    Program,
+    VarRef,
+    static_function_items,
+    static_items,
+)
 from agm.agl.syntax.resources import ResourceError, resolve_resource, resource_path
+from agm.agl.syntax.types import ImportMode
 from agm.agl.syntax.visitor import walk
 from agm.command_catalog import RESERVED_COMMAND_NAMES
 from agm.core import fs
@@ -18,6 +28,7 @@ from agm.packages.model import PackageInfo
 from agm.util.ident import is_identifier
 
 T = TypeVar("T")
+_ResourcePaths = dict[tuple[str, ...], BuiltinKind]
 
 
 class DisciplineError(ValueError):
@@ -94,22 +105,17 @@ def _validate_resources(
     exists: Callable[[str], bool],
 ) -> None:
     """Verify that every literal resource target in package modules is present."""
-    for module_path in modules.values():
+    programs: dict[ModuleId, tuple[T, Program]] = {}
+    for module_id, module_path in modules.items():
         try:
-            program = parse_program(read_module(module_path))
+            programs[module_id] = (module_path, parse_program(read_module(module_path)))
         except (AglSyntaxError, OSError, UnicodeDecodeError) as exc:
             raise DisciplineError(f"cannot parse package module {module_path}: {exc}") from exc
-        calls: list[tuple[Call, bool]] = []
 
-        def collect_resource_call(node: object) -> None:
-            if (
-                isinstance(node, Call)
-                and isinstance(node.callee, VarRef)
-                and node.callee.name in {"resource", "resource-dir"}
-            ):
-                calls.append((node, node.callee.name == "resource-dir"))
-
-        walk(program, collect_resource_call)
+    parsed_modules = {module_id: program for module_id, (_, program) in programs.items()}
+    exports = _resource_exports(parsed_modules)
+    for module_path, program in programs.values():
+        calls = _resource_calls(program, _resource_imports(program, exports))
         for call, is_directory in calls:
             try:
                 relative = resource_path(call, is_directory=is_directory)
@@ -119,6 +125,104 @@ def _validate_resources(
                 raise DisciplineError(
                     f"resource {relative!r} referenced by {module_path} does not exist"
                 )
+
+
+_RESOURCE_BUILTINS: _ResourcePaths = {
+    ("resource",): BuiltinKind.RESOURCE,
+    ("resource-dir",): BuiltinKind.RESOURCE_DIR,
+}
+
+
+def _resource_exports(programs: Mapping[ModuleId, Program]) -> dict[ModuleId, _ResourcePaths]:
+    """Resolve package re-exports that preserve a standard resource builtin."""
+
+    exports: dict[ModuleId, _ResourcePaths] = {module_id: {} for module_id in programs}
+    changed = True
+    while changed:
+        changed = False
+        for module_id, program in programs.items():
+            module_exports = exports[module_id]
+            for declaration in static_items(program.body.items):
+                if not isinstance(declaration, ExportDecl):
+                    continue
+                target = _resource_export_target(declaration.module_path, exports)
+                for path, kind in _select_resource_paths(declaration, target).items():
+                    if module_exports.get(path) != kind:
+                        module_exports[path] = kind
+                        changed = True
+    return exports
+
+
+def _resource_export_target(
+    module_path: tuple[str, ...], exports: Mapping[ModuleId, _ResourcePaths]
+) -> Mapping[tuple[str, ...], BuiltinKind]:
+    if module_path == ("std", "core"):
+        return _RESOURCE_BUILTINS
+    return exports.get(ModuleId(module_path), {})
+
+
+def _select_resource_paths(
+    declaration: ImportDecl | ExportDecl,
+    paths: Mapping[tuple[str, ...], BuiltinKind],
+) -> dict[tuple[str, ...], BuiltinKind]:
+    """Apply an import/export selection while retaining resource declaration identity."""
+
+    prefix = tuple(segment.name for segment in declaration.scope_path)
+    if declaration.mode is ImportMode.ALL:
+        return {(*prefix, *path): kind for path, kind in paths.items()}
+    if declaration.mode is ImportMode.HIDING:
+        hidden = {
+            (*tuple(segment.name for segment in item.scope_path), item.name)
+            for item in declaration.items
+        }
+        return {
+            (*prefix, *path): kind
+            for path, kind in paths.items()
+            if not any(path[: len(item)] == item for item in hidden)
+        }
+
+    selected: dict[tuple[str, ...], BuiltinKind] = {}
+    for item in declaration.items:
+        source = (*tuple(segment.name for segment in item.scope_path), item.name)
+        for path, kind in paths.items():
+            if path[: len(source)] != source:
+                continue
+            exposed = (item.rename or source[-1], *path[len(source) :])
+            selected[(*prefix, *exposed)] = kind
+    return selected
+
+
+def _resource_imports(
+    program: Program, exports: Mapping[ModuleId, _ResourcePaths]
+) -> dict[str, BuiltinKind]:
+    """Resolve bare resource builtin names introduced by imports in one module."""
+
+    names = {path[-1]: kind for path, kind in _RESOURCE_BUILTINS.items()}
+    for declaration in static_items(program.body.items):
+        if not isinstance(declaration, ImportDecl) or (
+            not declaration.is_open and declaration.mode is not ImportMode.USING
+        ):
+            continue
+        target = _resource_export_target(declaration.module_path, exports)
+        for path, kind in _select_resource_paths(declaration, target).items():
+            if len(path) == 1:
+                names[path[0]] = kind
+    return names
+
+
+def _resource_calls(program: Program, names: Mapping[str, BuiltinKind]) -> list[tuple[Call, bool]]:
+    """Return calls whose resolved imported name denotes a resource builtin."""
+
+    calls: list[tuple[Call, bool]] = []
+
+    def collect_resource_call(node: object) -> None:
+        if isinstance(node, Call) and isinstance(node.callee, VarRef):
+            kind = names.get(node.callee.name) if node.callee.qualifier is None else None
+            if kind in {BuiltinKind.RESOURCE, BuiltinKind.RESOURCE_DIR}:
+                calls.append((node, kind is BuiltinKind.RESOURCE_DIR))
+
+    walk(program, collect_resource_call)
+    return calls
 
 
 def _validate_package_name(name: str) -> None:

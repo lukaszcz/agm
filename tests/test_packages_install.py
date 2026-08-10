@@ -501,6 +501,23 @@ def test_shadowed_command_is_restored_when_the_winning_package_is_uninstalled(
     }
 
 
+def test_install_allocates_after_inactive_provenance_so_rebuild_stays_unambiguous(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    install_directory(_package(tmp_path / "alpha-one", "alpha", "1.0.0"), home=home, env={})
+    install_directory(_package(tmp_path / "alpha-two", "alpha", "2.0.0"), home=home, env={})
+    uninstall_package("alpha", home=home, env={})
+
+    install_directory(_package(tmp_path / "bravo", "bravo", "1.0.0"), home=home, env={})
+
+    index = load_activation_index(home=home, env={})
+    assert index.packages["bravo"].registration_order == 2
+    rebuilt = rebuild_activation_index(home=home, env={})
+    assert rebuilt.packages["alpha"].registration_order == 1
+    assert rebuilt.packages["bravo"].registration_order == 2
+
+
 def test_rebuild_after_index_loss_preserves_a_shadow_winner_installed_in_reverse_name_order(
     tmp_path: Path,
 ) -> None:

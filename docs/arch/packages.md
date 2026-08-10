@@ -47,7 +47,9 @@ A manifest `[commands]` table maps a single- or multi-word CLI path to a package
 `program def`. Activation rejects command conflicts unless the later installation uses
 `--shadow`; registry reconciliation applies the same provenance check to live editable manifests.
 Each invocation derives its effective registry from its selected package manifests, preserving
-global registration priority, so project pins affect dispatch, help, and completion.
+global registration priority, so project pins affect dispatch, help, and completion. New
+registrations advance beyond provenance retained by inactive immutable package versions, keeping
+later activation-index rebuilds unambiguous.
 When a built-in root command does not match, CLI dispatch resolves the longest registered path
 and runs its program through the same execution host as `agm exec`. Dispatch verifies the
 selected manifest and module ownership before executing it.

@@ -473,6 +473,7 @@ def _activate_package(
             env=state.env,
             transient_packages=state.transient_packages,
         )
+        registration_order = _next_registration_order(state.index, home=state.home, env=state.env)
     except PackageActivationError as exc:
         raise PackageInstallError(f"cannot register package commands: {exc}") from exc
     packages = dict(state.index.packages)
@@ -480,7 +481,7 @@ def _activate_package(
         package.manifest.version,
         editable=editable_root,
         shadow=shadow,
-        registration_order=_next_registration_order(state.index),
+        registration_order=registration_order,
     )
     state.index = ActivationIndex(packages, state.index.commands)
     state.index = merge_package_commands(state.index, package.manifest, shadow=shadow)
@@ -596,8 +597,22 @@ def _load_install_index(*, home: Path, env: Mapping[str, str] | None) -> Activat
         raise PackageInstallError(f"cannot load package activation: {exc}") from exc
 
 
-def _next_registration_order(index: ActivationIndex) -> int:
-    return max((package.registration_order for package in index.packages.values()), default=0) + 1
+def _next_registration_order(
+    index: ActivationIndex, *, home: Path, env: Mapping[str, str] | None
+) -> int:
+    """Allocate after active and retained immutable registration provenance."""
+
+    highest = max((package.registration_order for package in index.packages.values()), default=0)
+    for package in installed_packages(home=home, env=env):
+        provenance = load_package_provenance(
+            package.manifest.name,
+            package.manifest.version,
+            home=home,
+            env=env,
+        )
+        if provenance is not None:
+            highest = max(highest, provenance.registration_order)
+    return highest + 1
 
 
 def _commit_activation(

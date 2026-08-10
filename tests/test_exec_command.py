@@ -231,6 +231,18 @@ class TestExecCommandArgParsing:
         assert "agm exec" in result.output
         assert recorded_runs == []
 
+    def test_exec_help_before_file_discovers_file_params(
+        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
+    ) -> None:
+        agl_file = tmp_path / "test.agl"
+        write_file_program(agl_file, "param msg: text\n")
+
+        result = invoke(runner, ["exec", "--help", str(agl_file)])
+
+        assert result.exit_code == 0
+        assert "--msg" in result.output
+        assert recorded_runs == []
+
     def test_exec_param_before_file_is_usage_error(
         self, runner: CliRunner, recorded_runs: list[object]
     ) -> None:

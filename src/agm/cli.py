@@ -1184,8 +1184,13 @@ def exec_cmd(
     # - ``agm exec -h``      → Click assigns ``-h`` to ``file``
     # - ``agm exec FILE --help`` → FILE is correct; ``--help`` lands in ctx.args
     if file in ("--help", "-h") or "--help" in ctx.args or "-h" in ctx.args:
-        # When the help flag was misassigned to ``file``, treat ``file`` as absent.
-        effective_file = None if file in ("--help", "-h") else file
+        # When the help flag was misassigned to ``file``, recover a following
+        # FILE from the pass-through tokens so its parameters can still be shown.
+        effective_file = file
+        if file in ("--help", "-h"):
+            effective_file = next(
+                (token for token in ctx.args if token not in ("--help", "-h")), None
+            )
         _exec_print_help(
             file=effective_file,
             command=command,

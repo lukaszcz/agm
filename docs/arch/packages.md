@@ -19,7 +19,8 @@ derive that invocation's effective command registry. Package-root assembly mount
 the selected packages alongside ordinary module roots, while the module loader enforces that a
 package module imports only itself, its declared dependencies, and the selected standard
 library. A source file inside a development package similarly gives its package and local path
-dependency closure precedence for that invocation.
+dependency closure precedence for that invocation. Development discovery rejects distinct local
+roots with the same package identity, so mounted imports remain unambiguous.
 
 Installed package contents have a SHA-256 `RECORD`; archive creation and installation verify
 that content before publication. The shipped `std` package is a managed store package whose

@@ -95,3 +95,32 @@ def test_discovery_uses_path_dependencies_recursively_and_ignores_unavailable_so
     packages = discover_development_packages(alpha / "alpha" / "main.agl")
 
     assert tuple(package.manifest.name for package in packages) == ("alpha", "bravo")
+
+
+def test_discovery_rejects_different_roots_with_the_same_package_identity(tmp_path: Path) -> None:
+    alpha = tmp_path / "alpha"
+    left = tmp_path / "left"
+    right = tmp_path / "right"
+    shared_one = tmp_path / "shared-one"
+    shared_two = tmp_path / "shared-two"
+    _write_package(
+        alpha,
+        "alpha",
+        '\n[dependencies]\nleft = { version = "1", path = "../left" }\n'
+        'right = { version = "1", path = "../right" }\n',
+    )
+    _write_package(
+        left,
+        "left",
+        '\n[dependencies]\nshared = { version = "1", path = "../shared-one" }\n',
+    )
+    _write_package(
+        right,
+        "right",
+        '\n[dependencies]\nshared = { version = "1", path = "../shared-two" }\n',
+    )
+    _write_package(shared_one, "shared")
+    _write_package(shared_two, "shared")
+
+    with pytest.raises(ValueError, match="shared"):
+        discover_development_packages(alpha / "alpha" / "main.agl")

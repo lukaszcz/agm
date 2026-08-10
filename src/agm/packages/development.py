@@ -24,6 +24,7 @@ def discover_development_packages(anchor: Path) -> tuple[PackageInfo, ...]:
         return ()
 
     packages: dict[Path, PackageInfo] = {}
+    roots_by_name: dict[str, Path] = {}
 
     def add(root: Path) -> None:
         canonical_root = root.resolve()
@@ -31,6 +32,12 @@ def discover_development_packages(anchor: Path) -> tuple[PackageInfo, ...]:
             return
         manifest = load_manifest(canonical_root / "package.toml")
         package = PackageInfo(canonical_root, manifest)
+        previous_root = roots_by_name.setdefault(manifest.name, canonical_root)
+        if previous_root != canonical_root:
+            raise ValueError(
+                f"development dependencies resolve package {manifest.name!r} "
+                f"from both {previous_root} and {canonical_root}"
+            )
         packages[canonical_root] = package
         for dependency in manifest.dependencies.values():
             if dependency.path is None:

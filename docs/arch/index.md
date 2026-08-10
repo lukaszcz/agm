@@ -6,7 +6,7 @@ Start here for the system shape, then read only the subsystem documents relevant
 
 ## System Shape
 
-AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-contained subsystem hanging off two commands (`agm exec`, `agm repl`):
+AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-contained subsystem used by `agm exec`, `agm repl`, package discipline validation, and registered package commands:
 
 - **CLI layer** — a Typer command tree whose directory structure mirrors the command tree exactly. It parses arguments into typed containers and dispatches to command implementations.
 - **Command layer** — one module per command/command-group; each orchestrates domain logic but holds little of its own.
@@ -21,7 +21,7 @@ AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-c
 - **Configuration is layered TOML.** Settings merge across install, home, project, and workspace scopes; per-command sections override base sections; AgL source engine-setting writes and CLI flags override the file layers for the relevant commands.
 - **The filesystem is the project model.** A project is a directory layout (embedded or split) plus git worktrees and dependency checkouts. AGM detects state from disk rather than maintaining a separate database.
 - **Real agents are never run in tests, and never assumed.** Agent invocation is a subprocess boundary with timeout and output capture; runners are resolved from config and always have a default floor.
-- **AgL is firewalled, not isolated.** The firewall is semantic: its passes depend only on a stable AST, never on the parser, and it is reached only through the `exec`/`repl` commands and lazily imported. It still reuses the shared layers below it rather than reimplementing them.
+- **AgL is firewalled, not isolated.** The firewall is semantic: its passes depend only on a stable AST, never on the parser, and its public execution façade is lazily imported by its CLI and package-domain callers. It still reuses the shared layers below it rather than reimplementing them.
 
 ## What To Read Next
 

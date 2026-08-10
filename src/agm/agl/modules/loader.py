@@ -150,7 +150,12 @@ class ModuleGraph:
         if path is None:
             return None
         package = owning_package(path, self.roots.packages)
-        return package.root if package is not None else path.parent
+        if package is not None:
+            return package.root
+        return next(
+            (root for root in self.roots.stdlib_roots if path.resolve().is_relative_to(root)),
+            path.parent,
+        )
 
 
 # ---------------------------------------------------------------------------

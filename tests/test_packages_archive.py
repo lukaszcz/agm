@@ -1160,6 +1160,8 @@ def test_archive_limit_preflight_ignores_invalid_end_records(tmp_path: Path) -> 
     package_archive._validate_central_directory_limits(archive_path)
     archive_path.write_bytes(b"not a ZIP")
     package_archive._validate_central_directory_limits(archive_path)
+    archive_path.write_bytes(b"PK\x05\x06")
+    package_archive._validate_central_directory_limits(archive_path)
 
 
 def test_archive_entry_limit_is_checked_before_zipfile_loads_the_directory(

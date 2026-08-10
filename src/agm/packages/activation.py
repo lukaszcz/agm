@@ -291,7 +291,17 @@ def rebuild_activation_index(
                     f"installed package at {version_dir} does not match its store identity"
                 )
             selected = active.get(manifest.name)
-            if selected is None or manifest.version > selected.version:
+            previous_selection = previous.packages.get(manifest.name)
+            if (
+                selected is None
+                or manifest.version > selected.version
+                or (
+                    manifest.version == selected.version
+                    and previous_selection is not None
+                    and previous_selection.editable is None
+                    and str(manifest.version) == str(previous_selection.version)
+                )
+            ):
                 active[manifest.name] = ActivePackage(manifest.version)
 
     provenance = {

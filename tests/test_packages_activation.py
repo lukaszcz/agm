@@ -585,6 +585,22 @@ def test_rebuild_index_selects_latest_installed_manifest_per_package(tmp_path: P
     assert load_activation_index(home=home, env=env) == rebuilt
 
 
+def test_rebuild_preserves_active_equal_precedence_build(tmp_path: Path) -> None:
+    home = tmp_path / "agm-home"
+    _write_package(home, "alpha", "1.0.0+linux")
+    _write_package(home, "alpha", "1.0.0+macos")
+    env = {"AGM_HOME": str(home)}
+    write_activation_index(
+        ActivationIndex({"alpha": ActivePackage(semver.Version.parse("1.0.0+macos"))}),
+        home=home,
+        env=env,
+    )
+
+    rebuilt = rebuild_activation_index(home=home, env=env)
+
+    assert str(rebuilt.packages["alpha"].version) == "1.0.0+macos"
+
+
 def test_project_pin_overrides_the_global_active_version(tmp_path: Path) -> None:
     home = tmp_path / "agm-home"
     one = _write_package(home, "alpha", "1.0.0")

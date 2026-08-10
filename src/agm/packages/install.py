@@ -670,8 +670,14 @@ def _installed_satisfying(
             ) from exc
         return selected if selected.manifest.version >= requirement.version else None
     selected, verify_selected = candidates[0]
+    active = state.index.packages.get(name)
     for candidate, verify_candidate in candidates[1:]:
-        if candidate.manifest.version > selected.manifest.version:
+        if candidate.manifest.version > selected.manifest.version or (
+            candidate.manifest.version == selected.manifest.version
+            and active is not None
+            and active.editable is None
+            and str(candidate.manifest.version) == str(active.version)
+        ):
             selected = candidate
             verify_selected = verify_candidate
     if verify_selected:

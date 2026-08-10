@@ -10,7 +10,7 @@ keywords = ["review", "workflow"]
 [dependencies]
 std = "0.1"
 judge = { version = "0.1", path = "../judge" }
-tools = { version = "1.1", url = "https://example.test/tools.agmpkg", hash = "sha256:abc123" }
+tools = { version = "1.1", url = "https://example.test/tools.agmpkg", hash = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
 
 [commands]
 review-loop = { program = "review_tools/review::main", description = "Run the review loop" }

@@ -33,7 +33,7 @@ version = "1.0.0"
 
 [dependencies]
 bravo = { version = "2", path = "../bravo" }
-charlie = { version = "3", url = "https://example.test/charlie.agmpkg", hash = "sha256:abc" }
+charlie = { version = "3", url = "https://example.test/charlie.agmpkg", hash = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
 """,
             )
         )
@@ -56,7 +56,7 @@ charlie = { version = "3", url = "https://example.test/charlie.agmpkg", hash = "
         assert manifest.dependencies["std"].version == semver.Version.parse("0.1.0")
         assert manifest.dependencies["judge"].path == "../judge"
         assert manifest.dependencies["tools"].url == "https://example.test/tools.agmpkg"
-        assert manifest.dependencies["tools"].hash == "sha256:abc123"
+        assert manifest.dependencies["tools"].hash == "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         assert manifest.commands["review-loop"].program == "review_tools/review::main"
         assert manifest.commands["review-loop lint"].description == "Lint review configurations"
 
@@ -111,7 +111,10 @@ charlie = { version = "3", url = "https://example.test/charlie.agmpkg", hash = "
         (
             ('std = "0.4"', "0.4.0"),
             ('judge = { version = "0.1", path = "../judge" }', "0.1.0"),
-            (f'tools = {{ version = "1.1", url = "{URL}", hash = "sha256:abc" }}', "1.1.0"),
+            (
+                f'tools = {{ version = "1.1", url = "{URL}", hash = "sha256:{"a" * 64}" }}',
+                "1.1.0",
+            ),
         ),
     )
     def test_accepts_dependency_source_shapes(

@@ -144,7 +144,18 @@ def _dependency_table(name: str, raw: TomlDict) -> DependencySpec:
         raise ManifestError(f"URL dependency {name!r} requires a hash")
     if content_hash is not None and url is None:
         raise ManifestError(f"dependency {name!r} hash requires a URL source")
+    if content_hash is not None and not _is_sha256_hash(content_hash):
+        raise ManifestError(f"URL dependency {name!r} hash must be a SHA-256 digest")
     return DependencySpec(version, path=path, url=url, hash=content_hash)
+
+
+def _is_sha256_hash(value: str) -> bool:
+    prefixes = ("sha256=", "sha256:", "sha256-")
+    prefix = next((candidate for candidate in prefixes if value.startswith(candidate)), None)
+    if prefix is None:
+        return False
+    digest = value[len(prefix) :]
+    return len(digest) == 64 and all(character in "0123456789abcdefABCDEF" for character in digest)
 
 
 def _commands(raw: TomlDict) -> dict[str, CommandSpec]:

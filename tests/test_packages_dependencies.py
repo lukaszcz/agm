@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -134,6 +135,20 @@ def test_dependency_check_rejects_cyclic_missing_and_mismatched_path_sources(
     with pytest.raises(DependencyError, match="bravo"):
         validate_dependencies(mismatched, home=tmp_path / "home", env={})
     assert wrong.root.is_dir()
+
+
+def test_dependency_check_validates_path_dependency_discipline(tmp_path: Path) -> None:
+    bravo = _package(tmp_path / "bravo", "bravo", "1.0.0")
+    shutil.rmtree(bravo.root / "bravo")
+    alpha = _package(
+        tmp_path / "alpha",
+        "alpha",
+        "1.0.0",
+        '\n[dependencies]\nbravo = { version = "1", path = "../bravo" }\n',
+    )
+
+    with pytest.raises(DependencyError):
+        validate_dependencies(alpha, home=tmp_path / "home", env={})
 
 
 def test_dependency_check_selects_the_highest_satisfying_store_version(tmp_path: Path) -> None:

@@ -429,12 +429,15 @@ class TestPackageDiscipline:
 
         validate_package(package)
 
-    def test_accepts_resource_alias_shadowed_by_a_local_binding(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("binding", ("let", "var"))
+    def test_accepts_resource_alias_shadowed_by_a_local_binding(
+        self, tmp_path: Path, binding: str
+    ) -> None:
         package = _custom_package(tmp_path)
         (package.module_root / "main.agl").write_text(
             "import std/core using resource as asset\n"
             "program def main() -> text =\n"
-            "  let asset = fn(path: text) => path\n"
+            f"  {binding} asset = fn(path: text) => path\n"
             '  asset("not/a/resource")\n'
         )
 

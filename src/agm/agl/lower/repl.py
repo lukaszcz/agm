@@ -317,10 +317,8 @@ def _declaration_dependencies(
             item.name,
             scope_path=tuple(segment.name for segment in item.scope_path),
         )
-        if alias_template is not None:
-            dependencies.update(
-                _nominal_dependencies(alias_template.template, nominal_declaration_ids)
-            )
+        assert alias_template is not None, f"compiler bug: no type alias for {item.name!r}"
+        dependencies.update(_nominal_dependencies(alias_template.template, nominal_declaration_ids))
     return frozenset(dependencies), frozenset(imported_modules)
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import errno
 import shutil
-from collections.abc import Generator, Iterator
+from collections.abc import Generator, Iterable, Iterator
 from pathlib import Path
 
 import pytest
@@ -33,6 +33,7 @@ from agm.packages.install import (
     refresh_managed_stdlib,
     uninstall_package,
 )
+from agm.packages.model import PackageInfo
 from agm.packages.record import verify_record, write_record
 from agm.version import AGM_VERSION
 
@@ -1971,6 +1972,32 @@ def test_dry_run_archive_install_validates_imports_with_resolved_dependencies(
 
     assert not (home / ".agm" / "packages" / "alpha").exists()
     assert (home / ".agm" / "packages" / "index.toml").read_bytes() == activation
+
+
+def test_dry_run_archive_install_rejects_an_archive_changed_during_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    archive = tmp_path / "alpha.agmpkg"
+    write_archive(source, archive)
+    original_verify = package_install.verify_archive_discipline
+    calls = 0
+
+    def changing_verify(
+        archive_path: Path, *, dependency_packages: Iterable[PackageInfo] = ()
+    ) -> package_archive.ArchiveMetadata:
+        nonlocal calls
+        metadata = original_verify(archive_path, dependency_packages=dependency_packages)
+        calls += 1
+        if calls == 2:
+            return package_archive.ArchiveMetadata(metadata.manifest, "0" * 64)
+        return metadata
+
+    monkeypatch.setattr(package_install, "verify_archive_discipline", changing_verify)
+    dry_run.set_enabled(True)
+
+    with pytest.raises(PackageInstallError):
+        install_archive(archive, home=tmp_path / "home", env={})
 
 
 def test_dry_run_archive_install_rejects_a_missing_module_tree_without_writing(

@@ -41,6 +41,7 @@ _CACHE_DIRECTORIES = frozenset(
 _ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 _FILE_MODE = 0o100644
 _UTF8_FLAG = 0x800
+_ZIP64_LOCATOR_SIGNATURE = b"PK\x06\x07"
 _HASH_CHUNK_SIZE = 1024 * 1024
 _DIR_FD_PUBLICATION_OPERATIONS = (os.open, os.rename, os.unlink, os.link)
 
@@ -441,11 +442,11 @@ def _read_archive(archive_path: Path, operation: Callable[[zipfile.ZipFile], T])
 
 
 def _validate_central_directory_limits(archive: IO[bytes]) -> None:
-    """Reject oversized ZIP directories before :mod:`zipfile` reads them into memory."""
+    """Reject ZIP64 and oversized directories before :mod:`zipfile` reads them."""
 
     archive.seek(0, os.SEEK_END)
     file_size = archive.tell()
-    tail_size = min(file_size, 65_557)
+    tail_size = min(file_size, 65_577)
     archive.seek(-tail_size, os.SEEK_END)
     tail = archive.read(tail_size)
     signature = b"PK\x05\x06"
@@ -456,6 +457,8 @@ def _validate_central_directory_limits(archive: IO[bytes]) -> None:
             directory_size = int.from_bytes(tail[offset + 12 : offset + 16], "little")
             comment_size = int.from_bytes(tail[offset + 20 : offset + 22], "little")
             if offset + 22 + comment_size == len(tail):
+                if tail[offset - 20 : offset - 16] == _ZIP64_LOCATOR_SIGNATURE:
+                    raise ArchiveError("ZIP64 package archives are not supported")
                 if entries == 0xFFFF or entries > MAX_ARCHIVE_ENTRIES:
                     raise ArchiveError("package archive exceeds the entries limit")
                 if directory_size > MAX_ARCHIVE_CENTRAL_DIRECTORY_SIZE:

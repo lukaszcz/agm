@@ -1161,6 +1161,46 @@ def test_archive_limit_preflight_ignores_invalid_end_records(tmp_path: Path) -> 
             package_archive._validate_central_directory_limits(archive)
 
 
+def test_archive_preflight_rejects_zip64_before_zipfile_loads_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _package_tree(tmp_path)
+    archive_path = tmp_path / "package.agmpkg"
+    write_archive(root, archive_path)
+    raw = archive_path.read_bytes()
+    end_offset = raw.rindex(b"PK\x05\x06")
+    entries = int.from_bytes(raw[end_offset + 10 : end_offset + 12], "little")
+    directory_size = int.from_bytes(raw[end_offset + 12 : end_offset + 16], "little")
+    directory_offset = int.from_bytes(raw[end_offset + 16 : end_offset + 20], "little")
+    zip64_end = b"".join(
+        (
+            b"PK\x06\x06",
+            (44).to_bytes(8, "little"),
+            (45).to_bytes(2, "little") * 2,
+            (0).to_bytes(4, "little") * 2,
+            entries.to_bytes(8, "little") * 2,
+            directory_size.to_bytes(8, "little"),
+            directory_offset.to_bytes(8, "little"),
+        )
+    )
+    zip64_locator = b"".join(
+        (
+            b"PK\x06\x07",
+            (0).to_bytes(4, "little"),
+            end_offset.to_bytes(8, "little"),
+            (1).to_bytes(4, "little"),
+        )
+    )
+    archive_path.write_bytes(raw[:end_offset] + zip64_end + zip64_locator + raw[end_offset:])
+
+    def fail_open(*_: object, **__: object) -> zipfile.ZipFile:
+        pytest.fail("ZIP64 must be rejected before loading the central directory")
+
+    monkeypatch.setattr(zipfile, "ZipFile", fail_open)
+    with pytest.raises(ArchiveError):
+        read_archive_metadata(archive_path)
+
+
 def test_archive_metadata_preflight_and_zip_parsing_share_one_open_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -33,7 +33,7 @@ when it does not declare an entry itself.
 
 - the directory of `FILE` (or the working directory for `-c`),
 - when that directory is inside a development package, its containing package and the recursive closure of dependencies declared with relative `path` sources in their manifests,
-- the selected standard library: the active immutable `<AGM-home>/packages/std/<AGM_VERSION>/` package when it matches the running binary, otherwise AGM's bundled fallback (`agm/stdlib` in an installed wheel or the in-repo `stdlib/` tree in a source checkout); `AGM_STDLIB` overrides this selection without mounting the active package as an additional root,
+- the selected standard library: the active immutable `<AGM-home>/packages/std/<AGM_VERSION>/` package when it matches the running binary; a selected active package with a different version is an error, while AGM's bundled copy (`agm/stdlib` in an installed wheel or the in-repo `stdlib/` tree in a source checkout) is used when no active package is selected or the matching store tree is absent; `AGM_STDLIB` overrides this selection without mounting the active package as an additional root,
 - the selected AGM home's global `lib` directory (overridable via `[modules] lib_root` in config),
 - any roots declared under `[modules] roots` in any config layer,
 - any roots added with `-I`/`--module-path`.

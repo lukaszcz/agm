@@ -228,6 +228,29 @@ def test_package_validation_rejects_missing_resource_through_an_ancestor_scoped_
         validate_package(package)
 
 
+def test_scoped_function_blocks_scoped_resource_alias_during_nested_lookup(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "package"
+    module_root = root / "package"
+    module_root.mkdir(parents=True)
+    (module_root / "main.agl").write_text(
+        "import std/core using resource as asset\n"
+        "scope Assets\n"
+        "import std/core using resource as asset\n"
+        "def asset(path: text) -> text = path\n"
+        "scope Templates\n"
+        'let prompt = asset("prompts/missing.md")\n'
+        "end Templates\n"
+        "end Assets\n"
+        "program def main() -> unit = ()\n",
+        encoding="utf-8",
+    )
+    package = PackageInfo(root, PackageManifest("package", semver.Version.parse("1.0.0")))
+
+    validate_package(package)
+
+
 def test_package_validation_rejects_missing_resource_through_a_scoped_import_route(
     tmp_path: Path,
 ) -> None:

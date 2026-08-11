@@ -34,6 +34,7 @@ from agm.util.ident import is_identifier
 
 T = TypeVar("T")
 _ResourcePaths = dict[tuple[str, ...], BuiltinKind]
+_ResourceBindings = dict[tuple[str, ...], BuiltinKind | None]
 
 
 class DisciplineError(ValueError):
@@ -222,10 +223,10 @@ def _select_resource_paths(
 
 def _resource_imports(
     program: Program, exports: Mapping[ModuleId, _ResourcePaths]
-) -> _ResourcePaths:
+) -> _ResourceBindings:
     """Resolve the visible paths that identify standard resource declarations."""
 
-    paths = dict(_RESOURCE_BUILTINS)
+    paths: _ResourceBindings = dict(_RESOURCE_BUILTINS)
     for declaration in static_items(program.body.items):
         if not isinstance(declaration, ImportDecl):
             continue
@@ -251,13 +252,13 @@ def _resource_imports(
                 )
 
     for function in static_function_items(program.body.items):
-        if not function.scope_path:
-            paths.pop((function.name,), None)
+        declaration_path = tuple(segment.name for segment in function.scope_path) + (function.name,)
+        paths[declaration_path] = None
     return paths
 
 
 def _resource_calls(
-    program: Program, paths: Mapping[tuple[str, ...], BuiltinKind]
+    program: Program, paths: Mapping[tuple[str, ...], BuiltinKind | None]
 ) -> list[tuple[Call, bool]]:
     """Return calls whose resolved declaration denotes a resource builtin."""
 
@@ -280,7 +281,7 @@ def _resource_calls(
             (*route, *scope_path[:index], node.callee.name)
             for index in range(len(scope_path), -1, -1)
         )
-        kind = next((paths.get(path) for path in callee_paths if paths.get(path) is not None), None)
+        kind = next((paths[path] for path in callee_paths if path in paths), None)
         if kind in {BuiltinKind.RESOURCE, BuiltinKind.RESOURCE_DIR}:
             calls.append((node, kind is BuiltinKind.RESOURCE_DIR))
 

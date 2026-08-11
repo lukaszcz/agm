@@ -413,6 +413,16 @@ class TestResolveStdlibRoot:
 
         assert resolve_stdlib_root(home=home, env={}) == _REPO_ROOT / "stdlib"
 
+    def test_missing_shipped_stdlib_fails_cleanly(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        locator = tmp_path / "site-packages" / "agm" / "stdlib_locator.py"
+        locator.parent.mkdir(parents=True)
+        monkeypatch.setattr(stdlib_locator, "__file__", str(locator))
+
+        with pytest.raises(StdlibResolutionError, match="shipped"):
+            resolve_stdlib_root(home=tmp_path / "home", env={})
+
     def test_clean_wheel_context_falls_back_to_bundled_stdlib(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

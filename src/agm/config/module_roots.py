@@ -209,4 +209,7 @@ def resolve_stdlib_root(*, home: Path, env: Mapping[str, str] | None = None) -> 
                 ) from exc
             return store_stdlib
 
-    return shipped_stdlib_root()
+    shipped = shipped_stdlib_root()
+    if not shipped.is_dir():
+        raise StdlibResolutionError(f"shipped standard library is missing at {shipped}")
+    return shipped

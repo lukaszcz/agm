@@ -657,10 +657,16 @@ def command_shadow_diagnostics(
     *,
     home: Path,
     env: Mapping[str, str] | None = None,
+    transient_packages: Mapping[str, PackageInfo] | None = None,
 ) -> dict[str, tuple[CommandShadow, ...]]:
     """Return active winners and the package owners each one shadows."""
 
-    packages = _packages_from_index(index, home=home, env=env)
+    packages = _packages_from_index(
+        index,
+        home=home,
+        env=env,
+        transient_packages=transient_packages,
+    )
     by_path = _command_owners(packages)
     diagnostics: dict[str, list[CommandShadow]] = {}
     for path_name, owners in by_path.items():

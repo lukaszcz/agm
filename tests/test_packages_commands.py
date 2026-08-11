@@ -21,15 +21,17 @@ from agm.cli_support.args import (
     PkgUninstallArgs,
 )
 from agm.config.context import ConfigContext
+from agm.core import dry_run
 from agm.packages.activation import (
     ActivationIndex,
     ActivePackage,
     CommandRegistration,
     CommandShadow,
     PackageActivationError,
+    load_activation_index,
 )
 from agm.packages.archive import ArchiveError
-from agm.packages.install import PackageInstallError
+from agm.packages.install import PackageInstallError, PackageInstallPlan, install_directory
 from agm.packages.manifest import CommandSpec, DependencySpec, PackageManifest
 from agm.packages.model import PackageInfo
 from agm.packages.record import write_record
@@ -49,6 +51,14 @@ def _package(tmp_path: Path, name: str = "alpha") -> PackageInfo:
         encoding="utf-8",
     )
     return PackageInfo(root, manifest)
+
+
+def _install_plan(package: PackageInfo) -> PackageInstallPlan:
+    return PackageInstallPlan(
+        package,
+        ActivationIndex(),
+        {package.manifest.name: package},
+    )
 
 
 def test_create_command_validates_and_writes_the_default_archive_beside_its_package(
@@ -112,7 +122,11 @@ def test_install_command_delegates_and_renders_result(
 ) -> None:
     package = _package(tmp_path)
     monkeypatch.setattr(install_command, "current_config_context", lambda: _context(tmp_path))
-    monkeypatch.setattr(install_command, "install_directory", lambda *args, **kwargs: package)
+    monkeypatch.setattr(
+        install_command,
+        "install_directory_with_plan",
+        lambda *args, **kwargs: _install_plan(package),
+    )
 
     install_command.run(PkgInstallArgs("source", editable=False, shadow=False))
 
@@ -126,7 +140,11 @@ def test_install_command_routes_an_archive_to_the_archive_installer(
     archive.write_bytes(b"archive")
     package = _package(tmp_path)
     monkeypatch.setattr(install_command, "current_config_context", lambda: _context(tmp_path))
-    monkeypatch.setattr(install_command, "install_archive", lambda *args, **kwargs: package)
+    monkeypatch.setattr(
+        install_command,
+        "install_archive_with_plan",
+        lambda *args, **kwargs: _install_plan(package),
+    )
 
     install_command.run(PkgInstallArgs(str(archive), editable=False, shadow=True))
 
@@ -136,12 +154,16 @@ def test_shadow_install_reports_unavailable_shadow_diagnostics(
 ) -> None:
     package = _package(tmp_path)
     monkeypatch.setattr(install_command, "current_config_context", lambda: _context(tmp_path))
-    monkeypatch.setattr(install_command, "install_directory", lambda *args, **kwargs: package)
+    monkeypatch.setattr(
+        install_command,
+        "install_directory_with_plan",
+        lambda *args, **kwargs: _install_plan(package),
+    )
 
-    def fail_index(**_: object) -> ActivationIndex:
+    def fail_diagnostics(*_: object, **__: object) -> dict[str, tuple[CommandShadow, ...]]:
         raise PackageActivationError("broken")
 
-    monkeypatch.setattr(install_command, "load_activation_index", fail_index)
+    monkeypatch.setattr(install_command, "command_shadow_diagnostics", fail_diagnostics)
     with pytest.raises(SystemExit):
         install_command.run(PkgInstallArgs("source", editable=False, shadow=True))
 
@@ -151,8 +173,11 @@ def test_shadow_install_renders_displaced_command_owners(
 ) -> None:
     package = _package(tmp_path)
     monkeypatch.setattr(install_command, "current_config_context", lambda: _context(tmp_path))
-    monkeypatch.setattr(install_command, "install_directory", lambda *args, **kwargs: package)
-    monkeypatch.setattr(install_command, "load_activation_index", lambda **_: ActivationIndex())
+    monkeypatch.setattr(
+        install_command,
+        "install_directory_with_plan",
+        lambda *args, **kwargs: _install_plan(package),
+    )
     monkeypatch.setattr(
         install_command,
         "command_shadow_diagnostics",
@@ -164,6 +189,34 @@ def test_shadow_install_renders_displaced_command_owners(
     assert "shadowed command launch from bravo" in capsys.readouterr().out
 
 
+def test_dry_run_shadow_install_reports_the_planned_displacement_without_changing_activation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    context = _context(tmp_path)
+
+    def command_package(name: str) -> Path:
+        root = tmp_path / name
+        (root / name).mkdir(parents=True)
+        (root / "package.toml").write_text(
+            f'[package]\nname = "{name}"\nversion = "1.0.0"\n\n'
+            f'[commands]\nlaunch = {{ program = "{name}/main::main" }}\n',
+            encoding="utf-8",
+        )
+        (root / name / "main.agl").write_text("program def main() -> unit = ()\n", encoding="utf-8")
+        return root
+
+    install_directory(command_package("alpha"), home=context.home)
+    persisted = load_activation_index(home=context.home)
+    candidate = command_package("bravo")
+    monkeypatch.setattr(install_command, "current_config_context", lambda: context)
+    dry_run.set_enabled(True)
+
+    install_command.run(PkgInstallArgs(str(candidate), editable=False, shadow=True))
+
+    assert "shadowed command launch from alpha" in capsys.readouterr().out
+    assert load_activation_index(home=context.home) == persisted
+
+
 def test_install_command_reports_domain_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -172,7 +225,7 @@ def test_install_command_reports_domain_error(
     def fail(*_: object, **__: object) -> PackageInfo:
         raise PackageInstallError("bad package")
 
-    monkeypatch.setattr(install_command, "install_directory", fail)
+    monkeypatch.setattr(install_command, "install_directory_with_plan", fail)
     with pytest.raises(SystemExit):
         install_command.run(PkgInstallArgs("source", editable=True, shadow=False))
 

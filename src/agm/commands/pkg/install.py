@@ -7,12 +7,12 @@ from pathlib import Path
 
 from agm.cli_support.args import PkgInstallArgs
 from agm.config.context import current_config_context
-from agm.packages.activation import (
-    PackageActivationError,
-    command_shadow_diagnostics,
-    load_activation_index,
+from agm.packages.activation import PackageActivationError, command_shadow_diagnostics
+from agm.packages.install import (
+    PackageInstallError,
+    install_archive_with_plan,
+    install_directory_with_plan,
 )
-from agm.packages.install import PackageInstallError, install_archive, install_directory
 
 
 def run(args: PkgInstallArgs) -> None:
@@ -22,9 +22,13 @@ def run(args: PkgInstallArgs) -> None:
     try:
         source = Path(args.source)
         if source.is_file() and not args.editable:
-            package = install_archive(source, home=context.home, shadow=args.shadow)
+            plan = install_archive_with_plan(
+                source,
+                home=context.home,
+                shadow=args.shadow,
+            )
         else:
-            package = install_directory(
+            plan = install_directory_with_plan(
                 source,
                 home=context.home,
                 editable=args.editable,
@@ -33,14 +37,16 @@ def run(args: PkgInstallArgs) -> None:
     except PackageInstallError as exc:
         print(f"pkg install: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
+    package = plan.package
     kind = "editable" if args.editable else "installed"
     print(f"{kind} {package.manifest.name} {package.manifest.version}")
     if args.shadow:
         try:
-            index = load_activation_index(home=context.home)
-            shadows = command_shadow_diagnostics(index, home=context.home).get(
-                package.manifest.name, ()
-            )
+            shadows = command_shadow_diagnostics(
+                plan.activation_index,
+                home=context.home,
+                transient_packages=plan.transient_packages,
+            ).get(package.manifest.name, ())
         except PackageActivationError as exc:
             print(f"pkg install: cannot report command shadows: {exc}", file=sys.stderr)
             raise SystemExit(1) from exc

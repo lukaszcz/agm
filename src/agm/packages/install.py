@@ -54,6 +54,15 @@ class PackageInstallError(ValueError):
     """Raised when package installation or removal cannot safely proceed."""
 
 
+@dataclass(frozen=True, slots=True)
+class PackageInstallPlan:
+    """An installed package and the complete activation selected for it."""
+
+    package: PackageInfo
+    activation_index: ActivationIndex
+    transient_packages: Mapping[str, PackageInfo]
+
+
 @contextmanager
 def _package_operation_lock(*, home: Path, env: Mapping[str, str] | None) -> Iterator[None]:
     """Serialize package-store mutations through a persistent advisory lock."""
@@ -123,11 +132,30 @@ def install_directory(
     is fetched, hash-verified, and installed.
     """
 
+    return install_directory_with_plan(
+        source,
+        home=home,
+        env=env,
+        editable=editable,
+        shadow=shadow,
+    ).package
+
+
+def install_directory_with_plan(
+    source: Path,
+    *,
+    home: Path,
+    env: Mapping[str, str] | None = None,
+    editable: bool = False,
+    shadow: bool = False,
+) -> PackageInstallPlan:
+    """Install a directory package and return its resulting activation plan."""
+
     with _package_operation_lock(home=home, env=env):
         state = _InstallState(home=home, env=env, index=_load_install_index(home=home, env=env))
         try:
             package = _install_directory(source, state=state, editable=editable, shadow=shadow)
-            _commit_activation(
+            state.index = _commit_activation(
                 state.index,
                 home=home,
                 env=env,
@@ -136,7 +164,7 @@ def install_directory(
         except PackageInstallError:
             _rollback_created_trees(state)
             raise
-        return package
+        return PackageInstallPlan(package, state.index, dict(state.transient_packages))
 
 
 def refresh_managed_stdlib(
@@ -217,11 +245,23 @@ def install_archive(
 ) -> PackageInfo:
     """Verify, atomically extract, and activate a portable package archive."""
 
+    return install_archive_with_plan(archive, home=home, env=env, shadow=shadow).package
+
+
+def install_archive_with_plan(
+    archive: Path,
+    *,
+    home: Path,
+    env: Mapping[str, str] | None = None,
+    shadow: bool = False,
+) -> PackageInstallPlan:
+    """Install a portable package archive and return its resulting activation plan."""
+
     with _package_operation_lock(home=home, env=env):
         state = _InstallState(home=home, env=env, index=_load_install_index(home=home, env=env))
         try:
             package = _install_archive(archive, state=state, shadow=shadow)
-            _commit_activation(
+            state.index = _commit_activation(
                 state.index,
                 home=home,
                 env=env,
@@ -230,7 +270,7 @@ def install_archive(
         except PackageInstallError:
             _rollback_created_trees(state)
             raise
-        return package
+        return PackageInstallPlan(package, state.index, dict(state.transient_packages))
 
 
 def uninstall_package(name: str, *, home: Path, env: Mapping[str, str] | None = None) -> None:
@@ -812,7 +852,7 @@ def _commit_activation(
     home: Path,
     env: Mapping[str, str] | None,
     transient_packages: Mapping[str, PackageInfo] | None = None,
-) -> None:
+) -> ActivationIndex:
     """Validate and atomically publish a complete activation selection."""
 
     try:
@@ -839,6 +879,7 @@ def _commit_activation(
         except PackageActivationError:
             _restore_package_provenance(provenance)
             raise
+        return reconciled
     except PackageActivationError as exc:
         raise PackageInstallError(f"cannot write package activation: {exc}") from exc
 

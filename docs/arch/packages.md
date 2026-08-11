@@ -35,6 +35,9 @@ symlink. Development discovery validates each path source against its named depe
 version, and rejects distinct local roots with the same package identity, so mounted imports remain
 unambiguous.
 
+Dry-run installs retain their transient activation plan for command diagnostics while leaving the
+persisted index unchanged.
+
 Installed package contents have a SHA-256 `RECORD`. Archive readers bind metadata-limit
 preflight, ZIP parsing, verification, and extraction to one opened file. Immutable directory installs
 stage beside the final store path, revalidate the copied manifest, package discipline, and `RECORD`,

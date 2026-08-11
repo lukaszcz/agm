@@ -297,6 +297,8 @@ def _uninstall_package(name: str, *, home: Path, env: Mapping[str, str] | None =
             _remove_package_provenance(name, active.version, home=home, env=env)
         return
 
+    if tombstone.exists():
+        _finish_uninstall(name, tombstone, home=home, env=env)
     try:
         root.replace(tombstone)
     except OSError as exc:

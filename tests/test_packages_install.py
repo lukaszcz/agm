@@ -611,6 +611,51 @@ def test_partial_uninstall_cleanup_is_hidden_and_retryable(
     assert "alpha" not in load_activation_index(home=home, env={}).packages
 
 
+def test_uninstall_cleans_an_interrupted_tombstone_after_a_different_reinstall(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    first = install_directory(_package(tmp_path / "first", "alpha", "1.0.0"), home=home, env={})
+    tombstone = first.root.parent / ".uninstalling"
+    old_provenance = first.root.parent / ".provenance" / "1.0.0.toml"
+    original_unlink = package_install.fs.unlink
+    interrupted = False
+
+    def interrupt_cleanup(path: Path, *, missing_ok: bool = False) -> None:
+        nonlocal interrupted
+        if path == old_provenance and not interrupted:
+            interrupted = True
+            raise KeyboardInterrupt
+        original_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(package_install.fs, "unlink", interrupt_cleanup)
+    with pytest.raises(KeyboardInterrupt):
+        uninstall_package("alpha", home=home, env={})
+
+    assert interrupted
+    assert tombstone.is_dir()
+    assert old_provenance.is_file()
+    assert "alpha" not in load_activation_index(home=home, env={}).packages
+
+    monkeypatch.setattr(package_install.fs, "unlink", original_unlink)
+    second_source = _package(tmp_path / "second", "alpha", "2.0.0")
+    (second_source / "alpha" / "main.agl").write_text(
+        'program def main() -> string = "replacement"\n', encoding="utf-8"
+    )
+    second = install_directory(second_source, home=home, env={})
+    new_provenance = second.root.parent / ".provenance" / "2.0.0.toml"
+    assert old_provenance.is_file()
+    assert new_provenance.is_file()
+
+    uninstall_package("alpha", home=home, env={})
+
+    assert not second.root.exists()
+    assert not tombstone.exists()
+    assert not old_provenance.exists()
+    assert not new_provenance.exists()
+    assert "alpha" not in load_activation_index(home=home, env={}).packages
+
+
 def test_uninstall_retries_after_payload_removal_but_before_tombstone_removal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

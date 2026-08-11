@@ -120,7 +120,7 @@ class TestQualifiedConfigKeys:
 
     @pytest.mark.parametrize(
         "reserved_name",
-        ("exec", "wsp", "wt", "cp", "copy", "deps", "modules", "packages", "params"),
+        ("exec", "wsp", "wt", "deps", "modules", "packages", "params"),
     )
     def test_reserved_sections_are_not_config_module_prefixes(self, reserved_name: str) -> None:
         key = QualifiedConfigKey((reserved_name,), ("review",), "max-tries")

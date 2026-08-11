@@ -678,8 +678,6 @@ _HELP_TEXTS: dict[str, str] = {
 _HELP_ALIASES: dict[str, str] = {
     "wt": "worktree",
     "wsp": "workspace",
-    "cp": "config",
-    "copy": "config",
 }
 
 _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {

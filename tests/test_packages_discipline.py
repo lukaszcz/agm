@@ -172,7 +172,7 @@ class TestPackageDiscipline:
         with pytest.raises(DisciplineError):
             validate_package(_package(fixture))
 
-    @pytest.mark.parametrize("alias", ("wsp", "wt", "cp", "copy"))
+    @pytest.mark.parametrize("alias", ("wsp", "wt"))
     def test_rejects_command_path_starting_with_a_builtin_alias(
         self, tmp_path: Path, alias: str
     ) -> None:
@@ -181,6 +181,15 @@ class TestPackageDiscipline:
 
         with pytest.raises(DisciplineError):
             validate_package(package)
+
+    @pytest.mark.parametrize("command", ("cp", "copy"))
+    def test_accepts_command_path_matching_a_config_subcommand(
+        self, tmp_path: Path, command: str
+    ) -> None:
+        package = _custom_package(tmp_path, command_path=command)
+        (package.module_root / "main.agl").write_text("program def main() -> unit = ()\n")
+
+        validate_package(package)
 
     @pytest.mark.parametrize("command_path", ("--launch", "tools --help", "tools --dry-run"))
     def test_rejects_command_path_containing_an_option(

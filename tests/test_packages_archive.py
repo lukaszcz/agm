@@ -299,6 +299,26 @@ def test_write_archive_enforces_verifier_size_limits_before_publishing(
     assert destination.read_bytes() == b"existing archive"
 
 
+def test_write_archive_rejects_oversized_source_before_reading_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _package_tree(tmp_path)
+    payload = root / "review_tools" / "large.bin"
+    payload.write_bytes(b"x" * 2048)
+    monkeypatch.setattr(package_archive, "MAX_ARCHIVE_ENTRY_SIZE", 1024)
+    original_read_bytes = Path.read_bytes
+
+    def read_bytes(path: Path) -> bytes:
+        if path == payload:
+            raise AssertionError("oversized payload was read")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+
+    with pytest.raises(ArchiveError, match="entry exceeds"):
+        write_archive(root, tmp_path / "package.agmpkg")
+
+
 def test_write_archive_replaces_a_destination_symlink_without_writing_its_target(
     tmp_path: Path,
 ) -> None:
@@ -774,14 +794,14 @@ def test_write_archive_rejects_unreadable_source_files_and_gitignores(
     root = _package_tree(tmp_path)
     source = root / "source.txt"
     source.write_text("source", encoding="utf-8")
-    original_read_bytes = Path.read_bytes
+    original_read_source = package_archive._read_source_file
 
-    def fail_source_read(path: Path) -> bytes:
+    def fail_source_read(path: Path, limit: int, *, total_limited: bool) -> bytes:
         if path == source:
-            raise OSError("denied")
-        return original_read_bytes(path)
+            raise ArchiveError("cannot read package file: denied")
+        return original_read_source(path, limit, total_limited=total_limited)
 
-    monkeypatch.setattr(Path, "read_bytes", fail_source_read)
+    monkeypatch.setattr(package_archive, "_read_source_file", fail_source_read)
     with pytest.raises(ArchiveError, match="cannot read package file"):
         write_archive(root, tmp_path / "package.agmpkg")
 

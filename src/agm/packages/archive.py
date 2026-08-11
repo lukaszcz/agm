@@ -585,7 +585,7 @@ def _archive_distribution(root: Path) -> tuple[PackageManifest, str, dict[str, b
 def _archive_contents(root: Path, manifest: PackageManifest) -> dict[str, bytes]:
     paths = _source_paths(root)
     ignored = _gitignore_spec(root, paths)
-    contents: dict[str, bytes] = {}
+    selected: list[tuple[str, Path, int]] = []
     for path in paths:
         if not path.is_file():
             continue
@@ -594,14 +594,49 @@ def _archive_contents(root: Path, manifest: PackageManifest) -> dict[str, bytes]
             continue
         _relative_archive_path(relative)
         try:
-            contents[relative] = path.read_bytes()
+            size = path.stat().st_size
         except OSError as exc:
-            raise ArchiveError(f"cannot read package file {path}: {exc}") from exc
-    contents[_MANIFEST_NAME] = _normalized_manifest(manifest)
+            raise ArchiveError(f"cannot inspect package file {path}: {exc}") from exc
+        selected.append((relative, path, size))
+
+    manifest_content = _normalized_manifest(manifest)
+    record_paths = sorted([_MANIFEST_NAME, *(relative for relative, _, _ in selected)])
+    record_size = len(
+        serialize_record(tuple(RecordEntry(path, "0" * 64) for path in record_paths)).encode()
+    )
+    _validate_size_limits(
+        len(selected) + 2,
+        [*(size for _, _, size in selected), len(manifest_content), record_size],
+    )
+
+    contents = {_MANIFEST_NAME: manifest_content}
+    remaining = MAX_ARCHIVE_TOTAL_SIZE - len(manifest_content) - record_size
+    for relative, path, _ in selected:
+        limit = min(MAX_ARCHIVE_ENTRY_SIZE, remaining)
+        contents[relative] = _read_source_file(
+            path, limit, total_limited=limit < MAX_ARCHIVE_ENTRY_SIZE
+        )
+        remaining -= len(contents[relative])
     entries = _record_entries(contents)
     contents[_RECORD_NAME] = serialize_record(entries).encode()
     _reject_casefolding_collisions(contents)
     return contents
+
+
+def _read_source_file(path: Path, limit: int, *, total_limited: bool) -> bytes:
+    """Read one source payload without exceeding archive size limits."""
+    content = bytearray()
+    try:
+        with path.open("rb") as source:
+            while chunk := source.read(min(_HASH_CHUNK_SIZE, limit - len(content) + 1)):
+                content.extend(chunk)
+                if len(content) > limit:
+                    if total_limited:
+                        raise ArchiveError("package archive exceeds the total size limit")
+                    raise ArchiveError("package archive entry exceeds the size limit")
+    except OSError as exc:
+        raise ArchiveError(f"cannot read package file {path}: {exc}") from exc
+    return bytes(content)
 
 
 def _gitignore_spec(root: Path, paths: tuple[Path, ...]) -> PathSpec:

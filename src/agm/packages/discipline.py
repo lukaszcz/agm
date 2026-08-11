@@ -129,14 +129,16 @@ def _validate_resources(
         except (AglSyntaxError, OSError, UnicodeDecodeError) as exc:
             raise DisciplineError(f"cannot parse package module {module_path}: {exc}") from exc
 
-    parsed_modules = {module_id: program for module_id, (_, program) in programs.items()}
+    dependency_programs: dict[ModuleId, Program] = {}
     for module_id, module_path in ({} if export_modules is None else export_modules).items():
-        if module_id in parsed_modules:
-            continue
         try:
-            parsed_modules[module_id] = parse_program(read_module(module_path))
+            dependency_programs[module_id] = parse_program(read_module(module_path))
         except (AglSyntaxError, OSError, UnicodeDecodeError) as exc:
             raise DisciplineError(f"cannot parse dependency module {module_path}: {exc}") from exc
+    parsed_modules = {
+        **dependency_programs,
+        **{module_id: program for module_id, (_, program) in programs.items()},
+    }
     exports = _resource_exports(parsed_modules)
     for module_path, program in programs.values():
         calls = _resource_calls(program, _resource_imports(program, exports))

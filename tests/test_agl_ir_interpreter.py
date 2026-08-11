@@ -1473,6 +1473,28 @@ class TestFunctionEvaluation:
 
         assert "closure" in result
 
+    @pytest.mark.parametrize(
+        "default",
+        (
+            IrLoad(_LOC, SymbolId(998)),
+            IrAssign(_LOC, SymbolId(999), IrConstInt(_LOC, 1)),
+        ),
+    )
+    def test_param_default_with_unknown_symbol_raises_invalid_ir(self, default: IrExpr) -> None:
+        from agm.agl.ir.program import IrParam
+
+        param_sym, descriptor = _let_sym(700, "value")
+        param = IrParam(
+            symbol=param_sym,
+            public_name="value",
+            required=False,
+            default=default,
+            location=_LOC,
+        )
+
+        with pytest.raises(InvalidIrError):
+            IrInterpreter(_make_program((), {param_sym: descriptor}, params=(param,))).run()
+
     def test_param_default_can_call_top_level_function(self) -> None:
         """Entry param defaults can call functions whose closure initializer appears later."""
         from agm.agl.ir.program import IrParam

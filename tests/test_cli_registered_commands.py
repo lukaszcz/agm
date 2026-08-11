@@ -616,6 +616,30 @@ def test_registered_param_errors_show_registered_command_usage(
     assert "agm exec" not in error
 
 
+def test_registered_param_error_usage_handles_no_description_or_params(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import agm.commands.exec_program as exec_program
+
+    source = tmp_path / "main.agl"
+    source.write_text("program def main() -> unit = ()\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit):
+        exec_program.run(
+            ExecArgs(
+                file=str(source),
+                param_tokens=["--unknown"],
+                strict_json=None,
+                no_log=False,
+                log_file=None,
+                no_stdlib=True,
+            ),
+            usage_command_path="tools lint",
+        )
+
+    assert "usage: agm tools lint" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("reference", ["not-a-reference", "bad-name/main::main"])
 def test_exec_rejects_malformed_installed_references(reference: str) -> None:
     import agm.commands.exec_program as exec_program

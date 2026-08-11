@@ -319,6 +319,54 @@ def test_write_archive_rejects_oversized_source_before_reading_it(
         write_archive(root, tmp_path / "package.agmpkg")
 
 
+def test_write_archive_reports_source_stat_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _package_tree(tmp_path)
+    payload = root / "review_tools" / "payload.bin"
+    payload.write_bytes(b"payload")
+    manifest = package_archive.load_manifest(root / "package.toml")
+    source_paths = package_archive._source_paths(root)
+    original_is_file = Path.is_file
+    original_stat = Path.stat
+
+    monkeypatch.setattr(package_archive, "_source_paths", lambda _: source_paths)
+    monkeypatch.setattr(
+        Path,
+        "is_file",
+        lambda path: True if path == payload else original_is_file(path),
+    )
+
+    def stat(path: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+        if path == payload:
+            raise OSError("denied")
+        return original_stat(path, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(Path, "stat", stat)
+
+    with pytest.raises(ArchiveError, match="cannot inspect package file"):
+        package_archive._archive_contents(root, manifest)
+
+
+@pytest.mark.parametrize(
+    ("total_limited", "message"),
+    ((False, "entry exceeds"), (True, "total size")),
+)
+def test_bounded_source_read_rejects_growth(
+    tmp_path: Path, total_limited: bool, message: str
+) -> None:
+    payload = tmp_path / "payload.bin"
+    payload.write_bytes(b"too large")
+
+    with pytest.raises(ArchiveError, match=message):
+        package_archive._read_source_file(payload, 1, total_limited=total_limited)
+
+
+def test_bounded_source_read_reports_open_failure(tmp_path: Path) -> None:
+    with pytest.raises(ArchiveError, match="cannot read package file"):
+        package_archive._read_source_file(tmp_path / "missing", 1, total_limited=False)
+
+
 def test_write_archive_replaces_a_destination_symlink_without_writing_its_target(
     tmp_path: Path,
 ) -> None:

@@ -235,6 +235,40 @@ class TestPackageDiscipline:
         with pytest.raises(DisciplineError):
             validate_package(package)
 
+    @pytest.mark.parametrize(
+        "open_declaration",
+        (
+            "open Assets",
+            "open Assets hiding directories",
+            "open Assets using absent, asset as load",
+        ),
+    )
+    def test_resource_open_selection_modes_are_tracked(
+        self, tmp_path: Path, open_declaration: str
+    ) -> None:
+        package = _custom_package(tmp_path)
+        called = (
+            "asset" if open_declaration != "open Assets using absent, asset as load" else "load"
+        )
+        (package.module_root / "main.agl").write_text(
+            f"{open_declaration}\n"
+            "scope Assets\n"
+            "import std/core using resource as asset, resource-dir as directories\n"
+            "end Assets\n"
+            f'let prompt = {called}("prompts/missing.md")\n'
+        )
+
+        with pytest.raises(DisciplineError):
+            validate_package(package)
+
+    def test_resource_open_without_resource_members_is_ignored(self, tmp_path: Path) -> None:
+        package = _custom_package(tmp_path)
+        (package.module_root / "main.agl").write_text(
+            "open Empty\nscope Empty\ndef value() -> unit = ()\nend Empty\n"
+        )
+
+        validate_package(package)
+
     def test_rejects_missing_resource_reexported_by_dependency(self, tmp_path: Path) -> None:
         dependency_root = tmp_path / "dependency"
         (dependency_root / "helpers").mkdir(parents=True)
@@ -251,6 +285,20 @@ class TestPackageDiscipline:
         )
 
         with pytest.raises(DisciplineError):
+            validate_package(consumer, dependency_packages=(dependency,))
+
+    def test_rejects_unparseable_dependency_resource_exports(self, tmp_path: Path) -> None:
+        dependency_root = tmp_path / "dependency"
+        (dependency_root / "helpers").mkdir(parents=True)
+        dependency = PackageInfo(
+            dependency_root,
+            PackageManifest("helpers", semver.Version.parse("1.0.0")),
+        )
+        (dependency.module_root / "assets.agl").write_text("export ???\n")
+        consumer = _custom_package(tmp_path / "consumer")
+        (consumer.module_root / "main.agl").write_text("let value = 1\n")
+
+        with pytest.raises(DisciplineError, match="dependency module"):
             validate_package(consumer, dependency_packages=(dependency,))
 
     def test_rejects_missing_resource_through_a_scoped_alias_reexport_chain(

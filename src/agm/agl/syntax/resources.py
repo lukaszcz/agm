@@ -55,7 +55,7 @@ def _validate_relative_path(path: str) -> None:
         or "\0" in path
         or "\\" in path
         or posix.is_absolute()
-        or windows.is_absolute()
+        or bool(windows.drive or windows.root)
         or any(part == ".." for part in posix.parts)
     ):
         raise ResourceError("resource() path must be a relative forward-slash path without '..'")

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 import semver
@@ -124,6 +124,25 @@ def test_resource_calls_require_safe_literal_paths(call: str) -> None:
 """
 
     result = _run_file(source, Path("main.agl"), roots=RootSet(roots=frozenset({_STDLIB})))
+
+    assert not result.ok
+    assert result.diagnostics
+
+
+@pytest.mark.parametrize("path", ("C:prompt.md", "C:..", "C:../prompt.md"))
+def test_resource_rejects_windows_drive_relative_paths(path: str, tmp_path: Path) -> None:
+    target = tmp_path / PurePosixPath(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("prompt", encoding="utf-8")
+    source = f'''program def main() -> unit =
+  print resource("{path}")
+'''
+
+    result = _run_file(
+        source,
+        tmp_path / "main.agl",
+        roots=RootSet(roots=frozenset({_STDLIB})),
+    )
 
     assert not result.ok
     assert result.diagnostics

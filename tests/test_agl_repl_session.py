@@ -4700,6 +4700,20 @@ class TestImports:
         assert r2.ok, r2.diagnostics
         assert _int(r2.value) == 42
 
+    def test_runtime_failure_prunes_entry_function_depending_on_incomplete_module(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "unstable.agl").write_text(
+            "param seed: int = [1, 2][9]\ndef get_seed() -> int = seed\n"
+        )
+        session = self._make_session_with_root(tmp_path)
+
+        failed = session.eval_entry("open import unstable\ndef retained() -> int = get_seed()")
+
+        assert not failed.ok
+        assert "retained" not in failed.installed
+        assert not session.eval_entry("retained()").ok
+
     def test_scope_error_in_graph_mode(self, tmp_path: Path) -> None:
         # Declaring a reserved built-in name as an agent in program context
         # triggers AglScopeError during resolve_program.

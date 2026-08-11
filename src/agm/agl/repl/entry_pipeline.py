@@ -855,14 +855,16 @@ class EntryPipeline:
             """
             trace.run_end(ok=False)
             self._persist_interpreter_settings(interp, trace)
+            completed_module_ids = completed_library_module_ids()
             promoted = lowered.promotion_plan.completed_declaration_ids(
                 interp.module_completed_initializer_indices.get(
                     lowered.program.entry_module, set()
                 ),
                 interp.entry_param_symbols_installed,
+                self._ctx._loaded_lib_modules.keys() | completed_module_ids,
             )
             installed = promote(partial=True, promoted_declaration_ids=promoted)
-            retain_library_state(completed_library_module_ids())
+            retain_library_state(completed_module_ids)
             kind, name = self._ctx._classify(orig_program)
             return EntryResult(
                 kind=kind,
@@ -910,6 +912,7 @@ class EntryPipeline:
             promoted_declaration_ids=lowered.promotion_plan.completed_declaration_ids(
                 range(len(lowered.program.modules[lowered.program.entry_module].initializers)),
                 interp.entry_param_symbols_installed,
+                checked_program.modules.keys(),
             ),
         )
         retain_library_state(

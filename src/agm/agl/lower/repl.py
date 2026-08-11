@@ -112,24 +112,29 @@ class ReplPromotionPlan:
     This makes partial REPL promotion depend on completed IR initializers rather
     than diagnostic source locations. Entry parameters are installed by a
     pre-pass, so their completion comes from the symbols the interpreter
-    actually installed rather than from source position.
+    actually installed rather than from source position. Runtime references
+    into imported modules are retained separately so promotion can require the
+    owning modules to be available.
     """
 
     source_declaration_ids: tuple[frozenset[int], ...]
     initializers: tuple[InitializerOrigin, ...]
     params: tuple[ParamOrigin, ...]
     declaration_dependencies: Mapping[int, frozenset[int]]
+    imported_module_dependencies: Mapping[int, frozenset[ModuleId]]
 
     def completed_declaration_ids(
         self,
         completed_initializer_indices: Collection[int],
         installed_param_symbols: Collection[SymbolId],
+        available_module_ids: Collection[ModuleId],
     ) -> frozenset[int]:
-        """Return complete declarations, including only installed params.
+        """Return declarations whose local and imported dependencies are available.
 
-        The result is dependency-safe and needs no post-correction by callers.
         Parameters are installed by a pre-pass rather than an initializer, so
-        their source position cannot establish completion.
+        their source position cannot establish completion. Imported runtime
+        references are safe only when their owning library module initialized
+        completely or was already retained by the session.
         """
         completed_indices = set(completed_initializer_indices)
         assert all(0 <= index < len(self.initializers) for index in completed_indices)
@@ -154,10 +159,13 @@ class ReplPromotionPlan:
         )
 
         dependencies = self.declaration_dependencies
+        available_modules = set(available_module_ids)
         while unsafe := {
             declaration_id
             for declaration_id in completed
             if dependencies.get(declaration_id, frozenset()) - completed
+            or self.imported_module_dependencies.get(declaration_id, frozenset())
+            - available_modules
         }:
             completed.difference_update(unsafe)
         return frozenset(completed)
@@ -228,11 +236,13 @@ def _declaration_dependencies(
     checked: "CheckedModule",
     entry_declaration_ids: frozenset[int],
     type_declaration_ids: Mapping[str, frozenset[int]],
-) -> frozenset[int]:
-    """Return current-entry runtime and nominal dependencies of one leaf source item.
+) -> tuple[frozenset[int], frozenset[ModuleId]]:
+    """Return local declaration and imported runtime dependencies of one leaf item.
 
     Called only on the flattened, region-transparent sequence ``static_items``
-    produces, so *item* is never a ``ScopeRegion`` itself.
+    produces, so *item* is never a ``ScopeRegion`` itself. Imported nominal
+    types are metadata dependencies rather than module-initialization dependencies;
+    imported binding and method references require their module's runtime image.
     """
     from agm.agl.syntax.nodes import ElseSentinel, FuncDef
     from agm.agl.syntax.types import AppliedT, NameT
@@ -244,6 +254,7 @@ def _declaration_dependencies(
         else frozenset()
     )
     dependencies: set[int] = set()
+    imported_modules: set[ModuleId] = set()
 
     def collect(node: object) -> None:
         if isinstance(node, ElseSentinel):
@@ -256,8 +267,14 @@ def _declaration_dependencies(
         ):
             dependencies.update(type_declaration_ids.get(node.name, frozenset()))
         binding = checked.binding_for(node_id)
-        if binding is not None and binding.decl_node_id in entry_declaration_ids:
-            dependencies.add(binding.decl_node_id)
+        if binding is not None:
+            if binding.decl_node_id in entry_declaration_ids:
+                dependencies.add(binding.decl_node_id)
+            elif not binding.module_id.is_entry:
+                imported_modules.add(binding.module_id)
+        method = checked.method_selection_for(node_id)
+        if method is not None and not method.module_id.is_entry:
+            imported_modules.add(method.module_id)
         constructor = checked.constructor_ref_for(node_id)
         if constructor is not None and constructor.owner_decl_node_id in entry_declaration_ids:
             dependencies.add(constructor.owner_decl_node_id)
@@ -291,7 +308,7 @@ def _declaration_dependencies(
             base_typedef = checked.type_env.type_table.get_by_id(typedef.base)
             if base_typedef is not None and base_typedef.module_id.is_entry:
                 dependencies.update(type_declaration_ids.get(base_typedef.name, frozenset()))
-    return frozenset(dependencies)
+    return frozenset(dependencies), frozenset(imported_modules)
 
 
 def _promotion_plan(
@@ -323,19 +340,22 @@ def _promotion_plan(
                 item.name, frozenset()
             ) | frozenset({item.node_id})
     declaration_dependencies: dict[int, frozenset[int]] = {}
+    imported_module_dependencies: dict[int, frozenset[ModuleId]] = {}
     for item, declaration_ids in zip(leaf_items, source_declaration_ids, strict=True):
         if not declaration_ids:
             continue
-        item_dependencies = _declaration_dependencies(
+        item_dependencies, imported_modules = _declaration_dependencies(
             item, checked, entry_declaration_ids, type_declaration_ids
         )
         for declaration_id in declaration_ids:
             declaration_dependencies[declaration_id] = item_dependencies - {declaration_id}
+            imported_module_dependencies[declaration_id] = imported_modules
     return ReplPromotionPlan(
         source_declaration_ids=source_declaration_ids,
         initializers=initializer_origins,
         params=params,
         declaration_dependencies=MappingProxyType(declaration_dependencies),
+        imported_module_dependencies=MappingProxyType(imported_module_dependencies),
     )
 
 

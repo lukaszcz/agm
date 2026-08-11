@@ -86,7 +86,7 @@ from agm.agl.lower import LinkImage, LoweredReplEntry, compile_coercion, lower_r
 from agm.agl.lower.lowerer import InitializerOrigin, _Lowerer
 from agm.agl.lower.repl import ParamOrigin, ReplPromotionPlan
 from agm.agl.matchcompile import MatchCompiledProgram, compile_program_matches
-from agm.agl.modules.ids import ENTRY_ID
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.loader import build_repl_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program_seeded
@@ -251,9 +251,24 @@ def test_repl_promotion_excludes_uninstalled_params_before_dependency_closure() 
         initializers=(InitializerOrigin(source_index=1, is_function=False),),
         params=(ParamOrigin(declaration_id=10, symbol=SymbolId(7)),),
         declaration_dependencies={},
+        imported_module_dependencies={},
     )
 
-    assert plan.completed_declaration_ids(set(), set()) == frozenset()
+    assert plan.completed_declaration_ids(set(), set(), set()) == frozenset()
+
+
+def test_repl_promotion_requires_imported_runtime_modules_to_be_available() -> None:
+    library_id = ModuleId(("library",))
+    plan = ReplPromotionPlan(
+        source_declaration_ids=(frozenset({10}),),
+        initializers=(InitializerOrigin(source_index=0, is_function=True),),
+        params=(),
+        declaration_dependencies={},
+        imported_module_dependencies={10: frozenset({library_id})},
+    )
+
+    assert plan.completed_declaration_ids({0}, set(), set()) == frozenset()
+    assert plan.completed_declaration_ids({0}, set(), {library_id}) == frozenset({10})
 
 
 def test_lower_repl_trailing_binder_has_no_expression_marker() -> None:

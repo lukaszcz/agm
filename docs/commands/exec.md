@@ -68,11 +68,14 @@ like any other static error.
   program-specific option. Booleans use `--name` / `--no-name`. A param
   declared inside a named scope region uses its full path spelling, e.g.
   `--Deploy::region`. The module-qualified spelling, such as
-  `--review-tools/judge::Deploy::region`, is always accepted and disambiguates
-  params with the same short spelling. For an entry-file param that needs
-  qualification, use its file stem, such as `--workflow::Deploy::region` for
-  `workflow.agl`. If the resolved entry stem duplicates an imported module route,
-  the entry uses `--@entry::Deploy::region` so both qualified options remain distinct.
+  `--review-tools/judge::Deploy::region`, disambiguates params with the same
+  short spelling. If an ordinary qualified positive flag would equal another
+  boolean param's negative flag, help and completion show a collision-free
+  `@module::`-marked form, such as `--@module::no-settings::region` or
+  `--no-@module::settings::region`. For an entry-file param that needs qualification,
+  use its file stem, such as `--workflow::Deploy::region` for `workflow.agl`.
+  If the resolved entry stem duplicates an imported module route, the entry uses
+  `--@entry::Deploy::region` so both qualified options remain distinct.
   Qualified config tables supply values
   for every parameter in the selected inventory. Values for `text` params are taken verbatim; every other
   scalar or structured type (`int`/`decimal`/`bool`/`json`/`array`/`dict`/`record`/

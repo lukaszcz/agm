@@ -65,9 +65,12 @@ and may be supplied by the host as named external values at run start. A
 program's inventory includes its module's params and those of its transitive
 imports. A scoped param is supplied under its full path spelling —
 `param Deploy::region` is named `Deploy::region` by the host, e.g.
-`--Deploy::region` on the CLI. The module-qualified CLI spelling is always
-accepted, for example `--review-tools/judge::Deploy::region`; it is required
-when inventory params have the same short spelling.
+`--Deploy::region` on the CLI. A module-qualified CLI spelling, for example
+`--review-tools/judge::Deploy::region`, is used when inventory params have the
+same short spelling. If ordinary qualified positive and boolean-negative flags
+collide, the CLI's canonical spelling adds `@module::` before the module route, for
+example `--@module::no-settings::region` and `--no-@module::settings::region`; help and shell
+completion show the selected forms.
 
 Validation happens after type checking and **before any statement executes**:
 

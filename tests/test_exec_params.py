@@ -418,6 +418,31 @@ class TestParseParamTokens:
         with pytest.raises(ValueError, match="ambiguous"):
             parse_param_tokens(params, ["--settings::region", "value"])
 
+    def test_qualified_positive_negative_collision_has_canonical_flags(self) -> None:
+        from agm.cli_support.exec_params import param_option_flags, parse_param_tokens
+
+        params = (
+            self._text_param("region", module_segments=("no-settings",)),
+            self._bool_param("region", module_segments=("settings",)),
+        )
+
+        flags = param_option_flags(params)
+        assert "--@module::no-settings::region" in flags
+        assert "--@module::settings::region" in flags
+        assert "--no-@module::settings::region" in flags
+        assert "--no-settings::region" not in flags
+        with pytest.raises(ValueError) as exc_info:
+            parse_param_tokens(params, ["--no-settings::region", "local"])
+        assert "--@module::no-settings::region" in str(exc_info.value)
+        assert "--no-@module::settings::region" in str(exc_info.value)
+        assert parse_param_tokens(
+            params,
+            ["--@module::no-settings::region", "local", "--no-@module::settings::region"],
+        ) == {
+            "no-settings::region": "local",
+            "settings::region": False,
+        }
+
     def test_duplicate_external_qualified_bool_spelling_keeps_both_negatives_settable(
         self,
     ) -> None:
@@ -534,6 +559,32 @@ class TestRenderParamHelpSection:
 
         assert "--@entry::region" in section
         assert "--<entry>::region" not in section
+
+    def test_unresolvable_duplicate_qualified_spelling_is_not_advertised(self) -> None:
+        from agm.cli_support.exec_params import render_param_help_section
+
+        section = render_param_help_section(
+            (
+                _make_param("region", TextType(), module_segments=("settings",), line=1),
+                _make_param("region", TextType(), module_segments=("settings",), line=2),
+            )
+        )
+
+        assert "--settings::region" not in section
+
+    def test_qualified_positive_negative_collision_renders_canonical_flags(self) -> None:
+        from agm.cli_support.exec_params import render_param_help_section
+
+        section = render_param_help_section(
+            (
+                _make_param("region", TextType(), module_segments=("no-settings",)),
+                _make_param("region", BoolType(), module_segments=("settings",)),
+            )
+        )
+
+        assert "--@module::no-settings::region TEXT" in section
+        assert "--@module::settings::region/--no-@module::settings::region" in section
+        assert "--no-settings::region TEXT" not in section
 
     def test_entry_route_collision_renders_distinct_qualified_spellings(self) -> None:
         from agm.cli_support.exec_params import render_param_help_section

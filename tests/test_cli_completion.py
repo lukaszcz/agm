@@ -1686,6 +1686,26 @@ class TestExecParamCompletionItems:
         assert "--apple" in values
         assert "--banana" not in values
 
+    def test_qualified_positive_negative_collision_suggests_canonical_flags(
+        self, tmp_path: Path
+    ) -> None:
+        entry = tmp_path / "main.agl"
+        (tmp_path / "no-settings.agl").write_text("param region: text\n")
+        (tmp_path / "settings.agl").write_text("param region: bool\n")
+        entry.write_text("import no-settings\nimport settings\nprogram def main() -> unit = ()\n")
+
+        values = {
+            item.value
+            for item in completion._exec_param_completion_items(
+                entry.read_text(), "--", entry_path=entry
+            )
+        }
+
+        assert "--@module::no-settings::region" in values
+        assert "--@module::settings::region" in values
+        assert "--no-@module::settings::region" in values
+        assert "--no-settings::region" not in values
+
     def test_engine_key_params_are_not_suggested(self) -> None:
         items = completion._exec_param_completion_items("param max-iters: int\n", "--")
 

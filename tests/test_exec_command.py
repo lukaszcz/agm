@@ -260,6 +260,28 @@ class TestExecCommandArgParsing:
         assert getattr(args, "file") is None
         assert getattr(args, "param_tokens") == ["--msg", "hello"]
 
+    def test_exec_parser_preserves_canonical_qualified_param_flags(
+        self, runner: CliRunner, recorded_runs: list[object]
+    ) -> None:
+        result = invoke(
+            runner,
+            [
+                "exec",
+                "workflow.agl",
+                "--@module::no-settings::region",
+                "local",
+                "--no-@module::settings::region",
+            ],
+        )
+
+        assert result.exit_code == 0
+        args = recorded_runs[0]
+        assert getattr(args, "param_tokens") == [
+            "--@module::no-settings::region",
+            "local",
+            "--no-@module::settings::region",
+        ]
+
 
 class TestExecCommandInline:
     """Behavior tests for executing an inline -c/--command program."""
@@ -3512,6 +3534,35 @@ class TestEntryModuleConfig:
             is None
         )
         assert capsys.readouterr().out == "local:remote\n"
+
+    def test_qualified_positive_negative_collision_keeps_required_params_settable(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "no-settings.agl").write_text(
+            "param region: text\ndef read() -> text = region\n"
+        )
+        (tmp_path / "settings.agl").write_text("param region: bool\n")
+        agl_file = tmp_path / "workflow.agl"
+        write_file_program(
+            agl_file,
+            "import no-settings\nimport settings\n"
+            "program def main() -> unit = print(no-settings::read())\n",
+        )
+
+        assert (
+            exec_command.run(
+                _exec_args_no_log(
+                    agl_file,
+                    param_tokens=[
+                        "--@module::no-settings::region",
+                        "local",
+                        "--no-@module::settings::region",
+                    ],
+                )
+            )
+            is None
+        )
+        assert capsys.readouterr().out == "local\n"
 
     def test_colliding_imported_params_require_qualified_flags(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

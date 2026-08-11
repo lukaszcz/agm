@@ -208,6 +208,15 @@ _BUILTIN_CONSTRUCTOR_NODE_ID = -1
 # The set of names that may NOT be used as any kind of binding.
 _RESERVED_NAMES: frozenset[str] = frozenset(_BUILTIN_CALL_NAMES)
 
+_TEXTUALLY_ORDERED_BINDER_KINDS: frozenset[BinderKind] = frozenset(
+    {
+        BinderKind.let_binding,
+        BinderKind.var_binding,
+        BinderKind.param_binding,
+        BinderKind.pattern_slot,
+    }
+)
+
 
 def _scope_path_sort_key(path: ScopePath) -> tuple[int, ScopePath]:
     """Order scope paths by depth, then lexical spelling."""
@@ -425,6 +434,10 @@ class _Resolver:
         # Function-body flag: True only while resolving a def/fn body (not parameter
         # defaults). Used to reject `return` outside the nearest function boundary.
         self._in_function: bool = False
+        # The inline wrapper moves static bindings ahead of its synthetic
+        # entry. While resolving that entry, source offsets preserve the
+        # bindings' original textual visibility despite the AST partition.
+        self._in_synthetic_entry: bool = False
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -1828,7 +1841,12 @@ class _Resolver:
         # Defaults are resolved in the enclosing (root) scope — they are
         # evaluated in the function's definition scope.
         self._validate_qualifier_chains(node)
-        self._resolve_params_and_body(node)
+        previous_synthetic_entry = self._in_synthetic_entry
+        self._in_synthetic_entry = node.is_synthetic
+        try:
+            self._resolve_params_and_body(node)
+        finally:
+            self._in_synthetic_entry = previous_synthetic_entry
 
     def _resolve_type_decl(self, node: RecordDef | EnumDef | ExceptionDef | TypeAlias) -> None:
         """Reject type declarations outside the program root."""
@@ -1978,6 +1996,7 @@ class _Resolver:
         # Mutability is not decided here: a field-directed pattern slot's final
         # binding is only known once checking selects it, so type checking owns
         # the ``:=``-on-immutable rejection for every unqualified target.
+        self._require_textually_visible(ref, node.span)
         self._resolution[node.node_id] = ref
         self._resolve_expr(node.value)
 
@@ -2015,6 +2034,7 @@ class _Resolver:
                     span=node.span,
                 )
             ref = self._lookup_qualified_binding(qualifier, target.name, node.span)
+        self._require_textually_visible(ref, node.span)
         if not ref.mutable:
             raise AglScopeError(
                 f"Cannot assign to '{target.name}': "
@@ -2249,6 +2269,7 @@ class _Resolver:
         candidates: Collection[ConstructorRef] | None = None,
     ) -> None:
         """Record an ordinary value binding and its constructor metadata."""
+        self._require_textually_visible(ref, node.span)
         self._resolution[node.node_id] = ref
         if ref.kind != BinderKind.constructor_binding:
             return
@@ -2269,6 +2290,16 @@ class _Resolver:
             )
         if len(resolved_candidates) == 1:
             self._constructor_refs[node.node_id] = resolved_candidates[0]
+
+    def _require_textually_visible(self, ref: BindingRef, span: SourceSpan) -> None:
+        """Reject a binding that inline wrapping moved before an earlier use."""
+        if (
+            self._in_synthetic_entry
+            and ref.module_id == self._module_id
+            and ref.kind in _TEXTUALLY_ORDERED_BINDER_KINDS
+            and ref.decl_span.start_offset > span.start_offset
+        ):
+            raise AglScopeError(f"'{ref.name}' is not defined.", span=span)
 
     def _declaring_constructor_candidates(
         self, name: str, ref: BindingRef
@@ -2427,6 +2458,7 @@ class _Resolver:
                 f"Unknown member '{node.name}' in scope path '{rendered}'.", span=node.span
             )
         self._check_local_scope_route_ambiguity(chain, node.name, path)
+        self._require_textually_visible(ref, node.span)
         if ref.kind is BinderKind.constructor_binding:
             candidates = self._scoped_constructor_candidates.get((path, node.name), ())
             if len(candidates) == 1:

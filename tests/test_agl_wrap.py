@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
+
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program_seeded, wrap_inline_program
 from agm.agl.pipeline import PipelineDriver
@@ -161,6 +163,32 @@ let value = 1
 
     assert wrapped is program
     assert transformed_next_node_id == next_node_id
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "Config::answer\nlet Config::answer = 42",
+        "Config::answer\nscope Config\nlet answer = 42\nend Config",
+        "Config::answer\nscope Config\nparam answer: int = 42\nend Config",
+        "answer\nparam answer: int = 42",
+    ),
+    ids=("shorthand-let", "region-let", "scoped-param", "root-param"),
+)
+def test_inline_expression_cannot_reference_a_later_textual_binding(source: str) -> None:
+    parsed = PipelineDriver.parse_entry(source)
+    assert parsed.program is not None
+    wrapped, next_node_id = wrap_inline_program(parsed.program, next_node_id=parsed.next_id)
+
+    prepared = PipelineDriver.prepare_parsed_entry(
+        replace(parsed, program=wrapped, next_id=next_node_id),
+        roots=RootSet(roots=frozenset()),
+        default_stdlib=False,
+    )
+
+    assert prepared.resolved is None
+    assert len(prepared.diagnostics) == 1
+    assert prepared.diagnostics[0].line == 1
 
 
 def test_wrapped_root_declaration_reference_is_reported_by_the_scope_pipeline() -> None:

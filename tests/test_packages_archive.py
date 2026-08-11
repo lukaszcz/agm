@@ -1338,6 +1338,55 @@ def test_archive_entry_limit_is_checked_before_zipfile_loads_the_directory(
         read_archive_metadata(archive_path)
 
 
+def test_archive_entry_limit_preflight_counts_records_instead_of_trusting_end_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _package_tree(tmp_path)
+    archive_path = tmp_path / "package.agmpkg"
+    write_archive(root, archive_path)
+    raw = bytearray(archive_path.read_bytes())
+    end_offset = raw.rindex(b"PK\x05\x06")
+    raw[end_offset + 8 : end_offset + 12] = (1).to_bytes(2, "little") * 2
+    archive_path.write_bytes(raw)
+    monkeypatch.setattr(package_archive, "MAX_ARCHIVE_ENTRIES", 2)
+
+    def fail_open(*_: object, **__: object) -> zipfile.ZipFile:
+        pytest.fail("the ZIP central directory must not be loaded before its records are counted")
+
+    monkeypatch.setattr(zipfile, "ZipFile", fail_open)
+    with pytest.raises(ArchiveError, match="entries"):
+        read_archive_metadata(archive_path)
+
+
+@pytest.mark.parametrize("corruption", ("start", "signature", "length", "count"))
+def test_archive_preflight_rejects_malformed_central_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, corruption: str
+) -> None:
+    root = _package_tree(tmp_path)
+    archive_path = tmp_path / "package.agmpkg"
+    write_archive(root, archive_path)
+    raw = bytearray(archive_path.read_bytes())
+    end_offset = raw.rindex(b"PK\x05\x06")
+    directory_size = int.from_bytes(raw[end_offset + 12 : end_offset + 16], "little")
+    directory_start = end_offset - directory_size
+    if corruption == "start":
+        raw[end_offset + 12 : end_offset + 16] = (end_offset + 1).to_bytes(4, "little")
+    elif corruption == "signature":
+        raw[directory_start] = 0
+    elif corruption == "length":
+        raw[directory_start + 28 : directory_start + 30] = (0xFFFF).to_bytes(2, "little")
+    else:
+        raw[end_offset + 8 : end_offset + 12] = (0).to_bytes(2, "little") * 2
+    archive_path.write_bytes(raw)
+
+    def fail_open(*_: object, **__: object) -> zipfile.ZipFile:
+        pytest.fail("malformed central directory must be rejected before ZipFile construction")
+
+    monkeypatch.setattr(zipfile, "ZipFile", fail_open)
+    with pytest.raises(ArchiveError):
+        read_archive_metadata(archive_path)
+
+
 def test_archive_readers_reject_directory_entries(tmp_path: Path) -> None:
     archive_path = tmp_path / "directory.agmpkg"
     with zipfile.ZipFile(archive_path, "w") as archive:

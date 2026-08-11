@@ -45,6 +45,8 @@ _ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 _FILE_MODE = 0o100644
 _UTF8_FLAG = 0x800
 _ZIP64_LOCATOR_SIGNATURE = b"PK\x06\x07"
+_CENTRAL_DIRECTORY_SIGNATURE = b"PK\x01\x02"
+_CENTRAL_DIRECTORY_HEADER_SIZE = 46
 _HASH_CHUNK_SIZE = 1024 * 1024
 _DIR_FD_PUBLICATION_OPERATIONS = (os.open, os.rename, os.unlink, os.link)
 
@@ -455,7 +457,7 @@ def _read_archive(archive_path: Path, operation: Callable[[zipfile.ZipFile], T])
 
 
 def _validate_central_directory_limits(archive: IO[bytes]) -> None:
-    """Reject ZIP64 and oversized directories before :mod:`zipfile` reads them."""
+    """Reject ZIP64, malformed, and oversized directories before :mod:`zipfile` reads them."""
 
     archive.seek(0, os.SEEK_END)
     file_size = archive.tell()
@@ -476,6 +478,33 @@ def _validate_central_directory_limits(archive: IO[bytes]) -> None:
                     raise ArchiveError("package archive exceeds the entries limit")
                 if directory_size > MAX_ARCHIVE_CENTRAL_DIRECTORY_SIZE:
                     raise ArchiveError("package archive central directory exceeds the size limit")
+                directory_start = file_size - tail_size + offset - directory_size
+                if directory_start < 0:
+                    raise ArchiveError("package archive has an invalid central directory")
+                archive.seek(directory_start)
+                remaining = directory_size
+                actual_entries = 0
+                while remaining:
+                    header = archive.read(_CENTRAL_DIRECTORY_HEADER_SIZE)
+                    if (
+                        len(header) != _CENTRAL_DIRECTORY_HEADER_SIZE
+                        or header[:4] != _CENTRAL_DIRECTORY_SIGNATURE
+                    ):
+                        raise ArchiveError("package archive has an invalid central directory")
+                    variable_size = sum(
+                        int.from_bytes(header[start : start + 2], "little")
+                        for start in (28, 30, 32)
+                    )
+                    record_size = _CENTRAL_DIRECTORY_HEADER_SIZE + variable_size
+                    if record_size > remaining:
+                        raise ArchiveError("package archive has an invalid central directory")
+                    actual_entries += 1
+                    if actual_entries > MAX_ARCHIVE_ENTRIES:
+                        raise ArchiveError("package archive exceeds the entries limit")
+                    archive.seek(variable_size, os.SEEK_CUR)
+                    remaining -= record_size
+                if actual_entries != entries:
+                    raise ArchiveError("package archive central directory entry count is invalid")
                 return
         search_end = offset
 

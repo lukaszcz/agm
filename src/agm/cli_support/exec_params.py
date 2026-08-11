@@ -302,7 +302,7 @@ def discover_params_from_installed_reference(
             cwd=cwd,
             home=home,
             proj_dir=proj_dir,
-            package_roots=discover_development_packages(entry_path),
+            package_roots=discover_development_packages(entry_path, home=home),
         )
         return discover_params_from_source(
             source,

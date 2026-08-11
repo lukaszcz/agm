@@ -299,6 +299,26 @@ class TestReplRun:
 
         assert not result.ok
 
+    def test_repl_excludes_the_immutable_store_from_development_discovery(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        home = _isolated_home(monkeypatch, tmp_path)
+        calls: list[Path] = []
+        original = repl_command.discover_development_packages
+
+        def discover(anchor: Path, *, home: Path) -> tuple[object, ...]:
+            calls.append(home)
+            return original(anchor, home=home)
+
+        monkeypatch.setattr(repl_command, "discover_development_packages", discover)
+
+        repl_command.run(_args(no_stdlib=True))
+
+        assert calls == [home]
+
     def test_repl_mounts_the_current_package_and_its_path_dependencies(
         self,
         monkeypatch: pytest.MonkeyPatch,

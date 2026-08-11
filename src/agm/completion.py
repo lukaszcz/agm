@@ -564,7 +564,9 @@ class ExecCommand(TyperCommand):
                     cwd=context.cwd,
                     home=context.home,
                     proj_dir=context.proj_dir,
-                    package_roots=discover_development_packages(entry_path or context.cwd),
+                    package_roots=discover_development_packages(
+                        entry_path or context.cwd, home=context.home
+                    ),
                 )
                 extra = _exec_param_completion_items(
                     source,

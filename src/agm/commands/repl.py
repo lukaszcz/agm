@@ -135,7 +135,7 @@ def run(args: ReplArgs) -> None:
             home=ctx.home,
             proj_dir=ctx.proj_dir,
             cwd=ctx.cwd,
-            development_packages=discover_development_packages(ctx.cwd),
+            development_packages=discover_development_packages(ctx.cwd, home=ctx.home),
         )
     except ValueError as exc:
         print(f"Error: invalid package roots: {exc}", file=sys.stderr)

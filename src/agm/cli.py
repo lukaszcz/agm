@@ -1034,7 +1034,9 @@ def _exec_print_help(
                 cwd=context.cwd,
                 home=context.home,
                 proj_dir=context.proj_dir,
-                package_roots=discover_development_packages(entry_path or context.cwd),
+                package_roots=discover_development_packages(
+                    entry_path or context.cwd, home=context.home
+                ),
             )
             params = discover_params_from_source(
                 source,

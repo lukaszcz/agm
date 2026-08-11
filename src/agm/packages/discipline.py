@@ -24,7 +24,7 @@ from agm.agl.syntax.nodes import (
     static_items,
 )
 from agm.agl.syntax.resources import ResourceError, resolve_resource, resource_path
-from agm.agl.syntax.types import ImportMode
+from agm.agl.syntax.types import ImportMode, UnitT
 from agm.agl.syntax.visitor import walk
 from agm.command_catalog import RESERVED_COMMAND_NAMES
 from agm.core import fs
@@ -379,9 +379,14 @@ def _validate_program_reference(
     except (AglSyntaxError, OSError, UnicodeDecodeError) as exc:
         raise DisciplineError(f"cannot parse program module {source}: {exc}") from exc
     candidates = {
-        tuple(segment.name for segment in function.scope_path) + (function.name,)
+        tuple(segment.name for segment in function.scope_path) + (function.name,): function
         for function in static_function_items(program.body.items)
         if function.is_program
     }
-    if declaration not in candidates:
+    function = candidates.get(declaration)
+    if function is None:
         raise DisciplineError(f"program reference {reference!r} names no program declaration")
+    if function.type_param_slots or function.params or not isinstance(function.return_type, UnitT):
+        raise DisciplineError(
+            f"registered program {reference!r} must declare no parameters and an explicit unit result"
+        )

@@ -90,6 +90,24 @@ class TestPackageDiscipline:
         with pytest.raises(DisciplineError):
             validate_package(package)
 
+    @pytest.mark.parametrize(
+        "declaration",
+        (
+            "program def main[T]() -> unit = ()",
+            "program def main(value: int) -> unit = ()",
+            "program def main() -> int = 1",
+            "program def main() = ()",
+        ),
+    )
+    def test_rejects_registered_program_with_invalid_entry_signature(
+        self, tmp_path: Path, declaration: str
+    ) -> None:
+        package = _custom_package(tmp_path, command_path="start")
+        (package.module_root / "main.agl").write_text(f"{declaration}\n")
+
+        with pytest.raises(DisciplineError):
+            validate_package(package)
+
     def test_rejects_module_without_referenced_program(self, tmp_path: Path) -> None:
         package = _custom_package(tmp_path, command_path="start")
         (package.module_root / "main.agl").write_text("def main() -> unit = ()\n")

@@ -1,10 +1,10 @@
 """Syntax-level detection of AgL constant expressions.
 
-A constant expression is built only from literal syntax, container literals, and
-constructor applications. This is a pure predicate over the AST — it depends only
-on :mod:`agm.agl.syntax.nodes` — leaving type checking responsible for deciding
-which references are constructors and for validating the expression's declared
-type.
+A constant expression is built only from literal syntax, container literals,
+constructor applications, and designated root builtin calls. This is a pure
+predicate over the AST — it depends only on :mod:`agm.agl.syntax.nodes` — leaving
+type checking responsible for deciding which references are constructors and
+for validating the expression's declared type.
 """
 
 from __future__ import annotations
@@ -37,8 +37,10 @@ def is_constant_expression(
 ) -> bool:
     """Whether *expr* contains only literal construction.
 
-    ``is_constructor`` is supplied by the checked frontend artifact, keeping
-    this syntax-level predicate independent of scope and typecheck internals.
+    ``is_constructor`` and ``is_constant_builtin`` are supplied by the checked
+    frontend artifact, keeping this syntax-level predicate independent of scope
+    and typecheck internals. A constant builtin must be called through a
+    :class:`VarRef`; a type-directed member call cannot prove builtin provenance.
     """
     if isinstance(expr, (BoolLit, DecimalLit, IntLit, NullLit, StringLit, UnitLit)):
         return True
@@ -63,7 +65,10 @@ def is_constant_expression(
             expr.expr, is_constructor=is_constructor, is_constant_builtin=is_constant_builtin
         )
     if isinstance(expr, Call):
-        return is_constant_builtin(expr.node_id) or (
+        # Builtin provenance is attached to calls speculatively for member
+        # selection, so only a VarRef-rooted call can prove constancy here.
+        is_root_builtin = isinstance(expr.callee, VarRef) and is_constant_builtin(expr.node_id)
+        return is_root_builtin or (
             is_constant_expression(
                 expr.callee, is_constructor=is_constructor, is_constant_builtin=is_constant_builtin
             )

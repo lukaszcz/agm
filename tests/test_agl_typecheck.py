@@ -8184,6 +8184,21 @@ class TestRootBindingInitializers:
                 "def value() -> int = 1\nlet root = value()", default_capabilities()
             )
 
+    @pytest.mark.parametrize("method_name", ("resource", "resource-dir"))
+    def test_root_initializer_rejects_ordinary_method_named_like_resource_builtin(
+        self, method_name: str
+    ) -> None:
+        source = (
+            "record Provider()\n"
+            f"def Provider::{method_name}(self) -> int =\n"
+            "  print 1\n"
+            "  1\n"
+            f"let root = Provider().{method_name}()"
+        )
+
+        with pytest.raises(AglTypeError):
+            resolve_and_check_entry(source, default_capabilities())
+
     def test_root_constructor_initializer_is_constant(self) -> None:
         checked = resolve_and_check_entry(
             "record Settings(value: int)\nlet settings = Settings(value = 1)",

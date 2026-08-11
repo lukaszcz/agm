@@ -317,11 +317,14 @@ def _module_files(package: PackageInfo) -> dict[ModuleId, Path]:
         if not fs.is_file(path):
             continue
         relative = path.relative_to(package.root).with_suffix("")
+        target = path.resolve()
+        if not target.is_relative_to(module_root):
+            raise DisciplineError(f"package module {relative.as_posix()!r} escapes its module tree")
         try:
             module_id = ModuleId.from_path(relative.as_posix())
         except ValueError as exc:
             raise DisciplineError(f"invalid module path {relative.as_posix()!r}") from exc
-        modules[module_id] = path.resolve()
+        modules[module_id] = target
     return modules
 
 

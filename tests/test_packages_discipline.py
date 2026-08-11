@@ -144,6 +144,15 @@ class TestPackageDiscipline:
 
         assert owning_package(module, (outer, inner)) == inner
 
+    def test_rejects_symlinked_module_file_escaping_module_tree(self, tmp_path: Path) -> None:
+        package = _custom_package(tmp_path, command_path="start")
+        outside = tmp_path / "outside.agl"
+        outside.write_text("program def main() -> unit = ()\n")
+        (package.module_root / "main.agl").symlink_to(outside)
+
+        with pytest.raises(DisciplineError, match="escapes"):
+            validate_package(package)
+
     def test_maps_files_under_a_symlinked_module_tree_to_their_owning_package(
         self, tmp_path: Path
     ) -> None:

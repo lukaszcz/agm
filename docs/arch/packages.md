@@ -8,12 +8,14 @@ literal resources, and CLI commands backed by parameterless `program def` entrie
 
 ## Package Lifecycle
 
-`agm pkg check` validates a development package without modifying it. `agm pkg create`
-resolves the dependency closure, validates both the source tree and selected archive contents with
-those dependency modules, and produces a deterministic `.agmpkg` archive. `agm pkg install`
-validates dependencies, records immutable installations in the AGM-home package store, and
-activates one version of each package; editable installations instead mount their live source
-tree. The store follows the single runtime AGM home: `AGM_HOME`, otherwise a populated
+`agm pkg check` validates a development package without modifying it. Structural checks run before
+dependency resolution; dependency-aware validation then loads the package module graph with runtime
+package visibility, rejecting unresolved modules and imports outside the declared dependency
+closure. `agm pkg create` resolves the dependency closure, validates both the source tree and
+selected archive contents with those dependency modules, and produces a deterministic `.agmpkg`
+archive. `agm pkg install` validates dependencies, records immutable installations in the AGM-home
+package store, and activates one version of each package; editable installations instead mount their
+live source tree. The store follows the single runtime AGM home: `AGM_HOME`, otherwise a populated
 installation-prefix `.agm`, otherwise `~/.agm`. `agm pkg uninstall` removes an active selection
 and its registered commands.
 
@@ -80,7 +82,9 @@ selected manifest and module ownership before executing it.
 
 - `src/agm/packages/manifest.py` — manifest schema and distribution-manifest view.
 - `src/agm/packages/__init__.py` — lazy public package-domain façade.
-- `src/agm/packages/discipline.py` — module-tree, command, and lexical resource-alias validation across imports, opens, and the resolved dependency closure, including bounded re-export propagation.
+- `src/agm/packages/discipline.py` — staged module-tree and command validation,
+  dependency-aware import-graph loading, and lexical resource-alias validation across imports,
+  opens, and the resolved dependency closure.
 - `src/agm/packages/model.py` and `development.py` — package identity, ownership, and
   development-package discovery.
 - `src/agm/packages/store.py`, `record.py`, and `archive.py` — store layout, integrity records,

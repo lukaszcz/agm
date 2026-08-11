@@ -32,7 +32,11 @@ from agm.packages.archive import (
     extract_archive,
     verify_archive_discipline,
 )
-from agm.packages.discipline import DisciplineError, validate_package
+from agm.packages.discipline import (
+    DisciplineError,
+    validate_package,
+    validate_package_structure,
+)
 from agm.packages.fetch import FetchError, fetch_archive
 from agm.packages.manifest import DependencySpec, ManifestError, PackageManifest, load_manifest
 from agm.packages.model import PackageInfo, canonical_package_identity
@@ -186,6 +190,7 @@ def refresh_managed_stdlib(
         package = _validated_directory_package(source)
         _validate_managed_stdlib_install(package.manifest, source=package.root, editable=False)
         _validate_minimum_agm(package.manifest)
+        validate_package(package)
         try:
             destination = canonical_package_store_path(
                 package.manifest.name, package.manifest.version, home=home, env=env
@@ -400,7 +405,7 @@ def _validated_directory_package(source: Path) -> PackageInfo:
     root = source.resolve()
     try:
         package = PackageInfo(root, load_manifest(root / "package.toml"))
-        validate_package(package)
+        validate_package_structure(package)
     except (ManifestError, DisciplineError) as exc:
         raise PackageInstallError(f"cannot install package from {source}: {exc}") from exc
     return package
@@ -418,7 +423,7 @@ def _stage_directory_package(source: Path, package: PackageInfo, destination: Pa
     try:
         fs.copy_tree(source, staging, dirs_exist_ok=True)
         staged = PackageInfo(staging, load_manifest(staging / "package.toml"))
-        validate_package(staged)
+        validate_package_structure(staged)
         if (
             canonical_package_identity(staged.manifest.name, staged.manifest.version)
             != canonical_package_identity(package.manifest.name, package.manifest.version)
@@ -583,7 +588,7 @@ def _install_archive(archive: Path, *, state: _InstallState, shadow: bool) -> Pa
             metadata = extract_archive(archive_path, prepare_staging)
             destination, staging = prepared[-1]
             package = PackageInfo(staging, metadata.manifest)
-            validate_package(package)
+            validate_package_structure(package)
             verify_record(staging)
             if destination.exists():
                 _verify_existing_install(destination, metadata.manifest, metadata.package_hash)

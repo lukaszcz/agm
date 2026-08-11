@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
-from typing import TypeVar
+from tempfile import TemporaryDirectory
+from typing import TypeVar, cast
 
+from agm.agl.diagnostics import AglError
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId
+from agm.agl.modules.loader import build_repl_graph
+from agm.agl.modules.roots import RootSet
 from agm.agl.parser import AglSyntaxError, parse_program
+from agm.agl.parser.parser import parse_program_seeded
 from agm.agl.scope import BuiltinKind
 from agm.agl.scope.reexports import ReexportCycleError, converge_reexports
 from agm.agl.syntax.nodes import (
@@ -32,6 +38,7 @@ from agm.command_catalog import RESERVED_COMMAND_NAMES
 from agm.core import fs
 from agm.packages.manifest import PackageManifest
 from agm.packages.model import PackageInfo
+from agm.stdlib_locator import shipped_stdlib_root
 from agm.util.ident import is_identifier
 
 T = TypeVar("T")
@@ -47,7 +54,23 @@ class DisciplineError(ValueError):
 def validate_package(
     package: PackageInfo, *, dependency_packages: Iterable[PackageInfo] = ()
 ) -> None:
-    """Validate a package's module tree, commands, resources, and references."""
+    """Validate a package's module tree, commands, imports, resources, and references."""
+
+    dependencies = tuple(dependency_packages)
+    modules = _validate_package_structure(package, dependency_packages=dependencies)
+    _validate_imports(package, modules, dependency_packages=dependencies)
+
+
+def validate_package_structure(package: PackageInfo) -> None:
+    """Validate package structure before its dependency closure is available."""
+
+    _validate_package_structure(package, dependency_packages=())
+
+
+def _validate_package_structure(
+    package: PackageInfo, *, dependency_packages: tuple[PackageInfo, ...]
+) -> dict[ModuleId, Path]:
+    """Run validation stages that do not require loading the import graph."""
 
     _validate_package_name(package.manifest.name)
     modules = _module_files(package)
@@ -64,6 +87,46 @@ def validate_package(
         export_modules=dependency_modules,
         read_export_module=fs.read_text,
     )
+    return modules
+
+
+def _validate_imports(
+    package: PackageInfo,
+    modules: Mapping[ModuleId, Path],
+    *,
+    dependency_packages: tuple[PackageInfo, ...],
+) -> None:
+    """Load every package module with runtime package-visibility rules."""
+
+    if not modules:
+        return
+    stdlib_root = (
+        package.root if package.manifest.name == "std" else shipped_stdlib_root().resolve()
+    )
+    mounted_packages = (package, *dependency_packages)
+    roots = RootSet(
+        roots=frozenset({stdlib_root, *(mounted.root for mounted in mounted_packages)}),
+        packages=mounted_packages,
+        stdlib_roots=frozenset({stdlib_root}),
+    )
+    entry, next_id = _package_graph_entry(package.manifest.name)
+    try:
+        build_repl_graph(entry, next_id, path=None, cached={}, roots=roots)
+    except (AglError, OSError, UnicodeDecodeError) as exc:
+        raise DisciplineError(
+            f"cannot load imports for package {package.manifest.name!r}: {exc}"
+        ) from exc
+
+
+def _package_graph_entry(package_name: str) -> tuple[Program, int]:
+    """Build a synthetic wildcard entry without reparsing the package name."""
+
+    program, next_id = parse_program_seeded("import package_root/*\n", start_id=0)
+    declaration = replace(
+        cast(ImportDecl, program.body.items[0]),
+        module_path=(package_name,),
+    )
+    return replace(program, body=replace(program.body, items=(declaration,))), next_id
 
 
 def validate_archive_package(
@@ -76,6 +139,7 @@ def validate_archive_package(
     """Validate archived module content against its resolved dependencies."""
 
     _validate_package_name(manifest.name)
+    dependencies = tuple(dependency_packages)
     paths = tuple(archive_paths)
     module_root = manifest.name + "/"
     if not any(path.startswith(module_root) for path in paths):
@@ -91,7 +155,7 @@ def validate_archive_package(
         modules[module_id] = path
     dependency_modules = {
         module_id: path
-        for dependency in dependency_packages
+        for dependency in dependencies
         for module_id, path in _module_files(dependency).items()
     }
     _validate_commands(manifest, modules, read_module)
@@ -103,6 +167,48 @@ def validate_archive_package(
         export_modules=dependency_modules,
         read_export_module=fs.read_text,
     )
+    available_dependencies = {dependency.manifest.name for dependency in dependencies}
+    if all(name == "std" or name in available_dependencies for name in manifest.dependencies):
+        _validate_archive_imports(
+            manifest,
+            modules,
+            archive_paths=path_set,
+            read_module=read_module,
+            dependency_packages=dependencies,
+        )
+
+
+def _validate_archive_imports(
+    manifest: PackageManifest,
+    modules: Mapping[ModuleId, str],
+    *,
+    archive_paths: frozenset[str],
+    read_module: Callable[[str], str],
+    dependency_packages: tuple[PackageInfo, ...],
+) -> None:
+    """Materialize archived modules so the filesystem graph loader can validate them."""
+
+    try:
+        with TemporaryDirectory(prefix="agm-package-check-") as temporary:
+            package = PackageInfo(Path(temporary), manifest)
+            materialized: dict[ModuleId, Path] = {}
+            for module_id, archive_path in modules.items():
+                module_path = package.root / module_id.relpath()
+                module_path.parent.mkdir(parents=True, exist_ok=True)
+                module_path.write_text(read_module(archive_path), encoding="utf-8")
+                companion_path = str(PurePosixPath(archive_path).with_suffix(".py"))
+                if companion_path in archive_paths:
+                    module_path.with_suffix(".py").write_text("", encoding="utf-8")
+                materialized[module_id] = module_path
+            _validate_imports(
+                package,
+                materialized,
+                dependency_packages=dependency_packages,
+            )
+    except (OSError, UnicodeDecodeError) as exc:
+        raise DisciplineError(
+            f"cannot load imports for archive package {manifest.name!r}: {exc}"
+        ) from exc
 
 
 def _archive_resource_exists(relative: str, paths: frozenset[str]) -> bool:

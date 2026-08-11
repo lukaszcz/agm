@@ -7,8 +7,12 @@ from pathlib import Path
 import pytest
 import semver
 
-from agm.packages.discipline import DisciplineError, validate_package
-from agm.packages.manifest import CommandSpec, PackageManifest, load_manifest
+from agm.packages.discipline import (
+    DisciplineError,
+    validate_archive_package,
+    validate_package,
+)
+from agm.packages.manifest import CommandSpec, DependencySpec, PackageManifest, load_manifest
 from agm.packages.model import PackageInfo, owning_package
 from tests._timeouts import fail_if_slow
 
@@ -45,6 +49,71 @@ class TestPackageDiscipline:
     def test_rejects_unresolvable_command_program_reference(self) -> None:
         with pytest.raises(DisciplineError):
             validate_package(_package("missing_program"))
+
+    def test_rejects_import_of_missing_package_module(self, tmp_path: Path) -> None:
+        package = _custom_package(tmp_path)
+        (package.module_root / "main.agl").write_text("import custom/missing\n")
+
+        with pytest.raises(DisciplineError):
+            validate_package(package)
+
+    def test_rejects_undeclared_import_from_mounted_dependency(self, tmp_path: Path) -> None:
+        dependency_root = tmp_path / "dependency"
+        dependency = PackageInfo(
+            dependency_root,
+            PackageManifest("helpers", semver.Version.parse("1.0.0")),
+        )
+        dependency.module_root.mkdir(parents=True)
+        (dependency.module_root / "api.agl").write_text("let value = 1\n")
+        consumer = _custom_package(tmp_path / "consumer")
+        (consumer.module_root / "main.agl").write_text("import helpers/api\n")
+
+        with pytest.raises(DisciplineError):
+            validate_package(consumer, dependency_packages=(dependency,))
+
+    def test_accepts_import_from_declared_dependency(self, tmp_path: Path) -> None:
+        dependency_root = tmp_path / "dependency"
+        dependency = PackageInfo(
+            dependency_root,
+            PackageManifest("helpers", semver.Version.parse("1.0.0")),
+        )
+        dependency.module_root.mkdir(parents=True)
+        (dependency.module_root / "api.agl").write_text("let value = 1\n")
+        consumer_root = tmp_path / "consumer"
+        consumer = PackageInfo(
+            consumer_root,
+            PackageManifest(
+                "consumer",
+                semver.Version.parse("1.0.0"),
+                dependencies={
+                    "helpers": DependencySpec(semver.Version.parse("1.0.0")),
+                },
+            ),
+        )
+        consumer.module_root.mkdir(parents=True)
+        (consumer.module_root / "main.agl").write_text("import helpers/api\n")
+
+        validate_package(consumer, dependency_packages=(dependency,))
+
+    def test_rejects_missing_import_used_by_registered_command(self, tmp_path: Path) -> None:
+        package = _custom_package(tmp_path, command_path="start")
+        (package.module_root / "main.agl").write_text(
+            "import custom/missing\nprogram def main() -> unit = ()\n"
+        )
+
+        with pytest.raises(DisciplineError):
+            validate_package(package)
+
+    def test_rejects_archive_import_of_missing_package_module(self) -> None:
+        modules = {"custom/main.agl": "import custom/missing\n"}
+        manifest = PackageManifest("custom", semver.Version.parse("1.0.0"))
+
+        with pytest.raises(DisciplineError):
+            validate_archive_package(
+                manifest,
+                archive_paths=modules,
+                read_module=modules.__getitem__,
+            )
 
     @pytest.mark.parametrize("fixture", ("malformed_command", "reserved_command"))
     def test_rejects_malformed_or_reserved_command_path(self, fixture: str) -> None:

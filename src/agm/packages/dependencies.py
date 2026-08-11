@@ -9,7 +9,7 @@ from pathlib import Path
 import semver
 
 from agm.packages.activation import PackageActivationError, load_activation_index
-from agm.packages.discipline import DisciplineError, validate_package
+from agm.packages.discipline import DisciplineError, validate_package_structure
 from agm.packages.install import PackageInstallError, installed_packages
 from agm.packages.manifest import DependencySpec, ManifestError, load_manifest
 from agm.packages.model import PackageInfo
@@ -118,7 +118,7 @@ def _path_package(
         raise DependencyError(f"cannot use symbolic-link package dependency {root}")
     try:
         selected = PackageInfo(root.resolve(), load_manifest(root / "package.toml"))
-        validate_package(selected)
+        validate_package_structure(selected)
     except (DisciplineError, ManifestError) as exc:
         raise DependencyError(f"cannot validate path dependency {name!r}: {exc}") from exc
     if selected.manifest.name != name or selected.manifest.version < requirement.version:

@@ -8,7 +8,11 @@ from pathlib import Path
 from agm.cli_support.args import PkgCheckArgs
 from agm.config.context import current_config_context
 from agm.packages.dependencies import DependencyError, validate_dependencies
-from agm.packages.discipline import DisciplineError, validate_package
+from agm.packages.discipline import (
+    DisciplineError,
+    validate_package,
+    validate_package_structure,
+)
 from agm.packages.manifest import ManifestError, load_manifest
 from agm.packages.model import PackageInfo
 
@@ -19,7 +23,7 @@ def run(args: PkgCheckArgs) -> None:
     root = Path.cwd() if args.directory is None else Path(args.directory)
     try:
         package = PackageInfo(root=root, manifest=load_manifest(root / "package.toml"))
-        validate_package(package)
+        validate_package_structure(package)
         dependencies = validate_dependencies(package, home=current_config_context().home)
         validate_package(package, dependency_packages=dependencies)
     except (DependencyError, DisciplineError, ManifestError) as exc:

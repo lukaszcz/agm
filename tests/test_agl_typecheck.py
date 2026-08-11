@@ -8173,6 +8173,20 @@ class TestIndexTypechecking:
 
 
 # ---------------------------------------------------------------------------
+# Qualified calls
+# ---------------------------------------------------------------------------
+
+
+class TestQualifiedCalls:
+    def test_user_method_named_resource_uses_declared_signature(self) -> None:
+        checked = accept_type(
+            "record P()\ndef P::resource(self) -> P = self\nlet value = P::resource(P())\nvalue"
+        )
+
+        assert checked.resolved.program is not None
+
+
+# ---------------------------------------------------------------------------
 # Root binding initializers
 # ---------------------------------------------------------------------------
 

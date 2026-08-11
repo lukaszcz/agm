@@ -386,6 +386,9 @@ class BindingRef:
     ``slot_id``
         The :class:`PatternSlot` id when this reference is a field-directed
         pattern slot, or ``None`` for an ordinary resolved binding.
+    ``is_builtin``
+        Whether the referenced function declaration is host-implemented.
+        This provenance survives imports, re-exports, and REPL retention.
     """
 
     name: str
@@ -396,6 +399,7 @@ class BindingRef:
     module_id: ModuleId = ENTRY_ID
     scope_path: ScopePath = ()
     slot_id: int | None = None
+    is_builtin: bool = False
 
 
 # ---------------------------------------------------------------------------

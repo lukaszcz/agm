@@ -471,9 +471,9 @@ def _decl_to_import_target(
 # Cross-module decl info type aliases
 # ---------------------------------------------------------------------------
 
-# Maps (module_id, name) → (decl_node_id, decl_span, binder_kind) for use
-# when building BindingRef for cross-module references.
-_DeclInfo = dict[QName, tuple[int, SourceSpan, BinderKind]]
+# Maps (module_id, name) → (decl_node_id, decl_span, binder_kind, is_builtin)
+# for building BindingRef values for cross-module references.
+_DeclInfo = dict[QName, tuple[int, SourceSpan, BinderKind, bool]]
 
 
 # ---------------------------------------------------------------------------
@@ -582,7 +582,12 @@ def resolve_program(
                     continue
                 key = (mid, _item_atom(item))
                 all_public_funcs[key] = item
-                decl_info[key] = (item.node_id, item.span, BinderKind.function_binding)
+                decl_info[key] = (
+                    item.node_id,
+                    item.span,
+                    BinderKind.function_binding,
+                    item.is_builtin,
+                )
             elif isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
                 key = (mid, _item_atom(item))
                 all_public_types[key] = item
@@ -592,10 +597,15 @@ def resolve_program(
                     or isinstance(item.type_expr, (NameT, AppliedT))
                     else BinderKind.let_binding
                 )
-                decl_info[key] = (item.node_id, item.span, kind)
+                decl_info[key] = (item.node_id, item.span, kind, False)
             elif isinstance(item, BuiltinVarDecl):
                 key = (mid, _item_atom(item))
-                decl_info[key] = (item.node_id, item.span, BinderKind.builtin_var_binding)
+                decl_info[key] = (
+                    item.node_id,
+                    item.span,
+                    BinderKind.builtin_var_binding,
+                    False,
+                )
 
     cross_module_constructor_refs = _cross_module_constructor_refs(all_public_types)
     cross_module_constructible_types = frozenset(
@@ -603,7 +613,6 @@ def resolve_program(
         for qname, declaration in all_public_types.items()
         if isinstance(declaration, (RecordDef, EnumDef, ExceptionDef))
     )
-
     # ------------------------------------------------------------------
     # Step 6: Resolve each module's bodies.
     # ------------------------------------------------------------------

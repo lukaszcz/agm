@@ -33,13 +33,11 @@ Scope rules
 
 Built-in call classification
 -----------------------------
-``print`` / ``exec`` / ``ask`` are contextual built-ins.  They cannot be
-declared (``let``/``var``/``def``/``param``/pattern/catch).
-In **call position** (a ``Call`` whose callee is a bare ``VarRef`` with one
-of these names), the resolver records ``Call.node_id → BuiltinKind`` in the
-``builtin_calls`` side table and does NOT attempt to resolve the callee as a
-normal binding.  A bare ``VarRef("print")`` (not in call position) raises
-``AglScopeError`` — they are not first-class values in AgL.
+Contextual built-ins are reached through ordinary name resolution. In call
+position, the resolver records ``Call.node_id → BuiltinKind`` only when the
+resolved function declaration has ``builtin`` provenance. A reference to such
+a declaration outside call position raises ``AglScopeError`` because host
+built-ins are not first-class values in AgL.
 """
 
 from __future__ import annotations
@@ -266,7 +264,7 @@ class _Resolver:
         all_public_types: dict[
             tuple[ModuleId, NameAtom], RecordDef | EnumDef | ExceptionDef | TypeAlias
         ],
-        decl_info: dict[tuple[ModuleId, NameAtom], tuple[int, SourceSpan, BinderKind]]
+        decl_info: dict[tuple[ModuleId, NameAtom], tuple[int, SourceSpan, BinderKind, bool]]
         | None = None,
         cross_module_constructor_refs: Mapping[tuple[ModuleId, NameAtom], ConstructorRef]
         | None = None,
@@ -286,10 +284,11 @@ class _Resolver:
         # ImportEnv/dict for a module with no imports or no public types).
         self._module_id: ModuleId = module_id
         self._import_env: ImportEnv = import_env
-        # Maps (module_id, name) → (node_id, span, kind) for cross-module refs.
-        self._decl_info: dict[tuple[ModuleId, NameAtom], tuple[int, SourceSpan, BinderKind]] = (
-            decl_info if decl_info is not None else {}
-        )
+        # Maps (module_id, name) → (node_id, span, kind, is_builtin) for
+        # cross-module refs.
+        self._decl_info: dict[
+            tuple[ModuleId, NameAtom], tuple[int, SourceSpan, BinderKind, bool]
+        ] = decl_info if decl_info is not None else {}
         self._cross_module_constructor_refs: Mapping[tuple[ModuleId, NameAtom], ConstructorRef] = (
             cross_module_constructor_refs if cross_module_constructor_refs is not None else {}
         )
@@ -637,6 +636,7 @@ class _Resolver:
             kind=kind,
             module_id=self._module_id,
             scope_path=path,
+            is_builtin=isinstance(item, FuncDef) and item.is_builtin,
         )
         self._declaration_items[key] = item
         if isinstance(item, FuncDef):
@@ -1264,6 +1264,7 @@ class _Resolver:
                 decl_node_id=decl.node_id,
                 kind=BinderKind.function_binding,
                 module_id=self._module_id,
+                is_builtin=decl.is_builtin,
             )
             self._current_scope().define(name, ref)
 
@@ -2216,8 +2217,20 @@ class _Resolver:
                 node, self._resolution.get(node.node_id), is_call_target=is_call_target
             )
             return
-        # Standard lexical lookup.
+        # Standard lexical lookup. A receiver method may legally share a host
+        # built-in's spelling, but bare call syntax still denotes the visible
+        # builtin declaration; methods are selected by qualification or member
+        # access. Discard that method candidate so the ordinary contribution
+        # lookup below can recover the builtin with its real provenance.
         ref = self._current_scope().lookup(node.name)
+        if (
+            is_call_target
+            and node.name in _BUILTIN_CALL_NAMES
+            and ref is not None
+            and ref.kind is BinderKind.function_binding
+            and not ref.is_builtin
+        ):
+            ref = None
         regional_candidates = self._regional_constructor_candidates(node.name)
         if ref is None or (
             ref.kind is BinderKind.constructor_binding and regional_candidates is not None
@@ -2247,14 +2260,14 @@ class _Resolver:
         once a reference resolves to a ``function_binding`` for a built-in
         declaration, a call site turns it into a host-dispatch classification
         (*is_call_target* is set), while every other value context has no
-        host dispatch to offer. A non-``builtin`` ``def`` can never reach here
-        under a built-in name — that is rejected at declaration
-        (``_validate_function_decl``) — so this is exactly the built-in case.
+        host dispatch to offer. Qualified methods may legitimately share a
+        built-in's spelling, so declaration provenance rather than the
+        reference name distinguishes the host implementation.
         """
         if (
             not is_call_target
+            and self._is_builtin_function_ref(ref)
             and ref is not None
-            and ref.kind is BinderKind.function_binding
             and ref.name in _BUILTIN_CALL_NAMES
         ):
             raise AglScopeError(
@@ -2885,8 +2898,8 @@ class _Resolver:
             Source span of the reference site (for synthetic decl_span).
         """
         key = (owning_module, src_name)
-        decl_node_id, decl_span, kind = self._decl_info.get(
-            key, (-1, span, BinderKind.function_binding)
+        decl_node_id, decl_span, kind, is_builtin = self._decl_info.get(
+            key, (-1, span, BinderKind.function_binding, False)
         )
         path = (src_name,) if isinstance(src_name, str) else src_name
         return BindingRef(
@@ -2900,6 +2913,7 @@ class _Resolver:
             kind=kind,
             module_id=owning_module,
             scope_path=path[:-1],
+            is_builtin=is_builtin,
         )
 
     def _spaced_qualifier_repair(
@@ -2922,8 +2936,8 @@ class _Resolver:
         if not isinstance(result, QualResolutionFound):
             return None
         if advisory.type_qualified:
-            _node_id, _span, kind = self._decl_info.get(
-                result.qname, (-1, advisory.dcolon_span, BinderKind.let_binding)
+            _node_id, _span, kind, _is_builtin = self._decl_info.get(
+                result.qname, (-1, advisory.dcolon_span, BinderKind.let_binding, False)
             )
             if kind is not BinderKind.constructor_binding:
                 return None
@@ -2948,6 +2962,10 @@ class _Resolver:
                 return advisory
         return None
 
+    def _is_builtin_function_ref(self, ref: BindingRef | None) -> bool:
+        """Return whether *ref* names an actual ``builtin def`` declaration."""
+        return ref is not None and ref.kind is BinderKind.function_binding and ref.is_builtin
+
     def _resolve_call(self, node: Call) -> None:
         """Resolve a ``Call`` node.
 
@@ -2965,7 +2983,7 @@ class _Resolver:
         if isinstance(callee, VarRef):
             self._resolve_varref(callee, is_call_target=True)
             ref = self._resolution.get(callee.node_id)
-            if ref is not None and ref.kind is BinderKind.function_binding:
+            if ref is not None and self._is_builtin_function_ref(ref):
                 kind = _BUILTIN_CALL_NAMES.get(ref.name)
                 if kind is not None:
                     self._builtin_calls[node.node_id] = kind
@@ -3208,8 +3226,8 @@ class _Resolver:
                 # ordinary imported member; its declaration kind is what makes it
                 # a constructor spelling.
                 atom_path = _bare_path(qname[1])
-                decl_node_id, _decl_span, kind = self._decl_info.get(
-                    qname, (-1, node.span, BinderKind.let_binding)
+                decl_node_id, _decl_span, kind, _is_builtin = self._decl_info.get(
+                    qname, (-1, node.span, BinderKind.let_binding, False)
                 )
                 if kind is BinderKind.constructor_binding:
                     return (

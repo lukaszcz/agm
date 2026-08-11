@@ -1629,6 +1629,42 @@ class TestBuiltinCallClassification:
         # User call: not in builtin_calls
         assert let_node.value.node_id not in r.builtin_calls
 
+    @pytest.mark.parametrize(
+        ("method_name", "builtin_call", "builtin_kind"),
+        (
+            ("resource", 'resource("asset")', BuiltinKind.RESOURCE),
+            ("resource-dir", "resource-dir()", BuiltinKind.RESOURCE_DIR),
+        ),
+    )
+    def test_builtin_provenance_distinguishes_qualified_user_method(
+        self, method_name: str, builtin_call: str, builtin_kind: BuiltinKind
+    ) -> None:
+        r = parse_and_resolve(
+            "record P()\n"
+            f"def P::{method_name}(self) -> P = self\n"
+            f"let builtin_value = {builtin_call}\n"
+            f"let user_value = P::{method_name}(P())\n"
+            "user_value"
+        )
+        method = r.program.body.items[1]
+        builtin_let = r.program.body.items[2]
+        user_let = r.program.body.items[3]
+        assert isinstance(method, FuncDef)
+        assert isinstance(builtin_let, LetDecl)
+        assert isinstance(builtin_let.value, Call)
+        assert isinstance(builtin_let.value.callee, VarRef)
+        builtin_ref = r.resolution[builtin_let.value.callee.node_id]
+        assert builtin_ref.is_builtin
+        assert r.builtin_calls[builtin_let.value.node_id] is builtin_kind
+        assert isinstance(user_let, LetDecl)
+        assert isinstance(user_let.value, Call)
+        assert isinstance(user_let.value.callee, VarRef)
+        method_ref = r.resolution[user_let.value.callee.node_id]
+        assert method_ref.decl_node_id == method.node_id
+        assert method_ref.scope_path == ("P",)
+        assert not method_ref.is_builtin
+        assert user_let.value.node_id not in r.builtin_calls
+
     def test_lambda_call_not_classified(self) -> None:
         """Calling a lambda-bound name is not in builtin_calls."""
         r = parse_and_resolve("let f = fn(x: int) => x\nlet y = f(1)\ny")

@@ -2144,6 +2144,42 @@ def test_uninstall_reports_activation_write_failure(
     assert "alpha" in load_activation_index(home=home, env={}).packages
 
 
+def test_uninstall_translates_failed_activation_rollback_and_can_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    installed = install_directory(
+        _package(tmp_path / "source", "alpha", "1.0.0"), home=home, env={}
+    )
+    tombstone = installed.root.parent / ".uninstalling"
+    original_write = package_install.write_activation_index
+    original_replace = Path.replace
+    monkeypatch.setattr(
+        package_install,
+        "write_activation_index",
+        lambda *_, **__: (_ for _ in ()).throw(PackageActivationError("broken")),
+    )
+
+    def fail_rollback(path: Path, target: Path) -> Path:
+        if path == tombstone and target == installed.root:
+            raise OSError("rollback failed")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_rollback)
+
+    with pytest.raises(PackageInstallError):
+        uninstall_package("alpha", home=home, env={})
+
+    assert tombstone.is_dir()
+    assert "alpha" in load_activation_index(home=home, env={}).packages
+
+    monkeypatch.setattr(package_install, "write_activation_index", original_write)
+    monkeypatch.setattr(Path, "replace", original_replace)
+    uninstall_package("alpha", home=home, env={})
+    assert not tombstone.exists()
+    assert "alpha" not in load_activation_index(home=home, env={}).packages
+
+
 def test_installed_package_enumeration_skips_non_package_entries_and_bad_manifests(
     tmp_path: Path,
 ) -> None:

@@ -362,8 +362,13 @@ def _uninstall_package(name: str, *, home: Path, env: Mapping[str, str] | None =
         raise PackageInstallError(f"cannot remove package {name!r}: {exc}") from exc
     try:
         _commit_activation(ActivationIndex(packages), home=home, env=env)
-    except PackageInstallError:
-        tombstone.replace(root)
+    except PackageInstallError as activation_error:
+        try:
+            tombstone.replace(root)
+        except OSError as rollback_error:
+            raise PackageInstallError(
+                f"cannot restore package {name!r} after activation failure: {rollback_error}"
+            ) from activation_error
         raise
     _finish_uninstall(name, tombstone, version=active.version, home=home, env=env)
 

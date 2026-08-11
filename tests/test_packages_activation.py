@@ -227,7 +227,9 @@ def test_rebuild_index_merges_registered_commands_from_active_manifests(tmp_path
     )
 
 
-def test_effective_command_index_reconciles_cached_immutable_command_priority(tmp_path: Path) -> None:
+def test_effective_command_index_reconciles_cached_immutable_command_priority(
+    tmp_path: Path,
+) -> None:
     home = tmp_path / "agm-home"
     alpha = _write_package(home, "alpha", "1.0.0")
     bravo = _write_package(home, "bravo", "1.0.0")

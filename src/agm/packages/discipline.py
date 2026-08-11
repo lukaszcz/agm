@@ -515,9 +515,14 @@ def _resource_calls(
     ) -> None:
         shadowed = set(initial_shadowed)
         for item in block.items:
-            walk(item, lambda node: collect_resource_call(node, scope_path, frozenset(shadowed)))
+            walk(
+                item,
+                lambda node: collect_resource_call(node, scope_path, frozenset(shadowed)),
+            )
             if isinstance(item, LetDecl):
-                shadowed.update(candidate.name for candidate in pattern_binder_candidates(item.pattern))
+                shadowed.update(
+                    candidate.name for candidate in pattern_binder_candidates(item.pattern)
+                )
             elif isinstance(item, VarDecl):
                 shadowed.add(item.name)
 

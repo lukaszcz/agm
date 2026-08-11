@@ -13,7 +13,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Protocol, cast
 
-from agm.agl.diagnostics import Diagnostic
+from agm.agl.diagnostics import Diagnostic, diagnostic_from_span
 from agm.agl.repl.entry import EntryKind, EntryResult
 
 if TYPE_CHECKING:
@@ -615,6 +615,7 @@ class EntryPipeline:
         from agm.agl.runtime.request import AgentCancelled
         from agm.agl.runtime.trace import TraceStore
         from agm.agl.semantics.exceptions import AglRaise
+        from agm.agl.syntax.resources import ResourceError
 
         # Companion paths for every module the checked program can reach: prior
         # entries' cached library modules plus this entry's newly linked ones.
@@ -634,12 +635,21 @@ class EntryPipeline:
         # from the shared type table on every lowering, so it is always current
         # regardless of what this entry did or did not promote.
         link_snapshot = self._ctx._link_image.snapshot_state()
-        lowered = lower_repl_program(
-            compiled,
-            image=self._ctx._link_image,
-            source_text=text,
-            contract_payloads=contract_payloads,
-        )
+        try:
+            lowered = lower_repl_program(
+                compiled,
+                image=self._ctx._link_image,
+                source_text=text,
+                contract_payloads=contract_payloads,
+            )
+        except ResourceError as exc:
+            self._ctx._link_image.restore_state(link_snapshot)
+            diagnostic = (
+                diagnostic_from_span(str(exc), exc.span)
+                if exc.span is not None
+                else Diagnostic(message=str(exc), line=1)
+            )
+            return self._ctx._fail([diagnostic], warnings)
         # Lowering normally omits modules already linked into the persistent
         # image. Keep the boundary explicit nevertheless: config validation
         # needs their metadata, but installing one again would overwrite its

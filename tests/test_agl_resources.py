@@ -14,7 +14,8 @@ from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
 from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.modules.roots import RootSet
-from agm.agl.semantics.values import TextValue
+from agm.agl.repl import ReplSession
+from agm.agl.semantics.values import IntValue, TextValue
 from agm.agl.syntax.resources import ResourceError, resolve_resource
 from agm.packages.discipline import DisciplineError, validate_package
 from agm.packages.manifest import PackageManifest
@@ -158,6 +159,38 @@ def test_missing_resource_is_a_link_error(tmp_path: Path) -> None:
 
     assert not result.ok
     assert result.diagnostics
+
+
+def test_repl_resource_error_is_a_source_diagnostic() -> None:
+    session = ReplSession()
+
+    result = session.eval_entry('let staged = 1\nresource("missing.md")')
+
+    assert not result.ok
+    assert result.error is None
+    assert len(result.diagnostics) == 1
+    diagnostic = result.diagnostics[0]
+    assert (diagnostic.line, diagnostic.column, diagnostic.end_line, diagnostic.end_column) == (
+        2,
+        1,
+        2,
+        23,
+    )
+
+
+def test_repl_resource_error_restores_link_state() -> None:
+    session = ReplSession()
+    assert session.eval_entry("let keep = 1").ok
+    link_snapshot = session._link_image.snapshot_state()
+
+    result = session.eval_entry('let staged = 2\nresource("missing.md")')
+
+    assert not result.ok
+    assert session._link_image.snapshot_state() == link_snapshot
+    assert [(name, value) for name, _typ, value in session.bindings()] == [("keep", IntValue(1))]
+    recovered = session.eval_entry("let after = keep + 1")
+    assert recovered.ok, recovered.diagnostics
+    assert recovered.value == IntValue(2)
 
 
 def test_resource_resolution_rejects_symlinks_that_escape_its_anchor(tmp_path: Path) -> None:

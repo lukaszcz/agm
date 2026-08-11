@@ -12,7 +12,9 @@ literal resources, and CLI commands backed by parameterless `program def` entrie
 `agm pkg check` validates a development package without modifying it. Structural checks run before
 dependency resolution; dependency-aware validation then loads the package module graph with runtime
 package visibility, rejecting unresolved modules and imports outside the declared dependency
-closure. `agm pkg create` resolves the dependency closure, validates both the source tree and
+closure. Dependency checking retains one selected package per name across the closure, mirroring
+installation's path-source and minimum-version selection for diamond dependencies.
+`agm pkg create` resolves the dependency closure, validates both the source tree and
 selected archive contents with those dependency modules, and produces a deterministic `.agmpkg`
 archive. `agm pkg install` validates dependencies, records immutable installations in the AGM-home
 package store, and activates one version of each package; editable installations instead mount their

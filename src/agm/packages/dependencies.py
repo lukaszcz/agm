@@ -26,7 +26,7 @@ class _CheckState:
     home: Path
     env: Mapping[str, str] | None
     checking: set[Path] = field(default_factory=set)
-    resolved: dict[tuple[str, str], PackageInfo] = field(default_factory=dict)
+    resolved: dict[str, PackageInfo] = field(default_factory=dict)
 
 
 def validate_dependencies(
@@ -34,15 +34,16 @@ def validate_dependencies(
 ) -> tuple[PackageInfo, ...]:
     """Ensure every requirement has a usable store, path, or URL source.
 
-    Stored versions take precedence, matching installation's MVS resolution.
-    When no stored version satisfies a requirement, a local path source is
-    recursively checked. A URL with its required digest is a satisfiable
+    Stored and previously selected versions take precedence, matching
+    installation's MVS resolution. When no selected version satisfies a
+    requirement, a local path source is recursively checked. A URL with its
+    required digest is a satisfiable
     deferred source; validation never fetches it.
     """
 
     state = _CheckState(home=home, env=env)
     _validate_package_dependencies(package, state)
-    return tuple(state.resolved[key] for key in sorted(state.resolved))
+    return tuple(state.resolved[name] for name in sorted(state.resolved))
 
 
 def _validate_package_dependencies(package: PackageInfo, state: _CheckState) -> None:
@@ -61,7 +62,7 @@ def _validate_package_dependencies(package: PackageInfo, state: _CheckState) -> 
                         f"{requirement.version} via std, but running AGM is {AGM_VERSION}"
                     )
                 continue
-            selected = _stored_satisfying(name, requirement, state)
+            selected = _selected_satisfying(name, requirement, state)
             if selected is not None:
                 _validate_package_dependencies(selected, state)
             if selected is None and requirement.path is not None:
@@ -74,27 +75,33 @@ def _validate_package_dependencies(package: PackageInfo, state: _CheckState) -> 
                 raise DependencyError(
                     f"unsatisfied package requirement {name!r} >= {requirement.version}"
                 )
-            state.resolved[(selected.manifest.name, str(selected.manifest.version))] = selected
+            state.resolved[selected.manifest.name] = selected
     finally:
         state.checking.remove(root)
 
 
-def _stored_satisfying(
+def _selected_satisfying(
     name: str, requirement: DependencySpec, state: _CheckState
 ) -> PackageInfo | None:
     try:
         candidates = [
-            package
+            (package, True)
             for package in installed_packages(home=state.home, env=state.env)
             if package.manifest.name == name and package.manifest.version >= requirement.version
         ]
         active = load_activation_index(home=state.home, env=state.env).packages.get(name)
     except (PackageActivationError, PackageInstallError) as exc:
         raise DependencyError(str(exc)) from exc
+    previously_selected = state.resolved.get(name)
+    if (
+        previously_selected is not None
+        and previously_selected.manifest.version >= requirement.version
+    ):
+        candidates.append((previously_selected, False))
     if not candidates:
         return None
-    selected = candidates[0]
-    for candidate in candidates[1:]:
+    selected, verify_selected = candidates[0]
+    for candidate, verify_candidate in candidates[1:]:
         if candidate.manifest.version > selected.manifest.version or (
             candidate.manifest.version == selected.manifest.version
             and active is not None
@@ -102,10 +109,12 @@ def _stored_satisfying(
             and str(candidate.manifest.version) == str(active.version)
         ):
             selected = candidate
-    try:
-        verify_record(selected.root)
-    except RecordError as exc:
-        raise DependencyError(f"package integrity check failed for {name!r}: {exc}") from exc
+            verify_selected = verify_candidate
+    if verify_selected:
+        try:
+            verify_record(selected.root)
+        except RecordError as exc:
+            raise DependencyError(f"package integrity check failed for {name!r}: {exc}") from exc
     return selected
 
 

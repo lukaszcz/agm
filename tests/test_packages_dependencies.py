@@ -154,6 +154,48 @@ def test_dependency_check_validates_path_dependency_discipline(tmp_path: Path) -
         validate_dependencies(alpha, home=tmp_path / "home", env={})
 
 
+@pytest.mark.parametrize(
+    ("second_version", "expected_source"),
+    (("1.0.0", "shared-one"), ("2.0.0", "shared-two")),
+)
+def test_dependency_check_selects_one_path_source_per_name_in_a_diamond(
+    tmp_path: Path,
+    second_version: str,
+    expected_source: str,
+) -> None:
+    sources = {
+        "shared-one": _package(tmp_path / "shared-one", "shared", "1.0.0"),
+        "shared-two": _package(tmp_path / "shared-two", "shared", second_version),
+    }
+    _package(
+        tmp_path / "left",
+        "left",
+        "1.0.0",
+        '\n[dependencies]\nshared = { version = "1", path = "../shared-one" }\n',
+    )
+    _package(
+        tmp_path / "right",
+        "right",
+        "1.0.0",
+        f'\n[dependencies]\nshared = {{ version = "{second_version}", path = "../shared-two" }}\n',
+    )
+    package = _package(
+        tmp_path / "alpha",
+        "alpha",
+        "1.0.0",
+        "\n[dependencies]\n"
+        'left = { version = "1", path = "../left" }\n'
+        'right = { version = "1", path = "../right" }\n',
+    )
+
+    resolved = validate_dependencies(package, home=tmp_path / "home", env={})
+
+    selected_shared = [
+        dependency for dependency in resolved if dependency.manifest.name == "shared"
+    ]
+    assert [dependency.root for dependency in selected_shared] == [sources[expected_source].root]
+
+
 def test_dependency_check_selects_the_highest_satisfying_store_version(tmp_path: Path) -> None:
     home = tmp_path / "home"
     install_directory(_package(tmp_path / "older", "bravo", "1.0.0").root, home=home, env={})

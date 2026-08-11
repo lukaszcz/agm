@@ -586,6 +586,36 @@ def test_exec_program_option_overrides_an_installed_reference(
     assert result.stdout == "alternate\n"
 
 
+def test_registered_param_errors_show_registered_command_usage(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import agm.commands.exec_program as exec_program
+
+    source = tmp_path / "main.agl"
+    source.write_text("param level: text\nprogram def main() -> unit = ()\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc_info:
+        exec_program.run(
+            ExecArgs(
+                file=str(source),
+                param_tokens=["--unknown"],
+                strict_json=None,
+                no_log=False,
+                log_file=None,
+                no_stdlib=True,
+            ),
+            usage_command_path="tools lint",
+            usage_description="Lint package inputs",
+        )
+
+    assert exc_info.value.code == 1
+    error = capsys.readouterr().err
+    assert "usage: agm tools lint" in error
+    assert "Lint package inputs" in error
+    assert "--level" in error
+    assert "agm exec" not in error
+
+
 @pytest.mark.parametrize("reference", ["not-a-reference", "bad-name/main::main"])
 def test_exec_rejects_malformed_installed_references(reference: str) -> None:
     import agm.commands.exec_program as exec_program
@@ -687,7 +717,9 @@ def test_editable_registered_dispatch_uses_the_live_manifest(
     monkeypatch.setattr(
         exec_program,
         "run",
-        lambda args, *, entry_module_segments=None: calls.append((args, entry_module_segments)),
+        lambda args, *, entry_module_segments=None, **_: calls.append(
+            (args, entry_module_segments)
+        ),
     )
 
     exec_program.run_registered("tools/main::main", [], package="tools", command_path="live")

@@ -197,6 +197,8 @@ def run(
     args: ExecArgs,
     *,
     entry_module_segments: tuple[str, ...] | None = None,
+    usage_command_path: str | None = None,
+    usage_description: str | None = None,
     pipeline_factory: type[_PipelineDriver] = _PipelineDriver,
     agent_factory: _AgentFactory = value_driven_agent_factory,
     config_context_loader: _ConfigContextLoader = current_config_context,
@@ -458,7 +460,22 @@ def run(
     try:
         cli_params = parse_param_tokens(selected_params, args.param_tokens)
     except ValueError as exc:
-        exit_with_usage_error(["exec"], f"error: {exc}")
+        if usage_command_path is None:
+            exit_with_usage_error(["exec"], f"error: {exc}")
+        print(f"error: {exc}", file=sys.stderr)
+        print(file=sys.stderr)
+        print(
+            f"usage: agm {usage_command_path} [--PARAM VALUE]... [--dry-run]",
+            file=sys.stderr,
+        )
+        if usage_description is not None:
+            print(f"\n{usage_description}", file=sys.stderr)
+        flags = param_option_flags(selected_params)
+        if flags:
+            print("\nProgram parameters:", file=sys.stderr)
+            for flag in flags:
+                print(f"  {flag}", file=sys.stderr)
+        raise SystemExit(1) from exc
 
     if entry_stem is not None:
         param_keys = {
@@ -644,10 +661,12 @@ def run_registered(
             file=sys.stderr,
         )
         raise SystemExit(1)
+    usage_description: str | None = None
     if package is not None and command_path is not None:
         command = selected_package.manifest.commands.get(command_path)
         if module_id.segments[0] != package or command is None:
             _registered_command_mismatch(command_path)
+        usage_description = command.description
         if command.program != program:
             # The index deliberately remains an install-time cache. Editable
             # packages are its one live exception: their manifest is reread
@@ -703,4 +722,6 @@ def run_registered(
             ),
         ),
         entry_module_segments=module_id.segments,
+        usage_command_path=command_path,
+        usage_description=usage_description,
     )

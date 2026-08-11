@@ -8,22 +8,31 @@ import semver
 
 from agm.packages.manifest import load_manifest
 from agm.packages.model import PackageInfo
+from agm.packages.store import is_package_store_root
 
 
-def discover_development_packages(anchor: Path) -> tuple[PackageInfo, ...]:
-    """Return the containing package and its path-sourced dependency closure.
+def discover_development_packages(
+    anchor: Path, *, home: Path | None = None
+) -> tuple[PackageInfo, ...]:
+    """Return the containing development package and its path dependency closure.
 
     A development package is selected only by an ancestor ``package.toml`` of
     the host's source directory. Its mounted dependencies are the manifests at
     explicitly declared relative ``[dependencies]`` ``path`` sources. This
     deliberately does not scan loose module roots. Each path source must match
     its dependency key and minimum version; store activation can supply
-    additional roots through the same ``package_roots`` seam later.
+    additional roots through the same ``package_roots`` seam later. When the
+    host provides its home, an immutable store entry is left to active package
+    selection rather than being reclassified as development source.
     """
 
     package_root = _containing_package_root(anchor)
     if package_root is None:
         return ()
+    if home is not None:
+        manifest = load_manifest(package_root / "package.toml")
+        if is_package_store_root(package_root, manifest.name, manifest.version, home=home):
+            return ()
 
     packages: dict[Path, PackageInfo] = {}
     roots_by_name: dict[str, Path] = {}

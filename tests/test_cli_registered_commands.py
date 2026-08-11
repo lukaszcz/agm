@@ -432,6 +432,77 @@ def test_exec_prefers_an_existing_file_path_containing_a_reference_separator(
     assert calls == [args]
 
 
+@pytest.mark.parametrize(
+    "argv",
+    (["exec", "tools/main::main"], ["tools", "run"]),
+    ids=("installed-reference", "registered-command"),
+)
+def test_immutable_execution_uses_the_pinned_dependency_not_a_vendored_path_source(
+    argv: list[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "project"
+    config = project / ".agm"
+    config.mkdir(parents=True)
+    (config / "config.toml").write_text('[packages]\nshared = "1.0.0"\n', encoding="utf-8")
+
+    relocated_store = tmp_path / "relocated-packages"
+    relocated_store.mkdir()
+    logical_store = home / ".agm" / "packages"
+    logical_store.parent.mkdir(parents=True)
+    logical_store.symlink_to(relocated_store, target_is_directory=True)
+
+    def write_shared(root: Path, version: str, label: str) -> None:
+        module = root / "shared" / "value.agl"
+        module.parent.mkdir(parents=True)
+        (root / "package.toml").write_text(
+            f'[package]\nname = "shared"\nversion = "{version}"\n', encoding="utf-8"
+        )
+        module.write_text(f'def label() -> text = "{label}"\n', encoding="utf-8")
+
+    pinned_shared = relocated_store / "shared" / "1.0.0"
+    active_shared = relocated_store / "shared" / "2.0.0"
+    write_shared(pinned_shared, "1.0.0", "pinned")
+    write_shared(active_shared, "2.0.0", "active")
+    write_record(pinned_shared)
+    write_record(active_shared)
+
+    tools = relocated_store / "tools" / "1.0.0"
+    module = tools / "tools" / "main.agl"
+    module.parent.mkdir(parents=True)
+    (tools / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
+        '[dependencies]\nshared = { version = "1", path = "vendor/shared" }\n\n'
+        '[commands."tools run"]\nprogram = "tools/main::main"\n',
+        encoding="utf-8",
+    )
+    module.write_text(
+        "import shared/value\nprogram def main() -> unit = print shared/value::label()\n",
+        encoding="utf-8",
+    )
+    vendored_shared = tools / "vendor" / "shared"
+    write_shared(vendored_shared, "3.0.0", "vendored")
+    write_record(tools)
+
+    write_activation_index(
+        ActivationIndex(
+            packages={
+                "tools": ActivePackage(semver.Version.parse("1.0.0")),
+                "shared": ActivePackage(semver.Version.parse("2.0.0")),
+            },
+            commands={"tools run": CommandRegistration("tools", "tools/main::main")},
+        ),
+        home=home,
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(project)
+
+    result = invoke(CliRunner(), argv)
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout == "pinned\n"
+
+
 def test_exec_runs_an_installed_reference(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     home = tmp_path / "home"
     package_root = home / ".agm" / "packages" / "tools" / "1.0.0"

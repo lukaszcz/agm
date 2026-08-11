@@ -220,7 +220,7 @@ def run(
 
     ctx = config_context_loader()
     try:
-        development_packages = discover_development_packages(entry_path or ctx.cwd)
+        development_packages = discover_development_packages(entry_path or ctx.cwd, home=ctx.home)
     except ValueError as exc:
         print(f"Error: invalid module roots configuration: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc

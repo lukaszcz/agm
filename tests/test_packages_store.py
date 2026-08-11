@@ -12,6 +12,7 @@ from agm.packages.store import (
     StorePathError,
     canonical_package_provenance_path,
     canonical_package_store_path,
+    is_package_store_root,
     package_provenance_path,
     package_store_path,
     store_root,
@@ -38,6 +39,24 @@ def test_store_root_uses_the_installed_executable_prefix(
     monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: prefix)
 
     assert store_root(home=tmp_path / "home", env={}) == prefix / ".agm" / "packages"
+
+
+def test_store_root_identity_supports_relocation_without_matching_editable_source(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    relocated = tmp_path / "relocated"
+    immutable = relocated / "alpha" / "1.0.0"
+    immutable.mkdir(parents=True)
+    logical_store = home / ".agm" / "packages"
+    logical_store.parent.mkdir(parents=True)
+    logical_store.symlink_to(relocated, target_is_directory=True)
+    version = semver.Version.parse("1.0.0")
+
+    assert is_package_store_root(immutable, "alpha", version, home=home, env={})
+    assert not is_package_store_root(
+        tmp_path / "editable" / "alpha", "alpha", version, home=home, env={}
+    )
 
 
 def test_canonical_store_path_refuses_an_in_store_symlinked_tree_ancestor(tmp_path: Path) -> None:

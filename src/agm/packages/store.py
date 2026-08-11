@@ -73,6 +73,19 @@ def canonical_package_store_path(
     return logical_candidate.resolve()
 
 
+def is_package_store_root(
+    root: Path,
+    name: str,
+    version: semver.Version,
+    *,
+    home: Path,
+    env: Mapping[str, str] | None = None,
+) -> bool:
+    """Return whether *root* is the immutable store tree for an identity."""
+
+    return root.resolve() == canonical_package_store_path(name, version, home=home, env=env)
+
+
 def _reject_managed_tree_symlinks(logical_target: Path, logical_store_root: Path) -> None:
     """Reject links in a logical package tree while permitting a relocated store root."""
 

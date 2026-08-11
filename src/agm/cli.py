@@ -1027,7 +1027,7 @@ def _exec_print_help(
             from agm.cli_support.exec_roots import effective_exec_roots
             from agm.packages.development import discover_development_packages
 
-            entry_path = None if file is None else Path(file)
+            entry_path = None if command is not None or file is None else Path(file)
             roots = effective_exec_roots(
                 entry_path=entry_path,
                 module_paths=[] if module_paths is None else module_paths,

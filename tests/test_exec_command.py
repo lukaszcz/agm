@@ -391,6 +391,17 @@ class TestExecDynamicHelp:
         assert exc_info.value.code == 0
         assert "--count" in capsys.readouterr().out
 
+    def test_exec_help_ignores_qualified_option_bound_as_inline_file(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit):
+            cli._exec_print_help(
+                file="--foo/bar::x",
+                command="param count: int = 1\nprint count",
+            )
+
+        assert "--count" in capsys.readouterr().out
+
     def test_exec_help_discovers_params_from_cli_module_roots(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:

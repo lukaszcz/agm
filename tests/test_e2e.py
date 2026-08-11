@@ -7562,7 +7562,7 @@ class TestPackageInstall:
         assert result.stderr
         assert "Traceback" not in result.stderr
 
-    def test_registered_command_rejects_a_stale_activation_index_entry(
+    def test_registered_command_reconciles_a_stale_activation_index_entry(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         env["AGM_HOME"] = str(tmp_path / "agm-home")
@@ -7583,12 +7583,11 @@ class TestPackageInstall:
             index_path.read_text(encoding="utf-8").replace("alpha/main::main", "alpha/main::stale"),
             encoding="utf-8",
         )
-        stale = run_agm(["launch"], env=env, cwd=tmp_path, check=False)
+        reconciled = run_agm(["launch"], env=env, cwd=tmp_path)
 
         assert installed.returncode == 0
         assert launched.stdout == "launched\n"
-        assert stale.returncode == 1
-        assert "Traceback" not in stale.stderr
+        assert reconciled.stdout == "launched\n"
 
     def test_create_archive_install_and_url_dependency_install_are_hermetic(
         self, tmp_path: Path, env: dict[str, str]

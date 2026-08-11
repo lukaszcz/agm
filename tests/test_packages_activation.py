@@ -227,6 +227,39 @@ def test_rebuild_index_merges_registered_commands_from_active_manifests(tmp_path
     )
 
 
+def test_effective_command_index_reconciles_cached_immutable_command_priority(tmp_path: Path) -> None:
+    home = tmp_path / "agm-home"
+    alpha = _write_package(home, "alpha", "1.0.0")
+    bravo = _write_package(home, "bravo", "1.0.0")
+    for root, name in ((alpha, "alpha"), (bravo, "bravo")):
+        (root / "package.toml").write_text(
+            f'[package]\nname = "{name}"\nversion = "1.0.0"\n\n'
+            f'[commands]\nlaunch = {{ program = "{name}/main::main" }}\n',
+            encoding="utf-8",
+        )
+        write_record(root)
+    env = {"AGM_HOME": str(home)}
+    write_activation_index(
+        ActivationIndex(
+            {
+                "alpha": ActivePackage(
+                    semver.Version.parse("1.0.0"), registration_order=1
+                ),
+                "bravo": ActivePackage(
+                    semver.Version.parse("1.0.0"), shadow=True, registration_order=2
+                ),
+            },
+            {"launch": CommandRegistration("alpha", "alpha/main::main")},
+        ),
+        home=home,
+        env=env,
+    )
+
+    assert effective_command_index(home=home, proj_dir=None, cwd=tmp_path, env=env).commands == {
+        "launch": CommandRegistration("bravo", "bravo/main::main")
+    }
+
+
 def test_effective_command_index_uses_live_editable_manifest_commands(tmp_path: Path) -> None:
     home = tmp_path / "agm-home"
     root = tmp_path / "editable"

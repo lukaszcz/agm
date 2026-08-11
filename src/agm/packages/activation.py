@@ -442,7 +442,7 @@ def effective_command_index(
         and selected_roots == indexed_roots
         and all(active.editable is None for active in index.packages.values())
     ):
-        return index
+        return _reconciled_commands(index, packages)
     selections: dict[str, ActivePackage] = {}
     provenance: dict[str, ActivePackage | PackageProvenance | None] = {}
     for package in packages:

@@ -215,7 +215,7 @@ def _select_resource_paths(
         for path, kind in paths.items():
             if path[: len(source)] != source:
                 continue
-            exposed = (item.rename or source[-1], *path[len(source) :])
+            exposed = path if item.rename is None else (item.rename, *path[len(source) :])
             selected[(*prefix, *exposed)] = kind
     return selected
 

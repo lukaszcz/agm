@@ -195,6 +195,24 @@ class TestPackageDiscipline:
         with pytest.raises(DisciplineError):
             validate_package(package)
 
+    def test_rejects_missing_resource_through_a_scoped_alias_reexport_chain(
+        self, tmp_path: Path
+    ) -> None:
+        package = _custom_package(tmp_path)
+        (package.module_root / "resources.agl").write_text(
+            "scope Assets\nexport std/core using resource as asset\nend Assets\n"
+        )
+        (package.module_root / "facade.agl").write_text(
+            "export custom/resources using Assets::asset\n"
+        )
+        (package.module_root / "main.agl").write_text(
+            "import custom/facade using Assets::asset as load\n"
+            'let prompt = load("prompts/missing.md")\n'
+        )
+
+        with pytest.raises(DisciplineError):
+            validate_package(package)
+
     def test_rejects_invalid_utf8_referenced_source_fixture(self) -> None:
         with pytest.raises(DisciplineError):
             validate_package(_package("invalid_utf8_source"))

@@ -1042,7 +1042,11 @@ class IrInterpreter:
         for ir_param in self._program.params:
             if ir_param.symbol in self._param_values:
                 self._frames[0][ir_param.symbol] = self._param_values[ir_param.symbol]
-            elif ir_param.default is not None:
+                self.entry_param_symbols_installed.add(ir_param.symbol)
+        for ir_param in self._program.params:
+            if ir_param.symbol in self._param_values:
+                continue
+            if ir_param.default is not None:
                 self._frames[0][ir_param.symbol] = self._eval(ir_param.default)
             else:
                 raise InvalidIrError(
@@ -1147,9 +1151,10 @@ class IrInterpreter:
                     None,
                 )
                 if slot is None and self._resolving_param_defaults:
-                    module_id, initializer = self._static_bindings.pop(sym)
-                    self._eval_static_binding(module_id, initializer)
-                    slot = self._frames[0][sym]
+                    binding = self._static_bindings.pop(sym, None)
+                    if binding is not None:
+                        self._eval_static_binding(*binding)
+                        slot = self._frames[0][sym]
                 if slot is None:
                     raise InvalidIrError(
                         f"IrLoad: symbol_id={sym.value!r} is not bound in the frame"
@@ -1174,9 +1179,10 @@ class IrInterpreter:
                     # not closure captures.
                     slot = self._frames[0].get(sym)
                 if slot is None and self._resolving_param_defaults:
-                    module_id, initializer = self._static_bindings.pop(sym)
-                    self._eval_static_binding(module_id, initializer)
-                    slot = self._frames[0][sym]
+                    binding = self._static_bindings.pop(sym, None)
+                    if binding is not None:
+                        self._eval_static_binding(*binding)
+                        slot = self._frames[0][sym]
                 if not isinstance(slot, Cell):
                     desc = self._program.symbols.get(sym)
                     if desc is None:

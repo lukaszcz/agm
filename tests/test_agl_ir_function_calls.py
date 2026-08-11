@@ -454,6 +454,21 @@ def test_param_default_function_assigns_prior_static_var() -> None:
     assert ir["result"] == IntValue(1)
 
 
+def test_param_default_reads_later_host_supplied_param() -> None:
+    source = (
+        "param a: int = read_b()\n"
+        "param b: int\n"
+        "def read_b() -> int = b\n"
+        "let result = a + b\n"
+        "()"
+    )
+
+    ir = evaluate_ir(source, {"b": IntValue(40)}, default_stdlib=False)
+
+    assert ir["a"] == IntValue(40)
+    assert ir["result"] == IntValue(80)
+
+
 def test_param_default_reads_prior_destructured_static_let() -> None:
     """A parameter default may read binders from a preceding destructuring let."""
     source = (

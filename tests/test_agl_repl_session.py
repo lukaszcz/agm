@@ -3202,6 +3202,24 @@ class TestParams:
         assert "Missing required param" in result.diagnostics[0].message
         assert "token" in result.diagnostics[0].message
 
+    def test_import_cycle_param_default_dependency_cycle_is_diagnostic(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "a.agl").write_text(
+            "import b\nparam a_value: int = b::read()\ndef read() -> int = a_value\n"
+        )
+        (tmp_path / "b.agl").write_text(
+            "import a\nparam b_value: int = a::read()\ndef read() -> int = b_value\n"
+        )
+        session = ReplSession(lib_root=tmp_path, default_stdlib=False)
+
+        result = session.eval_entry("import a\n()")
+
+        assert not result.ok
+        assert result.error is None
+        assert len(result.diagnostics) == 1
+        assert "parameter defaults form a dependency cycle" in result.diagnostics[0].message.lower()
+
     def test_later_import_validates_active_params_without_reinstalling_them(
         self, tmp_path: Path
     ) -> None:

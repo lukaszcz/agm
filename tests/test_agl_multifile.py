@@ -138,6 +138,55 @@ def test_imported_module_param_is_discovered_lowered_and_available(
     assert capsys.readouterr().out == "eu\n"
 
 
+def test_import_cycle_param_default_resolves_later_module_param(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Parameter defaults follow runtime dependencies within an import cycle."""
+    library_root = tmp_path / "library"
+    library_root.mkdir()
+    (library_root / "a.agl").write_text(
+        "import b\nparam value: int = b::read()\ndef result() -> int = value\n"
+    )
+    (library_root / "b.agl").write_text(
+        "import a\nparam source: int = 42\ndef read() -> int = source\n"
+    )
+
+    result = _run_program(
+        "import a\nprogram def main() -> unit = print a::result()\n",
+        roots_dirs=[library_root],
+        entry_path=tmp_path / "main.agl",
+    )
+
+    assert result.ok, result.diagnostics
+    assert capsys.readouterr().out == "42\n"
+
+
+def test_import_cycle_param_default_dependency_cycle_is_diagnostic(tmp_path: Path) -> None:
+    library_root = tmp_path / "library"
+    library_root.mkdir()
+    (library_root / "a.agl").write_text(
+        "import b\nparam a_value: int = b::read()\ndef read() -> int = a_value\n"
+    )
+    (library_root / "b.agl").write_text(
+        "import a\nparam b_value: int = a::read()\ndef read() -> int = b_value\n"
+    )
+
+    result = _run_program(
+        "import a\nprogram def main() -> unit = ()\n",
+        roots_dirs=[library_root],
+        entry_path=tmp_path / "main.agl",
+    )
+
+    assert not result.ok
+    assert result.error is None
+    assert len(result.diagnostics) == 1
+    diagnostic = result.diagnostics[0]
+    assert "parameter defaults form a dependency cycle" in diagnostic.message.lower()
+    assert "a::a_value -> b::b_value -> a::a_value" in diagnostic.message
+    assert diagnostic.source_label == "b"
+    assert diagnostic.line == 2
+
+
 def test_program_inventory_excludes_params_outside_its_import_subgraph(tmp_path: Path) -> None:
     """A program only inherits params from modules it transitively imports."""
     library_root = tmp_path / "library"

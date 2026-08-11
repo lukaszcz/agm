@@ -124,6 +124,7 @@ from agm.agl.ir.program import (
     ExternFunctionBody,
     FunctionDescriptor,
     IrFunctionBody,
+    IrParam,
 )
 from agm.agl.ir.validate import InvalidIrError
 from agm.agl.modules.ids import ModuleId
@@ -173,7 +174,23 @@ if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract
     from agm.agl.runtime.host_settings import HostSettingsReconfigurer
 
-__all__ = ["HostConfigurationError", "IrInterpreter", "_apply_coercion", "_make_exc_value"]
+__all__ = [
+    "HostConfigurationError",
+    "IrInterpreter",
+    "ParameterDefaultCycleError",
+    "_apply_coercion",
+    "_make_exc_value",
+]
+
+
+class ParameterDefaultCycleError(Exception):
+    """Module parameter defaults depend on one another cyclically."""
+
+    def __init__(self, cycle: tuple[IrParam, ...]) -> None:
+        self.cycle = cycle
+        self.location = cycle[-2].location
+        rendered = " -> ".join(param.qualified_public_name for param in cycle)
+        super().__init__(f"Parameter defaults form a dependency cycle: {rendered}.")
 
 
 class HostConfigurationError(Exception):
@@ -461,6 +478,8 @@ class IrInterpreter:
         }
         self._evaluated_static_binding_ids: set[int] = set()
         self._resolving_param_defaults = False
+        self._params_by_symbol = {param.symbol: param for param in program.params}
+        self._param_default_stack: list[IrParam] = []
         self._synthetic_main_frame: Frame | None = None
         self._call_depth: int = 0
         self._trace: TraceStore = trace if trace is not None else noop_trace()
@@ -1038,22 +1057,33 @@ class IrInterpreter:
         )
 
     def _install_params(self) -> None:
-        """Install resolved module parameters before evaluating initializers."""
+        """Install module parameters before initializers, resolving defaults on demand."""
         for ir_param in self._program.params:
             if ir_param.symbol in self._param_values:
                 self._frames[0][ir_param.symbol] = self._param_values[ir_param.symbol]
                 self.entry_param_symbols_installed.add(ir_param.symbol)
         for ir_param in self._program.params:
-            if ir_param.symbol in self._param_values:
-                continue
-            if ir_param.default is not None:
-                self._frames[0][ir_param.symbol] = self._eval(ir_param.default)
-            else:
-                raise InvalidIrError(
-                    f"Required param {ir_param.public_name!r} has no value;"
-                    " the host must supply a value for required params before calling run()"
-                )
-            self.entry_param_symbols_installed.add(ir_param.symbol)
+            if ir_param.symbol not in self._frames[0]:
+                self._resolve_param_default(ir_param)
+
+    def _resolve_param_default(self, ir_param: IrParam) -> None:
+        """Evaluate one omitted parameter default, detecting dependency cycles."""
+        for index, active in enumerate(self._param_default_stack):
+            if active.symbol == ir_param.symbol:
+                cycle = (*self._param_default_stack[index:], ir_param)
+                raise ParameterDefaultCycleError(cycle)
+        if ir_param.default is None:
+            raise InvalidIrError(
+                f"Required param {ir_param.public_name!r} has no value;"
+                " the host must supply a value for required params before calling run()"
+            )
+
+        self._param_default_stack.append(ir_param)
+        try:
+            self._frames[0][ir_param.symbol] = self._eval(ir_param.default)
+        finally:
+            self._param_default_stack.pop()
+        self.entry_param_symbols_installed.add(ir_param.symbol)
 
     def _eval_static_binding(self, module_id: ModuleId, initializer: IrExpr) -> None:
         """Evaluate a parameter-default dependency in the module base frame."""
@@ -1151,10 +1181,15 @@ class IrInterpreter:
                     None,
                 )
                 if slot is None and self._resolving_param_defaults:
-                    binding = self._static_bindings.pop(sym, None)
-                    if binding is not None:
-                        self._eval_static_binding(*binding)
+                    ir_param = self._params_by_symbol.get(sym)
+                    if ir_param is not None:
+                        self._resolve_param_default(ir_param)
                         slot = self._frames[0][sym]
+                    else:
+                        binding = self._static_bindings.pop(sym, None)
+                        if binding is not None:
+                            self._eval_static_binding(*binding)
+                            slot = self._frames[0][sym]
                 if slot is None:
                     raise InvalidIrError(
                         f"IrLoad: symbol_id={sym.value!r} is not bound in the frame"

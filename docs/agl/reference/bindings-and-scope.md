@@ -251,6 +251,9 @@ explicit type or default, the param defaults to `text`.
 Each program's parameter inventory includes params declared in its module and
 in its transitive imports. Every inventory parameter receives a host value or
 default before execution, so imported functions can read their module's params.
+Defaults resolve parameter dependencies independently of declaration and module
+order, including dependencies reached through function calls. A cycle among
+omitted parameter defaults is a host invocation error.
 
 ```agl
 param spec                 # same as: param spec: text

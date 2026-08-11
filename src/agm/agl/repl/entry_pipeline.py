@@ -600,9 +600,17 @@ class EntryPipeline:
         contract_payloads: Mapping[int, "ContractPayload"],
     ) -> EntryResult:
         """Lower and execute one program entry in the persistent IR image."""
-        from agm.agl.eval.ir_interpreter import HostConfigurationError, IrInterpreter
+        from agm.agl.eval.ir_interpreter import (
+            HostConfigurationError,
+            IrInterpreter,
+            ParameterDefaultCycleError,
+        )
         from agm.agl.lower import lower_repl_program
-        from agm.agl.pipeline import _wire_extern_registry, exception_value_to_run_error
+        from agm.agl.pipeline import (
+            _parameter_default_cycle_diagnostic,
+            _wire_extern_registry,
+            exception_value_to_run_error,
+        )
         from agm.agl.runtime.params import _materialize_ir_contracts
         from agm.agl.runtime.request import AgentCancelled
         from agm.agl.runtime.trace import TraceStore
@@ -869,6 +877,11 @@ class EntryPipeline:
                 span=exc.span,
             )
             return partial_failure(diagnostics=[], error=error)
+        except ParameterDefaultCycleError as exc:
+            return partial_failure(
+                diagnostics=[_parameter_default_cycle_diagnostic(program_to_run, exc)],
+                error=None,
+            )
         except (AgentCancelled, KeyboardInterrupt) as exc:
             cancellation_message = (
                 "Agent call cancelled — entry aborted."

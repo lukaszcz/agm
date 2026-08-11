@@ -19,7 +19,11 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, TypeVar
 
 from agm.agl.diagnostics import AglError, Diagnostic, diagnostic_from_span
-from agm.agl.eval.ir_interpreter import HostConfigurationError, IrInterpreter
+from agm.agl.eval.ir_interpreter import (
+    HostConfigurationError,
+    IrInterpreter,
+    ParameterDefaultCycleError,
+)
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.params import _materialize_ir_contracts, _prepare_ir_params
 from agm.agl.runtime.types import (
@@ -523,6 +527,16 @@ class PipelineDriver:
                 ok=False,
                 diagnostics=[],
                 error=error,
+                warnings=list(warnings),
+                bindings={},
+                trace_path=trace.path,
+            )
+        except ParameterDefaultCycleError as exc:
+            trace.run_end(ok=False)
+            return RunResult(
+                ok=False,
+                diagnostics=[_parameter_default_cycle_diagnostic(executable, exc)],
+                error=None,
                 warnings=list(warnings),
                 bindings={},
                 trace_path=trace.path,
@@ -1864,6 +1878,20 @@ def assemble_host_environment(
         capabilities=capabilities,
         codecs=all_codecs,
         extern_registry=extern_registry if extern_registry is not None else ExternRegistry(),
+    )
+
+
+def _parameter_default_cycle_diagnostic(
+    executable: "ExecutableProgram", exc: ParameterDefaultCycleError
+) -> Diagnostic:
+    """Render an evaluator-detected parameter-default cycle at its source module."""
+    location = exc.location
+    source = executable.sources[location.source_id]
+    return Diagnostic(
+        message=str(exc),
+        line=location.start_line,
+        column=location.start_col,
+        source_label=source.display_name,
     )
 
 

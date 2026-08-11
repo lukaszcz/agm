@@ -16,8 +16,10 @@ from agm.agl.syntax.nodes import (
     FuncDef,
     ImportDecl,
     LetDecl,
+    OpenDecl,
     ParamDecl,
     Program,
+    ScopeRegion,
     VarDecl,
     VarRef,
     static_function_items,
@@ -41,16 +43,24 @@ class DisciplineError(ValueError):
     """Raised when a package directory violates package discipline."""
 
 
-def validate_package(package: PackageInfo) -> None:
-    """Validate a package's module tree, commands, and program references."""
+def validate_package(
+    package: PackageInfo, *, dependency_packages: Iterable[PackageInfo] = ()
+) -> None:
+    """Validate a package's module tree, commands, resources, and references."""
 
     _validate_package_name(package.manifest.name)
     modules = _module_files(package)
+    dependency_modules = {
+        module_id: path
+        for dependency in dependency_packages
+        for module_id, path in _module_files(dependency).items()
+    }
     _validate_commands(package.manifest, modules, fs.read_text)
     _validate_resources(
         modules,
         fs.read_text,
         exists=lambda relative: _resource_exists(package.root, relative),
+        export_modules=dependency_modules,
     )
 
 
@@ -109,6 +119,7 @@ def _validate_resources(
     read_module: Callable[[T], str],
     *,
     exists: Callable[[str], bool],
+    export_modules: Mapping[ModuleId, T] | None = None,
 ) -> None:
     """Verify that every literal resource target in package modules is present."""
     programs: dict[ModuleId, tuple[T, Program]] = {}
@@ -119,6 +130,13 @@ def _validate_resources(
             raise DisciplineError(f"cannot parse package module {module_path}: {exc}") from exc
 
     parsed_modules = {module_id: program for module_id, (_, program) in programs.items()}
+    for module_id, module_path in ({} if export_modules is None else export_modules).items():
+        if module_id in parsed_modules:
+            continue
+        try:
+            parsed_modules[module_id] = parse_program(read_module(module_path))
+        except (AglSyntaxError, OSError, UnicodeDecodeError) as exc:
+            raise DisciplineError(f"cannot parse dependency module {module_path}: {exc}") from exc
     exports = _resource_exports(parsed_modules)
     for module_path, program in programs.values():
         calls = _resource_calls(program, _resource_imports(program, exports))
@@ -251,10 +269,82 @@ def _resource_imports(
                     {path: kind for path, kind in selected.items() if len(path) == len(prefix) + 1}
                 )
 
+    _apply_resource_opens(program, paths)
     for function in static_function_items(program.body.items):
         declaration_path = tuple(segment.name for segment in function.scope_path) + (function.name,)
         paths[declaration_path] = None
     return paths
+
+
+def _apply_resource_opens(program: Program, paths: _ResourceBindings) -> None:
+    """Apply lexical ``open`` selections to known resource-bearing paths."""
+
+    def visit(items: tuple[object, ...], scope_path: tuple[str, ...]) -> None:
+        for item in items:
+            if isinstance(item, ScopeRegion):
+                visit(item.items, (*scope_path, item.segment.name))
+                continue
+            if not isinstance(item, OpenDecl):
+                continue
+            requested = (
+                *item.scope_ref.module_route,
+                *(segment.name for segment in item.scope_ref.scope_path),
+            )
+            candidates = (
+                *(
+                    (*scope_path[:index], *requested)
+                    for index in range(len(scope_path), -1, -1)
+                    if not item.scope_ref.module_route
+                ),
+                requested,
+            )
+            target_prefix = next(
+                (
+                    prefix
+                    for prefix in candidates
+                    if any(
+                        path[: len(prefix)] == prefix and len(path) > len(prefix) for path in paths
+                    )
+                ),
+                None,
+            )
+            if target_prefix is None:
+                continue
+            target = {
+                path[len(target_prefix) :]: kind
+                for path, kind in paths.items()
+                if path[: len(target_prefix)] == target_prefix and len(path) > len(target_prefix)
+            }
+            selected = _select_open_resource_paths(item, target)
+            paths.update({(*scope_path, *path): kind for path, kind in selected.items()})
+
+    visit(program.body.items, ())
+
+
+def _select_open_resource_paths(
+    declaration: OpenDecl, paths: _ResourceBindings
+) -> _ResourceBindings:
+    """Apply one open declaration's using/hiding selection."""
+    if declaration.mode is ImportMode.ALL:
+        return dict(paths)
+    prefixes = {
+        (*tuple(segment.name for segment in item.scope_path), item.name): item.rename
+        for item in declaration.items
+    }
+    if declaration.mode is ImportMode.HIDING:
+        return {
+            path: kind
+            for path, kind in paths.items()
+            if not any(path[: len(prefix)] == prefix for prefix in prefixes)
+        }
+    selected: _ResourceBindings = {}
+    for prefix, rename in prefixes.items():
+        for path, kind in paths.items():
+            if path[: len(prefix)] != prefix:
+                continue
+            exposed = path if rename is None else (rename, *path[len(prefix) :])
+            selected[exposed] = kind
+    return selected
 
 
 def _resource_calls(

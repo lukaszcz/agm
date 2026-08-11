@@ -79,7 +79,7 @@ selected manifest and module ownership before executing it.
 
 - `src/agm/packages/manifest.py` — manifest schema and distribution-manifest view.
 - `src/agm/packages/__init__.py` — lazy public package-domain façade.
-- `src/agm/packages/discipline.py` — module-tree, command, and lexical resource-alias validation, including bounded re-export propagation.
+- `src/agm/packages/discipline.py` — module-tree, command, and lexical resource-alias validation across imports, opens, and the resolved dependency closure, including bounded re-export propagation.
 - `src/agm/packages/model.py` and `development.py` — package identity, ownership, and
   development-package discovery.
 - `src/agm/packages/store.py`, `record.py`, and `archive.py` — store layout, integrity records,

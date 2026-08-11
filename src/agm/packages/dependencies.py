@@ -26,11 +26,12 @@ class _CheckState:
     home: Path
     env: Mapping[str, str] | None
     checking: set[Path] = field(default_factory=set)
+    resolved: dict[tuple[str, str], PackageInfo] = field(default_factory=dict)
 
 
 def validate_dependencies(
     package: PackageInfo, *, home: Path, env: Mapping[str, str] | None = None
-) -> None:
+) -> tuple[PackageInfo, ...]:
     """Ensure every requirement has a usable store, path, or URL source.
 
     Stored versions take precedence, matching installation's MVS resolution.
@@ -39,7 +40,9 @@ def validate_dependencies(
     deferred source; validation never fetches it.
     """
 
-    _validate_package_dependencies(package, _CheckState(home=home, env=env))
+    state = _CheckState(home=home, env=env)
+    _validate_package_dependencies(package, state)
+    return tuple(state.resolved[key] for key in sorted(state.resolved))
 
 
 def _validate_package_dependencies(package: PackageInfo, state: _CheckState) -> None:
@@ -71,6 +74,7 @@ def _validate_package_dependencies(package: PackageInfo, state: _CheckState) -> 
                 raise DependencyError(
                     f"unsatisfied package requirement {name!r} >= {requirement.version}"
                 )
+            state.resolved[(selected.manifest.name, str(selected.manifest.version))] = selected
     finally:
         state.checking.remove(root)
 

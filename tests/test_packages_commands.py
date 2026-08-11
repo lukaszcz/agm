@@ -45,6 +45,7 @@ def _context(tmp_path: Path) -> ConfigContext:
 def _package(tmp_path: Path, name: str = "alpha") -> PackageInfo:
     root = tmp_path / name
     root.mkdir()
+    (root / name).mkdir()
     manifest = PackageManifest(name=name, version=semver.Version.parse("1.0.0"))
     (root / "package.toml").write_text(
         f'[package]\nname = "{manifest.name}"\nversion = "{manifest.version}"\n',
@@ -66,7 +67,7 @@ def test_create_command_validates_and_writes_the_default_archive_beside_its_pack
 ) -> None:
     package = _package(tmp_path)
     monkeypatch.setattr(create_command, "validate_archive_source", lambda _: package.manifest)
-    monkeypatch.setattr(create_command, "validate_dependencies", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(create_command, "validate_dependencies", lambda *_args, **_kwargs: ())
     monkeypatch.setattr(create_command, "current_config_context", lambda: _context(tmp_path))
     written: list[Path] = []
     monkeypatch.setattr(
@@ -86,7 +87,7 @@ def test_create_command_dry_run_reports_its_plan_without_writing(
 ) -> None:
     package = _package(tmp_path)
     monkeypatch.setattr(create_command, "validate_archive_source", lambda _: package.manifest)
-    monkeypatch.setattr(create_command, "validate_dependencies", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(create_command, "validate_dependencies", lambda *_args, **_kwargs: ())
     monkeypatch.setattr(create_command, "current_config_context", lambda: _context(tmp_path))
     monkeypatch.setattr(create_command.dry_run, "enabled", lambda: True)
     monkeypatch.setattr(
@@ -105,7 +106,7 @@ def test_create_command_reports_validation_or_archive_errors(
 ) -> None:
     package = _package(tmp_path)
     monkeypatch.setattr(create_command, "validate_archive_source", lambda _: package.manifest)
-    monkeypatch.setattr(create_command, "validate_dependencies", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(create_command, "validate_dependencies", lambda *_args, **_kwargs: ())
     monkeypatch.setattr(create_command, "current_config_context", lambda: _context(tmp_path))
     monkeypatch.setattr(
         create_command,

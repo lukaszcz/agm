@@ -20,7 +20,8 @@ def run(args: PkgCheckArgs) -> None:
     try:
         package = PackageInfo(root=root, manifest=load_manifest(root / "package.toml"))
         validate_package(package)
-        validate_dependencies(package, home=current_config_context().home)
+        dependencies = validate_dependencies(package, home=current_config_context().home)
+        validate_package(package, dependency_packages=dependencies)
     except (DependencyError, DisciplineError, ManifestError) as exc:
         print(f"pkg check: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc

@@ -45,8 +45,11 @@ def test_dependency_check_resolves_store_then_path_and_accepts_url_sources(tmp_p
         'hash = "sha256=' + "0" * 64 + '" }\n',
     )
 
-    validate_dependencies(alpha, home=home, env={})
+    resolved = validate_dependencies(alpha, home=home, env={})
 
+    assert [(package.manifest.name, str(package.manifest.version)) for package in resolved] == [
+        ("bravo", "10.0.0")
+    ]
     assert path_bravo.root.is_dir()
 
 

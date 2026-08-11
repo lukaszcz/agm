@@ -115,6 +115,7 @@ class _InstallState:
     installing: set[Path] = field(default_factory=set)
     created: list[Path] = field(default_factory=list)
     transient_packages: dict[str, PackageInfo] = field(default_factory=dict)
+    resource_packages: dict[str, PackageInfo] = field(default_factory=dict)
 
 
 def install_directory(
@@ -481,6 +482,8 @@ def _install_directory(
     _validate_managed_stdlib_install(package.manifest, source=root, editable=editable)
     _validate_minimum_agm(package.manifest)
     _resolve_dependencies(package, state)
+    validate_package(package, dependency_packages=state.resource_packages.values())
+    state.resource_packages[package.manifest.name] = package
 
     if editable:
         installed = package
@@ -597,6 +600,9 @@ def _install_archive(archive: Path, *, state: _InstallState, shadow: bool) -> Pa
 
     try:
         _resolve_dependencies(installed, state)
+        if not dry_run.enabled():
+            validate_package(installed, dependency_packages=state.resource_packages.values())
+            state.resource_packages[installed.manifest.name] = installed
         _activate_package(installed, state, editable_root=None, shadow=shadow)
         return installed
     except (DisciplineError, PackageInstallError, ValueError) as exc:

@@ -222,6 +222,37 @@ class TestPackageDiscipline:
         with pytest.raises(DisciplineError):
             validate_package(package)
 
+    def test_rejects_missing_resource_through_an_open_alias(self, tmp_path: Path) -> None:
+        package = _custom_package(tmp_path)
+        (package.module_root / "main.agl").write_text(
+            "open Assets using asset as load\n"
+            "scope Assets\n"
+            "import std/core using resource as asset\n"
+            "end Assets\n"
+            'let prompt = load("prompts/missing.md")\n'
+        )
+
+        with pytest.raises(DisciplineError):
+            validate_package(package)
+
+    def test_rejects_missing_resource_reexported_by_dependency(self, tmp_path: Path) -> None:
+        dependency_root = tmp_path / "dependency"
+        (dependency_root / "helpers").mkdir(parents=True)
+        dependency = PackageInfo(
+            dependency_root,
+            PackageManifest("helpers", semver.Version.parse("1.0.0")),
+        )
+        (dependency.module_root / "assets.agl").write_text(
+            "export std/core using resource as asset\n"
+        )
+        consumer = _custom_package(tmp_path / "consumer")
+        (consumer.module_root / "main.agl").write_text(
+            'import helpers/assets using asset as load\nlet prompt = load("prompts/missing.md")\n'
+        )
+
+        with pytest.raises(DisciplineError):
+            validate_package(consumer, dependency_packages=(dependency,))
+
     def test_rejects_missing_resource_through_a_scoped_alias_reexport_chain(
         self, tmp_path: Path
     ) -> None:

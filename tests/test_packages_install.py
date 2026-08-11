@@ -1472,6 +1472,34 @@ def test_directory_install_stages_beside_the_final_store_path(
     assert verify_record(destination)
 
 
+def test_directory_install_revalidates_staged_imports_after_source_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    destination = home / ".agm" / "packages" / "alpha" / "1.0.0"
+    original_copy_tree = package_install.fs.copy_tree
+    staging_path: Path | None = None
+
+    def change_source_before_copy(
+        source_root: Path, staging: Path, *, dirs_exist_ok: bool = False
+    ) -> None:
+        nonlocal staging_path
+        staging_path = staging
+        (source_root / "alpha" / "main.agl").write_text("import alpha/missing\n", encoding="utf-8")
+        original_copy_tree(source_root, staging, dirs_exist_ok=dirs_exist_ok)
+
+    monkeypatch.setattr(package_install.fs, "copy_tree", change_source_before_copy)
+
+    with pytest.raises(PackageInstallError, match="cannot install"):
+        install_directory(source, home=home, env={})
+
+    assert not destination.exists()
+    assert staging_path is not None
+    assert not staging_path.exists()
+    assert load_activation_index(home=home, env={}).packages == {}
+
+
 def test_directory_install_revalidates_the_staged_package_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

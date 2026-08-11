@@ -423,7 +423,13 @@ def _validated_directory_package(source: Path) -> PackageInfo:
     return package
 
 
-def _stage_directory_package(source: Path, package: PackageInfo, destination: Path) -> Path:
+def _stage_directory_package(
+    source: Path,
+    package: PackageInfo,
+    destination: Path,
+    *,
+    dependency_packages: tuple[PackageInfo, ...] = (),
+) -> Path:
     """Copy and fully validate a package in a sibling staging directory."""
 
     source_root = source.resolve()
@@ -435,7 +441,7 @@ def _stage_directory_package(source: Path, package: PackageInfo, destination: Pa
     try:
         fs.copy_tree(source, staging, dirs_exist_ok=True)
         staged = PackageInfo(staging, load_manifest(staging / "package.toml"))
-        validate_package_structure(staged)
+        validate_package(staged, dependency_packages=dependency_packages)
         if (
             canonical_package_identity(staged.manifest.name, staged.manifest.version)
             != canonical_package_identity(package.manifest.name, package.manifest.version)
@@ -499,8 +505,9 @@ def _install_directory(
     _validate_managed_stdlib_install(package.manifest, source=root, editable=editable)
     _validate_minimum_agm(package.manifest)
     _resolve_dependencies(package, state)
+    dependency_packages = tuple(state.resource_packages.values())
     try:
-        validate_package(package, dependency_packages=state.resource_packages.values())
+        validate_package(package, dependency_packages=dependency_packages)
     except DisciplineError as exc:
         raise PackageInstallError(f"cannot install package from {source}: {exc}") from exc
     state.resource_packages[package.manifest.name] = package
@@ -528,7 +535,12 @@ def _install_directory(
         elif not dry_run.enabled():
             staging: Path | None = None
             try:
-                staging = _stage_directory_package(root, package, destination)
+                staging = _stage_directory_package(
+                    root,
+                    package,
+                    destination,
+                    dependency_packages=dependency_packages,
+                )
                 staging.replace(destination)
                 state.created.append(destination)
                 staging = None

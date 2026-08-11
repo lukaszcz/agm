@@ -99,6 +99,24 @@ def test_discovery_uses_path_dependencies_recursively_and_ignores_unavailable_so
     assert tuple(package.manifest.name for package in packages) == ("alpha", "bravo")
 
 
+def test_recursive_discovery_leaves_store_dependencies_to_activation(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    alpha = tmp_path / "alpha"
+    stored = home / ".agm" / "packages" / "bravo" / "1.0.0"
+    relative_store = stored.relative_to(tmp_path)
+    stored.parent.mkdir(parents=True)
+    _write_package(
+        alpha,
+        "alpha",
+        f'\n[dependencies]\nbravo = {{ version = "1", path = "../{relative_store}" }}\n',
+    )
+    _write_package(stored, "bravo")
+
+    packages = discover_development_packages(alpha / "alpha" / "main.agl", home=home)
+
+    assert tuple(package.manifest.name for package in packages) == ("alpha",)
+
+
 @pytest.mark.parametrize(
     ("dependency", "actual_name", "actual_version"),
     (("bravo", "charlie", "1.0.0"), ("bravo", "bravo", "0.9.0")),

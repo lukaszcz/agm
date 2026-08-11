@@ -29,11 +29,6 @@ def discover_development_packages(
     package_root = _containing_package_root(anchor)
     if package_root is None:
         return ()
-    if home is not None:
-        manifest = load_manifest(package_root / "package.toml")
-        if is_package_store_root(package_root, manifest.name, manifest.version, home=home):
-            return ()
-
     packages: dict[Path, PackageInfo] = {}
     roots_by_name: dict[str, Path] = {}
 
@@ -51,6 +46,10 @@ def discover_development_packages(
                 f"development dependency {expected_name!r} requires at least {minimum}, "
                 f"but path declares {manifest.version}"
             )
+        if home is not None and is_package_store_root(
+            canonical_root, manifest.name, manifest.version, home=home
+        ):
+            return
         if canonical_root in packages:
             return
         package = PackageInfo(canonical_root, manifest)

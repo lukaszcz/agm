@@ -5,16 +5,17 @@ from __future__ import annotations
 from dataclasses import replace
 
 import agm.agl.syntax as syntax
+from agm.agl.syntax.constants import is_constant_expression
 from agm.agl.syntax.nodes import Program, static_function_items
 
 
 def wrap_inline_program(program: Program, *, next_node_id: int) -> tuple[Program, int]:
     """Wrap root non-declarations in a host-only synthetic program entry.
 
-    The transform is intentionally syntactic: every root declaration, scope
-    region, and path-bearing binding stays at the root, while every other item
-    moves into ``main`` in source order. It never inspects initializer constancy
-    or resolves names.
+    The transform is syntactic: root declarations, scope regions, path-bearing
+    bindings, and constant bindings preceding a function stay at the root,
+    while every other item moves into ``main`` in source order. Keeping those
+    earlier bindings lets root functions retain normal textual visibility.
 
     If *program* already contains a ``program def`` at any scope path, it is
     returned unchanged with its supplied node-id seed. Otherwise the returned
@@ -25,10 +26,11 @@ def wrap_inline_program(program: Program, *, next_node_id: int) -> tuple[Program
     if any(function.is_program for function in static_function_items(program.body.items)):
         return program, next_node_id
 
+    items = program.body.items
     root_items: list[syntax.Item] = []
     main_items: list[syntax.Item] = []
     has_executable_item = False
-    for item in program.body.items:
+    for index, item in enumerate(items):
         is_module_header = isinstance(item, (syntax.ImportDecl, syntax.ExportDecl))
         if is_module_header and has_executable_item:
             main_items.append(item)
@@ -36,7 +38,13 @@ def wrap_inline_program(program: Program, *, next_node_id: int) -> tuple[Program
         is_scoped_binding = isinstance(item, (syntax.LetDecl, syntax.VarDecl)) and bool(
             item.scope_path
         )
-        if is_scoped_binding or isinstance(
+        is_earlier_constant_binding = (
+            isinstance(item, (syntax.LetDecl, syntax.VarDecl))
+            and not item.scope_path
+            and any(isinstance(later, syntax.FuncDef) for later in items[index + 1 :])
+            and is_constant_expression(item.value, is_constructor=lambda _node_id: False)
+        )
+        if is_scoped_binding or is_earlier_constant_binding or isinstance(
             item,
             (
                 syntax.FuncDef,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import stat
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -182,14 +183,17 @@ def _posix_relative_path(root: Path) -> Callable[[Path], str]:
 
 
 def _validate_package_tree(root: Path) -> None:
-    """Reject package roots and descendants that are symbolic links."""
+    """Reject links, special nodes, and non-recordable paths in a package tree."""
 
     try:
         if root.is_symlink():
             raise RecordError(f"package root is a symlink {root}")
         for path in fs.rglob(root, "*"):
-            if path.is_symlink():
+            mode = path.lstat().st_mode
+            if stat.S_ISLNK(mode):
                 raise RecordError(f"package contains symlink {path}")
+            if not stat.S_ISREG(mode) and not stat.S_ISDIR(mode):
+                raise RecordError(f"package contains unsupported filesystem node {path}")
             if any(character in _LINE_BREAKS for character in path.relative_to(root).as_posix()):
                 raise RecordError(f"package path contains a line break {path}")
     except OSError as exc:

@@ -135,6 +135,17 @@ def test_write_archive_refuses_symlinks_and_casefolding_collisions(tmp_path: Pat
         write_archive(root, tmp_path / "collision.agmpkg")
 
 
+@pytest.mark.skipif(os.name != "posix", reason="requires Unix FIFO support")
+def test_archive_source_operations_reject_a_fifo(tmp_path: Path) -> None:
+    root = _package_tree(tmp_path)
+    os.mkfifo(root / "pipe")
+
+    with pytest.raises(ArchiveError):
+        validate_archive_source(root)
+    with pytest.raises(ArchiveError):
+        write_archive(root, tmp_path / "package.agmpkg")
+
+
 def test_archive_metadata_and_manifest_are_read_without_leaving_an_open_archive(
     tmp_path: Path,
 ) -> None:

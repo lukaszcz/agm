@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Never
@@ -151,6 +152,19 @@ def test_write_record_rejects_a_symlink(tmp_path: Path) -> None:
 
     with pytest.raises(RecordError):
         write_record(root)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires Unix FIFO support")
+@pytest.mark.parametrize("operation", [write_record, read_record, verify_record])
+def test_record_operations_reject_a_fifo(
+    tmp_path: Path, operation: Callable[[Path], object]
+) -> None:
+    root = _package_tree(tmp_path)
+    write_record(root)
+    os.mkfifo(root / "pipe")
+
+    with pytest.raises(RecordError):
+        operation(root)
 
 
 @pytest.mark.parametrize("operation", [write_record, read_record, verify_record])

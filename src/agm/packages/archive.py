@@ -518,6 +518,12 @@ def _source_paths(root: Path) -> tuple[Path, ...]:
                 child_mode = child.lstat().st_mode
             except OSError as exc:
                 raise ArchiveError(f"cannot inspect package source {child}: {exc}") from exc
+            if (
+                not stat.S_ISREG(child_mode)
+                and not stat.S_ISDIR(child_mode)
+                and not stat.S_ISLNK(child_mode)
+            ):
+                raise ArchiveError(f"package contains unsupported filesystem node {child}")
             if stat.S_ISDIR(child_mode):
                 visit(child)
 

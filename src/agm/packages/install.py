@@ -663,6 +663,7 @@ def _resolve_dependency_requirements(package: PackageInfo, state: _InstallState)
             raise PackageInstallError(
                 f"unsatisfied package requirement {name!r} >= {requirement.version}"
             )
+        state.resource_packages.setdefault(name, selected)
         current = state.index.packages.get(name)
         if current is not None and current.editable == selected.root:
             if canonical_package_identity(name, current.version) != canonical_package_identity(

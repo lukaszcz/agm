@@ -1028,6 +1028,31 @@ def test_install_rejects_an_inactive_dependency_command_conflicting_with_an_acti
         install_directory(alpha, home=home, env={})
 
 
+def test_install_validates_resource_aliases_from_an_installed_satisfying_dependency(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    dependency = _package(tmp_path / "bravo", "bravo", "1.0.0")
+    (dependency / "bravo" / "assets.agl").write_text(
+        "export std/core using resource as asset\n",
+        encoding="utf-8",
+    )
+    install_directory(dependency, home=home, env={})
+    package = _package(
+        tmp_path / "alpha",
+        "alpha",
+        "1.0.0",
+        '\n[dependencies]\nbravo = "1"\n',
+    )
+    (package / "alpha" / "main.agl").write_text(
+        'import bravo/assets using asset as load\nlet prompt = load("prompts/missing.md")\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PackageInstallError):
+        install_directory(package, home=home, env={})
+
+
 def test_install_uses_an_installed_satisfying_dependency_before_path_source(tmp_path: Path) -> None:
     home = tmp_path / "home"
     install_directory(_package(tmp_path / "older", "bravo", "1.5.0"), home=home, env={})

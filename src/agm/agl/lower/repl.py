@@ -236,6 +236,7 @@ def _declaration_dependencies(
     checked: "CheckedModule",
     entry_declaration_ids: frozenset[int],
     type_declaration_ids: Mapping[str, frozenset[int]],
+    library_module_ids: Collection[ModuleId],
 ) -> tuple[frozenset[int], frozenset[ModuleId]]:
     """Return local declaration and imported runtime dependencies of one leaf item.
 
@@ -270,10 +271,10 @@ def _declaration_dependencies(
         if binding is not None:
             if binding.decl_node_id in entry_declaration_ids:
                 dependencies.add(binding.decl_node_id)
-            elif not binding.module_id.is_entry:
+            elif binding.module_id in library_module_ids:
                 imported_modules.add(binding.module_id)
         method = checked.method_selection_for(node_id)
-        if method is not None and not method.module_id.is_entry:
+        if method is not None and method.module_id in library_module_ids:
             imported_modules.add(method.module_id)
         constructor = checked.constructor_ref_for(node_id)
         if constructor is not None and constructor.owner_decl_node_id in entry_declaration_ids:
@@ -315,6 +316,7 @@ def _promotion_plan(
     checked: "CheckedModule",
     initializer_origins: tuple[InitializerOrigin, ...],
     decl_to_sym: Mapping[int, SymbolId],
+    library_module_ids: Collection[ModuleId],
 ) -> ReplPromotionPlan:
     """Consume lowering's origins and add dependency-safe promotion metadata.
 
@@ -345,7 +347,11 @@ def _promotion_plan(
         if not declaration_ids:
             continue
         item_dependencies, imported_modules = _declaration_dependencies(
-            item, checked, entry_declaration_ids, type_declaration_ids
+            item,
+            checked,
+            entry_declaration_ids,
+            type_declaration_ids,
+            library_module_ids,
         )
         for declaration_id in declaration_ids:
             declaration_dependencies[declaration_id] = item_dependencies - {declaration_id}
@@ -408,5 +414,6 @@ def lower_repl_program(
             checked.modules[checked.entry_id],
             image._state.initializer_origins[program.entry_module],
             image._state.decl_to_sym,
+            frozenset(checked.modules) - {checked.entry_id},
         ),
     )

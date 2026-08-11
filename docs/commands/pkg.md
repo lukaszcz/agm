@@ -43,7 +43,9 @@ review = { program = "review_tools/main::review", description = "Review a change
 A dependency `path` is relative to the package and cannot be combined with `url`. A URL
 requires a 64-hex-digit SHA-256 hash prefixed with `sha256=`, `sha256:`, or `sha256-`. Archive
 creation excludes hidden paths, VCS and cache directories, `.agmpkg` files, and files ignored by
-root or nested `.gitignore` files.
+root or nested `.gitignore` files. Portable archives are limited to 10,000 entries, 16 MiB of ZIP
+metadata, 256 path components per entry, 64 MiB expanded per entry, and 512 MiB expanded in total;
+ZIP64 archives are not supported.
 
 `agm pkg check` validates the `package.toml` manifest, module-tree naming discipline, program
 references used by manifest command registrations, and literal resource targets reached through

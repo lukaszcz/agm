@@ -30,8 +30,8 @@ from agm.project.layout import (
 
 _COMMON_PANE_COUNTS = ["1", "2", "3", "4", "6", "8", "12", "16"]
 
-_HELP_TREE: dict[str, list[str]] = {
-    "": [
+_HELP_TREE: dict[tuple[str, ...], list[str]] = {
+    (): [
         "open",
         "close",
         "init",
@@ -53,16 +53,16 @@ _HELP_TREE: dict[str, list[str]] = {
         "tmux",
         "help",
     ],
-    "loop": ["select", "run", "step"],
-    "config": ["cp", "copy", "env", "update"],
-    "workspace": ["open", "close", "setup", "list"],
-    "wsp": ["open", "close", "setup", "list"],
-    "sync": ["fetch", "pull"],
-    "wt": ["new", "rm", "remove"],
-    "worktree": ["new", "rm", "remove"],
-    "dep": ["list", "new", "switch", "rm", "remove"],
-    "pkg": ["check", "create", "install", "uninstall", "list", "info"],
-    "tmux": ["open", "close", "layout"],
+    ("loop",): ["select", "run", "step"],
+    ("config",): ["cp", "copy", "env", "update"],
+    ("workspace",): ["open", "close", "setup", "list"],
+    ("wsp",): ["open", "close", "setup", "list"],
+    ("sync",): ["fetch", "pull"],
+    ("wt",): ["new", "rm", "remove"],
+    ("worktree",): ["new", "rm", "remove"],
+    ("dep",): ["list", "new", "switch", "rm", "remove"],
+    ("pkg",): ["check", "create", "install", "uninstall", "list", "info"],
+    ("tmux",): ["open", "close", "layout"],
 }
 
 
@@ -192,9 +192,12 @@ def complete_help_path(ctx: click.Context, incomplete: str) -> list[str]:
     try:
         params = cast(dict[str, object], ctx.params)
         raw_help = params.get("help_command")
-        help_command = cast(list[str], raw_help) if isinstance(raw_help, list) else []
-        path_key = help_command[-1] if help_command else ""
-        static = _match(_HELP_TREE.get(path_key, []), incomplete)
+        help_command = (
+            tuple(cast(list[str] | tuple[str, ...], raw_help))
+            if isinstance(raw_help, (list, tuple))
+            else ()
+        )
+        static = _match(_HELP_TREE.get(help_command, []), incomplete)
         registered = complete_registered_commands(help_command, incomplete)
         return sorted(set(static) | set(registered))
     except (Exception, SystemExit):

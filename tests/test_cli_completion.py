@@ -292,6 +292,23 @@ def test_complete_help_path_suggests_subcommands() -> None:
     ]
 
 
+def test_nested_registered_help_does_not_leak_builtin_children(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        completion,
+        "complete_registered_commands",
+        lambda command_path, incomplete: ["lint"],
+    )
+
+    assert completion.complete_help_path(_make_ctx(help_command=["tools", "pkg"]), "") == [
+        "lint"
+    ]
+    assert completion.complete_help_path(_make_ctx(help_command=("tools", "pkg")), "") == [
+        "lint"
+    ]
+
+
 def test_complete_dep_name_lists_dependencies(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

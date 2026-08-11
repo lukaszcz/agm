@@ -3787,6 +3787,24 @@ class TestExecDevelopmentPackages:
         assert exec_command.run(_exec_args_no_log(entry)) is None
         assert capsys.readouterr().out == "package-qualified\n"
 
+    def test_direct_exec_does_not_mount_package_entry_parent_as_loose_root(
+        self, tmp_path: Path
+    ) -> None:
+        alpha = tmp_path / "alpha"
+        nested = alpha / "alpha" / "alpha"
+        nested.mkdir(parents=True)
+        (alpha / "package.toml").write_text('[package]\nname = "alpha"\nversion = "1.0.0"\n')
+        (alpha / "alpha" / "settings.agl").write_text("def answer() -> int = 42\n")
+        (nested / "settings.agl").write_text("def wrong() -> int = 0\n")
+        entry = alpha / "alpha" / "main.agl"
+        entry.write_text(
+            "import alpha/settings\n"
+            "program def main() -> unit =\n"
+            "  let _ = alpha/settings::answer()\n"
+        )
+
+        assert exec_command.run(_exec_args_no_log(entry, no_stdlib=True)) is None
+
     def test_direct_exec_reports_an_invalid_development_manifest(self, tmp_path: Path) -> None:
         alpha = tmp_path / "alpha"
         (alpha / "alpha").mkdir(parents=True)

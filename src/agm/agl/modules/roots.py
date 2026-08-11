@@ -79,7 +79,7 @@ def _canonicalize(path: Path) -> Path:
 
 def assemble_roots(
     *,
-    invocation_root: Path,
+    invocation_root: Path | None,
     stdlib_root: Path | None = None,
     lib_root: Path | None,
     configured: Iterable[tuple[str, Path]],
@@ -92,8 +92,8 @@ def assemble_roots(
     Parameters
     ----------
     invocation_root:
-        The cwd (for ``exec -c``) or the entry file's directory (for
-        ``exec <file>``).
+        The cwd (for ``exec -c``) or a loose entry file's directory. ``None``
+        keeps a package-owned entry's directory from becoming a loose root.
     stdlib_root:
         The selected standard-library module root (normally the active
         ``<AGM home>/packages/std/<AGM version>`` tree), or ``None`` if the
@@ -134,7 +134,8 @@ def assemble_roots(
         return None
 
     # 1. Invocation root
-    _add(invocation_root)
+    if invocation_root is not None:
+        _add(invocation_root)
 
     # 2. Standard library root. Keep its distinct identity so package
     # visibility can admit host-provided modules without admitting loose roots.

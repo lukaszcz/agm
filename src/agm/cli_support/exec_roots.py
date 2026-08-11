@@ -16,6 +16,7 @@ from agm.config.module_roots import (
     resolve_stdlib_root,
 )
 from agm.packages.activation import select_package_roots
+from agm.packages.model import owning_package
 
 
 def effective_exec_roots(
@@ -35,8 +36,15 @@ def effective_exec_roots(
         cwd=cwd,
         development_packages=package_roots,
     )
+    package_entry = (
+        entry_path is not None and owning_package(entry_path, selected_packages) is not None
+    )
     return assemble_roots(
-        invocation_root=entry_path.parent if entry_path is not None else cwd,
+        invocation_root=None
+        if package_entry
+        else entry_path.parent
+        if entry_path is not None
+        else cwd,
         stdlib_root=resolve_stdlib_root(home=home),
         lib_root=resolve_lib_root(module_config, home=home),
         configured=module_config.extra,

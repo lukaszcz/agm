@@ -9,7 +9,7 @@ from agm.agl.syntax.nodes import Program, static_function_items
 
 
 def wrap_inline_program(program: Program, *, next_node_id: int) -> tuple[Program, int]:
-    """Wrap root non-declarations in a synthesized ``program def main``.
+    """Wrap root non-declarations in a host-only synthetic program entry.
 
     The transform is intentionally syntactic: every root declaration and scope
     region stays at the root, while every other item moves into ``main`` in
@@ -18,7 +18,8 @@ def wrap_inline_program(program: Program, *, next_node_id: int) -> tuple[Program
     If *program* already contains a ``program def`` at any scope path, it is
     returned unchanged with its supplied node-id seed. Otherwise the returned
     seed follows the three synthesized nodes, so callers can safely use it for
-    subsequently parsed modules.
+    subsequently parsed modules. Downstream passes use ``is_synthetic`` to keep
+    the entry's node-id-based host lowering without introducing a source name.
     """
     if any(function.is_program for function in static_function_items(program.body.items)):
         return program, next_node_id

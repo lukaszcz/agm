@@ -70,6 +70,29 @@ def test_empty_synthetic_main_lowers_and_runs_as_unit() -> None:
     assert IrInterpreter(executable).run(program_symbol=synthetic_main) == {}
 
 
+def test_inline_user_main_coexists_with_host_synthetic_entry() -> None:
+    executable = lower_inline_ir("def main() -> int = 41\nlet answer = main() + 1")
+    synthetic_main = executable.synthetic_main_symbol
+    assert synthetic_main is not None
+
+    result = IrInterpreter(executable).run(program_symbol=synthetic_main)
+
+    assert result["answer"] == IntValue(42)
+    synthetic_symbol = executable.symbols[synthetic_main]
+    assert synthetic_symbol.public_name is None
+    assert synthetic_symbol.synthetic
+
+
+def test_inline_open_imported_main_resolves_to_helper_without_recursion(tmp_path: Path) -> None:
+    result = evaluate_ir_graph(
+        "open import helper\nlet answer = main()",
+        {"helper": "def main() -> int = 42"},
+        tmp_path,
+    )
+
+    assert result["answer"] == IntValue(42)
+
+
 def test_synthetic_main_discards_a_non_unit_body_result() -> None:
     executable = lower_inline_ir("1")
     synthetic_main = executable.synthetic_main_symbol

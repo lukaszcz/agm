@@ -13,7 +13,8 @@ Design
 - **Contribution import environment per module**: built from each module's
   import declarations against the already-loaded graph (no re-reading files).
 - **Whole-program pre-pass tables**: ``all_public_funcs`` and ``all_public_types``
-  collected BEFORE resolving any body, enabling cross-module mutual recursion.
+  collect source declarations BEFORE resolving any body, enabling cross-module
+  mutual recursion without publishing host-only synthetic entries.
 - **Static module roots**: every file-backed module permits declarations,
   parameters, and bindings but rejects root assignments and bare expressions;
   the incremental REPL is the executable-root host.
@@ -116,8 +117,8 @@ class ResolvedProgram:
         Always :data:`~agm.agl.modules.ids.ENTRY_ID`.
     ``all_public_funcs``
         Whole-program pre-pass table mapping ``(ModuleId, name)`` to the
-        :class:`~agm.agl.syntax.nodes.FuncDef` node.  Contains every
-        top-level function across all modules.
+        :class:`~agm.agl.syntax.nodes.FuncDef` node. Contains every source-level
+        function across all modules; host-only synthetic entries are excluded.
     ``all_public_types``
         Whole-program pre-pass table mapping ``(ModuleId, name)`` to the
         type declaration node (``RecordDef | EnumDef | TypeAlias``).
@@ -251,6 +252,8 @@ def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[NameAtom
     result: dict[NameAtom, QName] = {}
     for item in static_items(program.body.items):
         if isinstance(item, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias)):
+            if isinstance(item, FuncDef) and item.is_synthetic:
+                continue
             atom = _item_atom(item)
             result[atom] = (self_id, atom)
             if isinstance(item, EnumDef):
@@ -575,6 +578,8 @@ def resolve_program(
     for mid, loaded in graph.modules.items():
         for item in static_items(loaded.program.body.items):
             if isinstance(item, FuncDef):
+                if item.is_synthetic:
+                    continue
                 key = (mid, _item_atom(item))
                 all_public_funcs[key] = item
                 decl_info[key] = (item.node_id, item.span, BinderKind.function_binding)

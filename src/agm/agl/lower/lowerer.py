@@ -460,13 +460,15 @@ class _Lowerer:
         mutable: bool,
         public: bool = True,
         owner: "ModuleId | FunctionId | None" = None,
+        synthetic: bool = False,
     ) -> SymbolId:
         """Allocate a fresh ``SymbolId`` for a declaration and register it.
 
         When ``public`` is ``False`` the ``SymbolDescriptor.public_name`` is set
         to ``None`` so the symbol is not exposed in ``_collect_results``; this is
         used for catch-clause binders that live in the flat module frame but are
-        not top-level exported bindings.
+        not top-level exported bindings. ``synthetic`` marks a host-generated AST
+        declaration while retaining its ``decl_node_id`` symbol mapping.
         """
         sym = SymbolId(self._link.next_sym)
         self._link.next_sym += 1
@@ -476,7 +478,7 @@ class _Lowerer:
             mutable=mutable,
             public_name=name if public else None,
             owner=owner if owner is not None else self._module_id,
-            synthetic=False,
+            synthetic=synthetic,
         )
         return sym
 
@@ -583,8 +585,9 @@ class _Lowerer:
             funcdef.node_id,
             name=funcdef.name,
             mutable=False,
-            public=not funcdef.scope_path,
+            public=not funcdef.scope_path and not funcdef.is_synthetic,
             owner=self._module_id,
+            synthetic=funcdef.is_synthetic,
         )
         self._link.fn_node_to_sym[funcdef.node_id] = sym
         self._link.fn_node_to_id[funcdef.node_id] = fn_id

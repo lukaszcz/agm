@@ -1,6 +1,6 @@
 # AgL Name Resolution
 
-The scope pass performs full name resolution and records its results in side tables. Its collection pre-passes key declarations by module, named-scope path, and name; the empty path is the module root. They collect functions, types, and constructors before expression bodies are resolved, so root declarations remain visible regardless of order and mutual recursion works.
+The scope pass performs full name resolution and records its results in side tables. Its collection pre-passes key source declarations by module, named-scope path, and name; the empty path is the module root. They collect functions, types, and constructors before expression bodies are resolved, so root declarations remain visible regardless of order and mutual recursion works. A parser-generated inline host entry is walked so its body resolves normally, but its synthetic function is excluded from declaration registration, lookup, import contributions, and exports.
 
 ## Namespace-Directed Resolution
 

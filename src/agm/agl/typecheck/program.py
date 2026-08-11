@@ -681,6 +681,8 @@ def _build_program_func_sig_table(
                 env.register_generic_type("::".join((*scope_path, g_name)), gdef)
 
         for item in static_function_items(program.body.items):
+            if item.is_synthetic:
+                continue
             receiver_owner = rmod.resolved.receiver_owner_for(mid, item)
             # Defer invalid declarations to the checker. Scope-classified methods
             # have their own namespace, so they still need program-header metadata
@@ -757,7 +759,7 @@ def _module_function_signatures(
     """
     signatures: dict[str, FunctionSignature] = {}
     for item in program.body.items:
-        if not isinstance(item, FuncDef) or item.scope_path:
+        if not isinstance(item, FuncDef) or item.scope_path or item.is_synthetic:
             continue
         signature = env.get_function_signature_by_node_id(item.node_id)
         assert signature is not None, f"No checked signature for '{item.name}'"

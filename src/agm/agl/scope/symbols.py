@@ -765,8 +765,9 @@ class ModuleResolution:
         The root ``ScopeNode`` (tree root).  Nested scopes are linked via
         ``ScopeNode.parent``.
     ``declared_functions``
-        Maps each top-level ``def`` name to its :class:`FuncDef` node.
-        Populated in the pre-pass; useful for downstream typecheck and eval.
+        Maps each source-level root ``def`` name to its :class:`FuncDef` node.
+        Host-only synthetic entries are excluded. Populated in the pre-pass;
+        useful for downstream typecheck and eval.
     ``allows_root_statements``
         Whether this entry is an incremental REPL entry, whose root retains
         executable items instead of enforcing a static module root.

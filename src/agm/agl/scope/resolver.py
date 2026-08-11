@@ -561,6 +561,11 @@ class _Resolver:
                 segment.name for segment in item.scope_path
             )
             return
+        if isinstance(item, FuncDef) and item.is_synthetic:
+            # The inline host entry is executable AST, not a source declaration.
+            # Its body is still resolved by the main walk, but its implementation
+            # name must never claim a source namespace slot.
+            return
         if isinstance(item, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias)):
             path = tuple(segment.name for segment in item.scope_path)
             self._ensure_scope_path(path, item.node_id, item.span)

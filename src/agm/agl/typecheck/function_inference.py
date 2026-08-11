@@ -226,6 +226,7 @@ def _candidate_functions(component: ModuleCandidateComponent) -> dict[int, _Cand
                 and item.return_type is None
                 and not item.is_builtin
                 and not item.is_extern
+                and not item.is_synthetic
             ):
                 functions[item.node_id] = (module, item)
     return functions

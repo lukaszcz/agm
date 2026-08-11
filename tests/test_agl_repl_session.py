@@ -2817,6 +2817,28 @@ class TestFailureEffects:
         assert session.eval_entry("identity(1)").value == IntValue(1)
         assert not session.eval_entry("T(value = 1)").ok
 
+    def test_runtime_failure_distinguishes_same_named_scoped_nominal_dependencies(
+        self,
+    ) -> None:
+        session = ReplSession()
+
+        failed = session.eval_entry(
+            "scope A\n"
+            "record T(value: int)\n"
+            "end A\n"
+            "def keep(value: A::T) -> A::T = value\n"
+            'let stop: int = raise Abort(message = "stop")\n'
+            "scope B\n"
+            "record T(value: int)\n"
+            "end B"
+        )
+
+        assert not failed.ok
+        assert "keep" in failed.installed
+        kept = session.eval_entry("keep(A::T(value = 1))")
+        assert kept.ok, kept.diagnostics
+        assert not session.eval_entry("B::T(value = 1)").ok
+
     def test_runtime_failure_retains_independent_completed_function_and_pattern_binders(
         self,
     ) -> None:

@@ -219,15 +219,12 @@ def _item_declaration_ids(item: Item, checked: "CheckedModule") -> frozenset[int
     return frozenset()
 
 
-def _nominal_dependencies(
-    typ: "Type", type_declaration_ids: Mapping[str, frozenset[int]]
-) -> set[int]:
+def _nominal_dependencies(typ: "Type", nominal_declaration_ids: Collection[int]) -> set[int]:
     """Return entry nominal declarations reachable from a resolved semantic type."""
     return {
-        declaration_id
+        nominal.decl_id
         for nominal in iter_nominal_types(typ)
-        if nominal.module_id.is_entry
-        for declaration_id in type_declaration_ids.get(nominal.name, frozenset())
+        if nominal.module_id.is_entry and nominal.decl_id in nominal_declaration_ids
     }
 
 
@@ -235,7 +232,8 @@ def _declaration_dependencies(
     item: Item,
     checked: "CheckedModule",
     entry_declaration_ids: frozenset[int],
-    type_declaration_ids: Mapping[str, frozenset[int]],
+    nominal_declaration_ids: Collection[int],
+    alias_declaration_ids: Mapping[str, frozenset[int]],
     library_module_ids: Collection[ModuleId],
 ) -> tuple[frozenset[int], frozenset[ModuleId]]:
     """Return local declaration and imported runtime dependencies of one leaf item.
@@ -266,7 +264,7 @@ def _declaration_dependencies(
             and (node.qualifier is None or not node.qualifier.segments)
             and node.name not in type_parameters
         ):
-            dependencies.update(type_declaration_ids.get(node.name, frozenset()))
+            dependencies.update(alias_declaration_ids.get(node.name, frozenset()))
         binding = checked.binding_for(node_id)
         if binding is not None:
             if binding.decl_node_id in entry_declaration_ids:
@@ -281,34 +279,48 @@ def _declaration_dependencies(
             dependencies.add(constructor.owner_decl_node_id)
         typ = checked.node_types.get(node_id)
         if typ is not None:
-            dependencies.update(_nominal_dependencies(typ, type_declaration_ids))
+            dependencies.update(_nominal_dependencies(typ, nominal_declaration_ids))
 
     walk(item, collect)
     if isinstance(item, FuncDef):
         signature = checked.type_env.get_function_signature_by_node_id(item.node_id)
         assert signature is not None, f"compiler bug: no signature for {item.name!r}"
         for parameter in signature.params:
-            dependencies.update(_nominal_dependencies(parameter.type, type_declaration_ids))
-        dependencies.update(_nominal_dependencies(signature.result, type_declaration_ids))
+            dependencies.update(_nominal_dependencies(parameter.type, nominal_declaration_ids))
+        dependencies.update(_nominal_dependencies(signature.result, nominal_declaration_ids))
     typedef = (
         checked.type_env.type_table.get(
             checked.module_id,
             item.name,
             tuple(segment.name for segment in item.scope_path),
         )
-        if isinstance(item, (EnumDef, ExceptionDef, RecordDef, TypeAlias))
+        if isinstance(item, (EnumDef, ExceptionDef, RecordDef))
         else None
     )
     if typedef is not None:
         for _, field_type in typedef.fields:
-            dependencies.update(_nominal_dependencies(field_type, type_declaration_ids))
+            dependencies.update(_nominal_dependencies(field_type, nominal_declaration_ids))
         for _, fields in typedef.variants:
             for _, field_type in fields:
-                dependencies.update(_nominal_dependencies(field_type, type_declaration_ids))
+                dependencies.update(_nominal_dependencies(field_type, nominal_declaration_ids))
         if typedef.base is not None:
             base_typedef = checked.type_env.type_table.get_by_id(typedef.base)
-            if base_typedef is not None and base_typedef.module_id.is_entry:
-                dependencies.update(type_declaration_ids.get(base_typedef.name, frozenset()))
+            if (
+                base_typedef is not None
+                and base_typedef.module_id.is_entry
+                and base_typedef.decl_node_id in nominal_declaration_ids
+            ):
+                dependencies.add(base_typedef.decl_node_id)
+    if isinstance(item, TypeAlias):
+        alias_template = checked.type_env.source_type_template_qname(
+            checked.module_id,
+            item.name,
+            scope_path=tuple(segment.name for segment in item.scope_path),
+        )
+        if alias_template is not None:
+            dependencies.update(
+                _nominal_dependencies(alias_template.template, nominal_declaration_ids)
+            )
     return frozenset(dependencies), frozenset(imported_modules)
 
 
@@ -333,12 +345,15 @@ def _promotion_plan(
         if isinstance(item, ParamDecl)
     )
     entry_declaration_ids = frozenset().union(*source_declaration_ids, frozenset())
-    # Same-named declarations at different scope paths share one entry here, so a
-    # nominal reference depends on every declaration that could have produced it.
-    type_declaration_ids: dict[str, frozenset[int]] = {}
+    nominal_declaration_ids = frozenset(
+        item.node_id for item in leaf_items if isinstance(item, (EnumDef, ExceptionDef, RecordDef))
+    )
+    # Aliases are transparent in semantic types, so retain their syntactic
+    # declaration dependency separately from nominal identity.
+    alias_declaration_ids: dict[str, frozenset[int]] = {}
     for item in leaf_items:
-        if isinstance(item, (EnumDef, ExceptionDef, RecordDef, TypeAlias)):
-            type_declaration_ids[item.name] = type_declaration_ids.get(
+        if isinstance(item, TypeAlias):
+            alias_declaration_ids[item.name] = alias_declaration_ids.get(
                 item.name, frozenset()
             ) | frozenset({item.node_id})
     declaration_dependencies: dict[int, frozenset[int]] = {}
@@ -350,7 +365,8 @@ def _promotion_plan(
             item,
             checked,
             entry_declaration_ids,
-            type_declaration_ids,
+            nominal_declaration_ids,
+            alias_declaration_ids,
             library_module_ids,
         )
         for declaration_id in declaration_ids:

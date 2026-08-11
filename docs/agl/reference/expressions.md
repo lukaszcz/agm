@@ -9,10 +9,11 @@ rules and runtime semantics of each. Operator precedence is tabulated in
 
 In AgL **everything is an expression**: there is no separate statement
 category. Bindings, `:=`, `print`, `if` without `else`, and loops are all
-expressions with well-defined types. A block (function body, branch body, or
-the program top level) is a sequence of items whose value is the value of its
-last item. A final `let` or `var` contributes `unit` as the block value, or
-bottom when its initializer exits.
+expressions with well-defined types. An executable block, such as a function or
+branch body, is a sequence of items whose value is the value of its last item.
+A final `let` or `var` contributes `unit` as the block value, or bottom when its
+initializer exits. A file-backed module root is static and does not produce a
+block value.
 
 ## Discarded values
 

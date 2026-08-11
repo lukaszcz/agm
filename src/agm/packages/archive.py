@@ -49,6 +49,7 @@ _DIR_FD_PUBLICATION_OPERATIONS = (os.open, os.rename, os.unlink, os.link)
 # cannot make metadata inspection or verification consume unbounded resources.
 MAX_ARCHIVE_ENTRIES = 10_000
 MAX_ARCHIVE_CENTRAL_DIRECTORY_SIZE = 16 * 1024 * 1024
+MAX_ARCHIVE_PATH_COMPONENTS = 256
 MAX_ARCHIVE_ENTRY_SIZE = 64 * 1024 * 1024
 MAX_ARCHIVE_TOTAL_SIZE = 512 * 1024 * 1024
 
@@ -828,6 +829,8 @@ def _archive_path(value: str) -> PurePosixPath:
         or path.as_posix() != value
     ):
         raise ArchiveError(f"invalid package archive entry {value!r}")
+    if len(path.parts) > MAX_ARCHIVE_PATH_COMPONENTS:
+        raise ArchiveError(f"package archive entry exceeds path depth limit: {value!r}")
     _validate_portable_components(path.parts, value)
     return path
 

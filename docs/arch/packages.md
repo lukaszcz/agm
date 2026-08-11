@@ -38,7 +38,7 @@ unambiguous.
 Dry-run installs retain their transient activation plan for command diagnostics while leaving the
 persisted index unchanged.
 
-Installed package contents have a SHA-256 `RECORD`. Archive readers bind metadata-limit
+Installed package contents have a SHA-256 `RECORD`. Archive readers enforce bounded metadata, entry sizes, total expansion, and path depth while binding
 preflight, ZIP parsing, verification, and extraction to one opened file. Immutable directory installs
 stage beside the final store path, revalidate the copied manifest, package discipline, and `RECORD`,
 then publish with an atomic rename; dry runs scan directory sources for `RECORD` eligibility without

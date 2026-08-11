@@ -1078,6 +1078,19 @@ def test_write_archive_rejects_windows_portability_invalid_components(
         write_archive(root, tmp_path / "package.agmpkg")
 
 
+def test_write_archive_rejects_excessive_path_depth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _package_tree(tmp_path)
+    monkeypatch.setattr(package_archive, "MAX_ARCHIVE_PATH_COMPONENTS", 3)
+    nested = root / "one" / "two" / "three"
+    nested.mkdir(parents=True)
+    (nested / "value.txt").write_text("bad", encoding="utf-8")
+
+    with pytest.raises(ArchiveError, match="depth"):
+        write_archive(root, tmp_path / "package.agmpkg")
+
+
 def test_archive_readers_reject_noncanonical_zip_entry_metadata_and_flags(tmp_path: Path) -> None:
     root = _package_tree(tmp_path)
     archive_path = tmp_path / "package.agmpkg"

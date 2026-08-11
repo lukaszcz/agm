@@ -478,5 +478,6 @@ def _validate_program_reference(
         raise DisciplineError(f"program reference {reference!r} names no program declaration")
     if function.type_param_slots or function.params or not isinstance(function.return_type, UnitT):
         raise DisciplineError(
-            f"registered program {reference!r} must declare no parameters and an explicit unit result"
+            f"registered program {reference!r} must declare no parameters "
+            "and an explicit unit result"
         )

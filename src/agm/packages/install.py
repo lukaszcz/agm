@@ -322,7 +322,10 @@ def _uninstall_package(name: str, *, home: Path, env: Mapping[str, str] | None =
                     str(active.version),
                 ):
                     raise RecordError("uninstall tombstone identity does not match activation")
-                tombstone.replace(root)
+                if dry_run.enabled():
+                    root = tombstone
+                else:
+                    tombstone.replace(root)
             else:
                 entries = verify_record(root)
         except (ManifestError, OSError, RecordError, ValueError) as exc:

@@ -550,6 +550,32 @@ def test_uninstall_retries_when_interrupted_before_activation_commit(
     assert "alpha" not in load_activation_index(home=home, env={}).packages
 
 
+def test_dry_run_uninstall_preserves_interrupted_tombstone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    home = tmp_path / "home"
+    installed = install_directory(source, home=home, env={})
+    original_commit = package_install._commit_activation
+
+    monkeypatch.setattr(
+        package_install,
+        "_commit_activation",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(KeyboardInterrupt),
+    )
+    with pytest.raises(KeyboardInterrupt):
+        uninstall_package("alpha", home=home, env={})
+
+    tombstone = installed.root.parent / ".uninstalling"
+    monkeypatch.setattr(package_install, "_commit_activation", original_commit)
+    dry_run.set_enabled(True)
+    uninstall_package("alpha", home=home, env={})
+
+    assert tombstone.is_dir()
+    assert not installed.root.exists()
+    assert "alpha" in load_activation_index(home=home, env={}).packages
+
+
 def test_uninstall_rejects_interrupted_tombstone_with_wrong_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

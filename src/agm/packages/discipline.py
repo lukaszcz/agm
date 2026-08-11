@@ -280,9 +280,7 @@ def _resource_imports(
                 for path, kind in route_paths.items():
                     paths[(*route, *path)] = kind
             if declaration.is_open or declaration.mode is ImportMode.USING:
-                paths.update(
-                    {path: kind for path, kind in selected.items() if len(path) == len(prefix) + 1}
-                )
+                paths.update(selected)
 
     _apply_resource_opens(program, paths)
     for function in static_function_items(program.body.items):

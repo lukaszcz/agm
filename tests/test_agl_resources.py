@@ -258,6 +258,28 @@ program def main() -> unit =
         validate_package(package)
 
 
+def test_package_validation_rejects_missing_resource_exposed_by_open_import_scoped_alias(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "package"
+    module_root = root / "package"
+    module_root.mkdir(parents=True)
+    (module_root / "resources.agl").write_text(
+        "scope Assets\nexport std/core using resource as asset\nend Assets\n",
+        encoding="utf-8",
+    )
+    (module_root / "main.agl").write_text(
+        "open import package/resources\n"
+        'let prompt = Assets::asset("prompts/missing.md")\n'
+        "program def main() -> unit = ()\n",
+        encoding="utf-8",
+    )
+    package = PackageInfo(root, PackageManifest("package", semver.Version.parse("1.0.0")))
+
+    with pytest.raises(DisciplineError):
+        validate_package(package)
+
+
 def test_package_validation_rejects_missing_resource_through_an_ancestor_scoped_alias(
     tmp_path: Path,
 ) -> None:

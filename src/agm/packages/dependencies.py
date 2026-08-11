@@ -8,6 +8,7 @@ from pathlib import Path
 
 import semver
 
+from agm.packages.activation import PackageActivationError, load_activation_index
 from agm.packages.discipline import DisciplineError, validate_package
 from agm.packages.install import PackageInstallError, installed_packages
 from agm.packages.manifest import DependencySpec, ManifestError, load_manifest
@@ -83,13 +84,19 @@ def _stored_satisfying(
             for package in installed_packages(home=state.home, env=state.env)
             if package.manifest.name == name and package.manifest.version >= requirement.version
         ]
-    except PackageInstallError as exc:
+        active = load_activation_index(home=state.home, env=state.env).packages.get(name)
+    except (PackageActivationError, PackageInstallError) as exc:
         raise DependencyError(str(exc)) from exc
     if not candidates:
         return None
     selected = candidates[0]
     for candidate in candidates[1:]:
-        if candidate.manifest.version > selected.manifest.version:
+        if candidate.manifest.version > selected.manifest.version or (
+            candidate.manifest.version == selected.manifest.version
+            and active is not None
+            and active.editable is None
+            and str(candidate.manifest.version) == str(active.version)
+        ):
             selected = candidate
     try:
         verify_record(selected.root)

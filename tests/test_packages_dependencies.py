@@ -164,6 +164,22 @@ def test_dependency_check_selects_the_highest_satisfying_store_version(tmp_path:
         validate_dependencies(package, home=home, env={})
 
 
+def test_dependency_check_preserves_active_equal_precedence_build(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    inactive = [
+        install_directory(
+            _package(tmp_path / build, "bravo", f"1.0.0+{build}").root, home=home, env={}
+        )
+        for build in ("linux", "windows")
+    ]
+    install_directory(_package(tmp_path / "macos", "bravo", "1.0.0+macos").root, home=home, env={})
+    package = _package(tmp_path / "alpha", "alpha", "1.0.0", '\n[dependencies]\nbravo = "1"\n')
+    for installed in inactive:
+        (installed.root / "bravo" / "main.agl").write_text("tampered", encoding="utf-8")
+
+    validate_dependencies(package, home=home, env={})
+
+
 def test_dependency_check_wraps_an_invalid_package_store(tmp_path: Path) -> None:
     home = tmp_path / "home"
     broken = home / ".agm" / "packages" / "broken" / "1.0.0"

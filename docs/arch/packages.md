@@ -39,8 +39,10 @@ Installed package contents have a SHA-256 `RECORD`. Archive readers bind metadat
 preflight, ZIP parsing, verification, and extraction to one opened file. Immutable directory installs
 stage beside the final store path, revalidate the copied manifest, package discipline, and `RECORD`,
 then publish with an atomic rename; dry runs scan directory sources for `RECORD` eligibility without
-staging or writing. Archive installation follows the same verify-before-publication boundary. Active
-immutable selections verify `RECORD` again when resolved for activation or execution.
+staging or writing. Archive installation selects the canonical destination from verified metadata
+without reopening the archive, then extracts to a sibling staging tree so publication remains atomic
+when the store root is relocated across filesystems. Active immutable selections verify `RECORD`
+again when resolved for activation or execution.
 Editable selections remain live and are exempt. The shipped
 `std` package is a managed store package whose
 version must exactly match the running AGM version. A shared locator finds its source at the

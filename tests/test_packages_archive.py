@@ -16,6 +16,7 @@ import pytest
 import agm.packages.archive as package_archive
 from agm.packages.archive import (
     ArchiveError,
+    extract_archive,
     read_archive_manifest,
     read_archive_metadata,
     validate_archive_source,
@@ -148,6 +149,10 @@ def test_archive_metadata_and_manifest_are_read_without_leaving_an_open_archive(
     assert str(read_metadata.manifest.version) == "1.2.3"
     assert read_archive_manifest(archive_path) == read_metadata.manifest
     assert verify_archive(archive_path) == read_metadata
+    extracted = tmp_path / "extracted"
+    extracted.mkdir()
+    assert extract_archive(archive_path, extracted) == metadata
+    assert (extracted / "review_tools" / "main.agl").is_file()
 
 
 def test_verify_archive_rejects_a_record_that_does_not_match_its_contents(tmp_path: Path) -> None:

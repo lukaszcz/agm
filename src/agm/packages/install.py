@@ -28,6 +28,7 @@ from agm.packages.activation import (
 )
 from agm.packages.archive import (
     ArchiveError,
+    ArchiveMetadata,
     extract_archive,
     verify_archive_discipline,
 )
@@ -512,21 +513,28 @@ def _install_archive(archive: Path, *, state: _InstallState, shadow: bool) -> Pa
         dry_run.print_operation("install-package-archive", str(archive))
         installed = PackageInfo(destination, metadata.manifest)
     else:
-        staging: Path | None = None
-        try:
-            staging_parent = store_root(home=state.home, env=state.env).parent
-            fs.mkdir(staging_parent, parents=True, exist_ok=True)
-            staging = Path(mkdtemp(prefix=".agm-package-", dir=staging_parent))
-            # extract_archive verifies and extracts through one ZipFile instance,
-            # so a pathname swap cannot separate accepted data from extracted data.
-            metadata = extract_archive(archive_path, staging)
+        prepared: list[tuple[Path, Path]] = []
+
+        def prepare_staging(metadata: ArchiveMetadata) -> Path:
+            """Create staging beside the canonical destination once identity is verified."""
+
             _validate_managed_stdlib_install(metadata.manifest, source=None, editable=False)
+            _validate_minimum_agm(metadata.manifest)
             destination = canonical_package_store_path(
                 metadata.manifest.name, metadata.manifest.version, home=state.home, env=state.env
             )
+            fs.mkdir(destination.parent, parents=True, exist_ok=True)
+            staging = Path(mkdtemp(prefix=".agm-package-", dir=destination.parent))
+            prepared.append((destination, staging))
+            return staging
+
+        try:
+            # Verification, destination selection, and extraction share one
+            # ZipFile instance, binding accepted data to the extracted tree.
+            metadata = extract_archive(archive_path, prepare_staging)
+            destination, staging = prepared[-1]
             package = PackageInfo(staging, metadata.manifest)
             validate_package(package)
-            _validate_minimum_agm(package.manifest)
             verify_record(staging)
             if destination.exists():
                 _verify_existing_install(destination, metadata.manifest, metadata.package_hash)
@@ -534,15 +542,15 @@ def _install_archive(archive: Path, *, state: _InstallState, shadow: bool) -> Pa
                 fs.mkdir(destination.parent, parents=True, exist_ok=True)
                 staging.replace(destination)
                 state.created.append(destination)
-                staging = None
             installed = PackageInfo(destination, package.manifest)
         except PackageInstallError:
             raise
         except (ArchiveError, DisciplineError, RecordError, OSError, ValueError) as exc:
             raise PackageInstallError(f"cannot install package archive {archive}: {exc}") from exc
         finally:
-            if staging is not None and staging.exists():
-                fs.rmtree(staging)
+            for _, staging in prepared:
+                if staging.exists():
+                    fs.rmtree(staging)
 
     try:
         _resolve_dependencies(installed, state)

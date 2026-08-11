@@ -363,27 +363,32 @@ def verify_archive_discipline(archive_path: Path) -> ArchiveMetadata:
     return _read_archive(archive_path, verify_and_validate)
 
 
-def extract_archive(archive_path: Path, destination: Path) -> ArchiveMetadata:
-    """Verify then safely extract an archive into an empty private *destination*.
+def extract_archive(
+    archive_path: Path, destination: Path | Callable[[ArchiveMetadata], Path]
+) -> ArchiveMetadata:
+    """Verify then safely extract an archive into an empty private destination.
 
-    The caller owns publication of the extracted directory.  Archive paths are
-    validated before any write, and the extracted tree retains the archive's
-    canonical ``RECORD`` for the installed-tree integrity contract.
+    A callable destination is selected from the verified metadata before any
+    write while the archive remains open. The caller owns publication of the
+    extracted directory. Archive paths are validated before any write, and the
+    extracted tree retains the archive's canonical ``RECORD`` for the
+    installed-tree integrity contract.
     """
 
     def extract(archive: zipfile.ZipFile) -> ArchiveMetadata:
         metadata = _verify_open_archive(archive)
+        extraction_root = destination(metadata) if callable(destination) else destination
         prefix, _, record_name, infos = _archive_layout(archive.infolist())
         for name, info in infos.items():
             if name == record_name:
                 continue
             relative = name.removeprefix(prefix)
-            target = destination / relative
+            target = extraction_root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             with archive.open(info) as source, target.open("xb") as output:
                 while chunk := source.read(_HASH_CHUNK_SIZE):
                     output.write(chunk)
-        record_target = destination / _RECORD_NAME
+        record_target = extraction_root / _RECORD_NAME
         record_target.write_bytes(_read_entry(archive, infos[record_name]))
         return metadata
 

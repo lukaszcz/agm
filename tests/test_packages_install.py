@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import shutil
 from collections.abc import Generator, Iterator
 from pathlib import Path
@@ -1565,6 +1566,35 @@ def test_editable_command_lifecycle_restores_the_remaining_owner(tmp_path: Path)
     assert load_activation_index(home=home, env={}).commands == {
         "launch": CommandRegistration("alpha", "alpha/main::main")
     }
+
+
+def test_install_archive_stages_beside_a_relocated_store_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    archive = tmp_path / "alpha.agmpkg"
+    write_archive(source, archive)
+    home = tmp_path / "home"
+    logical_store = home / ".agm" / "packages"
+    relocated_store = tmp_path / "relocated-packages"
+    relocated_store.mkdir()
+    logical_store.parent.mkdir(parents=True)
+    logical_store.symlink_to(relocated_store, target_is_directory=True)
+    destination = relocated_store / "alpha" / "1.0.0"
+    original_replace = Path.replace
+
+    def reject_cross_device_publication(path: Path, target: Path) -> Path:
+        if target == destination and path.parent != target.parent:
+            raise OSError(errno.EXDEV, "cross-device link")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", reject_cross_device_publication)
+
+    installed = install_archive(archive, home=home, env={})
+
+    assert installed.root == destination
+    assert verify_record(destination)
+    assert not tuple(destination.parent.glob(".agm-package-*"))
 
 
 def test_install_archive_reuses_an_existing_verified_tree(tmp_path: Path) -> None:

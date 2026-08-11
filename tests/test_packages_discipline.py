@@ -115,6 +115,58 @@ class TestPackageDiscipline:
                 read_module=modules.__getitem__,
             )
 
+    def test_defers_archive_import_validation_until_dependencies_are_available(self) -> None:
+        modules = {"custom/main.agl": "import helpers/api\n"}
+        manifest = PackageManifest(
+            "custom",
+            semver.Version.parse("1.0.0"),
+            dependencies={
+                "helpers": DependencySpec(semver.Version.parse("1.0.0")),
+            },
+        )
+
+        validate_archive_package(
+            manifest,
+            archive_paths=modules,
+            read_module=modules.__getitem__,
+        )
+
+    def test_archive_import_validation_accepts_a_bundled_extern_companion(self) -> None:
+        files = {
+            "custom/main.agl": "extern def execute() -> unit\n",
+            "custom/main.py": "def execute():\n    return None\n",
+        }
+        manifest = PackageManifest("custom", semver.Version.parse("1.0.0"))
+
+        validate_archive_package(
+            manifest,
+            archive_paths=files,
+            read_module=files.__getitem__,
+        )
+
+    def test_archive_materialization_oserror_is_a_discipline_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        modules = {"custom/main.agl": "let value = 1\n"}
+        manifest = PackageManifest("custom", semver.Version.parse("1.0.0"))
+
+        def fail_to_create_temporary_directory(*, prefix: str) -> object:
+            raise OSError(f"temporary directory unavailable for {prefix}")
+
+        monkeypatch.setattr(
+            "agm.packages.discipline.TemporaryDirectory",
+            fail_to_create_temporary_directory,
+        )
+
+        with pytest.raises(DisciplineError) as raised:
+            validate_archive_package(
+                manifest,
+                archive_paths=modules,
+                read_module=modules.__getitem__,
+            )
+
+        assert isinstance(raised.value.__cause__, OSError)
+
     @pytest.mark.parametrize("fixture", ("malformed_command", "reserved_command"))
     def test_rejects_malformed_or_reserved_command_path(self, fixture: str) -> None:
         with pytest.raises(DisciplineError):

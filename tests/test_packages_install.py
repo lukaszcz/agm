@@ -1705,6 +1705,36 @@ def test_editable_command_lifecycle_restores_the_remaining_owner(tmp_path: Path)
     }
 
 
+def test_install_archive_validates_staging_before_canonical_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    (source / "alpha" / "main.agl").write_text(
+        "import missing\nprogram def main() -> unit = ()\n", encoding="utf-8"
+    )
+    archive = tmp_path / "alpha.agmpkg"
+    write_archive(source, archive)
+    home = tmp_path / "home"
+    destination = home / ".agm" / "packages" / "alpha" / "1.0.0"
+    original_replace = Path.replace
+    publication_attempted = False
+
+    def observe_publication(path: Path, target: Path) -> Path:
+        nonlocal publication_attempted
+        if target == destination and path.name.startswith(".agm-package-"):
+            publication_attempted = True
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", observe_publication)
+
+    with pytest.raises(PackageInstallError):
+        install_archive(archive, home=home, env={})
+
+    assert not publication_attempted
+    assert not destination.exists()
+    assert not tuple(destination.parent.glob(".agm-package-*"))
+
+
 def test_install_archive_stages_beside_a_relocated_store_destination(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

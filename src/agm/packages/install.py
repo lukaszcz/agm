@@ -614,13 +614,22 @@ def _install_archive(archive: Path, *, state: _InstallState, shadow: bool) -> Pa
             package = PackageInfo(staging, metadata.manifest)
             validate_package_structure(package)
             verify_record(staging)
-            if destination.exists():
+            destination_exists = destination.exists()
+            if destination_exists:
                 _verify_existing_install(destination, metadata.manifest, metadata.package_hash)
-            else:
+            try:
+                _resolve_dependencies(package, state)
+                validate_package(package, dependency_packages=state.resource_packages.values())
+            except (DisciplineError, PackageInstallError, ValueError) as exc:
+                raise PackageInstallError(
+                    f"cannot install package archive {archive}: {exc}"
+                ) from exc
+            if not destination_exists:
                 fs.mkdir(destination.parent, parents=True, exist_ok=True)
                 staging.replace(destination)
                 state.created.append(destination)
             installed = PackageInfo(destination, package.manifest)
+            state.resource_packages[installed.manifest.name] = installed
         except PackageInstallError:
             raise
         except (ArchiveError, DisciplineError, RecordError, OSError, ValueError) as exc:
@@ -631,10 +640,8 @@ def _install_archive(archive: Path, *, state: _InstallState, shadow: bool) -> Pa
                     fs.rmtree(staging)
 
     try:
-        _resolve_dependencies(installed, state)
-        if not dry_run.enabled():
-            validate_package(installed, dependency_packages=state.resource_packages.values())
-            state.resource_packages[installed.manifest.name] = installed
+        if dry_run.enabled():
+            _resolve_dependencies(installed, state)
         _activate_package(installed, state, editable_root=None, shadow=shadow)
         return installed
     except (DisciplineError, PackageInstallError, ValueError) as exc:

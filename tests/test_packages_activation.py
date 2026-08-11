@@ -244,9 +244,7 @@ def test_effective_command_index_reconciles_cached_immutable_command_priority(
     write_activation_index(
         ActivationIndex(
             {
-                "alpha": ActivePackage(
-                    semver.Version.parse("1.0.0"), registration_order=1
-                ),
+                "alpha": ActivePackage(semver.Version.parse("1.0.0"), registration_order=1),
                 "bravo": ActivePackage(
                     semver.Version.parse("1.0.0"), shadow=True, registration_order=2
                 ),

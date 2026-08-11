@@ -44,22 +44,26 @@ def wrap_inline_program(program: Program, *, next_node_id: int) -> tuple[Program
             and any(isinstance(later, syntax.FuncDef) for later in items[index + 1 :])
             and is_constant_expression(item.value, is_constructor=lambda _node_id: False)
         )
-        if is_scoped_binding or is_earlier_constant_binding or isinstance(
-            item,
-            (
-                syntax.FuncDef,
-                syntax.RecordDef,
-                syntax.EnumDef,
-                syntax.ExceptionDef,
-                syntax.TypeAlias,
-                syntax.ParamDecl,
-                syntax.BuiltinVarDecl,
-                syntax.InfixDecl,
-                syntax.ImportDecl,
-                syntax.ExportDecl,
-                syntax.OpenDecl,
-                syntax.ScopeRegion,
-            ),
+        if (
+            is_scoped_binding
+            or is_earlier_constant_binding
+            or isinstance(
+                item,
+                (
+                    syntax.FuncDef,
+                    syntax.RecordDef,
+                    syntax.EnumDef,
+                    syntax.ExceptionDef,
+                    syntax.TypeAlias,
+                    syntax.ParamDecl,
+                    syntax.BuiltinVarDecl,
+                    syntax.InfixDecl,
+                    syntax.ImportDecl,
+                    syntax.ExportDecl,
+                    syntax.OpenDecl,
+                    syntax.ScopeRegion,
+                ),
+            )
         ):
             root_items.append(item)
         else:

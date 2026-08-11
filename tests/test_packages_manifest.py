@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 import semver
 
+from agm.agl.keywords import KEYWORDS
 from agm.packages.manifest import ManifestError, distribution_manifest, load_manifest
 
 FIXTURES = Path(__file__).parent / "agl" / "packages"
@@ -73,8 +74,26 @@ charlie = { version = "3", url = "https://example.test/charlie.agmpkg", hash = "
         assert manifest.name == name
 
     @pytest.mark.parametrize("name", ("review-tools", "1review", "review/tools"))
-    def test_rejects_invalid_or_reserved_package_names(self, tmp_path: Path, name: str) -> None:
+    def test_rejects_invalid_package_names(self, tmp_path: Path, name: str) -> None:
         path = _write_manifest(tmp_path, f'[package]\nname = "{name}"\nversion = "1.2.3"\n')
+
+        with pytest.raises(ManifestError):
+            load_manifest(path)
+
+    @pytest.mark.parametrize("name", sorted(KEYWORDS))
+    def test_rejects_reserved_keyword_package_names(self, tmp_path: Path, name: str) -> None:
+        path = _write_manifest(tmp_path, f'[package]\nname = "{name}"\nversion = "1.2.3"\n')
+
+        with pytest.raises(ManifestError):
+            load_manifest(path)
+
+    @pytest.mark.parametrize("name", sorted(KEYWORDS))
+    def test_rejects_reserved_keyword_dependency_names(self, tmp_path: Path, name: str) -> None:
+        path = _write_manifest(
+            tmp_path,
+            '[package]\nname = "review_tools"\nversion = "1.2.3"\n\n'
+            f'[dependencies]\n"{name}" = "1"\n',
+        )
 
         with pytest.raises(ManifestError):
             load_manifest(path)

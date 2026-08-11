@@ -1,7 +1,8 @@
 """Canonical token-type name constants for the AgL lexer.
 
-This is the **single source of truth** for all token type names emitted by the
-custom lexer and declared in ``grammar/agl.lark``.  It also defines the
+This is the token contract for names emitted by the custom lexer and declared
+in ``grammar/agl.lark``. Reserved keyword names come from the dependency-free
+canonical inventory in :mod:`agm.agl.keywords`. This module also defines the
 tree-sitter portability contract: the ``externals`` set of a future
 tree-sitter grammar maps 1-to-1 to the synthetic tokens below.
 
@@ -44,6 +45,8 @@ Operators / punctuation:
 
 from __future__ import annotations
 
+from agm.agl import keywords as _keywords
+
 # ---------------------------------------------------------------------------
 # Layout tokens (synthetic; produced by INDENT/DEDENT filter)
 # ---------------------------------------------------------------------------
@@ -64,107 +67,54 @@ RAW_TAIL_START = "RAW_TAIL_START"
 RAW_FRAGMENT = "RAW_FRAGMENT"
 RAW_TAIL_END = "RAW_TAIL_END"
 
-# ---------------------------------------------------------------------------
-# Keywords (always reserved)
-# ---------------------------------------------------------------------------
-KW_RECORD = "record"
-KW_ENUM = "enum"
-KW_EXCEPTION = "exception"
-KW_TYPE = "type"
-KW_BUILTIN = "builtin"
-KW_EXTERN = "extern"
-KW_EXTENDS = "extends"
-KW_PARAM = "param"
-KW_PROGRAM = "program"
-KW_LET = "let"
-KW_VAR = "var"
-KW_DEF = "def"  # function declaration keyword
-KW_FN = "fn"  # lambda keyword
-KW_DO = "do"
-KW_UNTIL = "until"
-KW_DONE = "done"
-KW_BREAK = "break"
-KW_CONTINUE = "continue"
-KW_FOR = "for"
-KW_WHILE = "while"
-KW_IF = "if"
-KW_ELSE = "else"
-KW_CASE = "case"
-KW_OF = "of"
-KW_TRY = "try"
-KW_CATCH = "catch"
-KW_RAISE = "raise"
-KW_RETURN = "return"
-KW_AS = "as"
-KW_AS_QUESTION = "as?"
-# `pass` is a plain identifier (role taken by `()`).
-# `print` is an ordinary function name (NAME).
-KW_AND = "and"
-KW_OR = "or"
-KW_NOT = "not"
-KW_IS = "is"
-KW_IN = "in"
-KW_TRUE = "true"
-KW_FALSE = "false"
-KW_NULL = "null"
-KW_INFIXL = "infixl"
-KW_INFIXR = "infixr"
-KW_PRIO = "prio"
-KW_TO = "to"
-KW_DOWNTO = "downto"
-KW_BY = "by"
-KW_WITH = "with"
-
-# Set of all reserved keyword strings (used by the scanner for fast lookup).
-KEYWORDS: frozenset[str] = frozenset(
-    {
-        KW_RECORD,
-        KW_ENUM,
-        KW_EXCEPTION,
-        KW_TYPE,
-        KW_BUILTIN,
-        KW_EXTERN,
-        KW_EXTENDS,
-        KW_PARAM,
-        KW_PROGRAM,
-        KW_LET,
-        KW_VAR,
-        KW_DEF,
-        KW_FN,
-        KW_DO,
-        KW_UNTIL,
-        KW_DONE,
-        KW_BREAK,
-        KW_CONTINUE,
-        KW_FOR,
-        KW_WHILE,
-        KW_IF,
-        KW_ELSE,
-        KW_CASE,
-        KW_OF,
-        KW_TRY,
-        KW_CATCH,
-        KW_RAISE,
-        KW_RETURN,
-        KW_AS,
-        KW_AS_QUESTION,
-        KW_AND,
-        KW_OR,
-        KW_NOT,
-        KW_IS,
-        KW_IN,
-        KW_TRUE,
-        KW_FALSE,
-        KW_NULL,
-        KW_INFIXL,
-        KW_INFIXR,
-        KW_PRIO,
-        KW_TO,
-        KW_DOWNTO,
-        KW_BY,
-        KW_WITH,
-    }
-)
+# Reserved keyword constants and their canonical inventory are imported from
+# ``agm.agl.keywords`` and re-exported here with the rest of the token contract.
+KEYWORDS = _keywords.KEYWORDS
+KW_RECORD = _keywords.KW_RECORD
+KW_ENUM = _keywords.KW_ENUM
+KW_EXCEPTION = _keywords.KW_EXCEPTION
+KW_TYPE = _keywords.KW_TYPE
+KW_BUILTIN = _keywords.KW_BUILTIN
+KW_EXTERN = _keywords.KW_EXTERN
+KW_EXTENDS = _keywords.KW_EXTENDS
+KW_PARAM = _keywords.KW_PARAM
+KW_PROGRAM = _keywords.KW_PROGRAM
+KW_LET = _keywords.KW_LET
+KW_VAR = _keywords.KW_VAR
+KW_DEF = _keywords.KW_DEF
+KW_FN = _keywords.KW_FN
+KW_DO = _keywords.KW_DO
+KW_UNTIL = _keywords.KW_UNTIL
+KW_DONE = _keywords.KW_DONE
+KW_BREAK = _keywords.KW_BREAK
+KW_CONTINUE = _keywords.KW_CONTINUE
+KW_FOR = _keywords.KW_FOR
+KW_WHILE = _keywords.KW_WHILE
+KW_IF = _keywords.KW_IF
+KW_ELSE = _keywords.KW_ELSE
+KW_CASE = _keywords.KW_CASE
+KW_OF = _keywords.KW_OF
+KW_TRY = _keywords.KW_TRY
+KW_CATCH = _keywords.KW_CATCH
+KW_RAISE = _keywords.KW_RAISE
+KW_RETURN = _keywords.KW_RETURN
+KW_AS = _keywords.KW_AS
+KW_AS_QUESTION = _keywords.KW_AS_QUESTION
+KW_AND = _keywords.KW_AND
+KW_OR = _keywords.KW_OR
+KW_NOT = _keywords.KW_NOT
+KW_IS = _keywords.KW_IS
+KW_IN = _keywords.KW_IN
+KW_TRUE = _keywords.KW_TRUE
+KW_FALSE = _keywords.KW_FALSE
+KW_NULL = _keywords.KW_NULL
+KW_INFIXL = _keywords.KW_INFIXL
+KW_INFIXR = _keywords.KW_INFIXR
+KW_PRIO = _keywords.KW_PRIO
+KW_TO = _keywords.KW_TO
+KW_DOWNTO = _keywords.KW_DOWNTO
+KW_BY = _keywords.KW_BY
+KW_WITH = _keywords.KW_WITH
 
 # ---------------------------------------------------------------------------
 # Identifiers

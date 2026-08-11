@@ -10,7 +10,8 @@
 | `agm pkg info NAME` | Show active package details and dependency status |
 
 A package directory contains `package.toml` and a module tree whose directory matches
-`[package] name`. The manifest requires a complete semantic `version`; optional
+`[package] name`. Package and dependency names must each be one AgL identifier segment and cannot
+be reserved AgL keywords. The manifest requires a complete semantic `version`; optional
 `[dependencies]` entries state minimum versions and may provide a local `path` or a URL with
 its SHA-256 hash. `[commands]` maps a one- or multi-word command path to a package-owned
 `MODULE::PROGRAM` reference, where `PROGRAM` is a `program def` declaration with no value or type parameters and an explicit `-> unit` result. For example:

@@ -2,7 +2,8 @@
 
 The package domain defines portable, versioned AgL module collections. A package has a
 `package.toml` manifest and a module tree named after the package, so its modules import
-under a stable package-qualified path. Packages may declare minimum-version dependencies,
+under a stable package-qualified path. Package and dependency names must be AgL identifier
+segments and cannot be reserved AgL keywords. Packages may declare minimum-version dependencies,
 literal resources, and CLI commands backed by parameterless `program def` entries with explicit
 `unit` results.
 

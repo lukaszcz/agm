@@ -11,6 +11,8 @@ from click.testing import CliRunner, Result
 from typer.main import get_command
 
 import agm.cli as cli
+from agm.agl.runtime.types import ParamDeclInfo
+from agm.agl.semantics.types import BoolType, TextType
 from agm.cli_support.args import ExecArgs
 from agm.config.context import ConfigContext
 from agm.packages.activation import (
@@ -182,19 +184,31 @@ def test_registered_command_help_does_not_dispatch_program(
     )
     monkeypatch.setattr(dispatch, "current_config_context", lambda: context)
     monkeypatch.setattr(dispatch, "load_activation_index", lambda **_: index)
+    params = (
+        ParamDeclInfo("level", TextType(), False, 1, 1),
+        ParamDeclInfo("verbose", BoolType(), False, 2, 1),
+        ParamDeclInfo("message", TextType(), False, 3, 1),
+    )
+    monkeypatch.setattr(exec_program, "registered_program_params", lambda *_a, **_k: params)
     calls: list[object] = []
     monkeypatch.setattr(exec_program, "run_registered", lambda *args, **kwargs: calls.append(args))
 
     result = invoke(CliRunner(), ["tools", "lint", "--help"])
     short_result = invoke(CliRunner(), ["tools", "lint", "-h"])
+    value_option_result = invoke(CliRunner(), ["tools", "lint", "--level", "strict", "-h"])
+    bool_option_result = invoke(CliRunner(), ["tools", "lint", "--verbose", "-h"])
     value_result = invoke(CliRunner(), ["tools", "lint", "--message", "-h"])
 
     assert result.exit_code == 0
     assert short_result.exit_code == 0
+    assert value_option_result.exit_code == 0
+    assert bool_option_result.exit_code == 0
     assert value_result.exit_code == 0
     assert "agm tools lint" in result.output
     assert "Lint package inputs" in result.output
     assert "--dry-run" in result.output
+    assert "agm tools lint" in value_option_result.output
+    assert "agm tools lint" in bool_option_result.output
     assert calls == [("tools/lint::main", ["--message", "-h"])]
 
 

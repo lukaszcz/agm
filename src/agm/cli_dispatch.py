@@ -153,11 +153,20 @@ class RegisteredProgramCommand(TyperCommand):
         self._registration = registration
 
     def invoke(self, ctx: click.Context) -> None:
-        if "--help" in ctx.args or (ctx.args and ctx.args[0] == "-h"):
+        help_requested = "--help" in ctx.args
+        if not help_requested and "-h" in ctx.args:
+            # This is the first point at which an unknown command has been proven
+            # to be registered, so AgL remains unloaded for all builtin commands.
+            from agm.cli_support.exec_params import short_help_requested
+            from agm.commands.exec_program import registered_program_params
+
+            params = registered_program_params(
+                self._registration.program, self._registration.package
+            )
+            help_requested = short_help_requested(params, ctx.args)
+        if help_requested:
             print(registered_command_help(self._path_name, self._registration), end="")
             return
-        # This is the first point at which an unknown command has been proven
-        # to be registered, so AgL remains unloaded for all builtin commands.
         from agm.commands.exec_program import run_registered
 
         run_registered(

@@ -19,7 +19,7 @@ a param named ``timeout`` (the exact engine key name) collides, but one named
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -252,6 +252,22 @@ def _param_flag_map(params: tuple[ParamDeclInfo, ...]) -> _ParamFlagMap:
 def param_option_flags(params: tuple[ParamDeclInfo, ...]) -> tuple[str, ...]:
     """Return the selected unambiguous CLI flags for *params*."""
     return tuple(flag for flag, _param, _bool_value in _param_flag_map(params).bindings)
+
+
+def short_help_requested(params: tuple[ParamDeclInfo, ...], tokens: Sequence[str]) -> bool:
+    """Return whether an unconsumed ``-h`` occurs in program argument *tokens*."""
+    value_flags = {
+        flag for flag, _param, bool_value in _param_flag_map(params).bindings if bool_value is None
+    }
+    consume_value = False
+    for token in tokens:
+        if consume_value:
+            consume_value = False
+        elif token == "-h":
+            return True
+        elif token in value_flags:
+            consume_value = True
+    return False
 
 
 def discover_params_from_source(

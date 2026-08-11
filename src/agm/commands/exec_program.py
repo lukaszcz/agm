@@ -63,6 +63,7 @@ from agm.agl import PipelineDriver as _PipelineDriver
 from agm.agl.diagnostics import format_diagnostic
 from agm.agl.runtime.agents import AgentFn, value_driven_agent_factory
 from agm.agl.runtime.host_settings import HostSettingsPolicy
+from agm.agl.runtime.types import ParamDeclInfo
 from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES
 from agm.agl.syntax.nodes import FuncDef, ParamDecl, static_items
 from agm.cli_support.args import ExecArgs
@@ -166,31 +167,36 @@ def _registered_command_mismatch(command_path: str) -> NoReturn:
     raise SystemExit(1)
 
 
-def registered_program_param_flags(
+def registered_program_params(
     program: str, package_name: str, *, context: ConfigContext | None = None
-) -> tuple[str, ...]:
-    """Discover parameter flags for a registered program, degrading on failure."""
+) -> tuple[ParamDeclInfo, ...]:
+    """Discover the parameter inventory for a registered program, degrading on failure."""
     try:
         from agm.agl.modules.ids import ModuleId
 
-        module_path, separator, _declaration_path = program.partition("::")
-        if not separator or not _declaration_path:
+        module_path, separator, declaration_path = program.partition("::")
+        if not separator or not declaration_path:
             return ()
         module_id = ModuleId.from_path(module_path)
         if module_id.segments[0] != package_name:
             return ()
         if context is None:
             context = current_config_context()
-        return param_option_flags(
-            discover_params_from_installed_reference(
-                program,
-                home=context.home,
-                proj_dir=context.proj_dir,
-                cwd=context.cwd,
-            )
+        return discover_params_from_installed_reference(
+            program,
+            home=context.home,
+            proj_dir=context.proj_dir,
+            cwd=context.cwd,
         )
     except (Exception, SystemExit):
         return ()
+
+
+def registered_program_param_flags(
+    program: str, package_name: str, *, context: ConfigContext | None = None
+) -> tuple[str, ...]:
+    """Discover parameter flags for a registered program, degrading on failure."""
+    return param_option_flags(registered_program_params(program, package_name, context=context))
 
 
 def run(

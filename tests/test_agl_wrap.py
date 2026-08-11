@@ -97,6 +97,29 @@ print value
     assert transformed_next_node_id == next_node_id + 3
 
 
+def test_wrap_inline_program_keeps_scoped_bindings_at_root_and_wraps_local_bindings() -> None:
+    program, next_node_id = parse_program_seeded(
+        "let Config::answer = 42\nvar Config::count = 0\nlet local = 1\nvar scratch = 0\n",
+        start_id=0,
+    )
+    scoped_let, scoped_var, local_let, local_var = program.body.items
+
+    wrapped, _ = wrap_inline_program(program, next_node_id=next_node_id)
+
+    wrapped_scoped_let, wrapped_scoped_var, main = wrapped.body.items
+    assert wrapped_scoped_let is scoped_let
+    assert wrapped_scoped_var is scoped_var
+    assert isinstance(wrapped_scoped_let, LetDecl)
+    assert isinstance(wrapped_scoped_var, VarDecl)
+    assert wrapped_scoped_let.scope_path
+    assert wrapped_scoped_var.scope_path
+    assert isinstance(main, FuncDef)
+    assert main.body.items == (local_let, local_var)
+    assert all(
+        isinstance(item, (LetDecl, VarDecl)) and not item.scope_path for item in main.body.items
+    )
+
+
 def test_wrap_inline_program_keeps_late_exports_with_the_executable_body() -> None:
     program, next_node_id = parse_program_seeded("let value = 1\nexport helpers\n", start_id=0)
 

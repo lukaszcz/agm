@@ -29,22 +29,43 @@ from tests.agl.ir_harness import (
 )
 
 
-def test_wrap_mode_captures_synthetic_main_locals() -> None:
+@pytest.mark.parametrize(
+    "scoped_bindings",
+    (
+        "scope Static\nlet constant = 1\nvar offset = 1\nend Static\n",
+        "let Static::constant = 1\nvar Static::offset = 1\n",
+    ),
+    ids=("region", "shorthand"),
+)
+def test_wrap_mode_captures_static_bindings_and_synthetic_main_locals(
+    scoped_bindings: str,
+) -> None:
     """Statement-style harness sources execute through the synthetic main."""
     result = evaluate_ir(
-        "scope Static\n"
-        "let constant = 1\n"
-        "end Static\n"
-        "let first = Static::constant\n"
+        scoped_bindings + "let first = Static::constant + Static::offset\n"
         "var second = first + 1\n"
         "second := second + 1\n"
     )
 
     assert result == {
         "Static::constant": IntValue(1),
-        "first": IntValue(1),
-        "second": IntValue(3),
+        "Static::offset": IntValue(1),
+        "first": IntValue(2),
+        "second": IntValue(4),
     }
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "scope Static\nlet value = print 1\nend Static",
+        "let Static::value = print 1",
+    ),
+    ids=("region", "shorthand"),
+)
+def test_inline_scoped_bindings_obey_static_root_initializer_restrictions(source: str) -> None:
+    with pytest.raises(AglTypeError):
+        lower_inline_ir(source)
 
 
 def test_synthetic_main_runs_only_when_explicitly_selected() -> None:

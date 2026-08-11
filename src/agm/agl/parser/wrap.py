@@ -11,9 +11,10 @@ from agm.agl.syntax.nodes import Program, static_function_items
 def wrap_inline_program(program: Program, *, next_node_id: int) -> tuple[Program, int]:
     """Wrap root non-declarations in a host-only synthetic program entry.
 
-    The transform is intentionally syntactic: every root declaration and scope
-    region stays at the root, while every other item moves into ``main`` in
-    source order. It never inspects initializer constancy or resolves names.
+    The transform is intentionally syntactic: every root declaration, scope
+    region, and path-bearing binding stays at the root, while every other item
+    moves into ``main`` in source order. It never inspects initializer constancy
+    or resolves names.
 
     If *program* already contains a ``program def`` at any scope path, it is
     returned unchanged with its supplied node-id seed. Otherwise the returned
@@ -32,7 +33,10 @@ def wrap_inline_program(program: Program, *, next_node_id: int) -> tuple[Program
         if is_module_header and has_executable_item:
             main_items.append(item)
             continue
-        if isinstance(
+        is_scoped_binding = isinstance(item, (syntax.LetDecl, syntax.VarDecl)) and bool(
+            item.scope_path
+        )
+        if is_scoped_binding or isinstance(
             item,
             (
                 syntax.FuncDef,

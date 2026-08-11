@@ -1,10 +1,11 @@
 """CLI helpers for mapping AgL ``param`` declarations to exec CLI options.
 
 Each ``param`` declaration in a program becomes a ``--<scope-path>`` option
-on ``agm exec``. The module-qualified spelling is always accepted; it is
-required when two inventory params share their scope-path spelling. A file
-entry is rendered by its file-stem module route rather than the pipeline's
-internal ``<entry>`` sentinel; inline entries use ``@entry``. Bool params use
+on ``agm exec``. The module-qualified spelling is accepted and is required
+when two inventory params share their scope-path spelling. A file entry is
+rendered by its file-stem module route rather than the pipeline's internal
+``<entry>`` sentinel; inline entries use ``@entry``. If that stem collides
+with an imported module route, the entry also falls back to ``@entry``. Bool params use
 ``--name/--no-name`` flag form. This module provides pure,
 unit-testable functions used by both the exec command and the help/completion
 machinery.
@@ -85,11 +86,35 @@ _ENTRY_PARAM_QUALIFIER = "@entry"
 
 
 def _external_qualified_name(param: ParamDeclInfo) -> str:
-    """Return a shell-safe qualified spelling for a parameter flag."""
+    """Return the canonical shell-safe qualified spelling for a parameter flag."""
     if param.is_entry:
         qualifier = param.entry_qualifier or _ENTRY_PARAM_QUALIFIER
         return f"{qualifier}::{param.name}"
     return param.qualified_name
+
+
+def _collision_safe_qualified_names(
+    params: tuple[ParamDeclInfo, ...],
+) -> dict[ParamDeclInfo, str]:
+    """Return qualified spellings without an entry/module route collision.
+
+    A symlinked file entry's resolved stem can equal an imported module route.
+    Keep the imported module's canonical spelling and fall back to the existing
+    shell-safe ``@entry`` identity for the entry instead of choosing a winner by
+    inventory order.
+    """
+    canonical = tuple((param, _external_qualified_name(param)) for param in params)
+    counts: dict[str, int] = {}
+    for _param, spelling in canonical:
+        counts[spelling] = counts.get(spelling, 0) + 1
+    return {
+        param: (
+            f"{_ENTRY_PARAM_QUALIFIER}::{param.name}"
+            if param.is_entry and counts[spelling] > 1
+            else spelling
+        )
+        for param, spelling in canonical
+    }
 
 
 def _add_flag_candidates(
@@ -134,25 +159,47 @@ def _param_value_name(
     return param.name
 
 
+def _qualified_flag_candidates(
+    params: tuple[ParamDeclInfo, ...], qualified_names: Mapping[ParamDeclInfo, str]
+) -> dict[str, list[tuple[ParamDeclInfo, bool | None]]]:
+    """Collect qualified candidates before selecting any option spelling."""
+    candidates: dict[str, list[tuple[ParamDeclInfo, bool | None]]] = {}
+    for param in params:
+        _add_flag_candidates(candidates, param, qualified_names[param])
+    return candidates
+
+
+def _ambiguous_qualified_flags(
+    params: tuple[ParamDeclInfo, ...], qualified_names: Mapping[ParamDeclInfo, str]
+) -> dict[str, tuple[ParamDeclInfo, ...]]:
+    """Return qualified options that still identify multiple declarations."""
+    return {
+        flag: tuple(param for param, _value in matches)
+        for flag, matches in _qualified_flag_candidates(params, qualified_names).items()
+        if len(matches) > 1
+    }
+
+
 def _param_flag_selection(
     params: tuple[ParamDeclInfo, ...],
 ) -> tuple[tuple[str, ParamDeclInfo, bool | None], ...]:
     """Return the valid, unambiguous parameter flags for one inventory."""
     ambiguous = _ambiguous_short_flags(params)
+    qualified_names = _collision_safe_qualified_names(params)
+    qualified = _qualified_flag_candidates(params, qualified_names)
     flags: dict[str, tuple[ParamDeclInfo, bool | None]] = {}
     for param in params:
         qualified_candidates: dict[str, list[tuple[ParamDeclInfo, bool | None]]] = {}
-        _add_flag_candidates(qualified_candidates, param, _external_qualified_name(param))
-        flags.update({flag: candidates[0] for flag, candidates in qualified_candidates.items()})
+        _add_flag_candidates(qualified_candidates, param, qualified_names[param])
+        for flag, candidates in qualified_candidates.items():
+            if len(qualified[flag]) == 1:
+                flags.setdefault(flag, candidates[0])
+
         short_candidates: dict[str, list[tuple[ParamDeclInfo, bool | None]]] = {}
         _add_flag_candidates(short_candidates, param, param.name)
-        flags.update(
-            {
-                flag: candidates[0]
-                for flag, candidates in short_candidates.items()
-                if flag not in ambiguous
-            }
-        )
+        for flag, candidates in short_candidates.items():
+            if flag not in ambiguous:
+                flags.setdefault(flag, candidates[0])
     return tuple((flag, param, bool_value) for flag, (param, bool_value) in flags.items())
 
 
@@ -285,7 +332,12 @@ def parse_param_tokens(
     """
     # Qualified flags always participate; unsafe short flags remain in the
     # ambiguity map solely to produce an actionable diagnostic.
-    ambiguous_flags = _ambiguous_short_flags(params)
+    ambiguous_short_flags = _ambiguous_short_flags(params)
+    qualified_names = _collision_safe_qualified_names(params)
+    ambiguous_flags = {
+        **ambiguous_short_flags,
+        **_ambiguous_qualified_flags(params, qualified_names),
+    }
     flag_to_param = {
         flag: (param, bool_value) for flag, param, bool_value in _param_flag_selection(params)
     }
@@ -302,7 +354,7 @@ def parse_param_tokens(
             flag, _, value = token.partition("=")
             if flag in ambiguous_flags:
                 spellings = ", ".join(
-                    param_flag(_external_qualified_name(param)) for param in ambiguous_flags[flag]
+                    param_flag(qualified_names[param]) for param in ambiguous_flags[flag]
                 )
                 raise ValueError(f"Option {flag!r} is ambiguous; use one of: {spellings}")
             if flag not in flag_to_param:
@@ -310,7 +362,7 @@ def parse_param_tokens(
             param, bool_val = flag_to_param[flag]
             if bool_val is not None:
                 raise ValueError(f"Option {flag!r} does not take a value")
-            result_name = _param_value_name(param, ambiguous_flags)
+            result_name = _param_value_name(param, ambiguous_short_flags)
             if result_name in result:
                 raise ValueError(f"Option '{param_flag(param.name)}' specified more than once")
             result[result_name] = value
@@ -320,7 +372,7 @@ def parse_param_tokens(
         # Handle ``--name`` form.
         if token in ambiguous_flags:
             spellings = ", ".join(
-                param_flag(_external_qualified_name(param)) for param in ambiguous_flags[token]
+                param_flag(qualified_names[param]) for param in ambiguous_flags[token]
             )
             raise ValueError(f"Option {token!r} is ambiguous; use one of: {spellings}")
         if token not in flag_to_param:
@@ -329,7 +381,7 @@ def parse_param_tokens(
         param, bool_val = flag_to_param[token]
         if bool_val is not None:
             # Bool flag: --name → True, --no-name → False.
-            result_name = _param_value_name(param, ambiguous_flags)
+            result_name = _param_value_name(param, ambiguous_short_flags)
             if result_name in result:
                 raise ValueError(f"Option '{param_flag(param.name)}' specified more than once")
             result[result_name] = bool_val
@@ -338,7 +390,7 @@ def parse_param_tokens(
             # Value-taking flag: next token is the value.
             if i + 1 >= len(tokens) or tokens[i + 1].startswith("--"):
                 raise ValueError(f"Option {token!r} requires a value")
-            result_name = _param_value_name(param, ambiguous_flags)
+            result_name = _param_value_name(param, ambiguous_short_flags)
             if result_name in result:
                 raise ValueError(f"Option '{param_flag(param.name)}' specified more than once")
             result[result_name] = tokens[i + 1]
@@ -356,10 +408,11 @@ def render_param_help_section(params: tuple[ParamDeclInfo, ...]) -> str:
     if not params:
         return ""
     ambiguous = _ambiguous_short_flags(params)
+    qualified_names = _collision_safe_qualified_names(params)
     lines: list[str] = ["Program parameters:"]
     for p in params:
         display_name = (
-            _external_qualified_name(p)
+            qualified_names[p]
             if any(p in candidates for candidates in ambiguous.values())
             else p.name
         )

@@ -19,6 +19,7 @@ def _make_param(
     col: int = 1,
     module_segments: tuple[str, ...] = (),
     is_entry: bool = False,
+    entry_qualifier: str | None = None,
 ) -> ParamDeclInfo:
     """Build a ``ParamDeclInfo`` for testing."""
     if typ is None:
@@ -31,6 +32,7 @@ def _make_param(
         col=col,
         module_segments=module_segments,
         is_entry=is_entry,
+        entry_qualifier=entry_qualifier,
     )
 
 
@@ -381,6 +383,67 @@ class TestParseParamTokens:
             "<entry>::region": "local"
         }
 
+    @pytest.mark.parametrize("reverse_inventory", (False, True))
+    def test_duplicate_external_qualified_spelling_keeps_both_params_settable(
+        self, reverse_inventory: bool
+    ) -> None:
+        from agm.cli_support.exec_params import param_option_flags, parse_param_tokens
+
+        entry = self._text_param(
+            "region",
+            module_segments=("<entry>",),
+            is_entry=True,
+            entry_qualifier="settings",
+        )
+        imported = self._text_param("region", module_segments=("settings",))
+        params = (imported, entry) if reverse_inventory else (entry, imported)
+
+        flags = param_option_flags(params)
+        assert set(flags) == {"--@entry::region", "--settings::region"}
+        assert len(flags) == len(set(flags))
+        assert parse_param_tokens(
+            params,
+            ["--@entry::region", "local", "--settings::region", "remote"],
+        ) == {"<entry>::region": "local", "settings::region": "remote"}
+
+    def test_unresolvable_duplicate_qualified_spelling_is_reported_as_ambiguous(self) -> None:
+        from agm.cli_support.exec_params import param_option_flags, parse_param_tokens
+
+        params = (
+            self._text_param("region", module_segments=("settings",), line=1),
+            self._text_param("region", module_segments=("settings",), line=2),
+        )
+
+        assert "--settings::region" not in param_option_flags(params)
+        with pytest.raises(ValueError, match="ambiguous"):
+            parse_param_tokens(params, ["--settings::region", "value"])
+
+    def test_duplicate_external_qualified_bool_spelling_keeps_both_negatives_settable(
+        self,
+    ) -> None:
+        from agm.cli_support.exec_params import param_option_flags, parse_param_tokens
+
+        params = (
+            self._bool_param(
+                "enabled",
+                module_segments=("<entry>",),
+                is_entry=True,
+                entry_qualifier="settings",
+            ),
+            self._bool_param("enabled", module_segments=("settings",)),
+        )
+
+        assert set(param_option_flags(params)) == {
+            "--@entry::enabled",
+            "--no-@entry::enabled",
+            "--settings::enabled",
+            "--no-settings::enabled",
+        }
+        assert parse_param_tokens(params, ["--no-@entry::enabled", "--no-settings::enabled"]) == {
+            "<entry>::enabled": False,
+            "settings::enabled": False,
+        }
+
 
 # ---------------------------------------------------------------------------
 # render_param_help_section
@@ -471,3 +534,22 @@ class TestRenderParamHelpSection:
 
         assert "--@entry::region" in section
         assert "--<entry>::region" not in section
+
+    def test_entry_route_collision_renders_distinct_qualified_spellings(self) -> None:
+        from agm.cli_support.exec_params import render_param_help_section
+
+        section = render_param_help_section(
+            (
+                _make_param(
+                    "region",
+                    TextType(),
+                    module_segments=("<entry>",),
+                    is_entry=True,
+                    entry_qualifier="settings",
+                ),
+                _make_param("region", TextType(), module_segments=("settings",)),
+            )
+        )
+
+        assert "--@entry::region" in section
+        assert "--settings::region" in section

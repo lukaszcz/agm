@@ -3479,6 +3479,40 @@ class TestEntryModuleConfig:
 
         assert exc_info.value.code == 1
 
+    def test_symlinked_entry_stem_collision_keeps_both_qualified_params_settable(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        imported_root = tmp_path / "invocation"
+        imported_root.mkdir()
+        (imported_root / "settings.agl").write_text(
+            "param region: text\ndef read() -> text = region\n"
+        )
+        target_root = tmp_path / "target"
+        target_root.mkdir()
+        target = target_root / "settings.agl"
+        target.write_text(
+            "import settings\nparam region: text\n"
+            'program def main() -> unit = print(region + ":" + settings::read())\n'
+        )
+        entry = imported_root / "workflow.agl"
+        entry.symlink_to(target)
+
+        assert (
+            exec_command.run(
+                _exec_args_no_log(
+                    entry,
+                    param_tokens=[
+                        "--@entry::region",
+                        "local",
+                        "--settings::region",
+                        "remote",
+                    ],
+                )
+            )
+            is None
+        )
+        assert capsys.readouterr().out == "local:remote\n"
+
     def test_colliding_imported_params_require_qualified_flags(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:

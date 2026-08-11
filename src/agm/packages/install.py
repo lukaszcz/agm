@@ -482,7 +482,10 @@ def _install_directory(
     _validate_managed_stdlib_install(package.manifest, source=root, editable=editable)
     _validate_minimum_agm(package.manifest)
     _resolve_dependencies(package, state)
-    validate_package(package, dependency_packages=state.resource_packages.values())
+    try:
+        validate_package(package, dependency_packages=state.resource_packages.values())
+    except DisciplineError as exc:
+        raise PackageInstallError(f"cannot install package from {source}: {exc}") from exc
     state.resource_packages[package.manifest.name] = package
 
     if editable:

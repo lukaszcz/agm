@@ -2078,6 +2078,32 @@ def test_installed_package_enumeration_skips_non_package_entries_and_bad_manifes
         installed_packages(home=home, env={})
 
 
+def test_directory_install_rolls_back_new_dependency_after_discipline_failure(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    dependency = _package(tmp_path / "bravo", "bravo", "1.0.0")
+    (dependency / "bravo" / "assets.agl").write_text(
+        "export std/core using resource as asset\n", encoding="utf-8"
+    )
+    source = _package(
+        tmp_path / "alpha",
+        "alpha",
+        "1.0.0",
+        '\n[dependencies]\nbravo = { version = "1", path = "../bravo" }\n',
+    )
+    (source / "alpha" / "main.agl").write_text(
+        'import bravo/assets using asset as load\nlet prompt = load("prompts/missing.md")\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PackageInstallError):
+        install_directory(source, home=home, env={})
+
+    assert installed_packages(home=home, env={}) == ()
+    assert load_activation_index(home=home, env={}).packages == {}
+
+
 def test_install_refuses_unsatisfied_and_different_existing_manifest(tmp_path: Path) -> None:
     home = tmp_path / "home"
     unsatisfied = _package(

@@ -52,7 +52,8 @@ then publish with an atomic rename; dry runs scan directory sources for `RECORD`
 staging or writing. Archive installation selects the canonical destination from verified metadata
 without reopening the archive, then extracts to a sibling staging tree. It resolves dependencies and runs
 dependency-aware discipline validation against that staging tree before atomic publication, including when
-the store root is relocated across filesystems. Active immutable selections verify `RECORD`
+the store root is relocated across filesystems; dry runs repeat in-archive discipline validation with the
+resolved dependency closure. Active immutable selections verify `RECORD`
 again when resolved for activation or execution.
 Editable selections remain live and are exempt. The shipped
 `std` package is a managed store package whose

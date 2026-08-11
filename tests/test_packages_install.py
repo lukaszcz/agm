@@ -1947,6 +1947,32 @@ def test_dry_run_archive_install_validates_discipline_without_writing(tmp_path: 
     assert not (tmp_path / "home").exists()
 
 
+def test_dry_run_archive_install_validates_imports_with_resolved_dependencies(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    install_directory(_package(tmp_path / "bravo", "bravo", "1.0.0"), home=home, env={})
+    activation = (home / ".agm" / "packages" / "index.toml").read_bytes()
+    source = _package(
+        tmp_path / "alpha",
+        "alpha",
+        "1.0.0",
+        '\n[dependencies]\nbravo = "1"\n',
+    )
+    (source / "alpha" / "main.agl").write_text(
+        "import missing\nprogram def main() -> unit = ()\n", encoding="utf-8"
+    )
+    archive = tmp_path / "alpha.agmpkg"
+    write_archive(source, archive)
+    dry_run.set_enabled(True)
+
+    with pytest.raises(PackageInstallError):
+        install_archive(archive, home=home, env={})
+
+    assert not (home / ".agm" / "packages" / "alpha").exists()
+    assert (home / ".agm" / "packages" / "index.toml").read_bytes() == activation
+
+
 def test_dry_run_archive_install_rejects_a_missing_module_tree_without_writing(
     tmp_path: Path,
 ) -> None:

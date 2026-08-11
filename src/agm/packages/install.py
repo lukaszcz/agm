@@ -642,9 +642,15 @@ def _install_archive(archive: Path, *, state: _InstallState, shadow: bool) -> Pa
     try:
         if dry_run.enabled():
             _resolve_dependencies(installed, state)
+            revalidated = verify_archive_discipline(
+                archive_path,
+                dependency_packages=state.resource_packages.values(),
+            )
+            if revalidated != metadata:
+                raise PackageInstallError(f"package archive changed while validating {archive}")
         _activate_package(installed, state, editable_root=None, shadow=shadow)
         return installed
-    except (DisciplineError, PackageInstallError, ValueError) as exc:
+    except (ArchiveError, DisciplineError, PackageInstallError, ValueError) as exc:
         raise PackageInstallError(f"cannot install package archive {archive}: {exc}") from exc
 
 

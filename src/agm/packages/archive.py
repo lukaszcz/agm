@@ -350,8 +350,10 @@ def verify_archive(archive_path: Path) -> ArchiveMetadata:
     return _read_archive(archive_path, _verify_open_archive)
 
 
-def verify_archive_discipline(archive_path: Path) -> ArchiveMetadata:
-    """Verify an archive and validate its package discipline without extracting it."""
+def verify_archive_discipline(
+    archive_path: Path, *, dependency_packages: Iterable[PackageInfo] = ()
+) -> ArchiveMetadata:
+    """Verify an archive and validate its discipline against dependencies without extraction."""
 
     def verify_and_validate(archive: zipfile.ZipFile) -> ArchiveMetadata:
         metadata = _verify_open_archive(archive)
@@ -365,6 +367,7 @@ def verify_archive_discipline(archive_path: Path) -> ArchiveMetadata:
                 metadata.manifest,
                 archive_paths=(name.removeprefix(prefix) for name in infos),
                 read_module=lambda path: _read_entry(archive, infos[prefix + path]).decode(),
+                dependency_packages=dependency_packages,
             )
         except DisciplineError as exc:
             raise ArchiveError(f"archive package violates discipline: {exc}") from exc

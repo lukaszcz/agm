@@ -249,10 +249,11 @@ def lower_program(
 
     payloads = contract_payloads if contract_payloads is not None else {}
     dry_run_entries: list[DryRunEntry] = []
-    for cm in checked.modules.values():
+    for module_id, cm in checked.modules.items():
         for csr in cm.call_sites:
             dry_run_entries.append(
                 DryRunEntry(
+                    module=module_id,
                     callee=csr.callee,
                     codec_name=csr.codec_name,
                     target_type_label=repr(csr.target_type),

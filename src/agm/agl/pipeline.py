@@ -1374,13 +1374,16 @@ def _reachable_modules(module_id: "ModuleId", graph: "ModuleGraph") -> tuple[Mod
 def _select_program_inventory(
     executable: "ExecutableProgram", graph: "ModuleGraph", module_id: "ModuleId"
 ) -> "ExecutableProgram":
-    """Restrict runtime initialization and params to a selected program's graph."""
+    """Restrict runtime metadata to a selected program's dependency graph."""
     reachable = frozenset(_reachable_modules(module_id, graph))
     return replace(
         executable,
         entry_module=module_id,
         modules={mid: module for mid, module in executable.modules.items() if mid in reachable},
         params=tuple(param for param in executable.params if param.module in reachable),
+        dry_run_inventory=tuple(
+            call_site for call_site in executable.dry_run_inventory if call_site.module in reachable
+        ),
     )
 
 

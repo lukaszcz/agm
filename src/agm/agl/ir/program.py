@@ -273,8 +273,9 @@ class IrParam:
 
 @dataclass(frozen=True, slots=True)
 class DryRunEntry:
-    """Inventory entry for a single call site in the entry module.
+    """Inventory entry for a single call site in a linked module.
 
+    module            — module containing the call site.
     callee            — human-readable callee label (agent name, "exec", etc.).
     codec_name        — codec used ("text", "json").
     target_type_label — repr(target_type) from the contract spec, or "text".
@@ -284,6 +285,7 @@ class DryRunEntry:
     col               — 0-based source column of the call.
     """
 
+    module: ModuleId
     callee: str
     codec_name: str
     target_type_label: str

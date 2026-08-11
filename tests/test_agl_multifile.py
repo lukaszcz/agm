@@ -237,6 +237,30 @@ def test_program_inventory_excludes_params_outside_its_import_subgraph(tmp_path:
     assert result.ok, result.diagnostics
 
 
+def test_selected_program_preflight_excludes_unreachable_call_sites(tmp_path: Path) -> None:
+    library_root = tmp_path / "library"
+    library_root.mkdir()
+    (library_root / "a.agl").write_text('program def run() -> unit = ask("selected")\n')
+    (library_root / "b.agl").write_text('def dormant() -> text = exec("unreachable")\n')
+
+    from agm.agl import PipelineDriver
+    from agm.agl.modules.roots import RootSet
+
+    prepared = PipelineDriver.prepare_program(
+        "import a\nimport b\nprogram def main() -> unit = ()\n",
+        roots=RootSet(roots=frozenset({library_root, REPO_STDLIB_ROOT})),
+    )
+    runtime = PipelineDriver()
+    discovery = runtime.discover_params(prepared)
+    assert discovery.compiled is not None, discovery.diagnostics
+    selected = next(program for program in discovery.programs if program.qualified_path == "a::run")
+
+    preflight = runtime.preflight_params(prepared, compiled=discovery.compiled, program=selected)
+
+    assert preflight.result.ok, preflight.result.diagnostics
+    assert [site.callee for site in preflight.result.call_sites] == ["ask"]
+
+
 def test_selected_program_does_not_wire_unreachable_extern(tmp_path: Path) -> None:
     library_root = tmp_path / "library"
     library_root.mkdir()

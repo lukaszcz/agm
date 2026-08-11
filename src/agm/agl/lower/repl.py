@@ -58,12 +58,13 @@ class LinkImage:
         return self._state.decl_to_sym.get(decl_node_id)
 
     def mark_linked(self, module_ids: "Iterable[ModuleId]") -> None:
-        """Record library modules as persistently linked.
+        """Record initialized library modules as persistently linked.
 
-        Called by the REPL session only after an entry evaluates successfully,
-        so a runtime failure never leaves a module marked linked without a
-        matching cached ``LoadedModule`` (which would skip re-lowering on the
-        next import while the reloaded module carries fresh declaration IDs).
+        The REPL calls this together with caching the matching ``LoadedModule``
+        objects, either after full entry success or for the dependency-complete
+        library subset left by a partially failed run. An incomplete module is
+        never marked linked with fresh declaration IDs that a later reload
+        would replace.
         """
         self._linked_modules.update(module_ids)
 
@@ -360,10 +361,9 @@ def lower_repl_program(
     from agm.agl.lower.program import lower_program
 
     # NOTE: ``image._linked_modules`` is intentionally NOT updated here. Linking
-    # a module allocates persistent IDs, but the entry may still fail at runtime;
-    # marking modules linked before the entry succeeds would desync the image
-    # from the session's cached ``LoadedModule`` set. The session calls
-    # ``LinkImage.mark_linked`` once the entry has evaluated successfully.
+    # a module allocates persistent IDs, but evaluation still determines which
+    # modules initialized completely. The session calls ``LinkImage.mark_linked``
+    # together with caching exactly that completed library set.
     program = lower_program(
         compiled,
         _link=image._state,

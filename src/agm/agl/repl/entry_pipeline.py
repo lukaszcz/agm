@@ -144,6 +144,7 @@ class LoadedCheckedProgram:
 
     checked_program: "CheckedProgram"
     new_modules: "dict[ModuleId, LoadedModule]"
+    module_adjacency: "dict[ModuleId, tuple[ModuleId, ...]]"
     new_next_id: int
     entry_imports: "tuple[ImportDecl, ...]"
     entry_opens: "tuple[OpenDecl | ImportDecl | ScopeRegion, ...]"
@@ -247,6 +248,7 @@ class EntryPipeline:
         return LoadedCheckedProgram(
             checked_program=checked_program,
             new_modules=new_modules,
+            module_adjacency=graph.adjacency,
             new_next_id=new_next_id,
             entry_imports=entry_imports,
             entry_opens=entry_opens,
@@ -313,6 +315,7 @@ class EntryPipeline:
 
         checked_program = loaded.checked_program
         new_modules = loaded.new_modules
+        module_adjacency = loaded.module_adjacency
         new_next_id = loaded.new_next_id
         entry_imports = loaded.entry_imports
         entry_opens = loaded.entry_opens
@@ -357,6 +360,7 @@ class EntryPipeline:
             warnings=warnings,
             new_next_id=new_next_id,
             new_modules=new_modules,
+            module_adjacency=module_adjacency,
             entry_imports=entry_imports,
             entry_opens=entry_opens,
             contract_payloads=contract_payloads,
@@ -590,6 +594,7 @@ class EntryPipeline:
         warnings: list[Diagnostic],
         new_next_id: int,
         new_modules: dict[ModuleId, LoadedModule],
+        module_adjacency: dict[ModuleId, tuple[ModuleId, ...]],
         entry_imports: tuple[ImportDecl, ...],
         entry_opens: tuple[OpenDecl | ImportDecl | ScopeRegion, ...],
         contract_payloads: Mapping[int, "ContractPayload"],
@@ -615,10 +620,11 @@ class EntryPipeline:
         # Lowering allocates into the persistent image, so every way this entry
         # can fail from here on rolls back against this snapshot: an entry
         # rejected before anything is promoted discards its whole link delta
-        # via ``restore_state``. A partially run entry keeps its delta and
-        # needs no nominal rollback at all -- the link image's nominal state
-        # is rebuilt from the shared type table on every lowering, so it is
-        # always current regardless of what this entry did or did not promote.
+        # via ``restore_state``. A partially run entry keeps its delta, caching
+        # and marking only dependency-complete library modules, and needs no
+        # nominal rollback at all -- the link image's nominal state is rebuilt
+        # from the shared type table on every lowering, so it is always current
+        # regardless of what this entry did or did not promote.
         link_snapshot = self._ctx._link_image.snapshot_state()
         lowered = lower_repl_program(
             compiled,
@@ -745,6 +751,62 @@ class EntryPipeline:
             frozenset(lowered.program.builtin_setting_defaults), interp
         )
 
+        def retain_library_state(module_ids: frozenset[ModuleId]) -> None:
+            """Cache one coherent set of initialized library modules and params."""
+            installed_symbols = (
+                self._ctx._active_imported_params.keys() | interp.entry_param_symbols_installed
+            )
+            self._ctx._loaded_lib_modules.update(
+                (module_id, new_modules[module_id])
+                for module_id in module_ids
+                if module_id in new_modules
+            )
+            self._ctx._record_active_imported_params(
+                tuple(
+                    param
+                    for param in params_to_install
+                    if param.module in module_ids and param.symbol in installed_symbols
+                )
+            )
+            self._ctx._link_image.mark_linked(module_ids)
+
+        def completed_library_module_ids() -> frozenset[ModuleId]:
+            """Return newly initialized modules whose dependencies also completed."""
+            from agm.agl.modules.ids import STD_CORE_ID
+
+            installed_symbols = (
+                self._ctx._active_imported_params.keys() | interp.entry_param_symbols_installed
+            )
+            candidates: set[ModuleId] = set()
+            for module_id in new_modules:
+                if module_id == STD_CORE_ID:
+                    candidates.add(module_id)
+                    continue
+                module = lowered.program.modules[module_id]
+                module_params = tuple(
+                    param for param in lowered.program.params if param.module == module_id
+                )
+                if not all(param.symbol in installed_symbols for param in module_params):
+                    continue
+                completed_indices = interp.module_completed_initializer_indices.get(
+                    module_id, set()
+                )
+                if completed_indices == set(range(len(module.initializers))):
+                    candidates.add(module_id)
+
+            available = set(self._ctx._loaded_lib_modules) | candidates
+            while incomplete := {
+                module_id
+                for module_id in candidates
+                if any(
+                    not dependency.is_entry and dependency not in available
+                    for dependency in module_adjacency.get(module_id, ())
+                )
+            }:
+                candidates.difference_update(incomplete)
+                available.difference_update(incomplete)
+            return frozenset(candidates)
+
         def promote(*, partial: bool, promoted_declaration_ids: frozenset[int]) -> tuple[str, ...]:
             return self._ctx._promote_ir_state(
                 text=text,
@@ -769,7 +831,9 @@ class EntryPipeline:
             being restored wholesale, and needs no nominal rollback of its
             own: the link image's nominal state, including any ``builtin``
             declaration's host-mint override, is rebuilt from the shared type
-            table on every lowering.
+            table on every lowering. Library modules whose params and
+            initializers did complete are retained with their active parameter
+            inventory, provided their dependencies completed too.
             """
             trace.run_end(ok=False)
             self._persist_interpreter_settings(interp, trace)
@@ -780,6 +844,7 @@ class EntryPipeline:
                 interp.entry_param_symbols_installed,
             )
             installed = promote(partial=True, promoted_declaration_ids=promoted)
+            retain_library_state(completed_library_module_ids())
             kind, name = self._ctx._classify(orig_program)
             return EntryResult(
                 kind=kind,
@@ -824,10 +889,8 @@ class EntryPipeline:
                 interp.entry_param_symbols_installed,
             ),
         )
-        self._ctx._loaded_lib_modules.update(new_modules)
-        self._ctx._record_active_imported_params(params_to_install)
-        self._ctx._link_image.mark_linked(
-            mid for mid in checked_program.modules if not mid.is_entry
+        retain_library_state(
+            frozenset(module_id for module_id in checked_program.modules if not module_id.is_entry)
         )
         self._retain_import_context(entry_imports, entry_opens)
         marker = lowered.trailing_expression

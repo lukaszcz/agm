@@ -3234,6 +3234,80 @@ class TestParams:
             ("settings::items", "other::count"),
         ]
 
+    def test_partial_promotion_retains_completed_imported_param_inventory(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "settings.agl").write_text(
+            "param token: array[text]\n"
+            "def update() -> unit =\n"
+            '  token[0] := "mutated"\n'
+            "def read() -> text = token[0]\n"
+        )
+        (tmp_path / "other.agl").write_text("param count: int = 0\n")
+        seen_inventories: list[tuple[str, ...]] = []
+
+        def load_config(params: tuple[IrParam, ...]) -> dict[str, object]:
+            seen_inventories.append(tuple(param.qualified_public_name for param in params))
+            return {"settings::token": ["configured"]}
+
+        session = ReplSession(
+            lib_root=tmp_path,
+            default_stdlib=False,
+            params_config_loader=load_config,
+        )
+
+        failed = session.eval_entry(
+            "import settings\n"
+            "def retained() -> text = settings::read()\n"
+            "settings::update()\n"
+            '"bad" as int'
+        )
+        assert not failed.ok
+        assert failed.installed == ("retained",), (failed.diagnostics, failed.error)
+
+        later = session.eval_entry("import other\nretained()")
+        reimported = session.eval_entry("import settings\nsettings::read()")
+
+        assert later.ok, later.diagnostics
+        assert later.value == TextValue("mutated")
+        assert reimported.ok, reimported.diagnostics
+        assert reimported.value == TextValue("mutated")
+        assert seen_inventories == [
+            ("settings::token",),
+            ("settings::token", "other::count"),
+            ("settings::token", "other::count"),
+        ]
+
+    def test_partial_failure_does_not_retain_params_or_dependents_of_incomplete_module(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "broken.agl").write_text(
+            'param ready: text = "ready"\nparam failed: int = "bad" as int\n'
+        )
+        (tmp_path / "unfinished.agl").write_text("let value: int = 1\n")
+        (tmp_path / "wrapper.agl").write_text(
+            "import broken\nimport unfinished\ndef noop() -> unit = ()\n"
+        )
+        seen_inventories: list[tuple[str, ...]] = []
+
+        def load_config(params: tuple[IrParam, ...]) -> dict[str, object]:
+            seen_inventories.append(tuple(param.qualified_public_name for param in params))
+            return {}
+
+        session = ReplSession(
+            lib_root=tmp_path,
+            default_stdlib=False,
+            params_config_loader=load_config,
+        )
+
+        failed = session.eval_entry("import wrapper\n()")
+
+        assert not failed.ok
+        assert seen_inventories == [("broken::ready", "broken::failed")]
+        assert session._active_imported_params == {}
+        assert session._loaded_lib_modules == {}
+        assert session._link_image._linked_modules == set()
+
     def test_declared_param_typed_value(self) -> None:
         s = ReplSession()
         s.eval_entry("param count: int = 42")
@@ -4589,22 +4663,21 @@ class TestImports:
         assert succeeded.ok, succeeded.diagnostics
         assert _int(succeeded.value) == 1
 
-    def test_runtime_failure_does_not_mark_module_linked(self, tmp_path: Path) -> None:
-        # Regression: when an entry imports a previously unseen
-        # module and then raises at runtime, the module must NOT be marked as
-        # persistently linked. Otherwise the next import reloads it with fresh
-        # declaration IDs but skips lowering it (already linked), crashing with
-        # ``no FunctionId for function decl_node_id``.
+    def test_runtime_failure_retains_completed_module_link(self, tmp_path: Path) -> None:
+        # A library that completed before the entry raised keeps its loaded AST
+        # and linked identities together. Re-importing must reuse both rather
+        # than either reinitializing it or lowering fresh declaration IDs.
+        from agm.agl.modules.ids import ModuleId
+
         lib = tmp_path / "boom.agl"
         lib.write_text("def f() -> int = 42\n")
         s = self._make_session_with_root(tmp_path)
         r1 = s.eval_entry("import boom\nlet z: decimal = 1 / 0")
         assert not r1.ok
-        # The failed entry cached neither the loaded module nor the link.
-        assert not s._loaded_lib_modules
-        assert not s._link_image._linked_modules
-        # Re-importing reloads and re-lowers boom (with fresh decl IDs) and
-        # evaluates successfully instead of hitting a stale-link assertion.
+        boom_id = ModuleId(("boom",))
+        assert boom_id in s._loaded_lib_modules
+        assert boom_id in s._link_image._linked_modules
+
         r2 = s.eval_entry("open import boom\nf()")
         assert r2.ok, r2.diagnostics
         assert _int(r2.value) == 42

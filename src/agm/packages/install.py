@@ -362,8 +362,12 @@ def _validated_directory_package(source: Path) -> PackageInfo:
 def _stage_directory_package(source: Path, package: PackageInfo, destination: Path) -> Path:
     """Copy and fully validate a package in a sibling staging directory."""
 
-    fs.mkdir(destination.parent, parents=True, exist_ok=True)
-    staging = Path(mkdtemp(prefix=".agm-package-", dir=destination.parent))
+    source_root = source.resolve()
+    staging_parent = destination.parent.resolve()
+    if staging_parent == source_root or staging_parent.is_relative_to(source_root):
+        raise PackageInstallError(f"cannot stage package inside source directory {source_root}")
+    fs.mkdir(staging_parent, parents=True, exist_ok=True)
+    staging = Path(mkdtemp(prefix=".agm-package-", dir=staging_parent))
     try:
         fs.copy_tree(source, staging, dirs_exist_ok=True)
         staged = PackageInfo(staging, load_manifest(staging / "package.toml"))

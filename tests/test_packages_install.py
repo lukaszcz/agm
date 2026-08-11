@@ -1249,6 +1249,46 @@ def test_install_refuses_cyclic_and_mismatched_path_dependencies(tmp_path: Path)
     assert wrong.is_dir()
 
 
+@pytest.mark.parametrize("staging_parent_relation", ("equal", "inside"))
+def test_directory_install_rejects_staging_inside_the_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    staging_parent_relation: str,
+) -> None:
+    agm_home = tmp_path / "agm-home"
+    if staging_parent_relation == "equal":
+        (agm_home / "packages").mkdir(parents=True)
+        source = _package(agm_home / "packages" / "alpha", "alpha", "1.0.0")
+    else:
+        source = _package(tmp_path / "source", "alpha", "1.0.0")
+        agm_home = source / ".agm"
+    staging_attempted = False
+    copy_attempted = False
+
+    def reject_staging(*_args: object, **_kwargs: object) -> str:
+        nonlocal staging_attempted
+        staging_attempted = True
+        raise AssertionError("staging inside the source must not be created")
+
+    def refuse_recursive_copy(*_args: object, **_kwargs: object) -> None:
+        nonlocal copy_attempted
+        copy_attempted = True
+        raise OSError("recursive copy blocked by test")
+
+    monkeypatch.setattr(package_install, "mkdtemp", reject_staging)
+    monkeypatch.setattr(package_install.fs, "copy_tree", refuse_recursive_copy)
+
+    with pytest.raises(PackageInstallError, match="source"):
+        install_directory(
+            source,
+            home=tmp_path / "ignored-home",
+            env={"AGM_HOME": str(agm_home)},
+        )
+
+    assert not staging_attempted
+    assert not copy_attempted
+
+
 def test_directory_install_stages_beside_the_final_store_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

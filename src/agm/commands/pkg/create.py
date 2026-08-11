@@ -23,6 +23,7 @@ def run(args: PkgCreateArgs) -> None:
         context = current_config_context()
         dependencies = validate_dependencies(package, home=context.home)
         validate_package(package, dependency_packages=dependencies)
+        validate_archive_source(root, dependency_packages=dependencies)
         destination = (
             package.root.parent / f"{package.manifest.name}-{package.manifest.version}.agmpkg"
             if args.output is None

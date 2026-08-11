@@ -35,6 +35,7 @@ from agm.packages.model import PackageInfo
 from agm.util.ident import is_identifier
 
 T = TypeVar("T")
+U = TypeVar("U")
 _ResourcePaths = dict[tuple[str, ...], BuiltinKind]
 _ResourceBindings = dict[tuple[str, ...], BuiltinKind | None]
 
@@ -61,6 +62,7 @@ def validate_package(
         fs.read_text,
         exists=lambda relative: _resource_exists(package.root, relative),
         export_modules=dependency_modules,
+        read_export_module=fs.read_text,
     )
 
 
@@ -69,8 +71,9 @@ def validate_archive_package(
     *,
     archive_paths: Iterable[str],
     read_module: Callable[[str], str],
+    dependency_packages: Iterable[PackageInfo] = (),
 ) -> None:
-    """Validate archived module content without extracting it to disk."""
+    """Validate archived module content against its resolved dependencies."""
 
     _validate_package_name(manifest.name)
     paths = tuple(archive_paths)
@@ -86,12 +89,19 @@ def validate_archive_package(
         except ValueError as exc:
             raise DisciplineError(f"invalid module path {path.removesuffix('.agl')!r}") from exc
         modules[module_id] = path
+    dependency_modules = {
+        module_id: path
+        for dependency in dependency_packages
+        for module_id, path in _module_files(dependency).items()
+    }
     _validate_commands(manifest, modules, read_module)
     path_set = frozenset(paths)
     _validate_resources(
         modules,
         read_module,
         exists=lambda relative: _archive_resource_exists(relative, path_set),
+        export_modules=dependency_modules,
+        read_export_module=fs.read_text,
     )
 
 
@@ -119,7 +129,8 @@ def _validate_resources(
     read_module: Callable[[T], str],
     *,
     exists: Callable[[str], bool],
-    export_modules: Mapping[ModuleId, T] | None = None,
+    export_modules: Mapping[ModuleId, U],
+    read_export_module: Callable[[U], str],
 ) -> None:
     """Verify that every literal resource target in package modules is present."""
     programs: dict[ModuleId, tuple[T, Program]] = {}
@@ -130,11 +141,13 @@ def _validate_resources(
             raise DisciplineError(f"cannot parse package module {module_path}: {exc}") from exc
 
     dependency_programs: dict[ModuleId, Program] = {}
-    for module_id, module_path in ({} if export_modules is None else export_modules).items():
+    for module_id, dependency_path in export_modules.items():
         try:
-            dependency_programs[module_id] = parse_program(read_module(module_path))
+            dependency_programs[module_id] = parse_program(read_export_module(dependency_path))
         except (AglSyntaxError, OSError, UnicodeDecodeError) as exc:
-            raise DisciplineError(f"cannot parse dependency module {module_path}: {exc}") from exc
+            raise DisciplineError(
+                f"cannot parse dependency module {dependency_path}: {exc}"
+            ) from exc
     parsed_modules = {
         **dependency_programs,
         **{module_id: program for module_id, (_, program) in programs.items()},

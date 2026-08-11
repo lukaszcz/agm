@@ -7363,6 +7363,41 @@ class TestPackageInstall:
         assert result.returncode == 1
         assert not archive.exists()
 
+    def test_create_rejects_an_excluded_resource_reached_through_a_dependency_reexport(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["AGM_HOME"] = str(tmp_path / "agm-home")
+        dependency = _write_store_test_package(tmp_path / "helpers", "helpers", "1.0.0")
+        (dependency / "helpers" / "assets.agl").write_text(
+            "export std/core using resource as asset\n", encoding="utf-8"
+        )
+        package = _write_store_test_package(tmp_path / "source", "alpha", "1.0.0")
+        (package / "package.toml").write_text(
+            '[package]\nname = "alpha"\nversion = "1.0.0"\n\n[dependencies]\nhelpers = "1"\n',
+            encoding="utf-8",
+        )
+        (package / "prompts").mkdir()
+        (package / "prompts" / "review.md").write_text("prompt", encoding="utf-8")
+        (package / ".gitignore").write_text("prompts/review.md\n", encoding="utf-8")
+        (package / "alpha" / "main.agl").write_text(
+            "import helpers/assets using asset\n"
+            'let prompt = asset("prompts/review.md")\n'
+            "program def main() -> unit = ()\n",
+            encoding="utf-8",
+        )
+        archive = tmp_path / "alpha.agmpkg"
+
+        run_agm(["pkg", "install", str(dependency)], env=env, cwd=tmp_path)
+        result = run_agm(
+            ["pkg", "create", str(package), "-o", str(archive)],
+            env=env,
+            cwd=tmp_path,
+            check=False,
+        )
+
+        assert result.returncode == 1
+        assert not archive.exists()
+
     def test_install_import_uninstall_and_inspect_package(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

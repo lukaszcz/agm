@@ -9,7 +9,8 @@ literal resources, and CLI commands backed by parameterless `program def` entrie
 ## Package Lifecycle
 
 `agm pkg check` validates a development package without modifying it. `agm pkg create`
-produces a deterministic `.agmpkg` archive from that validated package. `agm pkg install`
+resolves the dependency closure, validates both the source tree and selected archive contents with
+those dependency modules, and produces a deterministic `.agmpkg` archive. `agm pkg install`
 validates dependencies, records immutable installations in the AGM-home package store, and
 activates one version of each package; editable installations instead mount their live source
 tree. The store follows the single runtime AGM home: `AGM_HOME`, otherwise a populated

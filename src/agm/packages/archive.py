@@ -12,7 +12,7 @@ import zlib
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import IO, TypeVar, cast
+from typing import IO, TYPE_CHECKING, TypeVar, cast
 
 from pathspec import PathSpec
 
@@ -30,6 +30,9 @@ from agm.packages.record import (
     parse_record,
     serialize_record,
 )
+
+if TYPE_CHECKING:
+    from agm.packages.model import PackageInfo
 
 _MANIFEST_NAME = "package.toml"
 _RECORD_NAME = "RECORD"
@@ -121,12 +124,15 @@ def write_archive(package_root: Path, destination: Path) -> ArchiveMetadata:
         os.close(source_root.fd)
 
 
-def validate_archive_source(package_root: Path) -> PackageManifest:
+def validate_archive_source(
+    package_root: Path, *, dependency_packages: Iterable[PackageInfo] = ()
+) -> PackageManifest:
     """Validate the portable archive view of a package without writing it.
 
-    This applies package discipline to the files selected for an archive, so
-    ignored or otherwise excluded resources cannot pass source-tree validation
-    and then disappear from the distribution.
+    This applies package discipline to the files selected for an archive, using
+    resolved dependency modules for resource re-exports, so ignored or otherwise
+    excluded resources cannot pass source-tree validation and then disappear from
+    the distribution.
     """
 
     root = _package_root(package_root)
@@ -141,6 +147,7 @@ def validate_archive_source(package_root: Path) -> PackageManifest:
             manifest,
             archive_paths=contents,
             read_module=lambda path: contents[path].decode(),
+            dependency_packages=dependency_packages,
         )
     except DisciplineError as exc:
         raise ArchiveError(f"archive package violates discipline: {exc}") from exc

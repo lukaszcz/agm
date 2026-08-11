@@ -64,11 +64,21 @@ class ArtifactProvenanceError(Exception):
     """A cached compiler artifact does not belong to the prepared source it is
     handed back with.
 
-    Raised by AgL's optional self-validation only.  The artifact seam is
-    internal — a caller passes back an artifact this pipeline produced for a
-    specific prepared source — so a mismatch is a host-wiring bug with no
-    user-facing remedy, not a diagnostic about the program.
+    The artifact seam is internal — a caller passes back an artifact this
+    pipeline produced for a specific prepared source — so a mismatch is a
+    host-wiring bug with no user-facing remedy, not a diagnostic about the
+    program. Frontend artifacts are re-verified by optional self-validation;
+    lowered executables are validated by the pipeline that issued them.
     """
+
+
+@dataclass(frozen=True, slots=True)
+class _ExecutableProvenance:
+    """Pipeline-owned cache metadata kept out of the typeless execution IR."""
+
+    executable: "ExecutableProgram"
+    prepared: "PreparedProgram"
+    capabilities: "HostCapabilities"
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,9 +106,9 @@ class ParamPreflight:
         The check-only run result: ``ok`` iff every param validated.
     ``executable``
         The lowered program the params were checked against, or ``None`` when a
-        pass before lowering failed.  Hand it back to
-        ``PipelineDriver.run_prepared`` as ``executable`` to execute it
-        without lowering the program a second time.
+        pass before lowering failed. Hand it back to the same
+        ``PipelineDriver.run_prepared`` as ``executable`` to execute it without
+        lowering the program a second time.
     """
 
     result: "RunResult"
@@ -310,6 +320,9 @@ class PipelineDriver:
         # REPL's per-entry ``host_environment()`` calls reuse one bundle.  Any
         # ``register_*`` invalidates it.
         self._host_env_cache: HostEnvironment | None = None
+        # Only preflight exposes lowered executables for later resumption. Keep
+        # their source and capability provenance here rather than in typeless IR.
+        self._executable_provenance: dict[int, _ExecutableProvenance] = {}
 
     def register_codec(self, codec: "OutputCodec") -> None:
         """Register a custom output codec.
@@ -356,6 +369,24 @@ class PipelineDriver:
             extern_registry=self._extern_registry,
         )
         return self._host_env_cache
+
+    def _validate_cached_executable(
+        self,
+        executable: "ExecutableProgram",
+        resolved: "ResolvedProgram",
+        capabilities: "HostCapabilities",
+    ) -> "ExecutableProgram | None":
+        """Validate a preflight executable and invalidate it on capability changes."""
+        provenance = self._executable_provenance.get(id(executable))
+        if provenance is None:
+            raise ArtifactProvenanceError("Cached executable was not produced by this pipeline.")
+        if provenance.prepared.resolved is not resolved:
+            raise ArtifactProvenanceError(
+                "Cached executable does not belong to the prepared source."
+            )
+        if provenance.capabilities != capabilities:
+            return None
+        return executable
 
     def _execute_ir(
         self,
@@ -1033,11 +1064,13 @@ class PipelineDriver:
             boundary. ``None`` invokes no declared entry after initialization.
 
         ``executable``
-            When the caller has already lowered this exact program (via
-            :meth:`preflight_params`), pass the executable here to
-            run it as-is: contract materialization and lowering are skipped, so
-            a program is lowered only once however many times a host resumes it.
-            ``None`` lowers here, before the check-only stop or evaluation.
+            When this driver has already lowered this exact program (via
+            :meth:`preflight_params`), pass the executable here to run it as-is:
+            contract materialization and lowering are skipped, so a program is
+            lowered only once however many times a host resumes it. A changed
+            host capability set invalidates the executable and lowers afresh;
+            an executable from another source or driver is rejected. ``None``
+            lowers here, before the check-only stop or evaluation.
         """
         result, _executable = self._run_program(
             prepared,
@@ -1068,9 +1101,10 @@ class PipelineDriver:
         reject bad params before it commits to any run side effect has to lower
         first. This runs the static pipeline exactly as :meth:`run_prepared`
         does under ``check_only`` and hands the lowered program back, so the host
-        can then execute it (``run_prepared(..., executable=...)``) without
-        paying for a second lowering.
+        can then execute it (``run_prepared(..., executable=...)``) on this
+        driver without paying for a second lowering.
         """
+        capabilities = self.host_environment().capabilities
         result, executable = self._run_program(
             prepared,
             param_values=param_values,
@@ -1078,6 +1112,12 @@ class PipelineDriver:
             compiled=compiled,
             selected_program=program,
         )
+        if executable is not None:
+            self._executable_provenance[id(executable)] = _ExecutableProvenance(
+                executable=executable,
+                prepared=prepared,
+                capabilities=capabilities,
+            )
         return ParamPreflight(result=result, executable=executable)
 
     def _run_program(
@@ -1121,6 +1161,8 @@ class PipelineDriver:
 
         host_env = self.host_environment()
         capabilities = host_env.capabilities
+        if executable is not None:
+            executable = self._validate_cached_executable(executable, resolved, capabilities)
         if compiled is not None:
             if self_validation_enabled():
                 _check_program_artifact_provenance(resolved, compiled.checked)

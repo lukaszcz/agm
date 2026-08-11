@@ -64,7 +64,10 @@ def discover_development_packages(
         for dependency_name, dependency in manifest.dependencies.items():
             if dependency.path is None:
                 continue
-            dependency_root = (canonical_root / dependency.path).resolve()
+            dependency_root = canonical_root / dependency.path
+            if dependency_root.is_symlink():
+                raise ValueError(f"cannot use symbolic-link package dependency {dependency_root}")
+            dependency_root = dependency_root.resolve()
             if (dependency_root / "package.toml").is_file():
                 add(
                     dependency_root,

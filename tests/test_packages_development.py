@@ -119,6 +119,22 @@ def test_discovery_validates_path_dependency_identity(
         discover_development_packages(alpha / "alpha" / "main.agl")
 
 
+def test_discovery_rejects_a_symbolic_link_path_dependency(tmp_path: Path) -> None:
+    alpha = tmp_path / "alpha"
+    target = tmp_path / "target"
+    linked = tmp_path / "linked"
+    _write_package(
+        alpha,
+        "alpha",
+        '\n[dependencies]\nbravo = { version = "1", path = "../linked" }\n',
+    )
+    _write_package(target, "bravo")
+    linked.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symbolic-link package dependency"):
+        discover_development_packages(alpha / "alpha" / "main.agl")
+
+
 def test_discovery_rejects_different_roots_with_the_same_package_identity(tmp_path: Path) -> None:
     alpha = tmp_path / "alpha"
     left = tmp_path / "left"

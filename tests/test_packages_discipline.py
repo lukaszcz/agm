@@ -420,6 +420,28 @@ class TestPackageDiscipline:
 
         validate_package(package)
 
+    def test_accepts_resource_alias_shadowed_by_a_function_parameter(
+        self, tmp_path: Path
+    ) -> None:
+        package = _custom_package(tmp_path)
+        (package.module_root / "main.agl").write_text(
+            "import std/core using resource as asset\n"
+            "def use(asset: (text) -> text) -> text = asset(\"not/a/resource\")\n"
+        )
+
+        validate_package(package)
+
+    def test_accepts_resource_alias_shadowed_by_a_local_binding(self, tmp_path: Path) -> None:
+        package = _custom_package(tmp_path)
+        (package.module_root / "main.agl").write_text(
+            "import std/core using resource as asset\n"
+            "program def main() -> text =\n"
+            "  let asset = fn(path: text) => path\n"
+            "  asset(\"not/a/resource\")\n"
+        )
+
+        validate_package(package)
+
     def test_accepts_scoped_enum_constructor_shadowing_resource_import(
         self, tmp_path: Path
     ) -> None:

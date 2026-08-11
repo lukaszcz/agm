@@ -17,6 +17,7 @@ from agm.agl.parser.parser import parse_program_seeded
 from agm.agl.scope import BuiltinKind
 from agm.agl.scope.reexports import ReexportCycleError, converge_reexports
 from agm.agl.syntax.nodes import (
+    Block,
     Call,
     EnumDef,
     ExceptionDef,
@@ -31,6 +32,7 @@ from agm.agl.syntax.nodes import (
     ScopeRegion,
     VarDecl,
     VarRef,
+    pattern_binder_candidates,
     static_function_items,
     static_items,
 )
@@ -483,7 +485,9 @@ def _resource_calls(
 
     calls: list[tuple[Call, bool]] = []
 
-    def collect_resource_call(node: object, scope_path: tuple[str, ...]) -> None:
+    def collect_resource_call(
+        node: object, scope_path: tuple[str, ...], shadowed: frozenset[str]
+    ) -> None:
         if not isinstance(node, Call) or not isinstance(node.callee, VarRef):
             return
         route = (
@@ -495,6 +499,8 @@ def _resource_calls(
                 for part in segment.name.split("/")
             )
         )
+        if not route and node.callee.name in shadowed:
+            return
         # Bare imports reach every lexically nested named scope.
         callee_paths = tuple(
             (*route, *scope_path[:index], node.callee.name)
@@ -504,6 +510,17 @@ def _resource_calls(
         if kind in {BuiltinKind.RESOURCE, BuiltinKind.RESOURCE_DIR}:
             calls.append((node, kind is BuiltinKind.RESOURCE_DIR))
 
+    def collect_block(
+        block: Block, scope_path: tuple[str, ...], initial_shadowed: frozenset[str]
+    ) -> None:
+        shadowed = set(initial_shadowed)
+        for item in block.items:
+            walk(item, lambda node: collect_resource_call(node, scope_path, frozenset(shadowed)))
+            if isinstance(item, LetDecl):
+                shadowed.update(candidate.name for candidate in pattern_binder_candidates(item.pattern))
+            elif isinstance(item, VarDecl):
+                shadowed.add(item.name)
+
     scoped_items = (FuncDef, LetDecl, ParamDecl, VarDecl)
     for item in static_items(program.body.items):
         scope_path = (
@@ -511,7 +528,17 @@ def _resource_calls(
             if isinstance(item, scoped_items)
             else ()
         )
-        walk(item, lambda node: collect_resource_call(node, scope_path))
+        if isinstance(item, FuncDef) and item.body is not None:
+            shadowed = frozenset(parameter.name for parameter in item.params)
+            if isinstance(item.body, Block):
+                collect_block(item.body, scope_path, shadowed)
+            else:
+                walk(
+                    item.body,
+                    lambda node: collect_resource_call(node, scope_path, shadowed),
+                )
+        else:
+            walk(item, lambda node: collect_resource_call(node, scope_path, frozenset()))
     return calls
 
 

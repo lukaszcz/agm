@@ -238,7 +238,7 @@ the selected AGM home's global `lib` directory, and any configured
 
 ```bash
 agm exec workflow.agl
-agm exec --name Alice workflow.agl   # --<param> per declared param
+agm exec workflow.agl --name Alice   # --<param> per declared param
 agm exec -c 'print "hello"'       # run inline program text instead of a file
 agm exec --dry-run workflow.agl   # static check only — no agent calls
 ```

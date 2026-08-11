@@ -28,6 +28,7 @@ from agm.packages.install import (
     PackageInstallError,
     install_archive,
     install_directory,
+    install_directory_with_plan,
     installed_packages,
     refresh_managed_stdlib,
     uninstall_package,
@@ -826,6 +827,63 @@ def test_install_refuses_builtin_and_alias_command_prefixes(
 
     with pytest.raises(PackageInstallError, match="reserved"):
         install_directory(source, home=tmp_path / "home", env={})
+
+
+def test_shadow_diagnostics_are_computed_from_the_locked_prepublication_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    alpha = _package(
+        tmp_path / "alpha",
+        "alpha",
+        "1.0.0",
+        '\n[commands]\nlaunch = { program = "alpha/main::main" }\n',
+    )
+    bravo = _package(
+        tmp_path / "bravo",
+        "bravo",
+        "1.0.0",
+        '\n[commands]\nlaunch = { program = "bravo/main::main" }\n',
+    )
+    home = tmp_path / "home"
+    install_directory(alpha, home=home, env={})
+    previous_index = load_activation_index(home=home, env={})
+    original_diagnostics = package_install.command_shadow_diagnostics
+
+    def observe_diagnostics(*args: object, **kwargs: object) -> object:
+        assert load_activation_index(home=home, env={}) == previous_index
+        with (home / ".agm" / "packages" / ".lock").open("a+", encoding="utf-8") as lock:
+            with pytest.raises(BlockingIOError):
+                package_install.fcntl.flock(
+                    lock.fileno(), package_install.fcntl.LOCK_EX | package_install.fcntl.LOCK_NB
+                )
+        return original_diagnostics(*args, **kwargs)
+
+    monkeypatch.setattr(package_install, "command_shadow_diagnostics", observe_diagnostics)
+
+    plan = install_directory_with_plan(bravo, home=home, env={}, shadow=True)
+
+    assert [(shadow.path_name, shadow.displaced_packages) for shadow in plan.command_shadows] == [
+        ("launch", ("alpha",))
+    ]
+    assert load_activation_index(home=home, env={}).packages.keys() == {"alpha", "bravo"}
+
+
+def test_shadow_diagnostic_failure_prevents_activation_and_rolls_back_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    home = tmp_path / "home"
+
+    def fail_diagnostics(*_args: object, **_kwargs: object) -> object:
+        raise PackageActivationError("diagnostics failed")
+
+    monkeypatch.setattr(package_install, "command_shadow_diagnostics", fail_diagnostics)
+
+    with pytest.raises(PackageInstallError, match="diagnostics failed"):
+        install_directory_with_plan(source, home=home, env={}, shadow=True)
+
+    assert load_activation_index(home=home, env={}) == ActivationIndex()
+    assert not (home / ".agm" / "packages" / "alpha" / "1.0.0").exists()
 
 
 def test_shadowed_command_is_restored_when_the_winning_package_is_uninstalled(

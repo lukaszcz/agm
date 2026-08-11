@@ -54,11 +54,14 @@ def _package(tmp_path: Path, name: str = "alpha") -> PackageInfo:
     return PackageInfo(root, manifest)
 
 
-def _install_plan(package: PackageInfo) -> PackageInstallPlan:
+def _install_plan(
+    package: PackageInfo, *, command_shadows: tuple[CommandShadow, ...] = ()
+) -> PackageInstallPlan:
     return PackageInstallPlan(
         package,
         ActivationIndex(),
         {package.manifest.name: package},
+        command_shadows,
     )
 
 
@@ -156,25 +159,6 @@ def test_install_command_routes_an_archive_to_the_archive_installer(
     install_command.run(PkgInstallArgs(str(archive), editable=False, shadow=True))
 
 
-def test_shadow_install_reports_unavailable_shadow_diagnostics(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    package = _package(tmp_path)
-    monkeypatch.setattr(install_command, "current_config_context", lambda: _context(tmp_path))
-    monkeypatch.setattr(
-        install_command,
-        "install_directory_with_plan",
-        lambda *args, **kwargs: _install_plan(package),
-    )
-
-    def fail_diagnostics(*_: object, **__: object) -> dict[str, tuple[CommandShadow, ...]]:
-        raise PackageActivationError("broken")
-
-    monkeypatch.setattr(install_command, "command_shadow_diagnostics", fail_diagnostics)
-    with pytest.raises(SystemExit):
-        install_command.run(PkgInstallArgs("source", editable=False, shadow=True))
-
-
 def test_shadow_install_renders_displaced_command_owners(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -183,12 +167,9 @@ def test_shadow_install_renders_displaced_command_owners(
     monkeypatch.setattr(
         install_command,
         "install_directory_with_plan",
-        lambda *args, **kwargs: _install_plan(package),
-    )
-    monkeypatch.setattr(
-        install_command,
-        "command_shadow_diagnostics",
-        lambda *args, **kwargs: {"alpha": (CommandShadow("launch", ("bravo",)),)},
+        lambda *args, **kwargs: _install_plan(
+            package, command_shadows=(CommandShadow("launch", ("bravo",)),)
+        ),
     )
 
     install_command.run(PkgInstallArgs("source", editable=False, shadow=True))

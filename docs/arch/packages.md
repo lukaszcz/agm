@@ -39,8 +39,10 @@ symlink. Development discovery validates each path source against its named depe
 version, and rejects distinct local roots with the same package identity, so mounted imports remain
 unambiguous.
 
-Dry-run installs retain their transient activation plan for command diagnostics while leaving the
-persisted index unchanged.
+Install plans finalize command-shadow diagnostics from the validated activation snapshot while the
+store lock is held and before activation publication; the CLI only renders this immutable result.
+Diagnostic failure aborts publication and rolls back newly created package trees. Dry-run installs
+retain the same transient plan while leaving the persisted index unchanged.
 
 Installed package contents have a SHA-256 `RECORD`. Archive readers enforce bounded metadata, entry sizes, total expansion, and path depth while binding
 preflight, ZIP parsing, verification, and extraction to one opened file. Immutable directory installs

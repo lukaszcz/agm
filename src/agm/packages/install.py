@@ -15,7 +15,9 @@ from agm.core import dry_run, fs
 from agm.packages.activation import (
     ActivationIndex,
     ActivePackage,
+    CommandShadow,
     PackageActivationError,
+    command_shadow_diagnostics,
     load_activation_index,
     load_package_provenance,
     merge_package_commands,
@@ -60,11 +62,12 @@ class PackageInstallError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class PackageInstallPlan:
-    """An installed package and the complete activation selected for it."""
+    """An installed package and its locked, prepublication activation result."""
 
     package: PackageInfo
     activation_index: ActivationIndex
     transient_packages: Mapping[str, PackageInfo]
+    command_shadows: tuple[CommandShadow, ...] = ()
 
 
 @contextmanager
@@ -160,16 +163,18 @@ def install_directory_with_plan(
         state = _InstallState(home=home, env=env, index=_load_install_index(home=home, env=env))
         try:
             package = _install_directory(source, state=state, editable=editable, shadow=shadow)
-            state.index = _commit_activation(
-                state.index,
-                home=home,
-                env=env,
-                transient_packages=state.transient_packages if dry_run.enabled() else None,
+            state.index, command_shadows = _commit_install_activation(
+                state, package, report_shadows=shadow
             )
         except PackageInstallError:
             _rollback_created_trees(state)
             raise
-        return PackageInstallPlan(package, state.index, dict(state.transient_packages))
+        return PackageInstallPlan(
+            package,
+            state.index,
+            dict(state.transient_packages),
+            command_shadows,
+        )
 
 
 def refresh_managed_stdlib(
@@ -267,16 +272,18 @@ def install_archive_with_plan(
         state = _InstallState(home=home, env=env, index=_load_install_index(home=home, env=env))
         try:
             package = _install_archive(archive, state=state, shadow=shadow)
-            state.index = _commit_activation(
-                state.index,
-                home=home,
-                env=env,
-                transient_packages=state.transient_packages if dry_run.enabled() else None,
+            state.index, command_shadows = _commit_install_activation(
+                state, package, report_shadows=shadow
             )
         except PackageInstallError:
             _rollback_created_trees(state)
             raise
-        return PackageInstallPlan(package, state.index, dict(state.transient_packages))
+        return PackageInstallPlan(
+            package,
+            state.index,
+            dict(state.transient_packages),
+            command_shadows,
+        )
 
 
 def uninstall_package(name: str, *, home: Path, env: Mapping[str, str] | None = None) -> None:
@@ -864,6 +871,35 @@ def _next_registration_order(
     return highest + 1
 
 
+def _commit_install_activation(
+    state: _InstallState, package: PackageInfo, *, report_shadows: bool
+) -> tuple[ActivationIndex, tuple[CommandShadow, ...]]:
+    """Compute install diagnostics from one locked plan, then publish that plan."""
+
+    transient_packages = state.transient_packages if dry_run.enabled() else None
+    try:
+        reconciled = _prepare_activation(
+            state.index,
+            home=state.home,
+            env=state.env,
+            transient_packages=transient_packages,
+        )
+        command_shadows = (
+            command_shadow_diagnostics(
+                reconciled,
+                home=state.home,
+                env=state.env,
+                transient_packages=state.transient_packages,
+            ).get(package.manifest.name, ())
+            if report_shadows
+            else ()
+        )
+        _publish_activation(reconciled, home=state.home, env=state.env)
+        return reconciled, command_shadows
+    except PackageActivationError as exc:
+        raise PackageInstallError(f"cannot write package activation: {exc}") from exc
+
+
 def _commit_activation(
     index: ActivationIndex,
     *,
@@ -874,32 +910,58 @@ def _commit_activation(
     """Validate and atomically publish a complete activation selection."""
 
     try:
-        reconciled = _assign_missing_registration_orders(
-            reconcile_package_commands(
-                index,
-                home=home,
-                env=env,
-                transient_packages=transient_packages,
-            )
-        )
-        validate_activation_index(
-            reconciled,
+        reconciled = _prepare_activation(
+            index,
             home=home,
             env=env,
             transient_packages=transient_packages,
         )
-        provenance = _snapshot_package_provenance(reconciled, home=home, env=env)
-        try:
-            for name, active in reconciled.packages.items():
-                if active.editable is None:
-                    write_package_provenance(name, active, home=home, env=env)
-            write_activation_index(reconciled, home=home, env=env)
-        except PackageActivationError:
-            _restore_package_provenance(provenance)
-            raise
+        _publish_activation(reconciled, home=home, env=env)
         return reconciled
     except PackageActivationError as exc:
         raise PackageInstallError(f"cannot write package activation: {exc}") from exc
+
+
+def _prepare_activation(
+    index: ActivationIndex,
+    *,
+    home: Path,
+    env: Mapping[str, str] | None,
+    transient_packages: Mapping[str, PackageInfo] | None,
+) -> ActivationIndex:
+    """Return the validated activation snapshot that is ready for publication."""
+
+    reconciled = _assign_missing_registration_orders(
+        reconcile_package_commands(
+            index,
+            home=home,
+            env=env,
+            transient_packages=transient_packages,
+        )
+    )
+    validate_activation_index(
+        reconciled,
+        home=home,
+        env=env,
+        transient_packages=transient_packages,
+    )
+    return reconciled
+
+
+def _publish_activation(
+    index: ActivationIndex, *, home: Path, env: Mapping[str, str] | None
+) -> None:
+    """Atomically publish one already validated activation snapshot."""
+
+    provenance = _snapshot_package_provenance(index, home=home, env=env)
+    try:
+        for name, active in index.packages.items():
+            if active.editable is None:
+                write_package_provenance(name, active, home=home, env=env)
+        write_activation_index(index, home=home, env=env)
+    except PackageActivationError:
+        _restore_package_provenance(provenance)
+        raise
 
 
 def _snapshot_package_provenance(

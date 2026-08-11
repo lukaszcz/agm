@@ -338,6 +338,43 @@ class TestPackageDiscipline:
 
         validate_package(package)
 
+    @pytest.mark.parametrize(
+        ("declaration", "constructor"),
+        (
+            ("record resource(value: text)", "resource"),
+            ("enum Value | resource(value: text)", "resource"),
+            ("exception resource(value: text)", "resource"),
+            ("record resource-dir(value: text)", "resource-dir"),
+            ("enum Value | resource-dir(value: text)", "resource-dir"),
+            ("exception resource-dir(value: text)", "resource-dir"),
+        ),
+    )
+    def test_accepts_constructor_named_like_resource_builtin(
+        self, tmp_path: Path, declaration: str, constructor: str
+    ) -> None:
+        package = _custom_package(tmp_path)
+        (package.module_root / "main.agl").write_text(
+            f'{declaration}\nlet value = {constructor}(value = "not/a/resource")\n'
+        )
+
+        validate_package(package)
+
+    def test_accepts_scoped_enum_constructor_shadowing_resource_import(
+        self, tmp_path: Path
+    ) -> None:
+        package = _custom_package(tmp_path)
+        (package.module_root / "main.agl").write_text(
+            "scope Types\n"
+            "scope Value\n"
+            "import std/core using resource\n"
+            "end Value\n"
+            "enum Value | resource(value: text)\n"
+            "end Types\n"
+            'let value = Types::Value::resource(value = "not/a/resource")\n'
+        )
+
+        validate_package(package)
+
     def test_rejects_missing_resource_reexported_by_dependency(self, tmp_path: Path) -> None:
         dependency_root = tmp_path / "dependency"
         (dependency_root / "helpers").mkdir(parents=True)

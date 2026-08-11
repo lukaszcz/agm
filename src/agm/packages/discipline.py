@@ -18,6 +18,8 @@ from agm.agl.scope import BuiltinKind
 from agm.agl.scope.reexports import ReexportCycleError, converge_reexports
 from agm.agl.syntax.nodes import (
     Call,
+    EnumDef,
+    ExceptionDef,
     ExportDecl,
     FuncDef,
     ImportDecl,
@@ -25,6 +27,7 @@ from agm.agl.syntax.nodes import (
     OpenDecl,
     ParamDecl,
     Program,
+    RecordDef,
     ScopeRegion,
     VarDecl,
     VarRef,
@@ -389,9 +392,16 @@ def _resource_imports(
                 paths.update(selected)
 
     _apply_resource_opens(program, paths)
-    for function in static_function_items(program.body.items):
-        declaration_path = tuple(segment.name for segment in function.scope_path) + (function.name,)
-        paths[declaration_path] = None
+    for declaration in static_items(program.body.items):
+        if isinstance(declaration, (FuncDef, RecordDef, ExceptionDef)):
+            scope_path = tuple(segment.name for segment in declaration.scope_path)
+            paths[(*scope_path, declaration.name)] = None
+        elif isinstance(declaration, EnumDef):
+            scope_path = tuple(segment.name for segment in declaration.scope_path)
+            for variant in declaration.variants:
+                paths[(*scope_path, declaration.name, variant.name)] = None
+                if not scope_path:
+                    paths[(variant.name,)] = None
     return paths
 
 

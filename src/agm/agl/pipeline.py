@@ -79,6 +79,7 @@ class _ExecutableProvenance:
     executable: "ExecutableProgram"
     prepared: "PreparedProgram"
     capabilities: "HostCapabilities"
+    selected_module: "ModuleId | None"
 
 
 @dataclass(frozen=True, slots=True)
@@ -375,8 +376,8 @@ class PipelineDriver:
         executable: "ExecutableProgram",
         resolved: "ResolvedProgram",
         capabilities: "HostCapabilities",
-    ) -> "ExecutableProgram | None":
-        """Validate a preflight executable and invalidate it on capability changes."""
+    ) -> "tuple[ExecutableProgram | None, ModuleId | None]":
+        """Validate a preflight executable and retain its selected module."""
         provenance = self._executable_provenance.get(id(executable))
         if provenance is None:
             raise ArtifactProvenanceError("Cached executable was not produced by this pipeline.")
@@ -385,8 +386,8 @@ class PipelineDriver:
                 "Cached executable does not belong to the prepared source."
             )
         if provenance.capabilities != capabilities:
-            return None
-        return executable
+            return None, provenance.selected_module
+        return executable, provenance.selected_module
 
     def _execute_ir(
         self,
@@ -1010,6 +1011,7 @@ class PipelineDriver:
         capabilities: "HostCapabilities",
         host_env: HostEnvironment,
         prepared: PreparedProgram,
+        module_ids: "set[ModuleId]",
         nominals: "Mapping[NominalId, NominalDescriptor]",
         on_failure: "Callable[[list[Diagnostic]], _ResultT]",
     ) -> "_ResultT | None":
@@ -1024,6 +1026,7 @@ class PipelineDriver:
             capabilities=capabilities,
             registry=host_env.extern_registry,
             companion_paths=prepared.companion_paths,
+            module_ids=module_ids,
             nominals=nominals,
         )
         if extern_diagnostics:
@@ -1117,6 +1120,7 @@ class PipelineDriver:
                 executable=executable,
                 prepared=prepared,
                 capabilities=capabilities,
+                selected_module=None if program is None else program.module,
             )
         return ParamPreflight(result=result, executable=executable)
 
@@ -1161,8 +1165,13 @@ class PipelineDriver:
 
         host_env = self.host_environment()
         capabilities = host_env.capabilities
+        selected_module = None if selected_program is None else selected_program.module
         if executable is not None:
-            executable = self._validate_cached_executable(executable, resolved, capabilities)
+            executable, cached_selection = self._validate_cached_executable(
+                executable, resolved, capabilities
+            )
+            if cached_selection is not None:
+                selected_module = cached_selection
         if compiled is not None:
             if self_validation_enabled():
                 _check_program_artifact_provenance(resolved, compiled.checked)
@@ -1252,10 +1261,8 @@ class PipelineDriver:
                     None,
                 )
 
-        if selected_program is not None:
-            executable = _select_program_inventory(
-                executable, resolved.graph, selected_program.module
-            )
+        if selected_module is not None:
+            executable = _select_program_inventory(executable, resolved.graph, selected_module)
 
         if not check_only:
             # Extern (Python FFI) companions: import and resolve every declared
@@ -1268,6 +1275,7 @@ class PipelineDriver:
                 capabilities=capabilities,
                 host_env=host_env,
                 prepared=prepared,
+                module_ids=set(executable.modules),
                 nominals=executable.nominals,
                 on_failure=lambda extern_diagnostics: RunResult(
                     ok=False,
@@ -1719,6 +1727,7 @@ def _extern_declaration_sort_key(pair: "tuple[ModuleId, str]") -> "tuple[tuple[s
 
 def _extern_declarations(
     checked: "CheckedProgram",
+    module_ids: "set[ModuleId] | None" = None,
 ) -> list[tuple["ModuleId", str]]:
     """Return ``(module_id, member_name)`` for every declared extern.
 
@@ -1740,6 +1749,7 @@ def _extern_declarations(
     declarations = [
         (mid, funcdef.name)
         for mid, mod in checked.modules.items()
+        if module_ids is None or mid in module_ids
         for funcdef in collect(mod.resolved.program.body.items)
     ]
     declarations.sort(key=_extern_declaration_sort_key)
@@ -1752,6 +1762,7 @@ def _wire_extern_registry(
     capabilities: "HostCapabilities",
     registry: "ExternRegistry",
     companion_paths: "Mapping[ModuleId, Path | None]",
+    module_ids: "set[ModuleId] | None" = None,
     nominals: "Mapping[NominalId, NominalDescriptor] | None" = None,
 ) -> list[Diagnostic]:
     """Import every companion and resolve every declared extern, up front.
@@ -1771,7 +1782,8 @@ def _wire_extern_registry(
     # modules, so this cheap check short-circuits the common no-extern program
     # before the full declared-function walk in ``_extern_declarations`` — and,
     # equivalently, gates the capability diagnostic without that walk.
-    if not any(path is not None for path in companion_paths.values()):
+    included_modules = set(companion_paths) if module_ids is None else module_ids
+    if not any(companion_paths.get(mid) is not None for mid in included_modules):
         return []
     if not capabilities.supports_extern:
         return [
@@ -1784,7 +1796,7 @@ def _wire_extern_registry(
                 line=1,
             )
         ]
-    declarations = _extern_declarations(checked)
+    declarations = _extern_declarations(checked, module_ids)
     if nominals is not None:
         registry.set_nominals(dict(nominals))
 

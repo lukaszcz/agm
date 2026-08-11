@@ -171,12 +171,51 @@ def test_program_inventory_excludes_params_outside_its_import_subgraph(tmp_path:
     assert preflight.result.ok, preflight.result.diagnostics
     assert preflight.executable is not None
     assert [param.public_name for param in preflight.executable.params] == ["included"]
+    from agm.agl.runtime.codec import TextCodec
+
+    class ExtraCodec(TextCodec):
+        @property
+        def name(self) -> str:
+            return "extra"
+
+    runtime.register_codec(ExtraCodec())
     result = runtime.run_prepared(
         prepared,
         compiled=discovery.compiled,
         executable=preflight.executable,
         program_symbol=preflight.executable.program_symbols[program_a.node_id],
     )
+    assert result.ok, result.diagnostics
+
+
+def test_selected_program_does_not_wire_unreachable_extern(tmp_path: Path) -> None:
+    library_root = tmp_path / "library"
+    library_root.mkdir()
+    (library_root / "a.agl").write_text('program def run() -> unit = print "selected"\n')
+    (library_root / "b.agl").write_text("extern def broken() -> unit\n")
+    (library_root / "b.py").write_text('raise RuntimeError("must not import")\n')
+
+    from agm.agl import PipelineDriver
+    from agm.agl.modules.roots import RootSet
+
+    prepared = PipelineDriver.prepare_program(
+        "import a\nimport b\nprogram def main() -> unit = ()\n",
+        roots=RootSet(roots=frozenset({library_root, REPO_STDLIB_ROOT})),
+    )
+    runtime = PipelineDriver()
+    discovery = runtime.discover_params(prepared)
+    selected = next(program for program in discovery.programs if program.qualified_path == "a::run")
+    preflight = runtime.preflight_params(prepared, compiled=discovery.compiled, program=selected)
+    assert preflight.result.ok
+    assert preflight.executable is not None
+
+    result = runtime.run_prepared(
+        prepared,
+        compiled=discovery.compiled,
+        executable=preflight.executable,
+        program_symbol=preflight.executable.program_symbols[selected.node_id],
+    )
+
     assert result.ok, result.diagnostics
 
 

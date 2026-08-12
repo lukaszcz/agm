@@ -116,8 +116,8 @@ qualifier_segment ::= ["/"] NAME ("/" NAME)* "::"
                     | NAME "[" type_expr ("," type_expr)* "]" "::"
 constructor_args ::= "(" (ctor_arg ("," ctor_arg)* ","?)? ")"
 value_type_args ::= "::" "[" type_expr ("," type_expr)* "]"
-ctor_arg    ::= expr              (* positional *)
-              | field_name "=" expr
+ctor_arg    ::= element_expr      (* positional; expr without a bare record update *)
+              | field_name "=" element_expr
 ```
 
 Constructor arguments follow the same **positional-greedy** binding as function
@@ -422,12 +422,15 @@ function values stored in bindings:
 ```ebnf
 call_expr ::= postfix "(" arg_list? ")"
 arg_list        ::= arg ("," arg)* ","?
-arg             ::= expr                         (* positional *)
+arg             ::= element_expr                 (* positional *)
                   | placeholder_arg              (* positional hole *)
-                  | field_name "=" expr          (* named *)
+                  | field_name "=" element_expr  (* named *)
                   | field_name "=" placeholder_arg (* named hole *)
 placeholder_arg ::= "?" | "?<digits>"
 ```
+
+`element_expr` is `expr` without a bare record update — see
+[Record update](#record-update).
 
 The `postfix` callee may already carry explicit type arguments, so
 `id::[int](5)` is a typed call.
@@ -733,8 +736,11 @@ A `case` expression selects among pattern branches whose bodies use the
 canonical `branch_body` form:
 
 ```ebnf
-case_expr   ::= "case" or_expr "of" "|"? case_branch ("|" case_branch)*
-case_branch ::= pattern "=>" branch_body
+case_expr       ::= "case" or_expr "of" case_body
+case_body       ::= case_branch_seq
+                  | NEWLINE INDENT case_branch_seq NEWLINE? DEDENT
+case_branch_seq ::= "|"? case_branch ("|" case_branch)*
+case_branch     ::= pattern "=>" branch_body
 ```
 
 <!-- agl-check: fragment -->
@@ -745,6 +751,8 @@ let next: text = case action of
   | Escalate(reason) => "Investigate blocker:\n%{reason}"
 ```
 
+The branch list either follows `of` on the same line or forms an indented
+block on the lines below it; the first branch's `|` is optional in both forms.
 `branch_body` is the canonical branch-body production: a suite or one
 `closed_item` (`or_expr`, inline assignment, `raise`, or `return`). See
 [Grammar](grammar.md#if).

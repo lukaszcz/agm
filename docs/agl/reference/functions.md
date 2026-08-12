@@ -12,7 +12,7 @@ from other functions. The type of a function value is written
 
 ```ebnf
 func_def      ::= "def" decl_head type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
-                | "builtin" NEWLINE? "def" name type_params? "(" param_list? ")" "->" type_expr
+                | "builtin" NEWLINE? "def" decl_head type_params? "(" param_list? ")" "->" type_expr
 decl_head     ::= [scope_path "::"] name
 func_body     ::= expr | suite
 type_params   ::= "[" name ("," name)* "]"
@@ -459,12 +459,16 @@ All calls use the same uniform parenthesized syntax:
 ```ebnf
 call_expr ::= postfix "(" arg_list? ")"
 arg_list        ::= arg ("," arg)* ","?
-arg             ::= expr                         (* positional *)
+arg             ::= element_expr                 (* positional *)
                   | placeholder_arg              (* positional hole *)
-                  | field_name "=" expr          (* named *)
+                  | field_name "=" element_expr  (* named *)
                   | field_name "=" placeholder_arg (* named hole *)
 placeholder_arg ::= "?" | "?<digits>"
 ```
+
+`element_expr` is `expr` without a bare record update, which must be
+parenthesized in a comma-separated element position — see
+[Record update](expressions.md#record-update).
 
 The `postfix` callee may already carry explicit type arguments, so
 `id::[int](5)` is a typed call; the `::[…]` application itself may also be used

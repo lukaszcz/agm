@@ -79,9 +79,16 @@ inside a branch persists after the `if`.
 ## `case`
 
 ```ebnf
-case_expr        ::= "case" or_expr "of" "|"? case_branch ("|" case_branch)*
+case_expr        ::= "case" or_expr "of" case_body
+case_body        ::= case_branch_seq
+                   | NEWLINE INDENT case_branch_seq NEWLINE? DEDENT
+case_branch_seq  ::= "|"? case_branch ("|" case_branch)*
 case_branch      ::= pattern "=>" branch_body
 ```
+
+The branch list either follows `of` on the same line or forms an indented
+block on the lines below it. The first branch's `|` is optional in both forms;
+every later branch starts with `|`.
 
 <!-- agl-check: fragment -->
 ```agl

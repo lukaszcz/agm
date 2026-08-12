@@ -32,7 +32,8 @@ import_decl ::= ["open"] "import" module_path ["/*"]
 module_path ::= NAME ("/" NAME)*
 using_clause ::= "using" path_atom ["as" ref_name] ("," path_atom ["as" ref_name])*
 hiding_clause ::= "hiding" path_atom ("," path_atom)*
-path_atom ::= NAME ("::" NAME)*
+path_atom ::= (NAME "::")* name
+name      ::= NAME | OP_NAME
 ```
 
 Each import contributes a selected set **S** of its target module's public

@@ -29,7 +29,7 @@ item       ::= import_decl                  (* header position only; scope_item 
              | builtin_modifier? enum_def   (* root only *)
              | type_alias                   (* root only *)
              | builtin_modifier? exception_def (* root only *)
-             | export_decl                  (* root only; scope_item also permits it *)
+             | export_decl                  (* header position only; scope_item also permits it *)
              | param_decl                   (* module root or scope region *)
              | program_func_def             (* root or scope region *)
              | infix_decl                   (* root only *)
@@ -83,7 +83,9 @@ line directly above it (`builtin` then `enum …`). The newline after a modifier
 is insignificant. `builtin` prefixes a `record`, `enum`, or `exception`.
 `builtin def` is a body-less declaration form, not a modifier applied to an
 ordinary `def`. `builtin` is not accepted for type aliases or extern
-functions.
+functions. The `extern` of an `extern def` and the `program` of a
+`program def` place the same way: each may sit on its declaration's line or on
+the line directly above it.
 
 ## Import and export declarations
 
@@ -103,7 +105,7 @@ scope_ref    ::= [module_path "::"] scope_path
 scope_path   ::= NAME ("::" NAME)*
 using_clause ::= "using" path_atom ("as" ref_name)? ("," path_atom ("as" ref_name)?)*
 hiding_clause ::= "hiding" path_atom ("," path_atom)*
-path_atom    ::= scope_path
+path_atom    ::= [scope_path "::"] name
 ```
 
 `"open"` is a contextual soft keyword at item start before an import or scope
@@ -240,7 +242,7 @@ type_param       ::= name | "_"
 param_marker     ::= "/" | "*" | "@" NAME    (* NAME must be pos, std, or named *)
 
 param_decl       ::= "param" name type_ann? ("=" expr)?
-program_func_def ::= "program" "def" decl_head "(" ")" ("->" "unit")? ("=" func_body | suite)
+program_func_def ::= "program" NEWLINE? "def" decl_head "(" ")" ("->" "unit")? ("=" func_body | suite)
 
 ```
 
@@ -439,9 +441,16 @@ type `T`.
 ## `case`
 
 ```ebnf
-case_expr    ::= "case" or_expr "of" "|"? case_branch ("|" case_branch)*
-case_branch  ::= pattern "=>" branch_body
+case_expr       ::= "case" or_expr "of" case_body
+case_body       ::= case_branch_seq
+                  | NEWLINE INDENT case_branch_seq NEWLINE? DEDENT
+case_branch_seq ::= "|"? case_branch ("|" case_branch)*
+case_branch     ::= pattern "=>" branch_body
 ```
+
+The branch list either follows `of` on the same line or forms an indented
+block on the lines below it. The first branch's `|` is optional in both forms;
+every later branch starts with `|`.
 
 ## `try` / `catch`
 
@@ -510,8 +519,11 @@ A `STRING` pattern may not contain interpolation.
 ## Raw-tail calls
 
 ```ebnf
+raw_tail_form   ::= raw_call | dotted_raw_call | raw_juxt
 raw_call        ::= raw_callee type_args? raw_tail
 dotted_raw_call ::= postfix "." raw_callee type_args? raw_tail
+raw_juxt        ::= postfix raw_call
+                  | postfix juxt_atom juxt_suffix* "." raw_callee type_args? raw_tail
 raw_callee      ::= "exec!" | "ask!"
 type_args       ::= "::" "[" type_expr ("," type_expr)* "]"
 raw_tail        ::= inline_raw_tail | block_raw_tail
@@ -534,12 +546,14 @@ before and between content lines. A raw call requires a nonempty inline tail or
 a block with at least one nonblank line. Raw text is tokenized as fragments and
 `%{expr}` interpolations, not as ordinary AgL expressions.
 
-A raw call is valid only where the grammar guarantees that nothing else follows
-on its line: as a block item; as a `let`, `var`, or assignment RHS; as an
-inline `def` body; as a `return` operand at a block-item or function-body tail;
-or as the final single-argument juxtaposition argument (for example,
-`print receiver.ask! prompt`). It is not valid inside brackets, branch/catch
-inline bodies, or another inline expression. Use the ordinary call form there.
+A `raw_tail_form` stands in for `expr` only where the grammar guarantees that
+nothing else follows on its line: as an `item`; as a `let_decl`, `var_decl`, or
+`assign_stmt` right-hand side; as an inline `func_body`; as the operand of a
+`return` in those same positions; or, through `raw_juxt`, as the
+single-argument juxtaposition argument of a call whose callee precedes it on
+the line (for example, `print receiver.ask! prompt`). It is not valid inside
+brackets, branch/catch inline bodies, or another inline expression. Use the
+ordinary call form there.
 
 ```agl
 program def main() -> unit =

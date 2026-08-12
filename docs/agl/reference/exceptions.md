@@ -117,7 +117,7 @@ try_body          ::= suite | (marked_item ";")* try_tail
 try_tail          ::= or_expr | inline_assign | try_letvar_decl | raise_expr
                     | return_expr | if_expr | case_expr | loop
 try_letvar_decl   ::= "let" pattern type_ann? "=" try_value
-                    | "var" name type_ann? "=" try_value
+                    | "var" decl_head type_ann? "=" try_value
 try_value         ::= or_expr | raise_expr | return_expr | if_expr | case_expr | loop
 catch_clause      ::= "catch" catch_pattern "=>" branch_body
 catch_pattern ::= name ("as" name)?

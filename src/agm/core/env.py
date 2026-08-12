@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
 import subprocess
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -60,10 +60,17 @@ def is_safe_shell_env_assignment_name(name: str) -> bool:
 
 
 def agm_installation_prefix() -> Path | None:
-    """Return the AGM installation prefix inferred from the executable on PATH."""
+    """Return the installation prefix of the running AGM executable.
 
-    agm_executable = shutil.which("agm")
-    if agm_executable is None:
+    The prefix is the parent of the executable's ``bin`` directory, taken from
+    the invocation path rather than PATH, so a development build reports its own
+    environment instead of an unrelated AGM installed elsewhere. The path is not
+    resolved through symlinks: a tool installer's entry point is a link in the
+    prefix's ``bin`` directory, and the prefix is that link's location.
+    """
+
+    agm_executable = sys.argv[0]
+    if not agm_executable:
         return None
     return Path(agm_executable).absolute().parent.parent
 

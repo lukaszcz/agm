@@ -8,7 +8,7 @@ All subprocess work goes through a single process module rather than ad-hoc `sub
 
 ## Environment Handling
 
-The environment module owns construction and resolution of process environments: cloning the ambient environment, resolving variable references, sourcing bash env files in a single shell to capture their effect, validating shell-safe identifiers, and locating the AGM installation prefix. Environments are passed explicitly as dictionaries through the call chain, so each command controls exactly what its subprocesses see.
+The environment module owns construction and resolution of process environments: cloning the ambient environment, resolving variable references, sourcing bash env files in a single shell to capture their effect, validating shell-safe identifiers, and locating the AGM installation prefix from the path AGM was invoked through, so each build resolves its own prefix rather than an unrelated AGM on PATH. Environments are passed explicitly as dictionaries through the call chain, so each command controls exactly what its subprocesses see.
 
 ## Filesystem, TOML, and Dotenv I/O
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,7 @@ from agm.core.env import (
 )
 
 
-def test_agm_installation_prefix_uses_agm_binary_location(
+def test_agm_installation_prefix_uses_running_executable_location(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     prefix = tmp_path / "prefix"
@@ -21,10 +22,7 @@ def test_agm_installation_prefix_uses_agm_binary_location(
     agm_executable.parent.mkdir(parents=True)
     agm_executable.write_text("", encoding="utf-8")
 
-    def fake_which(name: str) -> str | None:
-        return str(agm_executable) if name == "agm" else None
-
-    monkeypatch.setattr("agm.core.env.shutil.which", fake_which)
+    monkeypatch.setattr("agm.core.env.sys.argv", [str(agm_executable), "config", "env"])
 
     assert agm_installation_prefix() == prefix
 
@@ -39,18 +37,34 @@ def test_agm_installation_prefix_uses_symlink_location_without_resolving_target(
     agm_executable = prefix / "bin" / "agm"
     agm_executable.parent.mkdir(parents=True)
     agm_executable.symlink_to(tool_executable)
-    monkeypatch.setattr("agm.core.env.shutil.which", lambda _name: str(agm_executable))
+    monkeypatch.setattr("agm.core.env.sys.argv", [str(agm_executable)])
 
     assert agm_installation_prefix() == prefix
 
 
-def test_agm_installation_prefix_returns_none_when_agm_is_not_on_path(
+def test_agm_installation_prefix_ignores_a_different_agm_on_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A development build reports its own prefix, never an installed one on PATH."""
+
+    venv_prefix = tmp_path / "worktree" / ".venv"
+    venv_executable = venv_prefix / "bin" / "agm"
+    venv_executable.parent.mkdir(parents=True)
+    venv_executable.write_text("", encoding="utf-8")
+    installed_executable = tmp_path / "installed" / "bin" / "agm"
+    installed_executable.parent.mkdir(parents=True)
+    installed_executable.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr("agm.core.env.sys.argv", [str(venv_executable)])
+    monkeypatch.setattr(shutil, "which", lambda _name, **_kwargs: str(installed_executable))
+
+    assert agm_installation_prefix() == venv_prefix
+
+
+def test_agm_installation_prefix_returns_none_without_an_executable_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_which(_name: str) -> str | None:
-        return None
-
-    monkeypatch.setattr("agm.core.env.shutil.which", fake_which)
+    monkeypatch.setattr("agm.core.env.sys.argv", [""])
 
     assert agm_installation_prefix() is None
 

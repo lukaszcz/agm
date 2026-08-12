@@ -477,26 +477,42 @@ def _run_agm_raw(
     env: dict[str, str],
     cwd: str | Path | None = None,
     check: bool = True,
+    executable: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run the installed ``agm`` binary without prepending the venv ``bin/`` to PATH.
 
-    Used by tests that need to control ``agm_installation_prefix()`` (which is
-    derived from ``shutil.which("agm")``) by placing a shim ``agm`` earlier on
-    PATH themselves.  The real binary is still invoked (by absolute path), so
-    its behaviour is exercised; only the resolved install prefix differs.
+    Used by tests that control ``agm_installation_prefix()``, which is derived
+    from the path AGM is invoked through.  Pass *executable* — see
+    :func:`_install_agm_at_prefix` — to run the real binary through another
+    prefix's entry point; only the resolved install prefix differs.
 
     The PATH is still sanitized (via :func:`_agm_env`) so a real external agent
-    CLI on the developer's PATH can never be invoked; only the test's shim
-    ``agm`` and fake ``claude`` (both under tmp_path) are reachable.
+    CLI on the developer's PATH can never be invoked; only the test's fake
+    ``claude`` (under tmp_path) is reachable.
     """
     return subprocess.run(
-        [str(_AGM_INSTALL["bin"]), *args],
+        [str(_AGM_INSTALL["bin"] if executable is None else executable), *args],
         capture_output=True,
         text=True,
         env=_agm_env(env),
         cwd=cwd,
         check=check,
     )
+
+
+def _install_agm_at_prefix(prefix: Path) -> Path:
+    """Link the installed ``agm`` into *prefix*'s ``bin/`` and return that path.
+
+    This mirrors how a tool installer places an entry point: a link in the
+    prefix's ``bin`` directory pointing at the real console script elsewhere.
+    Invoking the returned path makes *prefix* the resolved install prefix, so a
+    test can populate ``<prefix>/.agm`` and have AGM read it.
+    """
+    bin_dir = prefix / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    entry_point = bin_dir / "agm"
+    entry_point.symlink_to(_AGM_INSTALL["bin"])
+    return entry_point
 
 
 def _git(
@@ -4485,11 +4501,7 @@ class TestLoop:
         env["FAKE_CLAUDE_LOG"] = str(tmp_path / "claude.log")
 
         prefix = tmp_path / "prefix"
-        (prefix / "bin").mkdir(parents=True)
-        agm = prefix / "bin" / "agm"
-        agm.write_text("#!/bin/bash\n")
-        agm.chmod(agm.stat().st_mode | stat.S_IEXEC)
-        env["PATH"] = f"{prefix / 'bin'}:{env['PATH']}"
+        agm = _install_agm_at_prefix(prefix)
 
         prompt_dir = prefix / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
@@ -4501,7 +4513,9 @@ class TestLoop:
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        result = _run_agm_raw(["loop", "run", "--no-selector"], env=env, cwd=str(work))
+        result = _run_agm_raw(
+            ["loop", "run", "--no-selector"], env=env, cwd=str(work), executable=agm
+        )
 
         assert result.returncode == 0
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p @{prompt_file}"] * 2
@@ -4514,11 +4528,7 @@ class TestLoop:
         env["FAKE_CLAUDE_LOG"] = str(tmp_path / "claude.log")
 
         prefix = tmp_path / "prefix"
-        (prefix / "bin").mkdir(parents=True)
-        agm = prefix / "bin" / "agm"
-        agm.write_text("#!/bin/bash\n")
-        agm.chmod(agm.stat().st_mode | stat.S_IEXEC)
-        env["PATH"] = f"{prefix / 'bin'}:{env['PATH']}"
+        agm = _install_agm_at_prefix(prefix)
 
         prompt_dir = prefix / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
@@ -4530,7 +4540,9 @@ class TestLoop:
         work = tmp_path / "work"
         work.mkdir()
 
-        result = _run_agm_raw(["loop", "run", "--no-selector"], env=env, cwd=str(work))
+        result = _run_agm_raw(
+            ["loop", "run", "--no-selector"], env=env, cwd=str(work), executable=agm
+        )
 
         assert result.returncode == 0
         assert "Step 1" in result.stdout

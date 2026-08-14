@@ -54,16 +54,17 @@ def resolve_qualified_values(
     """
 
     layers = config.layers
-
-    unique_keys_list: list[QualifiedConfigKey] = []
+    # ``dict.fromkeys`` would be shorter but is untyped under the repo's
+    # ``disallow_any_expr`` setting.
     seen_keys: set[QualifiedConfigKey] = set()
+    unique_keys_list: list[QualifiedConfigKey] = []
     for key in keys:
         if key not in seen_keys:
             seen_keys.add(key)
             unique_keys_list.append(key)
+    unique_keys = tuple(unique_keys_list)
 
     resolved: dict[QualifiedConfigKey, object] = {}
-    unique_keys = tuple(unique_keys_list)
     for layer in layers:
         for key in unique_keys:
             if any(_table_path_replaced(layer, path) for path in _table_paths_for(key)):

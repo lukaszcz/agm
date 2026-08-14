@@ -13,10 +13,11 @@ from typing import Protocol
 
 import requests
 
+from agm.packages.manifest import parse_sha256
+
 _FETCH_TIMEOUT_SECONDS = 30.0
 _CHUNK_SIZE = 1024 * 1024
 MAX_ARCHIVE_DOWNLOAD_SIZE = 128 * 1024 * 1024
-_SHA256_PREFIXES = ("sha256=", "sha256:", "sha256-")
 
 
 class FetchError(ValueError):
@@ -147,12 +148,7 @@ def _check_timeout(requirement: str, deadline: float) -> None:
 def _expected_digest(requirement: str, expected_hash: str) -> str:
     """Extract a SHA-256 hex digest from a manifest hash declaration."""
 
-    prefix = next(
-        (candidate for candidate in _SHA256_PREFIXES if expected_hash.startswith(candidate)), None
-    )
-    if prefix is None:
+    digest = parse_sha256(expected_hash)
+    if digest is None:
         raise FetchError(f"hash mismatch for {requirement}")
-    digest = expected_hash[len(prefix) :]
-    if len(digest) != 64 or any(character not in "0123456789abcdefABCDEF" for character in digest):
-        raise FetchError(f"hash mismatch for {requirement}")
-    return digest.lower()
+    return digest

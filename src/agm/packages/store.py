@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path, PureWindowsPath
 
 import semver
@@ -51,10 +51,9 @@ def canonical_package_provenance_path(
 ) -> Path:
     """Return the canonical, unlinked provenance sidecar path."""
 
-    logical_store_root = store_root(home=home, env=env)
-    logical_candidate = package_provenance_path(name, version, home=home, env=env)
-    _reject_managed_tree_symlinks(logical_candidate, logical_store_root)
-    return logical_candidate.resolve()
+    return _canonical_managed_path(
+        package_provenance_path(name, version, home=home, env=env), home=home, env=env
+    )
 
 
 def canonical_package_store_path(
@@ -67,10 +66,40 @@ def canonical_package_store_path(
     itself may be relocated by a link.
     """
 
-    logical_store_root = store_root(home=home, env=env)
-    logical_candidate = package_store_path(name, version, home=home, env=env)
-    _reject_managed_tree_symlinks(logical_candidate, logical_store_root)
-    return logical_candidate.resolve()
+    return _canonical_managed_path(
+        package_store_path(name, version, home=home, env=env), home=home, env=env
+    )
+
+
+def iter_store_package_dirs(*, home: Path, env: Mapping[str, str] | None = None) -> Iterator[Path]:
+    """Yield each package-name directory in the store, in name order.
+
+    An absent store holds no packages, and a linked name directory does not
+    designate a managed tree.
+    """
+
+    root = store_root(home=home, env=env)
+    if not root.is_dir():
+        return
+    for name_dir in sorted(root.iterdir()):
+        if name_dir.is_dir() and not name_dir.is_symlink():
+            yield name_dir
+
+
+def iter_store_version_dirs(name_dir: Path) -> Iterator[Path]:
+    """Yield one package's installed version directories, in directory order.
+
+    Dot-prefixed entries are the store's own bookkeeping — staging trees,
+    uninstall tombstones, and provenance sidecars — not installed versions.
+    """
+
+    for version_dir in sorted(name_dir.iterdir()):
+        if (
+            version_dir.is_dir()
+            and not version_dir.is_symlink()
+            and not version_dir.name.startswith(".")
+        ):
+            yield version_dir
 
 
 def is_package_store_root(
@@ -84,6 +113,15 @@ def is_package_store_root(
     """Return whether *root* is the immutable store tree for an identity."""
 
     return root.resolve() == canonical_package_store_path(name, version, home=home, env=env)
+
+
+def _canonical_managed_path(
+    logical_candidate: Path, *, home: Path, env: Mapping[str, str] | None
+) -> Path:
+    """Resolve a logical store path once its managed ancestry is known link-free."""
+
+    _reject_managed_tree_symlinks(logical_candidate, store_root(home=home, env=env))
+    return logical_candidate.resolve()
 
 
 def _reject_managed_tree_symlinks(logical_target: Path, logical_store_root: Path) -> None:

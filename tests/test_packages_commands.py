@@ -57,12 +57,7 @@ def _package(tmp_path: Path, name: str = "alpha") -> PackageInfo:
 def _install_plan(
     package: PackageInfo, *, command_shadows: tuple[CommandShadow, ...] = ()
 ) -> PackageInstallPlan:
-    return PackageInstallPlan(
-        package,
-        ActivationIndex(),
-        {package.manifest.name: package},
-        command_shadows,
-    )
+    return PackageInstallPlan(package, command_shadows)
 
 
 def test_create_command_validates_and_writes_the_default_archive_beside_its_package(
@@ -384,18 +379,19 @@ def test_info_command_rejects_immutable_store_escapes_and_identity_mismatches(
         info_command.run(PkgInfoArgs("alpha"))
 
     (store / "alpha").unlink()
-    monkeypatch.setattr(info_command, "verify_record", lambda _root: ())
     root = store / "alpha" / "1.0.0"
     root.mkdir(parents=True)
     (root / "package.toml").write_text(
         '[package]\nname = "bravo"\nversion = "1.0.0"\n', encoding="utf-8"
     )
+    write_record(root)
     with pytest.raises(SystemExit):
         info_command.run(PkgInfoArgs("alpha"))
 
     (root / "package.toml").write_text(
         '[package]\nname = "alpha"\nversion = "2.0.0"\n', encoding="utf-8"
     )
+    write_record(root)
     with pytest.raises(SystemExit):
         info_command.run(PkgInfoArgs("alpha"))
 
@@ -410,8 +406,8 @@ def test_info_command_rejects_different_build_metadata_for_immutable_package(
     (root / "package.toml").write_text(
         '[package]\nname = "alpha"\nversion = "1.0.0+other"\n', encoding="utf-8"
     )
+    write_record(root)
     monkeypatch.setattr(info_command, "current_config_context", lambda: context)
-    monkeypatch.setattr(info_command, "verify_record", lambda _root: ())
     monkeypatch.setattr(
         info_command,
         "load_activation_index",
@@ -486,7 +482,9 @@ def test_info_command_renders_metadata_and_reports_unknown_package(
             }
         ),
     )
-    monkeypatch.setattr(info_command, "load_manifest", lambda _: manifest)
+    monkeypatch.setattr(
+        info_command, "resolve_active_package", lambda *_, **__: PackageInfo(package.root, manifest)
+    )
 
     info_command.run(PkgInfoArgs("alpha"))
 
@@ -507,8 +505,10 @@ def test_info_command_renders_metadata_and_reports_unknown_package(
     newer_agm = semver.Version.parse(AGM_VERSION).bump_major()
     monkeypatch.setattr(
         info_command,
-        "load_manifest",
-        lambda _: replace(manifest, dependencies={"std": DependencySpec(newer_agm)}),
+        "resolve_active_package",
+        lambda *_, **__: PackageInfo(
+            package.root, replace(manifest, dependencies={"std": DependencySpec(newer_agm)})
+        ),
     )
     info_command.run(PkgInfoArgs("alpha"))
     assert (
@@ -517,7 +517,11 @@ def test_info_command_renders_metadata_and_reports_unknown_package(
     )
 
     no_description = PackageManifest(name="alpha", version=manifest.version)
-    monkeypatch.setattr(info_command, "load_manifest", lambda _: no_description)
+    monkeypatch.setattr(
+        info_command,
+        "resolve_active_package",
+        lambda *_, **__: PackageInfo(package.root, no_description),
+    )
     info_command.run(PkgInfoArgs("alpha"))
     monkeypatch.setattr(info_command, "load_activation_index", lambda **_: ActivationIndex())
     with pytest.raises(SystemExit):
@@ -532,8 +536,8 @@ def test_info_command_renders_metadata_and_reports_unknown_package(
     )
     monkeypatch.setattr(
         info_command,
-        "load_manifest",
-        lambda _: (_ for _ in ()).throw(info_command.ManifestError("broken")),
+        "resolve_active_package",
+        lambda *_, **__: (_ for _ in ()).throw(info_command.ManifestError("broken")),
     )
     with pytest.raises(SystemExit):
         info_command.run(PkgInfoArgs("alpha"))

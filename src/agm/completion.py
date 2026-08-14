@@ -209,10 +209,10 @@ def registered_command_completion(
 ) -> tuple[list[str], bool]:
     """Return next path segments and whether the path resolves to a registered command."""
     try:
-        from agm.cli_dispatch import load_activation_index, resolve_registered_command
+        from agm.cli_dispatch import load_command_index, resolve_registered_command
 
         context = current_config_context()
-        index = load_activation_index(home=context.home, proj_dir=context.proj_dir, cwd=context.cwd)
+        index = load_command_index(home=context.home, proj_dir=context.proj_dir, cwd=context.cwd)
         prefix = tuple(command_path)
         candidates = {
             words[len(prefix)]
@@ -232,11 +232,11 @@ def registered_command_param_completion(
 ) -> list[CompletionItem]:
     """Complete parameters for an already resolved registered command."""
     try:
-        from agm.cli_dispatch import load_activation_index, resolve_registered_command
+        from agm.cli_dispatch import load_command_index, resolve_registered_command
         from agm.commands.exec_program import registered_program_param_flags
 
         context = current_config_context()
-        index = load_activation_index(home=context.home, proj_dir=context.proj_dir, cwd=context.cwd)
+        index = load_command_index(home=context.home, proj_dir=context.proj_dir, cwd=context.cwd)
         resolution = resolve_registered_command(command_path, index.commands)
         if resolution is None:
             return []

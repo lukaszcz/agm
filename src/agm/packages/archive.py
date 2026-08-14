@@ -28,6 +28,7 @@ from agm.packages.record import (
     RecordError,
     content_hash,
     parse_record,
+    posix_relative_path,
     serialize_record,
 )
 
@@ -339,7 +340,7 @@ def read_archive_metadata(archive_path: Path) -> ArchiveMetadata:
         manifest = _manifest_from_bytes(_read_entry(archive, infos[manifest_name]))
         _validate_prefix(prefix, manifest)
         entries = _record_from_bytes(_read_entry(archive, infos[record_name]))
-        return ArchiveMetadata(manifest, _package_hash(entries))
+        return ArchiveMetadata(manifest, content_hash(entries))
 
     return _read_archive(archive_path, read_metadata)
 
@@ -430,7 +431,7 @@ def _verify_open_archive(archive: zipfile.ZipFile) -> ArchiveMetadata:
         raise ArchiveError("archive package manifest is not normalized")
     if entries != expected_entries:
         raise ArchiveError("archive contents do not match RECORD")
-    return ArchiveMetadata(manifest, _package_hash(entries))
+    return ArchiveMetadata(manifest, content_hash(entries))
 
 
 def _read_archive(archive_path: Path, operation: Callable[[zipfile.ZipFile], T]) -> T:
@@ -568,7 +569,7 @@ def _source_paths(root: Path) -> tuple[Path, ...]:
                 visit(child)
 
     visit(root)
-    return tuple(sorted(paths, key=_relative_path_key(root)))
+    return tuple(sorted(paths, key=posix_relative_path(root)))
 
 
 def _reject_source_links(root: Path) -> None:
@@ -631,7 +632,7 @@ def _archive_contents(root: Path, manifest: PackageManifest) -> dict[str, bytes]
         relative = path.relative_to(root).as_posix()
         if relative in {_MANIFEST_NAME, _RECORD_NAME} or _excluded(relative, ignored):
             continue
-        _relative_archive_path(relative)
+        _archive_path(relative)
         try:
             size = path.stat().st_size
         except OSError as exc:
@@ -800,11 +801,7 @@ def _record_entries(contents: dict[str, bytes]) -> tuple[RecordEntry, ...]:
 
 def _metadata(manifest: PackageManifest, contents: dict[str, bytes]) -> ArchiveMetadata:
     entries = _record_from_bytes(contents[_RECORD_NAME])
-    return ArchiveMetadata(manifest, _package_hash(entries))
-
-
-def _package_hash(entries: tuple[RecordEntry, ...]) -> str:
-    return content_hash(entries)
+    return ArchiveMetadata(manifest, content_hash(entries))
 
 
 def _entry_prefix(manifest: PackageManifest) -> str:
@@ -824,7 +821,7 @@ def _archive_layout(
 ) -> tuple[str, str, str, dict[str, zipfile.ZipInfo]]:
     if not infos:
         raise ArchiveError("package archive is empty")
-    _validate_archive_limits(infos)
+    _validate_size_limits(len(infos), (info.file_size for info in infos))
     names = [info.filename for info in infos]
     if any(stat.S_ISLNK(info.external_attr >> 16) for info in infos):
         raise ArchiveError("package archive contains a symlink")
@@ -849,10 +846,6 @@ def _archive_layout(
     if manifest_name not in names or record_name not in names:
         raise ArchiveError("package archive requires package.toml and RECORD")
     return prefix, manifest_name, record_name, dict(zip(names, infos, strict=True))
-
-
-def _validate_archive_limits(infos: list[zipfile.ZipInfo]) -> None:
-    _validate_size_limits(len(infos), (info.file_size for info in infos))
 
 
 def _validate_size_limits(entry_count: int, sizes: Iterable[int]) -> None:
@@ -909,10 +902,6 @@ def _archive_path(value: str) -> PurePosixPath:
     return path
 
 
-def _relative_archive_path(value: str) -> PurePosixPath:
-    return _archive_path(value)
-
-
 def _validate_portable_components(parts: tuple[str, ...], value: str) -> None:
     for component in parts:
         stem = component.split(".", maxsplit=1)[0].casefold()
@@ -952,7 +941,7 @@ def _record_from_bytes(content: bytes) -> tuple[RecordEntry, ...]:
     except (RecordError, UnicodeDecodeError) as exc:
         raise ArchiveError(f"cannot parse archive RECORD: {exc}") from exc
     for entry in entries:
-        _relative_archive_path(entry.path)
+        _archive_path(entry.path)
     _reject_casefolding_collisions(entry.path for entry in entries)
     if entries != tuple(sorted(entries, key=_record_path_key)):
         raise ArchiveError("archive RECORD entries are not sorted")
@@ -985,15 +974,6 @@ def _entry_digest(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> str:
     if size != info.file_size:
         raise ArchiveError("package archive entry size does not match its metadata")
     return digest.hexdigest()
-
-
-def _relative_path_key(root: Path) -> Callable[[Path], str]:
-    """Return a stable archive-sort key for paths below *root*."""
-
-    def key(path: Path) -> str:
-        return path.relative_to(root).as_posix()
-
-    return key
 
 
 def _record_path_key(entry: RecordEntry) -> str:

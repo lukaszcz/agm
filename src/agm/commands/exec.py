@@ -9,12 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agm.agl import PipelineDriver
-from agm.agl.runtime.agents import value_driven_agent_factory
 from agm.cli_support.args import ExecArgs
 from agm.commands import exec_program
-from agm.config.context import current_config_context
-from agm.config.general import exec_config_from_merged
 
 
 def run(args: ExecArgs) -> None:
@@ -27,12 +23,4 @@ def run(args: ExecArgs) -> None:
     ):
         exec_program.run_registered(args.file, args.param_tokens, args=args)
         return
-    # Keep these injectable seams on the established adapter for callers and
-    # tests that customize host construction around the execution pipeline.
-    exec_program.run(
-        args,
-        pipeline_factory=PipelineDriver,
-        agent_factory=value_driven_agent_factory,
-        config_context_loader=current_config_context,
-        exec_config_loader=exec_config_from_merged,
-    )
+    exec_program.run(args)

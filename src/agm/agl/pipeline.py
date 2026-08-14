@@ -78,7 +78,11 @@ class ArtifactProvenanceError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class _ExecutableProvenance:
-    """Pipeline-owned cache metadata kept out of the typeless execution IR."""
+    """Pipeline-owned cache metadata kept out of the typeless execution IR.
+
+    ``executable`` is never read: it keeps the executable alive so its
+    ``id()``, which keys this cache, cannot be recycled by a later object.
+    """
 
     executable: "ExecutableProgram"
     prepared: "PreparedProgram"

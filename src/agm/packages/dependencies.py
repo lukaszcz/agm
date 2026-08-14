@@ -6,15 +6,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import semver
-
 from agm.packages.activation import PackageActivationError, load_activation_index
 from agm.packages.discipline import DisciplineError, validate_package_structure
-from agm.packages.install import PackageInstallError, installed_packages
+from agm.packages.install import PackageInstallError, installed_packages, select_satisfying
 from agm.packages.manifest import DependencySpec, ManifestError, load_manifest
-from agm.packages.model import PackageInfo
+from agm.packages.model import PackageInfo, unmet_std_requirement
 from agm.packages.record import RecordError, verify_record
-from agm.version import AGM_VERSION
 
 
 class DependencyError(ValueError):
@@ -26,6 +23,7 @@ class _CheckState:
     home: Path
     env: Mapping[str, str] | None
     checking: set[Path] = field(default_factory=set)
+    checked: set[Path] = field(default_factory=set)
     resolved: dict[str, PackageInfo] = field(default_factory=dict)
 
 
@@ -47,20 +45,22 @@ def validate_dependencies(
 
 
 def _validate_package_dependencies(package: PackageInfo, state: _CheckState) -> None:
+    # A package reached again through a second path resolves identically, so
+    # revisiting it would only re-walk its subtree exponentially.
     root = package.root.resolve()
     if root in state.checking:
         raise DependencyError(f"cyclic path dependency at {root}")
+    if root in state.checked:
+        return
     state.checking.add(root)
     try:
         for name, requirement in package.manifest.dependencies.items():
             # The standard library is supplied by the running AGM binary
             # rather than the package store.
             if name == "std":
-                if requirement.version > semver.Version.parse(AGM_VERSION):
-                    raise DependencyError(
-                        f"package {package.manifest.name!r} requires AGM at least "
-                        f"{requirement.version} via std, but running AGM is {AGM_VERSION}"
-                    )
+                unmet = unmet_std_requirement(requirement)
+                if unmet is not None:
+                    raise DependencyError(f"package {package.manifest.name!r} {unmet}")
                 continue
             selected = _selected_satisfying(name, requirement, state)
             if selected is not None:
@@ -78,6 +78,7 @@ def _validate_package_dependencies(package: PackageInfo, state: _CheckState) -> 
             state.resolved[selected.manifest.name] = selected
     finally:
         state.checking.remove(root)
+    state.checked.add(root)
 
 
 def _selected_satisfying(
@@ -85,7 +86,7 @@ def _selected_satisfying(
 ) -> PackageInfo | None:
     try:
         candidates = [
-            (package, True)
+            package
             for package in installed_packages(home=state.home, env=state.env)
             if package.manifest.name == name and package.manifest.version >= requirement.version
         ]
@@ -97,20 +98,10 @@ def _selected_satisfying(
         previously_selected is not None
         and previously_selected.manifest.version >= requirement.version
     ):
-        candidates.append((previously_selected, False))
-    if not candidates:
-        return None
-    selected, verify_selected = candidates[0]
-    for candidate, verify_candidate in candidates[1:]:
-        if candidate.manifest.version > selected.manifest.version or (
-            candidate.manifest.version == selected.manifest.version
-            and active is not None
-            and active.editable is None
-            and str(candidate.manifest.version) == str(active.version)
-        ):
-            selected = candidate
-            verify_selected = verify_candidate
-    if verify_selected:
+        candidates.append(previously_selected)
+    selected = select_satisfying(candidates, active)
+    # An earlier selection was already verified when it was made.
+    if selected is not None and selected is not previously_selected:
         try:
             verify_record(selected.root)
         except RecordError as exc:

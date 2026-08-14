@@ -88,8 +88,8 @@ class TestConfigCopy:
 
 
 class TestPackageLifecycle:
-    def test_pkg_runner_helpers_lazy_load_command_adapters(
-        self, monkeypatch: pytest.MonkeyPatch
+    def test_pkg_lifecycle_options_map_to_typed_arguments(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import agm.commands.pkg.create as create_command
         import agm.commands.pkg.info as info_command
@@ -97,29 +97,11 @@ class TestPackageLifecycle:
         import agm.commands.pkg.list as list_command
         import agm.commands.pkg.uninstall as uninstall_command
 
-        calls: list[object] = []
-        monkeypatch.setattr(create_command, "run", lambda args: calls.append(args))
-        monkeypatch.setattr(install_command, "run", lambda args: calls.append(args))
-        monkeypatch.setattr(uninstall_command, "run", lambda args: calls.append(args))
-        monkeypatch.setattr(list_command, "run", lambda args: calls.append(args))
-        monkeypatch.setattr(info_command, "run", lambda args: calls.append(args))
-
-        cli._run_pkg_create(cli.PkgCreateArgs(directory="package", output=None))
-        cli._run_pkg_install(cli.PkgInstallArgs("source", editable=False, shadow=False))
-        cli._run_pkg_uninstall(cli.PkgUninstallArgs("alpha"))
-        cli._run_pkg_list(cli.PkgListArgs())
-        cli._run_pkg_info(cli.PkgInfoArgs("alpha"))
-
-        assert len(calls) == 5
-
-    def test_pkg_lifecycle_options_map_to_typed_arguments(
-        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        create_calls = make_recorder(monkeypatch, cli, "_run_pkg_create")
-        install_calls = make_recorder(monkeypatch, cli, "_run_pkg_install")
-        uninstall_calls = make_recorder(monkeypatch, cli, "_run_pkg_uninstall")
-        list_calls = make_recorder(monkeypatch, cli, "_run_pkg_list")
-        info_calls = make_recorder(monkeypatch, cli, "_run_pkg_info")
+        create_calls = make_recorder(monkeypatch, create_command, "run")
+        install_calls = make_recorder(monkeypatch, install_command, "run")
+        uninstall_calls = make_recorder(monkeypatch, uninstall_command, "run")
+        list_calls = make_recorder(monkeypatch, list_command, "run")
+        info_calls = make_recorder(monkeypatch, info_command, "run")
 
         assert invoke(runner, ["pkg", "create", "package", "-o", "out.agmpkg"]).exit_code == 0
         assert invoke(runner, ["pkg", "install", "--editable", "--shadow", "source"]).exit_code == 0
@@ -141,7 +123,9 @@ class TestPackageCheck:
     def test_pkg_check_passes_optional_directory_to_command(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        calls = make_recorder(monkeypatch, cli, "_run_pkg_check")
+        import agm.commands.pkg.check as check_command
+
+        calls = make_recorder(monkeypatch, check_command, "run")
 
         result = invoke(runner, ["pkg", "check", "package-dir"])
 
@@ -152,7 +136,9 @@ class TestPackageCheck:
     def test_pkg_check_uses_current_directory_without_argument(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        calls = make_recorder(monkeypatch, cli, "_run_pkg_check")
+        import agm.commands.pkg.check as check_command
+
+        calls = make_recorder(monkeypatch, check_command, "run")
 
         result = invoke(runner, ["pkg", "check"])
 

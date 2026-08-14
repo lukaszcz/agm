@@ -958,11 +958,11 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
 def _registered_command_overview() -> tuple[tuple[str, str], ...]:
     """Read registered command names for help without loading package manifests."""
     try:
-        from agm.cli_dispatch import load_activation_index
+        from agm.cli_dispatch import load_command_index
         from agm.config.context import current_config_context
 
         context = current_config_context()
-        index = load_activation_index(home=context.home, proj_dir=context.proj_dir, cwd=context.cwd)
+        index = load_command_index(home=context.home, proj_dir=context.proj_dir, cwd=context.cwd)
     except (OSError, SystemExit, ValueError):
         return ()
     return tuple(

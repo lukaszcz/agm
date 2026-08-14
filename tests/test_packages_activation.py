@@ -874,6 +874,37 @@ def test_final_root_selection_uses_development_package_for_active_requirements(
     )
 
 
+def test_std_is_never_selected_as_a_package_root(tmp_path: Path) -> None:
+    """``std`` is mounted only through the stdlib seam, never as a package root."""
+    home = tmp_path / "agm-home"
+    _write_package(home, "std", "1.0.0")
+    development_root = tmp_path / "development"
+    (development_root / "std").mkdir(parents=True)
+    (development_root / "package.toml").write_text(
+        '[package]\nname = "std"\nversion = "2.0.0"\n', encoding="utf-8"
+    )
+    from agm.packages.manifest import load_manifest
+    from agm.packages.model import PackageInfo
+
+    development = PackageInfo(development_root, load_manifest(development_root / "package.toml"))
+    env = {"AGM_HOME": str(home)}
+    write_activation_index(
+        ActivationIndex(packages={"std": ActivePackage(semver.Version.parse("1.0.0"))}),
+        home=home,
+        env=env,
+    )
+
+    packages = select_package_roots(
+        home=home,
+        proj_dir=None,
+        cwd=tmp_path,
+        development_packages=(development,),
+        env=env,
+    )
+
+    assert packages == ()
+
+
 def test_effective_exec_roots_mounts_indexed_packages_under_agm_home(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

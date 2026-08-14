@@ -79,9 +79,10 @@ def test_registered_command_resolution_tries_shorter_paths_after_a_longer_miss()
 
 
 def test_command_index_loader_reads_the_active_index(tmp_path: Path) -> None:
-    from agm.cli_dispatch import load_activation_index
+    from agm.cli_dispatch import load_command_index
 
-    assert load_activation_index(home=tmp_path / "home").commands == {}
+    home = tmp_path / "home"
+    assert load_command_index(home=home, proj_dir=None, cwd=tmp_path).commands == {}
 
 
 def test_command_index_loader_uses_project_selected_package_commands(
@@ -109,7 +110,7 @@ def test_command_index_loader_uses_project_selected_package_commands(
     )
     monkeypatch.setattr(activation, "_selected_active_packages", lambda **_: (pinned_package,))
 
-    index = dispatch.load_activation_index(home=home, proj_dir=tmp_path, cwd=tmp_path)
+    index = dispatch.load_command_index(home=home, proj_dir=tmp_path, cwd=tmp_path)
 
     assert index.commands == {"new": CommandRegistration("tools", "tools/new::main")}
 
@@ -126,7 +127,7 @@ def test_registered_command_dispatches_trailing_arguments(
         commands={"tools lint": CommandRegistration("tools", "tools/lint::main")},
     )
     monkeypatch.setattr(dispatch, "current_config_context", lambda: context)
-    monkeypatch.setattr(dispatch, "load_activation_index", lambda **_: index)
+    monkeypatch.setattr(dispatch, "load_command_index", lambda **_: index)
     calls: list[tuple[str, list[str], str, str]] = []
     monkeypatch.setattr(
         exec_program,
@@ -154,7 +155,7 @@ def test_registered_command_treats_only_standalone_dry_run_as_global(
         commands={"tools lint": CommandRegistration("tools", "tools/lint::main")}
     )
     monkeypatch.setattr(dispatch, "current_config_context", lambda: context)
-    monkeypatch.setattr(dispatch, "load_activation_index", lambda **_: index)
+    monkeypatch.setattr(dispatch, "load_command_index", lambda **_: index)
     calls: list[tuple[list[str], bool]] = []
     monkeypatch.setattr(
         exec_program,
@@ -183,7 +184,7 @@ def test_registered_command_help_does_not_dispatch_program(
         }
     )
     monkeypatch.setattr(dispatch, "current_config_context", lambda: context)
-    monkeypatch.setattr(dispatch, "load_activation_index", lambda **_: index)
+    monkeypatch.setattr(dispatch, "load_command_index", lambda **_: index)
     params = (
         ParamDeclInfo("level", TextType(), False, 1, 1),
         ParamDeclInfo("verbose", BoolType(), False, 2, 1),
@@ -224,7 +225,7 @@ def test_help_command_renders_registered_command_help(
         }
     )
     monkeypatch.setattr(dispatch, "current_config_context", lambda: context)
-    monkeypatch.setattr(dispatch, "load_activation_index", lambda **_: index)
+    monkeypatch.setattr(dispatch, "load_command_index", lambda **_: index)
 
     result = invoke(CliRunner(), ["help", "tools", "lint"])
 
@@ -273,7 +274,7 @@ def test_registered_command_help_returns_false_when_index_is_unavailable(
     )
     monkeypatch.setattr(
         dispatch,
-        "load_activation_index",
+        "load_command_index",
         lambda **_: (_ for _ in ()).throw(ValueError("bad index")),
     )
 
@@ -316,7 +317,7 @@ def test_unknown_command_without_registered_entry_keeps_click_error(
         "current_config_context",
         lambda: ConfigContext(home=tmp_path / "home", proj_dir=None, cwd=tmp_path),
     )
-    monkeypatch.setattr(dispatch, "load_activation_index", lambda **_: ActivationIndex())
+    monkeypatch.setattr(dispatch, "load_command_index", lambda **_: ActivationIndex())
 
     result = invoke(CliRunner(), ["not-a-command"])
 
@@ -329,7 +330,7 @@ def test_builtin_commands_do_not_load_the_package_index(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(
         dispatch,
-        "load_activation_index",
+        "load_command_index",
         lambda **_: (_ for _ in ()).throw(AssertionError("builtins must not read the index")),
     )
 
@@ -376,7 +377,7 @@ def test_help_overview_degrades_when_the_command_index_is_unavailable(
 
     monkeypatch.setattr(
         dispatch,
-        "load_activation_index",
+        "load_command_index",
         lambda **_: (_ for _ in ()).throw(ValueError("bad index")),
     )
 
@@ -860,7 +861,7 @@ def test_malformed_activation_index_fallback_is_a_clean_cli_error(
     )
     monkeypatch.setattr(
         dispatch,
-        "load_activation_index",
+        "load_command_index",
         lambda **_: (_ for _ in ()).throw(PackageActivationError("malformed index")),
     )
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, cast
+from typing import TYPE_CHECKING, cast
 
 import click
 from click.shell_completion import CompletionItem
@@ -14,45 +14,25 @@ from typer.core import TyperCommand, TyperGroup, TyperOption
 from agm.config.context import current_config_context
 from agm.core import dry_run
 
-
-class CommandRegistrationLike(Protocol):
-    """The command-index fields needed by the CLI fallback."""
-
-    @property
-    def package(self) -> str: ...
-
-    @property
-    def program(self) -> str: ...
-
-    @property
-    def description(self) -> str | None: ...
-
-
-class CommandIndexLike(Protocol):
-    """The active package index view needed by the CLI fallback."""
-
-    @property
-    def commands(self) -> Mapping[str, CommandRegistrationLike]: ...
+if TYPE_CHECKING:
+    from agm.agl.runtime.types import ParamDeclInfo
+    from agm.packages.activation import ActivationIndex, CommandRegistration
 
 
 @dataclass(frozen=True, slots=True)
 class RegisteredCommandResolution:
     """An indexed command registration and the arguments left after its path."""
 
-    registration: CommandRegistrationLike
+    registration: CommandRegistration
     trailing_args: tuple[str, ...]
 
 
-def load_activation_index(
-    *, home: Path, proj_dir: Path | None = None, cwd: Path | None = None
-) -> CommandIndexLike:
-    """Load the command index for the global or project-selected packages."""
+def load_command_index(*, home: Path, proj_dir: Path | None, cwd: Path) -> ActivationIndex:
+    """Load the command index for the project-selected packages."""
 
     from agm.packages import activation
 
-    if cwd is not None:
-        return activation.effective_command_index(home=home, proj_dir=proj_dir, cwd=cwd)
-    return activation.load_activation_index(home=home)
+    return activation.effective_command_index(home=home, proj_dir=proj_dir, cwd=cwd)
 
 
 def set_dry_run(ctx: object, param: object, value: bool) -> None:
@@ -73,14 +53,23 @@ def _is_usage_error(error: Exception) -> bool:
     return isinstance(error, click.UsageError) or error.__class__.__name__ == "UsageError"
 
 
-def _path_length(item: tuple[str, CommandRegistrationLike]) -> int:
+def _path_length(item: tuple[str, CommandRegistration]) -> int:
     """Return the number of words in an indexed command path."""
 
     return len(item[0].split())
 
 
-def registered_command_help(path_name: str, registration: CommandRegistrationLike) -> str:
-    """Render help for one package-registered command."""
+def registered_command_help(
+    path_name: str,
+    registration: CommandRegistration,
+    *,
+    params: tuple[ParamDeclInfo, ...] | None = None,
+) -> str:
+    """Render help for one package-registered command.
+
+    Pass *params* when the caller has already discovered the program's
+    parameter inventory, so rendering help does not compile it again.
+    """
     description = registration.description or "Run the registered AgL program."
     lines = [
         f"agm {path_name} [--PARAM VALUE]... [--dry-run]",
@@ -91,9 +80,14 @@ def registered_command_help(path_name: str, registration: CommandRegistrationLik
         "  --dry-run  Statically check the program without executing it.",
     ]
     try:
-        from agm.commands.exec_program import registered_program_param_flags
+        if params is not None:
+            from agm.cli_support.exec_params import param_option_flags
 
-        flags = registered_program_param_flags(registration.program, registration.package)
+            flags = param_option_flags(params)
+        else:
+            from agm.commands.exec_program import registered_program_param_flags
+
+            flags = registered_program_param_flags(registration.program, registration.package)
     except (Exception, SystemExit):
         flags = ()
     if flags:
@@ -105,7 +99,7 @@ def print_registered_command_help(command_path: Sequence[str]) -> bool:
     """Print registered-command help when *command_path* names one exactly."""
     try:
         context = current_config_context()
-        index = load_activation_index(home=context.home, proj_dir=context.proj_dir, cwd=context.cwd)
+        index = load_command_index(home=context.home, proj_dir=context.proj_dir, cwd=context.cwd)
     except (OSError, ValueError, SystemExit):
         return False
     path_name = " ".join(command_path)
@@ -117,7 +111,7 @@ def print_registered_command_help(command_path: Sequence[str]) -> bool:
 
 
 def resolve_registered_command(
-    args: Sequence[str], commands: Mapping[str, CommandRegistrationLike]
+    args: Sequence[str], commands: Mapping[str, CommandRegistration]
 ) -> RegisteredCommandResolution | None:
     """Resolve the longest registered command path at the start of *args*."""
 
@@ -131,7 +125,7 @@ def resolve_registered_command(
 class RegisteredProgramCommand(TyperCommand):
     """Click command that gives all remaining arguments to one AgL program."""
 
-    def __init__(self, path_name: str, registration: CommandRegistrationLike) -> None:
+    def __init__(self, path_name: str, registration: CommandRegistration) -> None:
         context_settings: dict[str, bool | list[str]] = {
             "allow_extra_args": True,
             "ignore_unknown_options": True,
@@ -153,6 +147,7 @@ class RegisteredProgramCommand(TyperCommand):
         self._registration = registration
 
     def invoke(self, ctx: click.Context) -> None:
+        params: tuple[ParamDeclInfo, ...] | None = None
         help_requested = "--help" in ctx.args
         if not help_requested and "-h" in ctx.args:
             # This is the first point at which an unknown command has been proven
@@ -165,7 +160,10 @@ class RegisteredProgramCommand(TyperCommand):
             )
             help_requested = short_help_requested(params, ctx.args)
         if help_requested:
-            print(registered_command_help(self._path_name, self._registration), end="")
+            print(
+                registered_command_help(self._path_name, self._registration, params=params),
+                end="",
+            )
             return
         from agm.commands.exec_program import run_registered
 
@@ -213,7 +211,7 @@ class RegisteredCommandGroup(TyperGroup):
                 raise
             context = current_config_context()
             try:
-                index = load_activation_index(
+                index = load_command_index(
                     home=context.home, proj_dir=context.proj_dir, cwd=context.cwd
                 )
             except ValueError as index_error:

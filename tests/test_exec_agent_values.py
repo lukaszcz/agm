@@ -10,7 +10,7 @@ from click.testing import CliRunner
 from typer.main import get_command
 
 import agm.cli as cli
-import agm.commands.exec as exec_command
+from agm.commands import exec_program as exec_engine
 from agm.config.context import ConfigContext
 from tests._agl_helpers import write_file_program
 from tests.conftest import FakeAgentTransport
@@ -81,7 +81,7 @@ def test_exec_default_agent_precedence_is_config_then_cli_then_source(
         program, f'import std/config\n{source_write}let answer: text = ask("hello")\nprint answer\n'
     )
     monkeypatch.setattr(
-        exec_command,
+        exec_engine,
         "current_config_context",
         lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
     )

@@ -39,7 +39,7 @@ from agm.agl.syntax.nodes import (
 from agm.agl.syntax.resources import ResourceError, resolve_resource, resource_path
 from agm.agl.syntax.types import ImportMode, UnitT
 from agm.agl.syntax.visitor import walk
-from agm.command_catalog import RESERVED_COMMAND_NAMES
+from agm.command_catalog import RESERVED_COMMAND_NAMES, invalid_command_path
 from agm.core import fs
 from agm.packages.manifest import PackageManifest
 from agm.packages.model import PackageInfo
@@ -47,7 +47,6 @@ from agm.stdlib_locator import shipped_stdlib_root
 from agm.util.ident import is_identifier
 
 T = TypeVar("T")
-U = TypeVar("U")
 _ResourcePaths = dict[tuple[str, ...], BuiltinKind]
 _ResourceBindings = dict[tuple[str, ...], BuiltinKind | None]
 
@@ -62,18 +61,12 @@ def validate_package(
     """Validate a package's module tree, commands, imports, resources, and references."""
 
     dependencies = tuple(dependency_packages)
-    modules = _validate_package_structure(package, dependency_packages=dependencies)
+    modules = validate_package_structure(package, dependency_packages=dependencies)
     _validate_imports(package, modules, dependency_packages=dependencies)
 
 
-def validate_package_structure(package: PackageInfo) -> None:
-    """Validate package structure before its dependency closure is available."""
-
-    _validate_package_structure(package, dependency_packages=())
-
-
-def _validate_package_structure(
-    package: PackageInfo, *, dependency_packages: tuple[PackageInfo, ...]
+def validate_package_structure(
+    package: PackageInfo, *, dependency_packages: tuple[PackageInfo, ...] = ()
 ) -> dict[ModuleId, Path]:
     """Run validation stages that do not require loading the import graph."""
 
@@ -90,7 +83,6 @@ def _validate_package_structure(
         fs.read_text,
         exists=lambda relative: _resource_exists(package.root, relative),
         export_modules=dependency_modules,
-        read_export_module=fs.read_text,
     )
     return modules
 
@@ -170,7 +162,6 @@ def validate_archive_package(
         read_module,
         exists=lambda relative: _archive_resource_exists(relative, path_set),
         export_modules=dependency_modules,
-        read_export_module=fs.read_text,
     )
     available_dependencies = {dependency.manifest.name for dependency in dependencies}
     if all(name == "std" or name in available_dependencies for name in manifest.dependencies):
@@ -240,8 +231,7 @@ def _validate_resources(
     read_module: Callable[[T], str],
     *,
     exists: Callable[[str], bool],
-    export_modules: Mapping[ModuleId, U],
-    read_export_module: Callable[[U], str],
+    export_modules: Mapping[ModuleId, Path],
 ) -> None:
     """Verify that every literal resource target in package modules is present."""
     programs: dict[ModuleId, tuple[T, Program]] = {}
@@ -254,7 +244,7 @@ def _validate_resources(
     dependency_programs: dict[ModuleId, Program] = {}
     for module_id, dependency_path in export_modules.items():
         try:
-            dependency_programs[module_id] = parse_program(read_export_module(dependency_path))
+            dependency_programs[module_id] = parse_program(fs.read_text(dependency_path))
         except (AglSyntaxError, OSError, UnicodeDecodeError) as exc:
             raise DisciplineError(
                 f"cannot parse dependency module {dependency_path}: {exc}"
@@ -588,13 +578,9 @@ def _validate_commands(
 
 
 def _validate_command_path(command_path: str) -> None:
-    words = command_path.split()
-    if not words or " ".join(words) != command_path:
-        raise DisciplineError(f"command path {command_path!r} must be space-separated words")
-    if words[0] in RESERVED_COMMAND_NAMES:
-        raise DisciplineError(f"command path {command_path!r} begins with a reserved AGM command")
-    if any(word.startswith("-") for word in words):
-        raise DisciplineError(f"command path {command_path!r} contains an option")
+    invalid = invalid_command_path(command_path)
+    if invalid is not None:
+        raise DisciplineError(f"command path {command_path!r} {invalid}")
 
 
 def _validate_program_reference(

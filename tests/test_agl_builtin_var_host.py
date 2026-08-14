@@ -20,6 +20,7 @@ import pytest
 from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.cli_support.args import ExecArgs
 from agm.commands import exec as exec_command
+from agm.commands import exec_program as exec_engine
 from agm.config.context import ConfigContext
 from tests._agl_helpers import write_file_program
 from tests.conftest import FakeAgentTransport
@@ -107,7 +108,7 @@ class TestCommandEngineSeeding:
             "agm.cli_support.exec_roots.resolve_stdlib_root", lambda *, home: stdlib_root
         )
         monkeypatch.setattr(
-            exec_command,
+            exec_engine,
             "current_config_context",
             lambda: ConfigContext(home=tmp_path, proj_dir=None, cwd=tmp_path),
         )
@@ -129,7 +130,7 @@ class TestCommandEngineSeeding:
             "agm.cli_support.exec_roots.resolve_stdlib_root", lambda *, home: stdlib_root
         )
         monkeypatch.setattr(
-            exec_command,
+            exec_engine,
             "current_config_context",
             lambda: ConfigContext(home=tmp_path, proj_dir=None, cwd=tmp_path),
         )

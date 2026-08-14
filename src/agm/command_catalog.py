@@ -41,3 +41,21 @@ COMMAND_ALIASES: tuple[str, ...] = ("wsp", "wt")
 
 # Every name reserved by AGM's built-in command surface.
 RESERVED_COMMAND_NAMES: frozenset[str] = frozenset(COMMAND_NAMES) | frozenset(COMMAND_ALIASES)
+
+
+def invalid_command_path(command_path: str) -> str | None:
+    """Describe why *command_path* cannot name a registered command, or ``None``.
+
+    Package commands extend the same command tree as AGM's own commands, so a
+    registered path must be plain space-separated words that neither start at
+    a reserved name nor look like an option.
+    """
+
+    words = command_path.split()
+    if not words or " ".join(words) != command_path:
+        return "must be space-separated words"
+    if words[0] in RESERVED_COMMAND_NAMES:
+        return "begins with a reserved AGM command"
+    if any(word.startswith("-") for word in words):
+        return "contains an option"
+    return None

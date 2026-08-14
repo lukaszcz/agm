@@ -169,10 +169,6 @@ def assemble_roots(
     # mounted, so ownership policy and resolver see the same selection.
     mounted_packages: list[PackageInfo] = []
     for package in package_roots:
-        # ``std`` is mounted only through ``stdlib_root``. This keeps an
-        # override or source-checkout fallback exclusive of active packages.
-        if package.manifest.name == "std":
-            continue
         package_root = _canonicalize(package.root)
         if package_root.exists():
             canonical_roots.add(package_root)

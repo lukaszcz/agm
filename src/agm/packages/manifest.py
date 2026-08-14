@@ -14,6 +14,8 @@ from agm.agl.keywords import KEYWORDS
 from agm.agl.modules.ids import ModuleId
 from agm.core.toml import TomlDict, load_toml_file, toml_dict
 
+_SHA256_PREFIXES = ("sha256=", "sha256:", "sha256-")
+
 
 class ManifestError(ValueError):
     """Raised when a package manifest does not satisfy the package schema."""
@@ -151,18 +153,28 @@ def _dependency_table(name: str, raw: TomlDict) -> DependencySpec:
         raise ManifestError(f"URL dependency {name!r} requires a hash")
     if content_hash is not None and url is None:
         raise ManifestError(f"dependency {name!r} hash requires a URL source")
-    if content_hash is not None and not _is_sha256_hash(content_hash):
+    if content_hash is not None and parse_sha256(content_hash) is None:
         raise ManifestError(f"URL dependency {name!r} hash must be a SHA-256 digest")
     return DependencySpec(version, path=path, url=url, hash=content_hash)
 
 
-def _is_sha256_hash(value: str) -> bool:
-    prefixes = ("sha256=", "sha256:", "sha256-")
-    prefix = next((candidate for candidate in prefixes if value.startswith(candidate)), None)
+def parse_sha256(value: str) -> str | None:
+    """Return the lowercase digest of a SHA-256 declaration, or ``None``.
+
+    All three conventional separators are accepted so a digest copied from a
+    checksum file, a URL fragment, or a subresource-integrity string is
+    usable unchanged.
+    """
+
+    prefix = next(
+        (candidate for candidate in _SHA256_PREFIXES if value.startswith(candidate)), None
+    )
     if prefix is None:
-        return False
+        return None
     digest = value[len(prefix) :]
-    return len(digest) == 64 and all(character in "0123456789abcdefABCDEF" for character in digest)
+    if len(digest) != 64 or any(character not in "0123456789abcdefABCDEF" for character in digest):
+        return None
+    return digest.lower()
 
 
 def _commands(raw: TomlDict) -> dict[str, CommandSpec]:

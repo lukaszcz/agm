@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import hmac
+import io
 import stat
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -66,7 +68,12 @@ def read_record(root: Path) -> tuple[RecordEntry, ...]:
 def serialize_record(entries: tuple[RecordEntry, ...]) -> str:
     """Serialize record entries in the canonical installed-package format."""
 
-    return "".join(_serialize_entry(entry) for entry in entries)
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    for entry in entries:
+        row: list[str] = [entry.path, f"{_DIGEST_PREFIX}{entry.digest}"]
+        writer.writerow(row)
+    return buffer.getvalue()
 
 
 def content_hash(entries: tuple[RecordEntry, ...]) -> str:
@@ -78,15 +85,20 @@ def content_hash(entries: tuple[RecordEntry, ...]) -> str:
 def parse_record(content: str) -> tuple[RecordEntry, ...]:
     """Parse and validate package ``RECORD`` content without reading a tree."""
 
+    try:
+        rows = list(csv.reader(io.StringIO(content), strict=True))
+    except csv.Error as exc:
+        raise RecordError(f"package record has a malformed entry: {exc}") from exc
     entries: list[RecordEntry] = []
     seen: set[str] = set()
-    for line in content.splitlines():
-        path_value, digest_value = _parse_row(line)
-        path = _record_path(path_value)
+    for row in rows:
+        if len(row) != 2:
+            raise RecordError("package record entries must have a path and SHA-256 digest")
+        path = _record_path(row[0])
         if path in seen:
             raise RecordError(f"package record repeats path {path!r}")
         seen.add(path)
-        entries.append(RecordEntry(path, _record_digest(digest_value)))
+        entries.append(RecordEntry(path, _record_digest(row[1])))
     return tuple(entries)
 
 
@@ -104,62 +116,6 @@ def verify_record(root: Path) -> tuple[RecordEntry, ...]:
     return entries
 
 
-def _serialize_entry(entry: RecordEntry) -> str:
-    """Serialize one two-column CSV record without depending on untyped CSV I/O."""
-
-    return f"{_escape_field(entry.path)},{_DIGEST_PREFIX}{entry.digest}\n"
-
-
-def _escape_field(value: str) -> str:
-    """Escape a CSV field used for one relative path."""
-
-    if any(character in value for character in ',"'):
-        return '"' + value.replace('"', '""') + '"'
-    return value
-
-
-def _parse_row(line: str) -> tuple[str, str]:
-    """Parse one two-column CSV row, rejecting malformed or extra columns."""
-
-    fields: list[str] = []
-    index = 0
-    while index < len(line):
-        field, index = _parse_field(line, index)
-        fields.append(field)
-        if index == len(line):
-            break
-        index += 1
-    if len(fields) != 2:
-        raise RecordError("package record entries must have a path and SHA-256 digest")
-    return fields[0], fields[1]
-
-
-def _parse_field(line: str, index: int) -> tuple[str, int]:
-    """Parse one CSV field and return it with its following delimiter index."""
-
-    if line[index] != '"':
-        end = line.find(",", index)
-        return (line[index:] if end == -1 else line[index:end], len(line) if end == -1 else end)
-
-    index += 1
-    value: list[str] = []
-    while index < len(line):
-        character = line[index]
-        if character != '"':
-            value.append(character)
-            index += 1
-            continue
-        index += 1
-        if index < len(line) and line[index] == '"':
-            value.append('"')
-            index += 1
-            continue
-        if index != len(line) and line[index] != ",":
-            raise RecordError("package record has malformed quoted path")
-        return "".join(value), index
-    raise RecordError("package record has unterminated quoted path")
-
-
 def _package_files(root: Path) -> tuple[Path, ...]:
     """Return sorted package files, excluding the root ``RECORD`` itself."""
 
@@ -170,10 +126,10 @@ def _package_files(root: Path) -> tuple[Path, ...]:
         ]
     except OSError as exc:
         raise RecordError(f"cannot traverse package tree {root}: {exc}") from exc
-    return tuple(sorted(files, key=_posix_relative_path(root)))
+    return tuple(sorted(files, key=posix_relative_path(root)))
 
 
-def _posix_relative_path(root: Path) -> Callable[[Path], str]:
+def posix_relative_path(root: Path) -> Callable[[Path], str]:
     """Return the portable ordering key for paths below *root*."""
 
     def key(path: Path) -> str:
@@ -203,14 +159,11 @@ def _validate_package_tree(root: Path) -> None:
 def _sha256(path: Path) -> str:
     """Return the lowercase SHA-256 hexadecimal digest of *path*."""
 
-    digest = hashlib.sha256()
     try:
         with path.open("rb") as file:
-            while chunk := file.read(1024 * 1024):
-                digest.update(chunk)
+            return hashlib.file_digest(file, "sha256").hexdigest()
     except OSError as exc:
         raise RecordError(f"cannot hash package file {path}: {exc}") from exc
-    return digest.hexdigest()
 
 
 def _record_path(value: str) -> str:

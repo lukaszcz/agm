@@ -6,6 +6,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 from agm.core import dry_run
 from agm.core.path import display_path
@@ -104,6 +105,25 @@ def write_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
     path.write_text(content, encoding=encoding)
 
 
+def write_text_atomic(path: Path, content: str, *, encoding: str = "utf-8") -> None:
+    """Write text through a temporary sibling that replaces *path* in one step.
+
+    Concurrent readers therefore observe either the previous file or the
+    complete new content, never a partially written file.
+    """
+
+    if dry_run.enabled():
+        write_text(path, content)
+        return
+    temporary_path = path.parent / f".{path.name}.{uuid4().hex}.tmp"
+    try:
+        with temporary_path.open("x", encoding=encoding) as temporary:
+            temporary.write(content)
+        temporary_path.replace(path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
 def chmod(path: Path, mode: int) -> None:
     """Change file mode unless dry-run is enabled."""
 
@@ -121,15 +141,6 @@ def append_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
         return
     with path.open("a", encoding=encoding) as handle:
         handle.write(content)
-
-
-def copy_file(source: Path, destination: Path) -> None:
-    """Copy a file with its metadata unless dry-run is enabled."""
-
-    if dry_run.enabled():
-        dry_run.print_operation("copy-file", f"{display_path(source)} {display_path(destination)}")
-        return
-    shutil.copy2(source, destination)
 
 
 def copy_tree(source: Path, destination: Path, *, dirs_exist_ok: bool = False) -> None:

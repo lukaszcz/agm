@@ -299,22 +299,12 @@ def discover_params_from_source(
 
                 program, next_id = wrap_inline_program(parsed.program, next_node_id=parsed.next_id)
                 parsed = replace(parsed, program=program, next_id=next_id)
-            prepared = (
-                runtime.prepare_parsed_entry(parsed, default_stdlib=default_stdlib)
-                if roots is None
-                else runtime.prepare_parsed_entry(
-                    parsed, roots=roots, default_stdlib=default_stdlib
-                )
+            prepared = runtime.prepare_parsed_entry(
+                parsed, roots=roots, default_stdlib=default_stdlib
             )
         else:
-            prepared = (
-                runtime.prepare_program(
-                    source, entry_path=entry_path, default_stdlib=default_stdlib
-                )
-                if roots is None
-                else runtime.prepare_program(
-                    source, entry_path=entry_path, roots=roots, default_stdlib=default_stdlib
-                )
+            prepared = runtime.prepare_program(
+                source, entry_path=entry_path, roots=roots, default_stdlib=default_stdlib
             )
         return runtime.discover_params(prepared).params
     except (Exception, SystemExit):

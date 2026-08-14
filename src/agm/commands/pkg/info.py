@@ -4,19 +4,16 @@ from __future__ import annotations
 
 import sys
 
-import semver
-
 from agm.cli_support.args import PkgInfoArgs
 from agm.config.context import current_config_context
 from agm.packages.activation import (
     PackageActivationError,
     active_package_version,
     load_activation_index,
+    resolve_active_package,
 )
-from agm.packages.manifest import ManifestError, load_manifest
-from agm.packages.model import canonical_package_identity
-from agm.packages.record import RecordError, verify_record
-from agm.packages.store import StorePathError, canonical_package_store_path
+from agm.packages.manifest import ManifestError
+from agm.packages.model import unmet_std_requirement
 from agm.version import AGM_VERSION
 
 
@@ -29,26 +26,11 @@ def run(args: PkgInfoArgs) -> None:
         active = index.packages.get(args.name)
         if active is None:
             raise PackageActivationError(f"package {args.name!r} is not installed")
-        if active.editable is not None:
-            root = active.editable
-        else:
-            root = canonical_package_store_path(args.name, active.version, home=context.home)
-            verify_record(root)
-        manifest = load_manifest(root / "package.toml")
-        if manifest.name != args.name:
-            raise PackageActivationError(
-                f"active package {args.name!r} has a manifest for {manifest.name!r}"
-            )
-        if active.editable is None and canonical_package_identity(
-            manifest.name, manifest.version
-        ) != canonical_package_identity(args.name, active.version):
-            raise PackageActivationError(
-                f"active package {args.name!r} has a mismatched installed version"
-            )
+        manifest = resolve_active_package(args.name, active, home=context.home).manifest
         active_versions = {
             name: active_package_version(selected) for name, selected in index.packages.items()
         }
-    except (ManifestError, PackageActivationError, RecordError, StorePathError) as exc:
+    except (ManifestError, PackageActivationError) as exc:
         print(f"pkg info: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
     print(f"{manifest.name} {manifest.version}")
@@ -70,7 +52,7 @@ def run(args: PkgInfoArgs) -> None:
     for name, dependency in sorted(manifest.dependencies.items()):
         if name == "std":
             status = f"running AGM {AGM_VERSION}"
-            if semver.Version.parse(AGM_VERSION) < dependency.version:
+            if unmet_std_requirement(dependency) is not None:
                 status += " (unsatisfied)"
         else:
             selected = index.packages.get(name)

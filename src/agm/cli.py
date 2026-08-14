@@ -1507,46 +1507,6 @@ def _run_dep_remove(*, command_path: list[str], target: str | None, all: bool) -
     )
 
 
-def _run_pkg_check(args: PkgCheckArgs) -> None:
-    """Load package validation only when its command is invoked."""
-
-    import agm.commands.pkg.check as pkg_check_command
-
-    pkg_check_command.run(args)
-
-
-def _run_pkg_create(args: PkgCreateArgs) -> None:
-    """Load archive creation only when its command is invoked."""
-
-    import agm.commands.pkg.create as pkg_create_command
-
-    pkg_create_command.run(args)
-
-
-def _run_pkg_install(args: PkgInstallArgs) -> None:
-    import agm.commands.pkg.install as pkg_install_command
-
-    pkg_install_command.run(args)
-
-
-def _run_pkg_uninstall(args: PkgUninstallArgs) -> None:
-    import agm.commands.pkg.uninstall as pkg_uninstall_command
-
-    pkg_uninstall_command.run(args)
-
-
-def _run_pkg_list(args: PkgListArgs) -> None:
-    import agm.commands.pkg.list as pkg_list_command
-
-    pkg_list_command.run(args)
-
-
-def _run_pkg_info(args: PkgInfoArgs) -> None:
-    import agm.commands.pkg.info as pkg_info_command
-
-    pkg_info_command.run(args)
-
-
 @pkg_app.callback(invoke_without_command=True)
 def pkg_callback(
     ctx: typer.Context,
@@ -1572,7 +1532,9 @@ def pkg_check(
 ) -> None:
     del _help
     del _dry_run
-    _run_pkg_check(PkgCheckArgs(directory=directory))
+    import agm.commands.pkg.check as pkg_check_command
+
+    pkg_check_command.run(PkgCheckArgs(directory=directory))
 
 
 @pkg_app.command(name="create")
@@ -1588,7 +1550,9 @@ def pkg_create(
 ) -> None:
     del _help
     del _dry_run
-    _run_pkg_create(PkgCreateArgs(directory=directory, output=output))
+    import agm.commands.pkg.create as pkg_create_command
+
+    pkg_create_command.run(PkgCreateArgs(directory=directory, output=output))
 
 
 @pkg_app.command(name="install")
@@ -1603,7 +1567,9 @@ def pkg_install(
 ) -> None:
     del _help
     del _dry_run
-    _run_pkg_install(
+    import agm.commands.pkg.install as pkg_install_command
+
+    pkg_install_command.run(
         PkgInstallArgs(
             source=_require_value(source, command_path=["pkg", "install"], name="source"),
             editable=editable,
@@ -1620,7 +1586,9 @@ def pkg_uninstall(
 ) -> None:
     del _help
     del _dry_run
-    _run_pkg_uninstall(
+    import agm.commands.pkg.uninstall as pkg_uninstall_command
+
+    pkg_uninstall_command.run(
         PkgUninstallArgs(name=_require_value(name, command_path=["pkg", "uninstall"], name="name"))
     )
 
@@ -1632,7 +1600,9 @@ def pkg_list(
 ) -> None:
     del _help
     del _dry_run
-    _run_pkg_list(PkgListArgs())
+    import agm.commands.pkg.list as pkg_list_command
+
+    pkg_list_command.run(PkgListArgs())
 
 
 @pkg_app.command(name="info")
@@ -1643,7 +1613,11 @@ def pkg_info(
 ) -> None:
     del _help
     del _dry_run
-    _run_pkg_info(PkgInfoArgs(name=_require_value(name, command_path=["pkg", "info"], name="name")))
+    import agm.commands.pkg.info as pkg_info_command
+
+    pkg_info_command.run(
+        PkgInfoArgs(name=_require_value(name, command_path=["pkg", "info"], name="name"))
+    )
 
 
 @sync_app.callback(invoke_without_command=True)

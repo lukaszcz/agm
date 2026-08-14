@@ -29,6 +29,7 @@ from agm.agl.runtime.contract import OutputContract
 from agm.agl.semantics.types import Type
 from agm.agl.semantics.values import TextValue
 from agm.agl.typecheck import AglTypeError
+from agm.commands import exec_program as exec_engine
 from tests._agl_helpers import prepare_inline_command, run_inline_command, type_table_for
 
 if TYPE_CHECKING:
@@ -412,7 +413,6 @@ class TestUncaughtAgentCallErrorSpan:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """End to end: ``agm exec`` prints ``at line N`` to stderr (exit 2)."""
-        import agm.commands.exec as exec_mod
         from agm.agl.runtime.agents import AgentCallHostError
         from agm.cli_support.args import ExecArgs
         from agm.commands.exec import run as exec_run
@@ -427,7 +427,7 @@ class TestUncaughtAgentCallErrorSpan:
                 cause="spawn_failure", exit_code=None, stderr_tail="boom", elapsed=0.0
             )
 
-        monkeypatch.setattr(exec_mod, "value_driven_agent_factory", lambda **_: failing_agent)
+        monkeypatch.setattr(exec_engine, "value_driven_agent_factory", lambda **_: failing_agent)
         args = ExecArgs(
             file=str(agl_file),
             param_tokens=[],

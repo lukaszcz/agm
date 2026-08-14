@@ -57,11 +57,12 @@ from __future__ import annotations
 import sys
 from dataclasses import replace
 from pathlib import Path
-from typing import NoReturn, Protocol, TypeVar
+from typing import NoReturn, TypeVar
 
-from agm.agl import PipelineDriver as _PipelineDriver
+from agm.agl import PipelineDriver
 from agm.agl.diagnostics import format_diagnostic
-from agm.agl.runtime.agents import AgentFn, value_driven_agent_factory
+from agm.agl.modules.ids import ModuleId
+from agm.agl.runtime.agents import value_driven_agent_factory
 from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.agl.runtime.types import ParamDeclInfo
 from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES
@@ -75,7 +76,7 @@ from agm.cli_support.exec_params import (
 )
 from agm.cli_support.exec_roots import effective_exec_roots
 from agm.config.context import ConfigContext, current_config_context
-from agm.config.general import ExecConfig, exec_config_from_merged, load_general_config
+from agm.config.general import exec_config_from_merged, load_general_config
 from agm.config.module_roots import StdlibResolutionError
 from agm.config.qualified_keys import (
     RESERVED_CONFIG_SECTION_NAMES,
@@ -91,35 +92,11 @@ from agm.core.log import (
     resolve_log_decision,
 )
 from agm.core.parse import parse_timeout
-from agm.core.toml import TomlDict, toml_dict
+from agm.core.toml import toml_dict
 from agm.packages.activation import load_activation_index, select_active_packages
 from agm.packages.development import discover_development_packages
 from agm.packages.model import PackageInfo, owning_package
 from agm.parser import exit_with_usage_error
-
-
-class _AgentFactory(Protocol):
-    """Build the value-driven agent dispatcher for one execution."""
-
-    def __call__(self, *, idle_timeout: float | None) -> AgentFn: ...
-
-
-class _ConfigContextLoader(Protocol):
-    """Load the command's current filesystem/configuration context."""
-
-    def __call__(self) -> ConfigContext: ...
-
-
-class _ExecConfigLoader(Protocol):
-    """Resolve exec settings from a merged configuration mapping."""
-
-    def __call__(
-        self,
-        merged: TomlDict,
-        *,
-        command_name: str | None = ...,
-        program_table: dict[str, object] | None = ...,
-    ) -> ExecConfig: ...
 
 
 def _scoped_config_key(module_segments: tuple[str, ...], public_name: str) -> QualifiedConfigKey:
@@ -172,8 +149,6 @@ def registered_program_params(
 ) -> tuple[ParamDeclInfo, ...]:
     """Discover the parameter inventory for a registered program, degrading on failure."""
     try:
-        from agm.agl.modules.ids import ModuleId
-
         module_path, separator, declaration_path = program.partition("::")
         if not separator or not declaration_path:
             return ()
@@ -205,10 +180,6 @@ def run(
     entry_module_segments: tuple[str, ...] | None = None,
     usage_command_path: str | None = None,
     usage_description: str | None = None,
-    pipeline_factory: type[_PipelineDriver] = _PipelineDriver,
-    agent_factory: _AgentFactory = value_driven_agent_factory,
-    config_context_loader: _ConfigContextLoader = current_config_context,
-    exec_config_loader: _ExecConfigLoader = exec_config_from_merged,
 ) -> None:
     """Run an AgL program selected by an exec argument container."""
     # The program source comes either from an inline ``-c/--command`` argument
@@ -226,7 +197,7 @@ def run(
         print("Error: exec requires either a FILE or -c/--command", file=sys.stderr)
         raise SystemExit(1)
 
-    ctx = config_context_loader()
+    ctx = current_config_context()
     try:
         development_packages = discover_development_packages(entry_path or ctx.cwd, home=ctx.home)
     except ValueError as exc:
@@ -247,7 +218,7 @@ def run(
 
     # Inline source remains a statement-oriented host. Its AST is wrapped before
     # scope resolution whenever it has no explicit program entry.
-    parsed = pipeline_factory.parse_entry(source, entry_path=entry_path)
+    parsed = PipelineDriver.parse_entry(source, entry_path=entry_path)
     if args.command is not None and parsed.program is not None:
         from agm.agl.parser import wrap_inline_program
 
@@ -304,7 +275,7 @@ def run(
             print(f"Error: invalid exec configuration: {exc}", file=sys.stderr)
             raise SystemExit(1) from exc
     try:
-        config = exec_config_loader(merged_config, program_table=engine_program_table)
+        config = exec_config_from_merged(merged_config, program_table=engine_program_table)
     except ValueError as exc:
         print(f"Error: invalid exec configuration: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
@@ -343,7 +314,7 @@ def run(
     else:
         resolved_timeout = config.timeout
 
-    factory = agent_factory(idle_timeout=resolved_timeout)
+    factory = value_driven_agent_factory(idle_timeout=resolved_timeout)
 
     # Resolve the CLI > config logging decision ONCE: it both drives the trace
     # file prepared below and seeds the readable ``log`` register.
@@ -407,7 +378,7 @@ def run(
         print(f"Error: invalid module roots configuration: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
-    prepared = pipeline_factory.prepare_parsed_entry(
+    prepared = PipelineDriver.prepare_parsed_entry(
         parsed,
         roots=roots,
         default_stdlib=not args.no_stdlib,
@@ -416,7 +387,7 @@ def run(
 
     # ``prepare_parsed_entry`` was already called above; the same ``PreparedProgram``
     # is reused for discovery and the run, so the source is loaded and scoped only once.
-    runtime = pipeline_factory(
+    runtime = PipelineDriver(
         default_loop_limit=resolved_loop_limit,
         default_strict_json=resolved_strict_json,
         agent_dispatcher=factory,
@@ -615,6 +586,20 @@ def run(
     raise SystemExit(2)
 
 
+def _installed_reference_parts(program: str) -> tuple[ModuleId, str]:
+    """Split an installed ``MODULE::DECLARATION`` reference, exiting on bad syntax."""
+
+    module_path, separator, declaration_path = program.partition("::")
+    if not separator or not declaration_path:
+        print(f"Error: invalid installed program reference {program!r}.", file=sys.stderr)
+        raise SystemExit(1)
+    try:
+        return ModuleId.from_path(module_path), declaration_path
+    except ValueError as exc:
+        print(f"Error: invalid installed program reference {program!r}: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+
 def run_registered(
     program: str,
     param_tokens: list[str],
@@ -636,19 +621,7 @@ def run_registered(
         print("Error: incomplete registered package command metadata.", file=sys.stderr)
         raise SystemExit(1)
 
-    module_path, separator, declaration_path = program.partition("::")
-    if not separator or not declaration_path:
-        print(f"Error: invalid installed program reference {program!r}.", file=sys.stderr)
-        raise SystemExit(1)
-
-    from agm.agl.modules.ids import ModuleId
-
-    try:
-        module_id = ModuleId.from_path(module_path)
-    except ValueError as exc:
-        print(f"Error: invalid installed program reference {program!r}: {exc}", file=sys.stderr)
-        raise SystemExit(1) from exc
-
+    module_id, declaration_path = _installed_reference_parts(program)
     context = current_config_context()
     try:
         packages = select_active_packages(
@@ -682,18 +655,7 @@ def run_registered(
             if active is None or active.editable != selected_package.root:
                 _registered_command_mismatch(command_path)
             program = command.program
-            module_path, separator, declaration_path = program.partition("::")
-            if not separator or not declaration_path:
-                print(f"Error: invalid installed program reference {program!r}.", file=sys.stderr)
-                raise SystemExit(1)
-            try:
-                module_id = ModuleId.from_path(module_path)
-            except ValueError as exc:
-                print(
-                    f"Error: invalid installed program reference {program!r}: {exc}",
-                    file=sys.stderr,
-                )
-                raise SystemExit(1) from exc
+            module_id, declaration_path = _installed_reference_parts(program)
             if module_id.segments[0] != package:
                 _registered_command_mismatch(command_path)
 

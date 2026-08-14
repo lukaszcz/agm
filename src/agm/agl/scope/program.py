@@ -123,7 +123,7 @@ class ResolvedProgram:
         Whole-program pre-pass table mapping ``(ModuleId, name)`` to the
         type declaration node (``RecordDef | EnumDef | TypeAlias``).
     ``import_sccs``
-        Loader-computed import strongly-connected components, retained in their
+        The graph's import strongly-connected components, in their
         deterministic reverse-topological order for downstream program passes.
     ``graph``
         The loaded module graph, retained so consumers that need module
@@ -134,8 +134,13 @@ class ResolvedProgram:
     entry_id: ModuleId
     all_public_funcs: dict[QName, FuncDef]
     all_public_types: dict[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias]
-    import_sccs: tuple[tuple[ModuleId, ...], ...]
     graph: ModuleGraph
+
+    @property
+    def import_sccs(self) -> tuple[tuple[ModuleId, ...], ...]:
+        """Return the loaded graph's import strongly-connected components."""
+
+        return self.graph.sccs
 
 
 # ---------------------------------------------------------------------------
@@ -667,6 +672,5 @@ def resolve_program(
         entry_id=graph.entry_id,
         all_public_funcs=all_public_funcs,
         all_public_types=all_public_types,
-        import_sccs=graph.sccs,
         graph=graph,
     )

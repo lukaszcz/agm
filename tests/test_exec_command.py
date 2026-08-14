@@ -28,6 +28,7 @@ from typer.main import get_command
 import agm.cli as cli
 import agm.commands.exec as exec_command
 from agm.cli_support.args import ExecArgs
+from agm.commands import exec_program as exec_engine
 from tests._agl_helpers import write_file_program
 
 
@@ -1225,7 +1226,7 @@ class TestExecCommandExitCodes:
             "program def demo() -> unit = print(Deploy::region)\n",
         )
         monkeypatch.setattr(
-            exec_command,
+            exec_engine,
             "current_config_context",
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
@@ -1284,7 +1285,7 @@ class TestExecCommandExitCodes:
         (home / ".agm").mkdir(parents=True)
         (home / ".agm" / "config.toml").write_text('[params]\nmsg = "legacy"\n')
         monkeypatch.setattr(
-            exec_command,
+            exec_engine,
             "current_config_context",
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
@@ -1322,7 +1323,7 @@ class TestExecCommandExitCodes:
             'param msg: text = "ok"\nprogram def demo() -> unit = print msg\n',
         )
         monkeypatch.setattr(
-            exec_command,
+            exec_engine,
             "current_config_context",
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
@@ -1336,7 +1337,6 @@ class TestExecCommandExitCodes:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """``agm exec`` dispatches the default ``Agent`` value at runtime."""
-        import agm.commands.exec as exec_mod
         from agm.agl.runtime.agents import AgentCallHostError
         from agm.cli_support.args import ExecArgs
 
@@ -1358,7 +1358,7 @@ class TestExecCommandExitCodes:
                 cause="spawn_failure", exit_code=None, stderr_tail="no runner", elapsed=0.0
             )
 
-        monkeypatch.setattr(exec_mod, "value_driven_agent_factory", lambda **_: failing_agent)
+        monkeypatch.setattr(exec_engine, "value_driven_agent_factory", lambda **_: failing_agent)
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(args)
         assert exc_info.value.code == 2
@@ -1495,7 +1495,7 @@ def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
                 default_call_depth_limit=default_call_depth_limit,
             )
 
-    monkeypatch.setattr(exec_command, "PipelineDriver", RecordingRuntime)
+    monkeypatch.setattr(exec_engine, "PipelineDriver", RecordingRuntime)
     return captured
 
 
@@ -1519,7 +1519,7 @@ class TestExecConfigWiring:
         write_file_program(agl_file, "let x = 1\nx\n")
 
         monkeypatch.setattr(
-            exec_command,
+            exec_engine,
             "current_config_context",
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
@@ -1549,7 +1549,7 @@ class TestExecConfigWiring:
         write_file_program(agl_file, "let x = 1\nx\n")
 
         monkeypatch.setattr(
-            exec_command,
+            exec_engine,
             "current_config_context",
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
@@ -1583,7 +1583,7 @@ class TestExecConfigWiring:
         write_file_program(agl_file, "let x = 1\nx\n")
 
         monkeypatch.setattr(
-            exec_command,
+            exec_engine,
             "current_config_context",
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
@@ -1616,7 +1616,7 @@ class TestExecConfigWiring:
         write_file_program(agl_file, "let x = 1\n")
 
         monkeypatch.setattr(
-            exec_command,
+            exec_engine,
             "current_config_context",
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
@@ -1671,7 +1671,7 @@ def _exec_args_with_fallback_runtime(
                 default_call_depth_limit=default_call_depth_limit,
             )
 
-    monkeypatch.setattr(exec_command, "PipelineDriver", FallbackRuntime)
+    monkeypatch.setattr(exec_engine, "PipelineDriver", FallbackRuntime)
     return _exec_args(agl_file, param_tokens=param_tokens)
 
 
@@ -1824,7 +1824,7 @@ class TestDryRunInventory:
                     default_call_depth_limit=default_call_depth_limit,
                 )
 
-        monkeypatch.setattr(exec_command, "PipelineDriver", SpyRuntime)
+        monkeypatch.setattr(exec_engine, "PipelineDriver", SpyRuntime)
 
         agl_file = tmp_path / "prog.agl"
         write_file_program(agl_file, 'ask("Hi")\n')
@@ -2325,7 +2325,7 @@ class TestExecTimeoutAndLogFileFlags:
                     program_symbol=program_symbol,
                 )
 
-        monkeypatch.setattr(exec_command, "PipelineDriver", CapturingRuntime)
+        monkeypatch.setattr(exec_engine, "PipelineDriver", CapturingRuntime)
         return captured
 
     def test_cli_timeout_flag_sets_engine_timeout(
@@ -2387,7 +2387,7 @@ class TestExecTimeoutAndLogFileFlags:
         agl_file = tmp_path / "prog.agl"
         write_file_program(agl_file, "import std/config\nprint std/config::timeout\n")
         monkeypatch.setattr(
-            exec_command,
+            exec_engine,
             "current_config_context",
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
@@ -2413,7 +2413,7 @@ class TestExecTimeoutAndLogFileFlags:
         agl_file = tmp_path / "prog.agl"
         write_file_program(agl_file, "import std/config\nprint std/config::log-file\n")
         monkeypatch.setattr(
-            exec_command,
+            exec_engine,
             "current_config_context",
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
@@ -2551,7 +2551,7 @@ class TestExecSourceConfigPrecedence:
             log_file=None,
         )
         monkeypatch.setattr(
-            exec_command, "exec_config_from_merged", lambda *_, **__: low_limit_config
+            exec_engine, "exec_config_from_merged", lambda *_, **__: low_limit_config
         )
 
         agl_file = tmp_path / "prog.agl"
@@ -2690,7 +2690,7 @@ class TestExecSourceConfigPrecedence:
             log=False,
             log_file=None,
         )
-        monkeypatch.setattr(exec_command, "exec_config_from_merged", lambda *_, **__: strict_config)
+        monkeypatch.setattr(exec_engine, "exec_config_from_merged", lambda *_, **__: strict_config)
 
         agl_file = tmp_path / "prog.agl"
         write_file_program(
@@ -2755,7 +2755,7 @@ class TestExecSourceConfigPrecedence:
             log_file=None,
         )
         monkeypatch.setattr(
-            exec_command, "exec_config_from_merged", lambda *_, **__: config_with_timeout
+            exec_engine, "exec_config_from_merged", lambda *_, **__: config_with_timeout
         )
 
         agl_file = tmp_path / "prog.agl"
@@ -2921,7 +2921,7 @@ class TestExecModuleRoots:
             proj_dir = original_ctx.proj_dir
             cwd = lib_dir
 
-        monkeypatch.setattr(exec_command, "current_config_context", lambda: FakeCtx())
+        monkeypatch.setattr(exec_engine, "current_config_context", lambda: FakeCtx())
 
         # A successful run returns normally (no SystemExit).
         exec_command.run(_exec_args_inline_no_log(entry_source))
@@ -3077,7 +3077,6 @@ class TestExecModuleRoots:
         Each scenario drives exec_command.run end-to-end with a distinct mock
         response injected via runner_backed_agent_factory, asserting each output.
         """
-        import agm.commands.exec as exec_mod
         from agm.agl.runtime.request import AgentRequest, AgentResponse
 
         (tmp_path / "greeter.agl").write_text(
@@ -3098,7 +3097,7 @@ class TestExecModuleRoots:
             def mock_agent(req: AgentRequest) -> AgentResponse:
                 return AgentResponse(content=response)
 
-            monkeypatch.setattr(exec_mod, "value_driven_agent_factory", lambda **_: mock_agent)
+            monkeypatch.setattr(exec_engine, "value_driven_agent_factory", lambda **_: mock_agent)
             exec_command.run(_exec_args_no_log(entry))
             out, _ = capsys.readouterr()
             return out
@@ -3235,7 +3234,7 @@ class TestExecCliModulePaths:
             proj_dir = original_ctx.proj_dir
             cwd = entry_dir
 
-        monkeypatch.setattr(exec_command, "current_config_context", lambda: FakeCtx())
+        monkeypatch.setattr(exec_engine, "current_config_context", lambda: FakeCtx())
 
         args = ExecArgs(
             file=None,
@@ -3265,7 +3264,7 @@ class TestEntryModuleConfig:
         (home / ".agm").mkdir(parents=True)
         (home / ".agm" / "config.toml").write_text("[foo]\nlimit = 7\n")
         monkeypatch.setattr(
-            exec_command,
+            exec_engine,
             "current_config_context",
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
@@ -3293,12 +3292,14 @@ class TestEntryModuleConfig:
         agl_file = tmp_path / "main.agl"
         write_file_program(agl_file, 'program def main() -> unit = print "unreached"\n')
 
+        monkeypatch.setattr(
+            exec_program,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
         with pytest.raises(SystemExit) as exc_info:
-            exec_program.run(
-                _exec_args_no_log(agl_file),
-                entry_module_segments=("tools", "main"),
-                config_context_loader=lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-            )
+            exec_program.run(_exec_args_no_log(agl_file), entry_module_segments=("tools", "main"))
 
         assert exc_info.value.code == 1
         assert "Error: invalid exec configuration" in capsys.readouterr().err
@@ -3313,7 +3314,7 @@ class TestEntryModuleConfig:
         (home / ".agm").mkdir(parents=True)
         (home / ".agm" / "config.toml").write_text('[workflow]\nregion = "configured"\n')
         monkeypatch.setattr(
-            exec_command,
+            exec_engine,
             "current_config_context",
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
@@ -3335,7 +3336,7 @@ class TestEntryModuleConfig:
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
         monkeypatch.setattr(
-            exec_command,
+            exec_engine,
             "current_config_context",
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
@@ -3380,7 +3381,7 @@ class TestEntryModuleConfig:
             "[workflow.first]\nmax-iters = 3\n\n[workflow.second]\nmax-iters = 1\n"
         )
         monkeypatch.setattr(
-            exec_command,
+            exec_engine,
             "current_config_context",
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
@@ -3416,7 +3417,7 @@ class TestEntryModuleConfig:
             "[workflow.main]\nstrict-json = true\nmax-iters = 2\n"
         )
         monkeypatch.setattr(
-            exec_command,
+            exec_engine,
             "current_config_context",
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
@@ -3435,7 +3436,7 @@ class TestEntryModuleConfig:
         (home / ".agm").mkdir(parents=True)
         (home / ".agm" / "config.toml").write_text('[settings]\nregion = "configured"\n')
         monkeypatch.setattr(
-            exec_command,
+            exec_engine,
             "current_config_context",
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
@@ -3467,7 +3468,7 @@ class TestEntryModuleConfig:
             '[settings]\nregion = "configured"\nzone = "secondary"\n'
         )
         monkeypatch.setattr(
-            exec_command,
+            exec_engine,
             "current_config_context",
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
@@ -3494,7 +3495,7 @@ class TestEntryModuleConfig:
             '[settings]\nregion = "short"\n\n["nested/settings"]\nregion = "exact"\n'
         )
         monkeypatch.setattr(
-            exec_command,
+            exec_engine,
             "current_config_context",
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
@@ -3627,7 +3628,7 @@ class TestSettingOverrideProvenanceWithNoStdlib:
             "[exec]\ndefault-agent = 'AgentCommand(\"echo cfg\")'\n"
         )
         monkeypatch.setattr(
-            exec_command,
+            exec_engine,
             "current_config_context",
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
@@ -3740,7 +3741,7 @@ class TestExecProgramSelection:
             def discover_params(self, *args: object, **kwargs: object):
                 return replace(super().discover_params(*args, **kwargs), programs=())
 
-        monkeypatch.setattr(exec_command, "PipelineDriver", NoProgramDiscoveryRuntime)
+        monkeypatch.setattr(exec_engine, "PipelineDriver", NoProgramDiscoveryRuntime)
         args = ExecArgs(
             file=None,
             command='print "only selected mains run"',
@@ -3833,7 +3834,7 @@ class TestExecDevelopmentPackages:
             '["alpha/main"]\nmessage = "package-qualified"\n'
         )
         monkeypatch.setattr(
-            exec_command,
+            exec_engine,
             "current_config_context",
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )

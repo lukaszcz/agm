@@ -13,6 +13,7 @@ from agm.agl.pipeline import PipelineDriver, RunResult
 from agm.agl.semantics.values import EnumValue, TextValue, Value
 from agm.cli_support.args import ExecArgs
 from agm.commands import exec as exec_command
+from agm.commands import exec_program as exec_engine
 from agm.config.context import ConfigContext
 from tests._agl_helpers import agent_value, run_inline_command
 
@@ -217,7 +218,7 @@ def test_exec_agent_source_cli_and_config_precedence(
         )
     )
     monkeypatch.setattr(
-        exec_command,
+        exec_engine,
         "current_config_context",
         lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
     )
@@ -262,7 +263,7 @@ def test_exec_runner_config_seeds_default_agent_as_agent_command(
     program = tmp_path / "program.agl"
     program.write_text(_file_program("import std/config\nprint std/config::default-agent\n"))
     monkeypatch.setattr(
-        exec_command,
+        exec_engine,
         "current_config_context",
         lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
     )
@@ -306,7 +307,7 @@ def test_exec_default_agent_beats_runner_precedence(
     program = tmp_path / "program.agl"
     program.write_text(_file_program("import std/config\nprint std/config::default-agent\n"))
     monkeypatch.setattr(
-        exec_command,
+        exec_engine,
         "current_config_context",
         lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
     )
@@ -360,7 +361,7 @@ def test_exec_rejects_invalid_agent_literal_from_config(
     program = tmp_path / "program.agl"
     program.write_text(_file_program('print "not-run"\n'))
     monkeypatch.setattr(
-        exec_command,
+        exec_engine,
         "current_config_context",
         lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
     )
@@ -415,7 +416,7 @@ def test_exec_rejects_malformed_exec_runner_before_any_module_loads(
     program = tmp_path / "program.agl"
     program.write_text(_file_program('print "not-run"\n'))
     monkeypatch.setattr(
-        exec_command,
+        exec_engine,
         "current_config_context",
         lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
     )

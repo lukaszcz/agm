@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import fcntl
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,7 +41,7 @@ from agm.packages.discipline import (
 )
 from agm.packages.fetch import FetchError, fetch_archive
 from agm.packages.manifest import DependencySpec, ManifestError, PackageManifest, load_manifest
-from agm.packages.model import PackageInfo, canonical_package_identity
+from agm.packages.model import PackageInfo, canonical_package_identity, unmet_std_requirement
 from agm.packages.record import (
     RecordEntry,
     RecordError,
@@ -51,7 +51,13 @@ from agm.packages.record import (
     verify_record,
     write_record,
 )
-from agm.packages.store import canonical_package_store_path, package_store_path, store_root
+from agm.packages.store import (
+    canonical_package_store_path,
+    iter_store_package_dirs,
+    iter_store_version_dirs,
+    package_store_path,
+    store_root,
+)
 from agm.stdlib_locator import shipped_stdlib_root
 from agm.version import AGM_VERSION
 
@@ -62,11 +68,9 @@ class PackageInstallError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class PackageInstallPlan:
-    """An installed package and its locked, prepublication activation result."""
+    """An installed package and the command shadows its activation produced."""
 
     package: PackageInfo
-    activation_index: ActivationIndex
-    transient_packages: Mapping[str, PackageInfo]
     command_shadows: tuple[CommandShadow, ...] = ()
 
 
@@ -120,9 +124,12 @@ class _InstallState:
     env: Mapping[str, str] | None
     index: ActivationIndex
     installing: set[Path] = field(default_factory=set)
+    resolved: set[Path] = field(default_factory=set)
     created: list[Path] = field(default_factory=list)
     transient_packages: dict[str, PackageInfo] = field(default_factory=dict)
     resource_packages: dict[str, PackageInfo] = field(default_factory=dict)
+    installed: tuple[PackageInfo, ...] | None = None
+    retained_registration_order: int | None = None
 
 
 def install_directory(
@@ -159,22 +166,32 @@ def install_directory_with_plan(
 ) -> PackageInstallPlan:
     """Install a directory package and return its resulting activation plan."""
 
+    return _install_with_plan(
+        lambda state: _install_directory(source, state=state, editable=editable, shadow=shadow),
+        home=home,
+        env=env,
+        shadow=shadow,
+    )
+
+
+def _install_with_plan(
+    install: Callable[[_InstallState], PackageInfo],
+    *,
+    home: Path,
+    env: Mapping[str, str] | None,
+    shadow: bool,
+) -> PackageInstallPlan:
+    """Run one locked install transaction, rolling back trees it created on failure."""
+
     with _package_operation_lock(home=home, env=env):
         state = _InstallState(home=home, env=env, index=_load_install_index(home=home, env=env))
         try:
-            package = _install_directory(source, state=state, editable=editable, shadow=shadow)
-            state.index, command_shadows = _commit_install_activation(
-                state, package, report_shadows=shadow
-            )
+            package = install(state)
+            command_shadows = _commit_install_activation(state, package, report_shadows=shadow)
         except PackageInstallError:
             _rollback_created_trees(state)
             raise
-        return PackageInstallPlan(
-            package,
-            state.index,
-            dict(state.transient_packages),
-            command_shadows,
-        )
+        return PackageInstallPlan(package, command_shadows)
 
 
 def refresh_managed_stdlib(
@@ -268,22 +285,12 @@ def install_archive_with_plan(
 ) -> PackageInstallPlan:
     """Install a portable package archive and return its resulting activation plan."""
 
-    with _package_operation_lock(home=home, env=env):
-        state = _InstallState(home=home, env=env, index=_load_install_index(home=home, env=env))
-        try:
-            package = _install_archive(archive, state=state, shadow=shadow)
-            state.index, command_shadows = _commit_install_activation(
-                state, package, report_shadows=shadow
-            )
-        except PackageInstallError:
-            _rollback_created_trees(state)
-            raise
-        return PackageInstallPlan(
-            package,
-            state.index,
-            dict(state.transient_packages),
-            command_shadows,
-        )
+    return _install_with_plan(
+        lambda state: _install_archive(archive, state=state, shadow=shadow),
+        home=home,
+        env=env,
+        shadow=shadow,
+    )
 
 
 def uninstall_package(name: str, *, home: Path, env: Mapping[str, str] | None = None) -> None:
@@ -378,20 +385,9 @@ def installed_packages(
 ) -> tuple[PackageInfo, ...]:
     """Return all installed immutable package versions, sorted by identity."""
 
-    root = store_root(home=home, env=env)
-    if not root.is_dir():
-        return ()
     packages: list[PackageInfo] = []
-    for name_dir in sorted(root.iterdir()):
-        if not name_dir.is_dir() or name_dir.is_symlink():
-            continue
-        for version_dir in sorted(name_dir.iterdir()):
-            if (
-                not version_dir.is_dir()
-                or version_dir.is_symlink()
-                or version_dir.name.startswith(".")
-            ):
-                continue
+    for name_dir in iter_store_package_dirs(home=home, env=env):
+        for version_dir in iter_store_version_dirs(name_dir):
             try:
                 package = PackageInfo(version_dir, load_manifest(version_dir / "package.toml"))
             except ManifestError as exc:
@@ -542,7 +538,7 @@ def _install_directory(
                     dependency_packages=dependency_packages,
                 )
                 staging.replace(destination)
-                state.created.append(destination)
+                _record_created_tree(state, destination)
                 staging = None
             except (
                 DisciplineError,
@@ -627,7 +623,7 @@ def _install_archive(archive: Path, *, state: _InstallState, shadow: bool) -> Pa
             if not destination_exists:
                 fs.mkdir(destination.parent, parents=True, exist_ok=True)
                 staging.replace(destination)
-                state.created.append(destination)
+                _record_created_tree(state, destination)
             installed = PackageInfo(destination, package.manifest)
             state.resource_packages[installed.manifest.name] = installed
         except PackageInstallError:
@@ -659,22 +655,45 @@ def _validate_minimum_agm(manifest: PackageManifest) -> None:
     requirement = manifest.dependencies.get("std")
     if requirement is None:
         return
-    if requirement.version > semver.Version.parse(AGM_VERSION):
-        raise PackageInstallError(
-            f"package {manifest.name!r} requires AGM at least {requirement.version} via std, "
-            f"but running AGM is {AGM_VERSION}"
-        )
+    unmet = unmet_std_requirement(requirement)
+    if unmet is not None:
+        raise PackageInstallError(f"package {manifest.name!r} {unmet}")
+
+
+def _transaction_installed_packages(state: _InstallState) -> tuple[PackageInfo, ...]:
+    """Return the store contents, scanned once per transaction.
+
+    Only this transaction publishes trees while it holds the store lock, so
+    the scan is reused until it does.
+    """
+
+    if state.installed is None:
+        state.installed = installed_packages(home=state.home, env=state.env)
+    return state.installed
+
+
+def _record_created_tree(state: _InstallState, destination: Path) -> None:
+    """Track a published tree for rollback and invalidate the cached store scan."""
+
+    state.created.append(destination)
+    state.installed = None
 
 
 def _resolve_dependencies(package: PackageInfo, state: _InstallState) -> None:
+    # Resolving a package is idempotent within a transaction, so a shared
+    # dependency reached again through another path needs no second traversal.
+    # Without this a diamond-shaped graph would be walked exponentially.
     root = package.root.resolve()
     if root in state.installing:
         raise PackageInstallError(f"cyclic package dependency at {root}")
+    if root in state.resolved:
+        return
     state.installing.add(root)
     try:
         _resolve_dependency_requirements(package, state)
     finally:
         state.installing.remove(root)
+    state.resolved.add(root)
 
 
 def _resolve_dependency_requirements(package: PackageInfo, state: _InstallState) -> None:
@@ -749,7 +768,7 @@ def _activate_package(
             env=state.env,
             transient_packages=state.transient_packages,
         )
-        registration_order = _next_registration_order(state.index, home=state.home, env=state.env)
+        registration_order = _next_registration_order(state)
     except PackageActivationError as exc:
         raise PackageInstallError(f"cannot register package commands: {exc}") from exc
     packages = dict(state.index.packages)
@@ -764,34 +783,21 @@ def _activate_package(
     state.transient_packages[package.manifest.name] = package
 
 
-def _installed_satisfying(
-    name: str, requirement: DependencySpec, state: _InstallState
+def select_satisfying(
+    candidates: Sequence[PackageInfo], active: ActivePackage | None
 ) -> PackageInfo | None:
-    candidates = [
-        (package, True)
-        for package in installed_packages(home=state.home, env=state.env)
-        if package.manifest.name == name and package.manifest.version >= requirement.version
-    ]
-    if dry_run.enabled():
-        candidates.extend(
-            (package, False)
-            for package in state.transient_packages.values()
-            if package.manifest.name == name and package.manifest.version >= requirement.version
-        )
+    """Return the greatest satisfying candidate, preferring the active build on a tie.
+
+    Versions that compare equal can still differ in build metadata, so an
+    exact match for the current selection wins over an equivalent sibling.
+    This is the shared MVS choice made by installation and by dependency
+    validation.
+    """
+
     if not candidates:
-        active = state.index.packages.get(name)
-        if active is None or active.editable is None:
-            return None
-        try:
-            selected = PackageInfo(active.editable, load_manifest(active.editable / "package.toml"))
-        except ManifestError as exc:
-            raise PackageInstallError(
-                f"cannot load active editable package {name!r}: {exc}"
-            ) from exc
-        return selected if selected.manifest.version >= requirement.version else None
-    selected, verify_selected = candidates[0]
-    active = state.index.packages.get(name)
-    for candidate, verify_candidate in candidates[1:]:
+        return None
+    selected = candidates[0]
+    for candidate in candidates[1:]:
         if candidate.manifest.version > selected.manifest.version or (
             candidate.manifest.version == selected.manifest.version
             and active is not None
@@ -799,8 +805,37 @@ def _installed_satisfying(
             and str(candidate.manifest.version) == str(active.version)
         ):
             selected = candidate
-            verify_selected = verify_candidate
-    if verify_selected:
+    return selected
+
+
+def _installed_satisfying(
+    name: str, requirement: DependencySpec, state: _InstallState
+) -> PackageInfo | None:
+    def satisfies(package: PackageInfo) -> bool:
+        return package.manifest.name == name and package.manifest.version >= requirement.version
+
+    stored = [package for package in _transaction_installed_packages(state) if satisfies(package)]
+    # A dry run never publishes, so planned installs stand in for store trees.
+    planned = (
+        [package for package in state.transient_packages.values() if satisfies(package)]
+        if dry_run.enabled()
+        else []
+    )
+    active = state.index.packages.get(name)
+    selected = select_satisfying([*stored, *planned], active)
+    if selected is None:
+        if active is None or active.editable is None:
+            return None
+        try:
+            editable = PackageInfo(active.editable, load_manifest(active.editable / "package.toml"))
+        except ManifestError as exc:
+            raise PackageInstallError(
+                f"cannot load active editable package {name!r}: {exc}"
+            ) from exc
+        return editable if editable.manifest.version >= requirement.version else None
+    # Planned trees were validated when they were planned; only a tree read
+    # back from the store needs its record checked again.
+    if not any(selected is package for package in planned):
         try:
             verify_record(selected.root)
         except RecordError as exc:
@@ -883,27 +918,34 @@ def _load_install_index(*, home: Path, env: Mapping[str, str] | None) -> Activat
         raise PackageInstallError(f"cannot load package activation: {exc}") from exc
 
 
-def _next_registration_order(
-    index: ActivationIndex, *, home: Path, env: Mapping[str, str] | None
-) -> int:
-    """Allocate after active and retained immutable registration provenance."""
+def _next_registration_order(state: _InstallState) -> int:
+    """Allocate after active and retained immutable registration provenance.
 
-    highest = max((package.registration_order for package in index.packages.values()), default=0)
-    for package in installed_packages(home=home, env=env):
-        provenance = load_package_provenance(
-            package.manifest.name,
-            package.manifest.version,
-            home=home,
-            env=env,
-        )
-        if provenance is not None:
-            highest = max(highest, provenance.registration_order)
-    return highest + 1
+    Sidecars are only rewritten when the transaction publishes, so the
+    retained high-water mark is read once and reused for every activation.
+    """
+
+    if state.retained_registration_order is None:
+        retained = 0
+        for package in _transaction_installed_packages(state):
+            provenance = load_package_provenance(
+                package.manifest.name,
+                package.manifest.version,
+                home=state.home,
+                env=state.env,
+            )
+            if provenance is not None:
+                retained = max(retained, provenance.registration_order)
+        state.retained_registration_order = retained
+    active = max(
+        (package.registration_order for package in state.index.packages.values()), default=0
+    )
+    return max(active, state.retained_registration_order) + 1
 
 
 def _commit_install_activation(
     state: _InstallState, package: PackageInfo, *, report_shadows: bool
-) -> tuple[ActivationIndex, tuple[CommandShadow, ...]]:
+) -> tuple[CommandShadow, ...]:
     """Compute install diagnostics from one locked plan, then publish that plan."""
 
     transient_packages = state.transient_packages if dry_run.enabled() else None
@@ -925,7 +967,7 @@ def _commit_install_activation(
             else ()
         )
         _publish_activation(reconciled, home=state.home, env=state.env)
-        return reconciled, command_shadows
+        return command_shadows
     except PackageActivationError as exc:
         raise PackageInstallError(f"cannot write package activation: {exc}") from exc
 

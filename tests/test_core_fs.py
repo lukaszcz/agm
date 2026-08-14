@@ -1,8 +1,7 @@
-"""Behavior tests for dry-run-aware filesystem copy primitives."""
+"""Behavior tests for dry-run-aware filesystem copy and write primitives."""
 
 from __future__ import annotations
 
-import stat
 from collections.abc import Callable, Generator
 from pathlib import Path
 
@@ -20,17 +19,37 @@ def reset_dry_run() -> Generator[None, None, None]:
     dry_run.set_enabled(previous)
 
 
-def test_copy_file_copies_content_and_metadata(tmp_path: Path) -> None:
-    source = tmp_path / "source.txt"
-    destination = tmp_path / "nested" / "destination.txt"
-    source.write_text("package contents\n", encoding="utf-8")
-    source.chmod(0o640)
-    destination.parent.mkdir()
+def test_write_text_atomic_replaces_existing_content(tmp_path: Path) -> None:
+    path = tmp_path / "index.toml"
+    path.write_text("previous\n", encoding="utf-8")
 
-    fs.copy_file(source, destination)
+    fs.write_text_atomic(path, "current\n")
 
-    assert destination.read_text(encoding="utf-8") == "package contents\n"
-    assert stat.S_IMODE(destination.stat().st_mode) == 0o640
+    assert path.read_text(encoding="utf-8") == "current\n"
+    assert [child.name for child in tmp_path.iterdir()] == ["index.toml"]
+
+
+def test_write_text_atomic_leaves_no_temporary_file_when_the_write_fails(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "missing-parent" / "index.toml"
+
+    with pytest.raises(OSError):
+        fs.write_text_atomic(path, "current\n")
+
+    assert not path.exists()
+
+
+def test_write_text_atomic_logs_and_does_not_write_when_dry_run_is_enabled(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "index.toml"
+    dry_run.set_enabled(True)
+
+    fs.write_text_atomic(path, "current\n")
+
+    assert not path.exists()
+    assert capsys.readouterr().out == f"dry-run: agm write-file {path}\n"
 
 
 def test_copy_tree_copies_a_complete_tree(tmp_path: Path) -> None:
@@ -106,7 +125,6 @@ def test_copy_tree_rejects_a_symlink_destination_ancestor_before_writing(tmp_pat
 
 
 _COPY_CASES: list[tuple[Callable[[Path, Path], None], str, str, str]] = [
-    (fs.copy_file, "source.txt", "destination.txt", "copy-file"),
     (fs.copy_tree, "source", "destination", "copy-tree"),
 ]
 

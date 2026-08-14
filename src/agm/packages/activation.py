@@ -5,27 +5,27 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
-from uuid import uuid4
 
 import semver
 from tomlkit.exceptions import TOMLKitError
 
 from agm.agl.modules.ids import ModuleId
-from agm.command_catalog import RESERVED_COMMAND_NAMES
+from agm.command_catalog import invalid_command_path
 from agm.config.general import load_merged_config
-from agm.core import dry_run
-from agm.core.fs import mkdir, write_text
+from agm.core.fs import mkdir, write_text_atomic
 from agm.core.toml import TomlDict, load_toml_file, toml_dict
 from agm.packages.manifest import ManifestError, PackageManifest, load_manifest
-from agm.packages.model import PackageInfo, canonical_package_identity
+from agm.packages.model import PackageInfo, canonical_package_identity, unmet_std_requirement
 from agm.packages.record import RecordError, verify_record
 from agm.packages.store import (
     canonical_package_provenance_path,
     canonical_package_store_path,
+    iter_store_package_dirs,
+    iter_store_version_dirs,
     store_root,
 )
-from agm.version import AGM_VERSION
 
 
 class PackageActivationError(ValueError):
@@ -147,16 +147,7 @@ def write_activation_index(
     content = "\n".join(lines)
     try:
         mkdir(path.parent, parents=True, exist_ok=True)
-        if dry_run.enabled():
-            write_text(path, content)
-            return path
-        temporary_path = path.parent / f".{path.name}.{uuid4().hex}.tmp"
-        try:
-            with temporary_path.open("x", encoding="utf-8") as temporary:
-                temporary.write(content)
-            temporary_path.replace(path)
-        finally:
-            temporary_path.unlink(missing_ok=True)
+        write_text_atomic(path, content)
     except OSError as exc:
         raise PackageActivationError(
             f"cannot write package activation index {path}: {exc}"
@@ -215,16 +206,7 @@ def write_package_provenance(
     )
     try:
         mkdir(path.parent, parents=True, exist_ok=True)
-        if dry_run.enabled():
-            write_text(path, content)
-            return path
-        temporary_path = path.parent / f".{path.name}.{uuid4().hex}.tmp"
-        try:
-            with temporary_path.open("x", encoding="utf-8") as temporary:
-                temporary.write(content)
-            temporary_path.replace(path)
-        finally:
-            temporary_path.unlink(missing_ok=True)
+        write_text_atomic(path, content)
     except OSError as exc:
         raise PackageActivationError(f"cannot write package provenance {path}: {exc}") from exc
     return path
@@ -266,22 +248,10 @@ def rebuild_activation_index(
     """
 
     previous = load_activation_index(home=home, env=env)
-    root = store_root(home=home, env=env)
-    if not root.is_dir():
-        return ActivationIndex()
-
     active: dict[str, ActivePackage] = {}
-    for name_dir in sorted(root.iterdir()):
-        if not name_dir.is_dir() or name_dir.is_symlink():
-            continue
+    for name_dir in iter_store_package_dirs(home=home, env=env):
         _validate_package_name(name_dir.name)
-        for version_dir in sorted(name_dir.iterdir()):
-            if (
-                not version_dir.is_dir()
-                or version_dir.is_symlink()
-                or version_dir.name.startswith(".")
-            ):
-                continue
+        for version_dir in iter_store_version_dirs(name_dir):
             manifest = _load_installed_manifest(version_dir)
             if canonical_package_identity(manifest.name, manifest.version) != (
                 name_dir.name,
@@ -428,20 +398,10 @@ def effective_command_index(
         pins=pins,
     )
     _validate_requirements(packages)
-    selected_roots = {package.manifest.name: package.root for package in packages}
-    indexed_roots = {
-        name: (
-            active.editable
-            if active.editable is not None
-            else canonical_package_store_path(name, active.version, home=home, env=env)
-        )
-        for name, active in index.packages.items()
-    }
-    if (
-        not pins
-        and selected_roots == indexed_roots
-        and all(active.editable is None for active in index.packages.values())
-    ):
+    # Without pins the selection is exactly the index, so the cached command
+    # registry already describes it — unless an editable package's manifest
+    # may have changed its commands since the index was written.
+    if not pins and all(active.editable is None for active in index.packages.values()):
         return _reconciled_commands(index, packages)
     selections: dict[str, ActivePackage] = {}
     provenance: dict[str, ActivePackage | PackageProvenance | None] = {}
@@ -636,11 +596,8 @@ def _reconciled_commands(
         index.packages if provenance is None else provenance,
     )
 
-    def registration_key(package: PackageInfo) -> tuple[int, str]:
-        return index.packages[package.manifest.name].registration_order, package.manifest.name
-
     commands: dict[str, CommandRegistration] = {}
-    for package in sorted(package_list, key=registration_key):
+    for package in sorted(package_list, key=partial(_command_registration_key, index)):
         for path_name, spec in sorted(package.manifest.commands.items()):
             commands[path_name] = CommandRegistration(
                 package.manifest.name,
@@ -672,10 +629,7 @@ def command_shadow_diagnostics(
     for path_name, owners in by_path.items():
         if len(owners) < 2:
             continue
-        winner = owners[0]
-        for owner in owners[1:]:
-            if _command_registration_key(index, owner) > _command_registration_key(index, winner):
-                winner = owner
+        winner = max(owners, key=partial(_command_registration_key, index))
         displaced = tuple(
             sorted(package.manifest.name for package in owners if package is not winner)
         )
@@ -864,15 +818,9 @@ def _validate_commands(index: ActivationIndex) -> None:
 def _validate_command_registration(
     path_name: str, command: CommandRegistration, packages: Mapping[str, ActivePackage]
 ) -> None:
-    words = path_name.split()
-    if not words or " ".join(words) != path_name:
-        raise PackageActivationError(f"command path {path_name!r} must be space-separated words")
-    if words[0] in RESERVED_COMMAND_NAMES:
-        raise PackageActivationError(
-            f"command path {path_name!r} begins with a reserved AGM command"
-        )
-    if any(word.startswith("-") for word in words):
-        raise PackageActivationError(f"command path {path_name!r} contains an option")
+    invalid = invalid_command_path(path_name)
+    if invalid is not None:
+        raise PackageActivationError(f"command path {path_name!r} {invalid}")
     _validate_package_name(command.package)
     if command.package not in packages:
         raise PackageActivationError(
@@ -882,6 +830,53 @@ def _validate_command_registration(
         raise PackageActivationError(f"command path {path_name!r} requires a program reference")
     if command.description is not None and not command.description:
         raise PackageActivationError(f"command path {path_name!r} has an invalid description")
+
+
+def resolve_active_package(
+    name: str,
+    active: ActivePackage,
+    *,
+    home: Path,
+    env: Mapping[str, str] | None = None,
+) -> PackageInfo:
+    """Resolve one activation selection into its verified root and manifest.
+
+    An editable selection names its own live root; an immutable one must
+    resolve inside the store and match its ``RECORD``.
+    """
+
+    if active.editable is not None:
+        root = active.editable
+    else:
+        try:
+            root = canonical_package_store_path(name, active.version, home=home, env=env)
+        except ValueError as exc:
+            raise PackageActivationError(
+                f"active package {name!r} resolves outside the package store root"
+            ) from exc
+        try:
+            verify_record(root)
+        except (OSError, RecordError) as exc:
+            raise PackageActivationError(
+                f"package integrity check failed for active package {name!r}: {exc}"
+            ) from exc
+    return _checked_active_package(name, active, root, _load_installed_manifest(root))
+
+
+def _checked_active_package(
+    name: str, active: ActivePackage, root: Path, manifest: PackageManifest
+) -> PackageInfo:
+    """Reject a resolved package whose manifest disagrees with its activation."""
+
+    if manifest.name != name:
+        raise PackageActivationError(
+            f"active package {name!r} has a manifest for {manifest.name!r}"
+        )
+    if active.editable is None and canonical_package_identity(
+        manifest.name, manifest.version
+    ) != canonical_package_identity(name, active.version):
+        raise PackageActivationError(f"active package {name!r} has a mismatched installed version")
+    return PackageInfo(root, manifest)
 
 
 def _packages_from_index(
@@ -894,37 +889,12 @@ def _packages_from_index(
     packages: list[PackageInfo] = []
     for name, active in sorted(index.packages.items()):
         transient = None if transient_packages is None else transient_packages.get(name)
-        if transient is not None:
-            manifest = transient.manifest
-            root = transient.root
+        if transient is None:
+            packages.append(resolve_active_package(name, active, home=home, env=env))
         else:
-            if active.editable is not None:
-                root = active.editable
-            else:
-                try:
-                    root = canonical_package_store_path(name, active.version, home=home, env=env)
-                except ValueError as exc:
-                    raise PackageActivationError(
-                        f"active package {name!r} resolves outside the package store root"
-                    ) from exc
-                try:
-                    verify_record(root)
-                except (OSError, RecordError) as exc:
-                    raise PackageActivationError(
-                        f"package integrity check failed for active package {name!r}: {exc}"
-                    ) from exc
-            manifest = _load_installed_manifest(root)
-        if manifest.name != name:
-            raise PackageActivationError(
-                f"active package {name!r} has a manifest for {manifest.name!r}"
+            packages.append(
+                _checked_active_package(name, active, transient.root, transient.manifest)
             )
-        if active.editable is None and canonical_package_identity(
-            manifest.name, manifest.version
-        ) != canonical_package_identity(name, active.version):
-            raise PackageActivationError(
-                f"active package {name!r} has a mismatched installed version"
-            )
-        packages.append(PackageInfo(root, manifest))
     return tuple(packages)
 
 
@@ -940,10 +910,10 @@ def _validate_requirements(packages: tuple[PackageInfo, ...]) -> None:
     for package in packages:
         for name, requirement in package.manifest.dependencies.items():
             if name == "std":
-                if requirement.version > semver.Version.parse(AGM_VERSION):
+                unmet = unmet_std_requirement(requirement)
+                if unmet is not None:
                     raise PackageActivationError(
-                        f"selected package {package.manifest.name!r} requires AGM at least "
-                        f"{requirement.version} via std, but running AGM is {AGM_VERSION}"
+                        f"selected package {package.manifest.name!r} {unmet}"
                     )
                 continue
             dependency = selected.get(name)

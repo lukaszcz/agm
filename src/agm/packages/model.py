@@ -7,7 +7,8 @@ from pathlib import Path
 
 import semver
 
-from agm.packages.manifest import PackageManifest
+from agm.packages.manifest import DependencySpec, PackageManifest
+from agm.version import AGM_VERSION
 
 PackageIdentity = tuple[str, str]
 
@@ -16,6 +17,20 @@ def canonical_package_identity(name: str, version: semver.Version) -> PackageIde
     """Return an exact canonical identity, including semantic-version build metadata."""
 
     return name, str(version)
+
+
+def unmet_std_requirement(requirement: DependencySpec) -> str | None:
+    """Describe why a ``std`` dependency exceeds the running AGM, or ``None``.
+
+    ``std`` is shipped by the AGM binary rather than stored as an installed
+    package, so a ``std`` dependency states a minimum AGM version. Callers
+    prefix the returned clause with their own subject and raise their own
+    error type.
+    """
+
+    if requirement.version <= semver.Version.parse(AGM_VERSION):
+        return None
+    return f"requires AGM at least {requirement.version} via std, but running AGM is {AGM_VERSION}"
 
 
 @dataclass(frozen=True, slots=True)

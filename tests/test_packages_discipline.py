@@ -25,7 +25,11 @@ def _package(name: str) -> PackageInfo:
 
 
 def _custom_package(
-    tmp_path: Path, *, command_path: str | None = None, program: str = "custom/main::main"
+    tmp_path: Path,
+    *,
+    command_path: str | None = None,
+    program: str = "custom/main::main",
+    dependencies: dict[str, DependencySpec] | None = None,
 ) -> PackageInfo:
     root = tmp_path / "package"
     module_root = root / "custom"
@@ -33,7 +37,12 @@ def _custom_package(
     commands = {} if command_path is None else {command_path: CommandSpec(program)}
     return PackageInfo(
         root=root,
-        manifest=PackageManifest("custom", semver.Version.parse("1.0.0"), commands=commands),
+        manifest=PackageManifest(
+            "custom",
+            semver.Version.parse("1.0.0"),
+            commands=commands,
+            dependencies=dependencies or {},
+        ),
     )
 
 
@@ -443,6 +452,27 @@ class TestPackageDiscipline:
 
         validate_package(package)
 
+    def test_accepts_resource_alias_shadowed_inside_a_nested_block(self, tmp_path: Path) -> None:
+        package = _custom_package(tmp_path)
+        (package.module_root / "main.agl").write_text(
+            "import std/core using resource as asset\n"
+            "def load(path: text) -> text = path\n"
+            "program def main() -> unit =\n"
+            "  if true =>\n"
+            "    let asset = load\n"
+            '    print (asset("not/a/resource"))\n'
+            "  else => ()\n"
+        )
+
+        validate_package(package)
+
+    def test_rejects_function_declared_with_a_resource_builtin_name(self, tmp_path: Path) -> None:
+        package = _custom_package(tmp_path)
+        (package.module_root / "main.agl").write_text("def resource(path: text) -> text = path\n")
+
+        with pytest.raises(DisciplineError):
+            validate_package(package)
+
     def test_accepts_scoped_enum_constructor_shadowing_resource_import(
         self, tmp_path: Path
     ) -> None:
@@ -469,15 +499,20 @@ class TestPackageDiscipline:
         (dependency.module_root / "assets.agl").write_text(
             "export std/core using resource as asset\n"
         )
-        consumer = _custom_package(tmp_path / "consumer")
+        consumer = _custom_package(
+            tmp_path / "consumer",
+            dependencies={"helpers": DependencySpec(semver.Version.parse("1.0.0"))},
+        )
         (consumer.module_root / "main.agl").write_text(
             'import helpers/assets using asset as load\nlet prompt = load("prompts/missing.md")\n'
         )
 
-        with pytest.raises(DisciplineError):
+        with pytest.raises(DisciplineError, match="missing.md"):
             validate_package(consumer, dependency_packages=(dependency,))
 
-    def test_rejects_unparseable_dependency_resource_exports(self, tmp_path: Path) -> None:
+    def test_rejects_unparseable_dependency_module_reached_by_an_import(
+        self, tmp_path: Path
+    ) -> None:
         dependency_root = tmp_path / "dependency"
         (dependency_root / "helpers").mkdir(parents=True)
         dependency = PackageInfo(
@@ -485,10 +520,13 @@ class TestPackageDiscipline:
             PackageManifest("helpers", semver.Version.parse("1.0.0")),
         )
         (dependency.module_root / "assets.agl").write_text("export ???\n")
-        consumer = _custom_package(tmp_path / "consumer")
-        (consumer.module_root / "main.agl").write_text("let value = 1\n")
+        consumer = _custom_package(
+            tmp_path / "consumer",
+            dependencies={"helpers": DependencySpec(semver.Version.parse("1.0.0"))},
+        )
+        (consumer.module_root / "main.agl").write_text("import helpers/assets\n")
 
-        with pytest.raises(DisciplineError, match="dependency module"):
+        with pytest.raises(DisciplineError):
             validate_package(consumer, dependency_packages=(dependency,))
 
     def test_rejects_missing_resource_through_a_scoped_alias_reexport_chain(

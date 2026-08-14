@@ -1610,7 +1610,7 @@ def test_install_rejects_changed_directory_content_for_an_existing_identity(tmp_
     home = tmp_path / "home"
     source = _package(tmp_path / "source", "alpha", "1.0.0")
     installed = install_directory(source, home=home, env={})
-    changed_source = "program def main() -> unit = ()\n// changed\n"
+    changed_source = "program def main() -> unit = ()\nlet changed = 1\n"
     (source / "alpha" / "main.agl").write_text(changed_source, encoding="utf-8")
 
     with pytest.raises(PackageInstallError, match="content"):
@@ -1782,7 +1782,7 @@ def test_install_archive_rejects_a_different_content_hash_for_an_existing_identi
     first_source = _package(tmp_path / "first-source", "alpha", "1.0.0")
     second_source = _package(tmp_path / "second-source", "alpha", "1.0.0")
     (second_source / "alpha" / "main.agl").write_text(
-        "program def main() -> unit = ()\n// different\n", encoding="utf-8"
+        "program def main() -> unit = ()\nlet different = 1\n", encoding="utf-8"
     )
     first_archive = tmp_path / "first.agmpkg"
     second_archive = tmp_path / "second.agmpkg"
@@ -1874,7 +1874,7 @@ def test_dry_run_archive_install_rejects_a_content_conflict_with_existing_tree(
     first_source = _package(tmp_path / "first-source", "alpha", "1.0.0")
     second_source = _package(tmp_path / "second-source", "alpha", "1.0.0")
     (second_source / "alpha" / "main.agl").write_text(
-        "program def main() -> unit = ()\n// different\n", encoding="utf-8"
+        "program def main() -> unit = ()\nlet different = 1\n", encoding="utf-8"
     )
     first_archive = tmp_path / "first.agmpkg"
     second_archive = tmp_path / "second.agmpkg"

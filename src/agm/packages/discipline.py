@@ -9,35 +9,14 @@ from tempfile import TemporaryDirectory
 from typing import TypeVar, cast
 
 from agm.agl.diagnostics import AglError
-from agm.agl.modules.ids import STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.loader import build_repl_graph
 from agm.agl.modules.roots import RootSet
-from agm.agl.parser import AglSyntaxError, parse_program
 from agm.agl.parser.parser import parse_program_seeded
-from agm.agl.scope import BuiltinKind
-from agm.agl.scope.reexports import ReexportCycleError, converge_reexports
-from agm.agl.syntax.nodes import (
-    Block,
-    Call,
-    EnumDef,
-    ExceptionDef,
-    ExportDecl,
-    FuncDef,
-    ImportDecl,
-    LetDecl,
-    OpenDecl,
-    ParamDecl,
-    Program,
-    RecordDef,
-    ScopeRegion,
-    VarDecl,
-    VarRef,
-    pattern_binder_candidates,
-    static_function_items,
-    static_items,
-)
+from agm.agl.scope import BuiltinKind, ModuleResolution, resolve_program
+from agm.agl.syntax.nodes import Call, ImportDecl, Program, static_function_items
 from agm.agl.syntax.resources import ResourceError, resolve_resource, resource_path
-from agm.agl.syntax.types import ImportMode, UnitT
+from agm.agl.syntax.types import UnitT
 from agm.agl.syntax.visitor import walk
 from agm.command_catalog import RESERVED_COMMAND_NAMES, invalid_command_path
 from agm.core import fs
@@ -47,8 +26,7 @@ from agm.stdlib_locator import shipped_stdlib_root
 from agm.util.ident import is_identifier
 
 T = TypeVar("T")
-_ResourcePaths = dict[tuple[str, ...], BuiltinKind]
-_ResourceBindings = dict[tuple[str, ...], BuiltinKind | None]
+_ModuleResolutions = Mapping[ModuleId, ModuleResolution]
 
 
 class DisciplineError(ValueError):
@@ -60,43 +38,39 @@ def validate_package(
 ) -> None:
     """Validate a package's module tree, commands, imports, resources, and references."""
 
-    dependencies = tuple(dependency_packages)
-    modules = validate_package_structure(package, dependency_packages=dependencies)
-    _validate_imports(package, modules, dependency_packages=dependencies)
+    modules = validate_package_structure(package)
+    resolutions = _resolve_package_modules(
+        package, modules, dependency_packages=tuple(dependency_packages)
+    )
+    _validate_command_programs(package.manifest, resolutions)
+    _validate_resources(
+        modules, resolutions, exists=lambda relative: _resource_exists(package.root, relative)
+    )
 
 
-def validate_package_structure(
-    package: PackageInfo, *, dependency_packages: tuple[PackageInfo, ...] = ()
-) -> dict[ModuleId, Path]:
-    """Run validation stages that do not require loading the import graph."""
+def validate_package_structure(package: PackageInfo) -> dict[ModuleId, Path]:
+    """Run the manifest and module-tree checks that read no module source."""
 
     _validate_package_name(package.manifest.name)
-    modules = _module_files(package)
-    dependency_modules = {
-        module_id: path
-        for dependency in dependency_packages
-        for module_id, path in _module_files(dependency).items()
-    }
-    _validate_commands(package.manifest, modules, fs.read_text)
-    _validate_resources(
-        modules,
-        fs.read_text,
-        exists=lambda relative: _resource_exists(package.root, relative),
-        export_modules=dependency_modules,
-    )
-    return modules
+    _validate_command_paths(package.manifest)
+    return _module_files(package)
 
 
-def _validate_imports(
+def _resolve_package_modules(
     package: PackageInfo,
     modules: Mapping[ModuleId, Path],
     *,
     dependency_packages: tuple[PackageInfo, ...],
-) -> None:
-    """Load every package module with runtime package-visibility rules."""
+) -> dict[ModuleId, ModuleResolution]:
+    """Load and name-resolve a package under runtime package-visibility rules.
+
+    A synthetic wildcard entry pulls the whole module tree into one graph, so
+    every module is parsed exactly once and later checks read the compiler's
+    own name resolution instead of re-deriving it.
+    """
 
     if not modules:
-        return
+        return {}
     stdlib_root = (
         package.root if package.manifest.name == "std" else shipped_stdlib_root().resolve()
     )
@@ -108,11 +82,13 @@ def _validate_imports(
     )
     entry, next_id = _package_graph_entry(package.manifest.name)
     try:
-        build_repl_graph(entry, next_id, path=None, cached={}, roots=roots)
+        graph, _next_id, _loaded = build_repl_graph(
+            entry, next_id, path=None, cached={}, roots=roots
+        )
+        resolved = resolve_program(graph)
     except (AglError, OSError, UnicodeDecodeError) as exc:
-        raise DisciplineError(
-            f"cannot load imports for package {package.manifest.name!r}: {exc}"
-        ) from exc
+        raise DisciplineError(f"cannot resolve package {package.manifest.name!r}: {exc}") from exc
+    return {module_id: resolved.modules[module_id].resolved for module_id in modules}
 
 
 def _package_graph_entry(package_name: str) -> tuple[Program, int]:
@@ -136,6 +112,7 @@ def validate_archive_package(
     """Validate archived module content against its resolved dependencies."""
 
     _validate_package_name(manifest.name)
+    _validate_command_paths(manifest)
     dependencies = tuple(dependency_packages)
     paths = tuple(archive_paths)
     module_root = manifest.name + "/"
@@ -150,31 +127,18 @@ def validate_archive_package(
         except ValueError as exc:
             raise DisciplineError(f"invalid module path {path.removesuffix('.agl')!r}") from exc
         modules[module_id] = path
-    dependency_modules = {
-        module_id: path
-        for dependency in dependencies
-        for module_id, path in _module_files(dependency).items()
-    }
-    _validate_commands(manifest, modules, read_module)
-    path_set = frozenset(paths)
-    _validate_resources(
-        modules,
-        read_module,
-        exists=lambda relative: _archive_resource_exists(relative, path_set),
-        export_modules=dependency_modules,
-    )
     available_dependencies = {dependency.manifest.name for dependency in dependencies}
     if all(name == "std" or name in available_dependencies for name in manifest.dependencies):
-        _validate_archive_imports(
+        _validate_archive_content(
             manifest,
             modules,
-            archive_paths=path_set,
+            archive_paths=frozenset(paths),
             read_module=read_module,
             dependency_packages=dependencies,
         )
 
 
-def _validate_archive_imports(
+def _validate_archive_content(
     manifest: PackageManifest,
     modules: Mapping[ModuleId, str],
     *,
@@ -182,7 +146,7 @@ def _validate_archive_imports(
     read_module: Callable[[str], str],
     dependency_packages: tuple[PackageInfo, ...],
 ) -> None:
-    """Materialize archived modules so the filesystem graph loader can validate them."""
+    """Materialize archived modules so the filesystem graph loader can resolve them."""
 
     try:
         with TemporaryDirectory(prefix="agm-package-check-") as temporary:
@@ -196,15 +160,17 @@ def _validate_archive_imports(
                 if companion_path in archive_paths:
                     module_path.with_suffix(".py").write_text("", encoding="utf-8")
                 materialized[module_id] = module_path
-            _validate_imports(
-                package,
-                materialized,
-                dependency_packages=dependency_packages,
+            resolutions = _resolve_package_modules(
+                package, materialized, dependency_packages=dependency_packages
             )
     except (OSError, UnicodeDecodeError) as exc:
-        raise DisciplineError(
-            f"cannot load imports for archive package {manifest.name!r}: {exc}"
-        ) from exc
+        raise DisciplineError(f"cannot load archive package {manifest.name!r}: {exc}") from exc
+    _validate_command_programs(manifest, resolutions)
+    _validate_resources(
+        modules,
+        resolutions,
+        exists=lambda relative: _archive_resource_exists(relative, archive_paths),
+    )
 
 
 def _archive_resource_exists(relative: str, paths: frozenset[str]) -> bool:
@@ -228,37 +194,16 @@ def _resource_exists(root: Path, relative: str) -> bool:
 
 def _validate_resources(
     modules: Mapping[ModuleId, T],
-    read_module: Callable[[T], str],
+    resolutions: _ModuleResolutions,
     *,
     exists: Callable[[str], bool],
-    export_modules: Mapping[ModuleId, Path],
 ) -> None:
     """Verify that every literal resource target in package modules is present."""
-    programs: dict[ModuleId, tuple[T, Program]] = {}
-    for module_id, module_path in modules.items():
-        try:
-            programs[module_id] = (module_path, parse_program(read_module(module_path)))
-        except (AglSyntaxError, OSError, UnicodeDecodeError) as exc:
-            raise DisciplineError(f"cannot parse package module {module_path}: {exc}") from exc
 
-    dependency_programs: dict[ModuleId, Program] = {}
-    for module_id, dependency_path in export_modules.items():
-        try:
-            dependency_programs[module_id] = parse_program(fs.read_text(dependency_path))
-        except (AglSyntaxError, OSError, UnicodeDecodeError) as exc:
-            raise DisciplineError(
-                f"cannot parse dependency module {dependency_path}: {exc}"
-            ) from exc
-    parsed_modules = {
-        **dependency_programs,
-        **{module_id: program for module_id, (_, program) in programs.items()},
-    }
-    exports = _resource_exports(parsed_modules)
-    for module_path, program in programs.values():
-        calls = _resource_calls(program, _resource_imports(program, exports))
-        for call, is_directory in calls:
+    for module_id, module_path in modules.items():
+        for call, kind in _resource_calls(resolutions[module_id]):
             try:
-                relative = resource_path(call, is_directory=is_directory)
+                relative = resource_path(call, is_directory=kind is BuiltinKind.RESOURCE_DIR)
             except ResourceError as exc:
                 raise DisciplineError(f"invalid resource call in {module_path}: {exc}") from exc
             if relative is not None and not exists(relative):
@@ -267,273 +212,19 @@ def _validate_resources(
                 )
 
 
-_RESOURCE_BUILTINS: _ResourcePaths = {
-    ("resource",): BuiltinKind.RESOURCE,
-    ("resource-dir",): BuiltinKind.RESOURCE_DIR,
-}
+def _resource_calls(resolution: ModuleResolution) -> list[tuple[Call, BuiltinKind]]:
+    """Return the calls the scope pass resolved to a resource builtin, in source order."""
 
+    calls: list[tuple[Call, BuiltinKind]] = []
 
-def _resource_exports(programs: Mapping[ModuleId, Program]) -> dict[ModuleId, _ResourcePaths]:
-    """Resolve package re-exports that preserve a standard resource builtin."""
-
-    exports: dict[ModuleId, _ResourcePaths] = {module_id: {} for module_id in programs}
-    declarations = {
-        module_id: tuple(
-            item for item in static_items(program.body.items) if isinstance(item, ExportDecl)
-        )
-        for module_id, program in programs.items()
-    }
-
-    def propagate() -> bool:
-        changed = False
-        for module_id, module_declarations in declarations.items():
-            module_exports = exports[module_id]
-            for declaration in module_declarations:
-                targets = _resource_export_targets(
-                    declaration.module_path, wildcard=declaration.wildcard, exports=exports
-                )
-                for _, target in targets:
-                    for path, kind in _select_resource_paths(declaration, target).items():
-                        if module_exports.get(path) != kind:
-                            module_exports[path] = kind
-                            changed = True
-        return changed
-
-    try:
-        converge_reexports(sum(map(len, declarations.values())), propagate)
-    except ReexportCycleError as exc:
-        raise DisciplineError(str(exc)) from exc
-    return exports
-
-
-def _resource_export_targets(
-    module_path: tuple[str, ...],
-    *,
-    wildcard: bool,
-    exports: Mapping[ModuleId, _ResourcePaths],
-) -> tuple[tuple[ModuleId, Mapping[tuple[str, ...], BuiltinKind]], ...]:
-    """Return concrete resource-bearing modules matched by an import or export."""
-    known = {**exports, STD_CORE_ID: _RESOURCE_BUILTINS}
-    if not wildcard:
-        module_id = ModuleId(module_path)
-        return ((module_id, known.get(module_id, {})),)
-    return tuple(
-        (module_id, paths)
-        for module_id, paths in known.items()
-        if module_id.segments[: len(module_path)] == module_path
-    )
-
-
-def _select_resource_paths(
-    declaration: ImportDecl | ExportDecl,
-    paths: Mapping[tuple[str, ...], BuiltinKind],
-) -> dict[tuple[str, ...], BuiltinKind]:
-    """Apply an import/export selection while retaining resource declaration identity."""
-
-    prefix = tuple(segment.name for segment in declaration.scope_path)
-    if declaration.mode is ImportMode.ALL:
-        return {(*prefix, *path): kind for path, kind in paths.items()}
-    if declaration.mode is ImportMode.HIDING:
-        hidden = {
-            (*tuple(segment.name for segment in item.scope_path), item.name)
-            for item in declaration.items
-        }
-        return {
-            (*prefix, *path): kind
-            for path, kind in paths.items()
-            if not any(path[: len(item)] == item for item in hidden)
-        }
-
-    selected: dict[tuple[str, ...], BuiltinKind] = {}
-    for item in declaration.items:
-        source = (*tuple(segment.name for segment in item.scope_path), item.name)
-        for path, kind in paths.items():
-            if path[: len(source)] != source:
-                continue
-            exposed = path if item.rename is None else (item.rename, *path[len(source) :])
-            selected[(*prefix, *exposed)] = kind
-    return selected
-
-
-def _resource_imports(
-    program: Program, exports: Mapping[ModuleId, _ResourcePaths]
-) -> _ResourceBindings:
-    """Resolve the visible paths that identify standard resource declarations."""
-
-    paths: _ResourceBindings = dict(_RESOURCE_BUILTINS)
-    for declaration in static_items(program.body.items):
-        if not isinstance(declaration, ImportDecl):
-            continue
-        targets = _resource_export_targets(
-            declaration.module_path, wildcard=declaration.wildcard, exports=exports
-        )
-        prefix = tuple(segment.name for segment in declaration.scope_path)
-        for module_id, target in targets:
-            selected = _select_resource_paths(declaration, target)
-            # A scoped import limits bare reach but leaves its module route global.
-            route_paths = {path[len(prefix) :]: kind for path, kind in selected.items()}
-            routes = (
-                ((declaration.alias,),)
-                if declaration.alias is not None
-                else tuple(module_id.segments[index:] for index in range(len(module_id.segments)))
-            )
-            for route in routes:
-                for path, kind in route_paths.items():
-                    paths[(*route, *path)] = kind
-            if declaration.is_open or declaration.mode is ImportMode.USING:
-                paths.update(selected)
-
-    _apply_resource_opens(program, paths)
-    for declaration in static_items(program.body.items):
-        if isinstance(declaration, (FuncDef, RecordDef, ExceptionDef)):
-            scope_path = tuple(segment.name for segment in declaration.scope_path)
-            paths[(*scope_path, declaration.name)] = None
-        elif isinstance(declaration, EnumDef):
-            scope_path = tuple(segment.name for segment in declaration.scope_path)
-            for variant in declaration.variants:
-                paths[(*scope_path, declaration.name, variant.name)] = None
-                if not scope_path:
-                    paths[(variant.name,)] = None
-    return paths
-
-
-def _apply_resource_opens(program: Program, paths: _ResourceBindings) -> None:
-    """Apply lexical ``open`` selections to known resource-bearing paths."""
-
-    def visit(items: tuple[object, ...], scope_path: tuple[str, ...]) -> None:
-        for item in items:
-            if isinstance(item, ScopeRegion):
-                visit(item.items, (*scope_path, item.segment.name))
-                continue
-            if not isinstance(item, OpenDecl):
-                continue
-            requested = (
-                *item.scope_ref.module_route,
-                *(segment.name for segment in item.scope_ref.scope_path),
-            )
-            candidates = (
-                *(
-                    (*scope_path[:index], *requested)
-                    for index in range(len(scope_path), -1, -1)
-                    if not item.scope_ref.module_route
-                ),
-                requested,
-            )
-            target_prefix = next(
-                (
-                    prefix
-                    for prefix in candidates
-                    if any(
-                        path[: len(prefix)] == prefix and len(path) > len(prefix) for path in paths
-                    )
-                ),
-                None,
-            )
-            if target_prefix is None:
-                continue
-            target = {
-                path[len(target_prefix) :]: kind
-                for path, kind in paths.items()
-                if path[: len(target_prefix)] == target_prefix and len(path) > len(target_prefix)
-            }
-            selected = _select_open_resource_paths(item, target)
-            paths.update({(*scope_path, *path): kind for path, kind in selected.items()})
-
-    visit(program.body.items, ())
-
-
-def _select_open_resource_paths(
-    declaration: OpenDecl, paths: _ResourceBindings
-) -> _ResourceBindings:
-    """Apply one open declaration's using/hiding selection."""
-    if declaration.mode is ImportMode.ALL:
-        return dict(paths)
-    prefixes = {
-        (*tuple(segment.name for segment in item.scope_path), item.name): item.rename
-        for item in declaration.items
-    }
-    if declaration.mode is ImportMode.HIDING:
-        return {
-            path: kind
-            for path, kind in paths.items()
-            if not any(path[: len(prefix)] == prefix for prefix in prefixes)
-        }
-    selected: _ResourceBindings = {}
-    for prefix, rename in prefixes.items():
-        for path, kind in paths.items():
-            if path[: len(prefix)] != prefix:
-                continue
-            exposed = path if rename is None else (rename, *path[len(prefix) :])
-            selected[exposed] = kind
-    return selected
-
-
-def _resource_calls(
-    program: Program, paths: Mapping[tuple[str, ...], BuiltinKind | None]
-) -> list[tuple[Call, bool]]:
-    """Return calls whose resolved declaration denotes a resource builtin."""
-
-    calls: list[tuple[Call, bool]] = []
-
-    def collect_resource_call(
-        node: object, scope_path: tuple[str, ...], shadowed: frozenset[str]
-    ) -> None:
-        if not isinstance(node, Call) or not isinstance(node.callee, VarRef):
+    def collect(node: object) -> None:
+        if not isinstance(node, Call):
             return
-        route = (
-            ()
-            if node.callee.qualifier is None
-            else tuple(
-                part
-                for segment in node.callee.qualifier.segments
-                for part in segment.name.split("/")
-            )
-        )
-        if not route and node.callee.name in shadowed:
-            return
-        # Bare imports reach every lexically nested named scope.
-        callee_paths = tuple(
-            (*route, *scope_path[:index], node.callee.name)
-            for index in range(len(scope_path), -1, -1)
-        )
-        kind = next((paths[path] for path in callee_paths if path in paths), None)
-        if kind in {BuiltinKind.RESOURCE, BuiltinKind.RESOURCE_DIR}:
-            calls.append((node, kind is BuiltinKind.RESOURCE_DIR))
+        kind = resolution.builtin_calls.get(node.node_id)
+        if kind is BuiltinKind.RESOURCE or kind is BuiltinKind.RESOURCE_DIR:
+            calls.append((node, kind))
 
-    def collect_block(
-        block: Block, scope_path: tuple[str, ...], initial_shadowed: frozenset[str]
-    ) -> None:
-        shadowed = set(initial_shadowed)
-        for item in block.items:
-            walk(
-                item,
-                lambda node: collect_resource_call(node, scope_path, frozenset(shadowed)),
-            )
-            if isinstance(item, LetDecl):
-                shadowed.update(
-                    candidate.name for candidate in pattern_binder_candidates(item.pattern)
-                )
-            elif isinstance(item, VarDecl):
-                shadowed.add(item.name)
-
-    scoped_items = (FuncDef, LetDecl, ParamDecl, VarDecl)
-    for item in static_items(program.body.items):
-        scope_path = (
-            tuple(segment.name for segment in item.scope_path)
-            if isinstance(item, scoped_items)
-            else ()
-        )
-        if isinstance(item, FuncDef) and item.body is not None:
-            shadowed = frozenset(parameter.name for parameter in item.params)
-            if isinstance(item.body, Block):
-                collect_block(item.body, scope_path, shadowed)
-            else:
-                walk(
-                    item.body,
-                    lambda node: collect_resource_call(node, scope_path, shadowed),
-                )
-        else:
-            walk(item, lambda node: collect_resource_call(node, scope_path, frozenset()))
+    walk(resolution.program, collect)
     return calls
 
 
@@ -569,25 +260,20 @@ def _module_files(package: PackageInfo) -> dict[ModuleId, Path]:
     return modules
 
 
-def _validate_commands(
-    manifest: PackageManifest, modules: Mapping[ModuleId, T], read_module: Callable[[T], str]
-) -> None:
-    for command_path, command in manifest.commands.items():
-        _validate_command_path(command_path)
-        _validate_program_reference(manifest, command.program, modules, read_module)
+def _validate_command_paths(manifest: PackageManifest) -> None:
+    for command_path in manifest.commands:
+        invalid = invalid_command_path(command_path)
+        if invalid is not None:
+            raise DisciplineError(f"command path {command_path!r} {invalid}")
 
 
-def _validate_command_path(command_path: str) -> None:
-    invalid = invalid_command_path(command_path)
-    if invalid is not None:
-        raise DisciplineError(f"command path {command_path!r} {invalid}")
+def _validate_command_programs(manifest: PackageManifest, resolutions: _ModuleResolutions) -> None:
+    for command in manifest.commands.values():
+        _validate_program_reference(manifest, command.program, resolutions)
 
 
 def _validate_program_reference(
-    manifest: PackageManifest,
-    reference: str,
-    modules: Mapping[ModuleId, T],
-    read_module: Callable[[T], str],
+    manifest: PackageManifest, reference: str, resolutions: _ModuleResolutions
 ) -> None:
     module_path, separator, declaration_path = reference.partition("::")
     if not separator or not module_path or not declaration_path:
@@ -607,17 +293,13 @@ def _validate_program_reference(
         raise DisciplineError(
             f"program reference {reference!r} is outside package {manifest.name!r}"
         )
-    source = modules.get(module_id)
-    if source is None:
+    resolution = resolutions.get(module_id)
+    if resolution is None:
         raise DisciplineError(f"program reference {reference!r} names no package module")
 
-    try:
-        program = parse_program(read_module(source))
-    except (AglSyntaxError, OSError, UnicodeDecodeError) as exc:
-        raise DisciplineError(f"cannot parse program module {source}: {exc}") from exc
     candidates = {
         tuple(segment.name for segment in function.scope_path) + (function.name,): function
-        for function in static_function_items(program.body.items)
+        for function in static_function_items(resolution.program.body.items)
         if function.is_program
     }
     function = candidates.get(declaration)

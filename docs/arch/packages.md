@@ -9,10 +9,14 @@ literal resources, and CLI commands backed by parameterless `program def` entrie
 
 ## Package Lifecycle
 
-`agm pkg check` validates a development package without modifying it. Structural checks run before
-dependency resolution; dependency-aware validation then loads the package module graph with runtime
-package visibility, rejecting unresolved modules and imports outside the declared dependency
-closure. Dependency checking retains one selected package per name across the closure, mirroring
+`agm pkg check` validates a development package without modifying it. Manifest and module-tree
+checks that read no module source run before dependency resolution; dependency-aware validation
+then loads and name-resolves the package module graph with runtime package visibility, rejecting
+unresolved modules, imports outside the declared dependency closure, command program references
+that name no valid entry, and literal resource targets that are absent. Every module is parsed
+once, by that one graph load, and resource call sites come from the scope pass's own built-in
+classification rather than a separate name-resolution rule.
+Dependency checking retains one selected package per name across the closure, mirroring
 installation's path-source and minimum-version selection for diamond dependencies.
 `agm pkg create` resolves the dependency closure, validates both the source tree and
 selected archive contents with those dependency modules, and produces a deterministic `.agmpkg`
@@ -89,9 +93,9 @@ selected manifest and module ownership before executing it.
 
 - `src/agm/packages/manifest.py` — manifest schema and distribution-manifest view.
 - `src/agm/packages/__init__.py` — lazy public package-domain façade.
-- `src/agm/packages/discipline.py` — staged module-tree and command validation,
-  dependency-aware import-graph loading, and lexical resource-alias validation across imports,
-  opens, and the resolved dependency closure.
+- `src/agm/packages/discipline.py` — source-free manifest and module-tree validation, plus the
+  single graph load and scope pass whose resolution decides command program references and which
+  call sites are resource built-ins, for both directory and archive packages.
 - `src/agm/packages/model.py` and `development.py` — package identity, ownership, and
   development-package discovery.
 - `src/agm/packages/store.py`, `record.py`, and `archive.py` — store layout, integrity records,

@@ -7756,7 +7756,11 @@ class TestPackageInstall:
         env["AGM_HOME"] = str(tmp_path / "agm-home")
         one = _write_store_test_package(tmp_path / "alpha-one", "alpha", "1.0.0")
         two = _write_store_test_package(tmp_path / "alpha-two", "alpha", "2.0.0")
-        (two / "alpha" / "main.agl").write_text("not valid AgL\n", encoding="utf-8")
+        # Name resolution is part of install-time package validation, so the
+        # version that must not be selected fails later, when it is typechecked.
+        (two / "alpha" / "main.agl").write_text(
+            'let broken: int = "text"\nprogram def main() -> unit = ()\n', encoding="utf-8"
+        )
         project = tmp_path / "project"
         config = project / "config"
         config.mkdir(parents=True)

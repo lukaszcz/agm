@@ -350,8 +350,9 @@ def test_package_validation_uses_the_resolved_resource_declaration(tmp_path: Pat
     module_root = root / "package"
     module_root.mkdir(parents=True)
     (module_root / "main.agl").write_text(
-        """def resource(path: text) -> text = path
-let local = resource("prompts/missing.md")
+        """import std/core using resource as asset
+def asset(path: text) -> text = path
+let local = asset("prompts/missing.md")
 program def main() -> unit = ()
 """,
         encoding="utf-8",

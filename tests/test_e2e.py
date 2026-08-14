@@ -458,45 +458,22 @@ def run_agm(
     cwd: str | Path | None = None,
     check: bool = True,
     input: str | None = None,
+    executable: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run an ``agm`` CLI command as a subprocess via the installed binary."""
+    """Run an ``agm`` CLI command as a subprocess via the installed binary.
+
+    Pass *executable* — see :func:`_install_agm_at_prefix` — to invoke that same
+    binary through another prefix's entry point, which is what selects the
+    install prefix AGM resolves for itself.
+    """
     return subprocess.run(
-        _agm_argv(args),
+        _agm_argv(args) if executable is None else [str(executable), *args],
         capture_output=True,
         text=True,
         env=_agm_env(env),
         cwd=cwd,
         check=check,
         input=input,
-    )
-
-
-def _run_agm_raw(
-    args: list[str],
-    *,
-    env: dict[str, str],
-    cwd: str | Path | None = None,
-    check: bool = True,
-    executable: Path | None = None,
-) -> subprocess.CompletedProcess[str]:
-    """Run the installed ``agm`` binary without prepending the venv ``bin/`` to PATH.
-
-    Used by tests that control ``agm_installation_prefix()``, which is derived
-    from the path AGM is invoked through.  Pass *executable* — see
-    :func:`_install_agm_at_prefix` — to run the real binary through another
-    prefix's entry point; only the resolved install prefix differs.
-
-    The PATH is still sanitized (via :func:`_agm_env`) so a real external agent
-    CLI on the developer's PATH can never be invoked; only the test's fake
-    ``claude`` (under tmp_path) is reachable.
-    """
-    return subprocess.run(
-        [str(_AGM_INSTALL["bin"] if executable is None else executable), *args],
-        capture_output=True,
-        text=True,
-        env=_agm_env(env),
-        cwd=cwd,
-        check=check,
     )
 
 
@@ -4513,9 +4490,7 @@ class TestLoop:
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        result = _run_agm_raw(
-            ["loop", "run", "--no-selector"], env=env, cwd=str(work), executable=agm
-        )
+        result = run_agm(["loop", "run", "--no-selector"], env=env, cwd=str(work), executable=agm)
 
         assert result.returncode == 0
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p @{prompt_file}"] * 2
@@ -4540,9 +4515,7 @@ class TestLoop:
         work = tmp_path / "work"
         work.mkdir()
 
-        result = _run_agm_raw(
-            ["loop", "run", "--no-selector"], env=env, cwd=str(work), executable=agm
-        )
+        result = run_agm(["loop", "run", "--no-selector"], env=env, cwd=str(work), executable=agm)
 
         assert result.returncode == 0
         assert "Step 1" in result.stdout
@@ -4599,7 +4572,7 @@ class TestLoop:
         work = tmp_path / "work"
         work.mkdir()
 
-        result = _run_agm_raw(
+        result = run_agm(
             ["loop", "run", "--no-selector", "--runner", "runner"],
             env=env,
             cwd=str(work),

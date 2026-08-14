@@ -1251,20 +1251,6 @@ def test_uninstall_verifies_record_then_removes_only_the_requested_version(tmp_p
     assert "alpha" not in load_activation_index(home=home, env={}).packages
 
 
-def test_uninstall_refuses_tampered_record_without_removing_files(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    installed = install_directory(
-        _package(tmp_path / "source", "alpha", "1.0.0"), home=home, env={}
-    )
-    module = installed.root / "alpha" / "main.agl"
-    module.write_text("tampered", encoding="utf-8")
-
-    with pytest.raises(PackageInstallError, match="integrity"):
-        uninstall_package("alpha", home=home, env={})
-
-    assert module.exists()
-
-
 def test_uninstall_refuses_to_leave_an_active_package_with_unsatisfied_dependencies(
     tmp_path: Path,
 ) -> None:
@@ -1617,16 +1603,6 @@ def test_install_rejects_changed_directory_content_for_an_existing_identity(tmp_
         install_directory(source, home=home, env={})
 
     assert (installed.root / "alpha" / "main.agl").read_text(encoding="utf-8") != changed_source
-
-
-def test_store_dependency_integrity_error_is_reported(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    installed = install_directory(_package(tmp_path / "bravo", "bravo", "1.0.0"), home=home, env={})
-    (installed.root / "bravo" / "main.agl").write_text("tampered", encoding="utf-8")
-    write_activation_index(ActivationIndex(), home=home, env={})
-    source = _package(tmp_path / "alpha", "alpha", "1.0.0", '\n[dependencies]\nbravo = "1"\n')
-    with pytest.raises(PackageInstallError, match="integrity"):
-        install_directory(source, home=home, env={})
 
 
 def test_install_archive_verifies_extracts_records_and_activates_it(tmp_path: Path) -> None:

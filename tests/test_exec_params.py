@@ -8,6 +8,7 @@ import pytest
 
 from agm.agl.runtime.types import ParamDeclInfo
 from agm.agl.semantics.types import ArrayType, BoolType, IntType, TextType
+from tests._package_helpers import write_installed_package
 
 
 def _make_param(
@@ -80,15 +81,25 @@ class TestSourceDiscovery:
 
         assert discover_params_from_source("param count: int =", inline_source=True) == ()
 
-    def test_invalid_installed_reference_degrades_to_no_params(self, tmp_path: Path) -> None:
+    def test_unreadable_installed_entry_degrades_to_no_params(self, tmp_path: Path) -> None:
+        """Help and completion are advisory: a resolved reference whose entry
+        file has since disappeared reports no params instead of failing."""
         from agm.cli_support.exec_params import discover_params_from_installed_reference
+        from agm.cli_support.exec_target import (
+            PackageProgramReference,
+            resolve_installed_reference,
+        )
+
+        module = write_installed_package(tmp_path, "tools")
+        target = resolve_installed_reference(
+            "tools/main::main", home=tmp_path, proj_dir=None, cwd=tmp_path
+        )
+        assert isinstance(target, PackageProgramReference)
+        module.unlink()
 
         assert (
             discover_params_from_installed_reference(
-                "tools/bad-name::main",
-                home=tmp_path / "home",
-                proj_dir=None,
-                cwd=tmp_path,
+                target, home=tmp_path, proj_dir=None, cwd=tmp_path
             )
             == ()
         )
@@ -468,6 +479,47 @@ class TestParseParamTokens:
             "<entry>::enabled": False,
             "settings::enabled": False,
         }
+
+
+# ---------------------------------------------------------------------------
+# external_param_keys
+# ---------------------------------------------------------------------------
+
+
+class TestExternalParamKeys:
+    """``external_param_keys`` is the one rule shared by CLI flag parsing
+    (``parse_param_tokens``) and qualified config-key resolution
+    (``exec_program.run``) for choosing a param's external identity."""
+
+    def test_unambiguous_param_keeps_its_short_name(self) -> None:
+        from agm.cli_support.exec_params import external_param_keys
+
+        param = _make_param("region", module_segments=("pkg", "deploy"))
+
+        assert external_param_keys((param,)) == {param: "region"}
+
+    def test_short_name_collision_uses_the_qualified_spelling(self) -> None:
+        from agm.cli_support.exec_params import external_param_keys
+
+        one = _make_param("region", module_segments=("pkg", "one"))
+        two = _make_param("region", module_segments=("pkg", "two"))
+
+        assert external_param_keys((one, two)) == {
+            one: "pkg/one::region",
+            two: "pkg/two::region",
+        }
+
+    def test_reserved_flag_collision_uses_the_qualified_spelling_even_when_unique(self) -> None:
+        """A param whose short name is a reserved built-in flag (e.g.
+        ``timeout``) is ambiguous even when it is the ONLY param with that
+        name — matching the CLI flag rule, so config-table resolution (which
+        addresses the same param by this same external key) cannot silently
+        store its value under a key the runtime never recognizes."""
+        from agm.cli_support.exec_params import external_param_keys
+
+        param = _make_param("timeout", module_segments=("pkg", "tuning"))
+
+        assert external_param_keys((param,)) == {param: "pkg/tuning::timeout"}
 
 
 # ---------------------------------------------------------------------------

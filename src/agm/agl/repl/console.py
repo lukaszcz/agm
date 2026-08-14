@@ -40,8 +40,9 @@ from prompt_toolkit.key_binding.key_processor import KeyPressEvent
 from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.output import Output
 
+from agm.agl.keywords import KEYWORDS
 from agm.agl.lexer import tokenize
-from agm.agl.lexer.tokens import KEYWORDS, RAW_TAIL_NAME
+from agm.agl.lexer.tokens import RAW_TAIL_NAME
 from agm.agl.parser import (
     has_open_raw_tail_block,
     has_unterminated_triple_quoted_string,

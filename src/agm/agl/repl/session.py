@@ -807,8 +807,7 @@ class ReplSession:
         self, params: tuple["IrParam", ...], warnings: list[Diagnostic]
     ) -> tuple[dict["SymbolId", "Value"], EntryResult | None]:
         """Validate active imported config routes and decode only new params."""
-        from agm.agl.runtime.convert import StrictJsonParseError
-        from agm.agl.runtime.params import decode_param_value
+        from agm.agl.runtime.params import decode_or_diagnose_param
 
         active_imported = (*self._active_imported_params.values(),)
         active_symbols = self._active_imported_params
@@ -825,40 +824,18 @@ class ReplSession:
         values: dict[SymbolId, Value] = {}
         for param in new_imported:
             name = param.qualified_public_name
-            if name not in configured:
-                if param.required:
-                    return {}, self._fail(
-                        [
-                            Diagnostic(
-                                message=(
-                                    f"Missing required param {name!r}: "
-                                    "provide a default expression."
-                                ),
-                                line=param.location.start_line,
-                                column=param.location.start_col,
-                            )
-                        ],
-                        warnings,
-                    )
-                continue
-            decoder = param.external_decoder
-            assert decoder is not None, "lowerer must provide an external param decoder"
-            try:
-                values[param.symbol] = decode_param_value(decoder, configured[name])
-            except (StrictJsonParseError, ValueError) as exc:
-                return {}, self._fail(
-                    [
-                        Diagnostic(
-                            message=(
-                                f"Param {name!r}: could not parse as "
-                                f"{decoder.target_type_label}: {exc}"
-                            ),
-                            line=param.location.start_line,
-                            column=param.location.start_col,
-                        )
-                    ],
-                    warnings,
-                )
+            supplied = name in configured
+            value, diagnostic = decode_or_diagnose_param(
+                param,
+                name,
+                supplied,
+                configured.get(name),
+                missing_message=f"Missing required param {name!r}: provide a default expression.",
+            )
+            if diagnostic is not None:
+                return {}, self._fail([diagnostic], warnings)
+            if value is not None:
+                values[param.symbol] = value
         # Prompt-local params are intentionally default-only; config values
         # apply exclusively to newly linked imported params.
         for param in params:

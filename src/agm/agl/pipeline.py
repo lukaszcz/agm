@@ -960,37 +960,33 @@ class PipelineDriver:
                 warnings=all_warnings,
             )
 
+        entry_qualifier = _entry_param_module_qualifier(prepared)
+
         infos_by_module: dict[ModuleId, tuple[ParamDeclInfo, ...]] = {}
+        program_infos: list[ProgramDeclInfo] = []
         for module_id, checked_module in checked.modules.items():
             module_infos: list[ParamDeclInfo] = []
             module_segments = module_id.segments if not module_id.is_entry else ("<entry>",)
             for item in static_items(checked_module.resolved.program.body.items):
-                if not isinstance(item, ParamDecl):
-                    continue
-                param_type = checked_module.type_env.get_binding_type(item.node_id)
-                assert param_type is not None, (
-                    f"Param {item.name!r} has no recorded binding type; checker invariant violated."
-                )
-                module_infos.append(
-                    ParamDeclInfo(
-                        name=scoped_public_name(item.scope_path, item.name),
-                        type=param_type,
-                        has_default=item.default is not None,
-                        line=item.span.start_line,
-                        col=item.span.start_col,
-                        module_segments=module_segments,
-                        is_entry=module_id.is_entry,
-                        entry_qualifier=(
-                            _entry_param_module_qualifier(prepared) if module_id.is_entry else None
-                        ),
+                if isinstance(item, ParamDecl):
+                    param_type = checked_module.type_env.get_binding_type(item.node_id)
+                    assert param_type is not None, (
+                        f"Param {item.name!r} has no recorded binding type; "
+                        "checker invariant violated."
                     )
-                )
-            infos_by_module[module_id] = tuple(module_infos)
-
-        program_infos: list[ProgramDeclInfo] = []
-        for module_id, checked_module in checked.modules.items():
-            for item in static_items(checked_module.resolved.program.body.items):
-                if isinstance(item, FuncDef) and item.is_program:
+                    module_infos.append(
+                        ParamDeclInfo(
+                            name=scoped_public_name(item.scope_path, item.name),
+                            type=param_type,
+                            has_default=item.default is not None,
+                            line=item.span.start_line,
+                            col=item.span.start_col,
+                            module_segments=module_segments,
+                            is_entry=module_id.is_entry,
+                            entry_qualifier=entry_qualifier if module_id.is_entry else None,
+                        )
+                    )
+                elif isinstance(item, FuncDef) and item.is_program:
                     program_infos.append(
                         ProgramDeclInfo(
                             module=module_id,
@@ -999,6 +995,8 @@ class PipelineDriver:
                             node_id=item.node_id,
                         )
                     )
+            infos_by_module[module_id] = tuple(module_infos)
+
         program_infos.sort(
             key=lambda info: (
                 not info.module.is_entry,
@@ -1006,14 +1004,26 @@ class PipelineDriver:
                 info.declaration_path,
             )
         )
+
+        # Programs declared in the same module share an identical inventory
+        # (each is the reachable-subgraph param set of its declaring module),
+        # so cache by module id rather than re-walking the reachability BFS
+        # once per program def.
+        graph = prepared.resolved.graph
+        inventory_cache: dict[ModuleId, tuple[ParamDeclInfo, ...]] = {}
+
+        def cached_param_inventory(inventory_module_id: ModuleId) -> tuple[ParamDeclInfo, ...]:
+            cached = inventory_cache.get(inventory_module_id)
+            if cached is None:
+                cached = _param_inventory(inventory_module_id, graph, infos_by_module)
+                inventory_cache[inventory_module_id] = cached
+            return cached
+
         inventories = {
-            program.node_id: _param_inventory(
-                program.module, prepared.resolved.graph, infos_by_module
-            )
-            for program in program_infos
+            program.node_id: cached_param_inventory(program.module) for program in program_infos
         }
         return ParamDiscovery(
-            params=_param_inventory(ENTRY_ID, prepared.resolved.graph, infos_by_module),
+            params=cached_param_inventory(ENTRY_ID),
             checked=checked,
             diagnostics=(),
             warnings=all_warnings,

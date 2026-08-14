@@ -325,12 +325,14 @@ class TestResolveStdlibRoot:
 
         assert resolve_stdlib_root(home=home, env={}) == _REPO_ROOT / "stdlib"
 
-    def test_corrupt_active_store_stdlib_reports_a_resolution_error(self, tmp_path: Path) -> None:
+    def test_unreadable_active_store_stdlib_manifest_reports_a_resolution_error(
+        self, tmp_path: Path
+    ) -> None:
         home = tmp_path / "home"
         store_stdlib = _activate_stdlib(home, AGM_VERSION)
-        (store_stdlib / "RECORD").write_text("corrupt", encoding="utf-8")
+        (store_stdlib / "package.toml").write_text("not valid = [", encoding="utf-8")
 
-        with pytest.raises(StdlibResolutionError, match="integrity"):
+        with pytest.raises(StdlibResolutionError, match="manifest"):
             resolve_stdlib_root(home=home, env={})
 
     def test_malformed_activation_is_a_stdlib_resolution_error(self, tmp_path: Path) -> None:

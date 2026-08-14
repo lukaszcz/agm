@@ -45,7 +45,7 @@ Operators / punctuation:
 
 from __future__ import annotations
 
-from agm.agl import keywords as _keywords
+from agm.agl.keywords import KEYWORDS, KW_AS_QUESTION
 
 # ---------------------------------------------------------------------------
 # Layout tokens (synthetic; produced by INDENT/DEDENT filter)
@@ -66,55 +66,6 @@ RAW_TAIL_NAME = "RAW_TAIL_NAME"
 RAW_TAIL_START = "RAW_TAIL_START"
 RAW_FRAGMENT = "RAW_FRAGMENT"
 RAW_TAIL_END = "RAW_TAIL_END"
-
-# Reserved keyword constants and their canonical inventory are imported from
-# ``agm.agl.keywords`` and re-exported here with the rest of the token contract.
-KEYWORDS = _keywords.KEYWORDS
-KW_RECORD = _keywords.KW_RECORD
-KW_ENUM = _keywords.KW_ENUM
-KW_EXCEPTION = _keywords.KW_EXCEPTION
-KW_TYPE = _keywords.KW_TYPE
-KW_BUILTIN = _keywords.KW_BUILTIN
-KW_EXTERN = _keywords.KW_EXTERN
-KW_EXTENDS = _keywords.KW_EXTENDS
-KW_PARAM = _keywords.KW_PARAM
-KW_PROGRAM = _keywords.KW_PROGRAM
-KW_LET = _keywords.KW_LET
-KW_VAR = _keywords.KW_VAR
-KW_DEF = _keywords.KW_DEF
-KW_FN = _keywords.KW_FN
-KW_DO = _keywords.KW_DO
-KW_UNTIL = _keywords.KW_UNTIL
-KW_DONE = _keywords.KW_DONE
-KW_BREAK = _keywords.KW_BREAK
-KW_CONTINUE = _keywords.KW_CONTINUE
-KW_FOR = _keywords.KW_FOR
-KW_WHILE = _keywords.KW_WHILE
-KW_IF = _keywords.KW_IF
-KW_ELSE = _keywords.KW_ELSE
-KW_CASE = _keywords.KW_CASE
-KW_OF = _keywords.KW_OF
-KW_TRY = _keywords.KW_TRY
-KW_CATCH = _keywords.KW_CATCH
-KW_RAISE = _keywords.KW_RAISE
-KW_RETURN = _keywords.KW_RETURN
-KW_AS = _keywords.KW_AS
-KW_AS_QUESTION = _keywords.KW_AS_QUESTION
-KW_AND = _keywords.KW_AND
-KW_OR = _keywords.KW_OR
-KW_NOT = _keywords.KW_NOT
-KW_IS = _keywords.KW_IS
-KW_IN = _keywords.KW_IN
-KW_TRUE = _keywords.KW_TRUE
-KW_FALSE = _keywords.KW_FALSE
-KW_NULL = _keywords.KW_NULL
-KW_INFIXL = _keywords.KW_INFIXL
-KW_INFIXR = _keywords.KW_INFIXR
-KW_PRIO = _keywords.KW_PRIO
-KW_TO = _keywords.KW_TO
-KW_DOWNTO = _keywords.KW_DOWNTO
-KW_BY = _keywords.KW_BY
-KW_WITH = _keywords.KW_WITH
 
 # ---------------------------------------------------------------------------
 # Identifiers

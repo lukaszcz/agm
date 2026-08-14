@@ -20,6 +20,7 @@ from agm.core.toml import (
     set_toml_table_value,
     toml_dict,
 )
+from agm.packages.layout import activation_index_path
 from agm.project.layout import project_config_dir
 from agm.util.interp import interp_preserving
 
@@ -153,7 +154,7 @@ def agm_home_dir(*, home: Path, env: Mapping[str, str] | None = None) -> Path:
     install_prefix = agm_installation_prefix()
     if install_prefix is not None:
         installation_home = install_prefix / ".agm"
-        if (installation_home / "packages" / "index.toml").is_file():
+        if activation_index_path(installation_home).is_file():
             return installation_home
 
     return home / ".agm"

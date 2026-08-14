@@ -2,22 +2,34 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from pathlib import Path, PureWindowsPath
 
 import semver
 
 from agm.config.general import agm_home_dir
+from agm.packages.layout import store_root_path
+from agm.packages.manifest import DependencySpec, ManifestError, load_manifest
+from agm.packages.model import (
+    PackageInfo,
+    VersionSelection,
+    canonical_package_identity,
+    select_satisfying,
+)
 
 
 class StorePathError(ValueError):
     """Raised when a package identity cannot safely name a store directory."""
 
 
+class StoreIdentityError(ValueError):
+    """Raised when an installed package version disagrees with its store location."""
+
+
 def store_root(*, home: Path, env: Mapping[str, str] | None = None) -> Path:
     """Return the package-store root under the selected AGM home."""
 
-    return agm_home_dir(home=home, env=env) / "packages"
+    return store_root_path(agm_home_dir(home=home, env=env))
 
 
 def package_store_path(
@@ -100,6 +112,65 @@ def iter_store_version_dirs(name_dir: Path) -> Iterator[Path]:
             and not version_dir.name.startswith(".")
         ):
             yield version_dir
+
+
+def iter_installed_packages(
+    *,
+    home: Path,
+    env: Mapping[str, str] | None = None,
+    on_manifest_error: Callable[[ManifestError, Path], Exception] | None = None,
+) -> Iterator[PackageInfo]:
+    """Yield every installed package version, validated against its store identity.
+
+    Iterates store name directories, then each package's version directories,
+    loading and checking ``package.toml`` against the store's own naming.
+    ``on_manifest_error`` lets a caller translate a manifest-loading failure
+    into its own domain error, retaining the offending version directory for
+    the message; without it, ``ManifestError`` propagates unchanged. A
+    version whose manifest identity disagrees with its store location raises
+    :class:`StoreIdentityError`.
+    """
+
+    for name_dir in iter_store_package_dirs(home=home, env=env):
+        for version_dir in iter_store_version_dirs(name_dir):
+            try:
+                manifest = load_manifest(version_dir / "package.toml")
+            except ManifestError as exc:
+                if on_manifest_error is None:
+                    raise
+                raise on_manifest_error(exc, version_dir) from exc
+            if canonical_package_identity(manifest.name, manifest.version) != (
+                name_dir.name,
+                version_dir.name,
+            ):
+                raise StoreIdentityError(
+                    f"installed package at {version_dir} does not match its store identity"
+                )
+            yield PackageInfo(version_dir, manifest)
+
+
+def satisfying_from_store(
+    store_packages: Iterable[PackageInfo],
+    name: str,
+    requirement: DependencySpec,
+    active: VersionSelection | None,
+    *,
+    extra_candidates: Iterable[PackageInfo] = (),
+) -> PackageInfo | None:
+    """Select the MVS-satisfying candidate for one dependency from store packages.
+
+    Candidates are filtered from *store_packages* by name and minimum
+    version, then MVS-selected against *active* (see
+    :func:`agm.packages.model.select_satisfying`). *extra_candidates* adds
+    packages that are not in the store yet, such as a dry-run install's
+    planned trees.
+    """
+
+    def satisfies(package: PackageInfo) -> bool:
+        return package.manifest.name == name and package.manifest.version >= requirement.version
+
+    candidates = [package for package in (*store_packages, *extra_candidates) if satisfies(package)]
+    return select_satisfying(candidates, active)
 
 
 def is_package_store_root(

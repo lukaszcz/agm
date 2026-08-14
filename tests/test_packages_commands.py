@@ -300,6 +300,7 @@ def test_list_command_marks_only_the_exact_build_identity_active(
     monkeypatch.setattr(list_command, "current_config_context", lambda: context)
     monkeypatch.setattr(list_command, "load_activation_index", lambda **_: index)
     monkeypatch.setattr(list_command, "installed_packages", lambda **_: packages)
+    monkeypatch.setattr(list_command, "resolve_indexed_packages", lambda *_args, **_kwargs: ())
     monkeypatch.setattr(list_command, "reconcile_package_commands", lambda *_args, **_kwargs: index)
     monkeypatch.setattr(list_command, "command_shadow_diagnostics", lambda *_args, **_kwargs: {})
 
@@ -416,36 +417,6 @@ def test_info_command_rejects_different_build_metadata_for_immutable_package(
 
     with pytest.raises(SystemExit):
         info_command.run(PkgInfoArgs("alpha"))
-
-
-def test_info_command_rejects_tampered_immutable_metadata(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    context = _context(tmp_path)
-    version = semver.Version.parse("1.0.0")
-    root = context.home / ".agm" / "packages" / "alpha" / str(version)
-    root.mkdir(parents=True)
-    manifest_path = root / "package.toml"
-    manifest_path.write_text(
-        '[package]\nname = "alpha"\nversion = "1.0.0"\ndescription = "original"\n',
-        encoding="utf-8",
-    )
-    write_record(root)
-    manifest_path.write_text(
-        '[package]\nname = "alpha"\nversion = "1.0.0"\ndescription = "tampered"\n',
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(info_command, "current_config_context", lambda: context)
-    monkeypatch.setattr(
-        info_command,
-        "load_activation_index",
-        lambda **_: ActivationIndex({"alpha": ActivePackage(version)}),
-    )
-
-    with pytest.raises(SystemExit):
-        info_command.run(PkgInfoArgs("alpha"))
-
-    assert "tampered" not in capsys.readouterr().out
 
 
 def test_info_command_renders_metadata_and_reports_unknown_package(

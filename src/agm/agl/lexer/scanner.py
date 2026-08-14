@@ -38,6 +38,7 @@ from typing import Iterator
 from lark.lexer import Token
 
 from agm.agl.diagnostics import Diagnostic, SourceSpan
+from agm.agl.keywords import KEYWORDS
 from agm.agl.lexer.errors import LexError
 from agm.agl.lexer.tokens import (
     ARROW,
@@ -55,7 +56,6 @@ from agm.agl.lexer.tokens import (
     INT,
     INTERP_END,
     INTERP_START,
-    KEYWORDS,
     LBRACE,
     LE,
     LPAR,

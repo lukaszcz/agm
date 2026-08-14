@@ -603,7 +603,7 @@ class TestTokenConstants:
         assert DECIMAL == "DECIMAL"
 
     def test_keywords_frozenset_contains_expected(self) -> None:
-        from agm.agl.lexer.tokens import KEYWORDS
+        from agm.agl.keywords import KEYWORDS
 
         assert "let" in KEYWORDS
         assert "var" in KEYWORDS
@@ -672,32 +672,32 @@ class TestTokenConstants:
         assert EQ_EQ == "EQ_EQ"
 
     def test_all_keyword_constants(self) -> None:
-        from agm.agl.lexer import tokens
+        from agm.agl import keywords
 
-        assert tokens.KW_RECORD == "record"
-        assert tokens.KW_ENUM == "enum"
-        assert tokens.KW_TYPE == "type"
-        assert tokens.KW_PARAM == "param"
-        assert tokens.KW_LET == "let"
-        assert tokens.KW_VAR == "var"
-        assert tokens.KW_DO == "do"
-        assert tokens.KW_UNTIL == "until"
-        assert tokens.KW_IF == "if"
-        assert tokens.KW_ELSE == "else"
-        assert tokens.KW_CASE == "case"
-        assert tokens.KW_OF == "of"
-        assert tokens.KW_TRY == "try"
-        assert tokens.KW_CATCH == "catch"
-        assert tokens.KW_RAISE == "raise"
-        assert tokens.KW_AS == "as"
-        assert tokens.KW_AND == "and"
-        assert tokens.KW_OR == "or"
-        assert tokens.KW_NOT == "not"
-        assert tokens.KW_IS == "is"
-        assert tokens.KW_IN == "in"
-        assert tokens.KW_TRUE == "true"
-        assert tokens.KW_FALSE == "false"
-        assert tokens.KW_NULL == "null"
+        assert keywords.KW_RECORD == "record"
+        assert keywords.KW_ENUM == "enum"
+        assert keywords.KW_TYPE == "type"
+        assert keywords.KW_PARAM == "param"
+        assert keywords.KW_LET == "let"
+        assert keywords.KW_VAR == "var"
+        assert keywords.KW_DO == "do"
+        assert keywords.KW_UNTIL == "until"
+        assert keywords.KW_IF == "if"
+        assert keywords.KW_ELSE == "else"
+        assert keywords.KW_CASE == "case"
+        assert keywords.KW_OF == "of"
+        assert keywords.KW_TRY == "try"
+        assert keywords.KW_CATCH == "catch"
+        assert keywords.KW_RAISE == "raise"
+        assert keywords.KW_AS == "as"
+        assert keywords.KW_AND == "and"
+        assert keywords.KW_OR == "or"
+        assert keywords.KW_NOT == "not"
+        assert keywords.KW_IS == "is"
+        assert keywords.KW_IN == "in"
+        assert keywords.KW_TRUE == "true"
+        assert keywords.KW_FALSE == "false"
+        assert keywords.KW_NULL == "null"
 
 
 class TestResetExternRegistry:

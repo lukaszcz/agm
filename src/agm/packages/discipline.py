@@ -21,7 +21,7 @@ from agm.agl.syntax.visitor import walk
 from agm.command_catalog import RESERVED_COMMAND_NAMES, invalid_command_path
 from agm.core import fs
 from agm.packages.manifest import PackageManifest
-from agm.packages.model import PackageInfo
+from agm.packages.model import PackageInfo, is_std_package_name
 from agm.stdlib_locator import shipped_stdlib_root
 from agm.util.ident import is_identifier
 
@@ -72,7 +72,9 @@ def _resolve_package_modules(
     if not modules:
         return {}
     stdlib_root = (
-        package.root if package.manifest.name == "std" else shipped_stdlib_root().resolve()
+        package.root
+        if is_std_package_name(package.manifest.name)
+        else shipped_stdlib_root().resolve()
     )
     mounted_packages = (package, *dependency_packages)
     roots = RootSet(
@@ -128,7 +130,10 @@ def validate_archive_package(
             raise DisciplineError(f"invalid module path {path.removesuffix('.agl')!r}") from exc
         modules[module_id] = path
     available_dependencies = {dependency.manifest.name for dependency in dependencies}
-    if all(name == "std" or name in available_dependencies for name in manifest.dependencies):
+    if all(
+        is_std_package_name(name) or name in available_dependencies
+        for name in manifest.dependencies
+    ):
         _validate_archive_content(
             manifest,
             modules,

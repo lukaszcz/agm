@@ -2,29 +2,41 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
+from typing import cast
 
 import semver
+import tomlkit
 from tomlkit.exceptions import TOMLKitError
 
-from agm.agl.modules.ids import ModuleId
 from agm.command_catalog import invalid_command_path
-from agm.config.general import load_merged_config
+from agm.config.general import agm_home_dir, load_merged_config
 from agm.core.fs import mkdir, write_text_atomic
-from agm.core.toml import TomlDict, load_toml_file, toml_dict
-from agm.packages.manifest import ManifestError, PackageManifest, load_manifest
-from agm.packages.model import PackageInfo, canonical_package_identity, unmet_std_requirement
-from agm.packages.record import RecordError, verify_record
+from agm.core.toml import TomlDict, dumps_toml, empty_toml_doc, load_toml_file, toml_dict
+from agm.packages.layout import activation_index_path as _resolved_activation_index_path
+from agm.packages.manifest import (
+    ManifestError,
+    PackageManifest,
+    load_manifest,
+    validate_package_name,
+)
+from agm.packages.model import (
+    STD_PACKAGE_NAME,
+    PackageInfo,
+    canonical_package_identity,
+    is_std_package_name,
+    select_satisfying,
+    unmet_std_requirement,
+)
 from agm.packages.store import (
+    StoreIdentityError,
     canonical_package_provenance_path,
     canonical_package_store_path,
+    iter_installed_packages,
     iter_store_package_dirs,
-    iter_store_version_dirs,
-    store_root,
 )
 
 
@@ -95,7 +107,7 @@ class ActivationIndex:
 def activation_index_path(*, home: Path, env: Mapping[str, str] | None = None) -> Path:
     """Return the selected AGM home's package activation-index path."""
 
-    return store_root(home=home, env=env) / "index.toml"
+    return _resolved_activation_index_path(agm_home_dir(home=home, env=env))
 
 
 def load_activation_index(*, home: Path, env: Mapping[str, str] | None = None) -> ActivationIndex:
@@ -117,37 +129,35 @@ def write_activation_index(
     """Atomically write a canonical activation index and return its path."""
 
     path = activation_index_path(home=home, env=env)
-    lines: list[str] = []
+    doc = empty_toml_doc()
+
+    packages_table = tomlkit.table()
     for name, active in sorted(index.packages.items()):
         _validate_active_package(name, active)
-        lines.extend(
-            (
-                f"[packages.{name}]",
-                f"version = {_toml_string(str(active.version))}",
-            )
-        )
+        package_table = tomlkit.table()
+        package_table["version"] = str(active.version)
         if active.editable is not None:
-            lines.append(f"editable = {_toml_string(str(active.editable))}")
+            package_table["editable"] = str(active.editable)
         if active.shadow:
-            lines.append("shadow = true")
-        lines.append(f"registration-order = {active.registration_order}")
-        lines.append("")
+            package_table["shadow"] = True
+        package_table["registration-order"] = active.registration_order
+        packages_table[name] = package_table
+    doc["packages"] = packages_table
+
+    commands_table = tomlkit.table()
     for path_name, command in sorted(index.commands.items()):
         _validate_command_registration(path_name, command, index.packages)
-        lines.extend(
-            (
-                f"[commands.{_toml_string(path_name)}]",
-                f"package = {_toml_string(command.package)}",
-                f"program = {_toml_string(command.program)}",
-            )
-        )
+        command_table = tomlkit.table()
+        command_table["package"] = command.package
+        command_table["program"] = command.program
         if command.description is not None:
-            lines.append(f"description = {_toml_string(command.description)}")
-        lines.append("")
-    content = "\n".join(lines)
+            command_table["description"] = command.description
+        commands_table[path_name] = command_table
+    doc["commands"] = commands_table
+
     try:
         mkdir(path.parent, parents=True, exist_ok=True)
-        write_text_atomic(path, content)
+        write_text_atomic(path, dumps_toml(doc))
     except OSError as exc:
         raise PackageActivationError(
             f"cannot write package activation index {path}: {exc}"
@@ -196,17 +206,14 @@ def write_package_provenance(
     if active.editable is not None:
         raise PackageActivationError(f"editable package {name!r} has no store provenance")
     path = package_provenance_path(name, active.version, home=home, env=env)
-    content = "\n".join(
-        (
-            "[activation]",
-            f"registration-order = {active.registration_order}",
-            f"shadow = {'true' if active.shadow else 'false'}",
-            "",
-        )
-    )
+    doc = empty_toml_doc()
+    activation_table = tomlkit.table()
+    activation_table["registration-order"] = active.registration_order
+    activation_table["shadow"] = active.shadow
+    doc["activation"] = activation_table
     try:
         mkdir(path.parent, parents=True, exist_ok=True)
-        write_text_atomic(path, content)
+        write_text_atomic(path, dumps_toml(doc))
     except OSError as exc:
         raise PackageActivationError(f"cannot write package provenance {path}: {exc}") from exc
     return path
@@ -218,20 +225,20 @@ def validate_activation_index(
     home: Path,
     env: Mapping[str, str] | None = None,
     transient_packages: Mapping[str, PackageInfo] | None = None,
+    packages: tuple[PackageInfo, ...] | None = None,
 ) -> None:
     """Ensure every activation resolves to matching packages with satisfied requirements.
 
     ``transient_packages`` supplies validated package manifests for selections
     that an install has planned but not yet written to the immutable store.
+    ``packages`` lets a caller that already resolved and verified the active
+    package set for ``index`` reuse it instead of re-resolving it here.
     """
 
     _validate_commands(index)
     _validate_requirements(
-        _packages_from_index(
-            index,
-            home=home,
-            env=env,
-            transient_packages=transient_packages,
+        _resolved_index_packages(
+            index, packages, home=home, env=env, transient_packages=transient_packages
         )
     )
 
@@ -248,31 +255,29 @@ def rebuild_activation_index(
     """
 
     previous = load_activation_index(home=home, env=env)
-    active: dict[str, ActivePackage] = {}
     for name_dir in iter_store_package_dirs(home=home, env=env):
         _validate_package_name(name_dir.name)
-        for version_dir in iter_store_version_dirs(name_dir):
-            manifest = _load_installed_manifest(version_dir)
-            if canonical_package_identity(manifest.name, manifest.version) != (
-                name_dir.name,
-                version_dir.name,
-            ):
-                raise PackageActivationError(
-                    f"installed package at {version_dir} does not match its store identity"
-                )
-            selected = active.get(manifest.name)
-            previous_selection = previous.packages.get(manifest.name)
-            if (
-                selected is None
-                or manifest.version > selected.version
-                or (
-                    manifest.version == selected.version
-                    and previous_selection is not None
-                    and previous_selection.editable is None
-                    and str(manifest.version) == str(previous_selection.version)
-                )
-            ):
-                active[manifest.name] = ActivePackage(manifest.version)
+
+    candidates_by_name: dict[str, list[PackageInfo]] = {}
+    try:
+        for installed in iter_installed_packages(
+            home=home,
+            env=env,
+            on_manifest_error=lambda exc, version_dir: PackageActivationError(
+                f"cannot load active package at {version_dir}: {exc}"
+            ),
+        ):
+            candidates_by_name.setdefault(installed.manifest.name, []).append(installed)
+    except StoreIdentityError as exc:
+        raise PackageActivationError(str(exc)) from exc
+
+    active: dict[str, ActivePackage] = {}
+    for name, candidates in candidates_by_name.items():
+        # ``candidates`` is only ever created together with its first
+        # element, so it is always non-empty and ``select_satisfying`` always
+        # returns a winner.
+        selected = cast(PackageInfo, select_satisfying(candidates, previous.packages.get(name)))
+        active[name] = ActivePackage(selected.manifest.version)
 
     provenance = {
         name: load_package_provenance(name, package.version, home=home, env=env)
@@ -316,7 +321,7 @@ def rebuild_activation_index(
             rebuilt[name] = ActivePackage(package.version, registration_order=next_order)
             used_orders.add(next_order)
     index = ActivationIndex(packages=rebuilt)
-    packages = _packages_from_index(index, home=home, env=env)
+    packages = resolve_indexed_packages(index, home=home, env=env)
     _validate_requirements(packages)
     return _reconciled_commands(index, packages, provenance=provenance)
 
@@ -361,11 +366,16 @@ def select_active_packages(
     proj_dir: Path | None,
     cwd: Path,
     env: Mapping[str, str] | None = None,
+    index: ActivationIndex | None = None,
 ) -> tuple[PackageInfo, ...]:
-    """Return globally active packages with project pins overlaid and checked."""
+    """Return globally active packages with project pins overlaid and checked.
+
+    ``index`` lets a caller that already loaded the activation index reuse it
+    instead of reloading it here.
+    """
 
     packages = _selected_active_packages(
-        home=home, proj_dir=proj_dir, cwd=cwd, excluded_names=set(), env=env
+        home=home, proj_dir=proj_dir, cwd=cwd, excluded_names=set(), env=env, index=index
     )
     _validate_requirements(packages)
     return packages
@@ -377,16 +387,19 @@ def effective_command_index(
     proj_dir: Path | None,
     cwd: Path,
     env: Mapping[str, str] | None = None,
+    index: ActivationIndex | None = None,
 ) -> ActivationIndex:
     """Return selected-package commands with project pins applied.
 
     The persistent activation index caches commands for the global selection.
     A project pin changes that selection, so derive its command registry from
     the selected manifests and the persisted registration priority of each
-    selected immutable version.
+    selected immutable version. ``index`` lets a caller that already loaded
+    the activation index reuse it instead of reloading it here.
     """
 
-    index = load_activation_index(home=home, env=env)
+    if index is None:
+        index = load_activation_index(home=home, env=env)
     pins = load_package_pins(home=home, proj_dir=proj_dir, cwd=cwd, env=env)
     packages = _selected_active_packages(
         home=home,
@@ -446,26 +459,32 @@ def select_package_roots(
     cwd: Path,
     development_packages: Iterable[PackageInfo] = (),
     env: Mapping[str, str] | None = None,
+    index: ActivationIndex | None = None,
 ) -> tuple[PackageInfo, ...]:
     """Return development roots followed by non-conflicting active store roots.
 
     Development names are excluded before active or pinned store selections
     are resolved, so a valid development root shadows stale store state.
+    ``index`` lets a caller that already loaded the activation index reuse it
+    instead of reloading it here.
     """
 
     development = tuple(
-        package for package in development_packages if package.manifest.name != "std"
+        package
+        for package in development_packages
+        if not is_std_package_name(package.manifest.name)
     )
     development_names = {package.manifest.name for package in development}
     # ``std`` is selected exclusively by ``resolve_stdlib_root`` so an
     # override or source-checkout fallback cannot also mount an active tree.
-    excluded_names = {*development_names, "std"}
+    excluded_names = {*development_names, STD_PACKAGE_NAME}
     activated = _selected_active_packages(
         home=home,
         proj_dir=proj_dir,
         cwd=cwd,
         excluded_names=excluded_names,
         env=env,
+        index=index,
     )
     selected = (
         *development,
@@ -496,7 +515,7 @@ def _selected_active_packages(
         selections[name] = ActivePackage(version)
     for name in excluded_names:
         selections.pop(name, None)
-    return _packages_from_index(ActivationIndex(selections), home=home, env=env)
+    return resolve_indexed_packages(ActivationIndex(selections), home=home, env=env)
 
 
 def validate_package_command_conflicts(
@@ -507,21 +526,24 @@ def validate_package_command_conflicts(
     home: Path,
     env: Mapping[str, str] | None = None,
     transient_packages: Mapping[str, PackageInfo] | None = None,
+    packages: tuple[PackageInfo, ...] | None = None,
 ) -> None:
     """Reject a candidate's conflicts with every other active manifest.
 
     The active command registry contains only each command's winner. Looking
     at manifests instead retains owners previously displaced by ``--shadow``
-    when their winner is updated.
+    when their winner is updated. ``packages`` lets a caller that already
+    resolved and verified the active package set for ``index`` reuse it
+    instead of re-resolving it here.
     """
 
     if shadow:
         return
-    packages = _packages_from_index(
-        index, home=home, env=env, transient_packages=transient_packages
+    resolved = _resolved_index_packages(
+        index, packages, home=home, env=env, transient_packages=transient_packages
     )
     candidate_paths = set(manifest.commands)
-    for package in packages:
+    for package in resolved:
         if package.manifest.name == manifest.name:
             continue
         conflicts = sorted(candidate_paths.intersection(package.manifest.commands))
@@ -572,16 +594,18 @@ def reconcile_package_commands(
     home: Path,
     env: Mapping[str, str] | None = None,
     transient_packages: Mapping[str, PackageInfo] | None = None,
+    packages: tuple[PackageInfo, ...] | None = None,
 ) -> ActivationIndex:
-    """Derive current command owners from the active package manifests."""
+    """Derive current command owners from the active package manifests.
 
-    packages = _packages_from_index(
-        index,
-        home=home,
-        env=env,
-        transient_packages=transient_packages,
+    ``packages`` lets a caller that already resolved and verified the active
+    package set for ``index`` reuse it instead of re-resolving it here.
+    """
+
+    resolved = _resolved_index_packages(
+        index, packages, home=home, env=env, transient_packages=transient_packages
     )
-    return _reconciled_commands(index, packages)
+    return _reconciled_commands(index, resolved)
 
 
 def _reconciled_commands(
@@ -615,16 +639,18 @@ def command_shadow_diagnostics(
     home: Path,
     env: Mapping[str, str] | None = None,
     transient_packages: Mapping[str, PackageInfo] | None = None,
+    packages: tuple[PackageInfo, ...] | None = None,
 ) -> dict[str, tuple[CommandShadow, ...]]:
-    """Return active winners and the package owners each one shadows."""
+    """Return active winners and the package owners each one shadows.
 
-    packages = _packages_from_index(
-        index,
-        home=home,
-        env=env,
-        transient_packages=transient_packages,
+    ``packages`` lets a caller that already resolved and verified the active
+    package set for ``index`` reuse it instead of re-resolving it here.
+    """
+
+    resolved = _resolved_index_packages(
+        index, packages, home=home, env=env, transient_packages=transient_packages
     )
-    by_path = _command_owners(packages)
+    by_path = _command_owners(resolved)
     diagnostics: dict[str, list[CommandShadow]] = {}
     for path_name, owners in by_path.items():
         if len(owners) < 2:
@@ -854,12 +880,6 @@ def resolve_active_package(
             raise PackageActivationError(
                 f"active package {name!r} resolves outside the package store root"
             ) from exc
-        try:
-            verify_record(root)
-        except (OSError, RecordError) as exc:
-            raise PackageActivationError(
-                f"package integrity check failed for active package {name!r}: {exc}"
-            ) from exc
     return _checked_active_package(name, active, root, _load_installed_manifest(root))
 
 
@@ -879,13 +899,37 @@ def _checked_active_package(
     return PackageInfo(root, manifest)
 
 
-def _packages_from_index(
+def _resolved_index_packages(
     index: ActivationIndex,
+    packages: tuple[PackageInfo, ...] | None,
     *,
     home: Path,
     env: Mapping[str, str] | None,
+    transient_packages: Mapping[str, PackageInfo] | None,
+) -> tuple[PackageInfo, ...]:
+    """Return *packages* unchanged if given, otherwise resolve and verify *index*."""
+
+    if packages is not None:
+        return packages
+    return resolve_indexed_packages(
+        index, home=home, env=env, transient_packages=transient_packages
+    )
+
+
+def resolve_indexed_packages(
+    index: ActivationIndex,
+    *,
+    home: Path,
+    env: Mapping[str, str] | None = None,
     transient_packages: Mapping[str, PackageInfo] | None = None,
 ) -> tuple[PackageInfo, ...]:
+    """Resolve and verify every activation selection in *index* into a package.
+
+    ``transient_packages`` supplies validated manifests for selections an
+    install has planned but not yet written to the immutable store, standing
+    in for a store or ``RECORD`` lookup for just those names.
+    """
+
     packages: list[PackageInfo] = []
     for name, active in sorted(index.packages.items()):
         transient = None if transient_packages is None else transient_packages.get(name)
@@ -909,7 +953,7 @@ def _validate_requirements(packages: tuple[PackageInfo, ...]) -> None:
     selected = {package.manifest.name: package for package in packages}
     for package in packages:
         for name, requirement in package.manifest.dependencies.items():
-            if name == "std":
+            if is_std_package_name(name):
                 unmet = unmet_std_requirement(requirement)
                 if unmet is not None:
                     raise PackageActivationError(
@@ -942,16 +986,6 @@ def _complete_version(value: object, context: str) -> semver.Version:
 
 def _validate_package_name(name: str) -> None:
     try:
-        module_id = ModuleId.from_path(name)
-    except ValueError as exc:
-        raise PackageActivationError(
-            f"package name {name!r} is not a valid module segment"
-        ) from exc
-    if len(module_id.segments) != 1:
-        raise PackageActivationError(f"package name {name!r} is not a valid module segment")
-
-
-def _toml_string(value: str) -> str:
-    """Return a JSON string, which is also a TOML basic string."""
-
-    return json.dumps(value)
+        validate_package_name(name)
+    except ManifestError as exc:
+        raise PackageActivationError(str(exc)) from exc

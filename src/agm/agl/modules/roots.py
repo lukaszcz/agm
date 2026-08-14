@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -25,16 +25,46 @@ class RootSet:
     :attr:`loose_roots` records ordinary roots that overlap package roots, so
     their unrestricted semantics win. Use :meth:`sorted_roots` for deterministic
     output in diagnostics and :meth:`sorted_roots_for` for resolution.
+
+    The per-root package lookups used by :meth:`sorted_roots_for` and
+    :meth:`admits_path` are derived from :attr:`packages` once here in
+    ``__post_init__``, since a module id is resolved against the same
+    :class:`RootSet` many times (once per import edge, and once per matched
+    file during wildcard expansion).
     """
 
     roots: frozenset[Path]
     packages: tuple[PackageInfo, ...] = ()
     stdlib_roots: frozenset[Path] = frozenset()
     loose_roots: frozenset[Path] = frozenset()
+    _sorted_roots: tuple[Path, ...] = field(init=False, repr=False, compare=False)
+    _package_names_by_root: dict[Path, frozenset[str]] = field(
+        init=False, repr=False, compare=False
+    )
+    _module_roots_by_root: dict[Path, tuple[Path, ...]] = field(
+        init=False, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        sorted_roots: tuple[Path, ...] = tuple(sorted(self.roots))
+        package_names_by_root: dict[Path, set[str]] = {}
+        module_roots_by_root: dict[Path, list[Path]] = {}
+        for package in self.packages:
+            package_names_by_root.setdefault(package.root, set()).add(package.manifest.name)
+            module_roots_by_root.setdefault(package.root, []).append(package.module_root)
+        frozen_package_names_by_root: dict[Path, frozenset[str]] = {
+            root: frozenset(names) for root, names in package_names_by_root.items()
+        }
+        tupled_module_roots_by_root: dict[Path, tuple[Path, ...]] = {
+            root: tuple(module_roots) for root, module_roots in module_roots_by_root.items()
+        }
+        object.__setattr__(self, "_sorted_roots", sorted_roots)
+        object.__setattr__(self, "_package_names_by_root", frozen_package_names_by_root)
+        object.__setattr__(self, "_module_roots_by_root", tupled_module_roots_by_root)
 
     def sorted_roots(self) -> tuple[Path, ...]:
         """Return roots sorted lexicographically for deterministic diagnostics."""
-        return tuple(sorted(self.roots))
+        return self._sorted_roots
 
     def sorted_roots_for(self, prefix: tuple[str, ...]) -> tuple[Path, ...]:
         """Return roots whose mount scope admits a module *prefix*.
@@ -43,13 +73,11 @@ class RootSet:
         admits that package's declared top-level module segment; explicitly
         supplying the same path as an ordinary root keeps it loose.
         """
-        package_names_by_root: dict[Path, set[str]] = {}
-        for package in self.packages:
-            package_names_by_root.setdefault(package.root, set()).add(package.manifest.name)
+        package_names_by_root = self._package_names_by_root
         first_segment = prefix[0]
         return tuple(
             root
-            for root in self.sorted_roots()
+            for root in self._sorted_roots
             if root in self.loose_roots
             or root not in package_names_by_root
             or first_segment in package_names_by_root[root]
@@ -59,11 +87,10 @@ class RootSet:
         """Return whether *path* is exposed by *root*'s mount policy."""
         if root in self.loose_roots:
             return True
-        mounted = tuple(package for package in self.packages if package.root == root)
-        if not mounted:
+        mounted_module_roots = self._module_roots_by_root.get(root)
+        if not mounted_module_roots:
             return True
-        canonical_path = path.resolve()
-        return any(canonical_path.is_relative_to(package.module_root) for package in mounted)
+        return any(path.is_relative_to(module_root) for module_root in mounted_module_roots)
 
     def is_standard_library_path(self, path: Path) -> bool:
         """Return whether *path* belongs to a host-selected standard-library root."""

@@ -560,6 +560,42 @@ class TestExecCommandBehavior:
         # The friendly message names the offending path.
         assert "a_directory" in captured.err
 
+    @pytest.mark.skipif(
+        os.name != "posix" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+        reason="permission bits are meaningless for root or on non-POSIX platforms",
+    )
+    def test_an_existing_unreadable_file_containing_a_reference_separator_is_still_a_file(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """An on-disk file wins classification even when its name contains
+        ``::`` and it cannot be read: execution reports the ordinary
+        unreadable-file error, never "does not name an active package" (the
+        installed-reference error), matching the classification rule shared
+        with ``--help`` and shell completion.
+        """
+        from agm.cli_support.args import ExecArgs
+
+        unreadable = tmp_path / "pkg::mod"
+        unreadable.write_text("param level: text\n", encoding="utf-8")
+        unreadable.chmod(0)
+        try:
+            args = ExecArgs(
+                file=str(unreadable),
+                param_tokens=[],
+                strict_json=None,
+                max_iters=None,
+                no_log=False,
+                log_file=None,
+            )
+            with pytest.raises(SystemExit) as exc_info:
+                exec_command.run(args)
+            assert exc_info.value.code == 1
+            captured = capsys.readouterr()
+            assert "Error: cannot read" in captured.err
+            assert "does not name an active package" not in captured.err
+        finally:
+            unreadable.chmod(0o644)
+
     def test_valid_file_exits_0_success(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -3456,6 +3492,37 @@ class TestEntryModuleConfig:
             is None
         )
         assert capsys.readouterr().out == "flag\n"
+
+    def test_config_value_for_a_reserved_flag_colliding_param_is_not_dropped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A param named like a built-in exec flag (e.g. ``dry-run``, reserved
+        even though it is not an engine setting) is ambiguous on the CLI, so
+        its config-table value must be addressed by the SAME qualified
+        spelling used by the CLI flag rule — not silently stored under the
+        plain name where the runtime would never find it.
+        """
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[settings]\ndry-run = "configured"\n')
+        monkeypatch.setattr(
+            exec_engine,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+        (tmp_path / "settings.agl").write_text(
+            "param dry-run: text\ndef read() -> text = dry-run\n"
+        )
+        agl_file = tmp_path / "workflow.agl"
+        write_file_program(
+            agl_file,
+            "import settings\nprogram def main() -> unit = print(settings::read())\n",
+        )
+
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert capsys.readouterr().out == "configured\n"
 
     def test_qualified_module_table_supplies_multiple_params(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

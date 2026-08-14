@@ -51,17 +51,22 @@ store lock is held and before activation publication; the CLI only renders this 
 Diagnostic failure aborts publication and rolls back newly created package trees. Dry-run installs
 retain the same transient plan while leaving the persisted index unchanged.
 
-Installed package contents have a SHA-256 `RECORD`. Archive readers enforce bounded metadata, entry sizes, total expansion, and path depth while binding
+Installed package contents have a SHA-256 `RECORD`, which serves as the manifest of the files an
+install created — uninstall reads it to remove exactly those. `RECORD` is unsigned and lives inside
+the tree it describes, so hashing is spent only where it is checked against an anchor outside that
+tree: reading an archive (entry digests against the archive's own `RECORD`, feeding the declared
+dependency hash) and installing over an existing tree (the destination against the hash of the
+source being installed). Nothing re-hashes a package to read, activate, or execute it — publication
+is an atomic rename, so a partially written tree is never reachable through a store path.
+Archive readers enforce bounded metadata, entry sizes, total expansion, and path depth while binding
 preflight, ZIP parsing, verification, and extraction to one opened file. Immutable directory installs
-stage beside the final store path, revalidate the copied manifest, package discipline, and `RECORD`,
-then publish with an atomic rename; dry runs scan directory sources for `RECORD` eligibility without
-staging or writing. Archive installation selects the canonical destination from verified metadata
+stage beside the final store path, revalidate the copied manifest and package discipline,
+then publish with an atomic rename; dry runs check directory sources for `RECORD` eligibility without
+hashing, staging, or writing. Archive installation selects the canonical destination from verified metadata
 without reopening the archive, then extracts to a sibling staging tree. It resolves dependencies and runs
 dependency-aware discipline validation against that staging tree before atomic publication, including when
 the store root is relocated across filesystems; dry runs repeat in-archive discipline validation with the
-resolved dependency closure. Active immutable selections verify `RECORD`
-again when resolved for activation or execution.
-Editable selections remain live and are exempt. The shipped
+resolved dependency closure. The shipped
 `std` package is a managed store package whose
 version must exactly match the running AGM version. A shared locator finds its source at the
 repository root during development and inside the installed `agm` package in a wheel. It is
@@ -96,12 +101,19 @@ selected manifest and module ownership before executing it.
 - `src/agm/packages/discipline.py` — source-free manifest and module-tree validation, plus the
   single graph load and scope pass whose resolution decides command program references and which
   call sites are resource built-ins, for both directory and archive packages.
-- `src/agm/packages/model.py` and `development.py` — package identity, ownership, and
+- `src/agm/packages/model.py` and `development.py` — package identity, MVS version selection, and
   development-package discovery.
-- `src/agm/packages/store.py`, `record.py`, and `archive.py` — store layout, integrity records,
-  and portable archives.
+- `src/agm/packages/layout.py` — pure store-directory and activation-index filename constants,
+  taking an already-resolved AGM home so `config.general` can depend on it without a cycle back
+  into the package domain.
+- `src/agm/packages/store.py`, `record.py`, and `archive.py` — store layout, the shared
+  store-scanning and MVS-candidate-selection helpers dependency resolution and installation both
+  use, integrity records, and portable archives.
 - `src/agm/packages/activation.py`, `dependencies.py`, `fetch.py`, and `install.py` — active
   selections, dependency resolution, downloads, and lifecycle operations.
+- `src/agm/packages/stdlib.py` — resolves the active managed standard-library package root
+  (activation lookup, canonical identity, store paths); `config.module_roots`
+  handles only the `AGM_STDLIB` override and delegates here.
 - `src/agm/agl/modules/roots.py` and `loader.py` — package-root mounting and import visibility.
 - `src/agm/commands/pkg/` — package CLI commands.
 - `src/agm/cli_dispatch.py` and `src/agm/commands/exec_program.py` — registered-command lookup

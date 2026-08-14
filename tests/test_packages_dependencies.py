@@ -203,10 +203,10 @@ def test_dependency_check_selects_the_highest_satisfying_store_version(tmp_path:
         _package(tmp_path / "newer", "bravo", "2.0.0").root, home=home, env={}
     )
     package = _package(tmp_path / "alpha", "alpha", "1.0.0", '\n[dependencies]\nbravo = "1"\n')
-    (newer.root / "bravo" / "main.agl").write_text("tampered", encoding="utf-8")
 
-    with pytest.raises(DependencyError, match="integrity"):
-        validate_dependencies(package, home=home, env={})
+    resolved = validate_dependencies(package, home=home, env={})
+
+    assert [dependency.root for dependency in resolved] == [newer.root]
 
 
 def test_dependency_check_preserves_active_equal_precedence_build(tmp_path: Path) -> None:
@@ -236,15 +236,10 @@ def test_dependency_check_wraps_an_invalid_package_store(tmp_path: Path) -> None
         validate_dependencies(package, home=home, env={})
 
 
-def test_dependency_check_rejects_linked_or_tampered_store_sources(tmp_path: Path) -> None:
+def test_dependency_check_rejects_linked_store_sources(tmp_path: Path) -> None:
     home = tmp_path / "home"
     source = _package(tmp_path / "source", "bravo", "1.0.0")
-    installed = install_directory(source.root, home=home, env={})
-    package = _package(tmp_path / "alpha", "alpha", "1.0.0", '\n[dependencies]\nbravo = "1"\n')
-    (installed.root / "bravo" / "main.agl").write_text("tampered", encoding="utf-8")
-
-    with pytest.raises(DependencyError, match="integrity"):
-        validate_dependencies(package, home=home, env={})
+    install_directory(source.root, home=home, env={})
 
     linked = tmp_path / "linked"
     linked.symlink_to(source.root, target_is_directory=True)

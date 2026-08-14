@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import fcntl
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,6 +23,7 @@ from agm.packages.activation import (
     merge_package_commands,
     package_provenance_path,
     reconcile_package_commands,
+    resolve_indexed_packages,
     validate_activation_index,
     validate_package_command_conflicts,
     write_activation_index,
@@ -41,21 +42,29 @@ from agm.packages.discipline import (
 )
 from agm.packages.fetch import FetchError, fetch_archive
 from agm.packages.manifest import DependencySpec, ManifestError, PackageManifest, load_manifest
-from agm.packages.model import PackageInfo, canonical_package_identity, unmet_std_requirement
+from agm.packages.model import (
+    STD_PACKAGE_NAME,
+    PackageInfo,
+    canonical_package_identity,
+    is_std_package_name,
+    unmet_std_requirement,
+)
 from agm.packages.record import (
     RecordEntry,
     RecordError,
     content_hash,
     read_record,
     record_entries,
+    validate_package_tree,
     verify_record,
     write_record,
 )
 from agm.packages.store import (
+    StoreIdentityError,
     canonical_package_store_path,
-    iter_store_package_dirs,
-    iter_store_version_dirs,
+    iter_installed_packages,
     package_store_path,
+    satisfying_from_store,
     store_root,
 )
 from agm.stdlib_locator import shipped_stdlib_root
@@ -102,10 +111,10 @@ def _validate_managed_stdlib_install(
     manifest: PackageManifest, *, source: Path | None, editable: bool
 ) -> None:
     """Require ``std`` to be the immutable, lockstep shipped package."""
-    if manifest.name != "std":
+    if not is_std_package_name(manifest.name):
         return
     if canonical_package_identity(manifest.name, manifest.version) != canonical_package_identity(
-        "std", semver.Version.parse(AGM_VERSION)
+        STD_PACKAGE_NAME, semver.Version.parse(AGM_VERSION)
     ):
         raise PackageInstallError(
             f"managed std package version must exactly match AGM version {AGM_VERSION}"
@@ -130,6 +139,7 @@ class _InstallState:
     resource_packages: dict[str, PackageInfo] = field(default_factory=dict)
     installed: tuple[PackageInfo, ...] | None = None
     retained_registration_order: int | None = None
+    resolved_active: tuple[PackageInfo, ...] | None = None
 
 
 def install_directory(
@@ -309,7 +319,7 @@ def _uninstall_package(name: str, *, home: Path, env: Mapping[str, str] | None =
         index = load_activation_index(home=home, env=env)
     except PackageActivationError as exc:
         raise PackageInstallError(f"cannot load package activation: {exc}") from exc
-    if name == "std":
+    if is_std_package_name(name):
         raise PackageInstallError("the AGM-managed std package cannot be uninstalled")
     placeholder_version = semver.Version(0, 0, 0)
     try:
@@ -335,7 +345,7 @@ def _uninstall_package(name: str, *, home: Path, env: Mapping[str, str] | None =
         try:
             root = canonical_package_store_path(name, active.version, home=home, env=env)
             if not root.exists() and tombstone.exists():
-                entries = verify_record(tombstone)
+                entries = read_record(tombstone)
                 manifest = load_manifest(tombstone / "package.toml")
                 if canonical_package_identity(manifest.name, manifest.version) != (
                     name,
@@ -347,7 +357,7 @@ def _uninstall_package(name: str, *, home: Path, env: Mapping[str, str] | None =
                 else:
                     tombstone.replace(root)
             else:
-                entries = verify_record(root)
+                entries = read_record(root)
         except (ManifestError, OSError, RecordError, ValueError) as exc:
             raise PackageInstallError(
                 f"package integrity check failed for {name!r}: {exc}"
@@ -385,24 +395,18 @@ def installed_packages(
 ) -> tuple[PackageInfo, ...]:
     """Return all installed immutable package versions, sorted by identity."""
 
-    packages: list[PackageInfo] = []
-    for name_dir in iter_store_package_dirs(home=home, env=env):
-        for version_dir in iter_store_version_dirs(name_dir):
-            try:
-                package = PackageInfo(version_dir, load_manifest(version_dir / "package.toml"))
-            except ManifestError as exc:
-                raise PackageInstallError(
+    try:
+        return tuple(
+            iter_installed_packages(
+                home=home,
+                env=env,
+                on_manifest_error=lambda exc, version_dir: PackageInstallError(
                     f"cannot load installed package at {version_dir}: {exc}"
-                ) from exc
-            if canonical_package_identity(package.manifest.name, package.manifest.version) != (
-                name_dir.name,
-                version_dir.name,
-            ):
-                raise PackageInstallError(
-                    f"installed package at {version_dir} does not match its store identity"
-                )
-            packages.append(package)
-    return tuple(packages)
+                ),
+            )
+        )
+    except StoreIdentityError as exc:
+        raise PackageInstallError(str(exc)) from exc
 
 
 def _validated_directory_package(source: Path) -> PackageInfo:
@@ -445,7 +449,6 @@ def _stage_directory_package(
         ):
             raise PackageInstallError("copied package manifest changed after source validation")
         write_record(staging)
-        verify_record(staging)
         return staging
     except (DisciplineError, ManifestError, OSError, PackageInstallError, RecordError, ValueError):
         fs.rmtree(staging)
@@ -556,7 +559,7 @@ def _install_directory(
                     fs.rmtree(staging)
         else:
             try:
-                record_entries(root)
+                validate_package_tree(root)
             except (OSError, RecordError) as exc:
                 raise PackageInstallError(
                     f"cannot install package {package.manifest.name!r}: {exc}"
@@ -609,7 +612,6 @@ def _install_archive(archive: Path, *, state: _InstallState, shadow: bool) -> Pa
             destination, staging = prepared[-1]
             package = PackageInfo(staging, metadata.manifest)
             validate_package_structure(package)
-            verify_record(staging)
             destination_exists = destination.exists()
             if destination_exists:
                 _verify_existing_install(destination, metadata.manifest, metadata.package_hash)
@@ -652,7 +654,7 @@ def _install_archive(archive: Path, *, state: _InstallState, shadow: bool) -> Pa
 
 def _validate_minimum_agm(manifest: PackageManifest) -> None:
     """Reject packages whose ``std`` requirement needs a newer AGM binary."""
-    requirement = manifest.dependencies.get("std")
+    requirement = manifest.dependencies.get(STD_PACKAGE_NAME)
     if requirement is None:
         return
     unmet = unmet_std_requirement(requirement)
@@ -679,6 +681,38 @@ def _record_created_tree(state: _InstallState, destination: Path) -> None:
     state.installed = None
 
 
+def _transaction_resolved_packages(state: _InstallState) -> tuple[PackageInfo, ...]:
+    """Return the transaction's active package set, resolved once and cached.
+
+    Reused by every activation-conflict and command-shadow check within one
+    locked install transaction until its activation index or transient
+    selections change.
+    """
+
+    if state.resolved_active is None:
+        state.resolved_active = resolve_indexed_packages(
+            state.index,
+            home=state.home,
+            env=state.env,
+            transient_packages=state.transient_packages,
+        )
+    return state.resolved_active
+
+
+def _set_transaction_index(state: _InstallState, index: ActivationIndex) -> None:
+    """Reassign the transaction's activation index, invalidating its resolved-package cache."""
+
+    state.index = index
+    state.resolved_active = None
+
+
+def _record_transient_package(state: _InstallState, name: str, package: PackageInfo) -> None:
+    """Register a transient package selection, invalidating the resolved-package cache."""
+
+    state.transient_packages[name] = package
+    state.resolved_active = None
+
+
 def _resolve_dependencies(package: PackageInfo, state: _InstallState) -> None:
     # Resolving a package is idempotent within a transaction, so a shared
     # dependency reached again through another path needs no second traversal.
@@ -700,7 +734,7 @@ def _resolve_dependency_requirements(package: PackageInfo, state: _InstallState)
     for name, requirement in package.manifest.dependencies.items():
         # ``std`` is a minimum AGM-version contract, already checked before
         # dependency resolution. It is not a package-store dependency.
-        if name == "std":
+        if is_std_package_name(name):
             continue
         selected = _installed_satisfying(name, requirement, state)
         if selected is None and requirement.path is not None:
@@ -737,8 +771,8 @@ def _resolve_dependency_requirements(package: PackageInfo, state: _InstallState)
                     shadow=current.shadow,
                     registration_order=current.registration_order,
                 )
-                state.index = ActivationIndex(packages, state.index.commands)
-            state.transient_packages[name] = selected
+                _set_transaction_index(state, ActivationIndex(packages, state.index.commands))
+            _record_transient_package(state, name, selected)
         elif (
             current is None
             or canonical_package_identity(name, current.version)
@@ -747,7 +781,7 @@ def _resolve_dependency_requirements(package: PackageInfo, state: _InstallState)
         ):
             _activate_package(selected, state, editable_root=None, shadow=False)
         else:
-            state.transient_packages[name] = selected
+            _record_transient_package(state, name, selected)
 
 
 def _activate_package(
@@ -767,6 +801,10 @@ def _activate_package(
             home=state.home,
             env=state.env,
             transient_packages=state.transient_packages,
+            # ``shadow`` skips conflict resolution entirely, so resolving the
+            # active set only when it is actually needed avoids forcing a
+            # resolve/verify pass that its caller would otherwise skip.
+            packages=None if shadow else _transaction_resolved_packages(state),
         )
         registration_order = _next_registration_order(state)
     except PackageActivationError as exc:
@@ -778,51 +816,31 @@ def _activate_package(
         shadow=shadow,
         registration_order=registration_order,
     )
-    state.index = ActivationIndex(packages, state.index.commands)
-    state.index = merge_package_commands(state.index, package.manifest, shadow=shadow)
-    state.transient_packages[package.manifest.name] = package
-
-
-def select_satisfying(
-    candidates: Sequence[PackageInfo], active: ActivePackage | None
-) -> PackageInfo | None:
-    """Return the greatest satisfying candidate, preferring the active build on a tie.
-
-    Versions that compare equal can still differ in build metadata, so an
-    exact match for the current selection wins over an equivalent sibling.
-    This is the shared MVS choice made by installation and by dependency
-    validation.
-    """
-
-    if not candidates:
-        return None
-    selected = candidates[0]
-    for candidate in candidates[1:]:
-        if candidate.manifest.version > selected.manifest.version or (
-            candidate.manifest.version == selected.manifest.version
-            and active is not None
-            and active.editable is None
-            and str(candidate.manifest.version) == str(active.version)
-        ):
-            selected = candidate
-    return selected
+    _set_transaction_index(state, ActivationIndex(packages, state.index.commands))
+    _set_transaction_index(
+        state, merge_package_commands(state.index, package.manifest, shadow=shadow)
+    )
+    _record_transient_package(state, package.manifest.name, package)
 
 
 def _installed_satisfying(
     name: str, requirement: DependencySpec, state: _InstallState
 ) -> PackageInfo | None:
-    def satisfies(package: PackageInfo) -> bool:
-        return package.manifest.name == name and package.manifest.version >= requirement.version
-
-    stored = [package for package in _transaction_installed_packages(state) if satisfies(package)]
-    # A dry run never publishes, so planned installs stand in for store trees.
+    # A dry run never publishes, so planned installs stand in for store
+    # trees; they were already validated when they were planned.
     planned = (
-        [package for package in state.transient_packages.values() if satisfies(package)]
+        [
+            package
+            for package in state.transient_packages.values()
+            if package.manifest.name == name and package.manifest.version >= requirement.version
+        ]
         if dry_run.enabled()
         else []
     )
     active = state.index.packages.get(name)
-    selected = select_satisfying([*stored, *planned], active)
+    selected = satisfying_from_store(
+        _transaction_installed_packages(state), name, requirement, active, extra_candidates=planned
+    )
     if selected is None:
         if active is None or active.editable is None:
             return None
@@ -833,15 +851,6 @@ def _installed_satisfying(
                 f"cannot load active editable package {name!r}: {exc}"
             ) from exc
         return editable if editable.manifest.version >= requirement.version else None
-    # Planned trees were validated when they were planned; only a tree read
-    # back from the store needs its record checked again.
-    if not any(selected is package for package in planned):
-        try:
-            verify_record(selected.root)
-        except RecordError as exc:
-            raise PackageInstallError(
-                f"package integrity check failed for {name!r}: {exc}"
-            ) from exc
     return selected
 
 
@@ -948,13 +957,18 @@ def _commit_install_activation(
 ) -> tuple[CommandShadow, ...]:
     """Compute install diagnostics from one locked plan, then publish that plan."""
 
+    # A real install has already published its trees, so activation is
+    # (re)validated straight from the store; only a dry run stands its
+    # transient plan in for the store, matching the cached resolution below.
     transient_packages = state.transient_packages if dry_run.enabled() else None
+    prepare_packages = _transaction_resolved_packages(state) if dry_run.enabled() else None
     try:
         reconciled = _prepare_activation(
             state.index,
             home=state.home,
             env=state.env,
             transient_packages=transient_packages,
+            packages=prepare_packages,
         )
         command_shadows = (
             command_shadow_diagnostics(
@@ -962,6 +976,7 @@ def _commit_install_activation(
                 home=state.home,
                 env=state.env,
                 transient_packages=state.transient_packages,
+                packages=_transaction_resolved_packages(state),
             ).get(package.manifest.name, ())
             if report_shadows
             else ()
@@ -1000,15 +1015,31 @@ def _prepare_activation(
     home: Path,
     env: Mapping[str, str] | None,
     transient_packages: Mapping[str, PackageInfo] | None,
+    packages: tuple[PackageInfo, ...] | None = None,
 ) -> ActivationIndex:
-    """Return the validated activation snapshot that is ready for publication."""
+    """Return the validated activation snapshot that is ready for publication.
 
+    ``packages`` lets a caller that already resolved and verified *index*'s
+    active package set under the same ``transient_packages`` reuse it.
+    Reconciling commands and assigning registration orders never change
+    which packages are selected, so the same resolution also validates the
+    reconciled snapshot below without a second resolve.
+    """
+
+    resolved = (
+        packages
+        if packages is not None
+        else resolve_indexed_packages(
+            index, home=home, env=env, transient_packages=transient_packages
+        )
+    )
     reconciled = _assign_missing_registration_orders(
         reconcile_package_commands(
             index,
             home=home,
             env=env,
             transient_packages=transient_packages,
+            packages=resolved,
         )
     )
     validate_activation_index(
@@ -1016,6 +1047,7 @@ def _prepare_activation(
         home=home,
         env=env,
         transient_packages=transient_packages,
+        packages=resolved,
     )
     return reconciled
 

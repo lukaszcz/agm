@@ -27,14 +27,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-import semver
-
 from agm.config.general import agm_home_dir, config_file_candidates, expand_env_root
 from agm.core.env import resolve_env
 from agm.core.toml import load_toml_file, toml_dict
-from agm.stdlib_locator import shipped_stdlib_root
+from agm.packages.stdlib import StdlibResolutionError as StdlibResolutionError
+from agm.packages.stdlib import StdlibVersionMismatchError as StdlibVersionMismatchError
+from agm.packages.stdlib import resolve_std_package_root
 from agm.util.interp import interp_preserving
-from agm.version import AGM_VERSION
 
 
 @dataclass(frozen=True)
@@ -138,78 +137,15 @@ def resolve_lib_root(
     return agm_home_dir(home=default_home, env=env) / "lib"
 
 
-class StdlibResolutionError(RuntimeError):
-    """Raised when the selected managed standard library cannot be used."""
-
-
-class StdlibVersionMismatchError(StdlibResolutionError):
-    """Raised when the active store ``std`` version differs from AGM's version."""
-
-    def __init__(self, installed_version: str, running_version: str) -> None:
-        self.installed_version = installed_version
-        self.running_version = running_version
-        super().__init__(
-            f"Active std package version {installed_version} does not match running AGM version "
-            f"{running_version}. Re-run `just install` to install the matching std package."
-        )
-
-
 def resolve_stdlib_root(*, home: Path, env: Mapping[str, str] | None = None) -> Path:
     """Return the selected AgL standard-library module root.
 
     ``AGM_STDLIB`` is an unchecked escape hatch for synthetic and in-progress
-    trees. Otherwise an active immutable store ``std`` package wins only when
-    its version exactly matches the running AGM binary. Without an active
-    store package, AGM uses the stdlib bundled in an installed wheel or the
-    repository ``stdlib/`` tree in a source checkout.
+    trees. Otherwise this delegates to the package domain, which selects an
+    active immutable store ``std`` package matching the running AGM version,
+    or falls back to the shipped standard library.
     """
     override = resolve_env(env).get("AGM_STDLIB")
     if override is not None and override.strip():
         return expand_env_root(override)
-
-    from agm.packages.activation import PackageActivationError, load_activation_index
-    from agm.packages.manifest import ManifestError, load_manifest
-    from agm.packages.model import canonical_package_identity
-    from agm.packages.record import RecordError, verify_record
-    from agm.packages.store import canonical_package_store_path
-
-    try:
-        active = load_activation_index(home=home, env=env).packages.get("std")
-    except PackageActivationError as exc:
-        raise StdlibResolutionError(f"cannot resolve active std package: {exc}") from exc
-    if active is not None:
-        if active.editable is not None:
-            raise StdlibResolutionError("the managed std package cannot be editable")
-        installed_version = str(active.version)
-        if canonical_package_identity("std", active.version) != canonical_package_identity(
-            "std", semver.Version.parse(AGM_VERSION)
-        ):
-            raise StdlibVersionMismatchError(installed_version, AGM_VERSION)
-        try:
-            store_stdlib = canonical_package_store_path("std", active.version, home=home, env=env)
-        except ValueError as exc:
-            raise StdlibResolutionError(f"cannot resolve active std package: {exc}") from exc
-        if store_stdlib.exists():
-            if not store_stdlib.is_dir():
-                raise StdlibResolutionError(
-                    f"active std package at {store_stdlib} is not a directory"
-                )
-            try:
-                manifest = load_manifest(store_stdlib / "package.toml")
-                if canonical_package_identity(
-                    manifest.name, manifest.version
-                ) != canonical_package_identity("std", active.version):
-                    raise StdlibResolutionError(
-                        f"active std package at {store_stdlib} does not match its activation"
-                    )
-                verify_record(store_stdlib)
-            except (ManifestError, RecordError) as exc:
-                raise StdlibResolutionError(
-                    f"active std package integrity check failed at {store_stdlib}: {exc}"
-                ) from exc
-            return store_stdlib
-
-    shipped = shipped_stdlib_root()
-    if not shipped.is_dir():
-        raise StdlibResolutionError(f"shipped standard library is missing at {shipped}")
-    return shipped
+    return resolve_std_package_root(home=home, env=env)

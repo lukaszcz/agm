@@ -42,7 +42,6 @@ from agm.agl.scope.imports import (
     build_import_env,
     resolve_alias_target,
 )
-from agm.agl.scope.reexports import ReexportCycleError, converge_reexports
 from agm.agl.scope.resolver import _Resolver
 from agm.agl.scope.symbols import (
     AglScopeError,
@@ -333,12 +332,16 @@ def _resolve_reexports(
 
     Re-export name conflicts (same exposed name → different origin QNames)
     raise :class:`~agm.agl.scope.symbols.AglScopeError`.
-    """
-    last_changed_decl: ExportDecl | None = None
 
-    def propagate() -> bool:
-        nonlocal last_changed_decl
+    Propagation is monotone: a contribution that does not revisit an export
+    declaration crosses at most ``declaration_count`` declarations, and one
+    additional pass observes convergence. Continued growth after that can
+    only depend on reapplying a declaration through a cycle.
+    """
+
+    def propagate() -> tuple[bool, ExportDecl | None]:
         changed = False
+        changed_decl: ExportDecl | None = None
         for mid, loaded in graph.modules.items():
             for decl in loaded.export_decls:
                 target = all_targets[decl.node_id]
@@ -358,19 +361,24 @@ def _resolve_reexports(
                         if existing is None:
                             current_exports[exposed] = qname
                             changed = True
-                            last_changed_decl = decl
+                            changed_decl = decl
                         elif existing != qname:
                             _raise_reexport_conflict(exposed, existing, qname, decl)
-        return changed
+        return changed, changed_decl
 
-    try:
-        converge_reexports(
-            sum(len(loaded.export_decls) for loaded in graph.modules.values()), propagate
-        )
-    except ReexportCycleError as exc:
+    declaration_count = sum(len(loaded.export_decls) for loaded in graph.modules.values())
+    last_changed_decl: ExportDecl | None = None
+    for _ in range(declaration_count + 1):
+        changed, changed_decl = propagate()
+        if changed_decl is not None:
+            last_changed_decl = changed_decl
+        if not changed:
+            break
+    else:
         raise AglScopeError(
-            str(exc), span=last_changed_decl.span if last_changed_decl else None
-        ) from exc
+            "cyclic re-export expansion does not converge",
+            span=last_changed_decl.span if last_changed_decl else None,
+        )
 
     # A selection may target a re-export which is populated later in the
     # fixed point. Validate only after every reachable export has propagated.

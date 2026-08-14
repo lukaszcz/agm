@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path, PurePosixPath
 
 from agm.agl.syntax.nodes import Call, StringLit
 from agm.agl.syntax.spans import SourceSpan
+from agm.core.path import is_portable_relative_path
 
 
 class ResourceError(ValueError):
@@ -48,14 +49,5 @@ def resolve_resource(anchor: Path | None, relative_path: str | None) -> Path:
 
 
 def _validate_relative_path(path: str) -> None:
-    posix = PurePosixPath(path)
-    windows = PureWindowsPath(path)
-    if (
-        not path
-        or "\0" in path
-        or "\\" in path
-        or posix.is_absolute()
-        or bool(windows.drive or windows.root)
-        or any(part == ".." for part in posix.parts)
-    ):
+    if not is_portable_relative_path(path):
         raise ResourceError("resource() path must be a relative forward-slash path without '..'")

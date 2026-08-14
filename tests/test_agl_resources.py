@@ -114,6 +114,10 @@ program def main() -> unit =
         'resource("/tmp/prompt")',
         'resource("../prompt")',
         'resource("prompts\\\\review.md")',
+        'resource("./prompt.md")',
+        'resource("prompts/./review.md")',
+        'resource("prompts//review.md")',
+        'resource("prompts/")',
         'resource-dir("prompt.md")',
     ),
 )

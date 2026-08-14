@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,7 +49,14 @@ def set_dry_run(ctx: object, param: object, value: bool) -> None:
 
 
 def _is_usage_error(error: Exception) -> bool:
-    """Recognize Click errors across Typer's bundled-Click compatibility boundary."""
+    """Recognize Click errors across Typer's bundled-Click compatibility boundary.
+
+    Typer vendors its own copy of Click (``typer._click``) from 0.25 onward, so
+    the ``UsageError`` raised by command resolution is a *different class* from
+    ``click.UsageError`` whenever AGM is installed against such a Typer.  An
+    ``isinstance`` check alone silently stops recognizing unknown commands
+    there, which disables the registered-package-command fallback below.
+    """
 
     return isinstance(error, click.UsageError) or error.__class__.__name__ == "UsageError"
 
@@ -165,14 +173,24 @@ class RegisteredProgramCommand(TyperCommand):
                 end="",
             )
             return
-        from agm.commands.exec_program import run_registered
+        from agm.commands.exec_program import RegisteredParamUsageError, run_registered
 
-        run_registered(
-            self._registration.program,
-            list(ctx.args),
-            package=self._registration.package,
-            command_path=self._path_name,
-        )
+        try:
+            run_registered(
+                self._registration.program,
+                list(ctx.args),
+                package=self._registration.package,
+                command_path=self._path_name,
+            )
+        except RegisteredParamUsageError as exc:
+            print(f"error: {exc.message}", file=sys.stderr)
+            print(file=sys.stderr)
+            print(
+                registered_command_help(self._path_name, self._registration, params=exc.params),
+                end="",
+                file=sys.stderr,
+            )
+            raise SystemExit(1) from exc
 
 
 class RegisteredCommandGroup(TyperGroup):

@@ -2,7 +2,32 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
+
+
+def is_portable_relative_path(value: str) -> bool:
+    """Whether *value* is a safe, canonical, portable POSIX-relative path.
+
+    Rejects empty values, backslashes, NUL bytes, absolute POSIX paths, Windows
+    drive-relative or rooted paths, ``.``/``..`` components, and any value that
+    does not already equal its own canonical POSIX rendering. This is the
+    shared core of every "safe relative path" check in the codebase; callers
+    that need additional constraints (line breaks, path depth, reserved names,
+    an anchor escape check, ...) apply them on top of this predicate.
+    """
+
+    posix = PurePosixPath(value)
+    windows = PureWindowsPath(value)
+    return not (
+        not value
+        or "\\" in value
+        or "\x00" in value
+        or posix.is_absolute()
+        or windows.drive
+        or windows.root
+        or any(part in {".", ".."} for part in posix.parts)
+        or posix.as_posix() != value
+    )
 
 
 def path_from_cli(value: str, *, cwd: Path) -> Path:

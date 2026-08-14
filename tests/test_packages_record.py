@@ -10,7 +10,6 @@ from typing import Never
 
 import pytest
 
-from agm.core import fs
 from agm.packages.record import RecordError, read_record, verify_record, write_record
 
 
@@ -192,35 +191,54 @@ def test_record_reading_and_verification_reject_symlink_descendants(
         operation(root)
 
 
-def test_record_wraps_traversal_io_failures(
+def test_record_wraps_root_inspection_io_failures(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _package_tree(tmp_path)
+    original_is_symlink = Path.is_symlink
 
-    def fail_rglob(_root: Path, _pattern: str) -> Iterator[Path]:
-        raise OSError("blocked")
+    def fail_is_symlink(path: Path) -> bool:
+        if path == root:
+            raise OSError("blocked")
+        return original_is_symlink(path)
 
-    monkeypatch.setattr(fs, "rglob", fail_rglob)
+    monkeypatch.setattr(Path, "is_symlink", fail_is_symlink)
 
     with pytest.raises(RecordError, match="blocked"):
         write_record(root)
 
 
-def test_record_wraps_second_traversal_io_failures(
+def test_record_wraps_directory_read_io_failures(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _package_tree(tmp_path)
-    original_rglob = fs.rglob
-    calls = 0
+    unreadable = root / "review-tools"
+    original_iterdir = Path.iterdir
 
-    def fail_second_rglob(path: Path, pattern: str) -> Iterator[Path]:
-        nonlocal calls
-        calls += 1
-        if calls == 2:
+    def fail_iterdir(path: Path) -> Iterator[Path]:
+        if path == unreadable:
             raise OSError("blocked")
-        return original_rglob(path, pattern)
+        return original_iterdir(path)
 
-    monkeypatch.setattr(fs, "rglob", fail_second_rglob)
+    monkeypatch.setattr(Path, "iterdir", fail_iterdir)
+
+    with pytest.raises(RecordError, match="blocked"):
+        write_record(root)
+
+
+def test_record_wraps_entry_inspection_io_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _package_tree(tmp_path)
+    target = root / "review-tools" / "main.agl"
+    original_lstat = Path.lstat
+
+    def fail_lstat(path: Path) -> os.stat_result:
+        if path == target:
+            raise OSError("blocked")
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", fail_lstat)
 
     with pytest.raises(RecordError, match="blocked"):
         write_record(root)

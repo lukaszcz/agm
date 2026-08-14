@@ -22,11 +22,15 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from agm.agl.modules.roots import RootSet
 from agm.agl.runtime.request import AgentResponse
 from agm.agl.runtime.types import ParamDeclInfo
 from agm.agl.semantics.types import BoolType
+
+if TYPE_CHECKING:
+    from agm.cli_support.exec_target import PackageProgramReference
 
 
 def _build_engine_key_flags() -> frozenset[str]:
@@ -165,13 +169,24 @@ def _ambiguous_short_flags(
     }
 
 
-def _param_value_name(
-    param: ParamDeclInfo, ambiguous_short_flags: Mapping[str, tuple[ParamDeclInfo, ...]]
-) -> str:
-    """Return the external key for *param*, qualifying ambiguous leaves."""
-    if any(param in candidates for candidates in ambiguous_short_flags.values()):
-        return param.qualified_name
-    return param.name
+def external_param_keys(params: tuple[ParamDeclInfo, ...]) -> dict[ParamDeclInfo, str]:
+    """Return each param's external key: its CLI flag/config-table spelling.
+
+    A param's own name doubles as its external key everywhere — the CLI flag
+    ``--<name>`` and the config-table key ``<name>`` — unless that spelling is
+    ambiguous: shared with another param's short spelling, or colliding with a
+    reserved built-in flag (``RESERVED_FLAGS``). An ambiguous param's external
+    key is always its module-qualified spelling, so every layer that reads or
+    writes its value (CLI flags, config tables) agrees on one key regardless
+    of how the value was supplied. This is the single rule shared by CLI flag
+    parsing (:func:`parse_param_tokens`) and qualified config-key resolution.
+    """
+    ambiguous_params = {
+        param for candidates in _ambiguous_short_flags(params).values() for param in candidates
+    }
+    return {
+        param: param.qualified_name if param in ambiguous_params else param.name for param in params
+    }
 
 
 def _escaped_qualified_name(qualified_name: str) -> str:
@@ -312,54 +327,35 @@ def discover_params_from_source(
 
 
 def discover_params_from_installed_reference(
-    reference: str,
+    resolved: "PackageProgramReference",
     *,
     home: Path,
     proj_dir: Path | None,
     cwd: Path,
     default_stdlib: bool = True,
 ) -> tuple[ParamDeclInfo, ...]:
-    """Discover params for an active package program reference.
+    """Discover params for an already-resolved active package program reference.
 
-    Help and completion must resolve ``PACKAGE/MODULE::PROGRAM`` through the
-    same active package selection as execution.  They are advisory surfaces,
-    so malformed, inactive, or unreadable references degrade to no params.
+    Help and completion resolve ``PACKAGE/MODULE::PROGRAM`` through the same
+    active package selection as execution, then pass the result here.  They are
+    advisory surfaces, so an unreadable entry or a program that no longer parses
+    degrades to no params.
     """
     try:
-        from agm.agl.modules.ids import ModuleId
         from agm.cli_support.exec_roots import effective_exec_roots
-        from agm.packages.activation import select_active_packages
-        from agm.packages.development import discover_development_packages
 
-        module_path, separator, declaration_path = reference.partition("::")
-        if not separator or not declaration_path:
-            return ()
-        module_id = ModuleId.from_path(module_path)
-        packages = select_active_packages(home=home, proj_dir=proj_dir, cwd=cwd)
-        package = next(
-            (
-                candidate
-                for candidate in packages
-                if candidate.manifest.name == module_id.segments[0]
-            ),
-            None,
-        )
-        if package is None:
-            return ()
-        entry_path = package.root / module_id.relpath()
-        source = entry_path.read_text(encoding="utf-8")
-        roots = effective_exec_roots(
-            entry_path=entry_path,
+        source = resolved.entry_path.read_text(encoding="utf-8")
+        exec_roots = effective_exec_roots(
+            entry_path=resolved.entry_path,
             module_paths=[],
             cwd=cwd,
             home=home,
             proj_dir=proj_dir,
-            package_roots=discover_development_packages(entry_path, home=home),
         )
         return discover_params_from_source(
             source,
-            entry_path=entry_path,
-            roots=roots,
+            entry_path=resolved.entry_path,
+            roots=exec_roots.roots,
             default_stdlib=default_stdlib,
         )
     except (Exception, SystemExit):
@@ -382,7 +378,7 @@ def parse_param_tokens(
     - Missing value for a non-bool flag
     - Duplicate param flags
     """
-    ambiguous_short_flags = _ambiguous_short_flags(params)
+    external_keys = external_param_keys(params)
     selected = _param_flag_map(params)
     flag_to_param = {flag: (param, bool_value) for flag, param, bool_value in selected.bindings}
 
@@ -404,55 +400,43 @@ def parse_param_tokens(
         return ", ".join(repairs)
 
     result: dict[str, object] = {}
+
+    def store(param: ParamDeclInfo, value: object) -> None:
+        """Record *value* for *param*, rejecting a flag repeated for the same param."""
+        key = external_keys[param]
+        if key in result:
+            raise ValueError(f"Option '{param_flag(param.name)}' specified more than once")
+        result[key] = value
+
     i = 0
     while i < len(tokens):
         token = tokens[i]
         if not token.startswith("--"):
             raise ValueError(f"Unexpected argument: {token!r}")
 
-        # Handle ``--name=value`` form.
-        if "=" in token:
-            flag, _, value = token.partition("=")
-            if flag in selected.ambiguous:
-                raise ValueError(
-                    f"Option {flag!r} is ambiguous; use one of: {ambiguity_repair(flag)}"
-                )
-            if flag not in flag_to_param:
-                raise ValueError(f"Unknown option: {flag!r}")
-            param, bool_val = flag_to_param[flag]
+        # ``--name=value`` and ``--name`` share one flag lookup; only the
+        # trailing value source differs.
+        flag, has_equals, inline_value = token.partition("=")
+        if flag in selected.ambiguous:
+            raise ValueError(f"Option {flag!r} is ambiguous; use one of: {ambiguity_repair(flag)}")
+        if flag not in flag_to_param:
+            raise ValueError(f"Unknown option: {flag!r}")
+        param, bool_val = flag_to_param[flag]
+
+        if has_equals:
             if bool_val is not None:
                 raise ValueError(f"Option {flag!r} does not take a value")
-            result_name = _param_value_name(param, ambiguous_short_flags)
-            if result_name in result:
-                raise ValueError(f"Option '{param_flag(param.name)}' specified more than once")
-            result[result_name] = value
+            store(param, inline_value)
             i += 1
-            continue
-
-        # Handle ``--name`` form.
-        if token in selected.ambiguous:
-            raise ValueError(
-                f"Option {token!r} is ambiguous; use one of: {ambiguity_repair(token)}"
-            )
-        if token not in flag_to_param:
-            raise ValueError(f"Unknown option: {token!r}")
-
-        param, bool_val = flag_to_param[token]
-        if bool_val is not None:
+        elif bool_val is not None:
             # Bool flag: --name → True, --no-name → False.
-            result_name = _param_value_name(param, ambiguous_short_flags)
-            if result_name in result:
-                raise ValueError(f"Option '{param_flag(param.name)}' specified more than once")
-            result[result_name] = bool_val
+            store(param, bool_val)
             i += 1
         else:
             # Value-taking flag: next token is the value.
             if i + 1 >= len(tokens) or tokens[i + 1].startswith("--"):
                 raise ValueError(f"Option {token!r} requires a value")
-            result_name = _param_value_name(param, ambiguous_short_flags)
-            if result_name in result:
-                raise ValueError(f"Option '{param_flag(param.name)}' specified more than once")
-            result[result_name] = tokens[i + 1]
+            store(param, tokens[i + 1])
             i += 2
 
     return result

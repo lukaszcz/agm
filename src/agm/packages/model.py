@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 import semver
 
@@ -12,11 +14,20 @@ from agm.version import AGM_VERSION
 
 PackageIdentity = tuple[str, str]
 
+STD_PACKAGE_NAME = "std"
+"""The name of AGM's managed, lockstep standard-library package."""
+
 
 def canonical_package_identity(name: str, version: semver.Version) -> PackageIdentity:
     """Return an exact canonical identity, including semantic-version build metadata."""
 
     return name, str(version)
+
+
+def is_std_package_name(name: str) -> bool:
+    """Return whether *name* names AGM's managed, lockstep standard-library package."""
+
+    return name == STD_PACKAGE_NAME
 
 
 def unmet_std_requirement(requirement: DependencySpec) -> str | None:
@@ -48,6 +59,47 @@ class PackageInfo:
         """Return the package's module-tree directory."""
 
         return (self.root / self.manifest.name).resolve()
+
+
+class VersionSelection(Protocol):
+    """The version/editable shape ``select_satisfying`` needs from an active selection.
+
+    A structural protocol lets this module accept ``activation.ActivePackage``
+    (and any similar store-domain caller) without importing it, since
+    ``activation`` itself imports this module. Read-only properties (rather
+    than plain attributes) match a frozen dataclass's read-only fields.
+    """
+
+    @property
+    def version(self) -> semver.Version: ...
+
+    @property
+    def editable(self) -> Path | None: ...
+
+
+def select_satisfying(
+    candidates: Sequence[PackageInfo], active: VersionSelection | None
+) -> PackageInfo | None:
+    """Return the greatest satisfying candidate, preferring the active build on a tie.
+
+    Versions that compare equal can still differ in build metadata, so an
+    exact match for the current selection wins over an equivalent sibling.
+    This is the shared MVS choice made by installation, dependency
+    validation, and activation-index rebuilding.
+    """
+
+    if not candidates:
+        return None
+    selected = candidates[0]
+    for candidate in candidates[1:]:
+        if candidate.manifest.version > selected.manifest.version or (
+            candidate.manifest.version == selected.manifest.version
+            and active is not None
+            and active.editable is None
+            and str(candidate.manifest.version) == str(active.version)
+        ):
+            selected = candidate
+    return selected
 
 
 def owning_package(path: Path, packages: tuple[PackageInfo, ...]) -> PackageInfo | None:

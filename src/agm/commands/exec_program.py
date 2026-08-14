@@ -61,7 +61,6 @@ from typing import NoReturn, TypeVar
 
 from agm.agl import PipelineDriver
 from agm.agl.diagnostics import format_diagnostic
-from agm.agl.modules.ids import ModuleId
 from agm.agl.runtime.agents import value_driven_agent_factory
 from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.agl.runtime.types import ParamDeclInfo
@@ -71,10 +70,16 @@ from agm.cli_support.args import ExecArgs
 from agm.cli_support.engine_seeds import build_host_engine_seeds, check_max_iters
 from agm.cli_support.exec_params import (
     discover_params_from_installed_reference,
+    external_param_keys,
     param_option_flags,
     parse_param_tokens,
 )
 from agm.cli_support.exec_roots import effective_exec_roots
+from agm.cli_support.exec_target import (
+    ExecTargetError,
+    PackageProgramReference,
+    resolve_installed_reference,
+)
 from agm.config.context import ConfigContext, current_config_context
 from agm.config.general import exec_config_from_merged, load_general_config
 from agm.config.module_roots import StdlibResolutionError
@@ -82,6 +87,7 @@ from agm.config.qualified_keys import (
     RESERVED_CONFIG_SECTION_NAMES,
     QualifiedConfigKey,
     QualifiedConfigLookupError,
+    build_qualified_config_key,
     resolve_qualified_values,
 )
 from agm.core import dry_run
@@ -93,16 +99,23 @@ from agm.core.log import (
 )
 from agm.core.parse import parse_timeout
 from agm.core.toml import toml_dict
-from agm.packages.activation import load_activation_index, select_active_packages
-from agm.packages.development import discover_development_packages
+from agm.packages.activation import load_activation_index
 from agm.packages.model import PackageInfo, owning_package
-from agm.parser import exit_with_usage_error
 
 
-def _scoped_config_key(module_segments: tuple[str, ...], public_name: str) -> QualifiedConfigKey:
-    """Build the config address for one scope-qualified declaration name."""
-    *scope_path, leaf = public_name.split("::")
-    return QualifiedConfigKey(module_segments, tuple(scope_path), leaf)
+class RegisteredParamUsageError(Exception):
+    """Raised when CLI parameter tokens fail to parse against a program's params.
+
+    Carries the parse-failure message and the program's parameter inventory so
+    the caller can render a usage message appropriate to how the program was
+    invoked: a plain ``agm exec`` usage error, or (for a dispatched registered
+    command) the shared registered-command help rendering.
+    """
+
+    def __init__(self, message: str, params: tuple[ParamDeclInfo, ...]) -> None:
+        super().__init__(message)
+        self.message = message
+        self.params = params
 
 
 def _entry_module_segments(
@@ -149,16 +162,17 @@ def registered_program_params(
 ) -> tuple[ParamDeclInfo, ...]:
     """Discover the parameter inventory for a registered program, degrading on failure."""
     try:
-        module_path, separator, declaration_path = program.partition("::")
-        if not separator or not declaration_path:
-            return ()
-        module_id = ModuleId.from_path(module_path)
-        if module_id.segments[0] != package_name:
-            return ()
         if context is None:
             context = current_config_context()
+        target = resolve_installed_reference(
+            program, home=context.home, proj_dir=context.proj_dir, cwd=context.cwd
+        )
+        if not isinstance(target, PackageProgramReference):
+            return ()
+        if target.module_id.segments[0] != package_name:
+            return ()
         return discover_params_from_installed_reference(
-            program,
+            target,
             home=context.home,
             proj_dir=context.proj_dir,
             cwd=context.cwd,
@@ -178,8 +192,6 @@ def run(
     args: ExecArgs,
     *,
     entry_module_segments: tuple[str, ...] | None = None,
-    usage_command_path: str | None = None,
-    usage_description: str | None = None,
 ) -> None:
     """Run an AgL program selected by an exec argument container."""
     # The program source comes either from an inline ``-c/--command`` argument
@@ -198,14 +210,26 @@ def run(
         raise SystemExit(1)
 
     ctx = current_config_context()
+    # Module roots (and the development packages reachable from the entry) are
+    # assembled ONCE here, up front: this same root set is reused below for
+    # scoping the graph, and the development packages for routing a directly
+    # executed development-package file to its package-qualified config route.
     try:
-        development_packages = discover_development_packages(entry_path or ctx.cwd, home=ctx.home)
-    except ValueError as exc:
+        exec_roots = effective_exec_roots(
+            entry_path=entry_path,
+            module_paths=args.module_paths,
+            cwd=ctx.cwd,
+            home=ctx.home,
+            proj_dir=ctx.proj_dir,
+        )
+    except (StdlibResolutionError, ValueError) as exc:
         print(f"Error: invalid module roots configuration: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
     entry_stem: str | None = Path(args.file).stem if args.file is not None else None
-    development_entry_segments = _development_entry_segments(entry_path, development_packages)
+    development_entry_segments = _development_entry_segments(
+        entry_path, exec_roots.development_packages
+    )
     config_entry_segments: tuple[str, ...]
     if entry_module_segments is not None:
         config_entry_segments = entry_module_segments
@@ -359,28 +383,13 @@ def run(
         agent=args.agent,
     )
 
-    # ----------------------------------------------------------------
-    # Assemble module roots and load + scope the graph ONCE, splicing any
-    # engine-setting overrides in as part of that same pass.  A source
-    # ``std/config::KEY := VALUE`` write takes effect at its program point and
-    # overrides the CLI flag, which overrides the config-file layer.
-    # ----------------------------------------------------------------
-    try:
-        roots = effective_exec_roots(
-            entry_path=entry_path,
-            module_paths=args.module_paths,
-            cwd=ctx.cwd,
-            home=ctx.home,
-            proj_dir=ctx.proj_dir,
-            package_roots=development_packages,
-        )
-    except (StdlibResolutionError, ValueError) as exc:
-        print(f"Error: invalid module roots configuration: {exc}", file=sys.stderr)
-        raise SystemExit(1) from exc
-
+    # Load + scope the graph ONCE, against the module roots assembled above,
+    # splicing any engine-setting overrides in as part of that same pass.  A
+    # source ``std/config::KEY := VALUE`` write takes effect at its program
+    # point and overrides the CLI flag, which overrides the config-file layer.
     prepared = PipelineDriver.prepare_parsed_entry(
         parsed,
-        roots=roots,
+        roots=exec_roots.roots,
         default_stdlib=not args.no_stdlib,
         setting_overrides=engine_seeds.overrides,
     )
@@ -437,26 +446,11 @@ def run(
     try:
         cli_params = parse_param_tokens(selected_params, args.param_tokens)
     except ValueError as exc:
-        if usage_command_path is None:
-            exit_with_usage_error(["exec"], f"error: {exc}")
-        print(f"error: {exc}", file=sys.stderr)
-        print(file=sys.stderr)
-        print(
-            f"usage: agm {usage_command_path} [--PARAM VALUE]... [--dry-run]",
-            file=sys.stderr,
-        )
-        if usage_description is not None:
-            print(f"\n{usage_description}", file=sys.stderr)
-        flags = param_option_flags(selected_params)
-        if flags:
-            print("\nProgram parameters:", file=sys.stderr)
-            for flag in flags:
-                print(f"  {flag}", file=sys.stderr)
-        raise SystemExit(1) from exc
+        raise RegisteredParamUsageError(str(exc), selected_params) from exc
 
     if entry_stem is not None:
         param_keys = {
-            param: _scoped_config_key(
+            param: build_qualified_config_key(
                 _entry_module_segments(config_entry_segments, param.module_segments), param.name
             )
             for param in selected_params
@@ -466,14 +460,10 @@ def run(
         except QualifiedConfigLookupError as exc:
             print(f"Error: invalid qualified configuration: {exc}", file=sys.stderr)
             raise SystemExit(1) from exc
-        name_counts: dict[str, int] = {}
-        for param in selected_params:
-            name_counts[param.name] = name_counts.get(param.name, 0) + 1
+        external_keys = external_param_keys(selected_params)
         external_params.update(
             {
-                param.qualified_name
-                if name_counts[param.name] > 1
-                else param.name: configured_params[key]
+                external_keys[param]: configured_params[key]
                 for param, key in param_keys.items()
                 if key in configured_params
             }
@@ -586,18 +576,21 @@ def run(
     raise SystemExit(2)
 
 
-def _installed_reference_parts(program: str) -> tuple[ModuleId, str]:
-    """Split an installed ``MODULE::DECLARATION`` reference, exiting on bad syntax."""
-
-    module_path, separator, declaration_path = program.partition("::")
-    if not separator or not declaration_path:
-        print(f"Error: invalid installed program reference {program!r}.", file=sys.stderr)
+def _resolve_installed_reference_or_exit(
+    program: str, *, context: ConfigContext, package_name: str | None = None
+) -> PackageProgramReference:
+    """Resolve an installed reference through the shared resolver, exiting on failure."""
+    target = resolve_installed_reference(
+        program,
+        home=context.home,
+        proj_dir=context.proj_dir,
+        cwd=context.cwd,
+        package_name=package_name,
+    )
+    if isinstance(target, ExecTargetError):
+        print(f"Error: {target.message}", file=sys.stderr)
         raise SystemExit(1)
-    try:
-        return ModuleId.from_path(module_path), declaration_path
-    except ValueError as exc:
-        print(f"Error: invalid installed program reference {program!r}: {exc}", file=sys.stderr)
-        raise SystemExit(1) from exc
+    return target
 
 
 def run_registered(
@@ -621,49 +614,32 @@ def run_registered(
         print("Error: incomplete registered package command metadata.", file=sys.stderr)
         raise SystemExit(1)
 
-    module_id, declaration_path = _installed_reference_parts(program)
     context = current_config_context()
-    try:
-        packages = select_active_packages(
-            home=context.home, proj_dir=context.proj_dir, cwd=context.cwd
-        )
-    except ValueError as exc:
-        print(f"Error: cannot resolve active packages: {exc}", file=sys.stderr)
-        raise SystemExit(1) from exc
-    package_name = module_id.segments[0] if package is None else package
-    selected_package = next(
-        (candidate for candidate in packages if candidate.manifest.name == package_name), None
-    )
-    if selected_package is None:
-        print(
-            f"Error: installed program reference {program!r} does not name an active package.",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
-    usage_description: str | None = None
+    target = _resolve_installed_reference_or_exit(program, context=context, package_name=package)
+
     if package is not None and command_path is not None:
-        command = selected_package.manifest.commands.get(command_path)
-        if module_id.segments[0] != package or command is None:
+        command = target.package.manifest.commands.get(command_path)
+        if target.module_id.segments[0] != package or command is None:
             _registered_command_mismatch(command_path)
-        usage_description = command.description
         if command.program != program:
             # The index deliberately remains an install-time cache. Editable
             # packages are its one live exception: their manifest is reread
             # above with the active package selection, so follow a changed
             # registration while immutable cached entries stay fail-closed.
             active = load_activation_index(home=context.home).packages.get(package)
-            if active is None or active.editable != selected_package.root:
+            if active is None or active.editable != target.package.root:
                 _registered_command_mismatch(command_path)
             program = command.program
-            module_id, declaration_path = _installed_reference_parts(program)
-            if module_id.segments[0] != package:
+            target = _resolve_installed_reference_or_exit(
+                program, context=context, package_name=package
+            )
+            if target.module_id.segments[0] != package:
                 _registered_command_mismatch(command_path)
 
-    entry_path = selected_package.root / module_id.relpath()
-    if not entry_path.is_file():
+    if not target.entry_path.is_file():
         print(f"Error: installed program reference {program!r} was not found.", file=sys.stderr)
         raise SystemExit(1)
-    if owning_package(entry_path, packages) is not selected_package:
+    if owning_package(target.entry_path, target.packages) is not target.package:
         print(
             f"Error: installed program reference {program!r} is not owned by its active package.",
             file=sys.stderr,
@@ -684,12 +660,12 @@ def run_registered(
     run(
         replace(
             execution_args,
-            file=str(entry_path.resolve()),
+            file=str(target.entry_path.resolve()),
             program=(
-                declaration_path if execution_args.program is None else execution_args.program
+                target.declaration_path
+                if execution_args.program is None
+                else execution_args.program
             ),
         ),
-        entry_module_segments=module_id.segments,
-        usage_command_path=command_path,
-        usage_description=usage_description,
+        entry_module_segments=target.module_id.segments,
     )

@@ -48,7 +48,7 @@ from agm.config.module_roots import (
     resolve_lib_root,
     resolve_stdlib_root,
 )
-from agm.config.qualified_keys import QualifiedConfigKey, resolve_qualified_values
+from agm.config.qualified_keys import build_qualified_config_key, resolve_qualified_values
 from agm.core import dry_run
 from agm.core.log import (
     LiveTracePathResolver,
@@ -166,10 +166,10 @@ def run(args: ReplArgs) -> None:
     )
 
     def imported_param_config(params: tuple["IrParam", ...]) -> dict[str, object]:
-        keys: dict[IrParam, QualifiedConfigKey] = {}
-        for param in params:
-            *scope_path, leaf = param.public_name.split("::")
-            keys[param] = QualifiedConfigKey(param.module.segments, tuple(scope_path), leaf)
+        keys = {
+            param: build_qualified_config_key(param.module.segments, param.public_name)
+            for param in params
+        }
         resolved = resolve_qualified_values(config_view, keys.values())
         return {
             param.qualified_public_name: resolved[key]

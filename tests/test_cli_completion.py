@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from typing import Any, cast
@@ -124,6 +125,44 @@ def test_installed_exec_reference_offers_program_param_completion(
     ]
 
     assert "--level" in values
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="permission bits are meaningless for root or on non-POSIX platforms",
+)
+def test_completion_treats_an_unreadable_colon_named_file_as_a_file_not_a_reference(
+    tmp_path: Path,
+) -> None:
+    """Regression: completion used to decide "installed reference" by catching
+    ``OSError`` from reading the file, which disagreed with execution's
+    ``is_file()``-based rule for an existing-but-unreadable file whose name
+    contains ``::``. Both must classify it as a file (and so both simply fail
+    to read it) rather than treating it as a package reference.
+    """
+    unreadable = tmp_path / "pkg::mod.agl"
+    unreadable.write_text("param level: text\n", encoding="utf-8")
+    unreadable.chmod(0)
+    try:
+        from agm.cli_support.exec_target import is_installed_reference
+
+        assert is_installed_reference(str(unreadable), command=None) is False
+
+        from agm.cli import app
+
+        shell_complete = ShellComplete(
+            typer.main.get_command(app), {}, "agm", "_TYPER_COMPLETE_ARGS"
+        )
+        values = [
+            item.value for item in shell_complete.get_completions(["exec", str(unreadable)], "--")
+        ]
+
+        # Degrades to base completion (the file can't be read) rather than
+        # attempting package resolution for "pkg::mod.agl" as a reference.
+        assert "--agent" in values
+        assert "--level" not in values
+    finally:
+        unreadable.chmod(0o644)
 
 
 def test_registered_param_completion_degrades_on_unknown_or_unavailable_commands(

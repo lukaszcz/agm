@@ -11,11 +11,12 @@ import zipfile
 import zlib
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path, PurePosixPath
 from typing import IO, TYPE_CHECKING, TypeVar, cast
 
 from pathspec import PathSpec
 
+from agm.core.path import is_portable_relative_path
 from agm.packages.manifest import (
     ManifestError,
     PackageManifest,
@@ -28,8 +29,8 @@ from agm.packages.record import (
     RecordError,
     content_hash,
     parse_record,
-    posix_relative_path,
     serialize_record,
+    walk_package_tree,
 )
 
 if TYPE_CHECKING:
@@ -542,34 +543,25 @@ def _directory_identity(result: os.stat_result) -> _DirectoryIdentity:
 
 
 def _source_paths(root: Path) -> tuple[Path, ...]:
-    """Return every source descendant, refusing directories that cannot be read."""
+    """Return every source descendant, refusing directories that cannot be read.
 
-    paths: list[Path] = []
+    Symlinks are accepted by this walk and rejected separately, once collected,
+    by :func:`_reject_source_links`.
+    """
 
-    def visit(directory: Path) -> None:
-        children: list[Path] = []
-        try:
-            for child in directory.iterdir():
-                children.append(child)
-        except OSError as exc:
-            raise ArchiveError(f"cannot read package directory {directory}: {exc}") from exc
-        for child in children:
-            paths.append(child)
-            try:
-                child_mode = child.lstat().st_mode
-            except OSError as exc:
-                raise ArchiveError(f"cannot inspect package source {child}: {exc}") from exc
-            if (
-                not stat.S_ISREG(child_mode)
-                and not stat.S_ISDIR(child_mode)
-                and not stat.S_ISLNK(child_mode)
-            ):
-                raise ArchiveError(f"package contains unsupported filesystem node {child}")
-            if stat.S_ISDIR(child_mode):
-                visit(child)
+    def accept(child: Path, mode: int) -> None:
+        if not stat.S_ISREG(mode) and not stat.S_ISDIR(mode) and not stat.S_ISLNK(mode):
+            raise ArchiveError(f"package contains unsupported filesystem node {child}")
 
-    visit(root)
-    return tuple(sorted(paths, key=posix_relative_path(root)))
+    def directory_error(directory: Path, exc: OSError) -> ArchiveError:
+        return ArchiveError(f"cannot read package directory {directory}: {exc}")
+
+    def entry_error(child: Path, exc: OSError) -> ArchiveError:
+        return ArchiveError(f"cannot inspect package source {child}: {exc}")
+
+    return walk_package_tree(
+        root, accept=accept, on_directory_error=directory_error, on_entry_error=entry_error
+    )
 
 
 def _reject_source_links(root: Path) -> None:
@@ -882,20 +874,9 @@ def _validate_zip_info(info: zipfile.ZipInfo) -> None:
 
 
 def _archive_path(value: str) -> PurePosixPath:
-    path = PurePosixPath(value)
-    windows_path = PureWindowsPath(value)
-    if (
-        not value
-        or "\\" in value
-        or "\x00" in value
-        or value.endswith("/")
-        or path.is_absolute()
-        or windows_path.drive
-        or windows_path.root
-        or any(part in {".", ".."} for part in path.parts)
-        or path.as_posix() != value
-    ):
+    if not is_portable_relative_path(value):
         raise ArchiveError(f"invalid package archive entry {value!r}")
+    path = PurePosixPath(value)
     if len(path.parts) > MAX_ARCHIVE_PATH_COMPONENTS:
         raise ArchiveError(f"package archive entry exceeds path depth limit: {value!r}")
     _validate_portable_components(path.parts, value)
@@ -950,29 +931,36 @@ def _record_from_bytes(content: bytes) -> tuple[RecordEntry, ...]:
     return entries
 
 
-def _read_entry(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes:
-    content = bytearray()
-    with archive.open(info) as file:
-        while chunk := file.read(_HASH_CHUNK_SIZE):
-            content.extend(chunk)
-            if len(content) > MAX_ARCHIVE_ENTRY_SIZE:
-                raise ArchiveError("package archive entry exceeds the size limit")
-    if len(content) != info.file_size:
-        raise ArchiveError("package archive entry size does not match its metadata")
-    return bytes(content)
+def _stream_entry(
+    archive: zipfile.ZipFile, info: zipfile.ZipInfo, sink: Callable[[bytes], None]
+) -> None:
+    """Feed one archive entry's bytes to *sink* in bounded chunks.
 
+    Enforces :data:`MAX_ARCHIVE_ENTRY_SIZE` while reading and checks the total
+    against the entry's declared size once streaming completes, so both the
+    accumulating and digesting readers apply the same guards.
+    """
 
-def _entry_digest(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> str:
-    digest = hashlib.sha256()
     size = 0
     with archive.open(info) as file:
         while chunk := file.read(_HASH_CHUNK_SIZE):
             size += len(chunk)
             if size > MAX_ARCHIVE_ENTRY_SIZE:
                 raise ArchiveError("package archive entry exceeds the size limit")
-            digest.update(chunk)
+            sink(chunk)
     if size != info.file_size:
         raise ArchiveError("package archive entry size does not match its metadata")
+
+
+def _read_entry(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes:
+    content = bytearray()
+    _stream_entry(archive, info, content.extend)
+    return bytes(content)
+
+
+def _entry_digest(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> str:
+    digest = hashlib.sha256()
+    _stream_entry(archive, info, digest.update)
     return digest.hexdigest()
 
 

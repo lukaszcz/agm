@@ -1006,48 +1006,45 @@ def _exec_print_help(
         discover_params_from_source,
         render_param_help_section,
     )
+    from agm.cli_support.exec_target import FileEntry, InlineSource, PackageProgramReference
     from agm.core.fs import read_text_arg
 
     print_help_for_command_path(["exec"])
 
-    source: str | None = None
-    if command is not None:
-        source = command
-    elif file is not None and ("::" not in file or Path(file).is_file()):
-        try:
-            source = read_text_arg(Path(file))
-        except SystemExit:
-            source = None
-
     try:
+        from agm.cli_support.exec_roots import effective_exec_roots
+        from agm.cli_support.exec_target import resolve_exec_target
         from agm.config.context import current_config_context
 
         context = current_config_context()
-        if source is not None:
-            from agm.cli_support.exec_roots import effective_exec_roots
-            from agm.packages.development import discover_development_packages
-
-            entry_path = None if command is not None or file is None else Path(file)
-            roots = effective_exec_roots(
+        target = resolve_exec_target(
+            file=file,
+            command=command,
+            home=context.home,
+            proj_dir=context.proj_dir,
+            cwd=context.cwd,
+        )
+        if isinstance(target, (InlineSource, FileEntry)):
+            source = command if isinstance(target, InlineSource) else read_text_arg(target.path)
+            entry_path = target.path if isinstance(target, FileEntry) else None
+            exec_roots = effective_exec_roots(
                 entry_path=entry_path,
                 module_paths=[] if module_paths is None else module_paths,
                 cwd=context.cwd,
                 home=context.home,
                 proj_dir=context.proj_dir,
-                package_roots=discover_development_packages(
-                    entry_path or context.cwd, home=context.home
-                ),
             )
+            assert source is not None
             params = discover_params_from_source(
                 source,
-                inline_source=command is not None,
+                inline_source=isinstance(target, InlineSource),
                 entry_path=entry_path,
-                roots=roots,
+                roots=exec_roots.roots,
                 default_stdlib=not no_stdlib,
             )
-        elif file is not None:
+        elif isinstance(target, PackageProgramReference):
             params = discover_params_from_installed_reference(
-                file,
+                target,
                 home=context.home,
                 proj_dir=context.proj_dir,
                 cwd=context.cwd,

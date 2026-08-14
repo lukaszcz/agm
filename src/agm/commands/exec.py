@@ -7,20 +7,19 @@ parameter, configuration, engine-setting, and runtime handling.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from agm.cli_support.args import ExecArgs
+from agm.cli_support.exec_target import is_installed_reference
 from agm.commands import exec_program
+from agm.commands.exec_program import RegisteredParamUsageError
+from agm.parser import exit_with_usage_error
 
 
 def run(args: ExecArgs) -> None:
     """Run a file, inline source, or installed program reference."""
-    if (
-        args.file is not None
-        and "::" in args.file
-        and args.command is None
-        and not Path(args.file).is_file()
-    ):
-        exec_program.run_registered(args.file, args.param_tokens, args=args)
-        return
-    exec_program.run(args)
+    try:
+        if args.file is not None and is_installed_reference(args.file, command=args.command):
+            exec_program.run_registered(args.file, args.param_tokens, args=args)
+            return
+        exec_program.run(args)
+    except RegisteredParamUsageError as exc:
+        exit_with_usage_error(["exec"], f"error: {exc.message}")

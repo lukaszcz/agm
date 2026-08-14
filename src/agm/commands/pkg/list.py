@@ -13,6 +13,7 @@ from agm.packages.activation import (
     command_shadow_diagnostics,
     load_activation_index,
     reconcile_package_commands,
+    resolve_indexed_packages,
 )
 from agm.packages.install import PackageInstallError, installed_packages
 from agm.packages.manifest import ManifestError
@@ -31,8 +32,9 @@ def run(args: PkgListArgs) -> None:
         raise SystemExit(1) from exc
     try:
         packages = installed_packages(home=context.home)
-        index = reconcile_package_commands(index, home=context.home)
-        shadows = command_shadow_diagnostics(index, home=context.home)
+        active_packages = resolve_indexed_packages(index, home=context.home)
+        index = reconcile_package_commands(index, home=context.home, packages=active_packages)
+        shadows = command_shadow_diagnostics(index, home=context.home, packages=active_packages)
         editable_versions = {
             name: active_package_version(active)
             for name, active in index.packages.items()

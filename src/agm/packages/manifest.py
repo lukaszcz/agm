@@ -95,7 +95,7 @@ def _parse_manifest(raw: TomlDict) -> PackageManifest:
         {"name", "version", "description", "license", "authors", "repository", "keywords"},
         "package",
     )
-    name = _package_name(_required_str(package, "name", "package"))
+    name = validate_package_name(_required_str(package, "name", "package"))
     return PackageManifest(
         name=name,
         version=_version(_required_str(package, "version", "package"), "package version"),
@@ -109,7 +109,13 @@ def _parse_manifest(raw: TomlDict) -> PackageManifest:
     )
 
 
-def _package_name(value: str) -> str:
+def validate_package_name(value: str) -> str:
+    """Validate a package or dependency name and return it unchanged.
+
+    A name must be a single AgL module-path segment and not a reserved AgL
+    keyword. This is the single package-name validation rule; other package
+    layers translate ``ManifestError`` into their own error type.
+    """
     try:
         module_id = ModuleId.from_path(value)
     except ValueError as exc:
@@ -124,7 +130,7 @@ def _package_name(value: str) -> str:
 def _dependencies(raw: TomlDict) -> dict[str, DependencySpec]:
     dependencies: dict[str, DependencySpec] = {}
     for name, value in raw.items():
-        _package_name(name)
+        validate_package_name(name)
         if isinstance(value, str):
             dependencies[name] = DependencySpec(
                 _minimum_version(value, f"dependency {name!r} version")

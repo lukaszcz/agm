@@ -512,27 +512,27 @@ class ExecCommand(TyperCommand):
         if not incomplete.startswith("-"):
             return base
         try:
+            from agm.cli_support.exec_target import (
+                FileEntry,
+                InlineSource,
+                PackageProgramReference,
+                resolve_exec_target,
+            )
+
             params = cast(dict[str, object], ctx.params)
-            source: str | None = None
-            entry_path: Path | None = None
-            installed_reference: str | None = None
-            inline_source = False
             raw_command = params.get("command")
-            if isinstance(raw_command, str):
-                source = raw_command
-                inline_source = True
-            else:
-                raw_file = params.get("file")
-                if isinstance(raw_file, str):
-                    try:
-                        entry_path = Path(raw_file)
-                        source = entry_path.read_text()
-                    except OSError:
-                        installed_reference = raw_file
+            command = raw_command if isinstance(raw_command, str) else None
+            raw_file = params.get("file")
+            file = raw_file if isinstance(raw_file, str) else None
             context = current_config_context()
-            if source is None:
-                if installed_reference is None:
-                    return base
+            target = resolve_exec_target(
+                file=file,
+                command=command,
+                home=context.home,
+                proj_dir=context.proj_dir,
+                cwd=context.cwd,
+            )
+            if isinstance(target, PackageProgramReference):
                 from agm.cli_support.exec_params import (
                     discover_params_from_installed_reference,
                     param_option_flags,
@@ -542,7 +542,7 @@ class ExecCommand(TyperCommand):
                     CompletionItem(flag)
                     for flag in param_option_flags(
                         discover_params_from_installed_reference(
-                            installed_reference,
+                            target,
                             home=context.home,
                             proj_dir=context.proj_dir,
                             cwd=context.cwd,
@@ -551,34 +551,35 @@ class ExecCommand(TyperCommand):
                     )
                     if flag.startswith(incomplete)
                 ]
-            else:
+            elif isinstance(target, (InlineSource, FileEntry)):
                 from agm.cli_support.exec_roots import effective_exec_roots
-                from agm.packages.development import discover_development_packages
 
+                source = command if isinstance(target, InlineSource) else target.path.read_text()
+                entry_path = target.path if isinstance(target, FileEntry) else None
                 raw_module_paths = params.get("module_paths")
                 module_paths: list[str] = []
                 if isinstance(raw_module_paths, (list, tuple)):
                     paths = cast(list[object] | tuple[object, ...], raw_module_paths)
                     if all(isinstance(path, str) for path in paths):
                         module_paths = [cast(str, path) for path in paths]
-                roots = effective_exec_roots(
+                exec_roots = effective_exec_roots(
                     entry_path=entry_path,
                     module_paths=module_paths,
                     cwd=context.cwd,
                     home=context.home,
                     proj_dir=context.proj_dir,
-                    package_roots=discover_development_packages(
-                        entry_path or context.cwd, home=context.home
-                    ),
                 )
+                assert source is not None
                 extra = _exec_param_completion_items(
                     source,
                     incomplete,
-                    inline_source=inline_source,
+                    inline_source=isinstance(target, InlineSource),
                     entry_path=entry_path,
-                    roots=roots,
+                    roots=exec_roots.roots,
                     default_stdlib=not bool(params.get("no_stdlib")),
                 )
+            else:
+                return base
         except (Exception, SystemExit):
             return base
         items_by_value: dict[str, CompletionItem] = {}

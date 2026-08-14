@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
     from agm.agl.ir.contracts import ParamDecoder
     from agm.agl.ir.ids import ContractId, SymbolId
-    from agm.agl.ir.program import ExecutableProgram
+    from agm.agl.ir.program import ExecutableProgram, IrParam
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.contract import OutputContract
     from agm.agl.semantics.type_table import TypeTable
@@ -23,6 +23,7 @@ __all__ = [
     "build_engine_config_seeds",
     "convert_config_value",
     "convert_param_value",
+    "decode_or_diagnose_param",
     "engine_default_settings",
     "raw_option_str",
 ]
@@ -138,12 +139,56 @@ def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
     return decode_value(decoder.decode, normalized, dict(decoder.defs))
 
 
+def decode_or_diagnose_param(
+    param: "IrParam",
+    display_name: str,
+    supplied: bool,
+    raw: object,
+    *,
+    missing_message: str,
+) -> "tuple[Value, None] | tuple[None, Diagnostic] | tuple[None, None]":
+    """Decode one host-supplied param value, or build its diagnostic.
+
+    The single per-param boundary shared by IR param binding
+    (:func:`_prepare_ir_params`) and the REPL's incremental param path
+    (:meth:`~agm.agl.repl.session.ReplSession._pre_eval_param_values`).
+    Returns ``(value, None)`` on success, ``(None, diagnostic)`` when the
+    param is missing-and-required or fails to parse, and ``(None, None)``
+    when the param is missing but optional (nothing to record).
+
+    *missing_message* is caller-supplied because the two call sites phrase
+    "missing" differently: compiled-IR binding reports a plain missing-param
+    error, while the REPL's imported-param path points at supplying a
+    default expression instead.
+    """
+    from agm.agl.runtime.convert import StrictJsonParseError
+
+    if not supplied:
+        if param.required:
+            return None, Diagnostic(
+                message=missing_message,
+                line=param.location.start_line,
+                column=param.location.start_col,
+            )
+        return None, None
+    decoder = param.external_decoder
+    assert decoder is not None, "lowerer must provide an external param decoder"
+    try:
+        return decode_param_value(decoder, raw), None
+    except (StrictJsonParseError, ValueError) as exc:
+        return None, Diagnostic(
+            message=(
+                f"Param {display_name!r}: could not parse as {decoder.target_type_label}: {exc}"
+            ),
+            line=param.location.start_line,
+            column=param.location.start_col,
+        )
+
+
 def _prepare_ir_params(
     executable: "ExecutableProgram", param_values: "Mapping[str, object]"
 ) -> "tuple[dict[SymbolId, Value], list[Diagnostic]]":
     """Validate and typelessly decode external params from IR metadata."""
-    from agm.agl.runtime.convert import StrictJsonParseError
-
     decoded: "dict[SymbolId, Value]" = {}
     errors: list[Diagnostic] = []
     name_counts: dict[str, int] = {}
@@ -161,31 +206,18 @@ def _prepare_ir_params(
             if param.qualified_public_name in param_values
             else value_name
         )
-        if supplied_name not in param_values:
-            if param.required:
-                errors.append(
-                    Diagnostic(
-                        message=f"Missing required param: {value_name!r}",
-                        line=param.location.start_line,
-                        column=param.location.start_col,
-                    )
-                )
-            continue
-        decoder = param.external_decoder
-        assert decoder is not None, "lowerer must provide an external param decoder"
-        try:
-            decoded[param.symbol] = decode_param_value(decoder, param_values[supplied_name])
-        except (StrictJsonParseError, ValueError) as exc:
-            errors.append(
-                Diagnostic(
-                    message=(
-                        f"Param {value_name!r}: could not parse as "
-                        f"{decoder.target_type_label}: {exc}"
-                    ),
-                    line=param.location.start_line,
-                    column=param.location.start_col,
-                )
-            )
+        supplied = supplied_name in param_values
+        value, diagnostic = decode_or_diagnose_param(
+            param,
+            value_name,
+            supplied,
+            param_values.get(supplied_name),
+            missing_message=f"Missing required param: {value_name!r}",
+        )
+        if diagnostic is not None:
+            errors.append(diagnostic)
+        elif value is not None:
+            decoded[param.symbol] = value
     return decoded, errors
 
 

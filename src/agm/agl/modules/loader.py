@@ -300,17 +300,12 @@ def _check_package_import_visibility(
     target_package = owning_package(target_path, roots.packages)
     if target_package == source_package and target_id.segments[0] == source_package.manifest.name:
         return
-    if target_package == source_package:
-        target_name = target_id.segments[0]
-    elif target_package is not None:
-        target_name = target_package.manifest.name
-    else:
-        target_name = target_id.segments[0]
-    if (
-        target_package is not None
-        and target_id.segments[0] == target_package.manifest.name
-        and target_name in source_package.manifest.dependencies
-    ):
+    if target_package is None or target_package == source_package:
+        raise PackageImportVisibilityError(
+            source_package.manifest.name, target_id.segments[0], span=span
+        )
+    target_name = target_package.manifest.name
+    if target_id.segments[0] == target_name and target_name in source_package.manifest.dependencies:
         return
     raise PackageImportVisibilityError(source_package.manifest.name, target_name, span=span)
 

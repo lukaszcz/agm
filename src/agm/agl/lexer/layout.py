@@ -41,17 +41,13 @@ from typing import Iterator
 from lark.lexer import Token
 
 from agm.agl.diagnostics import SourceSpan
+from agm.agl.keywords import KW_CATCH, KW_DO, KW_DONE, KW_ELSE, KW_UNTIL
 from agm.agl.lexer.errors import LexError
 from agm.agl.lexer.tokens import (
     DEDENT,
     INDENT,
     INTERP_END,
     INTERP_START,
-    KW_CATCH,
-    KW_DO,
-    KW_DONE,
-    KW_ELSE,
-    KW_UNTIL,
     LBRACE,
     LPAR,
     LSQB,

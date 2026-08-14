@@ -8,6 +8,7 @@ from typing import Never
 import pytest
 import semver
 
+from agm.agl.keywords import KEYWORDS
 from agm.cli_support.exec_roots import effective_exec_roots
 from agm.packages.activation import (
     ActivationIndex,
@@ -258,6 +259,31 @@ def test_effective_command_index_reconciles_cached_immutable_command_priority(
     assert effective_command_index(home=home, proj_dir=None, cwd=tmp_path, env=env).commands == {
         "launch": CommandRegistration("bravo", "bravo/main::main")
     }
+
+
+def test_effective_command_index_reuses_a_preresolved_index(tmp_path: Path) -> None:
+    """A caller that already loaded the activation index can hand it back in."""
+    home = tmp_path / "agm-home"
+    _write_package(home, "alpha", "1.0.0")
+    env = {"AGM_HOME": str(home)}
+    write_activation_index(
+        ActivationIndex(
+            {"alpha": ActivePackage(semver.Version.parse("1.0.0"), registration_order=1)}
+        ),
+        home=home,
+        env=env,
+    )
+    supplied = ActivationIndex(
+        {"alpha": ActivePackage(semver.Version.parse("1.0.0"), registration_order=99)}
+    )
+
+    result = effective_command_index(
+        home=home, proj_dir=None, cwd=tmp_path, env=env, index=supplied
+    )
+
+    # The supplied index's registration order wins, proving it was used
+    # directly instead of the differing persisted index being reloaded.
+    assert result.packages["alpha"].registration_order == 99
 
 
 def test_effective_command_index_uses_live_editable_manifest_commands(tmp_path: Path) -> None:
@@ -926,7 +952,7 @@ def test_effective_exec_roots_mounts_indexed_packages_under_agm_home(
         cwd=cwd,
         home=tmp_path / "user-home",
         proj_dir=None,
-    )
+    ).roots
 
     assert tuple(package.manifest.name for package in roots.packages) == ("alpha",)
     assert roots.packages[0].root == package_root.resolve()
@@ -962,7 +988,7 @@ def test_effective_exec_roots_treats_stdlib_override_as_exclusive(
         cwd=cwd,
         home=tmp_path / "user-home",
         proj_dir=None,
-    )
+    ).roots
 
     assert roots.stdlib_roots == {override.resolve()}
     assert tuple(package.manifest.name for package in roots.packages) == ("alpha",)
@@ -990,7 +1016,7 @@ def test_effective_exec_roots_falls_back_when_active_std_tree_is_missing(
         cwd=cwd,
         home=tmp_path / "user-home",
         proj_dir=None,
-    )
+    ).roots
 
     assert roots.stdlib_roots == {Path(__file__).resolve().parents[1] / "stdlib"}
     assert roots.packages == ()
@@ -1245,45 +1271,7 @@ def test_active_immutable_package_must_match_exact_build_metadata(tmp_path: Path
         select_active_packages(home=home, proj_dir=None, cwd=tmp_path, env=env)
 
 
-def test_active_immutable_package_must_match_its_record(tmp_path: Path) -> None:
-    home = tmp_path / "agm-home"
-    package = _write_package(home, "alpha", "1.0.0")
-    (package / "alpha" / "main.agl").write_text("changed", encoding="utf-8")
-    env = {"AGM_HOME": str(home)}
-    write_activation_index(
-        ActivationIndex({"alpha": ActivePackage(semver.Version.parse("1.0.0"))}),
-        home=home,
-        env=env,
-    )
-
-    with pytest.raises(PackageActivationError, match="integrity"):
-        select_active_packages(home=home, proj_dir=None, cwd=tmp_path, env=env)
-
-
-def test_active_immutable_package_record_read_failure_is_wrapped(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import agm.packages.activation as activation
-
-    home = tmp_path / "agm-home"
-    _write_package(home, "alpha", "1.0.0")
-    env = {"AGM_HOME": str(home)}
-    write_activation_index(
-        ActivationIndex({"alpha": ActivePackage(semver.Version.parse("1.0.0"))}),
-        home=home,
-        env=env,
-    )
-    monkeypatch.setattr(
-        activation,
-        "verify_record",
-        lambda _root: (_ for _ in ()).throw(OSError("unreadable")),
-    )
-
-    with pytest.raises(PackageActivationError, match="integrity"):
-        select_active_packages(home=home, proj_dir=None, cwd=tmp_path, env=env)
-
-
-def test_editable_package_does_not_require_a_record(tmp_path: Path) -> None:
+def test_editable_package_resolves_to_its_live_root(tmp_path: Path) -> None:
     home = tmp_path / "agm-home"
     editable = _write_development_package(tmp_path / "editable", "alpha", "1.0.0")
     env = {"AGM_HOME": str(home)}
@@ -1340,6 +1328,18 @@ def test_requirements_must_name_an_active_package(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("name", ("bad-name", "alpha/bravo"))
 def test_write_activation_index_rejects_non_segment_package_names(
+    tmp_path: Path, name: str
+) -> None:
+    with pytest.raises(PackageActivationError):
+        write_activation_index(
+            ActivationIndex(packages={name: ActivePackage(semver.Version.parse("1.0.0"))}),
+            home=tmp_path / "home",
+            env={},
+        )
+
+
+@pytest.mark.parametrize("name", sorted(KEYWORDS))
+def test_write_activation_index_rejects_reserved_keyword_package_names(
     tmp_path: Path, name: str
 ) -> None:
     with pytest.raises(PackageActivationError):

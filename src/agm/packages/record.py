@@ -9,9 +9,10 @@ import io
 import stat
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 
 from agm.core import fs
+from agm.core.path import is_portable_relative_path
 
 _RECORD_NAME = "RECORD"
 _DIGEST_PREFIX = "sha256="
@@ -52,16 +53,32 @@ def record_entries(root: Path) -> tuple[RecordEntry, ...]:
     )
 
 
+def validate_package_tree(root: Path) -> None:
+    """Check that *root* is a package tree AGM can record, without hashing it.
+
+    Callers that only need to know a directory is eligible (regular files and
+    directories, no symlinks or special nodes, portable relative paths) use
+    this instead of building record entries, which would read and hash every
+    file only to discard the digests.
+    """
+
+    _package_tree(root)
+
+
 def read_record(root: Path) -> tuple[RecordEntry, ...]:
     """Read and validate the package ``RECORD`` below *root*."""
 
-    _validate_package_tree(root)
-    record_path = root / _RECORD_NAME
+    _package_tree(root)
+    return _read_record_entries(root / _RECORD_NAME)
+
+
+def _read_record_entries(record_path: Path) -> tuple[RecordEntry, ...]:
+    """Read and parse ``RECORD`` content at *record_path*."""
+
     try:
         content = fs.read_text(record_path)
     except (OSError, UnicodeDecodeError) as exc:
         raise RecordError(f"cannot read package record {record_path}: {exc}") from exc
-
     return parse_record(content)
 
 
@@ -105,9 +122,15 @@ def parse_record(content: str) -> tuple[RecordEntry, ...]:
 def verify_record(root: Path) -> tuple[RecordEntry, ...]:
     """Verify that *root* exactly matches its ``RECORD`` contents."""
 
-    entries = read_record(root)
+    record_path = root / _RECORD_NAME
+    paths = _package_tree(root)
+    entries = _read_record_entries(record_path)
     expected = {entry.path: entry.digest for entry in entries}
-    actual = {path.relative_to(root).as_posix(): path for path in _package_files(root)}
+    actual = {
+        path.relative_to(root).as_posix(): path
+        for path in paths
+        if path.is_file() and path != record_path
+    }
     if expected.keys() != actual.keys():
         raise RecordError("package files do not match RECORD")
     for path, digest in expected.items():
@@ -119,14 +142,8 @@ def verify_record(root: Path) -> tuple[RecordEntry, ...]:
 def _package_files(root: Path) -> tuple[Path, ...]:
     """Return sorted package files, excluding the root ``RECORD`` itself."""
 
-    _validate_package_tree(root)
-    try:
-        files = [
-            path for path in fs.rglob(root, "*") if path.is_file() and path != root / _RECORD_NAME
-        ]
-    except OSError as exc:
-        raise RecordError(f"cannot traverse package tree {root}: {exc}") from exc
-    return tuple(sorted(files, key=posix_relative_path(root)))
+    record_path = root / _RECORD_NAME
+    return tuple(path for path in _package_tree(root) if path.is_file() and path != record_path)
 
 
 def posix_relative_path(root: Path) -> Callable[[Path], str]:
@@ -138,22 +155,67 @@ def posix_relative_path(root: Path) -> Callable[[Path], str]:
     return key
 
 
-def _validate_package_tree(root: Path) -> None:
-    """Reject links, special nodes, and non-recordable paths in a package tree."""
+def walk_package_tree(
+    root: Path,
+    *,
+    accept: Callable[[Path, int], None],
+    on_directory_error: Callable[[Path, OSError], Exception],
+    on_entry_error: Callable[[Path, OSError], Exception],
+) -> tuple[Path, ...]:
+    """Recursively enumerate every descendant of *root*, sorted by portable path.
+
+    Every child is ``lstat``-ed and passed to *accept* along with its raw mode;
+    *accept* raises the caller's own error for anything it rejects. Accepted
+    directories are recursed into. Directory-listing and ``lstat`` failures are
+    translated to exceptions through *on_directory_error* and *on_entry_error*.
+    """
+
+    paths: list[Path] = []
+
+    def visit(directory: Path) -> None:
+        try:
+            children = list(directory.iterdir())
+        except OSError as exc:
+            raise on_directory_error(directory, exc) from exc
+        for child in children:
+            try:
+                mode = child.lstat().st_mode
+            except OSError as exc:
+                raise on_entry_error(child, exc) from exc
+            accept(child, mode)
+            paths.append(child)
+            if stat.S_ISDIR(mode):
+                visit(child)
+
+    visit(root)
+    return tuple(sorted(paths, key=posix_relative_path(root)))
+
+
+def _package_tree(root: Path) -> tuple[Path, ...]:
+    """Validate and return every descendant of *root*, sorted by portable path.
+
+    Rejects a symlinked root, symlink descendants, special filesystem nodes,
+    and paths containing a line break, in a single traversal of the tree.
+    """
+
+    def wrap(_path: Path, exc: OSError) -> RecordError:
+        return RecordError(f"cannot inspect package tree {root}: {exc}")
+
+    def accept(child: Path, mode: int) -> None:
+        if stat.S_ISLNK(mode):
+            raise RecordError(f"package contains symlink {child}")
+        if not stat.S_ISREG(mode) and not stat.S_ISDIR(mode):
+            raise RecordError(f"package contains unsupported filesystem node {child}")
+        if any(character in _LINE_BREAKS for character in child.relative_to(root).as_posix()):
+            raise RecordError(f"package path contains a line break {child}")
 
     try:
-        if root.is_symlink():
-            raise RecordError(f"package root is a symlink {root}")
-        for path in fs.rglob(root, "*"):
-            mode = path.lstat().st_mode
-            if stat.S_ISLNK(mode):
-                raise RecordError(f"package contains symlink {path}")
-            if not stat.S_ISREG(mode) and not stat.S_ISDIR(mode):
-                raise RecordError(f"package contains unsupported filesystem node {path}")
-            if any(character in _LINE_BREAKS for character in path.relative_to(root).as_posix()):
-                raise RecordError(f"package path contains a line break {path}")
+        is_root_symlink = root.is_symlink()
     except OSError as exc:
-        raise RecordError(f"cannot inspect package tree {root}: {exc}") from exc
+        raise wrap(root, exc) from exc
+    if is_root_symlink:
+        raise RecordError(f"package root is a symlink {root}")
+    return walk_package_tree(root, accept=accept, on_directory_error=wrap, on_entry_error=wrap)
 
 
 def _sha256(path: Path) -> str:
@@ -169,17 +231,9 @@ def _sha256(path: Path) -> str:
 def _record_path(value: str) -> str:
     """Validate and normalize one serialized relative POSIX path."""
 
-    path = PurePosixPath(value)
-    windows_path = PureWindowsPath(value)
     if (
-        not value
-        or "\\" in value
+        not is_portable_relative_path(value)
         or any(character in _LINE_BREAKS for character in value)
-        or path.is_absolute()
-        or windows_path.drive
-        or windows_path.root
-        or any(part in {".", ".."} for part in path.parts)
-        or path.as_posix() != value
         or value == _RECORD_NAME
     ):
         raise RecordError(f"invalid package record path {value!r}")

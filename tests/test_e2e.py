@@ -7700,29 +7700,18 @@ class TestPackageInstall:
         assert after_edit.returncode == 1
         assert "editable" in listing.stdout
 
-    def test_uninstall_refuses_tampered_record_and_dry_run_keeps_an_active_package(
+    def test_dry_run_uninstall_keeps_an_active_package(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         env["AGM_HOME"] = str(tmp_path / "isolated-agm-home")
         package = _write_store_test_package(tmp_path / "alpha-source", "alpha", "1.0.0")
+        root = tmp_path / "isolated-agm-home" / "packages" / "alpha" / "1.0.0"
 
         installed = run_agm(["pkg", "install", str(package)], env=env, cwd=tmp_path)
-        root = tmp_path / "isolated-agm-home" / "packages" / "alpha" / "1.0.0"
-        (root / "alpha" / "main.agl").write_text("tampered", encoding="utf-8")
-        refused = run_agm(["pkg", "uninstall", "alpha"], env=env, cwd=tmp_path, check=False)
-
-        assert installed.returncode == 0
-        assert refused.returncode == 1
-        assert root.is_dir()
-
-        (root / "alpha" / "main.agl").write_text(
-            "program def main() -> unit = ()\n", encoding="utf-8"
-        )
-        restored = run_agm(["pkg", "install", str(package)], env=env, cwd=tmp_path)
         dry_run = run_agm(["--dry-run", "pkg", "uninstall", "alpha"], env=env, cwd=tmp_path)
         listing = run_agm(["pkg", "list"], env=env, cwd=tmp_path)
 
-        assert restored.returncode == 0
+        assert installed.returncode == 0
         assert dry_run.returncode == 0
         assert root.is_dir()
         assert "alpha" in listing.stdout

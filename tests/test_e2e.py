@@ -310,9 +310,9 @@ def _install_fake_loop_command(
 # ---------------------------------------------------------------------------
 
 # Populated once per session (per xdist worker) by the ``_agm_install`` fixture.
-# Keys: ``"bin_dir"`` (the venv ``bin/`` directory) and ``"bin"`` (the
-# installed ``agm`` executable).  ``which("agm")`` inside the subprocess
-# resolves to ``bin_dir`` so ``agm_installation_prefix()`` reports this venv.
+# Keys: ``"bin_dir"`` (the venv ``bin/`` directory), ``"bin"`` (the installed
+# ``agm`` executable) and ``"guard_dir"`` (the guard-shim directory).  Tests
+# invoke ``"bin"`` directly, so AGM resolves this venv as its install prefix.
 _AGM_INSTALL: dict[str, Path] = {}
 
 # The developer's pristine PATH captured at module import (before any test
@@ -372,7 +372,9 @@ def _agm_install(tmp_path_factory: pytest.TempPathFactory) -> None:
     # own fake-CLI dirs and the venv ``bin/`` but BEFORE the rest of PATH, so:
     #   - a test-installed fake (prepended first) shadows the guard shim → the
     #     fake is used (intended);
-    #   - ``which("agm")`` resolves to the venv ``agm`` (no guard shim for agm);
+    #   - a bare ``agm`` that AGM itself spawns (the tmux ``agm workspace
+    #     setup`` command, ``agm config env`` in a generated workspace rc)
+    #     resolves to the venv ``agm``, never a developer's global install;
     #   - a forgotten fake resolves to the guard shim, which fails loudly
     #     instead of falling through to a *real* ``claude``/``codex``/``srt``/…
     #     elsewhere on PATH.
@@ -424,10 +426,11 @@ def _agm_env(env: dict[str, str]) -> dict[str, str]:
     directories (tmp dirs not present in the pristine PATH) are kept first so
     test-installed fakes shadow everything.  Ordering guarantees:
 
-    - ``which("agm")`` resolves to the isolated install's ``agm`` (in the venv
-      ``bin/``), so ``agm_installation_prefix()`` reports this venv — unless a
-      test prepended its own shim ``agm`` dir (the install-prefix tests), in
-      which case that wins.
+    - A bare ``agm`` resolves to the isolated install's ``agm`` (in the venv
+      ``bin/``), so a command AGM spawns for itself can never reach a
+      developer's global install.  Which prefix AGM resolves for *itself* is
+      independent of PATH: it comes from the path the binary was invoked
+      through (see :func:`_install_agm_at_prefix`).
     - A test-installed fake (in a prepended dir) shadows both the venv and the
       guard shims for that CLI, so the genuine fake is used.
     - A *forgotten* fake resolves to the guard shim (placed ahead of the

@@ -224,9 +224,10 @@ def _prefixed_pattern(pattern: str, parent: str) -> str:
     body = pattern[1:] if negated else pattern
     anchored = body.startswith("/")
     body = body.removeprefix("/")
-    # A slash-free rule is a basename rule and applies at every descendant,
-    # unlike a rule containing a slash, which remains relative to this file.
-    relative_pattern = body if anchored or "/" in body else "**/" + body
+    # A rule is anchored to this file's directory only by a separator at its
+    # beginning or middle; a trailing separator merely restricts the rule to
+    # directories, leaving it a name rule that applies at every descendant.
+    relative_pattern = body if anchored or "/" in body.rstrip("/") else "**/" + body
     return ("!" if negated else "") + parent + "/" + relative_pattern
 
 

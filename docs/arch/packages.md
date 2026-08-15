@@ -48,14 +48,16 @@ unambiguous.
 
 Install plans finalize command-shadow diagnostics from the validated activation snapshot while the
 store lock is held and before activation publication; the CLI only renders this immutable result.
-Diagnostic failure aborts publication and rolls back newly created package trees. Dry-run installs
+Any diagnostic or activation failure, command registration included, aborts publication and rolls
+back newly created package trees. Dry-run installs
 retain the same transient plan while leaving the persisted index unchanged.
 
 A package source directory is stored and shipped as its *distribution*: the normalized manifest plus
 the source files that survive gitignore rules and the dotfile, VCS, cache, and archive exclusions.
 One module owns that selection, so archive creation, immutable directory staging, and the content
 hash that identifies an installed version all agree — the same source installs identically from a
-directory and from an archive of it.
+directory and from an archive of it. Dependents are validated against what a package actually
+publishes: the store tree for an immutable install, the live source for an editable one.
 
 Installed package contents have a SHA-256 `RECORD`, which serves as the manifest of the files an
 install created — uninstall reads it to remove exactly those. Removal additionally clears cache and
@@ -67,7 +69,9 @@ dependency hash) and installing over an existing tree (the destination against t
 source being installed). Nothing re-hashes a package to read, activate, or execute it — publication
 is an atomic rename, so a partially written tree is never reachable through a store path.
 Archive readers enforce bounded metadata, entry sizes, total expansion, and path depth while binding
-preflight, ZIP parsing, verification, and extraction to one opened file. Immutable directory installs
+preflight, ZIP parsing, verification, and extraction to one opened file. A URL dependency fetch is
+bounded by transfer inactivity and the archive download size limit rather than by total elapsed
+time, so a large healthy download completes while a stalled connection still fails fast. Immutable directory installs
 stage the source's distribution beside the final store path, revalidate the staged manifest and package
 discipline, then publish with an atomic rename; dry runs check directory sources for `RECORD` eligibility without
 hashing, staging, or writing. Archive installation selects the canonical destination from verified metadata

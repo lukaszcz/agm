@@ -2410,6 +2410,97 @@ def test_directory_install_rolls_back_new_dependency_after_discipline_failure(
     assert load_activation_index(home=home, env={}).packages == {}
 
 
+def _dependency_with_undistributed_module(root: Path) -> Path:
+    """Write a ``bravo`` source package whose ``extras`` modules stay out of the store."""
+
+    dependency = _package(root, "bravo", "1.0.0")
+    (dependency / ".gitignore").write_text("extras/\n", encoding="utf-8")
+    extras = dependency / "bravo" / "extras"
+    extras.mkdir()
+    (extras / "util.agl").write_text("let value = 1\n", encoding="utf-8")
+    (dependency / "bravo" / "kept.agl").write_text("let value = 1\n", encoding="utf-8")
+    return dependency
+
+
+def test_directory_dependency_is_validated_against_its_stored_distribution(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    _dependency_with_undistributed_module(tmp_path / "bravo")
+    source = _package(
+        tmp_path / "alpha",
+        "alpha",
+        "1.0.0",
+        '\n[dependencies]\nbravo = { version = "1", path = "../bravo" }\n',
+    )
+    main = source / "alpha" / "main.agl"
+    main.write_text("import bravo/extras/util\nprogram def main() -> unit = ()\n", encoding="utf-8")
+
+    with pytest.raises(PackageInstallError):
+        install_directory(source, home=home, env={})
+
+    assert installed_packages(home=home, env={}) == ()
+    assert load_activation_index(home=home, env={}).packages == {}
+
+    main.write_text("import bravo/kept\nprogram def main() -> unit = ()\n", encoding="utf-8")
+    install_directory(source, home=home, env={})
+
+    installed = home / ".agm" / "packages" / "bravo" / "1.0.0" / "bravo"
+    assert (installed / "kept.agl").is_file()
+    assert not (installed / "extras").exists()
+    assert set(load_activation_index(home=home, env={}).packages) == {"alpha", "bravo"}
+
+
+def test_editable_dependency_stays_visible_as_its_live_source(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    dependency = _dependency_with_undistributed_module(tmp_path / "bravo")
+    install_directory(dependency, home=home, env={}, editable=True)
+    source = _package(
+        tmp_path / "alpha",
+        "alpha",
+        "1.0.0",
+        '\n[dependencies]\nbravo = { version = "1", path = "../bravo" }\n',
+    )
+    (source / "alpha" / "main.agl").write_text(
+        "import bravo/extras/util\nprogram def main() -> unit = ()\n", encoding="utf-8"
+    )
+
+    install_directory(source, home=home, env={})
+
+    assert set(load_activation_index(home=home, env={}).packages) == {"alpha", "bravo"}
+
+
+def test_dependency_command_registration_failure_rolls_back_the_install(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    store = home / ".agm" / "packages"
+    charlie = store / "charlie" / "1.0.0"
+    (charlie / "charlie").mkdir(parents=True)
+    (charlie / "package.toml").write_text(
+        '[package]\nname = "charlie"\nversion = "1.0.0"\n'
+        '\n[commands]\n"exec launch" = { program = "charlie/main::main" }\n',
+        encoding="utf-8",
+    )
+    (charlie / "charlie" / "main.agl").write_text(
+        "program def main() -> unit = ()\n", encoding="utf-8"
+    )
+    write_record(charlie)
+    _package(tmp_path / "bravo", "bravo", "1.0.0")
+    source = _package(
+        tmp_path / "alpha",
+        "alpha",
+        "1.0.0",
+        '\n[dependencies]\nbravo = { version = "1", path = "../bravo" }\ncharlie = "1"\n',
+    )
+
+    with pytest.raises(PackageInstallError, match="reserved"):
+        install_directory(source, home=home, env={})
+
+    assert not (store / "bravo" / "1.0.0").exists()
+    assert not (store / "alpha" / "1.0.0").exists()
+    assert load_activation_index(home=home, env={}).packages == {}
+    assert (charlie / "package.toml").is_file()
+
+
 def test_install_refuses_unsatisfied_and_different_existing_manifest(tmp_path: Path) -> None:
     home = tmp_path / "home"
     unsatisfied = _package(

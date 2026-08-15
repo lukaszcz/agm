@@ -528,7 +528,6 @@ def _install_directory(
         validate_package(package, dependency_packages=dependency_packages)
     except DisciplineError as exc:
         raise PackageInstallError(f"cannot install package from {source}: {exc}") from exc
-    state.resource_packages[package.manifest.name] = package
 
     if editable:
         installed = package
@@ -590,6 +589,12 @@ def _install_directory(
             fs.mkdir(destination.parent, parents=True, exist_ok=True)
             fs.copy_tree(root, destination)
 
+    # Dependents see what a package actually ships: the published store tree,
+    # which carries only its distribution. An editable package is its own live
+    # source, and a dry run publishes nothing, so both keep the source tree.
+    state.resource_packages[package.manifest.name] = (
+        package if editable or dry_run.enabled() else installed
+    )
     _activate_package(installed, state, editable_root=root if editable else None, shadow=shadow)
     return installed
 
@@ -829,20 +834,22 @@ def _activate_package(
             # resolve/verify pass that its caller would otherwise skip.
             packages=None if shadow else _transaction_resolved_packages(state),
         )
-        registration_order = _next_registration_order(state)
+        packages = dict(state.index.packages)
+        packages[package.manifest.name] = ActivePackage(
+            package.manifest.version,
+            editable=editable_root,
+            shadow=shadow,
+            registration_order=_next_registration_order(state),
+        )
+        # Registering the commands can fail on its own, so the selection is
+        # only adopted once the whole activation holds; the install then
+        # reports the failure and rolls back the trees it created.
+        merged = merge_package_commands(
+            ActivationIndex(packages, state.index.commands), package.manifest, shadow=shadow
+        )
     except PackageActivationError as exc:
         raise PackageInstallError(f"cannot register package commands: {exc}") from exc
-    packages = dict(state.index.packages)
-    packages[package.manifest.name] = ActivePackage(
-        package.manifest.version,
-        editable=editable_root,
-        shadow=shadow,
-        registration_order=registration_order,
-    )
-    _set_transaction_index(state, ActivationIndex(packages, state.index.commands))
-    _set_transaction_index(
-        state, merge_package_commands(state.index, package.manifest, shadow=shadow)
-    )
+    _set_transaction_index(state, merged)
     _record_transient_package(state, package.manifest.name, package)
 
 

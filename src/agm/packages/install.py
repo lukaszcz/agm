@@ -40,8 +40,21 @@ from agm.packages.discipline import (
     validate_package,
     validate_package_structure,
 )
+from agm.packages.distribution import (
+    MANIFEST_NAME,
+    DistributionError,
+    distribution_entries,
+    is_cache_or_vcs_path,
+    materialize_distribution,
+)
 from agm.packages.fetch import FetchError, fetch_archive
-from agm.packages.manifest import DependencySpec, ManifestError, PackageManifest, load_manifest
+from agm.packages.manifest import (
+    DependencySpec,
+    ManifestError,
+    PackageManifest,
+    distribution_manifest,
+    load_manifest,
+)
 from agm.packages.model import (
     STD_PACKAGE_NAME,
     PackageInfo,
@@ -50,11 +63,11 @@ from agm.packages.model import (
     unmet_std_requirement,
 )
 from agm.packages.record import (
+    RECORD_NAME,
     RecordEntry,
     RecordError,
     content_hash,
     read_record,
-    record_entries,
     validate_package_tree,
     verify_record,
     write_record,
@@ -430,7 +443,12 @@ def _stage_directory_package(
     *,
     dependency_packages: tuple[PackageInfo, ...] = (),
 ) -> Path:
-    """Copy and fully validate a package in a sibling staging directory."""
+    """Stage and fully validate a package distribution in a sibling directory.
+
+    The staged tree is the same distribution an archive of *source* would
+    carry — its normalized manifest and its selected files — so a package has
+    one stored shape and one content hash however it reaches the store.
+    """
 
     source_root = source.resolve()
     staging_parent = destination.parent.resolve()
@@ -439,15 +457,16 @@ def _stage_directory_package(
     fs.mkdir(staging_parent, parents=True, exist_ok=True)
     staging = Path(mkdtemp(prefix=".agm-package-", dir=staging_parent))
     try:
-        fs.copy_tree(source, staging, dirs_exist_ok=True)
-        staged = PackageInfo(staging, load_manifest(staging / "package.toml"))
+        distribution = distribution_manifest(package.manifest)
+        materialize_distribution(source_root, distribution, staging)
+        staged = PackageInfo(staging, load_manifest(staging / MANIFEST_NAME))
         validate_package(staged, dependency_packages=dependency_packages)
         if (
             canonical_package_identity(staged.manifest.name, staged.manifest.version)
             != canonical_package_identity(package.manifest.name, package.manifest.version)
-            or staged.manifest != package.manifest
+            or staged.manifest != distribution
         ):
-            raise PackageInstallError("copied package manifest changed after source validation")
+            raise PackageInstallError("staged package manifest changed after source validation")
         write_record(staging)
         return staging
     except (DisciplineError, ManifestError, OSError, PackageInstallError, RecordError, ValueError):
@@ -524,13 +543,17 @@ def _install_directory(
             ) from exc
         installed = PackageInfo(destination, package.manifest)
         if destination.exists():
+            # The store holds the distribution view of a package, so identity
+            # is checked against what this source would store rather than
+            # against its unfiltered development tree.
+            distribution = distribution_manifest(package.manifest)
             try:
-                package_hash = content_hash(record_entries(root))
-            except (OSError, RecordError) as exc:
+                package_hash = content_hash(distribution_entries(root, distribution))
+            except (DistributionError, OSError, RecordError) as exc:
                 raise PackageInstallError(
                     f"cannot install package {package.manifest.name!r}: {exc}"
                 ) from exc
-            _verify_existing_install(destination, package.manifest, package_hash)
+            _verify_existing_install(destination, distribution, package_hash)
         elif not dry_run.enabled():
             staging: Path | None = None
             try:
@@ -1172,8 +1195,27 @@ def _remove_recorded_tree(root: Path, entries: tuple[RecordEntry, ...]) -> None:
 
     for entry in entries:
         fs.unlink(root / entry.path, missing_ok=True)
-    fs.unlink(root / "RECORD", missing_ok=True)
+    fs.unlink(root / RECORD_NAME, missing_ok=True)
+    _remove_cache_residue(root)
     directories = sorted((path for path in fs.rglob(root, "*") if path.is_dir()), reverse=True)
     for directory in directories:
         fs.rmdir(directory)
     fs.rmdir(root)
+
+
+def _remove_cache_residue(root: Path) -> None:
+    """Remove tool-cache and VCS residue a package never records.
+
+    A ``RECORD`` describes exactly the files an install created, so removal
+    would otherwise strand a tree that acquired unrecorded content while it was
+    installed. Only content no package distributes is cleared here; anything
+    else still fails the directory sweep loudly rather than being deleted.
+    """
+
+    for path in fs.rglob(root, "*"):
+        if not is_cache_or_vcs_path(path.relative_to(root).as_posix()):
+            continue
+        if path.is_dir() and not path.is_symlink():
+            fs.rmtree(path)
+        else:
+            fs.unlink(path, missing_ok=True)

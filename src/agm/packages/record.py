@@ -14,7 +14,7 @@ from pathlib import Path
 from agm.core import fs
 from agm.core.path import is_portable_relative_path
 
-_RECORD_NAME = "RECORD"
+RECORD_NAME = "RECORD"
 _DIGEST_PREFIX = "sha256="
 _LINE_BREAKS = frozenset("\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029")
 
@@ -37,7 +37,7 @@ def write_record(root: Path) -> Path:
     ``RECORD`` itself is omitted because hashing it would be self-referential.
     """
 
-    record_path = root / _RECORD_NAME
+    record_path = root / RECORD_NAME
     entries = record_entries(root)
     content = serialize_record(entries)
     fs.write_text(record_path, content)
@@ -48,7 +48,7 @@ def record_entries(root: Path) -> tuple[RecordEntry, ...]:
     """Return the canonical record entries for a package tree without writing it."""
 
     return tuple(
-        RecordEntry(_record_path(path.relative_to(root).as_posix()), _sha256(path))
+        RecordEntry(_record_path(path.relative_to(root).as_posix()), file_digest(path))
         for path in _package_files(root)
     )
 
@@ -69,7 +69,7 @@ def read_record(root: Path) -> tuple[RecordEntry, ...]:
     """Read and validate the package ``RECORD`` below *root*."""
 
     _package_tree(root)
-    return _read_record_entries(root / _RECORD_NAME)
+    return _read_record_entries(root / RECORD_NAME)
 
 
 def _read_record_entries(record_path: Path) -> tuple[RecordEntry, ...]:
@@ -122,7 +122,7 @@ def parse_record(content: str) -> tuple[RecordEntry, ...]:
 def verify_record(root: Path) -> tuple[RecordEntry, ...]:
     """Verify that *root* exactly matches its ``RECORD`` contents."""
 
-    record_path = root / _RECORD_NAME
+    record_path = root / RECORD_NAME
     paths = _package_tree(root)
     entries = _read_record_entries(record_path)
     expected = {entry.path: entry.digest for entry in entries}
@@ -134,7 +134,7 @@ def verify_record(root: Path) -> tuple[RecordEntry, ...]:
     if expected.keys() != actual.keys():
         raise RecordError("package files do not match RECORD")
     for path, digest in expected.items():
-        if not hmac.compare_digest(digest, _sha256(actual[path])):
+        if not hmac.compare_digest(digest, file_digest(actual[path])):
             raise RecordError(f"SHA-256 mismatch for package file {path!r}")
     return entries
 
@@ -142,8 +142,14 @@ def verify_record(root: Path) -> tuple[RecordEntry, ...]:
 def _package_files(root: Path) -> tuple[Path, ...]:
     """Return sorted package files, excluding the root ``RECORD`` itself."""
 
-    record_path = root / _RECORD_NAME
+    record_path = root / RECORD_NAME
     return tuple(path for path in _package_tree(root) if path.is_file() and path != record_path)
+
+
+def record_path_key(entry: RecordEntry) -> str:
+    """Return the canonical ordering key for one record entry."""
+
+    return entry.path
 
 
 def posix_relative_path(root: Path) -> Callable[[Path], str]:
@@ -218,7 +224,7 @@ def _package_tree(root: Path) -> tuple[Path, ...]:
     return walk_package_tree(root, accept=accept, on_directory_error=wrap, on_entry_error=wrap)
 
 
-def _sha256(path: Path) -> str:
+def file_digest(path: Path) -> str:
     """Return the lowercase SHA-256 hexadecimal digest of *path*."""
 
     try:
@@ -234,7 +240,7 @@ def _record_path(value: str) -> str:
     if (
         not is_portable_relative_path(value)
         or any(character in _LINE_BREAKS for character in value)
-        or value == _RECORD_NAME
+        or value == RECORD_NAME
     ):
         raise RecordError(f"invalid package record path {value!r}")
     return value

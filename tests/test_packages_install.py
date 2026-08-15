@@ -33,8 +33,9 @@ from agm.packages.install import (
     refresh_managed_stdlib,
     uninstall_package,
 )
+from agm.packages.manifest import PackageManifest
 from agm.packages.model import PackageInfo
-from agm.packages.record import verify_record, write_record
+from agm.packages.record import content_hash, read_record, verify_record, write_record
 from agm.version import AGM_VERSION
 
 
@@ -90,10 +91,10 @@ def test_managed_stdlib_refresh_stages_under_the_store_lock(
     core.write_text("old complete tree\n", encoding="utf-8")
     stale.write_text("stale\n", encoding="utf-8")
     write_record(installed.root)
-    original_copy_tree = package_install.fs.copy_tree
+    original_materialize = package_install.materialize_distribution
     observed_staging: Path | None = None
 
-    def observe_copy(source_root: Path, staging: Path, *, dirs_exist_ok: bool = False) -> None:
+    def observe_staging(source_root: Path, manifest: PackageManifest, staging: Path) -> None:
         nonlocal observed_staging
         observed_staging = staging
         assert staging != installed.root
@@ -104,9 +105,9 @@ def test_managed_stdlib_refresh_stages_under_the_store_lock(
                 package_install.fcntl.flock(
                     lock.fileno(), package_install.fcntl.LOCK_EX | package_install.fcntl.LOCK_NB
                 )
-        original_copy_tree(source_root, staging, dirs_exist_ok=dirs_exist_ok)
+        original_materialize(source_root, manifest, staging)
 
-    monkeypatch.setattr(package_install.fs, "copy_tree", observe_copy)
+    monkeypatch.setattr(package_install, "materialize_distribution", observe_staging)
 
     refreshed = refresh_managed_stdlib(source, home=home, env={})
 
@@ -1239,6 +1240,107 @@ def test_editable_install_mounts_live_tree_without_a_record(tmp_path: Path) -> N
     assert active.editable == source.resolve()
 
 
+def _development_package(root: Path, name: str, version: str) -> Path:
+    """Write a package source directory carrying ordinary development clutter."""
+
+    _package(root, name, version)
+    (root / "package.toml").write_text(
+        f"# a development comment\n\n[package]\nname   = '{name}'\nversion = '{version}'\n",
+        encoding="utf-8",
+    )
+    (root / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")
+    (root / ".hidden").write_text("hidden", encoding="utf-8")
+    (root / "ignored.txt").write_text("ignored", encoding="utf-8")
+    (root / name / "__pycache__").mkdir()
+    (root / name / "__pycache__" / "main.cpython-312.pyc").write_bytes(b"cached")
+    return root
+
+
+def _stored_content_hash(root: Path) -> str:
+    return content_hash(read_record(root))
+
+
+def test_directory_and_archive_installs_store_the_same_distribution(tmp_path: Path) -> None:
+    source = _development_package(tmp_path / "source", "alpha", "1.0.0")
+    archive = tmp_path / "alpha-1.0.0.agmpkg"
+    write_archive(source, archive)
+    directory_home = tmp_path / "directory-home"
+    archive_home = tmp_path / "archive-home"
+
+    from_directory = install_directory(source, home=directory_home, env={})
+    from_archive = install_archive(archive, home=archive_home, env={})
+
+    assert _stored_content_hash(from_directory.root) == _stored_content_hash(from_archive.root)
+    assert sorted(
+        path.relative_to(from_directory.root).as_posix()
+        for path in from_directory.root.rglob("*")
+        if path.is_file()
+    ) == ["RECORD", "alpha/main.agl", "package.toml"]
+    assert (from_directory.root / "package.toml").read_bytes() == (
+        from_archive.root / "package.toml"
+    ).read_bytes()
+
+
+def test_directory_install_accepts_an_archive_of_the_same_source_afterwards(
+    tmp_path: Path,
+) -> None:
+    source = _development_package(tmp_path / "source", "alpha", "1.0.0")
+    archive = tmp_path / "alpha-1.0.0.agmpkg"
+    write_archive(source, archive)
+    home = tmp_path / "home"
+
+    installed = install_directory(source, home=home, env={})
+    from_archive = install_archive(archive, home=home, env={})
+    reinstalled = install_directory(source, home=home, env={})
+
+    assert from_archive.root == installed.root
+    assert reinstalled.root == installed.root
+    assert verify_record(installed.root)
+
+
+def test_archive_install_accepts_the_same_source_directory_afterwards(tmp_path: Path) -> None:
+    source = _development_package(tmp_path / "source", "alpha", "1.0.0")
+    archive = tmp_path / "alpha-1.0.0.agmpkg"
+    write_archive(source, archive)
+    home = tmp_path / "home"
+
+    installed = install_archive(archive, home=home, env={})
+    from_directory = install_directory(source, home=home, env={})
+
+    assert from_directory.root == installed.root
+    assert verify_record(installed.root)
+
+
+def test_uninstall_removes_a_store_tree_polluted_by_unrecorded_caches(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    installed = install_directory(
+        _package(tmp_path / "source", "alpha", "1.0.0"), home=home, env={}
+    )
+    # A companion import writes bytecode next to its source, and a store tree
+    # copied by hand can carry VCS metadata; neither appears in RECORD.
+    (installed.root / "alpha" / "__pycache__").mkdir()
+    (installed.root / "alpha" / "__pycache__" / "main.cpython-312.pyc").write_bytes(b"cached")
+    (installed.root / ".git").mkdir()
+    (installed.root / ".git" / "config").write_text("vcs", encoding="utf-8")
+
+    uninstall_package("alpha", home=home, env={})
+
+    assert not installed.root.exists()
+    assert not (installed.root.parent / ".uninstalling").exists()
+    assert "alpha" not in load_activation_index(home=home, env={}).packages
+
+
+def test_uninstall_refuses_a_store_tree_with_unrecorded_package_content(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    installed = install_directory(
+        _package(tmp_path / "source", "alpha", "1.0.0"), home=home, env={}
+    )
+    (installed.root / "alpha" / "extra.agl").write_text("()\n", encoding="utf-8")
+
+    with pytest.raises(PackageInstallError, match="remove"):
+        uninstall_package("alpha", home=home, env={})
+
+
 def test_uninstall_verifies_record_then_removes_only_the_requested_version(tmp_path: Path) -> None:
     home = tmp_path / "home"
     one = install_directory(_package(tmp_path / "one", "alpha", "1.0.0"), home=home, env={})
@@ -1437,19 +1539,19 @@ def test_directory_install_stages_beside_the_final_store_path(
     home = tmp_path / "home"
     source = _package(tmp_path / "source", "alpha", "1.0.0")
     destination = home / ".agm" / "packages" / "alpha" / "1.0.0"
-    original_copy_tree = package_install.fs.copy_tree
+    original_materialize = package_install.materialize_distribution
     staged: list[Path] = []
 
-    def observe_copy(source_root: Path, staging: Path, *, dirs_exist_ok: bool = False) -> None:
+    def observe_staging(source_root: Path, manifest: PackageManifest, staging: Path) -> None:
         assert staging != destination
         assert staging.parent == destination.parent
         assert staging.stat().st_dev == destination.parent.stat().st_dev
         assert not destination.exists()
         assert installed_packages(home=home, env={}) == ()
         staged.append(staging)
-        original_copy_tree(source_root, staging, dirs_exist_ok=dirs_exist_ok)
+        original_materialize(source_root, manifest, staging)
 
-    monkeypatch.setattr(package_install.fs, "copy_tree", observe_copy)
+    monkeypatch.setattr(package_install, "materialize_distribution", observe_staging)
 
     installed = install_directory(source, home=home, env={})
 
@@ -1465,18 +1567,18 @@ def test_directory_install_revalidates_staged_imports_after_source_changes(
     home = tmp_path / "home"
     source = _package(tmp_path / "source", "alpha", "1.0.0")
     destination = home / ".agm" / "packages" / "alpha" / "1.0.0"
-    original_copy_tree = package_install.fs.copy_tree
+    original_materialize = package_install.materialize_distribution
     staging_path: Path | None = None
 
-    def change_source_before_copy(
-        source_root: Path, staging: Path, *, dirs_exist_ok: bool = False
+    def change_source_before_staging(
+        source_root: Path, manifest: PackageManifest, staging: Path
     ) -> None:
         nonlocal staging_path
         staging_path = staging
         (source_root / "alpha" / "main.agl").write_text("import alpha/missing\n", encoding="utf-8")
-        original_copy_tree(source_root, staging, dirs_exist_ok=dirs_exist_ok)
+        original_materialize(source_root, manifest, staging)
 
-    monkeypatch.setattr(package_install.fs, "copy_tree", change_source_before_copy)
+    monkeypatch.setattr(package_install, "materialize_distribution", change_source_before_staging)
 
     with pytest.raises(PackageInstallError, match="cannot install"):
         install_directory(source, home=home, env={})
@@ -1493,21 +1595,19 @@ def test_directory_install_revalidates_the_staged_package_identity(
     home = tmp_path / "home"
     source = _package(tmp_path / "source", "alpha", "1.0.0")
     destination = home / ".agm" / "packages" / "alpha" / "1.0.0"
-    original_copy_tree = package_install.fs.copy_tree
+    original_materialize = package_install.materialize_distribution
     staging_path: Path | None = None
 
-    def change_copied_identity(
-        source_root: Path, staging: Path, *, dirs_exist_ok: bool = False
-    ) -> None:
+    def change_staged_identity(source_root: Path, manifest: PackageManifest, staging: Path) -> None:
         nonlocal staging_path
         staging_path = staging
-        original_copy_tree(source_root, staging, dirs_exist_ok=dirs_exist_ok)
+        original_materialize(source_root, manifest, staging)
         (staging / "alpha").rename(staging / "bravo")
         (staging / "package.toml").write_text(
             '[package]\nname = "bravo"\nversion = "1.0.0"\n', encoding="utf-8"
         )
 
-    monkeypatch.setattr(package_install.fs, "copy_tree", change_copied_identity)
+    monkeypatch.setattr(package_install, "materialize_distribution", change_staged_identity)
 
     with pytest.raises(PackageInstallError, match="cannot install"):
         install_directory(source, home=home, env={})
@@ -1561,19 +1661,19 @@ def test_install_refuses_tampered_existing_tree_and_cleans_failed_copy(
 
     fresh = _package(tmp_path / "fresh", "bravo", "1.0.0")
 
-    def fail_copy(_: Path, destination: Path, **__: object) -> None:
-        destination.mkdir()
+    def fail_staging(_source: Path, _manifest: PackageManifest, staging: Path) -> None:
+        (staging / "partial").mkdir()
         raise OSError("full")
 
-    monkeypatch.setattr(package_install.fs, "copy_tree", fail_copy)
+    monkeypatch.setattr(package_install, "materialize_distribution", fail_staging)
     with pytest.raises(PackageInstallError, match="cannot install"):
         install_directory(fresh, home=home, env={})
     assert not (home / ".agm" / "packages" / "bravo" / "1.0.0").exists()
 
     another = _package(tmp_path / "another", "charlie", "1.0.0")
     monkeypatch.setattr(
-        package_install.fs,
-        "copy_tree",
+        package_install,
+        "materialize_distribution",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("full")),
     )
     with pytest.raises(PackageInstallError, match="cannot install"):

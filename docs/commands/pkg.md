@@ -66,8 +66,10 @@ archived manifest removes local `path` dependency sources while leaving the deve
 unchanged, so a package that relies only on a local path must have a matching stored version (or a
 URL source) before it can be archived.
 
-`agm pkg install` accepts either a package directory or a `.agmpkg` archive and copies its verified
-contents to `<AGM-home>/packages/<name>/<version>/`, where the runtime home is
+`agm pkg install` accepts either a package directory or a `.agmpkg` archive and stores its verified
+distribution — the normalized manifest and the same files archive creation selects, so a directory
+install omits hidden, VCS, cache, and ignored files and local `path` dependency sources just as
+archive creation does — in `<AGM-home>/packages/<name>/<version>/`, where the runtime home is
 `$AGM_HOME`, otherwise a populated `<install-prefix>/.agm`, otherwise `$HOME/.agm`. It writes
 and verifies the package's SHA-256 `RECORD`,
 and makes that version globally active only after the complete resulting selection validates.
@@ -147,7 +149,8 @@ refuses. A package's `std` minimum-version requirement is also its minimum AGM v
 installation refuses a package that requires a newer AGM binary.
 
 `agm pkg uninstall` verifies the active immutable package's `RECORD`, validates the remaining
-activation selection, then clears activation before removing every recorded file. Remaining
+activation selection, then clears activation before removing every recorded file, along with any
+tool-cache or VCS content the store tree acquired after installation. Remaining
 active manifests are reconciled so their command owners are restored. It refuses any store path
 whose resolved ancestors leave the canonical store root. For an editable package it only clears
 activation. `agm pkg list` shows every immutable installed version as `active` or `installed`,

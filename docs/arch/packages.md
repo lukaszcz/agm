@@ -51,17 +51,25 @@ store lock is held and before activation publication; the CLI only renders this 
 Diagnostic failure aborts publication and rolls back newly created package trees. Dry-run installs
 retain the same transient plan while leaving the persisted index unchanged.
 
+A package source directory is stored and shipped as its *distribution*: the normalized manifest plus
+the source files that survive gitignore rules and the dotfile, VCS, cache, and archive exclusions.
+One module owns that selection, so archive creation, immutable directory staging, and the content
+hash that identifies an installed version all agree — the same source installs identically from a
+directory and from an archive of it.
+
 Installed package contents have a SHA-256 `RECORD`, which serves as the manifest of the files an
-install created — uninstall reads it to remove exactly those. `RECORD` is unsigned and lives inside
-the tree it describes, so hashing is spent only where it is checked against an anchor outside that
+install created — uninstall reads it to remove exactly those. Removal additionally clears cache and
+VCS residue the store can acquire after publication; anything else unrecorded still fails removal
+loudly. `RECORD` is unsigned and lives inside the tree it describes, so hashing is spent only where
+it is checked against an anchor outside that
 tree: reading an archive (entry digests against the archive's own `RECORD`, feeding the declared
 dependency hash) and installing over an existing tree (the destination against the hash of the
 source being installed). Nothing re-hashes a package to read, activate, or execute it — publication
 is an atomic rename, so a partially written tree is never reachable through a store path.
 Archive readers enforce bounded metadata, entry sizes, total expansion, and path depth while binding
 preflight, ZIP parsing, verification, and extraction to one opened file. Immutable directory installs
-stage beside the final store path, revalidate the copied manifest and package discipline,
-then publish with an atomic rename; dry runs check directory sources for `RECORD` eligibility without
+stage the source's distribution beside the final store path, revalidate the staged manifest and package
+discipline, then publish with an atomic rename; dry runs check directory sources for `RECORD` eligibility without
 hashing, staging, or writing. Archive installation selects the canonical destination from verified metadata
 without reopening the archive, then extracts to a sibling staging tree. It resolves dependencies and runs
 dependency-aware discipline validation against that staging tree before atomic publication, including when
@@ -109,6 +117,8 @@ selected manifest and module ownership before executing it.
 - `src/agm/packages/store.py`, `record.py`, and `archive.py` — store layout, the shared
   store-scanning and MVS-candidate-selection helpers dependency resolution and installation both
   use, integrity records, and portable archives.
+- `src/agm/packages/distribution.py` — the one distribution view of a source tree: file selection,
+  manifest normalization, its record entries, and the cache/VCS classification uninstall reuses.
 - `src/agm/packages/activation.py`, `dependencies.py`, `fetch.py`, and `install.py` — active
   selections, dependency resolution, downloads, and lifecycle operations.
 - `src/agm/packages/stdlib.py` — resolves the active managed standard-library package root

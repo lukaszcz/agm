@@ -7386,6 +7386,38 @@ class TestPackageInstall:
         assert result.returncode == 1
         assert not archive.exists()
 
+    def test_package_with_a_python_companion_runs_and_uninstalls(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["AGM_HOME"] = str(tmp_path / "agm-home")
+        store = tmp_path / "agm-home" / "packages" / "alpha" / "1.0.0"
+        package = _write_store_test_package(tmp_path / "alpha-source", "alpha", "1.0.0")
+        (package / "package.toml").write_text(
+            '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
+            '[commands]\nshout = { program = "alpha/main::main" }\n',
+            encoding="utf-8",
+        )
+        (package / "alpha" / "main.agl").write_text(
+            "extern def shout(value: text) -> text\n"
+            'program def main() -> unit = print(shout("hi"))\n',
+            encoding="utf-8",
+        )
+        (package / "alpha" / "main.py").write_text(
+            "def shout(value):\n    return value.upper()\n", encoding="utf-8"
+        )
+
+        install = run_agm(["pkg", "install", str(package)], env=env, cwd=tmp_path)
+        run = run_agm(["shout"], env=env, cwd=tmp_path)
+        uninstall = run_agm(["pkg", "uninstall", "alpha"], env=env, cwd=tmp_path)
+
+        assert install.returncode == 0
+        assert run.stdout == "HI\n"
+        # Running the companion must leave the immutable store exactly as its
+        # RECORD describes it, or removal strands the package tree.
+        assert uninstall.returncode == 0
+        assert not store.exists()
+        assert not (store.parent / ".uninstalling").exists()
+
     def test_install_import_uninstall_and_inspect_package(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

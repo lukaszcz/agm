@@ -865,10 +865,12 @@ def resolve_active_package(
     home: Path,
     env: Mapping[str, str] | None = None,
 ) -> PackageInfo:
-    """Resolve one activation selection into its verified root and manifest.
+    """Resolve one activation selection into its root and installed manifest.
 
     An editable selection names its own live root; an immutable one must
-    resolve inside the store and match its ``RECORD``.
+    resolve inside the store, and its installed manifest must agree with the
+    activated identity. The read path does not verify tree contents against
+    ``RECORD``; installation and archive verification own that check.
     """
 
     if active.editable is not None:
@@ -927,7 +929,7 @@ def resolve_indexed_packages(
 
     ``transient_packages`` supplies validated manifests for selections an
     install has planned but not yet written to the immutable store, standing
-    in for a store or ``RECORD`` lookup for just those names.
+    in for a store manifest lookup for just those names.
     """
 
     packages: list[PackageInfo] = []

@@ -14,6 +14,7 @@ from typing import IO, cast
 import pytest
 
 import agm.packages.archive as package_archive
+import agm.packages.distribution as package_distribution
 from agm.packages.archive import (
     ArchiveError,
     extract_archive,
@@ -326,16 +327,10 @@ def test_write_archive_reports_source_stat_failure(
     payload = root / "review_tools" / "payload.bin"
     payload.write_bytes(b"payload")
     manifest = package_archive.load_manifest(root / "package.toml")
-    source_paths = package_archive._source_paths(root)
-    original_is_file = Path.is_file
+    selected = package_archive.distribution_files(root)
     original_stat = Path.stat
 
-    monkeypatch.setattr(package_archive, "_source_paths", lambda _: source_paths)
-    monkeypatch.setattr(
-        Path,
-        "is_file",
-        lambda path: True if path == payload else original_is_file(path),
-    )
+    monkeypatch.setattr(package_archive, "distribution_files", lambda _: selected)
 
     def stat(path: Path, *, follow_symlinks: bool = True) -> os.stat_result:
         if path == payload:
@@ -989,13 +984,13 @@ def test_nested_gitignore_cannot_reinclude_a_file_in_an_ignored_parent(tmp_path:
 
 
 def test_gitignore_pattern_prefixing_handles_comments_empty_and_negation() -> None:
-    assert package_archive._prefixed_pattern("# note", "nested") == "# note"
-    assert package_archive._prefixed_pattern("", "nested") == ""
-    assert package_archive._prefixed_pattern("!/kept", "nested") == "!nested/kept"
-    assert package_archive._prefixed_pattern("ignored", "nested") == "nested/**/ignored"
-    assert package_archive._prefixed_pattern("assets/*.tmp", "nested") == "nested/assets/*.tmp"
-    assert package_archive._prefixed_pattern("/ignored", "nested") == "nested/ignored"
-    assert package_archive._prefixed_pattern("ignored", ".") == "ignored"
+    assert package_distribution._prefixed_pattern("# note", "nested") == "# note"
+    assert package_distribution._prefixed_pattern("", "nested") == ""
+    assert package_distribution._prefixed_pattern("!/kept", "nested") == "!nested/kept"
+    assert package_distribution._prefixed_pattern("ignored", "nested") == "nested/**/ignored"
+    assert package_distribution._prefixed_pattern("assets/*.tmp", "nested") == "nested/assets/*.tmp"
+    assert package_distribution._prefixed_pattern("/ignored", "nested") == "nested/ignored"
+    assert package_distribution._prefixed_pattern("ignored", ".") == "ignored"
 
 
 @pytest.mark.parametrize(

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import secrets
 import stat
@@ -14,9 +13,15 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import IO, TYPE_CHECKING, TypeVar, cast
 
-from pathspec import PathSpec
-
 from agm.core.path import is_portable_relative_path
+from agm.packages.distribution import (
+    MANIFEST_NAME,
+    DistributionError,
+    distribution_files,
+    normalized_manifest,
+    reject_source_links,
+    source_paths,
+)
 from agm.packages.manifest import (
     ManifestError,
     PackageManifest,
@@ -25,24 +30,18 @@ from agm.packages.manifest import (
     load_manifest_text,
 )
 from agm.packages.record import (
+    RECORD_NAME,
     RecordEntry,
     RecordError,
     content_hash,
     parse_record,
+    record_path_key,
     serialize_record,
-    walk_package_tree,
 )
 
 if TYPE_CHECKING:
     from agm.packages.model import PackageInfo
 
-_MANIFEST_NAME = "package.toml"
-_RECORD_NAME = "RECORD"
-_ARCHIVE_SUFFIX = ".agmpkg"
-_VCS_DIRECTORIES = frozenset({".git", ".hg", ".svn", ".bzr", "CVS"})
-_CACHE_DIRECTORIES = frozenset(
-    {"__pycache__", ".cache", ".mypy_cache", ".pytest_cache", ".ruff_cache"}
-)
 _ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 _FILE_MODE = 0o100644
 _UTF8_FLAG = 0x800
@@ -403,7 +402,7 @@ def extract_archive(
             with archive.open(info) as source, target.open("xb") as output:
                 while chunk := source.read(_HASH_CHUNK_SIZE):
                     output.write(chunk)
-        record_target = extraction_root / _RECORD_NAME
+        record_target = extraction_root / RECORD_NAME
         record_target.write_bytes(_read_entry(archive, infos[record_name]))
         return metadata
 
@@ -428,7 +427,7 @@ def _verify_open_archive(archive: zipfile.ZipFile) -> ArchiveMetadata:
         for name, info in infos.items()
         if name != record_name
     )
-    if manifest_bytes != _normalized_manifest(manifest):
+    if manifest_bytes != normalized_manifest(manifest):
         raise ArchiveError("archive package manifest is not normalized")
     if entries != expected_entries:
         raise ArchiveError("archive contents do not match RECORD")
@@ -542,32 +541,23 @@ def _directory_identity(result: os.stat_result) -> _DirectoryIdentity:
     return _DirectoryIdentity(result.st_dev, result.st_ino)
 
 
+def _as_archive_error(operation: Callable[[], T]) -> T:
+    """Present a shared distribution-view failure as an archive failure."""
+
+    try:
+        return operation()
+    except DistributionError as exc:
+        raise ArchiveError(str(exc)) from exc
+
+
 def _source_paths(root: Path) -> tuple[Path, ...]:
-    """Return every source descendant, refusing directories that cannot be read.
+    """Return every source descendant, refusing directories that cannot be read."""
 
-    Symlinks are accepted by this walk and rejected separately, once collected,
-    by :func:`_reject_source_links`.
-    """
-
-    def accept(child: Path, mode: int) -> None:
-        if not stat.S_ISREG(mode) and not stat.S_ISDIR(mode) and not stat.S_ISLNK(mode):
-            raise ArchiveError(f"package contains unsupported filesystem node {child}")
-
-    def directory_error(directory: Path, exc: OSError) -> ArchiveError:
-        return ArchiveError(f"cannot read package directory {directory}: {exc}")
-
-    def entry_error(child: Path, exc: OSError) -> ArchiveError:
-        return ArchiveError(f"cannot inspect package source {child}: {exc}")
-
-    return walk_package_tree(
-        root, accept=accept, on_directory_error=directory_error, on_entry_error=entry_error
-    )
+    return _as_archive_error(lambda: source_paths(root))
 
 
 def _reject_source_links(root: Path) -> None:
-    for descendant in _source_paths(root):
-        if descendant.is_symlink():
-            raise ArchiveError(f"package contains symlink {descendant}")
+    _as_archive_error(lambda: reject_source_links(root))
 
 
 def _validate_destination(root: Path, destination: Path) -> None:
@@ -603,27 +593,20 @@ def _validate_destination(root: Path, destination: Path) -> None:
 def _archive_distribution(root: Path) -> tuple[PackageManifest, str, dict[str, bytes]]:
     """Build the manifest and selected content set for a portable archive."""
     try:
-        source_manifest = load_manifest(root / _MANIFEST_NAME)
+        source_manifest = load_manifest(root / MANIFEST_NAME)
     except ManifestError as exc:
         raise ArchiveError(f"cannot load package manifest from {root}: {exc}") from exc
     manifest = distribution_manifest(source_manifest)
     prefix = _entry_prefix(manifest)
-    _archive_path(prefix + _MANIFEST_NAME)
+    _archive_path(prefix + MANIFEST_NAME)
     contents = _archive_contents(root, manifest)
     _validate_content_paths(prefix, contents)
     return manifest, prefix, contents
 
 
 def _archive_contents(root: Path, manifest: PackageManifest) -> dict[str, bytes]:
-    paths = _source_paths(root)
-    ignored = _gitignore_spec(root, paths)
     selected: list[tuple[str, Path, int]] = []
-    for path in paths:
-        if not path.is_file():
-            continue
-        relative = path.relative_to(root).as_posix()
-        if relative in {_MANIFEST_NAME, _RECORD_NAME} or _excluded(relative, ignored):
-            continue
+    for relative, path in _as_archive_error(lambda: distribution_files(root)):
         _archive_path(relative)
         try:
             size = path.stat().st_size
@@ -631,8 +614,8 @@ def _archive_contents(root: Path, manifest: PackageManifest) -> dict[str, bytes]
             raise ArchiveError(f"cannot inspect package file {path}: {exc}") from exc
         selected.append((relative, path, size))
 
-    manifest_content = _normalized_manifest(manifest)
-    record_paths = sorted([_MANIFEST_NAME, *(relative for relative, _, _ in selected)])
+    manifest_content = normalized_manifest(manifest)
+    record_paths = sorted([MANIFEST_NAME, *(relative for relative, _, _ in selected)])
     record_size = len(
         serialize_record(tuple(RecordEntry(path, "0" * 64) for path in record_paths)).encode()
     )
@@ -641,7 +624,7 @@ def _archive_contents(root: Path, manifest: PackageManifest) -> dict[str, bytes]
         [*(size for _, _, size in selected), len(manifest_content), record_size],
     )
 
-    contents = {_MANIFEST_NAME: manifest_content}
+    contents = {MANIFEST_NAME: manifest_content}
     remaining = MAX_ARCHIVE_TOTAL_SIZE - len(manifest_content) - record_size
     for relative, path, _ in selected:
         limit = min(MAX_ARCHIVE_ENTRY_SIZE, remaining)
@@ -650,7 +633,7 @@ def _archive_contents(root: Path, manifest: PackageManifest) -> dict[str, bytes]
         )
         remaining -= len(contents[relative])
     entries = _record_entries(contents)
-    contents[_RECORD_NAME] = serialize_record(entries).encode()
+    contents[RECORD_NAME] = serialize_record(entries).encode()
     _reject_casefolding_collisions(contents)
     return contents
 
@@ -671,120 +654,6 @@ def _read_source_file(path: Path, limit: int, *, total_limited: bool) -> bytes:
     return bytes(content)
 
 
-def _gitignore_spec(root: Path, paths: tuple[Path, ...]) -> PathSpec:
-    patterns: list[str] = []
-    for path in paths:
-        if not path.is_file() or path.name != ".gitignore":
-            continue
-        relative_parent = path.relative_to(root).parent.as_posix()
-        try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except (OSError, UnicodeDecodeError) as exc:
-            raise ArchiveError(f"cannot read gitignore file {path}: {exc}") from exc
-        patterns.extend(_prefixed_pattern(line, relative_parent) for line in lines)
-    return PathSpec.from_lines("gitignore", patterns)
-
-
-def _prefixed_pattern(pattern: str, parent: str) -> str:
-    """Translate a nested gitignore rule to the package-root pattern space."""
-
-    if parent == "." or not pattern or pattern.startswith("#"):
-        return pattern
-    negated = pattern.startswith("!")
-    body = pattern[1:] if negated else pattern
-    anchored = body.startswith("/")
-    body = body.removeprefix("/")
-    # A slash-free rule is a basename rule and applies at every descendant,
-    # unlike a rule containing a slash, which remains relative to this file.
-    relative_pattern = body if anchored or "/" in body else "**/" + body
-    return ("!" if negated else "") + parent + "/" + relative_pattern
-
-
-def _excluded(path: str, ignored: PathSpec) -> bool:
-    parts = PurePosixPath(path).parts
-    if (
-        any(part.startswith(".") for part in parts)
-        or any(part in _VCS_DIRECTORIES or part in _CACHE_DIRECTORIES for part in parts)
-        or path.casefold().endswith(_ARCHIVE_SUFFIX)
-    ):
-        return True
-    # Git cannot re-include a child once an ancestor directory is excluded.
-    # PathSpec evaluates patterns for a single path, so retain that traversal
-    # rule when applying the combined nested-ignore specification.
-    ancestors = PurePosixPath(path).parents
-    return ignored.match_file(path) or any(
-        ignored.match_file(ancestor.as_posix() + "/")
-        for ancestor in ancestors
-        if ancestor != PurePosixPath(".")
-    )
-
-
-def _normalized_manifest(manifest: PackageManifest) -> bytes:
-    """Render manifest data in one stable TOML representation."""
-
-    lines = [
-        "[package]",
-        f"name = {_toml_string(manifest.name)}",
-        f"version = {_toml_string(str(manifest.version))}",
-    ]
-    for key, value in (
-        ("description", manifest.description),
-        ("license", manifest.license),
-        ("repository", manifest.repository),
-    ):
-        if value is not None:
-            lines.append(f"{key} = {_toml_string(value)}")
-    if manifest.authors:
-        lines.append("authors = " + _toml_array(manifest.authors))
-    if manifest.keywords:
-        lines.append("keywords = " + _toml_array(manifest.keywords))
-    if manifest.dependencies:
-        lines.extend(("", "[dependencies]"))
-        for name in sorted(manifest.dependencies):
-            dependency = manifest.dependencies[name]
-            fields = [("version", str(dependency.version))]
-            fields.extend(
-                (key, value)
-                for key, value in (("url", dependency.url), ("hash", dependency.hash))
-                if value is not None
-            )
-            if len(fields) == 1:
-                lines.append(f"{_toml_key(name)} = {_toml_string(fields[0][1])}")
-            else:
-                rendered = ", ".join(f"{key} = {_toml_string(value)}" for key, value in fields)
-                lines.append(f"{_toml_key(name)} = {{ {rendered} }}")
-    if manifest.commands:
-        lines.extend(("", "[commands]"))
-        for path in sorted(manifest.commands):
-            command = manifest.commands[path]
-            fields = [("program", command.program)]
-            if command.description is not None:
-                fields.append(("description", command.description))
-            rendered = ", ".join(f"{key} = {_toml_string(value)}" for key, value in fields)
-            lines.append(f"{_toml_key(path)} = {{ {rendered} }}")
-    return ("\n".join(lines) + "\n").encode()
-
-
-def _toml_string(value: str) -> str:
-    return json.dumps(value, ensure_ascii=False)
-
-
-def _toml_key(value: str) -> str:
-    return (
-        value
-        if value
-        and all(
-            character.isascii() and (character.isalnum() or character in "_-")
-            for character in value
-        )
-        else _toml_string(value)
-    )
-
-
-def _toml_array(values: tuple[str, ...]) -> str:
-    return "[" + ", ".join(_toml_string(value) for value in values) + "]"
-
-
 def _record_entries(contents: dict[str, bytes]) -> tuple[RecordEntry, ...]:
     return tuple(
         RecordEntry(path, hashlib.sha256(contents[path]).hexdigest()) for path in sorted(contents)
@@ -792,7 +661,7 @@ def _record_entries(contents: dict[str, bytes]) -> tuple[RecordEntry, ...]:
 
 
 def _metadata(manifest: PackageManifest, contents: dict[str, bytes]) -> ArchiveMetadata:
-    entries = _record_from_bytes(contents[_RECORD_NAME])
+    entries = _record_from_bytes(contents[RECORD_NAME])
     return ArchiveMetadata(manifest, content_hash(entries))
 
 
@@ -833,8 +702,8 @@ def _archive_layout(
     if any(path.parts[0] != prefix_part or len(path.parts) < 2 for path in paths):
         raise ArchiveError("package archive entries must share one directory prefix")
     prefix = prefix_part + "/"
-    manifest_name = prefix + _MANIFEST_NAME
-    record_name = prefix + _RECORD_NAME
+    manifest_name = prefix + MANIFEST_NAME
+    record_name = prefix + RECORD_NAME
     if manifest_name not in names or record_name not in names:
         raise ArchiveError("package archive requires package.toml and RECORD")
     return prefix, manifest_name, record_name, dict(zip(names, infos, strict=True))
@@ -904,7 +773,7 @@ def _validate_content_paths(prefix: str, contents: dict[str, bytes]) -> None:
 
 
 def _validate_prefix(prefix: str, manifest: PackageManifest) -> None:
-    _archive_path(prefix + _MANIFEST_NAME)
+    _archive_path(prefix + MANIFEST_NAME)
     if prefix != _entry_prefix(manifest):
         raise ArchiveError("package archive prefix does not match its manifest")
 
@@ -924,7 +793,7 @@ def _record_from_bytes(content: bytes) -> tuple[RecordEntry, ...]:
     for entry in entries:
         _archive_path(entry.path)
     _reject_casefolding_collisions(entry.path for entry in entries)
-    if entries != tuple(sorted(entries, key=_record_path_key)):
+    if entries != tuple(sorted(entries, key=record_path_key)):
         raise ArchiveError("archive RECORD entries are not sorted")
     if content != serialize_record(entries).encode():
         raise ArchiveError("archive RECORD is not canonical")
@@ -962,12 +831,6 @@ def _entry_digest(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> str:
     digest = hashlib.sha256()
     _stream_entry(archive, info, digest.update)
     return digest.hexdigest()
-
-
-def _record_path_key(entry: RecordEntry) -> str:
-    """Return the canonical ordering key for one record entry."""
-
-    return entry.path
 
 
 def _reject_file_descendant_conflicts(paths: Iterable[str]) -> None:

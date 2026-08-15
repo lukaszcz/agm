@@ -10,6 +10,7 @@ their underlying AgL containers.
 from __future__ import annotations
 
 import decimal
+import importlib.machinery
 import importlib.util
 import sys
 from collections.abc import Sequence
@@ -63,6 +64,22 @@ class ExternResolutionError(AglError):
         )
         self.module_id = module_id
         self.name = name
+
+
+class _CacheFreeLoader(importlib.machinery.SourceFileLoader):
+    """A source loader that never writes a bytecode cache beside its source.
+
+    CPython's source loader caches compiled bytecode in a ``__pycache__``
+    directory next to the module it imports.  A companion is imported from
+    wherever its AgL module lives, including an installed package's immutable
+    store tree, which AGM must never write into: unrecorded files there are
+    not part of the package and would strand its removal.  Discarding the
+    write leaves the import otherwise identical; an already-present cache is
+    still read.
+    """
+
+    def set_data(self, path: str, data: object, *, _mode: int = 0o666) -> None:
+        """Discard bytecode the loader would otherwise cache next to a companion."""
 
 
 # ---------------------------------------------------------------------------
@@ -193,10 +210,11 @@ class ExternRegistry:
             f"agm_agl_extern_companion__{module_id.synthetic_name_component()}"
             f"__{len(self._by_path)}"
         )
-        spec = importlib.util.spec_from_file_location(synthetic_name, canonical)
-        # A ``.py``-suffixed location always resolves to a source-file loader
-        # (verified to exist by the loader before this is ever called); this
-        # can only be ``None`` for a suffix no loader recognizes.
+        spec = importlib.util.spec_from_file_location(
+            synthetic_name, canonical, loader=_CacheFreeLoader(synthetic_name, str(canonical))
+        )
+        # A supplied source-file loader always yields a spec; ``None`` would
+        # mean the location carries a suffix no loader recognizes.
         assert spec is not None and spec.loader is not None, (
             f"cannot build an import spec for companion {canonical}"
         )

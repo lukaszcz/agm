@@ -17,6 +17,7 @@ program that calls an extern.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -195,6 +196,23 @@ class TestExternRegistryLoadAndResolve:
         registry.load_companion(mid, py_path)
         fn = registry.resolve(mid, "f")
         assert fn(1) == 2
+
+    def test_import_writes_no_bytecode_cache_beside_the_companion(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # An installed package's companion lives in the immutable store, which
+        # AGM must leave exactly as its RECORD describes it.
+        monkeypatch.setattr(sys, "dont_write_bytecode", False)
+        py_path = tmp_path / "mod.py"
+        py_path.write_text("def f(x):\n    return x + 1\n")
+        mid = ModuleId.from_path("lib/mod")
+        registry = ExternRegistry()
+
+        registry.load_companion(mid, py_path)
+
+        assert registry.resolve(mid, "f")(1) == 2
+        assert sorted(path.name for path in tmp_path.iterdir()) == ["mod.py"]
+        assert not list(tmp_path.rglob("*.pyc"))
 
     def test_import_runs_top_level_code_exactly_once_per_registry(self, tmp_path: Path) -> None:
         py_path = tmp_path / "mod.py"

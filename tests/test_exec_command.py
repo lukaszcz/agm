@@ -1352,7 +1352,7 @@ class TestExecCommandExitCodes:
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text("\n".join(["[test]", 'typo = "ignored"']))
+        (home / ".agm" / "config.toml").write_text("\n".join(["[test]", 'msgs = "ignored"']))
         agl_file = tmp_path / "test.agl"
         write_file_program(
             agl_file,
@@ -1366,8 +1366,10 @@ class TestExecCommandExitCodes:
 
         assert exec_command.run(_exec_args(agl_file)) is None
         captured = capsys.readouterr()
+        # The program still runs on the declared default; the misspelled key is
+        # reported so it is not silently dropped.
         assert captured.out == "ok\n"
-        assert captured.err == ""
+        assert "msgs" in captured.err
 
     def test_ask_program_dispatches_through_the_value_dispatcher(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -3401,6 +3403,112 @@ class TestEntryModuleConfig:
 
         assert exec_command.run(_exec_args_no_log(agl_file)) is None
         assert capsys.readouterr().out == "usable\n"
+
+    def test_reserved_entry_stem_still_selects_among_several_programs(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The reserved-stem scan must not consume the program declarations."""
+        agl_file = tmp_path / "exec.agl"
+        agl_file.write_text(
+            'program def first() -> unit = print "first"\n'
+            'program def second() -> unit = print "second"\n'
+        )
+
+        assert exec_command.run(_exec_args_no_log(agl_file, program="second")) is None
+        assert capsys.readouterr().out == "second\n"
+
+    def test_module_table_engine_settings_and_subtables_do_not_warn(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Params, engine settings, and nested route tables are all legitimate."""
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            "[workflow]\n"
+            "retries = 3\n"
+            'timeout = "30s"\n'
+            "\n[workflow.main]\n"
+            "max-iters = 5\n"
+            '\n[workflow.Deploy]\nregion = "prod"\n'
+        )
+        monkeypatch.setattr(
+            exec_engine,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+        agl_file = tmp_path / "workflow.agl"
+        agl_file.write_text(
+            "param retries: int = 1\n"
+            "scope Deploy\n"
+            'param region: text = "eu"\n'
+            "end Deploy\n"
+            "program def main() -> unit = print(Deploy::region)\n"
+        )
+
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        captured = capsys.readouterr()
+        assert captured.out == "prod\n"
+        assert captured.err == ""
+
+    def test_key_claimed_by_an_imported_module_suffix_route_does_not_warn(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """An imported route that reads the entry table by suffix claims its key."""
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text("[demo]\nretries = 5\n")
+        monkeypatch.setattr(
+            exec_engine,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+        (tmp_path / "lib").mkdir()
+        (tmp_path / "lib" / "demo.agl").write_text(
+            "param retries: int = 1\ndef read() -> int = retries\n"
+        )
+        agl_file = tmp_path / "demo.agl"
+        agl_file.write_text(
+            "import lib/demo\nprogram def main() -> unit = print(lib/demo::read())\n"
+        )
+
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        captured = capsys.readouterr()
+        assert captured.out == "5\n"
+        assert captured.err == ""
+
+    def test_undeclared_key_beside_valid_keys_warns_once_and_runs_on_default(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A misspelled param key is reported instead of being silently dropped."""
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            '[workflow]\nretires = 5\nregion = "prod"\n\n[workflow.main]\nmax-iters = 5\n'
+        )
+        monkeypatch.setattr(
+            exec_engine,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+        agl_file = tmp_path / "workflow.agl"
+        agl_file.write_text(
+            "param retries: int = 1\n"
+            'param region: text = "eu"\n'
+            "program def main() -> unit = print retries\n"
+        )
+
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        captured = capsys.readouterr()
+        assert captured.out == "1\n"
+        reported = [line for line in captured.err.splitlines() if line.strip()]
+        assert len(reported) == 1
+        assert "retires" in reported[0]
 
     def test_cli_max_iters_overrides_selected_qualified_program_table(
         self,

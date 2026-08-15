@@ -55,6 +55,7 @@ Flag notes:
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
 from typing import NoReturn, TypeVar
@@ -81,14 +82,16 @@ from agm.cli_support.exec_target import (
     resolve_installed_reference,
 )
 from agm.config.context import ConfigContext, current_config_context
-from agm.config.general import exec_config_from_merged, load_general_config
+from agm.config.general import GeneralConfig, exec_config_from_merged, load_general_config
 from agm.config.module_roots import StdlibResolutionError
 from agm.config.qualified_keys import (
     RESERVED_CONFIG_SECTION_NAMES,
     QualifiedConfigKey,
     QualifiedConfigLookupError,
     build_qualified_config_key,
+    configured_leaf_names,
     resolve_qualified_values,
+    route_table_paths,
 )
 from agm.core import dry_run
 from agm.core.fs import read_text_arg
@@ -155,6 +158,40 @@ def _registered_command_mismatch(command_path: str) -> NoReturn:
         file=sys.stderr,
     )
     raise SystemExit(1)
+
+
+def _report_undeclared_config_keys(
+    config: GeneralConfig,
+    module_segments: tuple[str, ...],
+    param_keys: Iterable[QualifiedConfigKey],
+) -> None:
+    """Warn about entry-module config keys that no declaration claims.
+
+    A key set in the entry module's configuration table that is neither one of
+    its params nor an engine setting is read by nothing — most often a
+    misspelled param name — so report it instead of dropping it silently. The
+    warning never affects the run: the program still executes on its defaults.
+    Engine settings legitimately share the table with params, and nested tables
+    (scope regions, per-program engine settings) address routes of their own.
+
+    A param claims a leaf whenever its own route reads the entry module's
+    table, which by suffix resolution includes params declared in imported
+    modules whose route ends in the entry module's name.
+    """
+    entry_paths = set(route_table_paths(module_segments))
+    declared = {
+        key.leaf
+        for key in param_keys
+        if entry_paths.intersection(route_table_paths(key.module_segments, key.scope_path))
+    }
+    for leaf in sorted(configured_leaf_names(config, module_segments)):
+        if leaf in declared or leaf in ENGINE_KEY_NAMES:
+            continue
+        print(
+            f"warning: config key '{leaf}' in the '{'/'.join(module_segments)}' "
+            "configuration table is not a declared param and will be ignored",
+            file=sys.stderr,
+        )
 
 
 def registered_program_params(
@@ -252,7 +289,10 @@ def run(
     # Loose file entries address declarations under the file stem; package
     # entries retain their package-qualified route. A loose stem that would
     # consume AGM's configuration namespace is harmless until it exposes params.
-    parsed_items = static_items(parsed.program.body.items) if parsed.program is not None else ()
+    # Materialized: the items are scanned twice below, for params and programs.
+    parsed_items = (
+        tuple(static_items(parsed.program.body.items)) if parsed.program is not None else ()
+    )
     if (
         len(config_entry_segments) == 1
         and entry_stem in RESERVED_CONFIG_SECTION_NAMES
@@ -468,6 +508,7 @@ def run(
                 if key in configured_params
             }
         )
+        _report_undeclared_config_keys(config_view, config_entry_segments, param_keys.values())
     external_params.update(cli_params)
 
     # Params are validated against the lowered program, so this preflight lowers

@@ -209,6 +209,10 @@ overrides from `[review-tools.review.review.main]`, and a `review::max-tries` pa
 suffix or an exact quoted module route such as `["review-tools/judge".review]` to
 disambiguate. `runner` remains an `[exec]`-only setting. Inline `-c` params are CLI-only.
 
+A key in the entry module's own table that names neither one of its params nor an engine
+setting (typically a misspelled param name) is reported on stderr and ignored; the program
+still runs on its declared defaults.
+
 #### Source-level engine settings (`std/config`)
 
 An AgL program may set its own exec options by importing the standard-library

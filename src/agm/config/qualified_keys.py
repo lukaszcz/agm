@@ -80,7 +80,10 @@ def resolve_qualified_values(
     resolved: dict[QualifiedConfigKey, object] = {}
     for layer in layers:
         for key in unique_keys:
-            if any(_table_path_replaced(layer, path) for path in _table_paths_for(key)):
+            if any(
+                _table_path_replaced(layer, path)
+                for path in route_table_paths(key.module_segments, key.scope_path)
+            ):
                 resolved.pop(key, None)
         resolved.update(_resolve_layer(layer, unique_keys))
     return resolved
@@ -96,7 +99,7 @@ def _resolve_layer(
     values_by_key: dict[QualifiedConfigKey, list[tuple[tuple[str, ...], object]]] = {}
 
     for key in keys:
-        for path in _table_paths_for(key):
+        for path in route_table_paths(key.module_segments, key.scope_path):
             table = _table_at(layer, path)
             if table is None or key.leaf not in table:
                 continue
@@ -126,12 +129,43 @@ def _resolve_layer(
     return resolved
 
 
-def _table_paths_for(key: QualifiedConfigKey) -> tuple[tuple[str, ...], ...]:
+def configured_leaf_names(
+    config: GeneralConfig,
+    module_segments: tuple[str, ...],
+    scope_path: tuple[str, ...] = (),
+) -> frozenset[str]:
+    """Return the leaf key names set in the tables that address one route.
+
+    The tables are exactly the ones :func:`resolve_qualified_values` reads for a
+    key on this route, across every layer, so a name is reported only when a
+    lookup on that route could observe it. A nested table addresses a route of
+    its own — a scope region or a program scope — and is never a leaf here.
+    """
+    paths = route_table_paths(module_segments, scope_path)
+    names: set[str] = set()
+    for layer in config.layers:
+        for path in paths:
+            table = _table_at(layer, path)
+            if table is None:
+                continue
+            names.update(name for name, value in table.items() if not isinstance(value, dict))
+    return frozenset(names)
+
+
+def route_table_paths(
+    module_segments: tuple[str, ...], scope_path: tuple[str, ...] = ()
+) -> tuple[tuple[str, ...], ...]:
+    """Return the config table paths that address one route, in read order.
+
+    Every module-suffix spelling, shortest first, then the exact quoted module
+    anchor; paths rooted in an AGM configuration section are excluded. This is
+    the single routing rule shared by value resolution and leaf enumeration, so
+    a caller can tell which routes a given table serves.
+    """
     suffix_paths = [
-        (*key.module_segments[-depth:], *key.scope_path)
-        for depth in range(1, len(key.module_segments) + 1)
+        (*module_segments[-depth:], *scope_path) for depth in range(1, len(module_segments) + 1)
     ]
-    anchor_path = ("/".join(key.module_segments), *key.scope_path)
+    anchor_path = ("/".join(module_segments), *scope_path)
     paths: list[tuple[str, ...]] = []
     seen_paths: set[tuple[str, ...]] = set()
     for path in (*suffix_paths, anchor_path):

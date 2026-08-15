@@ -11,7 +11,9 @@ from agm.config.general import GeneralConfig, load_general_config
 from agm.config.qualified_keys import (
     QualifiedConfigKey,
     QualifiedConfigLookupError,
+    configured_leaf_names,
     resolve_qualified_values,
+    route_table_paths,
 )
 from agm.core.toml import toml_dict
 
@@ -161,6 +163,39 @@ class TestQualifiedConfigKeys:
         config = {"judge": {"review": {"max-tries": 1}}}
 
         assert resolve_qualified_values(_config(config), (key, key)) == {key: 1}
+
+    def test_route_table_paths_share_a_table_between_a_suffix_and_its_own_route(self) -> None:
+        """A nested module route reads the table its last segment names."""
+        entry = route_table_paths(("demo",))
+        imported = route_table_paths(("lib", "demo"))
+
+        assert entry == (("demo",),)
+        assert set(entry).issubset(imported)
+
+    def test_configured_leaf_names_reports_every_consulted_spelling(self) -> None:
+        config = _config(
+            {"judge": {"review": {"max-tries": 1}}},
+            {"review-tools/judge": {"review": {"region": "eu"}}},
+        )
+
+        assert configured_leaf_names(config, ("review-tools", "judge"), ("review",)) == frozenset(
+            {"max-tries", "region"}
+        )
+
+    def test_configured_leaf_names_excludes_nested_tables(self) -> None:
+        config = _config({"workflow": {"msg": "hi", "main": {"max-iters": 1}}})
+
+        assert configured_leaf_names(config, ("workflow",)) == frozenset({"msg"})
+
+    def test_configured_leaf_names_skips_reserved_sections(self) -> None:
+        config = _config({"exec": {"max-iters": 1}})
+
+        assert configured_leaf_names(config, ("exec",)) == frozenset()
+
+    def test_configured_leaf_names_is_empty_without_a_matching_table(self) -> None:
+        config = _config({"other": {"region": "eu"}})
+
+        assert configured_leaf_names(config, ("workflow",)) == frozenset()
 
     def test_resolves_path_normalized_file_layers_with_dotted_and_quoted_headers(
         self, tmp_path: Path

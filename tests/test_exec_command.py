@@ -14,6 +14,7 @@ from __future__ import annotations
 import decimal
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -3877,6 +3878,67 @@ class TestEntryModuleConfig:
             is None
         )
         assert capsys.readouterr().out == "ab\n"
+
+
+class TestNegatedConstantDefaults:
+    """A unary operator over a constant operand is itself a constant.
+
+    Both places that require a constant initializer accept it: an engine
+    setting's declared default in ``std/config`` and a module root binding.
+    """
+
+    def test_engine_setting_default_may_be_negated(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A substitute standard library negates its ``strict-json`` default."""
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        monkeypatch.setattr(
+            exec_engine,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        repo_stdlib = Path(__file__).resolve().parent.parent / "stdlib"
+        lib_root = tmp_path / "lib"
+        shutil.copytree(repo_stdlib, lib_root)
+        config = lib_root / "std" / "config.agl"
+        config.write_text(
+            config.read_text(encoding="utf-8").replace(
+                "builtin var strict-json: bool = false",
+                "builtin var strict-json: bool = not false",
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("AGM_STDLIB", str(lib_root))
+
+        entry = tmp_path / "settings.agl"
+        entry.write_text(
+            "import std/config\nprogram def main() -> unit = print std/config::strict-json\n",
+            encoding="utf-8",
+        )
+
+        assert exec_command.run(_exec_args_no_log(entry)) is None
+        assert capsys.readouterr().out == "true\n"
+
+    def test_root_binding_may_be_negated(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        entry = tmp_path / "threshold.agl"
+        entry.write_text(
+            "let threshold = -1\n"
+            "let disabled = not true\n"
+            'program def main() -> unit = print "%{threshold}/%{disabled}"\n',
+            encoding="utf-8",
+        )
+
+        assert exec_command.run(_exec_args_no_log(entry)) is None
+        assert capsys.readouterr().out == "-1/false\n"
 
 
 class TestSettingOverrideProvenanceWithNoStdlib:

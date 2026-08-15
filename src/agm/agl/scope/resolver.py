@@ -163,6 +163,7 @@ from agm.agl.syntax.nodes import (
     VarPattern,
     VarRef,
     WildcardPattern,
+    declares_source_entry,
     pattern_binder_candidates,
 )
 from agm.agl.syntax.spans import SourceSpan
@@ -438,6 +439,13 @@ class _Resolver:
         # entry. While resolving that entry, source offsets preserve the
         # bindings' original textual visibility despite the AST partition.
         self._in_synthetic_entry: bool = False
+        # The synthetic entry's own body items, which the wrapper filled with
+        # what the user wrote at the root. A rejection there is phrased in the
+        # terms the source is written in, not in terms of the generated block.
+        self._synthetic_entry_items: tuple[Item, ...] | None = None
+        # Whether this module declares a ``program def`` of its own, which
+        # decides how a static-root rejection is explained.
+        self._declares_program_entry: bool = False
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -488,6 +496,8 @@ class _Resolver:
         # Seed ambient type names (from prior REPL entries).
         if ambient_type_names:
             self._declared_type_names.update(ambient_type_names)
+
+        self._declares_program_entry = declares_source_entry(program.body.items)
 
         # Pre-pass 1: collect every named declaration and scope mention. This
         # establishes path-keyed membership before qualifier validation and the
@@ -1477,7 +1487,9 @@ class _Resolver:
           enclosing sequence for this purpose, so the enclosing sequence's
           header rule governs a region as a whole, while its own header rule --
           tracked by the recursive call this function makes for the region's
-          body -- governs the region's own items independently.
+          body -- governs the region's own items independently. A synthetic
+          entry's own body holds the items the source wrote at its root, so a
+          header there is reported as the header-ordering violation it is.
         """
         seen_non_import_item = False
 
@@ -1486,14 +1498,19 @@ class _Resolver:
                 self._resolve_open_decl(item)
                 continue
             if isinstance(item, (ImportDecl, ExportDecl)):
-                if not self._at_root:
+                # A header the entry transform moved into the synthetic body is
+                # one the source wrote after an executable item: the rule it
+                # broke is the ordering one, stated in the source's own terms
+                # rather than in terms of the generated block.
+                in_entry_body = items is self._synthetic_entry_items
+                if not self._at_root and not in_entry_body:
                     kind = "import" if isinstance(item, ImportDecl) else "export"
                     raise AglScopeError(
                         f"'{kind}' declarations are only allowed at the program root, "
                         "not inside a nested block.",
                         span=item.span,
                     )
-                if seen_non_import_item:
+                if seen_non_import_item or in_entry_body:
                     raise AglScopeError(
                         "Import and export declarations must appear before any other "
                         "declarations in a module or scope region.",
@@ -1542,6 +1559,7 @@ class _Resolver:
                             "Assignment statements are not allowed at a static module root.",
                             subject="statements",
                             file_backed=self._origin_path is not None,
+                            declares_program_entry=self._declares_program_entry,
                         ),
                         span=item.span,
                     )
@@ -1556,6 +1574,7 @@ class _Resolver:
                             "Bare expressions are not allowed at a static module root.",
                             subject="statements",
                             file_backed=self._origin_path is not None,
+                            declares_program_entry=self._declares_program_entry,
                         ),
                         span=item.span,
                     )
@@ -1853,11 +1872,15 @@ class _Resolver:
         # evaluated in the function's definition scope.
         self._validate_qualifier_chains(node)
         previous_synthetic_entry = self._in_synthetic_entry
+        previous_entry_items = self._synthetic_entry_items
         self._in_synthetic_entry = node.is_synthetic
+        if node.is_synthetic and isinstance(node.body, Block):
+            self._synthetic_entry_items = node.body.items
         try:
             self._resolve_params_and_body(node)
         finally:
             self._in_synthetic_entry = previous_synthetic_entry
+            self._synthetic_entry_items = previous_entry_items
 
     def _resolve_type_decl(self, node: RecordDef | EnumDef | ExceptionDef | TypeAlias) -> None:
         """Reject type declarations outside the program root."""

@@ -1,0 +1,71 @@
+# Inline source without a `program def`: the host wraps its statements in a
+# synthetic entry. Lambdas created inside that entry capture the entry's own
+# bindings — including the mutable ones they assign — while root declarations
+# keep reading the computed bindings the wrapper retains at the root. A
+# retained binding initializes with the module, so its effects precede the
+# statements the entry kept.
+param start: int
+param rounds: int = 2
+
+def announce(value: int) -> int =
+  print("init:%{value}")
+  value
+
+print("entry")
+
+let base = announce(start + 1)
+let label = "base:%{base}"
+let limits = [-1, base]
+
+enum Mood
+  | Calm
+  | Tense(level: int)
+
+let mood = if start < 0 => Tense(-start) else => Calm
+
+var audits = 0
+
+def describe() -> text = "%{label} low:%{limits[0]}"
+
+def audit() -> int =
+  audits := audits + 1
+  audits
+
+def temper() -> int =
+  case mood of
+    | Calm => 0
+    | Tense(level) => level
+
+let reviewer = AgentCommand("reviewer")
+
+print(describe())
+print(temper())
+
+# A lambda assigning an entry-local `var`, called from a loop body.
+var tally = 0
+let add = fn(n: int) -> unit => do tally := tally + n until true
+for round in 1 to rounds do
+  add(round)
+  print(audit())
+done
+print(tally)
+
+# A lambda capturing an entry-local `let` and passed to a higher-order lambda
+# that never names the captured binding itself.
+let step = tally
+let apply = fn(f: (int) -> int, n: int) -> int => f(n)
+let scale = fn(n: int) -> int => n * step
+print(apply(scale, 3))
+
+# Entry-local mutable state written from a `case` branch and from a `catch`
+# body, both through the same captured lambda.
+var notes = "notes"
+let note = fn(entry: text) -> unit => do notes := notes + "/" + entry until true
+try
+  let verdict: Mood = ask("Review %{describe()}.", agent = reviewer)
+  case verdict of
+    | Calm => note("calm")
+    | Tense(level) => note("tense:%{level}")
+catch AgentParseError => note("unreadable")
+print(notes)
+print(audits)

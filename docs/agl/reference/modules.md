@@ -260,7 +260,9 @@ rules.
 
 Every file-backed module has a static root: imports, declarations, parameters,
 and `let`/`var` bindings are allowed there, while bare expressions and assignments
-are not. Root binding initializers must be constant expressions. Put executable
+are not. Root binding initializers must be constant expressions: literals,
+literal containers, constructor applications, and unary operators over those.
+Put executable
 workflow code in a `program def` body. Parameters are also legal in named scope
 regions in every module. A program receives values for the params in its module
 and transitive imports before it starts.

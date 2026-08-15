@@ -169,16 +169,19 @@ def format_diagnostic(diagnostic: Diagnostic, *, source_name: str | None = "<agl
     return "\n".join((primary, *notes))
 
 
-def static_root_message(message: str, *, subject: str, file_backed: bool) -> str:
-    """Return a static-module-root rejection, explained for a file-less module.
+def static_root_message(
+    message: str, *, subject: str, file_backed: bool, declares_program_entry: bool
+) -> str:
+    """Return a static-module-root rejection, explained where that helps.
 
-    A module with no backing file reaches a static root only when its host
-    admits source that declares its own ``program def`` instead of wrapping the
-    source in a synthetic entry, so the rejection is explained in those terms.
-    *subject* names what the offending root item is (for example ``"statements"``
-    or ``"bindings"``) so one sentence reads correctly at every rejection site.
+    Inline source that declares its own ``program def`` is an ordinary module
+    rather than a wrapped command, which is the one situation the extra
+    sentence explains; a file module and inline source with no entry of its own
+    get the bare rule. *subject* names what the offending root item is (for
+    example ``"statements"`` or ``"bindings"``) so the sentence reads correctly
+    at every rejection site.
     """
-    if file_backed:
+    if file_backed or not declares_program_entry:
         return message
     return (
         f"{message} Inline source that declares a 'program def' is an ordinary "

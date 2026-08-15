@@ -25,6 +25,7 @@ from tests.agl.ir_harness import (
     evaluate_ir_graph,
     evaluate_ir_graph_raises,
     lower_inline_ir,
+    lower_ir,
     nominal_id_for,
 )
 
@@ -55,17 +56,53 @@ def test_wrap_mode_captures_static_bindings_and_synthetic_main_locals(
     }
 
 
+_COUNTING_INITIALIZER = (
+    "def bump() -> int =\n  Static::calls := Static::calls + 1\n  41 + Static::calls\n"
+)
+
+
 @pytest.mark.parametrize(
-    "source",
+    "scoped_bindings",
     (
-        "scope Static\nlet value = print 1\nend Static",
-        "let Static::value = print 1",
+        "scope Static\nvar calls = 0\nlet value = bump()\nend Static\n",
+        "var Static::calls = 0\nlet Static::value = bump()\n",
     ),
     ids=("region", "shorthand"),
 )
-def test_inline_scoped_bindings_obey_static_root_initializer_restrictions(source: str) -> None:
+def test_inline_scoped_bindings_may_compute_their_initializers(scoped_bindings: str) -> None:
+    """Inline source is a command, never an imported module.
+
+    Its root bindings are the ones the entry transform kept there, so they
+    compute like any other statement: the initializer runs exactly once, and
+    the value it produced is readable through the binding's scoped path.
+    """
+    result = evaluate_ir(scoped_bindings + _COUNTING_INITIALIZER + "let seen = Static::value\n")
+
+    assert result == {
+        "Static::calls": IntValue(1),
+        "Static::value": IntValue(42),
+        "seen": IntValue(42),
+    }
+
+
+@pytest.mark.parametrize(
+    "root_bindings",
+    (
+        "scope Static\nlet value = 1 + 1\nend Static\n",
+        "let Static::value = 1 + 1\n",
+        "let value = 1 + 1\n",
+    ),
+    ids=("region", "shorthand", "unscoped"),
+)
+def test_file_module_rejects_a_non_constant_root_initializer(
+    root_bindings: str, tmp_path: Path
+) -> None:
+    """A module another program can import still executes nothing at its root."""
     with pytest.raises(AglTypeError):
-        lower_inline_ir(source)
+        lower_ir(
+            root_bindings + "program def main() -> unit = ()\n",
+            origin_path=tmp_path / "library.agl",
+        )
 
 
 def test_synthetic_main_runs_only_when_explicitly_selected() -> None:

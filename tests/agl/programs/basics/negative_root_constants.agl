@@ -1,0 +1,40 @@
+# Root bindings whose initializers apply a unary operator to constant operands:
+# bare literals, container elements, and constructor arguments.
+param reading: int
+
+record Range(lo: int, hi: int)
+
+enum Bias
+  | Low
+  | High(offset: int)
+
+let floor_value = -1
+let verbose = not true
+let offsets = [-2, 0, 2]
+let thresholds = {"cold": -10, "hot": 30}
+let span = Range(-5, 5)
+let bias = High(-3)
+
+def classify(value: int) -> text =
+  if | value < span.lo => "below"
+     | value > span.hi => "above"
+     | else => "inside"
+
+def offset_of(b: Bias) -> int =
+  case b of
+    | Low => floor_value
+    | High(offset) => offset
+
+program def main() -> unit =
+  print(classify(reading))
+  print(reading + offset_of(bias))
+  print(floor_value)
+  print(verbose)
+  print(offsets[0] + offsets[2])
+  print(thresholds["cold"])
+  var adjusted = reading
+  for step in offsets do
+    adjusted := adjusted - step
+  done
+  print(adjusted)
+  print(offset_of(Low))

@@ -357,7 +357,8 @@ assign_target ::= qualifier_chain? name
 
 A `builtin var` is a body-less, host-backed mutable binding with a mandatory
 type and an optional constant initializer. The initializer must have the
-declared type and use only literals, literal containers, and constructors. It
+declared type and use only literals, literal containers, constructors, and
+unary operators over those. It
 becomes the engine default only when the host supplies no initial value. The
 `builtin` modifier may sit on the same line or the line directly above (like
 `builtin def`). It may be declared only at the root, or in a named scope region,

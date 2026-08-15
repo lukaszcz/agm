@@ -1,10 +1,11 @@
 """Syntax-level detection of AgL constant expressions.
 
 A constant expression is built only from literal syntax, container literals,
-constructor applications, and designated root builtin calls. This is a pure
-predicate over the AST — it depends only on :mod:`agm.agl.syntax.nodes` — leaving
-type checking responsible for deciding which references are constructors and
-for validating the expression's declared type.
+unary operators over constants, constructor applications, and designated root
+builtin calls. This is a pure predicate over the AST — it depends only on
+:mod:`agm.agl.syntax.nodes` — leaving type checking responsible for deciding
+which references are constructors and for validating the expression's declared
+type.
 """
 
 from __future__ import annotations
@@ -22,6 +23,8 @@ from agm.agl.syntax.nodes import (
     NullLit,
     StringLit,
     TypeApply,
+    UnaryNeg,
+    UnaryNot,
     UnitLit,
     VarRef,
 )
@@ -36,6 +39,9 @@ def is_constant_expression(
     is_constant_builtin: Callable[[int], bool] = lambda _node_id: False,
 ) -> bool:
     """Whether *expr* contains only literal construction.
+
+    A unary operator over a constant operand is itself constant, so a negative
+    number reads as the literal it looks like.
 
     ``is_constructor`` and ``is_constant_builtin`` are supplied by the checked
     frontend artifact, keeping this syntax-level predicate independent of scope
@@ -57,6 +63,10 @@ def is_constant_expression(
                 entry.value, is_constructor=is_constructor, is_constant_builtin=is_constant_builtin
             )
             for entry in expr.entries
+        )
+    if isinstance(expr, (UnaryNeg, UnaryNot)):
+        return is_constant_expression(
+            expr.operand, is_constructor=is_constructor, is_constant_builtin=is_constant_builtin
         )
     if isinstance(expr, VarRef):
         return is_constructor(expr.node_id)

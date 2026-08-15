@@ -438,6 +438,10 @@ class _Lowerer:
             contract_payloads if contract_payloads is not None else {}
         )
         self._return_expected_stack: list[Type] = []
+        # The function whose body is being lowered, if any. A binding declared
+        # there is owned by that function: it lives in a per-invocation call
+        # frame, not in the module frame.
+        self._current_function: FunctionId | None = None
 
     @contextmanager
     def _return_context(self, expected: Type) -> Iterator[None]:
@@ -447,6 +451,16 @@ class _Lowerer:
             yield
         finally:
             self._return_expected_stack.pop()
+
+    @contextmanager
+    def _function_body(self, fn_id: FunctionId) -> Iterator[None]:
+        """Attribute every binding lowered inside a function body to *fn_id*."""
+        previous = self._current_function
+        self._current_function = fn_id
+        try:
+            yield
+        finally:
+            self._current_function = previous
 
     # ------------------------------------------------------------------
     # SymbolId allocation
@@ -469,6 +483,9 @@ class _Lowerer:
         used for catch-clause binders that live in the flat module frame but are
         not top-level exported bindings. ``synthetic`` marks a host-generated AST
         declaration while retaining its ``decl_node_id`` symbol mapping.
+
+        An omitted ``owner`` defaults to the function whose body is being
+        lowered, or to the module when lowering module-level items.
         """
         sym = SymbolId(self._link.next_sym)
         self._link.next_sym += 1
@@ -477,10 +494,18 @@ class _Lowerer:
             symbol_id=sym,
             mutable=mutable,
             public_name=name if public else None,
-            owner=owner if owner is not None else self._module_id,
+            owner=self._default_owner(owner),
             synthetic=synthetic,
         )
         return sym
+
+    def _default_owner(self, owner: "ModuleId | FunctionId | None") -> "ModuleId | FunctionId":
+        """Resolve an omitted symbol owner from the lowering context."""
+        if owner is not None:
+            return owner
+        if self._current_function is not None:
+            return self._current_function
+        return self._module_id
 
     def _symbol_for_or_alloc_decl(
         self,
@@ -522,7 +547,7 @@ class _Lowerer:
             symbol_id=sym,
             mutable=mutable,
             public_name=None,
-            owner=owner if owner is not None else self._module_id,
+            owner=self._default_owner(owner),
             synthetic=True,
         )
         return sym
@@ -796,9 +821,12 @@ class _Lowerer:
                 f"compiler bug: captured binding {ref.name!r} (decl_node_id={decl_id})"
                 " has no allocated symbol"
             )
-            # Module-owned bindings are resolved dynamically through frames[0].
-            # Capturing them would snapshot module lets and require module vars to
-            # exist before a top-level function closure can be hoisted.
+            # A static module binding lives in frames[0] for the whole run and is
+            # resolved dynamically there. Capturing it would snapshot module lets
+            # and require module vars to exist before a top-level function closure
+            # can be hoisted. Every other binding — including one declared at the
+            # top of a function body, which is owned by that function — lives in a
+            # frame the closure may outlive, so it is captured.
             symbol_desc = self._link.symbols[sym]
             if isinstance(symbol_desc.owner, ModuleId) and symbol_desc.public_name is not None:
                 continue
@@ -884,6 +912,7 @@ class _Lowerer:
         declaration_scope_path = tuple(segment.name for segment in funcdef.scope_path)
         with (
             self._return_context(sig.result),
+            self._function_body(fn_id),
             self._checked.type_env.type_scope(declaration_scope_path),
         ):
             body_ir: IrExpr
@@ -1024,7 +1053,7 @@ class _Lowerer:
             ir_params.append(IrFunctionParam(symbol=psym, default=default_ir))
 
         # Lower the body coerced to the declared return type (bakes result coercion in).
-        with self._return_context(fn_type.result):
+        with self._return_context(fn_type.result), self._function_body(fn_id):
             body_ir = self.lower_coerced(body_expr, fn_type.result)
 
         desc = FunctionDescriptor(

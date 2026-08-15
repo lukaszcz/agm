@@ -122,8 +122,12 @@ The pass enforces lexical control-flow boundaries —
 `break`/`continue` must stay within a loop in the same function, `return` must
 appear inside a function body — and the extern (Python FFI) placement rule that
 externs are only allowed in file-backed modules. The module's origin path also
-travels on its `ModuleResolution`, so both this pass and typecheck can explain a
-static-root rejection to a host whose module has no file.
+travels on its `ModuleResolution`, so both this pass and typecheck can add the
+inline-module explanation to a static-root rejection for file-less source that
+declares its own `program def` — the one situation it describes. A module header
+the inline entry transform moved into the synthetic body is reported as the
+header-ordering violation it is, since the block it now sits in is not one the
+source wrote.
 
 Program resolution extends this pass across modules and preserves the loader's immutable,
 reverse-topological import-SCC sequence on `ResolvedProgram`. Typecheck consumes that exact sequence

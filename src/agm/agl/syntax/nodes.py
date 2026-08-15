@@ -1351,6 +1351,21 @@ def static_function_items(items: tuple[Item, ...]) -> Iterator[FuncDef]:
             yield item
 
 
+def declares_synthetic_entry(items: tuple[Item, ...]) -> bool:
+    """Whether a host-synthesized program entry stands at this module's root.
+
+    True exactly for a source the host wrapped: the entry carries the module's
+    executable items, and every root binding beside it was placed there by the
+    same transform.
+    """
+    return any(item.is_program and item.is_synthetic for item in static_function_items(items))
+
+
+def declares_source_entry(items: tuple[Item, ...]) -> bool:
+    """Whether this module declares a ``program def`` entry of its own."""
+    return any(item.is_program and not item.is_synthetic for item in static_function_items(items))
+
+
 # Closed union of declaration nodes.
 # FuncDef is a declaration (top-level or block-level named function).
 Declaration = (

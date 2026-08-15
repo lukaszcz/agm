@@ -1,0 +1,31 @@
+{
+  "scenarios": [
+    {
+      "name": "reading_inside_the_span",
+      "params": {
+        "reading": 2
+      },
+      "expect": {
+        "stdout": "inside\n-1\n-1\nfalse\n0\n-10\n2\n-1\n"
+      }
+    },
+    {
+      "name": "reading_below_the_span",
+      "params": {
+        "reading": -8
+      },
+      "expect": {
+        "stdout": "below\n-11\n-1\nfalse\n0\n-10\n-8\n-1\n"
+      }
+    },
+    {
+      "name": "reading_above_the_span",
+      "params": {
+        "reading": 41
+      },
+      "expect": {
+        "stdout": "above\n38\n-1\nfalse\n0\n-10\n41\n-1\n"
+      }
+    }
+  ]
+}

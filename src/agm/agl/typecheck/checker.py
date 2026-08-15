@@ -173,6 +173,8 @@ from agm.agl.syntax.nodes import (
     VarPattern,
     VarRef,
     WildcardPattern,
+    declares_source_entry,
+    declares_synthetic_entry,
     pattern_binder_candidates,
     simple_let_pattern_name,
     static_items,
@@ -861,7 +863,14 @@ class _Checker:
         )
 
     def check_body(self, program: Program) -> None:
-        """Type-check one module's declarations and top-level items."""
+        """Type-check one module's declarations and top-level items.
+
+        The static-root binding rule keeps importing a module from executing
+        arbitrary code. It does not apply to a module whose root carries a
+        host-synthesized entry: that source is an inline command, never an
+        imported module, and its root bindings are there only because the
+        entry transform put them there.
+        """
         # Pre-pass: register static function signatures before any body is
         # checked, including members collected from named scope regions.
         for item in static_items(program.body.items):
@@ -872,7 +881,8 @@ class _Checker:
         self._check_block(
             program.body,
             expected=None,
-            static_root=not self._resolved.allows_root_statements,
+            static_root=not self._resolved.allows_root_statements
+            and not declares_synthetic_entry(program.body.items),
         )
 
     # ------------------------------------------------------------------
@@ -951,6 +961,9 @@ class _Checker:
                         "(constructors and literals only).",
                         subject="bindings",
                         file_backed=self._resolved.origin_path is not None,
+                        declares_program_entry=declares_source_entry(
+                            self._resolved.program.body.items
+                        ),
                     ),
                     span=item.value.span,
                 )

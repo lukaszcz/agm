@@ -27,6 +27,7 @@ Dry-run is a global, cross-cutting mode set from the `--dry-run` CLI flag. The p
 - `src/agm/core/process.py` — foreground/capture execution, success requirements, process-group termination.
 - `src/agm/core/env.py` — environment cloning/resolution, env-file sourcing, shell-name validation, installation prefix.
 - `src/agm/core/fs.py` — dry-run-aware filesystem operations.
+- `src/agm/core/path.py` — CLI path resolution, user-facing path display, and the shared safe-relative-path predicate behind archive entries, `RECORD` paths, and AgL resource paths.
 - `src/agm/core/toml.py` and `src/agm/core/dotenv.py` — round-trip TOML and dotenv read/write helpers.
 - `src/agm/core/dry_run.py` — global dry-run state and planned-command printing.
 - `src/agm/core/log.py` — logging setup and JSONL append support. AgL trace paths use `.jsonl`; ordinary command text logs retain `.log`.

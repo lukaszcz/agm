@@ -62,6 +62,38 @@ class _BlockingResponse(_Response):
         yield b""
 
 
+class _Clock:
+    """A deterministic monotonic clock advanced by the fake transport."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class _PacedResponse(_Response):
+    """Delivers each chunk after advancing the injected clock by its gap."""
+
+    def __init__(self, clock: _Clock, paced_chunks: list[tuple[float, bytes]]) -> None:
+        super().__init__([chunk for _, chunk in paced_chunks])
+        self.clock = clock
+        self.paced_chunks = paced_chunks
+
+    def iter_content(self, chunk_size: int) -> Iterator[bytes]:
+        assert chunk_size > 0
+        for gap, chunk in self.paced_chunks:
+            self.clock.advance(gap)
+            yield chunk
+
+
+def _use_clock(monkeypatch: pytest.MonkeyPatch, clock: _Clock) -> None:
+    monkeypatch.setattr(package_fetch, "time", SimpleNamespace(monotonic=clock.monotonic))
+
+
 class _Session:
     def __init__(
         self, response: _Response | None = None, *, get_error: Exception | None = None
@@ -200,7 +232,7 @@ def test_fetch_times_out_if_the_deadline_expires_before_connect(
     assert not tuple(tmp_path.iterdir())
 
 
-def test_fetch_stops_a_trickling_response_at_the_total_timeout(
+def test_fetch_stops_a_response_that_stalls_before_its_first_chunk(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     content = b"archive bytes"
@@ -220,6 +252,79 @@ def test_fetch_stops_a_trickling_response_at_the_total_timeout(
             expected_hash="sha256=" + hashlib.sha256(content).hexdigest(),
             handoff=lambda _: pytest.fail("archive handoff must not run"),
             session=_Session(_Response([content])),
+            scratch_dir=tmp_path,
+        )
+
+    assert not tuple(tmp_path.iterdir())
+
+
+def test_fetch_completes_a_steady_transfer_longer_than_the_stall_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A healthy download is bounded by inactivity, not by total elapsed time."""
+
+    monkeypatch.setattr(package_fetch, "_FETCH_TIMEOUT_SECONDS", 5.0)
+    clock = _Clock()
+    _use_clock(monkeypatch, clock)
+    paced_chunks = [(2.0, b"chunk%d;" % index) for index in range(10)]
+    content = b"".join(chunk for _, chunk in paced_chunks)
+    handed_off: list[bytes] = []
+
+    fetch_archive(
+        requirement="tools >= 1.0.0",
+        url="https://example.test/tools.agmpkg",
+        expected_hash="sha256=" + hashlib.sha256(content).hexdigest(),
+        handoff=lambda path: handed_off.append(path.read_bytes()),
+        session=_Session(_PacedResponse(clock, paced_chunks)),
+        scratch_dir=tmp_path,
+    )
+
+    assert clock.now > 5.0
+    assert handed_off == [content]
+    assert not tuple(tmp_path.iterdir())
+
+
+def test_fetch_stops_a_transfer_that_stalls_mid_stream(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(package_fetch, "_FETCH_TIMEOUT_SECONDS", 5.0)
+    clock = _Clock()
+    _use_clock(monkeypatch, clock)
+    paced_chunks = [(2.0, b"first"), (2.0, b"second"), (9.0, b"stalled")]
+    content = b"".join(chunk for _, chunk in paced_chunks)
+
+    with pytest.raises(FetchError, match=r"fetch timed out.*tools >= 1\.0\.0"):
+        fetch_archive(
+            requirement="tools >= 1.0.0",
+            url="https://example.test/tools.agmpkg",
+            expected_hash="sha256=" + hashlib.sha256(content).hexdigest(),
+            handoff=lambda _: pytest.fail("archive handoff must not run"),
+            session=_Session(_PacedResponse(clock, paced_chunks)),
+            scratch_dir=tmp_path,
+        )
+
+    assert not tuple(tmp_path.iterdir())
+
+
+def test_fetch_size_limit_bounds_a_steady_transfer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The size limit remains the backstop once inactivity replaces a total budget."""
+
+    monkeypatch.setattr(package_fetch, "_FETCH_TIMEOUT_SECONDS", 5.0)
+    monkeypatch.setattr(package_fetch, "MAX_ARCHIVE_DOWNLOAD_SIZE", 8)
+    clock = _Clock()
+    _use_clock(monkeypatch, clock)
+    paced_chunks = [(1.0, b"chunk"), (1.0, b"chunk"), (1.0, b"chunk")]
+    content = b"".join(chunk for _, chunk in paced_chunks)
+
+    with pytest.raises(FetchError, match=r"fetch failed.*tools >= 1\.0\.0"):
+        fetch_archive(
+            requirement="tools >= 1.0.0",
+            url="https://example.test/tools.agmpkg",
+            expected_hash="sha256=" + hashlib.sha256(content).hexdigest(),
+            handoff=lambda _: pytest.fail("archive handoff must not run"),
+            session=_Session(_PacedResponse(clock, paced_chunks)),
             scratch_dir=tmp_path,
         )
 

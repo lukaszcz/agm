@@ -1030,6 +1030,16 @@ def test_read_archive_metadata_rejects_unsafe_layouts(
         read_archive_metadata(archive_path)
 
 
+def test_read_archive_metadata_rejects_a_current_directory_entry(tmp_path: Path) -> None:
+    """A ``"."`` entry names no path component, so it has no directory prefix."""
+
+    archive_path = tmp_path / "dot.agmpkg"
+    _write_zip(archive_path, [(".", b"")])
+
+    with pytest.raises(ArchiveError):
+        read_archive_metadata(archive_path)
+
+
 def test_read_archive_metadata_rejects_file_descendant_conflicts(tmp_path: Path) -> None:
     archive_path = tmp_path / "conflict.agmpkg"
     _write_zip(

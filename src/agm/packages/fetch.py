@@ -8,6 +8,7 @@ import tempfile
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -15,6 +16,9 @@ import requests
 
 from agm.packages.manifest import parse_sha256
 
+# Bounds one connect or read of the transport, and how long a started transfer
+# may make no progress.  A healthy transfer of any size keeps going; the archive
+# size limit, not elapsed time, is what bounds a download that never stalls.
 _FETCH_TIMEOUT_SECONDS = 30.0
 _CHUNK_SIZE = 1024 * 1024
 MAX_ARCHIVE_DOWNLOAD_SIZE = 128 * 1024 * 1024
@@ -54,15 +58,19 @@ def fetch_archive(
     """Fetch, hash-verify, and hand an archive to the installer.
 
     The temporary archive exists only for the handoff callback.  Keeping archive
-    extraction outside this seam lets M6 add the archive format without changing
-    URL transport or its verification contract.
+    extraction outside this seam keeps the archive format independent of URL
+    transport and its verification contract.
+
+    A started transfer is bounded by inactivity rather than by total elapsed
+    time, so a large healthy download completes while a stalled connection
+    still fails fast.
     """
 
     expected_digest = _expected_digest(requirement, expected_hash)
     client: Session = requests.Session() if session is None else session
     archive: Path | None = None
     primary_failure = False
-    deadline = time.monotonic() + _FETCH_TIMEOUT_SECONDS
+    stall = _StallDeadline(requirement, _FETCH_TIMEOUT_SECONDS)
     try:
         try:
             with tempfile.NamedTemporaryFile(
@@ -72,14 +80,14 @@ def fetch_archive(
                 digest = hashlib.sha256()
                 downloaded_size = 0
                 try:
-                    with _wall_clock_deadline(requirement, deadline):
+                    with _wall_clock_deadline(stall):
                         with client.get(
                             url, stream=True, timeout=_FETCH_TIMEOUT_SECONDS
                         ) as response:
                             response.raise_for_status()
-                            _check_timeout(requirement, deadline)
+                            stall.check()
                             for chunk in response.iter_content(_CHUNK_SIZE):
-                                _check_timeout(requirement, deadline)
+                                stall.check()
                                 if chunk:
                                     downloaded_size += len(chunk)
                                     if downloaded_size > MAX_ARCHIVE_DOWNLOAD_SIZE:
@@ -89,6 +97,7 @@ def fetch_archive(
                                         )
                                     file.write(chunk)
                                     digest.update(chunk)
+                                    stall.progressed()
                 except FetchError:
                     raise
                 except Exception as exc:
@@ -111,17 +120,46 @@ def fetch_archive(
                     raise error from exc
 
 
+@dataclass(slots=True)
+class _StallDeadline:
+    """The inactivity budget of one archive transfer.
+
+    The deadline bounds how long the transfer may go without delivering data,
+    not how long it may run in total, so an archive of any permitted size can
+    be downloaded as long as it keeps arriving.
+    """
+
+    requirement: str
+    budget: float
+    deadline: float = 0.0
+
+    def __post_init__(self) -> None:
+        self.deadline = time.monotonic() + self.budget
+
+    def check(self) -> None:
+        """Raise once no data has arrived for a whole budget."""
+
+        if time.monotonic() >= self.deadline:
+            raise FetchError(f"fetch timed out for {self.requirement}")
+
+    def progressed(self) -> None:
+        """Restart the budget, and its alarm, after data actually arrived."""
+
+        self.deadline = time.monotonic() + self.budget
+        signal.setitimer(signal.ITIMER_REAL, self.budget)
+
+
 @contextmanager
-def _wall_clock_deadline(requirement: str, deadline: float) -> Iterator[None]:
-    """Interrupt a blocked transport operation at its absolute deadline."""
+def _wall_clock_deadline(stall: _StallDeadline) -> Iterator[None]:
+    """Interrupt a transport operation blocked past its inactivity deadline."""
 
     started = time.monotonic()
-    remaining = deadline - started
+    remaining = stall.deadline - started
     if remaining <= 0:
-        raise FetchError(f"fetch timed out for {requirement}")
+        raise FetchError(f"fetch timed out for {stall.requirement}")
 
     def raise_timeout(_signum: int, _frame: object) -> None:
-        raise FetchError(f"fetch timed out for {requirement}")
+        raise FetchError(f"fetch timed out for {stall.requirement}")
 
     previous_handler = signal.signal(signal.SIGALRM, raise_timeout)
     previous_timer = (0.0, 0.0)
@@ -136,13 +174,6 @@ def _wall_clock_deadline(requirement: str, deadline: float) -> Iterator[None]:
             elapsed = time.monotonic() - started
             restored_remaining = max(previous_remaining - elapsed, 1e-6)
             signal.setitimer(signal.ITIMER_REAL, restored_remaining, previous_interval)
-
-
-def _check_timeout(requirement: str, deadline: float) -> None:
-    """Raise when the archive transfer has exceeded its total deadline."""
-
-    if time.monotonic() >= deadline:
-        raise FetchError(f"fetch timed out for {requirement}")
 
 
 def _expected_digest(requirement: str, expected_hash: str) -> str:

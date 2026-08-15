@@ -73,8 +73,8 @@ preflight, ZIP parsing, verification, and extraction to one opened file. A URL d
 bounded by transfer inactivity and the archive download size limit rather than by total elapsed
 time, so a large healthy download completes while a stalled connection still fails fast. Immutable directory installs
 stage the source's distribution beside the final store path, revalidate the staged manifest and package
-discipline, then publish with an atomic rename; dry runs check directory sources for `RECORD` eligibility without
-hashing, staging, or writing. Archive installation selects the canonical destination from verified metadata
+discipline, then publish with an atomic rename; dry runs validate the filtered distribution and check
+directory sources for `RECORD` eligibility without hashing or publishing it. Archive installation selects the canonical destination from verified metadata
 without reopening the archive, then extracts to a sibling staging tree. It resolves dependencies and runs
 dependency-aware discipline validation against that staging tree before atomic publication, including when
 the store root is relocated across filesystems; dry runs repeat in-archive discipline validation with the

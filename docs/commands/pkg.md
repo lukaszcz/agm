@@ -85,8 +85,8 @@ resolution, where build metadata does not affect whether a version satisfies a r
 stored version is selected first, otherwise a declared local `path` source is installed. URL
 dependencies are fetched with a required SHA-256 hash, then the downloaded archive's normalized
 manifest and `RECORD` are verified before atomic extraction and activation. Downloads have a 128 MiB
-size limit and a 30-second wall-clock deadline, including blocked connection and body reads; partial
-temporary archives are removed on failure.
+size limit and a 30-second inactivity timeout, including blocked connection and body reads; each
+nonempty chunk resets the timeout, and partial temporary archives are removed on failure.
 
 ## Package version pins
 

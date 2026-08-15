@@ -38,6 +38,7 @@ from agm.packages.archive import (
 from agm.packages.discipline import (
     DisciplineError,
     validate_package,
+    validate_package_distribution,
     validate_package_structure,
 )
 from agm.packages.distribution import (
@@ -582,7 +583,11 @@ def _install_directory(
         else:
             try:
                 validate_package_tree(root)
-            except (OSError, RecordError) as exc:
+                validate_package_distribution(
+                    package,
+                    dependency_packages=dependency_packages,
+                )
+            except (DisciplineError, DistributionError, OSError, RecordError) as exc:
                 raise PackageInstallError(
                     f"cannot install package {package.manifest.name!r}: {exc}"
                 ) from exc

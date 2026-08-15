@@ -20,7 +20,8 @@ from agm.agl.syntax.types import UnitT
 from agm.agl.syntax.visitor import walk
 from agm.command_catalog import RESERVED_COMMAND_NAMES, invalid_command_path
 from agm.core import fs
-from agm.packages.manifest import PackageManifest
+from agm.packages.distribution import MANIFEST_NAME, distribution_files
+from agm.packages.manifest import PackageManifest, distribution_manifest
 from agm.packages.model import PackageInfo, is_std_package_name
 from agm.stdlib_locator import shipped_stdlib_root
 from agm.util.ident import is_identifier
@@ -45,6 +46,20 @@ def validate_package(
     _validate_command_programs(package.manifest, resolutions)
     _validate_resources(
         modules, resolutions, exists=lambda relative: _resource_exists(package.root, relative)
+    )
+
+
+def validate_package_distribution(
+    package: PackageInfo, *, dependency_packages: Iterable[PackageInfo] = ()
+) -> None:
+    """Validate the filtered distribution produced by a directory package."""
+
+    files = dict(distribution_files(package.root))
+    validate_archive_package(
+        distribution_manifest(package.manifest),
+        archive_paths=(MANIFEST_NAME, *files),
+        read_module=lambda path: files[path].read_text(encoding="utf-8"),
+        dependency_packages=dependency_packages,
     )
 
 

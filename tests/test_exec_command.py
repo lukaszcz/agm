@@ -45,6 +45,32 @@ def invoke(runner: CliRunner, argv: list[str]) -> Result:
     return runner.invoke(get_command(cli.app), argv, prog_name="agm", catch_exceptions=False)
 
 
+def inline_args(command: str, *, param_tokens: list[str] | None = None) -> ExecArgs:
+    """Build the ``ExecArgs`` an ``agm exec -c SOURCE`` invocation produces."""
+    return ExecArgs(
+        file=None,
+        command=command,
+        param_tokens=param_tokens or [],
+        strict_json=None,
+        max_iters=None,
+        no_log=True,
+        log_file=None,
+    )
+
+
+def file_args(path: Path) -> ExecArgs:
+    """Build the ``ExecArgs`` an ``agm exec FILE`` invocation produces."""
+    return ExecArgs(
+        file=str(path),
+        command=None,
+        param_tokens=[],
+        strict_json=None,
+        max_iters=None,
+        no_log=True,
+        log_file=None,
+    )
+
+
 @pytest.fixture()
 def recorded_runs(monkeypatch: pytest.MonkeyPatch) -> list[object]:
     """Patch ``exec.run`` to record its ExecArgs instead of executing.
@@ -288,15 +314,7 @@ class TestExecCommandInline:
     """Behavior tests for executing an inline -c/--command program."""
 
     def _command_args(self, command: str, *, param_tokens: list[str] | None = None) -> ExecArgs:
-        return ExecArgs(
-            file=None,
-            command=command,
-            param_tokens=param_tokens or [],
-            strict_json=None,
-            max_iters=None,
-            no_log=True,
-            log_file=None,
-        )
+        return inline_args(command, param_tokens=param_tokens)
 
     def test_inline_command_runs_and_prints(self, capsys: pytest.CaptureFixture[str]) -> None:
         assert exec_command.run(self._command_args('print "hello"')) is None
@@ -328,6 +346,89 @@ class TestExecCommandInline:
             exec_command.run(args)
         assert exc_info.value.code == 1
         assert "Error" in capsys.readouterr().err
+
+
+class TestInlineSourceDiagnostics:
+    """Diagnostics that only inline (`-c`) source can trigger explain themselves.
+
+    Inline source without a ``program def`` is wrapped in a synthetic entry, so
+    its top level is statement-oriented; declaring a ``program def`` suppresses
+    the wrap and makes the same text an ordinary module with a static root. The
+    static-root diagnostics say so, and ``resource``/``resource-dir`` explain
+    that they have no module file to anchor against. A file entry keeps the
+    plain wording.
+    """
+
+    def _failing_stderr(self, args: ExecArgs, capsys: pytest.CaptureFixture[str]) -> str:
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(args)
+        assert exc_info.value.code == 1
+        return capsys.readouterr().err
+
+    def test_inline_bare_expression_at_module_root_names_the_program_def(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        source = 'program def main() -> unit =\n  print "hi"\nprint "top"\n'
+        assert "program def" in self._failing_stderr(inline_args(source), capsys)
+
+    def test_inline_assignment_at_module_root_names_the_program_def(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        source = "var x = 1\nprogram def main() -> unit = print x\nx := 2\n"
+        assert "program def" in self._failing_stderr(inline_args(source), capsys)
+
+    def test_inline_non_constant_root_binding_names_the_program_def(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        source = "let x = 1 + 1\nprogram def main() -> unit = print x\n"
+        assert "program def" in self._failing_stderr(inline_args(source), capsys)
+
+    def test_inline_program_def_still_runs(self, capsys: pytest.CaptureFixture[str]) -> None:
+        assert exec_command.run(inline_args('program def main() -> unit =\n  print "hi"\n')) is None
+        assert capsys.readouterr().out == "hi\n"
+
+    def test_file_bare_expression_at_module_root_keeps_the_plain_message(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        entry = tmp_path / "prog.agl"
+        entry.write_text('program def main() -> unit =\n  print "hi"\nprint "top"\n')
+        err = self._failing_stderr(file_args(entry), capsys)
+        assert "static module root" in err
+        assert "program def" not in err
+
+    def test_file_assignment_at_module_root_keeps_the_plain_message(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        entry = tmp_path / "prog.agl"
+        entry.write_text("var x = 1\nprogram def main() -> unit = print x\nx := 2\n")
+        err = self._failing_stderr(file_args(entry), capsys)
+        assert "static module root" in err
+        assert "program def" not in err
+
+    def test_file_non_constant_root_binding_keeps_the_plain_message(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        entry = tmp_path / "prog.agl"
+        entry.write_text("let x = 1 + 1\nprogram def main() -> unit = print x\n")
+        err = self._failing_stderr(file_args(entry), capsys)
+        assert "constant expressions" in err
+        assert "program def" not in err
+
+    def test_inline_resource_call_explains_the_missing_module_file(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        err = self._failing_stderr(inline_args('print(resource("data.txt"))'), capsys)
+        assert "resource" in err
+        assert "inline" in err.lower()
+
+    def test_file_resource_call_resolves_against_the_module_directory(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "data.txt").write_text("payload\n")
+        entry = tmp_path / "prog.agl"
+        entry.write_text('program def main() -> unit = print(resource("data.txt"))\n')
+        assert exec_command.run(file_args(entry)) is None
+        assert "data.txt" in capsys.readouterr().out
 
 
 class TestExecDynamicHelp:

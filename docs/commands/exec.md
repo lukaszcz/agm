@@ -24,7 +24,9 @@ A file must declare at least one `program def` function. `exec` initializes the
 linked program and invokes its sole entry implicitly; if it declares several, select
 one with `-p`/`--program` using its declaration path (for example,
 `review::main`). Inline `-c` source is wrapped in a synthetic `program def main`
-when it does not declare an entry itself.
+when it does not declare an entry itself; when it declares one, the source is an
+ordinary module whose root is static, so its statements and non-constant bindings
+belong in the program body.
 
 ### Module resolution
 
@@ -54,6 +56,12 @@ derived rather than searched, so module-root ambiguity never applies to it. A
 missing companion, or a companion missing the extern's declared name as a
 callable attribute, is a diagnostic reported before the program runs, exactly
 like any other static error.
+
+`resource` and `resource-dir` (see
+[Expressions](../agl/reference/expressions.md)) anchor at their declaring
+module's directory or owning package root, so they need a module read from disk:
+they are unavailable in inline `-c` source and in `agm repl`, where a call to
+either is a static error.
 
 ### Options
 

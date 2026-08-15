@@ -564,9 +564,10 @@ binding. `resource-dir() -> text` returns the same absolute resource anchor.
 
 Resources in a loose module are anchored at that module's directory. Resources in a
 package-owned module are anchored at the package root, so they remain stable when the
-module is imported from another project. Both calls are constant expressions and may
-initialize root bindings and `builtin var` defaults. They resolve during linking; a
-missing target is a static error. Package checks and package creation verify each
+module is imported from another project. A module with no backing file has no resource
+anchor, so either call in such a module is a static error. Both calls are constant
+expressions and may initialize root bindings and `builtin var` defaults. They resolve
+during linking; a missing target is a static error. Package checks and package creation verify each
 literal resource target. `resource` produces a path only; use [`std/fs`](#stdfs) to
 perform filesystem effects.
 

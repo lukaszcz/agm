@@ -121,7 +121,9 @@ an ordinary declaration, with no shape-specific placement logic of its own.
 The pass enforces lexical control-flow boundaries —
 `break`/`continue` must stay within a loop in the same function, `return` must
 appear inside a function body — and the extern (Python FFI) placement rule that
-externs are only allowed in file-backed modules.
+externs are only allowed in file-backed modules. The module's origin path also
+travels on its `ModuleResolution`, so both this pass and typecheck can explain a
+static-root rejection to a host whose module has no file.
 
 Program resolution extends this pass across modules and preserves the loader's immutable,
 reverse-topological import-SCC sequence on `ResolvedProgram`. Typecheck consumes that exact sequence

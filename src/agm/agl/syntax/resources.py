@@ -38,7 +38,10 @@ def resource_path(call: Call, *, is_directory: bool) -> str | None:
 def resolve_resource(anchor: Path | None, relative_path: str | None) -> Path:
     """Resolve a checked resource under *anchor*, requiring an existing target."""
     if anchor is None:
-        raise ResourceError("resource calls require a file-backed declaring module")
+        raise ResourceError(
+            "resource() and resource-dir() need a module file to anchor against; "
+            "inline sources and REPL entries have none"
+        )
     root = anchor.resolve()
     target = root if relative_path is None else (root / PurePosixPath(relative_path)).resolve()
     if not target.is_relative_to(root):

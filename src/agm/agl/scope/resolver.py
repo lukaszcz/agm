@@ -48,6 +48,7 @@ from dataclasses import dataclass, replace
 from functools import partial
 from typing import TYPE_CHECKING, cast
 
+from agm.agl.diagnostics import static_root_message
 from agm.agl.modules.ids import STD_CONFIG_ID, STD_CORE_ID, ModuleId, spell_declaration
 from agm.agl.scope.imports import (
     NameAtom,
@@ -532,6 +533,7 @@ class _Resolver:
             scope_nodes=dict(self._scope_nodes),
             declared_functions=dict(self._declared_functions),
             allows_root_statements=self._allow_root_statements,
+            origin_path=self._origin_path,
             declared_type_names=frozenset(self._declared_type_names),
             declared_type_paths=frozenset(self._type_paths),
             constructor_candidates={
@@ -1536,7 +1538,11 @@ class _Resolver:
             elif isinstance(item, AssignStmt):
                 if self._at_root and not self._allow_root_statements:
                     raise AglScopeError(
-                        "Assignment statements are not allowed at a static module root.",
+                        static_root_message(
+                            "Assignment statements are not allowed at a static module root.",
+                            subject="statements",
+                            file_backed=self._origin_path is not None,
+                        ),
                         span=item.span,
                     )
                 self._resolve_assign(item)
@@ -1546,7 +1552,11 @@ class _Resolver:
                 # Pure expression item (Expr union).
                 if self._at_root and not self._allow_root_statements:
                     raise AglScopeError(
-                        "Bare expressions are not allowed at a static module root.",
+                        static_root_message(
+                            "Bare expressions are not allowed at a static module root.",
+                            subject="statements",
+                            file_backed=self._origin_path is not None,
+                        ),
                         span=item.span,
                     )
                 self._resolve_expr(item)

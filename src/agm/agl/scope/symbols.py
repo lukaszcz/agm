@@ -23,6 +23,7 @@ from __future__ import annotations
 import enum
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TypeVar
 
 from agm.agl.diagnostics import AglError
@@ -775,6 +776,10 @@ class ModuleResolution:
     ``allows_root_statements``
         Whether this entry is an incremental REPL entry, whose root retains
         executable items instead of enforcing a static module root.
+    ``origin_path``
+        This module's canonical source file, or ``None`` for a module with no
+        backing file (inline sources, REPL entries). Later passes consult it to
+        phrase a diagnostic for the host the module actually came from.
     ``declarations``
         Every named declaration keyed by ``(module_id, scope_path, name)``.
         Root declarations use the empty path just like any other scope.
@@ -822,6 +827,7 @@ class ModuleResolution:
     scope_nodes: dict[ScopePath, ScopeNode] = field(default_factory=dict)
     declared_functions: dict[str, FuncDef] = field(default_factory=dict)
     allows_root_statements: bool = False
+    origin_path: Path | None = None
     declared_type_names: frozenset[str] = frozenset()
     declared_type_paths: frozenset[ScopePath] = frozenset()
     constructor_candidates: dict[str, tuple[ConstructorRef, ...]] = field(default_factory=dict)

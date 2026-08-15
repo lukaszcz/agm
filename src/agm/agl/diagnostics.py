@@ -5,6 +5,10 @@ a 1-based source location.  `AglError` is the base class for all fatal pipeline
 errors raised *before* evaluation begins (lex, parse, scope, typecheck).
 Match-compilation failures use the same pre-execution diagnostic channel.
 
+This module is also where user-facing diagnostic text shared by more than one
+pipeline pass lives, so the wording is written once (see
+:func:`static_root_message`).
+
 ``SourceSpan`` is defined in ``agm.agl.syntax.spans`` and re-exported here
 for backward compatibility (the lexer and other callers use
 ``from agm.agl.diagnostics import SourceSpan``).
@@ -163,6 +167,23 @@ def format_diagnostic(diagnostic: Diagnostic, *, source_name: str | None = "<agl
         for note in diagnostic.related
     )
     return "\n".join((primary, *notes))
+
+
+def static_root_message(message: str, *, subject: str, file_backed: bool) -> str:
+    """Return a static-module-root rejection, explained for a file-less module.
+
+    A module with no backing file reaches a static root only when its host
+    admits source that declares its own ``program def`` instead of wrapping the
+    source in a synthetic entry, so the rejection is explained in those terms.
+    *subject* names what the offending root item is (for example ``"statements"``
+    or ``"bindings"``) so one sentence reads correctly at every rejection site.
+    """
+    if file_backed:
+        return message
+    return (
+        f"{message} Inline source that declares a 'program def' is an ordinary "
+        f"module: move {subject} into the program body."
+    )
 
 
 class AglError(Exception):

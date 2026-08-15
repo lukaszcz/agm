@@ -53,7 +53,7 @@ from dataclasses import dataclass, field, replace
 from typing import Literal, TypeGuard, assert_never, cast
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.diagnostics import Diagnostic
+from agm.agl.diagnostics import Diagnostic, static_root_message
 from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope.imports import (
@@ -946,8 +946,12 @@ class _Checker:
                 ),
             ):
                 raise AglTypeError(
-                    "Root let and var initializers must be constant expressions "
-                    "(constructors and literals only).",
+                    static_root_message(
+                        "Root let and var initializers must be constant expressions "
+                        "(constructors and literals only).",
+                        subject="bindings",
+                        file_backed=self._resolved.origin_path is not None,
+                    ),
                     span=item.value.span,
                 )
             return binding_type

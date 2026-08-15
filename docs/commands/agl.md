@@ -43,6 +43,10 @@ typed at the prompt (with no backing file of its own) may not declare
 with everything else — a subsequent import resolves and imports the companion
 again as though the session were new.
 
+For the same reason, `resource` and `resource-dir` cannot be called from a direct
+entry: they anchor at the declaring module's file. An imported file-backed module
+uses them normally.
+
 ### Entry editing
 
 - Multiline editing is **AgL-aware**: pressing Enter on an unterminated block

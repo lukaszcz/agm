@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import cast
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.loader import ModuleGraph
@@ -65,6 +66,8 @@ from agm.agl.syntax.nodes import (
     QualifierChain,
     RecordDef,
     TypeAlias,
+    VariantDef,
+    VariantRef,
     static_items,
 )
 from agm.agl.syntax.spans import SourceSpan
@@ -147,6 +150,17 @@ class ResolvedProgram:
 # ---------------------------------------------------------------------------
 
 
+def _reject_enum_member_references(program: Program) -> None:
+    """Reject member references until scope can resolve their record targets."""
+    for item in static_items(program.body.items):
+        if isinstance(item, EnumDef):
+            for member in item.members:
+                if isinstance(member, VariantRef):
+                    raise AglScopeError(
+                        "Enum member references are not yet supported.", span=member.span
+                    )
+
+
 def _build_cross_module_constructor_candidates(
     import_env: ImportEnv,
     all_public_types: dict[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias],
@@ -224,7 +238,8 @@ def _build_cross_module_constructor_candidates(
                 )
                 candidates.setdefault(exposed_name, []).append(cref)
             elif isinstance(decl, EnumDef):
-                for variant in decl.variants:
+                for member in decl.members:
+                    variant = cast(VariantDef, member)
                     if (mid, variant.name) in all_public_types and isinstance(
                         all_public_types[(mid, variant.name)], ExceptionDef
                     ):
@@ -261,7 +276,8 @@ def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[NameAtom
             atom = _item_atom(item)
             result[atom] = (self_id, atom)
             if isinstance(item, EnumDef):
-                for variant in item.variants:
+                for member in item.members:
+                    variant = cast(VariantDef, member)
                     variant_atom = _atom(
                         (
                             *tuple(segment.name for segment in item.scope_path),
@@ -293,7 +309,8 @@ def _cross_module_constructor_refs(
                 owner_path=path[:-1],
             )
         elif isinstance(declaration, EnumDef):
-            for variant in declaration.variants:
+            for member in declaration.members:
+                variant = cast(VariantDef, member)
                 variant_path = (*path, variant.name)
                 variant_atom = _atom(variant_path)
                 result[(module_id, variant_atom)] = ConstructorRef(
@@ -542,6 +559,9 @@ def resolve_program(
     AglScopeError
         On the first static scope violation (first-error abort).
     """
+    for loaded in graph.modules.values():
+        _reject_enum_member_references(loaded.program)
+
     # ------------------------------------------------------------------
     # Step 1: Build local export maps (own declarations only).
     # ------------------------------------------------------------------

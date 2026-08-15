@@ -160,6 +160,7 @@ from agm.agl.syntax.nodes import (
     UnaryNot,
     UnitLit,
     VarDecl,
+    VariantDef,
     VarPattern,
     VarRef,
     WildcardPattern,
@@ -675,7 +676,8 @@ class _Resolver:
         self._scope_node_ids.setdefault(type_scope, item.node_id)
         self._type_paths.add(type_scope)
         if isinstance(item, EnumDef):
-            for variant in item.variants:
+            for member in item.members:
+                variant = cast(VariantDef, member)
                 variant_key = (self._module_id, type_scope, variant.name)
                 if self._scope_entity_kinds.get(variant_key) is not None:
                     raise AglScopeError(
@@ -1126,7 +1128,8 @@ class _Resolver:
                 )
             elif isinstance(item, EnumDef):
                 type_scope = path + (item.name,)
-                for variant in item.variants:
+                for member in item.members:
+                    variant = cast(VariantDef, member)
                     cref = ConstructorRef(
                         owner_name=item.name,
                         variant=variant.name,
@@ -1701,7 +1704,8 @@ class _Resolver:
         module, source = qname
         owner_path = _bare_path(source)
         scope = self._current_scope()
-        for variant in declaration.variants:
+        for member in declaration.members:
+            variant = cast(VariantDef, member)
             # A same-named top-level exception already owns the bare name
             # (checked by its own plain atom, not the variant's owner-path
             # key); the exception's own bare contribution stands alone.

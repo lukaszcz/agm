@@ -44,6 +44,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from dataclasses import replace
+from typing import cast
 
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, reserved_nominal_id
 from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
@@ -71,6 +72,7 @@ from agm.agl.syntax.nodes import (
     Program,
     RecordDef,
     TypeAlias,
+    VariantDef,
     scoped_public_name,
     static_type_items,
 )
@@ -416,7 +418,8 @@ class _TypeBuilder:
             self._build_generic_enum(stmt)
             return
         variants: dict[str, dict[str, Type]] = {}
-        for vd in stmt.variants:
+        for member in stmt.members:
+            vd = cast(VariantDef, member)
             vfields: dict[str, Type] = {}
             seen_vfields: dict[str, SourceSpan] = {}
             for fd in vd.fields:
@@ -444,7 +447,8 @@ class _TypeBuilder:
         self._env.type_table.register(typedef)
         # Register field kinds for each variant constructor, under the same
         # owning identity as the TypeDef just above.
-        for vd in stmt.variants:
+        for member in stmt.members:
+            vd = cast(VariantDef, member)
             vfield_kinds = tuple((fd.name, fd.kind) for fd in vd.fields)
             self._env.register_constructor_field_kinds(
                 bare_name,
@@ -736,7 +740,8 @@ class _TypeBuilder:
         type_params = stmt.type_params
         type_vars = frozenset(type_params)
         variants: dict[str, dict[str, Type]] = {}
-        for vd in stmt.variants:
+        for member in stmt.members:
+            vd = cast(VariantDef, member)
             vfields: dict[str, Type] = {}
             seen_vfields: dict[str, SourceSpan] = {}
             for fd in vd.fields:
@@ -772,7 +777,8 @@ class _TypeBuilder:
         self._env.type_table.register(typedef)
         # Register one ConstructorSignature and field kinds per variant, under
         # the same owning identity as the TypeDef just above.
-        for vd in stmt.variants:
+        for member in stmt.members:
+            vd = cast(VariantDef, member)
             vfields = variants[vd.name]
             field_names = tuple(vfields.keys())
             field_templates = tuple(vfields.values())

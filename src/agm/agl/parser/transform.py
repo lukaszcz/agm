@@ -836,21 +836,25 @@ class AstBuilder(Transformer):
         for a in args:
             if _is_str_tuple(a):
                 type_params_val = cast(tuple[str, ...], a)
-        variants = _find_variant_tuple(args)
+        members = _find_member_tuple(args)
         return syntax.EnumDef(
             name=name,
-            variants=variants,
+            members=members,
             type_param_slots=type_params_val,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
             scope_path=scope_path,
         )
 
-    def enum_body(self, meta: Meta, args: _Args) -> tuple[syntax.VariantDef, ...]:
-        return _find_variant_tuple(args)
+    def enum_body(
+        self, meta: Meta, args: _Args
+    ) -> tuple[syntax.VariantDef | syntax.VariantRef, ...]:
+        return _find_member_tuple(args)
 
-    def enum_variant_seq(self, meta: Meta, args: _Args) -> tuple[syntax.VariantDef, ...]:
-        return tuple(a for a in args if isinstance(a, syntax.VariantDef))
+    def enum_variant_seq(
+        self, meta: Meta, args: _Args
+    ) -> tuple[syntax.VariantDef | syntax.VariantRef, ...]:
+        return tuple(a for a in args if isinstance(a, (syntax.VariantDef, syntax.VariantRef)))
 
     def variant_def(self, meta: Meta, args: _Args) -> syntax.VariantDef:
         # Grammar: PIPE? name variant_payload?
@@ -869,6 +873,20 @@ class AstBuilder(Transformer):
             fields=fields,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
+        )
+
+    def variant_ref(self, meta: Meta, args: _Args) -> syntax.VariantRef:
+        chain = next(arg for arg in args if isinstance(arg, syntax.QualifierChain))
+        return syntax.VariantRef(
+            chain=chain,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def variant_ref_with_payload(self, meta: Meta, args: _Args) -> syntax.VariantRef:
+        raise AglSyntaxError(
+            "A member reference may not carry a field list; the shape comes from the record.",
+            span=self._span_from_meta(meta),
         )
 
     def variant_payload(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
@@ -2739,7 +2757,7 @@ class AstBuilder(Transformer):
         e = next(a for a in args if isinstance(a, syntax.EnumDef))
         return syntax.EnumDef(
             name=e.name,
-            variants=e.variants,
+            members=e.members,
             type_param_slots=e.type_param_slots,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
@@ -3299,15 +3317,17 @@ def _resolve_params(
     return tuple(result)
 
 
-def _is_variant_tuple(a: object) -> bool:
-    return isinstance(a, tuple) and (len(a) == 0 or isinstance(a[0], syntax.VariantDef))
+def _is_member_tuple(a: object) -> bool:
+    return isinstance(a, tuple) and (
+        len(a) == 0 or isinstance(a[0], (syntax.VariantDef, syntax.VariantRef))
+    )
 
 
-def _find_variant_tuple(args: _Args) -> tuple[syntax.VariantDef, ...]:
-    result = next((a for a in args if _is_variant_tuple(a)), None)
+def _find_member_tuple(args: _Args) -> tuple[syntax.VariantDef | syntax.VariantRef, ...]:
+    result = next((a for a in args if _is_member_tuple(a)), None)
     if result is None:  # pragma: no cover
-        raise AssertionError(f"_find_variant_tuple: no variant tuple found in {args!r}")
-    return cast(tuple[syntax.VariantDef, ...], result)
+        raise AssertionError(f"_find_member_tuple: no member tuple found in {args!r}")
+    return cast(tuple[syntax.VariantDef | syntax.VariantRef, ...], result)
 
 
 def _is_case_branch_tuple(a: object) -> bool:
@@ -3491,12 +3511,14 @@ def _rewrite_item(
     if isinstance(item, syntax.EnumDef):
         return replace(
             item,
-            variants=tuple(
+            members=tuple(
                 replace(
-                    v,
-                    fields=tuple(_rewrite_param(p, table, builder) for p in v.fields),
+                    member,
+                    fields=tuple(_rewrite_param(p, table, builder) for p in member.fields),
                 )
-                for v in item.variants
+                if isinstance(member, syntax.VariantDef)
+                else member
+                for member in item.members
             ),
         )
     if isinstance(item, syntax.ExceptionDef):

@@ -427,7 +427,7 @@ def _variant_def(name: str, *fields: ast.Param) -> ast.VariantDef:
 
 
 def _enum_def(name: str, *variants: ast.VariantDef) -> ast.EnumDef:
-    return ast.EnumDef(name=name, variants=tuple(variants), span=_sp(), node_id=_nid())
+    return ast.EnumDef(name=name, members=tuple(variants), span=_sp(), node_id=_nid())
 
 
 # ---------------------------------------------------------------------------

@@ -117,6 +117,12 @@ def diag(err: AglScopeError) -> tuple[int, str]:
     return d.line, d.message
 
 
+def test_enum_member_reference_is_rejected_during_scope_resolution() -> None:
+    error = reject_scope("enum RR = ::R1")
+
+    assert error.to_diagnostic().line == 1
+
+
 def _find_varref(program: object, name: str, occurrence: int = -1) -> VarRef:
     """Walk *program* depth-first; return the VarRef named *name* at *occurrence*.
 
@@ -2604,7 +2610,7 @@ class TestDirectASTConstruction:
 
         sp = _sp()
         variant = VariantDef(name="point", fields=(), span=sp, node_id=_nid())
-        enum_def = EnumDef(name="Shape", variants=(variant,), span=sp, node_id=_nid())
+        enum_def = EnumDef(name="Shape", members=(variant,), span=sp, node_id=_nid())
         let_n = _make_let("n", _make_intlit(5))
         arg = NamedArg(name="n", value=_make_varref("n"), span=sp, node_id=_nid())
         # Constructor call: Call(callee=VarRef("point"), named_args=[n: n])
@@ -3115,12 +3121,12 @@ def _make_enum(
     line: int = 1,
 ) -> EnumDef:
     sp = _sp(line)
-    variants: list[VariantDef] = []
+    members: list[VariantDef] = []
     for vname in variant_names:
-        variants.append(VariantDef(name=vname, fields=(), span=sp, node_id=_nid()))
+        members.append(VariantDef(name=vname, fields=(), span=sp, node_id=_nid()))
     return EnumDef(
         name=name,
-        variants=tuple(variants),
+        members=tuple(members),
         type_param_slots=type_param_slots,
         span=sp,
         node_id=_nid(),

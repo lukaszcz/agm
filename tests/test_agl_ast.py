@@ -92,6 +92,8 @@ from agm.agl.syntax import (
     PatternField,
     Placeholder,
     Program,
+    QualifierAnchor,
+    QualifierChain,
     Raise,
     RecordDef,
     Return,
@@ -114,6 +116,7 @@ from agm.agl.syntax import (
     UnitT,
     VarDecl,
     VariantDef,
+    VariantRef,
     VarPattern,
     # nodes – expressions
     VarRef,
@@ -1243,9 +1246,20 @@ class TestDeclarations:
     def test_enum_def(self) -> None:
         variant_a = VariantDef(name="A", fields=(), span=self._s(), node_id=2)
         variant_b = VariantDef(name="B", fields=(), span=self._s(), node_id=3)
-        node = EnumDef(name="Color", variants=(variant_a, variant_b), span=self._s(), node_id=1)
-        assert isinstance(node.variants, tuple)
-        assert len(node.variants) == 2
+        node = EnumDef(name="Color", members=(variant_a, variant_b), span=self._s(), node_id=1)
+        assert isinstance(node.members, tuple)
+        assert len(node.members) == 2
+
+    def test_variant_ref(self) -> None:
+        chain = QualifierChain(
+            anchor=QualifierAnchor.CURRENT_MODULE,
+            segments=(),
+            member="Shared",
+            span=self._s(),
+            node_id=2,
+        )
+        ref = VariantRef(chain=chain, span=self._s(), node_id=1)
+        assert ref.chain is chain
 
     def test_type_alias(self) -> None:
         t = ArrayT(elem=TextT(span=self._s(), node_id=3), span=self._s(), node_id=2)
@@ -1496,7 +1510,18 @@ class TestVisitorWalk:
             name="val", type_expr=text_t, kind=ParamKind.STANDARD, default=None, span=s, node_id=211
         )
         variant_def = VariantDef(name="Some", fields=(variant_field,), span=s, node_id=212)
-        enum_def = EnumDef(name="Opt", variants=(variant_def,), span=s, node_id=213)
+        variant_ref = VariantRef(
+            chain=QualifierChain(
+                anchor=QualifierAnchor.CURRENT_MODULE,
+                segments=(),
+                member="Shared",
+                span=s,
+                node_id=213,
+            ),
+            span=s,
+            node_id=214,
+        )
+        enum_def = EnumDef(name="Opt", members=(variant_def, variant_ref), span=s, node_id=215)
 
         type_alias = TypeAlias(name="Names", type_expr=list_t, span=s, node_id=214)
         exc_field = Param(

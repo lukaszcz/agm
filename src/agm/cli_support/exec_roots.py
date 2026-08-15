@@ -13,22 +13,21 @@ from agm.config.module_roots import (
 )
 from agm.packages.activation import select_package_roots
 from agm.packages.development import discover_development_packages
-from agm.packages.model import PackageInfo, owning_package
+from agm.packages.model import owning_package
 
 
 @dataclass(frozen=True, slots=True)
 class ExecRoots:
     """The assembled root set for an ``agm exec`` invocation.
 
-    ``development_packages`` are the path-configured, uninstalled package
-    checkouts discovered from *entry_path*/*cwd* — exposed so a caller can
-    also test entry ownership against them (e.g. to route a directly executed
-    development-package file to its package-qualified config route) without
-    discovering them a second time.
+    ``roots.packages`` is the mounted package selection the set was assembled
+    from, so a caller can test entry ownership against exactly the packages
+    that shaped the roots — a directly executed package file keeps its
+    package-qualified config route whether its package is a development
+    checkout or an installed store tree.
     """
 
     roots: RootSet
-    development_packages: tuple[PackageInfo, ...]
 
 
 def effective_exec_roots(
@@ -41,9 +40,9 @@ def effective_exec_roots(
 ) -> ExecRoots:
     """Build exactly the root set an ``agm exec`` invocation uses.
 
-    Development packages reachable from *entry_path* (or *cwd*) are
-    discovered here, so callers no longer need to discover and pass them in
-    themselves.
+    Development packages reachable from *entry_path* (or *cwd*) are discovered
+    here and mounted alongside the selected store packages, so a caller supplies
+    only the invocation's own paths.
     """
     development_packages = discover_development_packages(entry_path or cwd, home=home)
     module_config = load_module_roots(home=home, proj_dir=proj_dir, cwd=cwd)
@@ -69,4 +68,4 @@ def effective_exec_roots(
         cwd=cwd,
         package_roots=selected_packages,
     )
-    return ExecRoots(roots=roots, development_packages=development_packages)
+    return ExecRoots(roots=roots)

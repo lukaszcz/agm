@@ -33,7 +33,9 @@ def run(args: PkgInstallArgs) -> None:
                 editable=args.editable,
                 shadow=args.shadow,
             )
-    except PackageInstallError as exc:
+    # A user-supplied source path can fail at the operating-system boundary
+    # before any package rule applies; report it like every other bad source.
+    except (OSError, PackageInstallError) as exc:
         print(f"pkg install: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
     package = plan.package

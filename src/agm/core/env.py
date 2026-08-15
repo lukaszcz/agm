@@ -60,19 +60,27 @@ def is_safe_shell_env_assignment_name(name: str) -> bool:
 
 
 def agm_installation_prefix() -> Path | None:
-    """Return the installation prefix of the running AGM executable.
+    """Return the installation prefix of the running AGM executable, if any.
 
     The prefix is the parent of the executable's ``bin`` directory, taken from
     the invocation path rather than PATH, so a development build reports its own
     environment instead of an unrelated AGM installed elsewhere. The path is not
     resolved through symlinks: a tool installer's entry point is a link in the
     prefix's ``bin`` directory, and the prefix is that link's location.
+
+    Only a ``<prefix>/bin/<executable>`` invocation names a prefix. Any other
+    entry point — a repository script, a directly invoked module — belongs to no
+    installation, and reporting its grandparent would attach an AGM home and a
+    config layer to an arbitrary directory.
     """
 
     agm_executable = sys.argv[0]
     if not agm_executable:
         return None
-    return Path(agm_executable).absolute().parent.parent
+    bin_dir = Path(agm_executable).absolute().parent
+    if bin_dir.name != "bin":
+        return None
+    return bin_dir.parent
 
 
 def source_env_files(

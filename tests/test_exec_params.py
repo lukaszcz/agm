@@ -656,3 +656,101 @@ class TestRenderParamHelpSection:
 
         assert "--@entry::region" in section
         assert "--settings::region" in section
+
+
+# ---------------------------------------------------------------------------
+# Reserved built-in flags
+# ---------------------------------------------------------------------------
+
+
+class TestReservedFlags:
+    """Every flag ``agm exec`` itself declares must be reserved.
+
+    A param whose name matches an unreserved built-in flag is advertised under
+    that flag in ``--help`` while Click routes the token to the built-in, so
+    the supplied value never reaches the program.
+    """
+
+    def test_param_named_after_a_builtin_flag_is_advertised_qualified(self) -> None:
+        from agm.cli_support.exec_params import param_option_flags, render_param_help_section
+
+        params = (
+            _make_param(
+                "agent",
+                TextType(),
+                has_default=True,
+                module_segments=("<entry>",),
+                is_entry=True,
+                entry_qualifier="p",
+            ),
+        )
+
+        assert param_option_flags(params) == ("--p::agent",)
+        assert "--p::agent" in render_param_help_section(params)
+
+    def test_param_named_after_a_builtin_flag_rejects_its_short_spelling(self) -> None:
+        from agm.cli_support.exec_params import parse_param_tokens
+
+        params = (
+            _make_param(
+                "agent",
+                TextType(),
+                has_default=True,
+                module_segments=("<entry>",),
+                is_entry=True,
+                entry_qualifier="p",
+            ),
+        )
+
+        with pytest.raises(ValueError, match="ambiguous"):
+            parse_param_tokens(params, ["--agent", "x"])
+
+    def test_param_named_after_a_builtin_flag_uses_its_qualified_config_key(self) -> None:
+        from agm.cli_support.exec_params import external_param_keys
+
+        param = _make_param("agent", module_segments=("pkg", "deploy"))
+
+        assert external_param_keys((param,)) == {param: "pkg/deploy::agent"}
+
+    def test_every_flag_the_exec_command_declares_is_reserved(self) -> None:
+        """Guard against a new ``agm exec`` flag silently shadowing a param.
+
+        Read from the built Click command rather than the Typer declarations,
+        so an option contributed by the command class or its context settings
+        is checked too.
+        """
+        from typer.main import get_command
+
+        import agm.cli as cli
+        from agm.cli_support.exec_params import RESERVED_FLAGS
+
+        root = get_command(cli.app)
+        command = root.commands["exec"]
+        declared = {
+            flag
+            for parameter in command.params
+            for flag in (*parameter.opts, *parameter.secondary_opts)
+            if flag.startswith("-")
+        }
+
+        assert declared
+        assert declared <= RESERVED_FLAGS
+
+    def test_registered_command_flags_are_reserved(self) -> None:
+        """Registered package commands share the same param reservation rule."""
+        from agm.cli_dispatch import RegisteredProgramCommand
+        from agm.cli_support.exec_params import RESERVED_FLAGS
+        from agm.packages.activation import CommandRegistration
+
+        command = RegisteredProgramCommand(
+            "demo", CommandRegistration(package="demo", program="demo/main::main")
+        )
+        declared = {
+            flag
+            for parameter in command.params
+            for flag in (*parameter.opts, *parameter.secondary_opts)
+            if flag.startswith("-")
+        }
+
+        assert declared
+        assert declared <= RESERVED_FLAGS

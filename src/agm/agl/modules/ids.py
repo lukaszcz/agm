@@ -15,6 +15,13 @@ _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # can produce a ModuleId with this segment via from_path.
 _ENTRY_SEGMENT = "\x00entry"
 
+ENTRY_DISPLAY = "<entry>"
+"""The entry module's user-facing label, standing in for a name it has not got.
+
+Every layer that renders an entry-qualified name for a user recognizes this
+label, so it is defined once here rather than spelled at each of them.
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class ModuleId:
@@ -51,7 +58,7 @@ class ModuleId:
     def display(self) -> str:
         """Return a user-facing module label that never exposes sentinel bytes."""
         if self.is_entry:
-            return "<entry>"
+            return ENTRY_DISPLAY
         return self.path_str()
 
     def synthetic_name_component(self) -> str:

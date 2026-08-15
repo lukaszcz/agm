@@ -11,10 +11,10 @@ also falls back to ``@entry``. Bool params use ``--name/--no-name`` flag form.
 One selected option map drives parsing, help, and completion.
 
 Collision detection is **verbatim**: a param whose name is ``foo`` produces the
-flag ``--foo``; that exact string is checked against ``RESERVED_FLAGS``.  There
-is no underscore↔hyphen normalisation — the engine keys all use kebab-case, so
-a param named ``timeout`` (the exact engine key name) collides, but one named
-``timeout_val`` does not.
+flag ``--foo``; that exact string is checked against ``RESERVED_FLAGS``.
+There is no underscore↔hyphen normalisation — the engine keys all use
+kebab-case, so a param named ``timeout`` (the exact engine key name) collides,
+but one named ``timeout_val`` does not.
 """
 
 from __future__ import annotations
@@ -26,7 +26,11 @@ from typing import TYPE_CHECKING
 
 from agm.agl.modules.roots import RootSet
 from agm.agl.runtime.request import AgentResponse
-from agm.agl.runtime.types import ParamDeclInfo
+from agm.agl.runtime.types import (
+    ENTRY_PARAM_QUALIFIER,
+    ParamDeclInfo,
+    public_param_spelling,
+)
 from agm.agl.semantics.types import BoolType
 
 if TYPE_CHECKING:
@@ -41,8 +45,10 @@ def _build_engine_key_flags() -> frozenset[str]:
     - Adds ``--no-<name>`` for bool-typed keys and Option-typed keys (which have
       an explicit ``--no-<name>`` negation to set the binding to ``none``).
 
-    Derived at import time from the engine-key catalog so that adding a new
-    engine key automatically appears here.
+    Derived from the engine-key catalog so that adding a new engine key
+    automatically appears here.  An engine key whose CLI flag is spelled
+    differently from its key name (``default-agent`` is reached by ``--agent``)
+    is reserved by ``_BUILTIN_EXEC_FLAGS`` instead.
     """
     from agm.config.engine_keys import ENGINE_KEYS, EngineKeyKind
 
@@ -55,7 +61,12 @@ def _build_engine_key_flags() -> frozenset[str]:
     return frozenset(flags)
 
 
-# Non-engine built-in flags that are always reserved on ``agm exec``.
+# Flags ``agm exec`` declares that the engine-key catalog does not spell.
+# Every flag the command declares must appear either here or there: an
+# unreserved flag is worse than a rejected param name, because Click binds the
+# token to the built-in option and the param advertised under that flag
+# silently keeps its default.  The declarations live in ``agm.cli``, a layer
+# above this one, so they are mirrored here and cross-checked by the tests.
 _BUILTIN_EXEC_FLAGS: frozenset[str] = frozenset(
     {
         "--command",
@@ -65,14 +76,18 @@ _BUILTIN_EXEC_FLAGS: frozenset[str] = frozenset(
         "--module-path",
         "-I",
         "--max-call-depth",
+        # ``agm exec`` turns off Click's built-in help option so that program
+        # ``--param`` tokens pass through to it, and recognises these itself.
         "--help",
         "-h",
         "--dry-run",
         "--no-stdlib",
+        # The CLI spelling of the ``default-agent`` engine key.
+        "--agent",
     }
 )
 
-# Reserved flag strings: non-engine built-ins UNION engine-key flags (both polarities).
+# Reserved flag strings: declared built-ins UNION engine-key flags (both polarities).
 # Collision check is verbatim — no underscore↔hyphen normalisation.
 RESERVED_FLAGS: frozenset[str] = _BUILTIN_EXEC_FLAGS | _build_engine_key_flags()
 
@@ -87,16 +102,12 @@ def negative_param_flag(name: str) -> str:
     return f"--no-{name}"
 
 
-_ENTRY_PARAM_QUALIFIER = "@entry"
 _QUALIFIED_PARAM_QUALIFIER = "@module"
 
 
 def _external_qualified_name(param: ParamDeclInfo) -> str:
     """Return the canonical shell-safe qualified spelling for a parameter flag."""
-    if param.is_entry:
-        qualifier = param.entry_qualifier or _ENTRY_PARAM_QUALIFIER
-        return f"{qualifier}::{param.name}"
-    return param.qualified_name
+    return public_param_spelling(param.qualified_name, entry_qualifier=param.entry_qualifier)
 
 
 def _collision_safe_qualified_names(
@@ -115,7 +126,7 @@ def _collision_safe_qualified_names(
         counts[spelling] = counts.get(spelling, 0) + 1
     return {
         param: (
-            f"{_ENTRY_PARAM_QUALIFIER}::{param.name}"
+            f"{ENTRY_PARAM_QUALIFIER}::{param.name}"
             if param.is_entry and counts[spelling] > 1
             else spelling
         )

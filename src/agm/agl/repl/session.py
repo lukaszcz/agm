@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.repl.entry import EntryKind, EntryResult
 from agm.agl.repl.entry_pipeline import EntryPipeline
+from agm.agl.runtime.types import public_param_spelling
 from agm.agl.self_validation import self_validation_enabled
 from agm.config.engine_keys import HOST_CONSUMED_ENGINE_KEYS
 
@@ -840,11 +841,15 @@ class ReplSession:
         # apply exclusively to newly linked imported params.
         for param in params:
             if param.module.is_entry and param.required:
+                # A prompt entry has no module route, so report the param under
+                # the shared user-facing entry namespace rather than the
+                # module system's internal identity.
+                spelling = public_param_spelling(param.qualified_public_name)
                 return {}, self._fail(
                     [
                         Diagnostic(
                             message=(
-                                f"Missing required param {param.qualified_public_name!r}: "
+                                f"Missing required param {spelling!r}: "
                                 "provide a default expression."
                             ),
                             line=param.location.start_line,

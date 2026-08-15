@@ -6,12 +6,16 @@ from pathlib import Path
 
 import pytest
 
+from agm.cli_support.args import ExecArgs
+from agm.commands import exec_program as exec_engine
+from agm.config.context import ConfigContext
 from agm.config.general import (
     ExecConfig,
     exec_config_from_merged,
     load_exec_config,
     load_merged_config,
 )
+from tests._package_helpers import write_installed_package
 
 
 class TestExecConfig:
@@ -189,3 +193,72 @@ class TestExecConfigProgramTableOverride:
         cfg = exec_config_from_merged(merged, program_table={"strict-json": True})
         assert cfg.default_loop_limit == 7
         assert cfg.strict_json is True
+
+
+class TestPackageEntryConfigRoute:
+    """Every spelling of one package program reads the same config table.
+
+    A program that belongs to a package is addressed by its package-qualified
+    module route, so its configuration lives under that route whether it was
+    reached by file path, by installed reference, or as a registered command.
+    """
+
+    _SOURCE = 'param level: text = "unset"\nprogram def main() -> unit = print level\n'
+
+    def _install(self, tmp_path: Path) -> tuple[Path, Path]:
+        """Install a one-module ``tools`` package and configure its param."""
+        home = tmp_path / "home"
+        module = write_installed_package(home, "tools", source=self._SOURCE)
+        (home / ".agm" / "config.toml").write_text('[tools.main]\nlevel = "prod"\n')
+        return home, module
+
+    def _use_home(self, monkeypatch: pytest.MonkeyPatch, home: Path, cwd: Path) -> None:
+        monkeypatch.setattr(
+            exec_engine,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=cwd),
+        )
+
+    def test_store_package_file_path_reads_the_qualified_table(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        home, module = self._install(tmp_path)
+        self._use_home(monkeypatch, home, tmp_path)
+
+        exec_engine.run(ExecArgs(file=str(module), strict_json=None, no_log=False, log_file=None))
+
+        assert capsys.readouterr().out == "prod\n"
+
+    def test_installed_reference_reads_the_qualified_table(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        home, _module = self._install(tmp_path)
+        self._use_home(monkeypatch, home, tmp_path)
+
+        exec_engine.run_registered("tools/main::main", [])
+
+        assert capsys.readouterr().out == "prod\n"
+
+    def test_loose_file_outside_a_package_keeps_its_stem_route(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A file that no selected package owns is still addressed by its stem."""
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[loose]\nlevel = "stem"\n')
+        loose = tmp_path / "loose.agl"
+        loose.write_text(self._SOURCE, encoding="utf-8")
+        self._use_home(monkeypatch, home, tmp_path)
+
+        exec_engine.run(ExecArgs(file=str(loose), strict_json=None, no_log=False, log_file=None))
+
+        assert capsys.readouterr().out == "stem\n"

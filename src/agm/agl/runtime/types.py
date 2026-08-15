@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from agm.agl.modules.ids import ENTRY_DISPLAY
+
 if TYPE_CHECKING:
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.modules.ids import ModuleId
@@ -14,11 +16,32 @@ if TYPE_CHECKING:
     from agm.agl.semantics.types import Type as AglType
 
 __all__ = [
+    "ENTRY_PARAM_QUALIFIER",
     "CallSiteInfo",
     "HostEnvironment",
     "ParamDeclInfo",
     "ProgramDeclInfo",
+    "public_param_spelling",
 ]
+
+ENTRY_PARAM_QUALIFIER = "@entry"
+"""The shell-safe namespace a param of an unnamed entry module is addressed in."""
+
+
+def public_param_spelling(qualified_name: str, *, entry_qualifier: str | None = None) -> str:
+    """Return the user-facing spelling of a module-qualified param name.
+
+    The entry module is an internal identity with no user-facing name, so a
+    qualified spelling that leaks its sentinel is meaningless in a diagnostic
+    or a CLI flag. A file-backed entry is addressed by its module route
+    (*entry_qualifier*); every other entry by the reserved
+    :data:`ENTRY_PARAM_QUALIFIER` namespace, which no module route can claim.
+    Names qualified by a real module are returned unchanged.
+    """
+    qualifier, separator, remainder = qualified_name.partition("::")
+    if not separator or qualifier != ENTRY_DISPLAY:
+        return qualified_name
+    return f"{entry_qualifier or ENTRY_PARAM_QUALIFIER}{separator}{remainder}"
 
 
 @dataclass(frozen=True, slots=True)

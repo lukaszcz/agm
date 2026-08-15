@@ -209,9 +209,9 @@ as configuration is read, before the module graph loads; a malformed command exi
 with nothing run.
 
 Qualified tables address declarations by module suffix and scope path. A loose entry
-file's `.agl` stem is its module component. A file executed directly from a development
-package instead retains its package-qualified module route, just like an installed package
-reference. For example, a `review::main` program in `review-tools/review` reads engine
+file's `.agl` stem is its module component. A file executed directly from a package — a
+development checkout or an installed store tree — instead retains its package-qualified
+module route, just like an installed package reference. For example, a `review::main` program in `review-tools/review` reads engine
 overrides from `[review-tools.review.review.main]`, and a `review::max-tries` param in
 `review-tools/judge` reads `[judge.review]` when that suffix is unambiguous. Use a longer
 suffix or an exact quoted module route such as `["review-tools/judge".review]` to

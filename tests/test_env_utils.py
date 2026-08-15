@@ -69,6 +69,49 @@ def test_agm_installation_prefix_returns_none_without_an_executable_path(
     assert agm_installation_prefix() is None
 
 
+def test_agm_installation_prefix_returns_none_for_a_script_outside_a_bin_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A script run from a source tree has no installation prefix at all.
+
+    Treating its grandparent as a prefix would invent a runtime tree — and an
+    AGM home — beside an arbitrary directory.
+    """
+    script = tmp_path / "repo" / "tools" / "install_agm_config.py"
+    script.parent.mkdir(parents=True)
+    script.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr("agm.core.env.sys.argv", [str(script)])
+
+    assert agm_installation_prefix() is None
+
+
+def test_agm_installation_prefix_returns_none_for_an_executable_beside_its_prefix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable = tmp_path / "prefix" / "agm"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr("agm.core.env.sys.argv", [str(executable)])
+
+    assert agm_installation_prefix() is None
+
+
+def test_agm_installation_prefix_accepts_a_relative_bin_invocation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ``bin`` check reads the invocation path, however it was spelled."""
+    prefix = tmp_path / "prefix"
+    (prefix / "bin").mkdir(parents=True)
+    (prefix / "bin" / "agm").write_text("", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    monkeypatch.setattr("agm.core.env.sys.argv", ["prefix/bin/agm"])
+
+    assert agm_installation_prefix() == prefix
+
+
 def test_is_shell_identifier_accepts_shell_variable_names() -> None:
     assert is_shell_identifier("NAME")
     assert is_shell_identifier("_NAME_2")

@@ -33,7 +33,9 @@ def run(args: PkgCreateArgs) -> None:
             dry_run.print_operation("create-package-archive", str(destination))
         else:
             write_archive(package.root, destination)
-    except (ArchiveError, DependencyError, DisciplineError) as exc:
+    # A user-supplied source path can fail at the operating-system boundary
+    # before any package rule applies; report it like every other bad source.
+    except (ArchiveError, DependencyError, DisciplineError, OSError) as exc:
         print(f"pkg create: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
     print(destination)

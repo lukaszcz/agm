@@ -130,10 +130,16 @@ def _entry_module_segments(
     return module_segments
 
 
-def _development_entry_segments(
+def _package_entry_segments(
     entry_path: Path | None, packages: tuple[PackageInfo, ...]
 ) -> tuple[str, ...] | None:
-    """Return a development-package entry's package-qualified module path."""
+    """Return a package entry's package-qualified module path.
+
+    *packages* is the mounted package selection the root set was assembled
+    from, so a development checkout and an installed store tree route their
+    configuration identically — and identically to the same program reached by
+    its ``PACKAGE/MODULE::PROGRAM`` reference.
+    """
     if entry_path is None:
         return None
     package = owning_package(entry_path, packages)
@@ -247,10 +253,10 @@ def run(
         raise SystemExit(1)
 
     ctx = current_config_context()
-    # Module roots (and the development packages reachable from the entry) are
-    # assembled ONCE here, up front: this same root set is reused below for
-    # scoping the graph, and the development packages for routing a directly
-    # executed development-package file to its package-qualified config route.
+    # Module roots are assembled ONCE here, up front: this same root set is
+    # reused below for scoping the graph, and its mounted packages classify a
+    # directly executed package file so it keeps its package-qualified config
+    # route.
     try:
         exec_roots = effective_exec_roots(
             entry_path=entry_path,
@@ -264,14 +270,12 @@ def run(
         raise SystemExit(1) from exc
 
     entry_stem: str | None = Path(args.file).stem if args.file is not None else None
-    development_entry_segments = _development_entry_segments(
-        entry_path, exec_roots.development_packages
-    )
+    package_entry_segments = _package_entry_segments(entry_path, exec_roots.roots.packages)
     config_entry_segments: tuple[str, ...]
     if entry_module_segments is not None:
         config_entry_segments = entry_module_segments
-    elif development_entry_segments is not None:
-        config_entry_segments = development_entry_segments
+    elif package_entry_segments is not None:
+        config_entry_segments = package_entry_segments
     else:
         config_entry_segments = () if entry_stem is None else (entry_stem,)
     config_view = load_general_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)

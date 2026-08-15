@@ -5,17 +5,110 @@ from __future__ import annotations
 from dataclasses import replace
 
 import agm.agl.syntax as syntax
-from agm.agl.syntax.constants import is_constant_expression
-from agm.agl.syntax.nodes import Program, static_function_items
+from agm.agl.syntax.nodes import Item, Program, static_function_items
+from agm.agl.syntax.visitor import walk
+
+_ROOT_DECLARATIONS = (
+    syntax.FuncDef,
+    syntax.RecordDef,
+    syntax.EnumDef,
+    syntax.ExceptionDef,
+    syntax.TypeAlias,
+    syntax.ParamDecl,
+    syntax.BuiltinVarDecl,
+    syntax.InfixDecl,
+    syntax.ImportDecl,
+    syntax.ExportDecl,
+    syntax.OpenDecl,
+    syntax.ScopeRegion,
+)
+
+
+def _binding_names(binding: syntax.LetDecl | syntax.VarDecl) -> frozenset[str]:
+    """The names *binding* introduces, over-approximated for pattern binders."""
+    if isinstance(binding, syntax.VarDecl):
+        return frozenset({binding.name})
+    names: set[str] = set()
+    walk(binding.pattern, lambda node: _collect_binder(node, names))
+    return frozenset(names)
+
+
+def _collect_binder(node: object, names: set[str]) -> None:
+    """Record every name *node* can introduce as a binder."""
+    if isinstance(node, (syntax.Param, syntax.VarDecl, syntax.VarPattern, syntax.AsPattern)):
+        names.add(node.name)
+    elif isinstance(node, syntax.Loop) and node.for_var is not None:
+        names.add(node.for_var)
+    elif isinstance(node, syntax.CatchClause) and node.binding is not None:
+        names.add(node.binding)
+
+
+def _free_names(item: Item) -> frozenset[str]:
+    """Names *item* reads from its surroundings, over-approximating its binders.
+
+    A read is a ``VarRef`` or an assignment target anywhere in the subtree,
+    matched by member name so a qualified spelling matches its binding. Any
+    name a binder introduces in the same subtree is dropped: the reference may
+    be to that binder rather than to the enclosing binding.
+    """
+    references: set[str] = set()
+    binders: set[str] = set()
+
+    def visit(node: object) -> None:
+        if isinstance(node, (syntax.VarRef, syntax.NameTarget)):
+            references.add(node.name)
+        else:
+            _collect_binder(node, binders)
+
+    walk(item, visit)
+    return frozenset(references - binders)
+
+
+def _root_retained(items: tuple[Item, ...]) -> frozenset[int]:
+    """Indices of the items that must stay at the program root.
+
+    Declarations and path-bearing bindings are retained outright — a scoped
+    binder path is illegal inside a block. An unscoped ``let``/``var`` is
+    retained only when a retained item reads its name, computed to a fixpoint
+    so a retained binding's own initializer retains what it reads in turn.
+    Constancy is not decided here: the checker rejects a retained binding whose
+    initializer is not a constant expression, which the scope pass alone cannot
+    determine.
+    """
+    retained = {
+        index
+        for index, item in enumerate(items)
+        if isinstance(item, _ROOT_DECLARATIONS)
+        or (isinstance(item, (syntax.LetDecl, syntax.VarDecl)) and bool(item.scope_path))
+    }
+    needed: set[str] = set()
+    for index in retained:
+        needed |= _free_names(items[index])
+    candidates = {
+        index: item
+        for index, item in enumerate(items)
+        if index not in retained and isinstance(item, (syntax.LetDecl, syntax.VarDecl))
+    }
+    growing = True
+    while growing:
+        growing = False
+        for index, item in list(candidates.items()):
+            if _binding_names(item) & needed:
+                del candidates[index]
+                retained.add(index)
+                needed |= _free_names(item)
+                growing = True
+    return frozenset(retained)
 
 
 def wrap_inline_program(program: Program, *, next_node_id: int) -> tuple[Program, int]:
     """Wrap root non-declarations in a host-only synthetic program entry.
 
     The transform is syntactic: root declarations, scope regions, path-bearing
-    bindings, and constant bindings preceding a function stay at the root,
-    while every other item moves into ``main`` in source order. Keeping those
-    earlier bindings lets root functions retain normal textual visibility.
+    bindings, and every binding a root item reads (see :func:`_root_retained`)
+    stay at the root, while all other items move into ``main`` in source order.
+    Retaining the bindings root declarations read keeps those declarations'
+    normal textual visibility.
 
     If *program* already contains a ``program def`` at any scope path, it is
     returned unchanged with its supplied node-id seed. Otherwise the returned
@@ -27,44 +120,13 @@ def wrap_inline_program(program: Program, *, next_node_id: int) -> tuple[Program
         return program, next_node_id
 
     items = program.body.items
+    retained = _root_retained(items)
     root_items: list[syntax.Item] = []
     main_items: list[syntax.Item] = []
     has_executable_item = False
     for index, item in enumerate(items):
         is_module_header = isinstance(item, (syntax.ImportDecl, syntax.ExportDecl))
-        if is_module_header and has_executable_item:
-            main_items.append(item)
-            continue
-        is_scoped_binding = isinstance(item, (syntax.LetDecl, syntax.VarDecl)) and bool(
-            item.scope_path
-        )
-        is_earlier_constant_binding = (
-            isinstance(item, (syntax.LetDecl, syntax.VarDecl))
-            and not item.scope_path
-            and any(isinstance(later, syntax.FuncDef) for later in items[index + 1 :])
-            and is_constant_expression(item.value, is_constructor=lambda _node_id: False)
-        )
-        if (
-            is_scoped_binding
-            or is_earlier_constant_binding
-            or isinstance(
-                item,
-                (
-                    syntax.FuncDef,
-                    syntax.RecordDef,
-                    syntax.EnumDef,
-                    syntax.ExceptionDef,
-                    syntax.TypeAlias,
-                    syntax.ParamDecl,
-                    syntax.BuiltinVarDecl,
-                    syntax.InfixDecl,
-                    syntax.ImportDecl,
-                    syntax.ExportDecl,
-                    syntax.OpenDecl,
-                    syntax.ScopeRegion,
-                ),
-            )
-        ):
+        if index in retained and not (is_module_header and has_executable_item):
             root_items.append(item)
         else:
             main_items.append(item)

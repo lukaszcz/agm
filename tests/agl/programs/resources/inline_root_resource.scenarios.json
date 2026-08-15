@@ -1,0 +1,34 @@
+{
+  "scenarios": [
+    {
+      "name": "plain_resource_path_from_a_root_declaration",
+      "inline_entry": true,
+      "params": {
+        "decorate": false
+      },
+      "expect": {
+        "stdout_contains": [
+          "tests/agl/programs/resources/prompt.md",
+          "tests/agl/programs/resources"
+        ],
+        "stdout_not_contains": [
+          "prompt: "
+        ]
+      }
+    },
+    {
+      "name": "decorated_resource_path_from_a_root_declaration",
+      "inline_entry": true,
+      "params": {
+        "decorate": true
+      },
+      "expect": {
+        "stdout_contains": [
+          "prompt: ",
+          "tests/agl/programs/resources/prompt.md",
+          "tests/agl/programs/resources"
+        ]
+      }
+    }
+  ]
+}

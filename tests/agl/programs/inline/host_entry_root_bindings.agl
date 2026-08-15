@@ -1,0 +1,63 @@
+# Inline source without a `program def`: the host wraps the root statements into
+# a synthetic entry, keeping at the root every binding a root declaration reads
+# (record, enum-variant, and exception constructors, plus a mutable counter a
+# root `def` assigns) and demoting every other binding into the entry.
+import std/config
+
+param label: text = "corner"
+param rounds: int = 2
+
+record Point(x: int, y: int)
+
+enum Shape
+  | Flat
+  | Square(side: int)
+
+exception Broken extends Exception
+  reason: text
+
+let corner = Point(1, 2)
+let flat = Flat
+let square = Square(3)
+let broken = Broken(message = "the hinge broke", reason = "hinge")
+let tally = 20 + 22
+var visits = 0
+
+def describe() -> text = "%{label}: %{corner.x},%{corner.y}"
+
+def budget() -> int = config::max-iters
+
+def area() -> int =
+  case square of
+    | Flat => 0
+    | Square(side) => side * side
+
+def sides() -> int =
+  case flat of
+    | Flat => 0
+    | Square(side) => side
+
+def excuse() -> text = broken.reason
+
+def visit() -> int =
+  visits := visits + 1
+  visits
+
+def shadowed() -> int =
+  let tally = 7
+  tally
+
+let reviewer = AgentCommand("reviewer")
+
+print(describe())
+print(area() + sides())
+print(excuse())
+for round in 1 to rounds do
+  print(visit())
+done
+print(shadowed())
+print(tally)
+print(corner.y)
+print(budget())
+let verdict: text = ask("Review %{describe()}.", agent = reviewer)
+print(verdict)

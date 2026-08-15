@@ -43,6 +43,7 @@ from typing import Any
 
 import pytest
 
+from tests._agl_helpers import prepare_inline_command
 from tests._process_helpers import FakeShell
 
 AGL_DIR = Path(__file__).parent / "agl"
@@ -165,32 +166,35 @@ def _run_program(
     runtime = PipelineDriver(**runtime_options)
     module_roots = scenario.get("module_roots", [])
     default_stdlib = not scenario.get("no_stdlib", False)
+    entry_path: Path | None = None
+    roots: Any | None = None
+    if module_roots:
+        from agm.agl.modules.roots import RootSet
+
+        roots = RootSet(
+            roots=frozenset(
+                {
+                    *((AGL_DIR / str(root)).resolve() for root in module_roots),
+                    REPO_STDLIB_ROOT,
+                }
+            )
+        )
+    elif program.is_relative_to(EXTERNS_PROGRAMS_DIR) or program.is_relative_to(
+        RESOURCE_PROGRAMS_DIR
+    ):
+        from agm.agl.modules.roots import RootSet
+
+        entry_path = program
+        roots = RootSet(roots=frozenset({program.parent.resolve(), REPO_STDLIB_ROOT}))
+    # `inline_entry` sources carry no `program def`: they run through the same
+    # synthetic-entry transform as `agm exec -c`.
+    prepare = (
+        prepare_inline_command if scenario.get("inline_entry") else PipelineDriver.prepare_program
+    )
     with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
-        if module_roots:
-            from agm.agl.modules.roots import RootSet
-
-            roots = RootSet(
-                roots=frozenset(
-                    {
-                        *((AGL_DIR / str(root)).resolve() for root in module_roots),
-                        REPO_STDLIB_ROOT,
-                    }
-                )
-            )
-            prepared = PipelineDriver.prepare_program(
-                source, entry_path=None, roots=roots, default_stdlib=default_stdlib
-            )
-        elif program.is_relative_to(EXTERNS_PROGRAMS_DIR) or program.is_relative_to(
-            RESOURCE_PROGRAMS_DIR
-        ):
-            from agm.agl.modules.roots import RootSet
-
-            roots = RootSet(roots=frozenset({program.parent.resolve(), REPO_STDLIB_ROOT}))
-            prepared = PipelineDriver.prepare_program(
-                source, entry_path=program, roots=roots, default_stdlib=default_stdlib
-            )
-        else:
-            prepared = PipelineDriver.prepare_program(source, default_stdlib=default_stdlib)
+        prepared = prepare(
+            source, entry_path=entry_path, roots=roots, default_stdlib=default_stdlib
+        )
 
         result = _run_prepared_entry(runtime, prepared, param_values=scenario.get("params", {}))
     return result, agents, shell

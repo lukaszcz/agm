@@ -153,11 +153,14 @@ def prepare_inline_command(
     default_stdlib: bool = True,
     setting_overrides: dict[str, SettingOverride] | None = None,
 ) -> PreparedProgram:
-    """Prepare test-only inline source with the ``agm exec -c`` entry transform."""
+    """Prepare test-only inline source with the ``agm exec -c`` entry transform.
+
+    ``entry_path`` is ``None`` for real inline sources; the corpus passes a path
+    for programs whose builtins need a file-backed anchor (``resource``).
+    """
     from dataclasses import replace
 
-    assert entry_path is None
-    parsed = PipelineDriver.parse_entry(source, entry_path=None)
+    parsed = PipelineDriver.parse_entry(source, entry_path=entry_path)
     if parsed.program is not None:
         program, next_node_id = wrap_inline_program(parsed.program, next_node_id=parsed.next_id)
         parsed = replace(parsed, program=program, next_id=next_node_id)

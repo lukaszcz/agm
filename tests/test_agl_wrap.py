@@ -29,6 +29,7 @@ from agm.agl.syntax import (
     UnitT,
     VarDecl,
 )
+from tests._agl_helpers import run_inline_command
 
 
 def test_wrap_inline_program_partitions_root_items_and_preserves_statement_order() -> None:
@@ -221,3 +222,164 @@ def test_wrapped_root_declaration_reference_is_reported_by_the_scope_pipeline() 
     assert prepared.resolved is None
     assert len(prepared.diagnostics) == 1
     assert "value" in prepared.diagnostics[0].message
+
+
+def test_wrap_inline_program_keeps_a_binding_a_root_declaration_references() -> None:
+    program, next_node_id = parse_program_seeded(
+        """\
+record Point(x: int, y: int)
+let used = Point(1, 2)
+let unused = Point(3, 4)
+def read() -> int = used.x
+print(read())
+""",
+        start_id=0,
+    )
+    point, used, unused, read, call = program.body.items
+
+    wrapped, _ = wrap_inline_program(program, next_node_id=next_node_id)
+
+    root_point, root_used, root_read, main = wrapped.body.items
+    assert root_point is point
+    assert root_used is used
+    assert root_read is read
+    assert isinstance(main, FuncDef)
+    assert main.body.items == (unused, call)
+    assert main.body.items[0] is unused
+
+
+def test_wrap_inline_program_retains_bindings_reachable_through_other_retained_bindings() -> None:
+    program, next_node_id = parse_program_seeded(
+        """\
+record Point(x: int, y: int)
+record Boxed(inner: Point)
+let corner = Point(1, 2)
+let boxed = Boxed(corner)
+def read() -> int = boxed.inner.y
+print(read())
+""",
+        start_id=0,
+    )
+    point, boxed_def, corner, boxed, read, call = program.body.items
+
+    wrapped, _ = wrap_inline_program(program, next_node_id=next_node_id)
+
+    assert wrapped.body.items[:-1] == (point, boxed_def, corner, boxed, read)
+    main = wrapped.body.items[-1]
+    assert isinstance(main, FuncDef)
+    assert main.body.items == (call,)
+
+
+def test_wrap_inline_program_retains_a_binding_a_root_declaration_assigns() -> None:
+    program, next_node_id = parse_program_seeded(
+        """\
+var count = 0
+def reset() -> unit =
+  count := 0
+reset()
+""",
+        start_id=0,
+    )
+    count, reset, call = program.body.items
+
+    wrapped, _ = wrap_inline_program(program, next_node_id=next_node_id)
+
+    assert wrapped.body.items[:-1] == (count, reset)
+    main = wrapped.body.items[-1]
+    assert isinstance(main, FuncDef)
+    assert main.body.items == (call,)
+
+
+def test_wrap_inline_program_demotes_a_binding_shadowed_inside_the_declaration() -> None:
+    program, next_node_id = parse_program_seeded(
+        """\
+let x = 1 + 1
+def f() -> int =
+  let x = 5
+  x
+print(f())
+print(x)
+""",
+        start_id=0,
+    )
+    binding, func, print_call, print_x = program.body.items
+
+    wrapped, _ = wrap_inline_program(program, next_node_id=next_node_id)
+
+    assert wrapped.body.items[:-1] == (func,)
+    main = wrapped.body.items[-1]
+    assert isinstance(main, FuncDef)
+    assert main.body.items == (binding, print_call, print_x)
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    (
+        "def f() -> int =\n  fn(hidden: int) -> int => hidden\n  5",
+        "def f(hidden: int) -> int = hidden",
+        "def f() -> int =\n  for hidden in [1] do print hidden done\n  5",
+        "def f() -> int =\n  try raise Boom() catch Boom as hidden => print hidden\n  5",
+        "def f() -> int =\n  case Point(1, 2) of | Point(hidden, _) => hidden",
+        "def f() -> int =\n  case Point(1, 2) of | Point(_, _) as hidden => hidden.x",
+    ),
+    ids=("lambda", "param", "loop", "catch", "pattern", "as-pattern"),
+)
+def test_wrap_inline_program_treats_any_binder_in_a_declaration_as_shadowing(
+    declaration: str,
+) -> None:
+    program, next_node_id = parse_program_seeded(
+        f"record Point(x: int, y: int)\nexception Boom()\nlet hidden = 1\n{declaration}\n",
+        start_id=0,
+    )
+    binding = program.body.items[2]
+
+    wrapped, _ = wrap_inline_program(program, next_node_id=next_node_id)
+
+    main = wrapped.body.items[-1]
+    assert isinstance(main, FuncDef)
+    assert main.body.items == (binding,)
+
+
+def test_wrap_inline_program_keeps_an_unreferenced_scoped_binding_at_the_root() -> None:
+    program, next_node_id = parse_program_seeded(
+        "let Config::answer = 42\nlet plain = 42\nprint 1\n",
+        start_id=0,
+    )
+    scoped, plain, call = program.body.items
+
+    wrapped, _ = wrap_inline_program(program, next_node_id=next_node_id)
+
+    assert wrapped.body.items[:-1] == (scoped,)
+    main = wrapped.body.items[-1]
+    assert isinstance(main, FuncDef)
+    assert main.body.items == (plain, call)
+
+
+def test_wrap_inline_program_retains_a_binding_a_scoped_binding_references() -> None:
+    program, next_node_id = parse_program_seeded(
+        """\
+record Point(x: int, y: int)
+let corner = Point(1, 2)
+let Config::origin = corner
+print 1
+""",
+        start_id=0,
+    )
+    point, corner, scoped, call = program.body.items
+
+    wrapped, _ = wrap_inline_program(program, next_node_id=next_node_id)
+
+    assert wrapped.body.items[:-1] == (point, corner, scoped)
+    main = wrapped.body.items[-1]
+    assert isinstance(main, FuncDef)
+    assert main.body.items == (call,)
+
+
+def test_wrapped_non_constant_binding_needed_at_the_root_reports_the_binding() -> None:
+    result = run_inline_command(
+        PipelineDriver(), "let value = 1 + 1\ndef read() -> int = value\nprint(read())"
+    )
+
+    assert not result.ok
+    assert result.error is None
+    assert [diagnostic.line for diagnostic in result.diagnostics] == [1]

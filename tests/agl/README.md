@@ -6,9 +6,9 @@ functions).
 
 Layout:
 
-- `programs/**/*.agl` — valid file-style AgL programs, each declaring an explicit
-  `program def` entry and carrying a sidecar `<name>.scenarios.json` describing the
-  scenarios it runs under. Every program is
+- `programs/**/*.agl` — valid AgL programs, each declaring an explicit
+  `program def` entry (or marked `inline_entry`, see below) and carrying a sidecar
+  `<name>.scenarios.json` describing the scenarios it runs under. Every program is
   exercised under **multiple scenarios**: distinct combinations of host params,
   scripted mock agent responses, and scripted shell results, each driving a different
   control-flow path with its own expected outcome.
@@ -30,7 +30,7 @@ Layout:
 | `exprs/` | Arithmetic, comparisons, string operations |
 | `functions/` | User-defined functions: recursion, default args, first-class values, lambdas, `ask(agent:)` in a `def` body |
 | `generics/` | Generic types/functions: inference, explicit `::[…]` overrides, erasure, HOFs, imported generics |
-| `inline/` | Single-expression programs |
+| `inline/` | Single-expression programs and host-wrapped `inline_entry` sources |
 | `methods/` | Record and enum methods: direct and bound calls, generic receivers, partial application, and scope opening |
 | `modules/` | Multi-file module programs (via `module_roots`): imports combined with generics, casts, records/enums, pattern matching, and cross-module mutual recursion |
 | `partial/` | Partial application placeholders for calls, constructors, generics, eager capture, and higher-order use |
@@ -94,6 +94,9 @@ Field notes:
   (`default_call_depth_limit`, `default_strict_json`).
 - `module_roots` — optional paths relative to `tests/agl/`. When present, the
   program runs through the multi-file module graph with these library roots.
+- `inline_entry` — the program declares no `program def`: it runs through the
+  same synthetic-entry transform as `agm exec -c`, which keeps root
+  declarations and the bindings they read at the root.
 - `expect.calls` — exact number of calls per listed agent (retries count as calls).
 - `expect.prompts` — assertions on the rendered user prompt (`request.prompt`) an
   agent received on a given 0-based call index. `schema_contains` instead checks

@@ -851,6 +851,45 @@ class DictLit:
     node_id: int = dc_field(compare=False)
 
 
+@dataclass(frozen=True, slots=True)
+class RawInfixOperator:
+    """One operator token retained while a raw infix chain awaits resolution."""
+
+    name: str
+    builtin: BinOp | None
+    callee_node_id: int
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class RawPrefixNot:
+    """One ``not`` prefix retained while a raw infix chain awaits resolution."""
+
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class RawInfixOperand:
+    """One operand and its pending ``not`` prefixes in a raw infix chain."""
+
+    expr: Expr | RawInfixChain
+    prefix_nots: tuple[RawPrefixNot, ...]
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class RawInfixChain:
+    """A flat infix chain awaiting parser-layer fixity resolution."""
+
+    operands: tuple[RawInfixOperand, ...]
+    operators: tuple[RawInfixOperator, ...]
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
 # Closed union of all expression nodes.
 # NOTE: Raise/Return are Exprs (bottom type — assignable to any expected type).
 # Block, If, Case, Loop, Try are expressions (value-producing in AgL).

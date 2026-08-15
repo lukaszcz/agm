@@ -39,7 +39,9 @@ from agm.agl.parser import (
     is_incomplete_source,
     parse_program,
     parse_program_seeded,
+    parse_program_unresolved,
     parse_type_expr,
+    resolve_infix_chains,
 )
 from agm.agl.parser.errors import syntax_error_from_lark
 from agm.agl.syntax import (
@@ -88,6 +90,7 @@ from agm.agl.syntax import (
     Placeholder,
     Program,
     Raise,
+    RawInfixChain,
     RecordDef,
     Return,
     ScopeRegion,
@@ -145,6 +148,14 @@ def items(prog: Program) -> tuple[object, ...]:
 def first(prog: Program) -> object:
     """Return the first top-level item."""
     return prog.body.items[0]
+
+
+def raw_infix_program(*operator_names: str) -> Program:
+    """Parse one raw infix chain for parser-layer resolution tests."""
+    source_parts = ["0"]
+    for index, name in enumerate(operator_names, start=1):
+        source_parts.extend((name, str(index)))
+    return parse_program_unresolved(" ".join(source_parts))
 
 
 def assert_raw_tail_name_span(error: AglSyntaxError, source: str) -> None:
@@ -2092,6 +2103,50 @@ class TestBinaryOperators:
     def test_user_infix_operator_must_be_declared_before_use(self) -> None:
         with pytest.raises(AglSyntaxError, match="must be declared"):
             parse("1 |> 2")
+
+    def test_ast_builder_retains_user_infix_chain_before_resolution(self) -> None:
+        program = parse_program_unresolved("infixl |>\n1 |> 2 |> 3")
+
+        expression = program.body.items[1]
+        assert isinstance(expression, RawInfixChain)
+        assert tuple(operator.name for operator in expression.operators) == ("|>", "|>")
+        assert len(expression.operands) == 3
+        assert all(isinstance(operand.expr, IntLit) for operand in expression.operands)
+
+    def test_resolution_pass_rewrites_raw_chain(self) -> None:
+        resolved = resolve_infix_chains(
+            raw_infix_program("|>", "|>"),
+            {"|>": (5, InfixAssoc.LEFT, None)},
+        )
+
+        expression = resolved.body.items[0]
+        assert isinstance(expression, Call)
+        assert isinstance(expression.args[0], Call)
+        assert isinstance(expression.callee, VarRef)
+        assert expression.callee.name == "|>"
+
+    def test_resolution_pass_honors_precedence_and_associativity(self) -> None:
+        resolved = resolve_infix_chains(
+            raw_infix_program("|>", "<|", "<|"),
+            {
+                "|>": (5, InfixAssoc.LEFT, None),
+                "<|": (6, InfixAssoc.RIGHT, None),
+            },
+        )
+
+        expression = resolved.body.items[0]
+        assert isinstance(expression, Call)
+        assert isinstance(expression.callee, VarRef)
+        assert expression.callee.name == "|>"
+        right = expression.args[1]
+        assert isinstance(right, Call)
+        assert isinstance(right.callee, VarRef)
+        assert right.callee.name == "<|"
+        assert isinstance(right.args[1], Call)
+
+    def test_resolution_pass_rejects_undeclared_operator(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            resolve_infix_chains(raw_infix_program("|>"), {})
 
     def test_user_infix_left_associative(self) -> None:
         e = items(parse("infixl |>\n1 |> 2 |> 3"))[1]

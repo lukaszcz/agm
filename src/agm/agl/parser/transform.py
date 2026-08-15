@@ -139,13 +139,9 @@ class _ParamMarker:
     span: SourceSpan
 
 
-@dataclass(frozen=True, slots=True)
-class _InfixOperator:
-    """Transformer-internal operator token in a flat infix chain."""
-
-    name: str
-    builtin: syntax.BinOp | None
-    span: SourceSpan
+_InfixOperator: TypeAlias = syntax.RawInfixOperator
+_InfixOperand: TypeAlias = syntax.RawInfixOperand
+_RawInfixChain: TypeAlias = syntax.RawInfixChain
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,24 +151,6 @@ class _InfixPriority:
     value: int | None
     base: str | None
     delta: int
-
-
-@dataclass(frozen=True, slots=True)
-class _InfixOperand:
-    """Transformer-internal infix operand with pending prefix ``not`` operators."""
-
-    expr: syntax.Expr | _RawInfixChain
-    not_count: int
-    span: SourceSpan
-
-
-@dataclass(frozen=True, slots=True)
-class _RawInfixChain:
-    """Transformer-internal flat chain awaiting declaration-aware regrouping."""
-
-    operands: tuple[_InfixOperand, ...]
-    operators: tuple[_InfixOperator, ...]
-    span: SourceSpan
 
 
 @dataclass(frozen=True, slots=True)
@@ -392,7 +370,6 @@ class AstBuilder(Transformer):
         *,
         start_id: int = 0,
         source: SourceId | None = None,
-        ambient_infix: "Mapping[str, tuple[int, syntax.InfixAssoc]] | None" = None,
     ) -> None:
         super().__init__()
         self._counter = count(start_id)
@@ -404,11 +381,6 @@ class AstBuilder(Transformer):
         # Source identity stamped on every span this builder constructs.
         # Defaults to UNKNOWN_SOURCE when no source is supplied.
         self._source: SourceId = source if source is not None else UNKNOWN_SOURCE
-        # Already-resolved user infix fixity carried over from a prior context
-        # (REPL entries). Merged into the operator table so an operator declared
-        # in an earlier entry can be used in a later one. ``None`` for a standalone
-        # whole-program parse.
-        self._ambient_infix = ambient_infix
         # Node ids of qualified patterns built by ``pat_qual_bare`` (no argument
         # list in the source). Provenance for ``let_decl``'s scoped-binding
         # reinterpretation only -- ``A::x`` and ``A::x()`` build structurally
@@ -472,9 +444,7 @@ class AstBuilder(Transformer):
         if stray_end is not None:
             raise AglSyntaxError("stray 'end'; no scope region is open.", span=stray_end.span)
         span = self._span_from_meta(meta)
-        table = _operator_table_from_decls(block.items, self._ambient_infix)
-        body = _rewrite_block_infix(block, table, self)
-        return syntax.Program(body=body, span=span, node_id=self._next_id())
+        return syntax.Program(body=block, span=span, node_id=self._next_id())
 
     def _build_block(self, meta: Meta, args: _Args) -> syntax.Block:
         """Build a root or suite block from its non-layout children."""
@@ -1821,7 +1791,13 @@ class AstBuilder(Transformer):
     def _op(
         self, meta: Meta, args: _Args, name: str, builtin: syntax.BinOp | None
     ) -> _InfixOperator:
-        return _InfixOperator(name=name, builtin=builtin, span=self._span_from_meta(meta))
+        return _InfixOperator(
+            name=name,
+            builtin=builtin,
+            callee_node_id=self._next_id(),
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+        )
 
     def op_or(self, meta: Meta, args: _Args) -> _InfixOperator:
         return self._op(meta, args, "or", syntax.BinOp.OR)
@@ -1866,16 +1842,16 @@ class AstBuilder(Transformer):
         tok = next(a for a in args if isinstance(a, Token))
         return self._op(meta, args, str(tok), None)
 
-    def not_prefix(self, meta: Meta, args: _Args) -> object:
-        return object()
+    def not_prefix(self, meta: Meta, args: _Args) -> syntax.RawPrefixNot:
+        return syntax.RawPrefixNot(span=self._span_from_meta(meta), node_id=self._next_id())
 
     def infix_operand(self, meta: Meta, args: _Args) -> _InfixOperand:
         expr = cast(syntax.Expr | _RawInfixChain, next(a for a in args if _is_expr_node(a)))
-        not_count = sum(1 for a in args if not isinstance(a, Token) and not _is_expr_node(a))
         return _InfixOperand(
             expr=expr,
-            not_count=not_count,
+            prefix_nots=tuple(a for a in args if isinstance(a, syntax.RawPrefixNot)),
             span=self._span_from_meta(meta),
+            node_id=self._next_id(),
         )
 
     def infix_chain(self, meta: Meta, args: _Args) -> syntax.Expr | _RawInfixChain:
@@ -1883,12 +1859,13 @@ class AstBuilder(Transformer):
         operators = tuple(a for a in args if isinstance(a, _InfixOperator))
         if not operators:
             assert len(operands) == 1
-            if operands[0].not_count == 0:
+            if not operands[0].prefix_nots:
                 return operands[0].expr
         return _RawInfixChain(
             operands=operands,
             operators=operators,
             span=self._span_from_meta(meta),
+            node_id=self._next_id(),
         )
 
     # ------------------------------------------------------------------
@@ -3440,6 +3417,32 @@ def _operator_table_from_decls(
     return table
 
 
+def resolve_program_infix(
+    program: syntax.Program,
+    ambient: Mapping[str, tuple[int, syntax.InfixAssoc]] | None = None,
+) -> syntax.Program:
+    """Resolve a parsed program using its declarations and ambient fixities."""
+    return resolve_infix_chains(
+        program,
+        _operator_table_from_decls(program.body.items, ambient),
+    )
+
+
+def resolve_infix_chains(
+    program: syntax.Program,
+    operator_table: Mapping[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]],
+) -> syntax.Program:
+    """Rewrite every raw infix chain in *program* using *operator_table*.
+
+    This parser-layer AST-to-AST pass is the only stage that may consume raw
+    infix nodes. Callers must resolve a program before scope resolution.
+    """
+    return replace(
+        program,
+        body=_rewrite_block_infix(program.body, dict(operator_table), AstBuilder()),
+    )
+
+
 def _rewrite_block_infix(
     block: syntax.Block,
     table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]],
@@ -3708,19 +3711,18 @@ def _resolve_infix_chain(
     builder: AstBuilder,
 ) -> syntax.Expr:
     operands = [_rewrite_expr(operand.expr, table, builder) for operand in chain.operands]
-    not_counts = [operand.not_count for operand in chain.operands]
-    operand_spans = [operand.span for operand in chain.operands]
+    prefix_nots = [list(operand.prefix_nots) for operand in chain.operands]
     operators = list(chain.operators)
 
     def parse_prefix(operand_index: int) -> tuple[syntax.Expr, int]:
-        if not_counts[operand_index] > 0:
-            not_counts[operand_index] -= 1
+        if prefix_nots[operand_index]:
+            prefix = prefix_nots[operand_index].pop(0)
             operand, next_operand_index = parse_at(_NOT_PRIORITY, operand_index)
             return (
                 syntax.UnaryNot(
                     operand=operand,
-                    span=operand_spans[operand_index],
-                    node_id=builder._next_id(),
+                    span=prefix.span,
+                    node_id=prefix.node_id,
                 ),
                 next_operand_index,
             )
@@ -3773,15 +3775,15 @@ def _make_infix_node(
             left=left,
             right=right,
             span=span,
-            node_id=builder._next_id(),
+            node_id=op.node_id,
         )
-    callee = syntax.VarRef(name=op.name, span=op.span, node_id=builder._next_id())
+    callee = syntax.VarRef(name=op.name, span=op.span, node_id=op.callee_node_id)
     return syntax.Call(
         callee=callee,
         args=(left, right),
         named_args=(),
         span=span,
-        node_id=builder._next_id(),
+        node_id=op.node_id,
     )
 
 

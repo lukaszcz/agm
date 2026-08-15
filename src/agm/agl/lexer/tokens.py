@@ -127,10 +127,9 @@ DO_LSQB = "DO_LSQB"  # [ opening a do-loop bound
 # ---------------------------------------------------------------------------
 # Module system tokens (contextual / synthetic — %declare in grammar)
 # ---------------------------------------------------------------------------
-OPEN = "OPEN"  # contextual: 'open' directly before an item-start import
 IMPORT = "IMPORT"  # contextual: 'import' at item-start
-USING = "USING"  # contextual: 'using' in an import or export declaration
-HIDING = "HIDING"  # contextual: 'hiding' in an import or export declaration
+USE = "USE"  # contextual: 'use' at item-start
+HIDING = "HIDING"  # contextual: 'hiding' in a module header
 EXPORT = "EXPORT"  # contextual: 'export' at item-start
 SCOPE = "SCOPE"  # contextual: 'scope' at item-start before a scope path
 END = "END"  # contextual: 'end' at item-start while a scope region is open

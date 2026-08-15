@@ -57,13 +57,12 @@ from agm.agl.lexer.tokens import (
     MODQUAL,
     NAME,
     OP_NAME,
-    OPEN,
     RPAR,
     RSQB,
     SCOPE,
     SLASH,
     TYPEARG_LSQB,
-    USING,
+    USE,
     WILDCARD,
 )
 from agm.agl.syntax.advisories import SpacedQualifier
@@ -198,10 +197,8 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
     """Contextually promote soft keywords in the post-layout token stream.
 
     Rules:
-    - 'open' → OPEN at item-start before an import or scope reference.
-    - 'import' → IMPORT at item-start, or immediately after OPEN.
-    - 'export' → EXPORT at item-start.
-    - 'using' → USING and 'hiding' → HIDING within import or export declarations.
+    - 'import' → IMPORT, 'use' → USE, and 'export' → EXPORT at item-start.
+    - 'hiding' → HIDING within an import, use, or export declaration.
     - 'scope' → SCOPE at item-start before a scope path.
     - 'end' → END only for a complete closer at its region's layout level.
     """
@@ -226,16 +223,11 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
 
         if tt == NAME:
             at_item_start = prev_type is None or prev_type in _ITEM_START_TYPES
-            if (
-                tv == "open"
-                and at_item_start
-                and index + 1 < len(tokens)
-                and tokens[index + 1].type == NAME
-            ):
-                tok = _retype(tok, OPEN)
-                in_module_header = str(tokens[index + 1]) != "import"
-            elif tv == "import" and (at_item_start or prev_type == OPEN):
+            if tv == "import" and at_item_start:
                 tok = _retype(tok, IMPORT)
+                in_module_header = True
+            elif tv == "use" and at_item_start:
+                tok = _retype(tok, USE)
                 in_module_header = True
             elif tv == "export" and at_item_start:
                 tok = _retype(tok, EXPORT)
@@ -252,11 +244,8 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
             ):
                 tok = _retype(tok, END)
                 scope_layouts.pop()
-            elif in_module_header:
-                if tv == "using":
-                    tok = _retype(tok, USING)
-                elif tv == "hiding":
-                    tok = _retype(tok, HIDING)
+            elif in_module_header and tv == "hiding":
+                tok = _retype(tok, HIDING)
 
         result.append(tok)
         prev_type = tok.type
@@ -267,7 +256,7 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
 def _merge_modpath(tokens: list[Token]) -> list[Token]:
     """Merge module-header paths into single MODPATH tokens.
 
-    Pattern: immediately following an IMPORT or EXPORT token, consume
+    Pattern: immediately following an IMPORT, USE, or EXPORT token, consume
     NAME (SLASH NAME)* into a single MODPATH token whose value is the slash
     path (e.g. "foo/bar", "utils"). Every pair in the run is adjacent in the
     source, the rule module qualifiers obey: ``a/b`` is a path, ``a / b`` is
@@ -282,7 +271,7 @@ def _merge_modpath(tokens: list[Token]) -> list[Token]:
     n = len(tokens)
     while i < n:
         tok = tokens[i]
-        if tok.type in (IMPORT, EXPORT) and i + 1 < n and tokens[i + 1].type == NAME:
+        if tok.type in (IMPORT, USE, EXPORT) and i + 1 < n and tokens[i + 1].type == NAME:
             result.append(tok)
             i += 1
             # Absorb NAME (SLASH NAME)*. Module path segments may begin with

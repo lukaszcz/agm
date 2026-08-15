@@ -1845,19 +1845,30 @@ class TestTripleTemplatePositions:
         # (it was emitted after consuming the quote), overlapping TEMPLATE_END
         # and duplicating the quote in span consumers like the REPL highlighter.
         for source in ('x = "hi"', "x = 'hi'", 'f("a" + "b")'):
-            spanned = [
-                t
+            spans: list[tuple[int, int, str, str]] = [
+                (t.start_pos, t.end_pos, t.type, str(t))
                 for t in tokenize(source)
                 if t.start_pos is not None and t.end_pos is not None and t.end_pos > t.start_pos
             ]
-            ends = sorted(spanned, key=lambda t: t.start_pos)
-            for prev, nxt in zip(ends, ends[1:]):
-                assert prev.end_pos <= nxt.start_pos, (
-                    f"overlap in {source!r}: {prev.type} {prev.value!r} "
-                    f"[{prev.start_pos},{prev.end_pos}) overlaps "
-                    f"{nxt.type} {nxt.value!r} [{nxt.start_pos},{nxt.end_pos})"
+
+            def span_start(span: tuple[int, int, str, str]) -> int:
+                return span[0]
+
+            spans.sort(key=span_start)
+            for (prev_start, prev_end, prev_type, prev_value), (
+                nxt_start,
+                nxt_end,
+                nxt_type,
+                nxt_value,
+            ) in zip(spans, spans[1:]):
+                assert prev_end <= nxt_start, (
+                    f"overlap in {source!r}: {prev_type} {prev_value!r} "
+                    f"[{prev_start},{prev_end}) overlaps "
+                    f"{nxt_type} {nxt_value!r} [{nxt_start},{nxt_end})"
                 )
             frag = next(t for t in tokenize(source) if t.type == "STRING_FRAGMENT")
+            assert frag.start_pos is not None
+            assert frag.end_pos is not None
             assert frag.end_pos == frag.start_pos + len(frag.value)
 
     def test_layout_tokens_have_positions(self) -> None:
@@ -1874,6 +1885,7 @@ class TestTripleTemplatePositions:
         # Per the layout rule, a _NEWLINE sits at the newline character itself.
         source = "a\nb"
         nl = next(t for t in tokenize(source) if t.type == "_NEWLINE")
+        assert nl.start_pos is not None
         assert source[nl.start_pos] == "\n"
 
 
@@ -2634,16 +2646,17 @@ class TestAsQuestionKeyword:
 class TestModuleSystemLexer:
     """Tests for soft-keyword promotion and MODQUAL merging."""
 
-    # --- import soft keyword ---
+    # --- module-header soft keywords ---
 
     def test_import_at_line_start_is_import_token(self) -> None:
         result = tok("import foo/bar")
         assert result[0] == ("IMPORT", "import")
 
-    def test_open_is_promoted_only_directly_before_item_start_import(self) -> None:
-        assert tok("open import foo")[0:2] == [("OPEN", "open"), ("IMPORT", "import")]
-        assert ("NAME", "open") in tok("let open = 1")
-        assert ("NAME", "open") in tok("open\nimport foo")
+    def test_use_at_item_start_is_use_token(self) -> None:
+        assert tok("use shared")[:2] == [("USE", "use"), ("MODPATH", "shared")]
+
+    def test_open_and_using_remain_identifiers(self) -> None:
+        assert tok("open using") == [("NAME", "open"), ("NAME", "using")]
 
     def test_qualified_remains_an_identifier(self) -> None:
         assert tok("qualified") == [("NAME", "qualified")]
@@ -2660,31 +2673,19 @@ class TestModuleSystemLexer:
         assert ("NAME", "private") in tok("x + private")
         assert ("NAME", "private") in tok("let private = 1")
 
-    def test_using_in_import_line(self) -> None:
-        result = tok("import foo using bar")
-        types = [t for t, _ in result]
-        assert "USING" in types
-
     def test_hiding_in_import_line(self) -> None:
         result = tok("import foo hiding bar")
         types = [t for t, _ in result]
         assert "HIDING" in types
 
-    def test_using_outside_import_stays_name(self) -> None:
-        result = tok("let using = 1")
-        assert ("NAME", "using") in result
-
     def test_hiding_outside_import_stays_name(self) -> None:
         result = tok("let hiding = 1")
         assert ("NAME", "hiding") in result
 
-    def test_import_window_closes_at_newline(self) -> None:
-        # After newline, a new import line resets; 'using' on a different line
-        # from 'import' is not inside the import window
-        src = "import foo\nusing bar"
+    def test_module_header_window_closes_at_newline(self) -> None:
+        src = "use shared\nhiding member"
         result = tok(src)
-        # 'using' here is on its own line not preceded by import on same line
-        assert ("NAME", "using") in result
+        assert ("NAME", "hiding") in result
 
     # --- MODQUAL merging ---
 
@@ -2744,15 +2745,6 @@ class TestModuleSystemLexer:
             ("NAME", "bar"),
         ]
 
-    def test_export_using_in_export_line(self) -> None:
-        result = tok("export foo using bar")
-        assert result == [
-            ("EXPORT", "export"),
-            ("MODPATH", "foo"),
-            ("USING", "using"),
-            ("NAME", "bar"),
-        ]
-
     def test_export_hiding_in_export_line(self) -> None:
         result = tok("export foo hiding bar")
         assert result == [
@@ -2762,10 +2754,9 @@ class TestModuleSystemLexer:
             ("NAME", "bar"),
         ]
 
-    def test_import_in_lark_token_stream(self) -> None:
-        # After remap, 'import' at item-start becomes IMPORT in the parser stream
-        result = lark_tok("import foo")
-        assert result[0] == ("IMPORT", "import")
+    def test_use_in_lark_token_stream(self) -> None:
+        result = lark_tok("use shared")
+        assert result[0] == ("USE", "use")
 
 
 # ---------------------------------------------------------------------------

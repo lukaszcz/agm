@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from agm.agl.lexer import spaced_qualifier_collector, tokenize, unclosed_scope_path
 
 
@@ -13,11 +17,48 @@ def _non_layout_tokens(source: str) -> list[tuple[str, str]]:
     return [token for token in _tokens(source) if not token[0].startswith("_")]
 
 
+@pytest.mark.parametrize(
+    "fixture",
+    (
+        "programs/scope/scoped_destructuring.agl",
+        "rejections/scope/opened_scope_members_do_not_escape.agl",
+    ),
+)
+def test_use_in_scope_fixtures_remains_an_identifier(fixture: str) -> None:
+    source = (Path(__file__).parent / "agl" / fixture).read_text()
+
+    assert ("NAME", "use") in _tokens(source)
+
+
 def test_scope_at_item_start_with_a_path_is_promoted() -> None:
     tokens = _non_layout_tokens("scope Point::Member")
 
     assert tokens[0] == ("SCOPE", "scope")
     assert tokens[1:] == [("MODQUAL", "Point"), ("NAME", "Member")]
+
+
+def test_use_in_a_scope_region_is_promoted_and_keeps_its_header_window() -> None:
+    assert _non_layout_tokens("scope Outer\nuse Shared hiding member\nend Outer") == [
+        ("SCOPE", "scope"),
+        ("NAME", "Outer"),
+        ("USE", "use"),
+        ("MODPATH", "Shared"),
+        ("HIDING", "hiding"),
+        ("NAME", "member"),
+        ("END", "end"),
+        ("NAME", "Outer"),
+    ]
+
+
+def test_use_in_expression_position_remains_an_identifier() -> None:
+    assert _non_layout_tokens("let value = use + 1") == [
+        ("let", "let"),
+        ("NAME", "value"),
+        ("EQ", "="),
+        ("NAME", "use"),
+        ("PLUS", "+"),
+        ("INT", "1"),
+    ]
 
 
 def test_scope_without_a_complete_path_remains_an_identifier() -> None:

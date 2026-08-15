@@ -9,6 +9,7 @@ from uuid import UUID
 import pytest
 
 from agm.agent.session import (
+    SessionAskError,
     SessionAskRequest,
     SessionAskResponse,
     SessionBackend,
@@ -19,6 +20,7 @@ from agm.agent.session import (
     SessionService,
     SessionStats,
 )
+from agm.agent.transport import AgentCallInfo
 
 
 @dataclass
@@ -192,6 +194,15 @@ def test_close_all_attempts_every_session_and_leaves_failures_retryable() -> Non
         )
 
 
+def test_ephemeral_ask_returns_its_response_after_closing() -> None:
+    service, factory = _service()
+
+    response = service.ask_ephemeral(object(), "cli", SessionAskRequest(prompt="hello"))
+
+    assert response == SessionAskResponse(content="answer")
+    assert factory.backends[0].close_calls == 1
+
+
 def test_ephemeral_ask_closes_after_a_backend_failure() -> None:
     factory = FakeBackendFactory()
     error = RuntimeError("transport failed")
@@ -206,6 +217,58 @@ def test_ephemeral_ask_closes_after_a_backend_failure() -> None:
     with pytest.raises(RuntimeError, match="transport failed"):
         failing_service.ask_ephemeral(object(), "cli", SessionAskRequest(prompt="hello"))
 
+    assert factory.backends[0].close_calls == 1
+
+
+def test_ephemeral_ask_preserves_an_ask_error_when_close_also_fails() -> None:
+    factory = FakeBackendFactory()
+    ask_error = SessionAskError(
+        cause="nonzero_exit",
+        exit_code=1,
+        stderr_tail="agent failed",
+        elapsed=0.1,
+        call_info=AgentCallInfo(argv=["runner"], prompt_via_stdin=False, elapsed=0.1, exit_code=1),
+    )
+
+    def make_failing_backend(agent: object, transport: str) -> SessionBackend:
+        backend = FakeBackend(
+            capabilities=factory.capabilities,
+            ask_error=ask_error,
+            close_error=RuntimeError("close failed"),
+        )
+        factory.backends.append(backend)
+        return backend
+
+    service = SessionService(make_failing_backend)
+
+    with pytest.raises(SessionAskError) as raised:
+        service.ask_ephemeral(object(), "cli", SessionAskRequest(prompt="hello"))
+
+    assert raised.value is ask_error
+    assert raised.value.call_info.to_trace() == {
+        "argv": ["runner"],
+        "prompt_via_stdin": False,
+        "elapsed": 0.1,
+        "exit_code": 1,
+    }
+    assert factory.backends[0].close_calls == 1
+
+
+def test_ephemeral_ask_surfaces_a_close_failure_after_a_successful_ask() -> None:
+    factory = FakeBackendFactory()
+    close_error = RuntimeError("close failed")
+
+    def make_failing_backend(agent: object, transport: str) -> SessionBackend:
+        backend = FakeBackend(capabilities=factory.capabilities, close_error=close_error)
+        factory.backends.append(backend)
+        return backend
+
+    service = SessionService(make_failing_backend)
+
+    with pytest.raises(RuntimeError) as raised:
+        service.ask_ephemeral(object(), "cli", SessionAskRequest(prompt="hello"))
+
+    assert raised.value is close_error
     assert factory.backends[0].close_calls == 1
 
 

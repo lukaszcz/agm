@@ -17,6 +17,7 @@ from agm.agent.prompt import (
     preprocess_prompt_file,
     require_prompt_file,
 )
+from agm.agent.transport import AgentTransportFailureCause
 from agm.core import dry_run
 from agm.core.process import ProcessCaptureResult, run_capture, run_capture_result
 from agm.util.interp import (
@@ -36,6 +37,7 @@ _RUNNER_NOT_FOUND_EXIT = 127
 # The variable a runner command uses to name the prepared prompt file, and its
 # shorthand alias.
 PROMPT_FILE_VAR = "PROMPT_FILE"
+SESSION_ID_VAR = "SESSION_ID"
 PROMPT_FILE_ALIAS = "%%"
 
 
@@ -89,7 +91,7 @@ class PromptRunResult:
     Unlike the existing ``run_prompt_command`` helper, this never prints to
     stderr and never raises ``SystemExit``.  All outcomes — spawn failure,
     nonzero exit, and idle-timeout — are represented here so that callers can
-    map them to structured AgL exceptions (``AgentCallError``).
+    map them to their own host errors.
     """
 
     returncode: int | None
@@ -98,6 +100,34 @@ class PromptRunResult:
     elapsed: float
     timed_out: bool
     spawn_error: str | None
+
+
+class PromptRunFailure(Exception):
+    """A failed structured prompt run, independent of any caller's error model."""
+
+    def __init__(self, cause: AgentTransportFailureCause, result: PromptRunResult) -> None:
+        self.cause = cause
+        self.result = result
+        super().__init__(_prompt_run_failure_message(cause, result))
+
+
+def prompt_run_result_error(result: PromptRunResult) -> PromptRunFailure | None:
+    """Return the failure represented by *result*, or ``None`` for success."""
+    if result.spawn_error is not None:
+        return PromptRunFailure("spawn_failure", result)
+    if result.timed_out:
+        return PromptRunFailure("timeout", result)
+    if result.returncode not in (None, 0):
+        return PromptRunFailure("nonzero_exit", result)
+    return None
+
+
+def _prompt_run_failure_message(cause: AgentTransportFailureCause, result: PromptRunResult) -> str:
+    if cause == "spawn_failure":
+        return f"agent command could not be started: {result.spawn_error}"
+    if cause == "timeout":
+        return "agent command timed out"
+    return f"agent command exited with code {result.returncode}"
 
 
 def parse_command(command: str, *, kind: str) -> list[str]:
@@ -146,6 +176,25 @@ def _targets_prompt_file(segments: list[Segment]) -> bool:
     )
 
 
+def command_targets_session_id(command: list[str]) -> bool:
+    """Whether a command contains an unescaped session-id placeholder.
+
+    Every element is parsed even after finding a placeholder so malformed
+    interpolation is always reported while a command session is opened.
+    """
+    targets_session_id = False
+    for arg in command:
+        try:
+            segments = _split_command_element(arg)
+        except InterpolationError as exc:
+            exc.context = f"in command element {arg!r}"
+            raise
+        targets_session_id = targets_session_id or any(
+            isinstance(segment, Hole) and segment.name == SESSION_ID_VAR for segment in segments
+        )
+    return targets_session_id
+
+
 def validate_command(command: list[str], *, kind: str, env: MutableMapping[str, str]) -> None:
     """Preflight-check a runner/selector command.
 
@@ -174,16 +223,26 @@ def validate_command(command: list[str], *, kind: str, env: MutableMapping[str, 
 
 
 def _interpolate_command(
-    command: list[str], target: Path, env: MutableMapping[str, str]
+    command: list[str],
+    target: Path,
+    env: MutableMapping[str, str],
+    *,
+    session_id: str | None = None,
 ) -> tuple[list[str], bool]:
-    """Interpolate *command* against *env*, binding ``PROMPT_FILE``/``%%`` to *target*.
+    """Interpolate *command* against *env*, binding prompt and session placeholders.
 
-    Returns the interpolated argv and whether any element targeted
-    ``PROMPT_FILE``/``%%``. *env* must be the same mapping the child process
-    will actually receive (see ``run_capture``'s ``env`` argument) so argv
-    holes and the spawned process resolve names identically.
+    ``PROMPT_FILE``/``%%`` always resolve to *target*. When *session_id* is
+    supplied, ``SESSION_ID`` resolves to it; otherwise it retains the normal
+    environment-backed interpolation behavior. Returns the interpolated argv
+    and whether any element targeted ``PROMPT_FILE``/``%%``. *env* must be the
+    same mapping the child process will actually receive (see
+    ``run_capture``'s ``env`` argument) so argv holes and the spawned process
+    resolve names identically.
     """
-    variables = ChainMap({PROMPT_FILE_VAR: str(target)}, env)
+    bindings = {PROMPT_FILE_VAR: str(target)}
+    if session_id is not None:
+        bindings[SESSION_ID_VAR] = session_id
+    variables = ChainMap(bindings, env)
     interpolated: list[str] = []
     targeted = False
 
@@ -205,6 +264,7 @@ def command_with_prompt_target(
     env: MutableMapping[str, str],
     *,
     append_target: bool = True,
+    session_id: str | None = None,
 ) -> list[str]:
     """Interpolate *command* against *env*, binding ``PROMPT_FILE``/``%%`` to *target*.
 
@@ -214,7 +274,7 @@ def command_with_prompt_target(
     so its argv is interpolated the same way but never gets an ``@<target>``
     argument — the prompt reaches the process on standard input instead.
     """
-    interpolated, targeted = _interpolate_command(command, target, env)
+    interpolated, targeted = _interpolate_command(command, target, env, session_id=session_id)
     if targeted or not append_target:
         return interpolated
     return [*interpolated, f"@{target}"]
@@ -432,6 +492,7 @@ def prepare_rendered_prompt_run(
     temp_files: list[Path],
     env: dict[str, str],
     prompt_via_stdin: bool = False,
+    session_id: str | None = None,
 ) -> PreparedPromptRun:
     """Prepare a runner invocation for an already-rendered AgL prompt.
 
@@ -446,12 +507,14 @@ def prepare_rendered_prompt_run(
       returned by ``run_prepared_prompt_result``.
     - Accepts an already-tokenized argv from an agent command builder, avoiding
       a string round-trip before the prepared invocation is run.
+    - Binds ``%{SESSION_ID}`` when *session_id* is provided, without changing
+      ordinary runner interpolation when it is not.
 
     *prompt_via_stdin* is carried onto the returned ``PreparedPromptRun`` so
     ``run_prepared_prompt_result`` knows to pipe *rendered_prompt* straight in
     rather than attach it via placeholder or ``@<path>``. In that case no
-    temp file is written at all: the rendered text travels on
-    ``PreparedPromptRun.rendered_prompt`` instead, since nothing reads a file
+    temp file is written at all: the rendered text travels in
+    ``PreparedPromptRun.stdin_prompt`` instead, since nothing reads a file
     back for this delivery mode. File-sourced delivery still writes
     *rendered_prompt* verbatim to a temp file, because argv interpolation may
     bind ``%{PROMPT_FILE}``/``%%`` to it and the backend reads the prompt from
@@ -468,7 +531,11 @@ def prepare_rendered_prompt_run(
             temp_files=temp_files,
             stdin_prompt=rendered_prompt,
             argv=command_with_prompt_target(
-                command, effective_file, child_env, append_target=False
+                command,
+                effective_file,
+                child_env,
+                append_target=False,
+                session_id=session_id,
             ),
         )
     with NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".md") as handle:
@@ -481,7 +548,13 @@ def prepare_rendered_prompt_run(
         effective_file=temp_path,
         env=env,
         temp_files=temp_files,
-        argv=command_with_prompt_target(command, temp_path, child_env, append_target=True),
+        argv=command_with_prompt_target(
+            command,
+            temp_path,
+            child_env,
+            append_target=True,
+            session_id=session_id,
+        ),
     )
 
 

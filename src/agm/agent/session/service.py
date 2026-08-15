@@ -137,9 +137,15 @@ class SessionService:
         """Ask through a short-lived session and close it even when asking fails."""
         handle = self.open(agent, transport, name=name)
         try:
-            return self.ask(handle, request)
-        finally:
-            self.close(handle)
+            response = self.ask(handle, request)
+        except BaseException:
+            try:
+                self.close(handle)
+            except BaseException:
+                pass
+            raise
+        self.close(handle)
+        return response
 
     def _entry_for(self, handle: str, operation: SessionOperation | str) -> _SessionEntry:
         entry = self._entries.get(handle)

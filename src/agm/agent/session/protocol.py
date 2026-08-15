@@ -7,6 +7,8 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Protocol
 
+from agm.agent.transport import AgentTransportError
+
 
 class SessionOperation(StrEnum):
     """Operations a session backend can advertise as supported."""
@@ -78,6 +80,15 @@ class SessionHostError(Exception):
         self.message = message
         self.operation = operation
         super().__init__(message)
+
+
+class SessionAskError(AgentTransportError):
+    """A backend-neutral transport failure from one session ``ask`` call.
+
+    Unlike :class:`SessionHostError`, this retains process diagnostics for the
+    host effect boundary that maps a failed agent request to its user-facing
+    error model.
+    """
 
 
 class SessionBackend(Protocol):

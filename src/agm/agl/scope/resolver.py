@@ -296,6 +296,7 @@ class _Resolver:
         repl_session_scope: ScopeNode | None = None,
         repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
         repl_session_type_paths: Mapping[ScopePath, str | None] | None = None,
+        retained_use_targets: Mapping[int, ResolvedUseTarget] | None = None,
         origin_path: Path | None = None,
         spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
     ) -> None:
@@ -350,6 +351,7 @@ class _Resolver:
         # None for a nominal type: receiver classification cannot tell the two
         # apart from a path alone.
         self._repl_session_type_paths = dict(repl_session_type_paths or {})
+        self._retained_use_targets = retained_use_targets or {}
         # This module's canonical source file, or None for a module with no
         # backing file (inline `-c` sources, direct REPL entries). Drives the
         # `extern def` placement check — externs require a file-backed module.
@@ -1742,9 +1744,12 @@ class _Resolver:
         """Inject the selected members of one already-nameable route bare."""
         decl = self._reinterpret_single_member_use_alias(decl)
         target = tuple(segment.name for segment in decl.target)
-        local = self._use_local_target(decl, target)
-        if local is None and not decl.anchored:
-            local = self._use_contributed_local_target(target, decl.span)
+        retained_target = self._retained_use_targets.get(decl.node_id)
+        local = retained_target.local_path if retained_target is not None else None
+        if local is None and not (retained_target and retained_target.imported_routes):
+            local = self._use_local_target(decl, target)
+            if local is None and not decl.anchored:
+                local = self._use_contributed_local_target(target, decl.span)
         route = () if decl.current_module else tuple(target[0].split("/"))
         route_target = () if decl.current_module else target[1:]
         direct_candidates = (
@@ -1779,6 +1784,26 @@ class _Resolver:
         bare_imports = () if decl.anchored else self._bare_use_import_targets(target)
         used_imports = () if decl.anchored else self._used_import_targets(target)
         imported = self._merge_use_import_targets(direct_imports, bare_imports, used_imports)
+        if retained_target is not None and retained_target.imported_routes:
+            available = dict(imported)
+            replayed: list[tuple[BareRoute, Mapping[NameAtom, QName]]] = []
+            for imported_route in retained_target.imported_routes:
+                members = available.get(imported_route)
+                if members is None:
+                    module, source = imported_route
+                    contribution = self._import_env.contributions.get(module)
+                    if contribution is None:
+                        continue
+                    members = self._relative_use_import_members(
+                        contribution.members,
+                        source,
+                        target_exists=(
+                            imported_route in self._import_env.scope_origins_by_route
+                        ),
+                    )
+                if members is not None:
+                    replayed.append((imported_route, members))
+            imported = tuple(replayed)
         direct_routes = {imported_route for imported_route, _members in direct_imports}
         facade_declarations = (
             self._import_env.facade_aliases.get(route[0], {}) if len(route) == 1 else {}
@@ -1789,7 +1814,7 @@ class _Resolver:
             and tuple(facade_declarations.values())
             == (frozenset(module for module, _members in direct_candidates),)
             and {imported_route for imported_route, _members in imported} == direct_routes
-        )
+        ) or bool(retained_target and len(retained_target.imported_routes) > 1)
         if local is not None and imported:
             candidates = ", ".join(module.display() for (module, _root), _members in imported)
             module_targets = ", ".join(
@@ -1836,12 +1861,15 @@ class _Resolver:
             return
         if shared_alias_facade:
             self._use_targets[decl.node_id] = ResolvedUseTarget(
-                imported_routes=tuple(route for route, _members in direct_imports)
+                imported_routes=tuple(route for route, _members in imported)
             )
             self._contribute_use_facade_members(
                 decl,
-                tuple(members for _route, members in direct_imports),
-                tuple(direct_import_scope_routes[route] for route, _members in direct_imports),
+                tuple(members for _route, members in imported),
+                tuple(
+                    direct_import_scope_routes.get(route, self._import_scope_routes(route))
+                    for route, _members in imported
+                ),
             )
             return
         imported_route, imported_members = imported[0]
@@ -1849,6 +1877,7 @@ class _Resolver:
             imported_scope_routes = direct_import_scope_routes[imported_route]
         else:
             imported_scope_routes = {
+                **self._import_scope_routes(imported_route),
                 **self._bare_use_import_scope_routes(target, imported_route),
                 **self._used_import_scope_routes(target, imported_route),
             }
@@ -1933,6 +1962,16 @@ class _Resolver:
                 exists = True
                 relative_members[_bare_atom(path[len(target) :])] = qname
         return relative_members if exists else None
+
+    def _import_scope_routes(self, imported_route: BareRoute) -> dict[NameAtom, BareRoute]:
+        """Return all scope identities beneath one exact imported route."""
+        contribution = self._import_env.contributions.get(imported_route[0])
+        if contribution is None:
+            return {}
+        scope_paths = set(contribution.path_scope_paths)
+        for alias_paths in contribution.alias_scope_paths.values():
+            scope_paths.update(alias_paths)
+        return self._relative_use_import_scope_routes(scope_paths, imported_route)
 
     @staticmethod
     def _relative_use_import_scope_routes(

@@ -420,6 +420,12 @@ class EntryPipeline:
         from agm.agl.scope.program import resolve_program
         from agm.agl.syntax.nodes import UseDecl, static_items
 
+        retained_use_targets = {
+            node_id: target
+            for generation in self._ctx._accumulated_use_targets
+            for node_id, target in generation.items()
+        }
+
         def resolve(current_graph: ModuleGraph, *, use_targets_only: bool) -> ResolvedProgram:
             return resolve_program(
                 current_graph,
@@ -429,6 +435,7 @@ class EntryPipeline:
                 entry_repl_session_scope=self._ctx._session_scope,
                 entry_repl_session_scope_nodes=self._ctx._session_scope_nodes,
                 entry_repl_session_type_paths=self._ctx._session_type_paths,
+                entry_retained_use_targets=retained_use_targets,
                 _entry_use_targets_only=use_targets_only,
             )
 

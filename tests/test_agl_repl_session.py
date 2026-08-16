@@ -793,6 +793,23 @@ class TestScopedBindingRetention:
         assert result.ok, result.diagnostics
         assert result.value == IntValue(1)
 
+    def test_retained_relative_use_keeps_its_resolved_scope_target(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("scope Source\ndef value() -> int = 1\nend Source").ok
+        assert session.eval_entry("scope Outer\nuse Source::*\nend Outer").ok
+        assert session.eval_entry(
+            "scope Outer\nscope Source\ndef value() -> int = 2\nend Source\nend Outer"
+        ).ok
+
+        declared = session.eval_entry(
+            "scope Outer\ndef selected() -> int = value()\nend Outer"
+        )
+        result = session.eval_entry("Outer::selected()")
+
+        assert declared.ok, declared.diagnostics
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(1)
+
     def test_retained_use_sees_a_member_promoted_by_a_later_entry(self) -> None:
         """A retained use resolves a member a later entry adds to its target."""
         s = ReplSession()

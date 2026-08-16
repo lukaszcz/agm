@@ -1242,6 +1242,24 @@ class TestScopeUses:
         assert result.ok is True
         assert capsys.readouterr().out == "3\n"
 
+    def test_bare_used_generic_enum_supports_applied_constructor_patterns(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "lib.agl").write_text("enum E[T]\n  | A(value: T)\n")
+
+        result = _run_program(
+            "import lib\n"
+            "use /lib::{E}\n"
+            "let item = E[int]::A(value = 3)\n"
+            "let result = case item of\n"
+            "  | E[int]::A(value) => value\n"
+            "print result\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is True
+        assert capsys.readouterr().out == "3\n"
+
     def test_nearer_used_enum_variant_keeps_its_scoped_owner(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:

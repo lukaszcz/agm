@@ -1120,8 +1120,14 @@ class TypeEnvironment:
                 return None
         # Scope-use contributions: a bare name made available in the current
         # region (``use A::*``) resolves here too, before falling through to
-        # module-level import tails. An arity complaint about a selected
-        # generic propagates: it names the problem better than "unknown type".
+        # module-level import tails. Generic templates remain useful to
+        # alias-transparent qualifier checks even though ordinary bare type
+        # expressions still require arguments in ``_resolve_opened_type``.
+        opened_key = self._opened_type_key(name, None)
+        if opened_key is not None:
+            opened_generic = (self._program_generic_table or {}).get(opened_key)
+            if opened_generic is not None:
+                return opened_generic.template
         opened = self._resolve_opened_type(name, None)
         if opened is not None:
             return opened

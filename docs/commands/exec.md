@@ -95,9 +95,9 @@ either is a static error.
   (repeatable), resolved relative to the invocation working directory. See
   [Module resolution](#module-resolution). This is also how e2e/fixture tests point
   `agm exec` at test-specific module roots.
-- `--no-stdlib`: Disable automatic `std/core` opening throughout the loaded
-  program (the entry and its library modules). Explicit `import std/core` still
-  uses the normal module import semantics.
+- `--no-stdlib`: Disable the automatic `import std/core::*` prelude throughout
+  the loaded program (the entry and its library modules). Explicit `import std/core`
+  still uses the normal module import semantics.
 - `--strict-json`: Require agents to return exactly one bare JSON value (no fences,
   prose, or repair). Overridable per call site with the `strict_json:` named argument
   to `ask`.

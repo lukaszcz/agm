@@ -254,9 +254,9 @@ accumulates bindings, types, and declarations, so earlier results stay available
 calls fire exactly once. By default it fires agent calls immediately; `--confirm-agents`
 asks before each one. Multiline editing, syntax highlighting, tab-completion, and history are
 built in, and `:` meta-commands (`:help`, `:type`, `:bindings`, …) inspect the session.
-The `std/core` standard-library module is opened automatically throughout each loaded
-program, as in `agm exec`; pass `--no-stdlib` to disable that automatic opening for the
-entry and its library modules. Imported-module params can be supplied by their qualified
+Each loaded program receives the `std/core` standard-library prelude, as in
+`agm exec`; pass `--no-stdlib` to disable it for the entry and its library
+modules. Imported-module params can be supplied by their qualified
 config tables; params declared directly at the prompt use source defaults (or are required).
 
 ```bash

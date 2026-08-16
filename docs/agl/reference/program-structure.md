@@ -17,7 +17,7 @@ module_block ::= module_item ((NEWLINE | ";") module_item)* (NEWLINE | ";")?
 module_item   ::= scope_region | item
 block         ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 item          ::= import_decl                     (* header position only *)
-             | open_decl                          (* header position only *)
+             | use_decl                           (* header position only *)
              | export_decl                        (* header position only *)
              | builtin_modifier? record_def        (* root only *)
              | builtin_modifier? enum_def          (* root only *)
@@ -38,14 +38,14 @@ builtin_modifier ::= "builtin" NEWLINE?
 
 ### Import declarations
 
-`import`, `open`, and `export` declarations are **header-only**: they must
+`import`, `use`, and `export` declarations are **header-only**: they must
 appear before any other declaration or expression, at the module root or
 inside a named scope region. See [Modules](modules.md) and
 [Grammar](grammar.md#import-and-export-declarations) for their syntax.
 
 ### Named scope regions
 
-A named scope region is a module item containing nested regions, header `open`
+A named scope region is a module item containing nested regions, header `use`
 and `import` declarations, `export` declarations, static declarations,
 `param` declarations, and `let`/`var` bindings. Its matching `scope`/`end`
 syntax, declaration and binder paths, and visibility rules are described in
@@ -74,12 +74,12 @@ region.
   to its declaring module. A program receives external values for the params in
   its module and transitive imports. A scoped parameter's short external
   spelling is its full scope path; see [Named scopes](scopes.md#parameters).
-- **`import`/`export` declarations** — module-system declarations; root-only
-  or a member of a named scope region. A scoped import's bare contribution
-  narrows to its own region; its qualifier route stays module-wide. A scoped
-  export re-roots its forwarded atoms under the region's path. See
-  [Named scopes](scopes.md#import-and-export) and
-  [Modules](modules.md#import-and-export-inside-a-scope-region).
+- **`import`/`use`/`export` declarations** — module-system declarations;
+  root-only or members of a named scope region. A scoped import tail or use
+  contributes bare names only to its own region; an import's qualifier route
+  stays module-wide. A scoped export re-roots its forwarded atoms under the
+  region's path. See [Named scopes](scopes.md#import-and-export) and
+  [Modules](modules.md#imports-and-use-inside-a-scope-region).
 - **`program def` declaration** — marks a non-generic, zero-argument,
   `unit`-returning ordinary function as an executable entry point. It cannot be a
   builtin, extern, or method. It may appear at the module root or as a non-method
@@ -167,8 +167,9 @@ The settings and their types are:
 A write takes effect **positionally**, exactly like any `var` mutation: it
 governs the statements that follow it, in program order. An assignment target
 names an imported setting the same way a read does ([Modules](modules.md)): a
-qualified target always works, and a bare `max-iters := …` works when the
-import is open, so the name is in scope unqualified.
+qualified target always works, and a bare `max-iters := …` works after
+`import std/config::*` or an equivalent `use`, so the name is in scope
+unqualified.
 The `Option[text]` settings (`log-file`, `timeout`) are set with `Some("…")` or
 `None`. A `timeout` read preserves the exact assigned text; its parsed duration
 controls shell execution without normalizing the stored value.

@@ -1,10 +1,10 @@
 
 %{PROBLEM}
 
-Your task is to plan the implementation of the above. Save the plan to %{PLAN_FILE}.
+Develop an implementation design for the request and save it to the requested destination.
 
-All solutions must be general, principled and extensible - no pragmatic fixes.
+All solutions must be general, principled, and extensible; avoid pragmatic fixes.
 
-If anything is unclear, don't make assumptions, but ask me questions instead. Do NOT silently make major architectural decisions that are not explicitly specified by the owner.
+If anything is unclear, ask questions rather than making assumptions. Do not silently make major architectural choices that the owner has not specified.
 
-For every owner decision, present several alternatives with pros and cons and a single recommendation. Before writing the plan, ask me, one-by-one, about each decision, explaining the issue and presenting the options together with your recommendation.
+For each owner choice, present alternatives with pros and cons and one recommendation. Before writing the design, ask about each choice one at a time, explaining the issue and options with the recommendation.

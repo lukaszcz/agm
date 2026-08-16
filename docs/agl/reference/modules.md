@@ -27,10 +27,9 @@ from the same global module set.
 
 ```ebnf
 import_decl ::= "import" module_path ["/*"]
-                ["as" ref_name | "::" import_selection]
-                [hiding_clause]
+                ("as" ref_name | "::" tail)? [hiding_clause]
 
-import_selection ::= "*" | import_item | "{" import_item ("," import_item)* [","] "}"
+tail             ::= "*" | import_item | "{" import_item ("," import_item)* "}"
 import_item      ::= path_atom ["as" ref_name]
 hiding_clause    ::= "hiding" path_atom ("," path_atom)*
 path_atom        ::= (NAME "::")* name
@@ -61,7 +60,8 @@ import app/vocabulary::* hiding internal-word
 
 An import alias supplies a single-segment qualified route instead of the
 module's slash-path routes. It does not make names bare and cannot be combined
-with an import tail.
+with an import tail. A tail rename is additive: it adds a bare route without
+removing the selected source path.
 
 <!-- agl-check: fragment -->
 ```agl
@@ -82,7 +82,7 @@ or module root. Its target can be a local scope, a scope or module root reached
 through an import route, or a scope anchored at the current module root.
 
 ```ebnf
-use_decl      ::= "use" use_target ("::" import_selection | "as" ref_name)
+use_decl      ::= "use" use_target ("::" tail | "as" ref_name)
                   [hiding_clause]
 use_target    ::= ["/"] module_path ["::" scope_path] | "::" scope_path
 scope_path    ::= NAME ("::" NAME)*
@@ -98,10 +98,10 @@ use library::*
 use library as Alias
 ```
 
-`use Scope::*` contributes every member of `Scope` bare. A braced tail selects
-members, and item renames add renamed bare paths. `use Scope as Alias` and
-`use library as Alias` contribute every selected member beneath `Alias`.
-`hiding` is valid only with a `::*` tail. A `use` declaration contributes names
+`use Scope::*` contributes every member of `Scope` bare. A braced or
+single-atom tail selects members, and item renames add renamed bare paths.
+`use Scope as Alias` and `use library as Alias` contribute every selected
+member beneath `Alias`. `hiding` is valid only with a `::*` tail. A `use` declaration contributes names
 only to its enclosing module or named scope region; it does not make a module
 available. Import the module first when its target is not local.
 
@@ -261,14 +261,16 @@ declarations across an import cycle.
 
 ## REPL
 
-REPL imports persist after a successful entry, retained as written: a retained
-wildcard expands again on every later entry, so it picks up modules added
-since. A later entry replaces the earlier import declaration for every module
-it names, so its tail, hiding clause, or alias takes effect for that module.
-Multiple declarations for one module in the same entry combine normally. A
-failed entry changes no imports, and `:reset` clears imports with the session
-bindings. Each REPL entry and its loaded library modules receive the `std/core`
-prelude unless the session was launched with `--no-stdlib`.
+REPL imports and `use` declarations persist after a successful entry, retained
+as written: a retained wildcard expands again on every later entry, so it picks
+up modules added since. A later successful entry replaces the earlier import
+declaration for every module it names and the earlier `use` declaration for the
+same target in the same enclosing module or scope region. A failed entry
+changes neither imports nor uses, and `:reset` clears both with the session
+bindings. An
+explicit `import std/core` retained from a successful entry
+suppresses the synthetic prelude in later entries; `--no-stdlib` disables it
+for the whole session.
 
 ## Diagnostics
 

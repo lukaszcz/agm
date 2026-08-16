@@ -4544,20 +4544,21 @@ class TestImports:
         assert r2.ok, r2.diagnostics
         assert _int(r2.value) == 10
 
-    def test_same_target_use_is_additive_and_failed_entries_preserve_it(self) -> None:
+    def test_same_target_use_is_replaced_and_failed_entries_preserve_it(self) -> None:
         s = ReplSession()
-        assert s.eval_entry("def First::value() -> int = 1").ok
-        assert s.eval_entry("use First::*").ok
-        assert s.eval_entry("value()").value == IntValue(1)
+        assert s.eval_entry("def Source::original() -> int = 1").ok
+        assert s.eval_entry("def Source::replacement() -> int = 2").ok
+        assert s.eval_entry("use Source::{original}").ok
+        assert s.eval_entry("original()").value == IntValue(1)
 
-        assert s.eval_entry("use First::{value as first_value}").ok
-        assert s.eval_entry("value()").value == IntValue(1)
-        assert s.eval_entry("first_value()").value == IntValue(1)
+        assert s.eval_entry("use Source::{replacement}").ok
+        assert not s.eval_entry("original()").ok
+        assert s.eval_entry("replacement()").value == IntValue(2)
 
-        failed = s.eval_entry('use First::*\nlet bad: int = "not an int"')
+        failed = s.eval_entry('use Source::{original}\nlet bad: int = "not an int"')
         assert not failed.ok
-        assert s.eval_entry("value()").value == IntValue(1)
-        assert s.eval_entry("first_value()").value == IntValue(1)
+        assert not s.eval_entry("original()").ok
+        assert s.eval_entry("replacement()").value == IntValue(2)
 
     def test_distinct_use_targets_with_clashing_bare_names_remain_ambiguous(self) -> None:
         s = ReplSession()

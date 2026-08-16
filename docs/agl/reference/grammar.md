@@ -23,7 +23,7 @@ module_item   ::= scope_region | item
 block         ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 
 item       ::= import_decl                  (* header position only; scope_item also permits it *)
-             | open_decl                    (* module-root or scope-region header only *)
+             | use_decl                     (* module-root or scope-region header only *)
              | builtin_var_def              (* root only; standard library only *)
              | builtin_modifier? record_def (* root only *)
              | builtin_modifier? enum_def   (* root only *)
@@ -54,7 +54,7 @@ scope_region ::= "scope" scope_path (NEWLINE | ";")
                  [scope_item ((NEWLINE | ";") scope_item)* (NEWLINE | ";")?]
                  "end" scope_path
 scope_path   ::= NAME ("::" NAME)*
-scope_item   ::= scope_region | open_decl
+scope_item   ::= scope_region | use_decl
                | import_decl                  (* header position only *)
                | export_decl
                | record_def | enum_def | exception_def | type_alias
@@ -92,13 +92,13 @@ the line directly above it.
 ```ebnf
 import_decl ::= "import" module_path ["/*"]
                 ("as" ref_name | "::" tail)? [hiding_clause]
-use_decl    ::= "use" use_target ("::" tail | "as" ref_name)? [hiding_clause]
+use_decl    ::= "use" use_target ("::" tail | "as" ref_name) [hiding_clause]
 export_decl ::= "export" module_path ["/*"] ["::" braces] [hiding_clause]
 
 tail          ::= "*" | braces | path_atom ["as" ref_name]
 braces        ::= "{" brace_item ("," brace_item)* "}"
 brace_item    ::= path_atom ["as" ref_name]
-use_target    ::= ["/"] qualifier_path
+use_target    ::= ("/" | "::")? qualifier_path
 module_path   ::= NAME ("/" NAME)*    (* byte-adjacent, as is a trailing "/*" *)
 qualifier_path ::= NAME ("/" NAME)* ("::" NAME)*
 ref_name      ::= name
@@ -108,7 +108,11 @@ path_atom     ::= NAME ("::" NAME)*
 
 `"import"`, `"use"`, and `"export"` are contextual at item start when they
 begin their declaration form. `"hiding"` is contextual within those headers.
-They remain valid identifiers elsewhere.
+They remain valid identifiers elsewhere. An import alias and a tail are
+exclusive. Braces cannot be empty or nested, cannot contain `*`, and cannot
+be combined with `hiding`. `hiding` is valid on a plain import, an import glob,
+a module wildcard import, or a use glob. An export accepts brace tails but not
+`::*`.
 
 Examples:
 
@@ -124,6 +128,7 @@ import foo/bar/* as A
 export foo/bar::{x as X, y}
 export foo/bar/* hiding internal
 use Point::{distance as d}
+use ::Scope::*
 ```
 
 ### Suites (indented blocks)

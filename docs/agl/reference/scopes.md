@@ -138,7 +138,7 @@ items, like `use`: they must precede the region's other items. A scoped
 import tail's bare contribution narrows to its own region; its qualifier
 route stays available module-wide, like any other import. A scoped export
 re-roots every atom it forwards under the region's own path. See
-[Modules](modules.md#import-and-export-inside-a-scope-region) for the
+[Modules](modules.md#imports-and-use-inside-a-scope-region) for the
 complete semantics.
 
 Scoped bindings are never exported. Library modules may use root or scoped
@@ -255,8 +255,9 @@ methods are declared only on records, enums, and exceptions.
 The familiar bare-variant spelling remains available when it is unambiguous or
 selected by the expected enum type. Module-root record and exception
 construction keeps its bare type spelling (`Point(...)`); a scoped type is
-constructed through its full path or after opening its enclosing scope. A scope
-path is a route, not a type qualifier, so a scoped generic constructor takes
+constructed through its full path or after a `use` declaration selects its
+containing scope. A scope path is a route, not a type qualifier, so a scoped
+generic constructor takes
 explicit type arguments on the constructor just as an unqualified one does
 (`A::Pair::[int]`); only a variant qualified by its owning enum puts them on the
 type (`Option[int]::some`).

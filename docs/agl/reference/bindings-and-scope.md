@@ -304,9 +304,10 @@ program def main() -> unit =
 ```
 
 An engine setting is an ordinary mutable binding in another module, so an
-assignment target names it exactly as a read does: a qualifier always works, and
-a bare name works whenever an import tail or use contributes it, so the name is in scope
-unqualified. When the host supplies no initial value, the declared default is
+assignment target names it exactly as a read does: a qualifier always works,
+and an import tail or `use` declaration can contribute a bare name. See
+[Modules](modules.md) for import and `use` contributions. When the host
+supplies no initial value, the declared default is
 used; a host seed wins over it. A write takes effect from its program point
 onward, exactly like any `var` mutation. The `Option[text]` settings
 are set with `Some("…")` or `None`.

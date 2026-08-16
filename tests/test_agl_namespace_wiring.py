@@ -329,6 +329,25 @@ def test_unbraced_single_member_use_tail_can_be_renamed(tmp_path: Path) -> None:
     check_program(resolve_program(graph), base_caps())
 
 
+def test_local_use_can_expose_empty_nested_scope(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use Outer::{Empty}\n"
+                "use Empty::*\n"
+                "scope Outer\n"
+                "scope Empty\n"
+                "end Empty\n"
+                "end Outer\n"
+                "()\n"
+            ),
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
 def test_single_member_alias_can_follow_local_scope_alias(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,

@@ -202,6 +202,13 @@ _LET_PATTERN_POLICY = _PatternResolutionPolicy(
 
 
 @dataclass(frozen=True, slots=True)
+class _LocalScopeRoute:
+    """Identity of a nested local scope exposed through ``use``."""
+
+    path: ScopePath
+
+
+@dataclass(frozen=True, slots=True)
 class _ImportedUseContribution:
     """One imported surface exposed by a resolved ``use`` in a lexical region."""
 
@@ -2127,11 +2134,7 @@ class _Resolver:
                 selected = self._select_use_members(
                     contribution.declaration, source_members, validate=False
                 )
-                exposed_members: list[tuple[NameAtom, BindingRef]] = [
-                    (exposed, source)
-                    for exposed, source in selected.items()
-                    if isinstance(source, BindingRef)
-                ]
+                exposed_members = list(selected.items())
                 exposed_members.extend(
                     self._use_renamed_members(contribution.declaration, source_members)
                 )
@@ -2139,7 +2142,11 @@ class _Resolver:
                     exposed_path = _bare_path(exposed)
                     if exposed_path[: len(target)] != target:
                         continue
-                    source_path = (*source.scope_path, source.name)
+                    source_path = (
+                        source.path
+                        if isinstance(source, _LocalScopeRoute)
+                        else (*source.scope_path, source.name)
+                    )
                     trailing_length = len(exposed_path) - len(target)
                     candidate = (
                         source_path if trailing_length == 0 else source_path[:-trailing_length]
@@ -2158,13 +2165,17 @@ class _Resolver:
             layer = layer.parent
         return None
 
-    def _local_use_members(self, target: ScopePath) -> dict[NameAtom, BindingRef]:
-        """Expose one local scope subtree relative to its selected root."""
-        members: dict[NameAtom, BindingRef] = {}
+    def _local_use_members(
+        self, target: ScopePath
+    ) -> dict[NameAtom, BindingRef | _LocalScopeRoute]:
+        """Expose one local scope subtree and its nested scope identities."""
+        members: dict[NameAtom, BindingRef | _LocalScopeRoute] = {}
         for path, scope in self._scope_nodes.items():
             if path[: len(target)] != target:
                 continue
             relative = path[len(target) :]
+            if relative:
+                members[_bare_atom(relative)] = _LocalScopeRoute(path)
             for name, ref in scope.members.items():
                 members[_bare_atom((*relative, name))] = ref
         return members
@@ -2185,12 +2196,14 @@ class _Resolver:
                         scope.contribute_bare_constructor(exposed, constructor)
 
                 for exposed, source in selected.items():
-                    contribute(exposed, cast(BindingRef, source))
+                    if isinstance(source, BindingRef):
+                        contribute(exposed, source)
                 for exposed, source in self._use_renamed_members(
                     contribution.declaration,
                     self._local_use_members(contribution.source.scope_path),
                 ):
-                    contribute(exposed, source)
+                    if isinstance(source, BindingRef):
+                        contribute(exposed, source)
 
     def _contribute_use_facade_members(
         self,
@@ -2222,14 +2235,12 @@ class _Resolver:
         selected_scope_routes = self._select_use_members(decl, scope_routes, validate=False)
         scope = self._current_scope()
         exposed_scope_routes = {
-            atom: cast(BareRoute, route)
-            for atom, route in selected_scope_routes.items()
-            if _bare_path(atom)
+            atom: route for atom, route in selected_scope_routes.items() if _bare_path(atom)
         }
         if exposed_scope_routes:
             self._imported_use_contributions.setdefault(scope.node_id, []).append(
                 _ImportedUseContribution(
-                    members={atom: cast(QName, qname) for atom, qname in selected.items()},
+                    members=dict(selected),
                     scope_routes=exposed_scope_routes,
                 )
             )
@@ -2240,9 +2251,8 @@ class _Resolver:
             if constructor is not None:
                 scope.contribute_bare_constructor(exposed, constructor)
 
-        selected_qnames = frozenset(cast(QName, source) for source in selected.values())
-        for exposed, source in selected.items():
-            qname = cast(QName, source)
+        selected_qnames = frozenset(selected.values())
+        for exposed, qname in selected.items():
             contribute(exposed, qname)
             if isinstance(exposed, str):
                 self._contribute_regional_enum_variants(
@@ -2268,10 +2278,10 @@ class _Resolver:
     def _select_use_members(
         self,
         decl: UseDecl,
-        members: Mapping[NameAtom, BindingRef | QName],
+        members: Mapping[NameAtom, _T],
         *,
         validate: bool = True,
-    ) -> dict[NameAtom, BindingRef | QName]:
+    ) -> dict[NameAtom, _T]:
         """Apply a use tail, hiding clause, or additive route alias to members."""
 
         def matching(item: ImportItem) -> tuple[NameAtom, ...]:
@@ -2289,7 +2299,7 @@ class _Resolver:
                 _bare_atom((decl.alias, *_bare_path(atom))): source
                 for atom, source in members.items()
             }
-        selected: dict[NameAtom, BindingRef | QName] = {}
+        selected: dict[NameAtom, _T] = {}
         if decl.tail == ():
             selected.update(members)
         else:

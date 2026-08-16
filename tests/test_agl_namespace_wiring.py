@@ -537,6 +537,94 @@ def test_inner_use_shadows_root_import_and_use_contributions(tmp_path: Path) -> 
     check_program(resolve_program(graph), base_caps())
 
 
+_BARE_TYPE_USES = [
+    ("record R(value: text)\n", "def identity(value: R) -> R = value\n"),
+    ("record R(value: text)\n", 'let decoded = "{\\"value\\":\\"ok\\"}" as R\n'),
+    ("record R[A](value: A)\n", "def identity(value: R[int]) -> R[int] = value\n"),
+    ("record R[A](value: A)\n", 'let decoded = "{\\"value\\":1}" as R[int]\n'),
+]
+
+
+@pytest.mark.parametrize(("declaration", "type_use"), _BARE_TYPE_USES)
+def test_root_use_and_import_tail_type_collision_is_ambiguous(
+    tmp_path: Path, declaration: str, type_use: str
+) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": ("import lib::*\nuse S::*\nscope S\n" + declaration + "end S\n" + type_use),
+            "lib": declaration,
+        },
+    )
+
+    with pytest.raises(AglTypeError, match="Ambiguous type"):
+        check_program(resolve_program(graph), base_caps())
+
+
+@pytest.mark.parametrize(("declaration", "type_use"), _BARE_TYPE_USES)
+def test_root_use_and_import_tail_type_routes_deduplicate_same_origin(
+    tmp_path: Path, declaration: str, type_use: str
+) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import lib::*\nuse lib::*\n" + type_use,
+            "lib": declaration,
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+@pytest.mark.parametrize(("declaration", "type_use"), _BARE_TYPE_USES)
+def test_regional_use_type_shadows_root_import_tail(
+    tmp_path: Path, declaration: str, type_use: str
+) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import lib::*\n"
+                "import selected\n"
+                "scope Inner\n"
+                "use selected::*\n" + type_use + "end Inner\n"
+            ),
+            "lib": declaration,
+            "selected": declaration,
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_resolve_named_type_rejects_root_use_and_import_tail_collision(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": ("import lib::*\nuse S::*\nscope S\nrecord R(value: text)\nend S\n"),
+            "lib": "record R(value: int)\n",
+        },
+    )
+
+    checked = check_program(resolve_program(graph), base_caps())
+
+    assert checked.modules[graph.entry_id].type_env.resolve_named_type("R") is None
+
+
+def test_resolve_named_type_deduplicates_root_routes_to_same_origin(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import lib::*\nuse lib::*\n",
+            "lib": "record R(value: int)\n",
+        },
+    )
+
+    checked = check_program(resolve_program(graph), base_caps())
+
+    assert checked.modules[graph.entry_id].type_env.resolve_named_type("R") is not None
+
+
 def test_use_can_target_local_scope_exposed_by_an_earlier_use(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,

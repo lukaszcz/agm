@@ -498,6 +498,25 @@ class ScopeNode:
         }
 
 
+def resolve_bare_contribution_layer(
+    scope: ScopeNode,
+    name: BareAtom,
+    scope_nodes: Mapping[ScopePath, ScopeNode],
+    *,
+    predicate: Callable[[BindingRef], bool] | None = None,
+) -> tuple[ScopeNode, set[BindingRef]] | None:
+    """Return the nearest region and its bare candidates in one namespace."""
+    del scope_nodes
+    layer: ScopeNode | None = scope
+    while layer is not None:
+        stored = layer.bare_contributions.get(name, ())
+        selected = set(stored) if predicate is None else {ref for ref in stored if predicate(ref)}
+        if selected:
+            return layer, selected
+        layer = layer.parent
+    return None
+
+
 def resolve_bare_contribution(
     scope: ScopeNode,
     name: BareAtom,
@@ -506,15 +525,8 @@ def resolve_bare_contribution(
     predicate: Callable[[BindingRef], bool] | None = None,
 ) -> set[BindingRef] | None:
     """Return the nearest region's bare candidates for *name* in one namespace."""
-    del scope_nodes
-    layer: ScopeNode | None = scope
-    while layer is not None:
-        stored = layer.bare_contributions.get(name, ())
-        selected = set(stored) if predicate is None else {ref for ref in stored if predicate(ref)}
-        if selected:
-            return selected
-        layer = layer.parent
-    return None
+    resolved = resolve_bare_contribution_layer(scope, name, scope_nodes, predicate=predicate)
+    return None if resolved is None else resolved[1]
 
 
 # ---------------------------------------------------------------------------

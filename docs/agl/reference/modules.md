@@ -100,7 +100,9 @@ use library as Alias
 
 `use Scope::*` contributes every member of `Scope` bare. A braced or
 single-atom tail selects members, and item renames add renamed bare paths.
-`use Scope as Alias` and `use library as Alias` contribute every selected
+When `use Scope::member as Alias` ends at an ordinary member, it is the
+single-item rename; when the complete path names a scope, it is a whole-target
+alias. `use Scope as Alias` and `use library as Alias` contribute every selected
 member beneath `Alias`. `hiding` is valid only with a `::*` tail. A `use` declaration contributes names
 only to its enclosing module or named scope region; it does not make a module
 available. Import the module first when its target is not local.

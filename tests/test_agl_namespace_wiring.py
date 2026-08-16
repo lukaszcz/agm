@@ -187,6 +187,23 @@ def test_type_use_lookup_continues_past_inner_value_contribution(tmp_path: Path)
     check_program(resolve_program(graph), base_caps())
 
 
+def test_unbraced_single_member_use_tail_can_be_renamed(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use Scope::member as Alias\n"
+                "scope Scope\n"
+                "def member() -> int = 1\n"
+                "end Scope\n"
+                "Alias()\n"
+            ),
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
 def test_inner_use_shadows_root_import_and_use_contributions(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,

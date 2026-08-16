@@ -1676,6 +1676,7 @@ class _Resolver:
 
     def _resolve_use_decl(self, decl: UseDecl) -> None:
         """Inject the selected members of one already-nameable route bare."""
+        decl = self._reinterpret_single_member_use_alias(decl)
         target = tuple(segment.name for segment in decl.target)
         local = self._use_local_target(decl, target)
         route = () if decl.current_module else tuple(target[0].split("/"))
@@ -1734,6 +1735,49 @@ class _Resolver:
             return
         _imported_route, imported_members = imported[0]
         self._contribute_use_members(decl, imported_members)
+
+    def _reinterpret_single_member_use_alias(self, decl: UseDecl) -> UseDecl:
+        """Disambiguate ``use Scope::member as Alias`` from a whole-target alias."""
+        if decl.alias is None or len(decl.target) < 2:
+            return decl
+        target = tuple(segment.name for segment in decl.target)
+        parent = target[:-1]
+        member = target[-1]
+        ordinary = False
+        if not decl.anchored or decl.current_module:
+            bases = [()] if decl.current_module else self._scope_bases_for_use()
+            ordinary = any(
+                (scope := self._scope_nodes.get(base + parent)) is not None
+                and member in scope.members
+                and base + target not in self._scope_nodes
+                for base in bases
+            )
+        if not ordinary and not decl.current_module:
+            route = tuple(target[0].split("/"))
+            source = _bare_atom(target[1:])
+            ordinary = any(
+                (qname := members.get(source)) is not None
+                and qname not in self._cross_module_type_scopes
+                for _module, members in qualifier_members(
+                    self._import_env, route, anchored=decl.anchored
+                )
+            )
+        if not ordinary and not decl.anchored:
+            exposed = _bare_atom(target)
+            ordinary = any(
+                qname not in self._cross_module_type_scopes
+                for qname in self._import_env.unqualified.get(exposed, ())
+            )
+        if not ordinary:
+            return decl
+        segment = decl.target[-1]
+        selected = ImportItem(
+            name=segment.name,
+            rename=decl.alias,
+            span=segment.span,
+            node_id=segment.node_id,
+        )
+        return replace(decl, target=decl.target[:-1], tail=(selected,), alias=None)
 
     @staticmethod
     def _relative_use_import_members(

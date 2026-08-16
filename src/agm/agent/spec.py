@@ -57,7 +57,26 @@ class AgentClaude:
 
     def argv(self) -> list[str]:
         """Build the argv for a one-shot Claude prompt invocation."""
-        return ["claude", "-p", *_flag("--model", self.model), *_flag("--effort", self.thinking)]
+        return ["claude", "-p", *_claude_options(self.model, self.thinking)]
+
+    def session_argv(
+        self,
+        session_id: str,
+        *,
+        resume: bool = False,
+        fork: bool = False,
+        json_output: bool = False,
+        name: str = "",
+    ) -> list[str]:
+        """Build a Claude prompt argv for an existing or newly named session."""
+        command = ["claude", "-p", "--resume" if resume else "--session-id", session_id]
+        if fork:
+            command.append("--fork-session")
+        if json_output:
+            command.extend(("--output-format", "json"))
+        if name:
+            command.extend(("-n", name))
+        return [*command, *_claude_options(self.model, self.thinking)]
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,11 +98,23 @@ class AgentCodex:
 
     def argv(self) -> list[str]:
         """Build the argv for a one-shot Codex prompt invocation, reading stdin."""
-        command = ["codex", "exec", *_flag("--model", self.model)]
-        if self.thinking:
-            command.extend(("-c", f"model_reasoning_effort={self.thinking}"))
-        command.append("-")
-        return command
+        return self._exec_argv()
+
+    def session_argv(self, session_id: str | None = None) -> list[str]:
+        """Build the argv that starts or resumes a Codex CLI session."""
+        command = ["codex", "exec"]
+        if session_id is None:
+            command.append("--json")
+        else:
+            command.extend(("resume", session_id))
+        return self._exec_argv(command)
+
+    def _exec_argv(self, command: list[str] | None = None) -> list[str]:
+        """Add this specification's model settings and stdin marker to *command*."""
+        result = command or ["codex", "exec"]
+        result.extend(_codex_options(self.model, self.thinking))
+        result.append("-")
+        return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,13 +130,18 @@ class AgentPi:
 
     def argv(self) -> list[str]:
         """Build the argv for a one-shot Pi prompt invocation."""
-        return [
-            "pi",
-            "-p",
-            *_flag("--provider", self.provider),
-            *_flag("--model", self.model),
-            *_flag("--thinking", self.thinking),
-        ]
+        return ["pi", "-p", *_pi_options(self.provider, self.model, self.thinking)]
+
+    def session_argv(
+        self, session_id: str, *, fork_from: str | None = None, name: str = ""
+    ) -> list[str]:
+        """Build the argv for a Pi prompt in a named or forked CLI session."""
+        command = ["pi", "-p", "--session-id", session_id]
+        if fork_from is not None:
+            command.extend(("--fork", fork_from))
+        if name:
+            command.extend(("--name", name))
+        return [*command, *_pi_options(self.provider, self.model, self.thinking)]
 
 
 AgentSpec: TypeAlias = AgentCommand | AgentClaude | AgentCodex | AgentPi
@@ -119,6 +155,28 @@ AGENT_SPECS: Mapping[str, type[AgentSpec]] = MappingProxyType(
         "AgentPi": AgentPi,
     }
 )
+
+
+def _claude_options(model: str, thinking: str) -> list[str]:
+    """Build the model settings shared by Claude one-shot and session runs."""
+    return [*_flag("--model", model), *_flag("--effort", thinking)]
+
+
+def _codex_options(model: str, thinking: str) -> list[str]:
+    """Build the model settings shared by Codex one-shot and session runs."""
+    options = [*_flag("--model", model)]
+    if thinking:
+        options.extend(("-c", f"model_reasoning_effort={thinking}"))
+    return options
+
+
+def _pi_options(provider: str, model: str, thinking: str) -> list[str]:
+    """Build the model settings shared by Pi one-shot and session runs."""
+    return [
+        *_flag("--provider", provider),
+        *_flag("--model", model),
+        *_flag("--thinking", thinking),
+    ]
 
 
 def _flag(flag: str, value: str) -> tuple[str, ...]:

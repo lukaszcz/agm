@@ -428,8 +428,9 @@ def run_capture(
     timeout_callback: Callable[[str], None] | None = None,
     isolate_process_group: bool = False,
     idle_timeout: float | None = None,
+    stdin_text: str | None = None,
 ) -> tuple[int, str, str]:
-    """Run a command and capture stdout/stderr.
+    """Run a command, optionally supplying *stdin_text*, and capture stdout/stderr.
 
     This is a compatibility adapter over :func:`_run_capture_result_impl`. On idle-timeout
     it reports a diagnostic through *timeout_callback* (or stderr when omitted) and raises
@@ -452,6 +453,7 @@ def run_capture(
         interrupt_cleanup_cmd=interrupt_cleanup_cmd,
         stdout_callback=stdout_callback,
         stderr_callback=stderr_callback,
+        stdin_text=stdin_text,
     )
     if spawn_exc is not None:
         raise spawn_exc

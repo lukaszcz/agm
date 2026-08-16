@@ -188,7 +188,7 @@ parenthesized — `try (fn(x: int) -> int => x) catch _ => 0` — which restores
 the marker.
 
 A `=>` body holds a single `closed_item` — no `;`, no binder, and none of the
-open forms whose own branch lists would swallow the enclosing form's
+right-extending forms whose own branch lists would swallow the enclosing form's
 continuation.
 
 This is not a special restriction on `;`. Within a block, `;` and a newline
@@ -743,14 +743,14 @@ not permitted inside `%{…}`.
   call — the two are syntactically unified.
 - Inline branch and `catch` bodies hold a single *closed* item — `or_expr`,
   `:=`, `raise`, or `return`. They admit neither a `;` sequence nor a binder,
-  nor the *open* forms (`case`, `if`, `try`, a loop) or a lambda, whose body is
+  nor the *right-extending* forms (`case`, `if`, `try`, a loop) or a lambda, whose body is
   itself an `expr`: those would extend rightwards into the enclosing branch
   list's `|` / `else` / `catch`. Write them as a suite or parenthesize them
   (see [Inline bodies](#inline-bodies)).
-- `until` conditions reference `or_expr` directly, so an open form there must
+- `until` conditions reference `or_expr` directly, so a right-extending form there must
   be parenthesized.
 - Bodies whose end is marked by a token — a parenthesized block, a loop body,
   a `try` body — take a full `;` sequence; loop bodies additionally admit the
-  open forms, because the loop terminator closes the body.
+  right-extending forms, because the loop terminator closes the body.
 - A `return` followed by a newline is a bare `return`; its operand does not
   continue onto the next line.

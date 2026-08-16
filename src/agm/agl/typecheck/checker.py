@@ -4878,46 +4878,62 @@ class _Checker:
         pattern: ConstructorPattern,
         owner_type: RecordType | EnumType,
     ) -> ConstructorRef | None:
-        """Select the scope-published candidate matching this exact nominal constructor.
+        """Select the unique scope-published constructor for this exact nominal owner.
 
         Candidate owner names retain the spelling written by the user, including
         aliases. ``match_source_type_qname`` resolves that spelling transparently
-        and matches its full nominal template against the concrete scrutinee, so
-        the first owner match is the selection. Every published candidate
-        carries the exact variant it was declared for — a nominal alias whose
-        chain resolves to an enum publishes no candidate of its own (see
-        ``alias_denotes_constructible_type``) — so an owner match is also a
-        variant match.
+        and matches its full nominal template against the concrete scrutinee.
+        Owner matching disambiguates same-spelled constructors from different
+        enums, but distinct variants of that owner cannot share one pattern alias.
         """
         candidates = self._resolved.pattern_constructor_candidates.get(
             pattern.node_id, self._resolved.constructor_candidates.get(pattern.name, ())
         )
-        for candidate in candidates:
-            if (
-                self._env.match_source_type_qname(
-                    candidate.owner_module_id,
-                    candidate.owner_name,
-                    owner_type,
-                    scope_path=candidate.owner_path,
-                )
-                is not None
-            ):
-                return candidate
-        return None
+        matching = tuple(
+            candidate
+            for candidate in candidates
+            if self._env.match_source_type_qname(
+                candidate.owner_module_id,
+                candidate.owner_name,
+                owner_type,
+                scope_path=candidate.owner_path,
+            )
+            is not None
+        )
+        return self._unique_pattern_constructor(pattern.name, pattern.span, owner_type, matching)
+
+    @staticmethod
+    def _unique_pattern_constructor(
+        name: str,
+        span: SourceSpan,
+        owner_type: RecordType | EnumType,
+        candidates: tuple[ConstructorRef, ...],
+    ) -> ConstructorRef | None:
+        """Return one candidate unless it denotes multiple constructors of *owner_type*."""
+        if len({candidate.variant for candidate in candidates}) > 1:
+            raise AglTypeError(
+                f"Constructor pattern '{name}' is ambiguous for '{owner_type!r}'.",
+                span=span,
+            )
+        return candidates[0] if candidates else None
 
     def _candidate_for_field_type(
         self, pattern: VarPattern, field_type: Type
     ) -> ConstructorRef | None:
-        """Return the candidate spelling that belongs to this enum field, if any."""
+        """Return the unique candidate spelling that belongs to this enum field, if any."""
         if not isinstance(field_type, EnumType):
             return None
         if self._resolved.pattern_constructor_spellings.get(pattern.node_id) != pattern.name:
             return None
-        for candidate in self._resolved.pattern_constructor_candidates.get(pattern.node_id, ()):
-            variant = candidate.variant if candidate.variant is not None else pattern.name
-            if candidate.matches(field_type, variant):
-                return candidate
-        return None
+        matching = tuple(
+            candidate
+            for candidate in self._resolved.pattern_constructor_candidates.get(pattern.node_id, ())
+            if candidate.matches(
+                field_type,
+                candidate.variant if candidate.variant is not None else pattern.name,
+            )
+        )
+        return self._unique_pattern_constructor(pattern.name, pattern.span, field_type, matching)
 
     def _check_top_level_bare_constructor(self, pattern: VarPattern, subj_type: Type) -> None:
         """Finalize a top-level bare pattern as a nullary enum constructor."""

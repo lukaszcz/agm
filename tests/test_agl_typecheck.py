@@ -5894,6 +5894,42 @@ class TestConstructorRefDispatch:
         )
         assert r.resolved.program is not None
 
+    def test_bare_variant_pattern_aliasing_distinct_variants_of_owner_is_ambiguous(self) -> None:
+        err = reject_type(
+            "use S::{E::A as X, E::B as X}\n"
+            "scope S\n"
+            "enum E | A | B\n"
+            "end S\n"
+            "let value = S::E::A\n"
+            "case value of | X => 1 | _ => 0"
+        )
+        assert "ambiguous" in str(err).lower()
+
+    def test_applied_variant_pattern_aliasing_distinct_variants_of_owner_is_ambiguous(
+        self,
+    ) -> None:
+        err = reject_type(
+            "use S::{E::A as X, E::B as X}\n"
+            "scope S\n"
+            "enum E | A(value: int) | B(value: int)\n"
+            "end S\n"
+            "let value = S::E::A(value = 1)\n"
+            "case value of | X(value = _) => 1 | _ => 0"
+        )
+        assert "ambiguous" in str(err).lower()
+
+    def test_applied_variant_pattern_alias_is_disambiguated_by_enum_owner(self) -> None:
+        result = accept_type(
+            "use S::{First::A as X, Second::B as X}\n"
+            "scope S\n"
+            "enum First | A(value: int)\n"
+            "enum Second | B(value: int)\n"
+            "end S\n"
+            "let value = S::First::A(value = 1)\n"
+            "case value of | X(value = _) => 1"
+        )
+        assert result.resolved.program is not None
+
     def test_bare_variant_pattern_wrong_enum_rejected(self) -> None:
         # 'Green' is only a Shade variant; on a Color scrutinee no candidate
         # belongs to the scrutinee's enum, so the bare pattern is rejected.

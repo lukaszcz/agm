@@ -72,7 +72,6 @@ from agm.agl.ir.nodes import (
     IrConvert,
     IrCopyValue,
     IrDirectCall,
-    IrEnumCaseKey,
     IrExec,
     IrExpr,
     IrField,
@@ -99,6 +98,8 @@ from agm.agl.ir.nodes import (
     IrMakeJsonArray,
     IrMakeJsonObject,
     IrMakeRecord,
+    IrNominalCaseKey,
+    IrNominalIs,
     IrOr,
     IrParseJson,
     IrPrint,
@@ -113,7 +114,6 @@ from agm.agl.ir.nodes import (
     IrTry,
     IrUnary,
     IrUpdateRecord,
-    IrVariantIs,
     UseDefault,
 )
 from agm.agl.ir.operations import (
@@ -151,13 +151,12 @@ from agm.agl.matchcompile import (
     DecisionDecompose,
     DecisionLeaf,
     DecisionSwitch,
-    EnumConstructor,
     FieldOccurrenceProvenance,
     LetSite,
     LiteralKind,
+    NominalConstructor,
     Occurrence,
     OccurrenceId,
-    RecordConstructor,
 )
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId, spell_scope_path
 from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
@@ -307,7 +306,9 @@ def _add_builtin_nominals(
             kind=NominalKind.ENUM,
             fields=(),
             variants=tuple(
-                VariantDescriptor(vname, tuple(type_table.record_fields(member)))
+                VariantDescriptor(
+                    vname, tuple(type_table.record_fields(member)), NominalId(member.decl_id)
+                )
                 for vname, member in type_table.enum_member_names(enum_type).items()
             ),
         )
@@ -1376,10 +1377,10 @@ class _Lowerer:
                 assert isinstance(operand_type, EnumType), (
                     "is-test operand must be enum-typed (checker guarantees this)"
                 )
-                return IrVariantIs(
+                member = self._type_table.enum_member_names(operand_type)[variant]
+                return IrNominalIs(
                     location=self._loc(span),
-                    nominal=NominalId(operand_type.decl_id),
-                    variant=variant,
+                    nominal=NominalId(member.decl_id),
                     value=self.lower_expr(operand),
                     negated=negated,
                 )
@@ -3025,15 +3026,10 @@ class _Lowerer:
             return symbol
 
         def case_key(constructor: Constructor) -> IrCaseKey:
-            if isinstance(constructor, EnumConstructor):
-                return IrEnumCaseKey(
-                    NominalId(constructor.enum_type.decl_id),
-                    constructor.variant,
-                )
+            if isinstance(constructor, NominalConstructor):
+                return IrNominalCaseKey(NominalId(constructor.record_type.decl_id))
             if isinstance(constructor, BoolConstructor):
                 return IrLiteralCaseKey(IrLiteralKind.BOOL, constructor.value)
-            if isinstance(constructor, RecordConstructor):
-                raise AssertionError("compiler bug: records must lower through DecisionDecompose")
             if constructor.kind is LiteralKind.NUMERIC:
                 assert isinstance(constructor.value, decimal.Decimal)
                 return IrLiteralCaseKey(IrLiteralKind.NUMERIC, constructor.value)
@@ -3053,7 +3049,7 @@ class _Lowerer:
 
         def demanded_children(
             parent: OccurrenceId,
-            constructor: EnumConstructor | RecordConstructor,
+            constructor: NominalConstructor,
             demanded: tuple[OccurrenceId, ...],
         ) -> tuple[Occurrence, ...]:
             """Return demanded child occurrences in stable declaration order."""
@@ -3064,15 +3060,11 @@ class _Lowerer:
 
         def projection_bindings(
             parent: OccurrenceId,
-            constructor: EnumConstructor | RecordConstructor,
+            constructor: NominalConstructor,
             demanded: tuple[OccurrenceId, ...],
         ) -> tuple[IrBind, ...]:
             """Project demanded nominal fields into their occurrence symbols."""
-            nominal = (
-                NominalId(constructor.enum_type.decl_id)
-                if isinstance(constructor, EnumConstructor)
-                else NominalId(constructor.record_type.decl_id)
-            )
+            nominal = NominalId(constructor.record_type.decl_id)
             return tuple(
                 IrBind(
                     location,
@@ -3127,7 +3119,7 @@ class _Lowerer:
                 for decision_branch in decision.keyed_children:
                     constructor = decision_branch.constructor
                     branch_child = decision_branch.decision
-                    if isinstance(constructor, (EnumConstructor, RecordConstructor)):
+                    if isinstance(constructor, NominalConstructor):
                         field_bindings = tuple(
                             (occurrence.provenance.field_name, symbol_for_occurrence(occurrence.id))
                             for occurrence in demanded_children(

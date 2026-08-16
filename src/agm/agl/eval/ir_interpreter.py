@@ -67,7 +67,6 @@ from agm.agl.ir.nodes import (
     IrConvert,
     IrCopyValue,
     IrDirectCall,
-    IrEnumCaseKey,
     IrExec,
     IrExpr,
     IrField,
@@ -93,6 +92,8 @@ from agm.agl.ir.nodes import (
     IrMakeJsonArray,
     IrMakeJsonObject,
     IrMakeRecord,
+    IrNominalCaseKey,
+    IrNominalIs,
     IrOr,
     IrParseJson,
     IrPrint,
@@ -107,7 +108,6 @@ from agm.agl.ir.nodes import (
     IrTry,
     IrUnary,
     IrUpdateRecord,
-    IrVariantIs,
     UseDefault,
 )
 from agm.agl.ir.operations import (
@@ -125,6 +125,7 @@ from agm.agl.ir.program import (
     FunctionDescriptor,
     IrFunctionBody,
     IrParam,
+    NominalKind,
 )
 from agm.agl.ir.validate import InvalidIrError
 from agm.agl.modules.ids import ModuleId
@@ -303,7 +304,11 @@ def _make_literal_key_value(key: IrLiteralCaseKey) -> Value:
 
 
 def _project_nominal_field(
-    value: Value, nominal: NominalId, field: str, mode: IrFieldMode
+    value: Value,
+    nominal: NominalId,
+    field: str,
+    mode: IrFieldMode,
+    actual_nominal: NominalId | None,
 ) -> Value:
     """Read one declared field from a nominal runtime value.
 
@@ -320,9 +325,9 @@ def _project_nominal_field(
         )
     match mode:
         case IrFieldMode.EXACT:
-            if value.nominal != nominal:
+            if actual_nominal != nominal:
                 raise InvalidIrError(
-                    f"IrField: expected nominal {nominal!r}, got {value.nominal!r}"
+                    f"IrField: expected nominal {nominal!r}, got {actual_nominal!r}"
                 )
         case IrFieldMode.UPPER_BOUND:
             pass
@@ -1110,6 +1115,27 @@ class IrInterpreter:
     # Expression evaluator (closed IrExpr dispatch)
     # ------------------------------------------------------------------
 
+    def _dispatch_nominal(self, value: RecordValue | EnumValue | ExceptionValue) -> NominalId:
+        """Resolve an enum's linked member-record identity for nominal dispatch."""
+        if not isinstance(value, EnumValue):
+            return value.nominal
+        descriptor = self._program.nominals.get(value.nominal)
+        if descriptor is None or descriptor.kind is not NominalKind.ENUM:
+            raise InvalidIrError(
+                f"enum value references non-enum nominal {value.nominal!r} in program descriptors"
+            )
+        variant = next((item for item in descriptor.variants if item.name == value.variant), None)
+        if variant is None:
+            raise InvalidIrError(
+                f"enum value references variant {value.variant!r} absent from {value.nominal!r}"
+            )
+        member = self._program.nominals.get(variant.member)
+        if member is None or member.kind is not NominalKind.RECORD:
+            raise InvalidIrError(
+                f"enum variant {value.variant!r} links non-record member {variant.member!r}"
+            )
+        return variant.member
+
     def _eval(self, node: IrExpr) -> Value:
         """Evaluate *node* in the current frame and return its value.
 
@@ -1349,7 +1375,13 @@ class IrInterpreter:
                         assert_never(_unreachable_unary)
 
             case IrField(value=val_expr, nominal=nominal, field=field_name, mode=mode):
-                return _project_nominal_field(self._eval(val_expr), nominal, field_name, mode)
+                value = self._eval(val_expr)
+                member = (
+                    self._dispatch_nominal(value)
+                    if isinstance(value, (RecordValue, EnumValue, ExceptionValue))
+                    else None
+                )
+                return _project_nominal_field(value, nominal, field_name, mode, member)
 
             case IrUpdateRecord(value=val_expr, updates=updates):
                 target = self._eval(val_expr)
@@ -1406,7 +1438,10 @@ class IrInterpreter:
                 )
 
             case IrMakeEnum(
-                nominal=nominal, display_name=display_name, variant=variant, fields=fields
+                nominal=nominal,
+                display_name=display_name,
+                variant=variant,
+                fields=fields,
             ):
                 enum_fields: dict[str, Value] = {
                     fname: self._eval(fexpr) for fname, fexpr in fields
@@ -1435,13 +1470,13 @@ class IrInterpreter:
                     variant=variant,
                 )
 
-            case IrVariantIs(variant=variant, value=val_expr, negated=negated):
+            case IrNominalIs(nominal=nominal, value=val_expr, negated=negated):
                 value = self._eval(val_expr)
-                if not isinstance(value, EnumValue):
+                if not isinstance(value, (RecordValue, EnumValue, ExceptionValue)):
                     raise InvalidIrError(
-                        f"IrVariantIs: value is not EnumValue, got {type(value).__name__}"
+                        f"IrNominalIs: value is not nominal, got {type(value).__name__}"
                     )
-                return BoolValue((value.variant == variant) != negated)
+                return BoolValue((self._dispatch_nominal(value) == nominal) != negated)
 
             case IrConvert(value=val_expr, recipe=recipe, failure_mode=failure_mode):
                 source_value = self._eval(val_expr)
@@ -1514,28 +1549,27 @@ class IrInterpreter:
                 subject_val = self._eval(subject_expr)
                 for arm in arms:
                     key = arm.key
-                    if isinstance(key, IrEnumCaseKey):
-                        selected = (
-                            isinstance(subject_val, EnumValue)
-                            and subject_val.nominal == key.nominal
-                            and subject_val.variant == key.variant
-                        )
+                    if isinstance(key, IrNominalCaseKey):
+                        selected = isinstance(
+                            subject_val, (RecordValue, EnumValue, ExceptionValue)
+                        ) and (self._dispatch_nominal(subject_val) == key.nominal)
                     else:
                         selected = value_eq(subject_val, _literal_key_value(key))
                     if not selected:
                         continue
                     if arm.field_bindings:
-                        if not isinstance(subject_val, EnumValue):
+                        if not isinstance(subject_val, (RecordValue, EnumValue, ExceptionValue)):
                             raise InvalidIrError(
-                                "IrCase: selected payload arm for a non-enum subject"
+                                "IrCase: selected payload arm for a non-nominal subject"
                             )
-                        assert isinstance(key, IrEnumCaseKey)
+                        assert isinstance(key, IrNominalCaseKey)
                         for field_name, symbol in arm.field_bindings:
                             self._frame[symbol] = _project_nominal_field(
                                 subject_val,
                                 key.nominal,
                                 field_name,
                                 IrFieldMode.EXACT,
+                                self._dispatch_nominal(subject_val),
                             )
                     return self._eval(arm.body)
                 if default is not None:

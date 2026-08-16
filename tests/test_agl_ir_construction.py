@@ -10,7 +10,7 @@ import decimal
 
 import pytest
 
-from agm.agl.ir.ids import NominalId
+from agm.agl.ir.ids import NominalId, SourceId
 from agm.agl.ir.nodes import (
     IrBind,
     IrMakeConstructor,
@@ -727,7 +727,7 @@ def test_validate_rejects_ir_make_enum_with_unknown_variant() -> None:
         declared_name="Color",
         kind=NominalKind.ENUM,
         fields=(),
-        variants=(VariantDescriptor(name="Red", fields=()),),
+        variants=(VariantDescriptor(name="Red", fields=(), member=NominalId(2)),),
     )
     node = IrMakeEnum(
         location=loc,
@@ -742,11 +742,62 @@ def test_validate_rejects_ir_make_enum_with_unknown_variant() -> None:
         entry_module=EID,
         modules={EID: ExecutableModule(module_id=EID, initializers=(node,))},
         symbols={},
-        nominals={nominal_id: desc},
+        nominals={
+            nominal_id: desc,
+            NominalId(2): NominalDescriptor(
+                NominalId(2), EID, ("Color",), "Red", NominalKind.RECORD
+            ),
+        },
         sources={sid: SourceFile(display_name="<test>", normalized_text=" ")},
     )
     with pytest.raises(InvalidIrError, match="variant"):
         validate_ir(prog, deep=True)
+
+
+@pytest.mark.parametrize(
+    "variants",
+    (
+        (
+            VariantDescriptor(name="same", fields=(), member=NominalId(2)),
+            VariantDescriptor(name="same", fields=(), member=NominalId(3)),
+        ),
+        (
+            VariantDescriptor(name="first", fields=(), member=NominalId(2)),
+            VariantDescriptor(name="second", fields=(), member=NominalId(2)),
+        ),
+    ),
+    ids=("duplicate-variant-name", "duplicate-member-nominal"),
+)
+def test_validate_rejects_duplicate_enum_descriptor_members(
+    variants: tuple[VariantDescriptor, VariantDescriptor],
+) -> None:
+    """Deep validation requires each enum descriptor to identify each member once."""
+    from agm.agl.ir.program import ExecutableModule, SourceFile
+    from agm.agl.ir.validate import validate_ir
+
+    enum = NominalId(1)
+    member_one = NominalId(2)
+    member_two = NominalId(3)
+    program = ExecutableProgram(
+        entry_module=ENTRY_ID,
+        modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=())},
+        symbols={},
+        nominals={
+            enum: NominalDescriptor(
+                enum, ENTRY_ID, (), "Choice", NominalKind.ENUM, variants=variants
+            ),
+            member_one: NominalDescriptor(
+                member_one, ENTRY_ID, ("Choice",), "first", NominalKind.RECORD
+            ),
+            member_two: NominalDescriptor(
+                member_two, ENTRY_ID, ("Choice",), "second", NominalKind.RECORD
+            ),
+        },
+        sources={SourceId(0): SourceFile(display_name="<test>", normalized_text="")},
+    )
+
+    with pytest.raises(InvalidIrError):
+        validate_ir(program, deep=True)
 
 
 def test_validate_accepts_valid_ir_make_record() -> None:
@@ -814,8 +865,8 @@ def test_nominal_descriptor_enum_with_variants() -> None:
     """NominalDescriptor for an enum carries VariantDescriptor objects."""
     nom = NominalId(2)
     variants = (
-        VariantDescriptor(name="Circle", fields=("radius",)),
-        VariantDescriptor(name="Square", fields=("side",)),
+        VariantDescriptor(name="Circle", fields=("radius",), member=NominalId(3)),
+        VariantDescriptor(name="Square", fields=("side",), member=NominalId(4)),
     )
     desc = NominalDescriptor(
         nominal=nom,
@@ -957,55 +1008,31 @@ def test_validate_non_deep_accepts_ir_make_constructor_with_unknown_nominal() ->
     validate_ir(prog, deep=False)  # must not raise
 
 
-def test_validate_check_enum_variant_skips_when_nominal_not_in_table() -> None:
-    """_check_enum_variant returns early when nominal is absent from program.nominals.
-
-    This path is exercised when IrMakeEnum's nominal was never registered.
-    We check it via deep=True but with no descriptor in the table — deep checks
-    the nominal first (and raises), but if we test _check_enum_variant in isolation
-    we can call it directly.  Instead we rely on the IrMakeConstructor path to
-    exercise the absent-nominal early return: variant=not-None, nominal not in table, deep=True.
-    The _check_nominal_in_table call raises first; but _check_enum_variant is called
-    after that in IrMakeConstructor when variant is not None.  So we test via
-    IrMakeConstructor with variant=None to take the line-403 path (skip variant check)
-    and IrMakeConstructor with variant='X' + nominal absent.
-    The absent-nominal early-return in _check_enum_variant is reached:
-    IrMakeConstructor deep with nominal absent AND variant present triggers both
-    _check_nominal_in_table (which raises) and then is NOT reached for _check_enum_variant.
-    To reach the absent-nominal early-return purely, we need to call validate
-    when variant is 'X' but the table has the nominal — with a non-ENUM kind.
-    """
-    from agm.agl.ir.ids import Location, SourceId
+def test_validate_rejects_ir_make_constructor_variant_on_a_record() -> None:
+    """A first-class variant constructor must name a linked enum variant."""
+    from agm.agl.ir.ids import Location
     from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
     from agm.agl.ir.validate import validate_ir
 
     sid = SourceId(0)
     loc = Location(source_id=sid, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    nominal_id = NominalId(1)
-    # Register nominal as RECORD (kind != ENUM) — variant check is skipped
-    desc = NominalDescriptor(
-        nominal=nominal_id,
-        module_id=ENTRY_ID,
-        scope_path=(),
-        declared_name="Pt",
-        kind=NominalKind.RECORD,
-        fields=("x",),
-    )
-    node = IrMakeConstructor(
-        location=loc,
-        nominal=nominal_id,
-        display_name="Pt",
-        variant="Ignored",  # variant is not None → triggers _check_enum_variant
-    )
-    from agm.agl.modules.ids import ENTRY_ID as EID
-
-    prog = ExecutableProgram(
-        entry_module=EID,
-        modules={EID: ExecutableModule(module_id=EID, initializers=(node,))},
+    nominal = NominalId(1)
+    program = ExecutableProgram(
+        entry_module=ENTRY_ID,
+        modules={
+            ENTRY_ID: ExecutableModule(
+                module_id=ENTRY_ID,
+                initializers=(IrMakeConstructor(loc, nominal, "Point", "not-a-variant"),),
+            )
+        },
         symbols={},
-        nominals={nominal_id: desc},
+        nominals={
+            nominal: NominalDescriptor(
+                nominal, ENTRY_ID, (), "Point", NominalKind.RECORD, fields=("x",)
+            )
+        },
         sources={sid: SourceFile(display_name="<test>", normalized_text=" ")},
     )
-    # deep=True: _check_nominal_in_table passes (nominal is registered),
-    # _check_enum_variant is called but returns early (kind != ENUM).
-    validate_ir(prog, deep=True)  # must not raise
+
+    with pytest.raises(InvalidIrError):
+        validate_ir(program, deep=True)

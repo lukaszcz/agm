@@ -584,10 +584,21 @@ def test_validate_accepts_recursive_recipe_with_matching_defs() -> None:
                 declared_name="Tree",
                 kind=NominalKind.ENUM,
                 variants=(
-                    VariantDescriptor("Leaf", ()),
-                    VariantDescriptor("Node", ("value", "left", "right")),
+                    VariantDescriptor("Leaf", (), NominalId(1)),
+                    VariantDescriptor("Node", ("value", "left", "right"), NominalId(2)),
                 ),
-            )
+            ),
+            NominalId(1): NominalDescriptor(
+                NominalId(1), ENTRY_ID, ("Tree",), "Leaf", NominalKind.RECORD
+            ),
+            NominalId(2): NominalDescriptor(
+                NominalId(2),
+                ENTRY_ID,
+                ("Tree",),
+                "Node",
+                NominalKind.RECORD,
+                ("value", "left", "right"),
+            ),
         },
         sources={sid: SourceFile(display_name="<test>", normalized_text=" ")},
     )

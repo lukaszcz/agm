@@ -24,12 +24,12 @@ from agm.agl.matchcompile.model import (
     Constructor,
     ConstructorCell,
     DecisionDecompose,
-    EnumConstructor,
     MatrixRow,
-    RecordConstructor,
+    NominalConstructor,
     WildcardCell,
 )
 from agm.agl.matchcompile.normalize import normalize_case
+from agm.agl.semantics.types import EnumType
 from agm.agl.semantics.values import (
     BoolValue,
     DecimalValue,
@@ -45,6 +45,7 @@ from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck import CheckedModule
 from tests.agl.match_reference import (
     canonical_cell_matches,
+    enum_variant_members,
     matrix_action,
     reference_action,
 )
@@ -81,12 +82,12 @@ def _matrix(
     )
 
 
-def _constructor_by_variant(matrix: PatternMatrix, column: int) -> dict[str, EnumConstructor]:
+def _constructor_by_variant(matrix: PatternMatrix, column: int) -> dict[str, NominalConstructor]:
     constructors = head_constructors(matrix, column)
-    assert all(isinstance(constructor, EnumConstructor) for constructor in constructors)
+    assert all(isinstance(constructor, NominalConstructor) for constructor in constructors)
     return {
-        constructor.variant: constructor
-        for constructor in cast(tuple[EnumConstructor, ...], constructors)
+        constructor.terminal_name: constructor
+        for constructor in cast(tuple[NominalConstructor, ...], constructors)
     }
 
 
@@ -113,7 +114,7 @@ def test_paper_specializations_preserve_complete_rows_and_priority() -> None:
         "  | subject(left = left, right = nil()) => 2\n"
         "  | subject(left = cons(), right = cons()) => 3\n"
     )
-    subject = cast(EnumConstructor, head_constructors(root, 0)[0])
+    subject = cast(NominalConstructor, head_constructors(root, 0)[0])
     columns_result = specialize(root, 0, subject, allocator)
     columns = columns_result.matrix
     nil = _constructor_by_variant(columns, 0)["nil"]
@@ -178,7 +179,7 @@ def test_paper_default_retains_and_migrates_all_wildcard_rows() -> None:
         "  | subject(left = left, right = nil()) => 2\n"
         "  | subject(left = left, right = _) => 3\n"
     )
-    subject = cast(EnumConstructor, head_constructors(root, 0)[0])
+    subject = cast(NominalConstructor, head_constructors(root, 0)[0])
     matrix = specialize(root, 0, subject, allocator).matrix
     defaulted = default_matrix(matrix, 0)
     _, second, third = matrix.rows
@@ -201,15 +202,16 @@ def _head_arguments(
     constructor: Constructor,
     provenance_cell: ConstructorCell,
     value: Value,
+    enum_variant_members: dict[tuple[NominalId, str], NominalId],
 ) -> tuple[Value, ...] | None:
     head_only = ConstructorCell(
         constructor,
         tuple(WildcardCell(provenance_cell.provenance) for _ in range(constructor.arity)),
         provenance_cell.provenance,
     )
-    if not canonical_cell_matches(head_only, value):
+    if not canonical_cell_matches(head_only, value, enum_variant_members):
         return None
-    if isinstance(constructor, EnumConstructor):
+    if isinstance(constructor, NominalConstructor):
         assert isinstance(value, EnumValue)
         return tuple(value.fields[field.name] for field in constructor.fields)
     return ()
@@ -234,13 +236,15 @@ def _assert_decomposition_partition(
         )
         specialized.append((head, result.matrix, provenance_cell))
     defaulted = default_matrix(matrix, 0)
+    members_by_variant = enum_variant_members(matrix.occurrences, matrix.type_table)
 
     for subject in subjects:
         expected = reference_action(case, checked, subject)
         matching = [
             (specialized_matrix, arguments)
             for head, specialized_matrix, provenance_cell in specialized
-            if (arguments := _head_arguments(head, provenance_cell, subject)) is not None
+            if (arguments := _head_arguments(head, provenance_cell, subject, members_by_variant))
+            is not None
         ]
         if matching:
             assert len(matching) == 1
@@ -270,7 +274,7 @@ def test_boolean_and_enum_decompositions_partition_complete_finite_domains() -> 
         "let value = red()\n"
         "case value of | red() => 1 | blue() => 2 | _ as remaining => 3"
     )
-    enum_type = cast(EnumConstructor, head_constructors(enum_matrix, 0)[0]).enum_type
+    enum_type = cast(EnumType, enum_matrix.occurrences[0].type)
     nominal = NominalId(enum_type.decl_id)
     subjects = tuple(
         EnumValue(nominal, enum_type.name, variant, {}) for variant in ("red", "green", "blue")
@@ -338,11 +342,11 @@ def test_record_decompositions_partition_partial_and_nested_patterns() -> None:
         "  | _ => 3\n"
     )
     outer = head_constructors(matrix, 0)[0]
-    assert isinstance(outer, RecordConstructor)
+    assert isinstance(outer, NominalConstructor)
     outer_nominal = NominalId(outer.record_type.decl_id)
     outer_result = specialize(matrix, 0, outer, allocator)
     inner = head_constructors(outer_result.matrix, 0)[0]
-    assert isinstance(inner, RecordConstructor)
+    assert isinstance(inner, NominalConstructor)
     inner_nominal = NominalId(inner.record_type.decl_id)
 
     subjects = (
@@ -410,10 +414,10 @@ def test_nested_enum_and_literal_decomposition_preserves_first_match_actions() -
     envelope_heads = _constructor_by_variant(matrix, 0)
     wrapped = envelope_heads["wrapped"]
     empty = envelope_heads["empty"]
-    envelope_nominal = NominalId(wrapped.enum_type.decl_id)
+    envelope_type = cast(EnumType, matrix.occurrences[0].type)
+    envelope_nominal = NominalId(envelope_type.decl_id)
     wrapped_cell = cast(ConstructorCell, matrix.rows[0].cells[0])
-    payload_cell = cast(ConstructorCell, wrapped_cell.arguments[0])
-    payload_type = cast(EnumConstructor, payload_cell.constructor).enum_type
+    payload_type = cast(EnumType, wrapped_cell.constructor.fields[0].type)
     payload_nominal = NominalId(payload_type.decl_id)
 
     def payload(variant: str, value: Value) -> EnumValue:
@@ -422,34 +426,39 @@ def test_nested_enum_and_literal_decomposition_preserves_first_match_actions() -
     subjects = (
         EnumValue(
             envelope_nominal,
-            wrapped.enum_type.name,
-            wrapped.variant,
+            envelope_type.name,
+            wrapped.terminal_name,
             {"payload": payload("number", IntValue(1))},
         ),
         EnumValue(
             envelope_nominal,
-            wrapped.enum_type.name,
-            wrapped.variant,
+            envelope_type.name,
+            wrapped.terminal_name,
             {"payload": payload("number", DecimalValue(decimal.Decimal("1.0")))},
         ),
         EnumValue(
             envelope_nominal,
-            wrapped.enum_type.name,
-            wrapped.variant,
+            envelope_type.name,
+            wrapped.terminal_name,
             {"payload": payload("number", DecimalValue(decimal.Decimal("2.5")))},
         ),
         EnumValue(
             envelope_nominal,
-            wrapped.enum_type.name,
-            wrapped.variant,
+            envelope_type.name,
+            wrapped.terminal_name,
             {"payload": payload("word", TextValue("x"))},
         ),
         EnumValue(
             envelope_nominal,
-            wrapped.enum_type.name,
-            wrapped.variant,
+            envelope_type.name,
+            wrapped.terminal_name,
             {"payload": payload("word", TextValue("other"))},
         ),
-        EnumValue(envelope_nominal, empty.enum_type.name, empty.variant, {}),
+        EnumValue(
+            envelope_nominal,
+            envelope_type.name,
+            empty.terminal_name,
+            {},
+        ),
     )
     _assert_decomposition_partition(checked, case, matrix, allocator, subjects)

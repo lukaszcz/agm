@@ -52,7 +52,6 @@ from .model import (
     Constructor,
     ConstructorCell,
     ConstructorField,
-    EnumConstructor,
     FieldBearingNominalConstructor,
     LetBindingAction,
     LetSite,
@@ -60,13 +59,13 @@ from .model import (
     LiteralKind,
     MatchCaseContext,
     MatrixRow,
+    NominalConstructor,
     NormalizedMatchSite,
     Occurrence,
     OccurrenceId,
     OmittedFieldProvenance,
     OpenSignature,
     PatternCell,
-    RecordConstructor,
     RootOccurrenceProvenance,
     Signature,
     SourceAction,
@@ -113,7 +112,7 @@ def resolve_bare_enum_constructors(
     )
 
 
-def enum_constructor(enum_type: EnumType, variant: str, table: TypeTable) -> EnumConstructor:
+def enum_constructor(enum_type: EnumType, variant: str, table: TypeTable) -> NominalConstructor:
     try:
         variants = table.enum_member_names(enum_type)
     except (KeyError, AssertionError) as exc:
@@ -125,9 +124,8 @@ def enum_constructor(enum_type: EnumType, variant: str, table: TypeTable) -> Enu
         raise MatchCompileInvariantError(
             f"checked enum pattern names unknown variant {enum_type!r}::{variant}"
         )
-    return EnumConstructor(
-        enum_type=enum_type,
-        variant=variant,
+    return NominalConstructor(
+        record_type=member,
         fields=tuple(
             ConstructorField(name, field_type)
             for name, field_type in table.record_fields(member).items()
@@ -135,20 +133,22 @@ def enum_constructor(enum_type: EnumType, variant: str, table: TypeTable) -> Enu
     )
 
 
-def record_constructor(record_type: RecordType, table: TypeTable) -> RecordConstructor:
+def record_constructor(record_type: RecordType, table: TypeTable) -> NominalConstructor:
     try:
         fields = table.record_fields(record_type)
     except (KeyError, AssertionError) as exc:
         raise MatchCompileInvariantError(
             f"cannot resolve record signature for checked type {record_type!r}"
         ) from exc
-    return RecordConstructor(
+    return NominalConstructor(
         record_type=record_type,
         fields=tuple(ConstructorField(name, field_type) for name, field_type in fields.items()),
     )
 
 
-def constructor_inhabits_type(constructor: Constructor, subject_type: Type) -> bool:
+def constructor_inhabits_type(
+    constructor: Constructor, subject_type: Type, table: TypeTable | None = None
+) -> bool:
     """Return whether a constructor denotes any runtime value of ``subject_type``.
 
     This dispatch is deliberately total over both current closed unions.  In
@@ -157,7 +157,7 @@ def constructor_inhabits_type(constructor: Constructor, subject_type: Type) -> b
     non-finite decimal.  AgL decimal values are finite exact decimals.
     """
     match constructor:
-        case BoolConstructor() | EnumConstructor() | RecordConstructor() | LiteralConstructor():
+        case BoolConstructor() | NominalConstructor() | LiteralConstructor():
             pass
         case _ as unsupported_constructor:
             _unsupported("constructor", unsupported_constructor)
@@ -166,10 +166,22 @@ def constructor_inhabits_type(constructor: Constructor, subject_type: Type) -> b
         case BoolType():
             return isinstance(constructor, BoolConstructor)
         case EnumType() as enum_type:
-            return isinstance(constructor, EnumConstructor) and constructor.enum_type == enum_type
+            if table is None:
+                raise MatchCompileInvariantError(
+                    "enum constructor inhabitation requires a type table"
+                )
+            try:
+                members = table.enum_members(enum_type)
+            except (KeyError, AssertionError) as exc:
+                raise MatchCompileInvariantError(
+                    f"cannot resolve enum signature for checked type {enum_type!r}"
+                ) from exc
+            return (
+                isinstance(constructor, NominalConstructor) and constructor.record_type in members
+            )
         case RecordType() as record_type:
             return (
-                isinstance(constructor, RecordConstructor)
+                isinstance(constructor, NominalConstructor)
                 and constructor.record_type == record_type
             )
         case IntType():
@@ -211,17 +223,19 @@ def constructor_inhabits_type(constructor: Constructor, subject_type: Type) -> b
             _unsupported("semantic type", unsupported_type)
 
 
-def pattern_cell_inhabits_type(cell: PatternCell, subject_type: Type) -> bool:
+def pattern_cell_inhabits_type(
+    cell: PatternCell, subject_type: Type, table: TypeTable | None = None
+) -> bool:
     """Return whether a canonical cell can match a value of ``subject_type``."""
     if isinstance(subject_type, BottomType):
         return False
     if isinstance(cell, WildcardCell):
         return True
-    if not constructor_inhabits_type(cell.constructor, subject_type):
+    if not constructor_inhabits_type(cell.constructor, subject_type, table):
         return False
-    if isinstance(cell.constructor, (EnumConstructor, RecordConstructor)):
+    if isinstance(cell.constructor, NominalConstructor):
         return all(
-            pattern_cell_inhabits_type(argument, field.type)
+            pattern_cell_inhabits_type(argument, field.type, table)
             for field, argument in zip(cell.constructor.fields, cell.arguments, strict=True)
         )
     return True
@@ -358,7 +372,7 @@ def normalize_pattern(
                     binders=(BinderProvenance(node_id=node_id, name=name, span=pattern.span),),
                 )
             constructor_ref = classifications.get(node_id)
-            if constructor_ref is None or constructor_ref.variant != name:
+            if constructor_ref is None:
                 raise MatchCompileInvariantError(
                     "missing final constructor classification for bare pattern"
                 )
@@ -366,6 +380,13 @@ def normalize_pattern(
                 raise MatchCompileInvariantError(
                     "final bare constructor has a non-enum checked type"
                 )
+            if (
+                constructor_ref.variant != name
+                or constructor_ref.owner_name != subject_type.name
+                or constructor_ref.owner_module_id != subject_type.module_id
+                or constructor_ref.owner_path != subject_type.scope_path
+            ):
+                raise MatchCompileInvariantError("invalid final constructor classification")
             constructor = enum_constructor(
                 EnumType(
                     constructor_ref.owner_name,
@@ -377,7 +398,8 @@ def normalize_pattern(
                 name,
                 checked.type_env.type_table,
             )
-            if constructor.enum_type != subject_type or constructor.arity != 0:
+            members = checked.type_env.type_table.enum_members(subject_type)
+            if constructor.record_type not in members or constructor.arity != 0:
                 raise MatchCompileInvariantError("invalid final bare constructor classification")
             return ConstructorCell(constructor, (), provenance)
         case LiteralPattern():
@@ -491,7 +513,7 @@ def normalize_case(
     rows: list[MatrixRow] = []
     for index, branch in enumerate(case.branches):
         cell = normalize_pattern(branch.pattern, subject_type, checked)
-        if pattern_cell_inhabits_type(cell, subject_type):
+        if pattern_cell_inhabits_type(cell, subject_type, checked.type_env.type_table):
             rows.append(
                 MatrixRow(
                     cells=(cell,),

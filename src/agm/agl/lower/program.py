@@ -140,7 +140,9 @@ def lower_program(
                 kind=NominalKind.ENUM,
                 fields=(),
                 variants=tuple(
-                    VariantDescriptor(name, tuple(type_table.record_fields(member)))
+                    VariantDescriptor(
+                        name, tuple(type_table.record_fields(member)), NominalId(member.decl_id)
+                    )
                     for name, member in type_table.enum_member_names(handle).items()
                 ),
                 bears_name_path=bears_name_path,
@@ -196,7 +198,11 @@ def lower_program(
                     declared_name=typ.name,
                     kind=NominalKind.ENUM,
                     variants=tuple(
-                        VariantDescriptor(vname, tuple(type_table.record_fields(member)))
+                        VariantDescriptor(
+                            vname,
+                            tuple(type_table.record_fields(member)),
+                            NominalId(member.decl_id),
+                        )
                         for vname, member in type_table.enum_member_names(typ).items()
                     ),
                     bears_name_path=bears_name_path,

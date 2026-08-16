@@ -89,7 +89,6 @@ from agm.agl.ir.nodes import (
     IrConvert,
     IrCopyValue,
     IrDirectCall,
-    IrEnumCaseKey,
     IrExec,
     IrExpr,
     IrField,
@@ -115,6 +114,8 @@ from agm.agl.ir.nodes import (
     IrMakeJsonArray,
     IrMakeJsonObject,
     IrMakeRecord,
+    IrNominalCaseKey,
+    IrNominalIs,
     IrOr,
     IrParseJson,
     IrPrint,
@@ -129,7 +130,6 @@ from agm.agl.ir.nodes import (
     IrTry,
     IrUnary,
     IrUpdateRecord,
-    IrVariantIs,
     UseDefault,
     is_canonical_literal_scalar,
 )
@@ -141,6 +141,7 @@ from agm.agl.ir.program import (
     IrParam,
     NominalKind,
     SourceFile,
+    VariantDescriptor,
 )
 from agm.agl.modules.ids import ModuleId
 from agm.config.engine_keys import ENGINE_KEY_NAMES
@@ -294,19 +295,31 @@ def _check_nominal_field(nominal: NominalId, field: str, mode: IrFieldMode, ctx:
         raise InvalidIrError(f"IrField references unknown field {field!r} of nominal {nominal!r}")
 
 
-def _check_enum_variant(nominal: NominalId, variant: str, ctx: _Context) -> None:
-    """Raise ``InvalidIrError`` if *variant* is not declared in the nominal's descriptor."""
-    desc = ctx.program.nominals.get(nominal)
-    if desc is None:  # pragma: no cover
-        return  # already caught by _check_nominal_in_table
+def _enum_variant_descriptor(nominal: NominalId, variant: str, ctx: _Context) -> VariantDescriptor:
+    """Return the linked descriptor for an enum variant, or raise."""
+    desc = ctx.program.nominals[nominal]
     if desc.kind is not NominalKind.ENUM:
-        return  # not an enum; variant check not applicable
-    known = {v.name for v in desc.variants}
-    if variant not in known:
-        raise InvalidIrError(
-            f"IR node references variant {variant!r} of {nominal!r}"
-            f" which is not in the descriptor's variants {sorted(known)!r}"
-        )
+        raise InvalidIrError(f"IR node references non-enum nominal {nominal!r} as an enum")
+    for item in desc.variants:
+        if item.name == variant:
+            return item
+    known = sorted(item.name for item in desc.variants)
+    raise InvalidIrError(
+        f"IR node references variant {variant!r} of {nominal!r}"
+        f" which is not in the descriptor's variants {known!r}"
+    )
+
+
+def _check_enum_variant(nominal: NominalId, variant: str, ctx: _Context) -> None:
+    """Require a first-class variant constructor to resolve through its enum descriptor."""
+    _enum_variant_descriptor(nominal, variant, ctx)
+
+
+def _check_record_nominal(nominal: NominalId, ctx: _Context, node_name: str) -> None:
+    """Require a nominal-dispatch target to be a member-record identity."""
+    _check_nominal_in_table(nominal, ctx)
+    if ctx.program.nominals[nominal].kind is not NominalKind.RECORD:
+        raise InvalidIrError(f"{node_name} references non-record nominal {nominal!r}")
 
 
 _DECODE_STRATEGIES = frozenset(
@@ -478,32 +491,17 @@ def _is_payload_candidate(symbol: SymbolId, ctx: _Context) -> bool:
 
 
 def _case_family(arm: IrCaseArm) -> tuple[str, object]:
-    if isinstance(arm.key, IrEnumCaseKey):
-        return "enum", arm.key.nominal
+    if isinstance(arm.key, IrNominalCaseKey):
+        return "nominal", None
     return "literal", arm.key.kind
 
 
 def _validate_case_arm(arm: IrCaseArm, ctx: _Context) -> None:
     match arm.key:
-        case IrEnumCaseKey(nominal=nominal, variant=variant):
+        case IrNominalCaseKey(nominal=nominal):
             if ctx.deep:
-                descriptor = ctx.program.nominals.get(nominal)
-                if descriptor is None:
-                    raise InvalidIrError(
-                        f"IrEnumCaseKey references nominal {nominal!r}"
-                        " which is not in program.nominals"
-                    )
-                if descriptor.kind is not NominalKind.ENUM:
-                    raise InvalidIrError(f"IrEnumCaseKey references non-enum nominal {nominal!r}")
-                variant_descriptor = next(
-                    (item for item in descriptor.variants if item.name == variant), None
-                )
-                if variant_descriptor is None:
-                    raise InvalidIrError(
-                        f"IrEnumCaseKey references unknown variant {variant!r}"
-                        f" of nominal {nominal!r}"
-                    )
-                valid_fields = set(variant_descriptor.fields)
+                _check_record_nominal(nominal, ctx, "IrNominalCaseKey")
+                valid_fields = set(ctx.program.nominals[nominal].fields)
             else:
                 valid_fields = None
         case IrLiteralCaseKey() as key:
@@ -580,13 +578,6 @@ def _validate_case(node: IrCase, ctx: _Context) -> None:
         }
         if bool_keys != {True, False}:
             raise InvalidIrError("IrCase has an incomplete boolean domain without a default")
-    elif family is not None and family[0] == "enum" and ctx.deep:
-        nominal = family[1]
-        assert isinstance(nominal, NominalId)
-        descriptor = ctx.program.nominals[nominal]
-        enum_keys = {arm.key.variant for arm in node.arms if isinstance(arm.key, IrEnumCaseKey)}
-        if enum_keys != {variant.name for variant in descriptor.variants}:
-            raise InvalidIrError("IrCase has an incomplete enum domain without a default")
     elif family is None or family[0] == "literal":
         raise InvalidIrError("IrCase over an open domain requires a default")
 
@@ -828,7 +819,7 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             _validate_location(node.location, ctx)
             if ctx.deep:
                 _check_nominal_in_table(nominal, ctx)
-                _check_enum_variant(nominal, variant, ctx)
+                _enum_variant_descriptor(nominal, variant, ctx)
             for _fname, fexpr in fields:
                 _validate_expr(fexpr, ctx)
 
@@ -846,11 +837,10 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                 if variant is not None:
                     _check_enum_variant(nominal, variant, ctx)
 
-        case IrVariantIs(nominal=nominal, variant=variant, value=val):
+        case IrNominalIs(nominal=nominal, value=val):
             _validate_location(node.location, ctx)
             if ctx.deep:
-                _check_nominal_in_table(nominal, ctx)
-                _check_enum_variant(nominal, variant, ctx)
+                _check_record_nominal(nominal, ctx, "IrNominalIs")
             _validate_expr(val, ctx)
 
         case IrConvert(value=val, recipe=recipe):
@@ -1074,6 +1064,30 @@ def _validate_program_tables(ctx: _Context) -> None:
                 f"program.nominals entry keyed by {nom_key!r} has"
                 f" nominal={nom_desc.nominal!r} (mismatch)"
             )
+        if nom_desc.kind is NominalKind.ENUM:
+            variant_names: set[str] = set()
+            member_nominals: set[NominalId] = set()
+            for variant in nom_desc.variants:
+                if variant.name in variant_names:
+                    raise InvalidIrError(
+                        f"enum descriptor has duplicate variant name {variant.name!r}"
+                    )
+                variant_names.add(variant.name)
+                if variant.member in member_nominals:
+                    raise InvalidIrError(
+                        f"enum descriptor reuses member record nominal {variant.member!r}"
+                    )
+                member_nominals.add(variant.member)
+                member = program.nominals.get(variant.member)
+                if member is None or member.kind is not NominalKind.RECORD:
+                    raise InvalidIrError(
+                        f"enum variant {variant.name!r} links non-record member {variant.member!r}"
+                    )
+                if member.fields != variant.fields:
+                    raise InvalidIrError(
+                        f"enum variant {variant.name!r} fields disagree with member"
+                        f" {variant.member!r}"
+                    )
 
     # 4. functions table consistency
     for fn_key, fn_desc in program.functions.items():

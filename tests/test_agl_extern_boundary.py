@@ -544,15 +544,23 @@ def _synthesize_box_class() -> tuple[NominalId, type[object]]:
 def _synthesize_choice_classes() -> tuple[NominalId, type[object]]:
     """Build a fresh synthesized ``Choice`` enum class for one test's isolated use."""
     nominal = _fresh_nominal()
+    some = _fresh_nominal()
+    none = _fresh_nominal()
     descriptor = NominalDescriptor(
         nominal=nominal,
         module_id=ENTRY_ID,
         scope_path=(),
         declared_name="Choice",
         kind=NominalKind.ENUM,
-        variants=(VariantDescriptor("Some", ("value",)), VariantDescriptor("None", ())),
+        variants=(VariantDescriptor("Some", ("value",), some), VariantDescriptor("None", (), none)),
     )
-    return nominal, synthesize_nominal_classes((descriptor,))[nominal]
+    return nominal, synthesize_nominal_classes(
+        (
+            descriptor,
+            NominalDescriptor(some, ENTRY_ID, ("Choice",), "Some", NominalKind.RECORD, ("value",)),
+            NominalDescriptor(none, ENTRY_ID, ("Choice",), "None", NominalKind.RECORD),
+        )
+    )[nominal]
 
 
 def _synthesize_problem_class() -> tuple[NominalId, type[object]]:
@@ -828,13 +836,15 @@ def test_synthesizing_an_already_present_identity_reuses_its_class_unchanged() -
     claims.
     """
     nominal = _fresh_nominal()
+    some = _fresh_nominal()
+    gone = _fresh_nominal()
     first = NominalDescriptor(
         nominal=nominal,
         module_id=ENTRY_ID,
         scope_path=(),
         declared_name="Choice",
         kind=NominalKind.ENUM,
-        variants=(VariantDescriptor("Some", ("value",)), VariantDescriptor("Gone", ())),
+        variants=(VariantDescriptor("Some", ("value",), some), VariantDescriptor("Gone", (), gone)),
     )
     classes = synthesize_nominal_classes((first,))
     enum_cls = classes[nominal]
@@ -846,7 +856,7 @@ def test_synthesizing_an_already_present_identity_reuses_its_class_unchanged() -
         scope_path=(),
         declared_name="Choice",
         kind=NominalKind.ENUM,
-        variants=(VariantDescriptor("Some", ("value", "extra")),),
+        variants=(VariantDescriptor("Some", ("value", "extra"), some),),
     )
     reused = synthesize_nominal_classes((second,), classes)
 

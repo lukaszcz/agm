@@ -12,19 +12,21 @@ from collections.abc import Mapping
 from typing import assert_never
 
 from agm.agl.eval.arith import value_eq
+from agm.agl.ir.ids import NominalId
 from agm.agl.matchcompile.compiler import CompiledMatchSite
 from agm.agl.matchcompile.matrix import PatternMatrix
 from agm.agl.matchcompile.model import (
     BoolConstructor,
     CaseSite,
-    EnumConstructor,
     LiteralConstructor,
     LiteralKind,
+    NominalConstructor,
+    Occurrence,
     PatternCell,
-    RecordConstructor,
     WildcardCell,
 )
 from agm.agl.matchcompile.normalize import CheckedPatternOwner
+from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import EnumType, RecordType, Type
 from agm.agl.semantics.values import (
     BoolValue,
@@ -132,7 +134,24 @@ def _constructor_literal_value(constructor: LiteralConstructor) -> Value:
     return JsonValue(None)
 
 
-def canonical_cell_matches(cell: PatternCell, value: Value) -> bool:
+def enum_variant_members(
+    occurrences: tuple[Occurrence, ...], type_table: TypeTable
+) -> dict[tuple[NominalId, str], NominalId]:
+    """Resolve runtime enum spellings to their descriptor-linked member identities."""
+    return {
+        (NominalId(enum_type.decl_id), name): NominalId(member.decl_id)
+        for enum_type in {
+            occurrence.type for occurrence in occurrences if isinstance(occurrence.type, EnumType)
+        }
+        for name, member in type_table.enum_member_names(enum_type).items()
+    }
+
+
+def canonical_cell_matches(
+    cell: PatternCell,
+    value: Value,
+    enum_variant_members: Mapping[tuple[NominalId, str], NominalId],
+) -> bool:
     """Match one canonical matrix cell with AgL runtime equality semantics."""
     if isinstance(cell, WildcardCell):
         return True
@@ -142,19 +161,18 @@ def canonical_cell_matches(cell: PatternCell, value: Value) -> bool:
         return isinstance(value, BoolValue) and value.value is constructor.value
     if isinstance(constructor, LiteralConstructor):
         return value_eq(value, _constructor_literal_value(constructor))
-    if isinstance(constructor, EnumConstructor) and isinstance(value, EnumValue):
-        if (
-            value.nominal.value != constructor.enum_type.decl_id
-            or value.variant != constructor.variant
+    if isinstance(constructor, NominalConstructor) and isinstance(value, EnumValue):
+        if enum_variant_members.get((value.nominal, value.variant)) != NominalId(
+            constructor.record_type.decl_id
         ):
             return False
-    elif isinstance(constructor, RecordConstructor) and isinstance(value, RecordValue):
+    elif isinstance(constructor, NominalConstructor) and isinstance(value, RecordValue):
         if value.nominal.value != constructor.record_type.decl_id:
             return False
     else:
         return False
     return all(
-        canonical_cell_matches(argument, value.fields[field.name])
+        canonical_cell_matches(argument, value.fields[field.name], enum_variant_members)
         for field, argument in zip(constructor.fields, cell.arguments, strict=True)
     )
 
@@ -162,9 +180,10 @@ def canonical_cell_matches(cell: PatternCell, value: Value) -> bool:
 def matrix_action(matrix: PatternMatrix, values: tuple[Value, ...]) -> int | None:
     """Return the first action selected by a canonical pattern matrix."""
     assert len(values) == len(matrix.occurrences)
+    members_by_variant = enum_variant_members(matrix.occurrences, matrix.type_table)
     for row in matrix.rows:
         if all(
-            canonical_cell_matches(cell, value)
+            canonical_cell_matches(cell, value, members_by_variant)
             for cell, value in zip(row.cells, values, strict=True)
         ):
             return row.action_id
@@ -176,4 +195,10 @@ def case_sites(sites: "Mapping[int, CompiledMatchSite]") -> dict[int, CompiledMa
     return {node_id: site for node_id, site in sites.items() if isinstance(site.source, CaseSite)}
 
 
-__all__ = ["canonical_cell_matches", "case_sites", "matrix_action", "reference_action"]
+__all__ = [
+    "canonical_cell_matches",
+    "case_sites",
+    "enum_variant_members",
+    "matrix_action",
+    "reference_action",
+]

@@ -1517,10 +1517,21 @@ def test_validate_contract_request_recursive_decode_defs() -> None:
                 declared_name="Tree",
                 kind=NominalKind.ENUM,
                 variants=(
-                    VariantDescriptor("Leaf", ()),
-                    VariantDescriptor("Node", ("value", "left", "right")),
+                    VariantDescriptor("Leaf", (), NominalId(1)),
+                    VariantDescriptor("Node", ("value", "left", "right"), NominalId(2)),
                 ),
-            )
+            ),
+            NominalId(1): NominalDescriptor(
+                NominalId(1), ENTRY_ID, ("Tree",), "Leaf", NominalKind.RECORD
+            ),
+            NominalId(2): NominalDescriptor(
+                NominalId(2),
+                ENTRY_ID,
+                ("Tree",),
+                "Node",
+                NominalKind.RECORD,
+                ("value", "left", "right"),
+            ),
         },
         sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
         contracts={cid: req},

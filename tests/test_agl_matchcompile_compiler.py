@@ -52,16 +52,15 @@ from agm.agl.matchcompile.model import (
     DecisionFail,
     DecisionLeaf,
     DecisionSwitch,
-    EnumConstructor,
     EnumConstructorSpelling,
     FieldOccurrenceProvenance,
     LetSite,
     LiteralKind,
     MatchCaseContext,
     MatchSiteSource,
+    NominalConstructor,
     Occurrence,
     OccurrenceId,
-    RecordConstructor,
     Signature,
     WildcardCell,
 )
@@ -85,7 +84,7 @@ from agm.agl.typecheck import (
     check_program,
 )
 from tests.agl.ir_harness import make_graph_from_files
-from tests.agl.match_reference import reference_action
+from tests.agl.match_reference import enum_variant_members, reference_action
 from tests.agl.module_graph import resolve_and_check_inline_entry
 
 _CAPS = HostCapabilities(
@@ -202,20 +201,23 @@ def _compile_without_normalized_rows(source: str) -> tuple[Case, CompiledMatchSi
     return case, compile_match_site(normalized)
 
 
-def _branch_matches(constructor: object, value: Value) -> bool:
+def _branch_matches(
+    constructor: object,
+    value: Value,
+    enum_variant_members: dict[tuple[NominalId, str], NominalId],
+) -> bool:
     if isinstance(constructor, BoolConstructor):
         return isinstance(value, BoolValue) and value.value is constructor.value
-    if isinstance(constructor, EnumConstructor):
-        return (
-            isinstance(value, EnumValue)
-            and value.nominal.value == constructor.enum_type.decl_id
-            and value.variant == constructor.variant
-        )
+    if isinstance(constructor, NominalConstructor):
+        return isinstance(value, EnumValue) and enum_variant_members.get(
+            (value.nominal, value.variant)
+        ) == NominalId(constructor.record_type.decl_id)
     raise AssertionError("finite generated tests only use boolean and enum constructors")
 
 
 def _decision_action(compiled: CompiledMatchSite, subject: Value) -> int | None:
     occurrences = {occurrence.id: occurrence for occurrence in compiled.occurrences}
+    members_by_variant = enum_variant_members(compiled.occurrences, compiled.normalized.type_table)
 
     def evaluate(decision: Decision, values: dict[object, Value]) -> int | None:
         if isinstance(decision, DecisionFail):
@@ -240,10 +242,10 @@ def _decision_action(compiled: CompiledMatchSite, subject: Value) -> int | None:
                 next_values[child.id] = value.fields[field.name]
             return evaluate(decision.child, next_values)
         for branch in decision.keyed_children:
-            if not _branch_matches(branch.constructor, value):
+            if not _branch_matches(branch.constructor, value, members_by_variant):
                 continue
             next_values = dict(values)
-            if isinstance(branch.constructor, EnumConstructor):
+            if isinstance(branch.constructor, NominalConstructor):
                 assert isinstance(value, EnumValue)
 
                 def creation_order(occurrence: Occurrence) -> int:
@@ -409,7 +411,7 @@ def test_singleton_nominals_decompose_without_a_discriminant_and_demand_only_use
     )
 
     root = cast(DecisionDecompose, compiled.root)
-    assert isinstance(root.constructor, RecordConstructor)
+    assert isinstance(root.constructor, NominalConstructor)
     assert isinstance(root.child, DecisionSwitch)
     assert root.free_occurrences == (compiled.normalized.root.id,)
     assert [occurrence.provenance.field_name for occurrence in root.children] == ["payload", "note"]
@@ -551,7 +553,7 @@ def test_true_single_variant_enum_decomposes_before_its_refutable_payload() -> N
     )
 
     root = cast(DecisionDecompose, compiled.root)
-    assert isinstance(root.constructor, EnumConstructor)
+    assert isinstance(root.constructor, NominalConstructor)
     assert isinstance(root.child, DecisionSwitch)
     assert root.demanded_occurrences == (root.children[0].id,)
     validate_compiled_case(compiled)
@@ -730,17 +732,58 @@ def test_qba_reordering_preserves_source_priority_for_every_pair_value() -> None
         "  | _ => 3\n"
     )
     root = cast(DecisionDecompose, compiled.root)
-    pair = cast(EnumConstructor, root.constructor)
-    nominal = NominalId(pair.enum_type.decl_id)
+    pair = cast(NominalConstructor, root.constructor)
+    enum_type = cast(EnumType, compiled.normalized.root.type)
+    nominal = NominalId(enum_type.decl_id)
 
     for left, right in itertools.product((False, True), repeat=2):
         value = EnumValue(
             nominal,
-            pair.enum_type.name,
-            pair.variant,
+            enum_type.name,
+            pair.terminal_name,
             {"left": BoolValue(left), "right": BoolValue(right)},
         )
         assert _decision_action(compiled, value) == reference_action(case, checked, value)
+
+
+def test_decision_oracle_distinguishes_same_named_enum_members() -> None:
+    """A same-named variant from another enum must take the fallback branch."""
+    _, _, compiled = _compile(
+        "enum Left\n  | same(payload: bool)\n  | other\n"
+        "enum Right\n  | same(payload: bool)\n  | other\n"
+        "enum Pair\n  | pair(left: Left, right: Right)\n"
+        "let value = pair(left = Left::same(payload = false), "
+        "right = Right::same(payload = false))\n"
+        "case value of\n"
+        "  | pair(left = Left::same(payload = false), right = Right::same(payload = false)) => 1\n"
+        "  | _ => 2\n"
+    )
+    root = cast(DecisionDecompose, compiled.root)
+    pair = cast(NominalConstructor, root.constructor)
+    pair_type = cast(EnumType, compiled.normalized.root.type)
+    right_type = cast(EnumType, pair.fields[1].type)
+    foreign_left = EnumValue(
+        NominalId(right_type.decl_id),
+        right_type.name,
+        "same",
+        {"payload": BoolValue(False)},
+    )
+    subject = EnumValue(
+        NominalId(pair_type.decl_id),
+        pair_type.name,
+        pair.terminal_name,
+        {
+            "left": foreign_left,
+            "right": EnumValue(
+                NominalId(right_type.decl_id),
+                right_type.name,
+                "same",
+                {"payload": BoolValue(False)},
+            ),
+        },
+    )
+
+    assert _decision_action(compiled, subject) == compiled.normalized.rows[1].action_id
 
 
 def test_generated_finite_matrices_match_reference_reachability_and_failure() -> None:
@@ -814,7 +857,7 @@ def test_generated_nested_multi_column_matrices_match_the_reference() -> None:
         checked, case, compiled = _compile(source)
         pair_type = cast(EnumType, compiled.normalized.root.type)
         pair_constructor = cast(
-            EnumConstructor,
+            NominalConstructor,
             cast(
                 ClosedSignature, signature_for_type(pair_type, checked.type_env.type_table)
             ).constructors[0],
@@ -2021,8 +2064,10 @@ def test_strong_compiled_case_validator_rejects_internal_corruption() -> None:
             root_occurrence,
             normalized.type_table,
         )
-    foreign_constructor = replace(pair_constructor, variant="foreign", fields=())
-    with pytest.raises(MatchCompileInvariantError, match="absent"):
+    foreign_constructor = NominalConstructor(
+        replace(pair_constructor.record_type, name="foreign"), ()
+    )
+    with pytest.raises(MatchCompileInvariantError, match="incompatible"):
         compiler_module._canonical_switch_constructor(
             foreign_constructor,
             root_occurrence,

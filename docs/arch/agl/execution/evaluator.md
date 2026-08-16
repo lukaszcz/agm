@@ -10,7 +10,7 @@ Because binding is by reference, an indexed assignment can close a genuine refer
 
 Recursion is bounded by a `max_call_depth` guard that raises a catchable `RecursionError`. Because the tree-walker spans several Python frames per AgL call, `run()` raises Python's recursion limit so the AgL guard is reached first; a Python `RecursionError` that still escapes (the limit is capped) is converted to the same catchable AgL exception (`ir_interpreter.py`). Only an escape while invoking a selected `program def` receives that entry's fallback source span; parameter setup and module initialization retain their ordinary attribution.
 
-An `IrField` projection carries either exact nominal identity or a static upper-bound mode. The evaluator enforces identity only for exact projections; it does not name or implement any specific nominal hierarchy.
+An `IrCase` selects nominal-member arms by member-record identity (or literal keys). The evaluator resolves an enum's member identity from its linked variant descriptor, keeping runtime enum values independent of dispatch metadata; a missing, wrong-kind, or unknown link is invalid IR, never an enum-identity fallback. An `IrField` projection carries either exact nominal identity or a static upper-bound mode. The evaluator enforces identity only for exact projections; it does not name or implement any specific nominal hierarchy.
 
 ## Host-Backed Operations
 

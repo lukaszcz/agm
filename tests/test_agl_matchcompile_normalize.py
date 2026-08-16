@@ -24,15 +24,14 @@ from agm.agl.matchcompile.model import (
     DecisionFail,
     DecisionLeaf,
     DecisionSwitch,
-    EnumConstructor,
     FieldOccurrenceProvenance,
     LetSite,
     LiteralConstructor,
     LiteralKind,
+    NominalConstructor,
     Occurrence,
     OccurrenceId,
     OmittedFieldProvenance,
-    RecordConstructor,
     SourcePatternProvenance,
     WildcardCell,
 )
@@ -100,24 +99,16 @@ def _stripped_signature(signature: ClosedSignature) -> ClosedSignature:
 
     ``strip_decl_ids`` only walks a single ``Type``'s structural children, so
     it cannot reach the ``RecordType``/``EnumType`` handles nested inside a
-    ``RecordConstructor``/``EnumConstructor`` (and its ``ConstructorField``s)
+    ``NominalConstructor``/``NominalConstructor`` (and its ``ConstructorField``s)
     directly; this reapplies it field-by-field across the closed signature
     the match compiler returns.
     """
 
     def strip(constructor: Constructor) -> Constructor:
-        if isinstance(constructor, RecordConstructor):
+        if isinstance(constructor, NominalConstructor):
             return replace(
                 constructor,
                 record_type=cast(RecordType, strip_decl_ids(constructor.record_type)),
-                fields=tuple(
-                    replace(field, type=strip_decl_ids(field.type)) for field in constructor.fields
-                ),
-            )
-        if isinstance(constructor, EnumConstructor):
-            return replace(
-                constructor,
-                enum_type=cast(EnumType, strip_decl_ids(constructor.enum_type)),
                 fields=tuple(
                     replace(field, type=strip_decl_ids(field.type)) for field in constructor.fields
                 ),
@@ -173,13 +164,13 @@ def test_signatures_are_closed_for_boolean_and_enum_in_declaration_order() -> No
     assert isinstance(enum_type, EnumType)
     enum_signature = signature_for_type(enum_type, table)
     assert isinstance(enum_signature, ClosedSignature)
-    assert [constructor.variant for constructor in enum_signature.constructors] == [
+    assert [constructor.terminal_name for constructor in enum_signature.constructors] == [
         "Empty",
         "Value",
     ]
     value = enum_signature.constructors[1]
-    assert isinstance(value, EnumConstructor)
-    assert strip_decl_ids(value.enum_type) == EnumType("Result", (IntType(),), ENTRY_ID)
+    assert isinstance(value, NominalConstructor)
+    assert strip_decl_ids(value.record_type) == strip_decl_ids(table.enum_members(enum_type)[1])
     assert [(field.name, field.type) for field in value.fields] == [
         ("item", IntType()),
         ("note", TextType()),
@@ -207,7 +198,7 @@ def test_record_signature_and_pattern_normalization_use_canonical_nominal_identi
 
     assert _stripped_signature(signature) == ClosedSignature(
         (
-            RecordConstructor(
+            NominalConstructor(
                 RecordType("Outer", (IntType(),), ENTRY_ID),
                 (
                     ConstructorField("first", IntType()),
@@ -219,7 +210,7 @@ def test_record_signature_and_pattern_normalization_use_canonical_nominal_identi
     )
     outer = normalize_case(case, checked).rows[0].cells[0]
     assert isinstance(outer, ConstructorCell)
-    assert isinstance(outer.constructor, RecordConstructor)
+    assert isinstance(outer.constructor, NominalConstructor)
     assert strip_decl_ids(outer.constructor.record_type) == RecordType(
         "Outer", (IntType(),), ENTRY_ID
     )
@@ -227,7 +218,7 @@ def test_record_signature_and_pattern_normalization_use_canonical_nominal_identi
     assert isinstance(outer.arguments[0], WildcardCell)
     inner = outer.arguments[1]
     assert isinstance(inner, ConstructorCell)
-    assert isinstance(inner.constructor, RecordConstructor)
+    assert isinstance(inner.constructor, NominalConstructor)
     assert [binder.name for binder in inner.arguments[0].binders] == ["captured"]
     assert isinstance(outer.arguments[2], WildcardCell)
     assert [binder.name for binder in outer.binders] == ["whole"]
@@ -290,7 +281,7 @@ def test_record_signatures_keep_modules_and_generic_instantiations_distinct() ->
     assert left_int != right_int
     assert _stripped_signature(left_int) == ClosedSignature(
         (
-            RecordConstructor(
+            NominalConstructor(
                 RecordType("Box", (IntType(),), left_module),
                 (ConstructorField("value", IntType()),),
             ),
@@ -332,7 +323,7 @@ def test_record_signature_cache_preserves_identity_and_invalidates_redeclaration
 
     assert redeclared is not original
     assert _stripped_signature(redeclared) == ClosedSignature(
-        (RecordConstructor(RecordType("Box"), (ConstructorField("label", TextType()),)),)
+        (NominalConstructor(RecordType("Box"), (ConstructorField("label", TextType()),)),)
     )
 
 
@@ -379,7 +370,7 @@ def test_scoped_record_signature_cache_invalidates_on_its_own_redeclaration() ->
     assert redeclared is not original
     assert _stripped_signature(redeclared) == ClosedSignature(
         (
-            RecordConstructor(
+            NominalConstructor(
                 RecordType("Box", scope_path=("A",)),
                 (ConstructorField("label", TextType()),),
             ),
@@ -563,7 +554,7 @@ def test_constructor_normalization_expands_omitted_generic_fields_in_declaration
 
     outer = normalized.rows[0].cells[0]
     assert isinstance(outer, ConstructorCell)
-    assert isinstance(outer.constructor, EnumConstructor)
+    assert isinstance(outer.constructor, NominalConstructor)
     assert [field.name for field in outer.constructor.fields] == [
         "first",
         "second",
@@ -597,8 +588,8 @@ def test_bare_nullary_variant_uses_resolver_classification() -> None:
 
     first = normalized.rows[0].cells[0]
     assert isinstance(first, ConstructorCell)
-    assert isinstance(first.constructor, EnumConstructor)
-    assert first.constructor.variant == "none"
+    assert isinstance(first.constructor, NominalConstructor)
+    assert first.constructor.terminal_name == "none"
     assert first.arguments == ()
     assert isinstance(normalized.rows[1].cells[0], ConstructorCell)
 
@@ -626,9 +617,11 @@ def test_imported_generic_enum_normalizes_from_checked_metadata(tmp_path: Path) 
     constructor_cell = normalized.rows[0].cells[0]
     assert isinstance(constructor_cell, ConstructorCell)
     constructor = constructor_cell.constructor
-    assert isinstance(constructor, EnumConstructor)
-    assert strip_decl_ids(constructor.enum_type) == EnumType(
-        "Choice", (IntType(),), ModuleId.from_path("lib")
+    assert isinstance(constructor, NominalConstructor)
+    assert strip_decl_ids(constructor.record_type) == strip_decl_ids(
+        checked.type_env.type_table.enum_members(
+            cast(EnumType, checked.node_types[case.subject.node_id])
+        )[1]
     )
     assert [(field.name, field.type) for field in constructor.fields] == [
         ("value", IntType()),

@@ -88,10 +88,12 @@ class VariantDescriptor:
     ``name``   — the variant name.
     ``fields`` — declared field names in declaration order (names only; no
                  checker ``Type`` objects — the IR is typeless).
+    ``member`` — nominal identity of the member record declaration.
     """
 
     name: str
     fields: tuple[str, ...]
+    member: NominalId
 
 
 @dataclass(frozen=True, slots=True)

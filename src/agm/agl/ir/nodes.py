@@ -86,7 +86,7 @@ __all__ = [
     "IrIndex",
     "IrIndexSet",
     "IrIndirectCall",
-    "IrEnumCaseKey",
+    "IrNominalCaseKey",
     "IrLiteralCaseKey",
     "IrLiteralKind",
     "IrLiteralScalar",
@@ -115,7 +115,7 @@ __all__ = [
     "IrTry",
     "IrUnary",
     "IrUpdateRecord",
-    "IrVariantIs",
+    "IrNominalIs",
     "UseDefault",
     "is_canonical_literal_scalar",
 ]
@@ -620,18 +620,11 @@ class IrConvert:
 
 
 @dataclass(frozen=True, slots=True)
-class IrVariantIs:
-    """IR enum-variant membership test (``is`` / ``is not``).
-
-    Evaluates ``value`` (always an ``EnumValue`` in well-lowered IR) and yields
-    ``BoolValue((value.variant == variant) != negated)``. The boolean depends
-    only on the variant string and ``negated`` because the checker guarantees
-    the operand's enum type. ``nominal`` records the tested enum for validation.
-    """
+class IrNominalIs:
+    """IR nominal-member test (``is`` / ``is not``)."""
 
     location: Location
     nominal: NominalId
-    variant: str
     value: "IrExpr"
     negated: bool
 
@@ -775,11 +768,10 @@ def is_canonical_literal_scalar(kind: IrLiteralKind, value: IrLiteralScalar) -> 
 
 
 @dataclass(frozen=True, slots=True)
-class IrEnumCaseKey:
-    """One enum discriminant identified by nominal owner and variant."""
+class IrNominalCaseKey:
+    """One record-member discriminant identified by nominal declaration."""
 
     nominal: NominalId
-    variant: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -807,7 +799,7 @@ class IrLiteralCaseKey:
             raise ValueError(f"invalid scalar {value!r} for literal case kind {self.kind.name!r}")
 
 
-IrCaseKey: TypeAlias = IrEnumCaseKey | IrLiteralCaseKey
+IrCaseKey: TypeAlias = IrNominalCaseKey | IrLiteralCaseKey
 
 
 @dataclass(frozen=True, slots=True)
@@ -1171,7 +1163,7 @@ IrExpr = (
     | IrMakeEnum
     | IrMakeException
     | IrMakeConstructor
-    | IrVariantIs
+    | IrNominalIs
     | IrConvert
     | IrIf
     | IrRaise

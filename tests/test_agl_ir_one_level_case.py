@@ -18,11 +18,11 @@ from agm.agl.ir import (
     IrConstDecimal,
     IrConstInt,
     IrConstText,
-    IrEnumCaseKey,
     IrLiteralCaseKey,
     IrLiteralKind,
     IrLoad,
     IrMakeEnum,
+    IrNominalCaseKey,
     Location,
     NominalDescriptor,
     NominalId,
@@ -40,7 +40,9 @@ from agm.agl.semantics.values import IntValue
 _SOURCE = "case"
 _LOC = Location(SourceId(0), 0, 1, 1, 0)
 _COLOR = NominalId(1)
-_OTHER = NominalId(2)
+_PLAIN = NominalId(2)
+_WITH = NominalId(3)
+_OTHER = NominalId(4)
 _PAYLOAD = SymbolId(0)
 _RESULT = SymbolId(1)
 
@@ -60,18 +62,24 @@ def _program(
     )
 
 
-def _color_descriptor() -> NominalDescriptor:
-    return NominalDescriptor(
-        nominal=_COLOR,
-        module_id=ENTRY_ID,
-        scope_path=(),
-        declared_name="Color",
-        kind=NominalKind.ENUM,
-        variants=(
-            VariantDescriptor("Plain", ()),
-            VariantDescriptor("With", ("value", "unused")),
+def _color_nominals() -> dict[NominalId, NominalDescriptor]:
+    return {
+        _COLOR: NominalDescriptor(
+            nominal=_COLOR,
+            module_id=ENTRY_ID,
+            scope_path=(),
+            declared_name="Color",
+            kind=NominalKind.ENUM,
+            variants=(
+                VariantDescriptor("Plain", (), _PLAIN),
+                VariantDescriptor("With", ("value", "unused"), _WITH),
+            ),
         ),
-    )
+        _PLAIN: NominalDescriptor(_PLAIN, ENTRY_ID, ("Color",), "Plain", NominalKind.RECORD),
+        _WITH: NominalDescriptor(
+            _WITH, ENTRY_ID, ("Color",), "With", NominalKind.RECORD, ("value", "unused")
+        ),
+    }
 
 
 def _private_symbol(symbol: SymbolId = _PAYLOAD) -> SymbolDescriptor:
@@ -80,6 +88,31 @@ def _private_symbol(symbol: SymbolId = _PAYLOAD) -> SymbolDescriptor:
 
 def _literal_case(*arms: IrCaseArm, default: IrConstInt | None = None) -> IrCase:
     return IrCase(_LOC, IrConstInt(_LOC, 1), arms, default)
+
+
+def test_validation_requires_enum_variant_member_record() -> None:
+    enum_value = IrMakeEnum(_LOC, _COLOR, "Color", "Plain", ())
+    validate_ir(_program(enum_value, nominals=_color_nominals()))
+
+    incomplete = _color_nominals()
+    del incomplete[_PLAIN]
+    with pytest.raises(InvalidIrError, match="member"):
+        validate_ir(_program(enum_value, nominals=incomplete))
+
+    wrong_shape = _color_nominals()
+    wrong_shape[_PLAIN] = NominalDescriptor(
+        _PLAIN, ENTRY_ID, ("Color",), "Plain", NominalKind.RECORD, ("unexpected",)
+    )
+    with pytest.raises(InvalidIrError, match="fields disagree"):
+        validate_ir(_program(enum_value, nominals=wrong_shape))
+
+    unknown_variant = IrMakeEnum(_LOC, _COLOR, "Color", "Missing", ())
+    with pytest.raises(InvalidIrError, match="variant"):
+        validate_ir(_program(unknown_variant, nominals=_color_nominals()))
+
+    non_enum = IrMakeEnum(_LOC, _PLAIN, "Plain", "Missing", ())
+    with pytest.raises(InvalidIrError, match="non-enum"):
+        validate_ir(_program(non_enum, nominals=_color_nominals()))
 
 
 def test_numeric_keys_are_runtime_canonical_and_duplicate_semantics_are_rejected() -> None:
@@ -101,7 +134,7 @@ def test_validation_accepts_enum_field_binding_and_default() -> None:
         IrConstInt(_LOC, 0),
         (
             IrCaseArm(
-                IrEnumCaseKey(_COLOR, "With"),
+                IrNominalCaseKey(_WITH),
                 (("value", _PAYLOAD),),
                 IrLoad(_LOC, _PAYLOAD),
             ),
@@ -112,7 +145,7 @@ def test_validation_accepts_enum_field_binding_and_default() -> None:
         _program(
             case,
             symbols={_PAYLOAD: _private_symbol()},
-            nominals={_COLOR: _color_descriptor()},
+            nominals=_color_nominals(),
         )
     )
 
@@ -123,10 +156,6 @@ def test_validation_accepts_enum_field_binding_and_default() -> None:
         (
             IrCaseArm(IrLiteralCaseKey(IrLiteralKind.BOOL, True), (), IrConstInt(_LOC, 1)),
             IrCaseArm(IrLiteralCaseKey(IrLiteralKind.TEXT, "x"), (), IrConstInt(_LOC, 2)),
-        ),
-        (
-            IrCaseArm(IrEnumCaseKey(_COLOR, "Plain"), (), IrConstInt(_LOC, 1)),
-            IrCaseArm(IrEnumCaseKey(_OTHER, "Plain"), (), IrConstInt(_LOC, 2)),
         ),
     ],
 )
@@ -161,49 +190,25 @@ def test_validation_rejects_bad_enum_field_bindings(
     case = IrCase(
         _LOC,
         IrConstInt(_LOC, 0),
-        (IrCaseArm(IrEnumCaseKey(_COLOR, "With"), field_bindings, IrConstInt(_LOC, 1)),),
+        (IrCaseArm(IrNominalCaseKey(_WITH), field_bindings, IrConstInt(_LOC, 1)),),
         None,
     )
     with pytest.raises(InvalidIrError):
-        validate_ir(_program(case, symbols=symbols, nominals={_COLOR: _color_descriptor()}))
+        validate_ir(_program(case, symbols=symbols, nominals=_color_nominals()))
 
 
 def test_validation_rejects_unknown_nominal_and_variant() -> None:
     unknown_nominal = IrCase(
         _LOC,
         IrConstInt(_LOC, 0),
-        (IrCaseArm(IrEnumCaseKey(_OTHER, "Plain"), (), IrConstInt(_LOC, 1)),),
+        (IrCaseArm(IrNominalCaseKey(_OTHER), (), IrConstInt(_LOC, 1)),),
         None,
     )
     with pytest.raises(InvalidIrError):
-        validate_ir(_program(unknown_nominal, nominals={_COLOR: _color_descriptor()}))
-    unknown_variant = IrCase(
-        _LOC,
-        IrConstInt(_LOC, 0),
-        (IrCaseArm(IrEnumCaseKey(_COLOR, "Missing"), (), IrConstInt(_LOC, 1)),),
-        None,
-    )
-    with pytest.raises(InvalidIrError):
-        validate_ir(_program(unknown_variant, nominals={_COLOR: _color_descriptor()}))
+        validate_ir(_program(unknown_nominal, nominals=_color_nominals()))
 
 
 def test_validation_rejects_non_enum_nominal_and_corrupted_literal_key() -> None:
-    record_descriptor = NominalDescriptor(
-        nominal=_COLOR,
-        module_id=ENTRY_ID,
-        scope_path=(),
-        declared_name="Color",
-        kind=NominalKind.RECORD,
-    )
-    enum_case = IrCase(
-        _LOC,
-        IrConstInt(_LOC, 0),
-        (IrCaseArm(IrEnumCaseKey(_COLOR, "Plain"), (), IrConstInt(_LOC, 1)),),
-        None,
-    )
-    with pytest.raises(InvalidIrError):
-        validate_ir(_program(enum_case, nominals={_COLOR: record_descriptor}))
-
     key = IrLiteralCaseKey(IrLiteralKind.TEXT, "valid")
     object.__setattr__(key, "scalar_value", 1)
     corrupted = IrCase(
@@ -214,6 +219,24 @@ def test_validation_rejects_non_enum_nominal_and_corrupted_literal_key() -> None
     )
     with pytest.raises(InvalidIrError):
         validate_ir(_program(corrupted), deep=False)
+
+
+def test_validation_rejects_non_record_nominal_case_keys() -> None:
+    case = IrCase(
+        _LOC,
+        IrConstInt(_LOC, 0),
+        (IrCaseArm(IrNominalCaseKey(_COLOR), (), IrConstInt(_LOC, 1)),),
+        None,
+    )
+    descriptor = NominalDescriptor(
+        nominal=_COLOR,
+        module_id=ENTRY_ID,
+        scope_path=(),
+        declared_name="Problem",
+        kind=NominalKind.EXCEPTION,
+    )
+    with pytest.raises(InvalidIrError, match="non-record"):
+        validate_ir(_program(case, nominals={_COLOR: descriptor}))
 
 
 def test_validation_rejects_literal_fields_and_shallow_enum_fields_skip_tables() -> None:
@@ -237,7 +260,7 @@ def test_validation_rejects_literal_fields_and_shallow_enum_fields_skip_tables()
         IrConstInt(_LOC, 0),
         (
             IrCaseArm(
-                IrEnumCaseKey(_COLOR, "With"),
+                IrNominalCaseKey(_WITH),
                 (("value", SymbolId(99)),),
                 IrConstInt(_LOC, 1),
             ),
@@ -254,9 +277,9 @@ def test_deep_validation_rejects_shared_case_body_without_payload_dominance() ->
         _LOC,
         IrConstInt(_LOC, 0),
         (
-            IrCaseArm(IrEnumCaseKey(_COLOR, "Plain"), (), shared_body),
+            IrCaseArm(IrNominalCaseKey(_PLAIN), (), shared_body),
             IrCaseArm(
-                IrEnumCaseKey(_COLOR, "With"),
+                IrNominalCaseKey(_WITH),
                 (("value", _PAYLOAD),),
                 shared_body,
             ),
@@ -269,7 +292,7 @@ def test_deep_validation_rejects_shared_case_body_without_payload_dominance() ->
             _program(
                 case,
                 symbols={_PAYLOAD: _private_symbol()},
-                nominals={_COLOR: _color_descriptor()},
+                nominals=_color_nominals(),
             )
         )
 
@@ -335,7 +358,7 @@ def test_direct_enum_dispatch_copies_fields_and_rejects_missing_payload() -> Non
         subject,
         (
             IrCaseArm(
-                IrEnumCaseKey(_COLOR, "With"),
+                IrNominalCaseKey(_WITH),
                 (("value", _PAYLOAD),),
                 IrLoad(_LOC, _PAYLOAD),
             ),
@@ -347,7 +370,9 @@ def test_direct_enum_dispatch_copies_fields_and_rejects_missing_payload() -> Non
         _PAYLOAD: _private_symbol(),
         _RESULT: SymbolDescriptor(_RESULT, False, "result", ENTRY_ID),
     }
-    assert IrInterpreter(_program(result, symbols=symbols)).run() == {"result": IntValue(42)}
+    assert IrInterpreter(_program(result, symbols=symbols, nominals=_color_nominals())).run() == {
+        "result": IntValue(42)
+    }
 
     missing_field_subject = IrMakeEnum(_LOC, _COLOR, "Color", "With", ())
     malformed = IrCase(
@@ -355,7 +380,7 @@ def test_direct_enum_dispatch_copies_fields_and_rejects_missing_payload() -> Non
         missing_field_subject,
         (
             IrCaseArm(
-                IrEnumCaseKey(_COLOR, "With"),
+                IrNominalCaseKey(_WITH),
                 (("value", _PAYLOAD),),
                 IrConstInt(_LOC, 1),
             ),
@@ -364,6 +389,19 @@ def test_direct_enum_dispatch_copies_fields_and_rejects_missing_payload() -> Non
     )
     with pytest.raises(InvalidIrError):
         IrInterpreter(_program(malformed)).run()
+
+
+def test_enum_dispatch_rejects_a_malformed_variant_link() -> None:
+    """A malformed enum value cannot fall back to its enclosing enum identity."""
+    malformed = IrCase(
+        _LOC,
+        IrMakeEnum(_LOC, _COLOR, "Color", "Missing", ()),
+        (IrCaseArm(IrNominalCaseKey(_WITH), (), IrConstInt(_LOC, 1)),),
+        IrConstInt(_LOC, 0),
+    )
+
+    with pytest.raises(InvalidIrError):
+        IrInterpreter(_program(malformed, nominals=_color_nominals())).run()
 
 
 def test_direct_malformed_literal_payload_binding_rejects_non_enum_subject() -> None:

@@ -42,7 +42,6 @@ from agm.agl.ir.nodes import (
     IrContains,
     IrConvert,
     IrDirectCall,
-    IrEnumCaseKey,
     IrField,
     IrFieldMode,
     IrIf,
@@ -60,6 +59,7 @@ from agm.agl.ir.nodes import (
     IrMakeJsonArray,
     IrMakeJsonObject,
     IrMakeRecord,
+    IrNominalCaseKey,
     IrRaise,
     IrRenderTemplate,
     IrSequence,
@@ -3035,8 +3035,14 @@ class TestOneLevelCaseLowering:
         assert prog.symbols[sequence.items[0].symbol].public_name is None
         switch = sequence.items[1]
         assert isinstance(switch, IrCase)
-        assert isinstance(switch.arms[0].key, IrEnumCaseKey)
-        assert switch.arms[0].key.variant == "Active"
+        assert isinstance(switch.arms[0].key, IrNominalCaseKey)
+        enum = next(
+            descriptor
+            for descriptor in prog.nominals.values()
+            if descriptor.declared_name == "Status"
+        )
+        active = next(variant for variant in enum.variants if variant.name == "Active")
+        assert switch.arms[0].key.nominal == active.member
 
     def test_binder_pattern_lowers_in_default_leaf(self) -> None:
         source = (
@@ -3078,7 +3084,7 @@ class TestOneLevelCaseLowering:
         assert isinstance(case_bind.value, IrSequence)
         switch = case_bind.value.items[1]
         assert isinstance(switch, IrCase)
-        assert isinstance(switch.arms[0].key, IrEnumCaseKey)
+        assert isinstance(switch.arms[0].key, IrNominalCaseKey)
         assert switch.default is not None
 
 

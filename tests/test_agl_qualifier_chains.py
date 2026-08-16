@@ -474,6 +474,20 @@ def test_use_target_local_module_ambiguity_requires_an_anchor(tmp_path: Path) ->
     )
 
 
+def test_use_accepts_one_facade_scope_with_multiple_defining_modules(tmp_path: Path) -> None:
+    _entry_resolution(
+        tmp_path,
+        {
+            "entry": (
+                "import facade::{Scope}\nuse Scope::*\ndef selected() -> int = alpha() + beta()"
+            ),
+            "facade": "export source/a::{Scope}\nexport source/b::{Scope}",
+            "source/a": "scope Scope\ndef alpha() -> int = 1\nend Scope",
+            "source/b": "scope Scope\ndef beta() -> int = 2\nend Scope",
+        },
+    )
+
+
 def test_use_keeps_distinct_targets_from_one_module_ambiguous() -> None:
     with pytest.raises(AglScopeError, match="ambiguous"):
         _resolve_without_loader(

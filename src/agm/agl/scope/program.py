@@ -45,6 +45,7 @@ from agm.agl.scope.imports import (
     WildcardTarget,
     build_import_env,
     resolve_alias_target,
+    sibling_qname,
 )
 from agm.agl.scope.resolver import _Resolver
 from agm.agl.scope.symbols import (
@@ -253,7 +254,7 @@ def _build_cross_module_constructor_candidates(
                 add_candidate(exposed_name, constructor)
             elif isinstance(decl, EnumDef):
                 for variant in decl.variants:
-                    exception_qname = (mid, variant.name)
+                    exception_qname = sibling_qname(key, variant.name)
                     if exception_qname in exposed_qnames and isinstance(
                         all_public_types.get(exception_qname), ExceptionDef
                     ):

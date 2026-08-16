@@ -66,6 +66,7 @@ from agm.agl.scope.imports import (
     resolve_alias_target,
     resolve_qualified,
     resolve_qualified_member,
+    sibling_qname,
     try_resolve_qualified_member,
 )
 from agm.agl.scope.symbols import (
@@ -1720,10 +1721,9 @@ class _Resolver:
         owner_path = _bare_path(source)
         scope = self._current_scope()
         for variant in declaration.variants:
-            # A same-named top-level exception already owns the bare name
-            # (checked by its own plain atom, not the variant's owner-path
-            # key); the exception's own bare contribution stands alone.
-            exception_qname = (module, variant.name)
+            # A same-named exception beside the enum already owns the bare
+            # name; the exception's own bare contribution stands alone.
+            exception_qname = sibling_qname(qname, variant.name)
             if exception_qname in selected_qnames and isinstance(
                 self._all_public_types.get(exception_qname), ExceptionDef
             ):

@@ -30,8 +30,10 @@ from agm.agl.scope.program import ResolvedModule, ResolvedProgram, resolve_progr
 from agm.agl.scope.symbols import AglScopeError, BinderKind
 from agm.agl.semantics.values import IntValue
 from agm.agl.syntax.nodes import AssignStmt, Case, ConstructorPattern, FuncDef, VarPattern, VarRef
+from agm.agl.typecheck.program import check_program
 from tests._timeouts import fail_if_slow
 from tests.agl.ir_harness import (
+    base_caps,
     evaluate_ir_graph,
     make_file_graph_from_files,
 )
@@ -2266,6 +2268,34 @@ class TestExceptionDefInGraph:
         )
 
         assert ENTRY_ID in resolve_program(graph).modules
+
+    def test_scoped_exception_suppresses_sibling_enum_variant_in_imported_use(
+        self, tmp_path: Path
+    ) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": ('import library\nuse library::A::*\nlet error = X(message = "boom")'),
+                "library": ("scope A\nenum E | X | Y\nexception X extends Exception()\nend A"),
+            },
+        )
+
+        check_program(resolve_program(graph), base_caps())
+
+    def test_scoped_exception_suppresses_sibling_enum_variant_in_import_tail(
+        self, tmp_path: Path
+    ) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    'import library::{A::E as E, A::X as X}\nlet error = X(message = "boom")'
+                ),
+                "library": ("scope A\nenum E | X | Y\nexception X extends Exception()\nend A"),
+            },
+        )
+
+        check_program(resolve_program(graph), base_caps())
 
     def test_exception_skip_branch_enum_variant_collision(self, tmp_path: Path) -> None:
         """Exception-skip branch: an enum variant whose name collides with a public

@@ -52,6 +52,7 @@ __all__ = [
     "resolve_alias_target",
     "resolve_qualified",
     "resolve_qualified_member",
+    "sibling_qname",
     "try_resolve_qualified_member",
 ]
 
@@ -62,6 +63,12 @@ NameAtom: TypeAlias = str | PathAtom
 QName: TypeAlias = tuple[ModuleId, NameAtom]
 ScopeOrigins: TypeAlias = frozenset[QName]
 BareRoute: TypeAlias = tuple[ModuleId, PathAtom]
+
+
+def sibling_qname(owner: QName, sibling_name: str) -> QName:
+    """Return the qualified name beside *owner* in its declaring scope."""
+    module, atom = owner
+    return module, _atom((*_path(atom)[:-1], sibling_name))
 
 
 def _path_sort_key(atom: NameAtom) -> str:

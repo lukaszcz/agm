@@ -1,0 +1,2 @@
+def text::trim(self) -> text = self
+program def main() -> unit = ()

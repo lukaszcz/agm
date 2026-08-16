@@ -250,6 +250,15 @@ class _QualifierChainSegment:
 
 
 @dataclass(frozen=True, slots=True)
+class _BuiltinReceiverHead:
+    """A function declaration head headed by an applied builtin receiver."""
+
+    name: str
+    receiver_type: TypeExpr
+    span: SourceSpan
+
+
+@dataclass(frozen=True, slots=True)
 class _PatternFieldsSplit:
     """Transformer-internal split of pattern_fields into positional and named.
 
@@ -582,6 +591,33 @@ class AstBuilder(Transformer):
         assert path.segments
         name, _span = path.segments[-1]
         return name, self._scope_segments(_ScopePath(path.segments[:-1]))
+
+    def _receiver_type_params(self, receiver: TypeExpr | None) -> tuple[str, ...]:
+        """Return the positional type-variable slots bound by a builtin receiver."""
+        if isinstance(receiver, ArrayT) and isinstance(receiver.elem, NameT):
+            return (receiver.elem.name,)
+        if isinstance(receiver, DictT) and isinstance(receiver.value, NameT):
+            return (receiver.value.name,)
+        return ()
+
+    def _function_declaration_head(
+        self, args: _Args
+    ) -> tuple[str, tuple[syntax.ScopeSegment, ...], TypeExpr | None]:
+        receiver = next((arg for arg in args if isinstance(arg, _BuiltinReceiverHead)), None)
+        if receiver is None:
+            name, scope_path = self._declaration_head(args)
+            return name, scope_path, None
+        return (
+            receiver.name,
+            (
+                syntax.ScopeSegment(
+                    name=render_type_expr(receiver.receiver_type),
+                    span=receiver.span,
+                    node_id=self._next_id(),
+                ),
+            ),
+            receiver.receiver_type,
+        )
 
     def _binder_scope_path(
         self, qualifier: syntax.QualifierChain
@@ -936,11 +972,12 @@ class AstBuilder(Transformer):
 
     def _func_def(self, meta: Meta, args: _Args, *, is_program: bool = False) -> syntax.FuncDef:
         """Build an ordinary or ``program``-marked function definition."""
-        name, scope_path = self._declaration_head(args)
+        name, scope_path, receiver_type = self._function_declaration_head(args)
         type_params_val: tuple[str, ...] = ()
         for a in args:
             if _is_str_tuple(a):
                 type_params_val = cast(tuple[str, ...], a)
+        type_params_val = self._receiver_type_params(receiver_type) + type_params_val
         params, return_type, body = self._split_params_type_body(args)
         assert body is not None, "func_def: no body"
         return syntax.FuncDef(
@@ -953,6 +990,7 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
             is_program=is_program,
             scope_path=scope_path,
+            receiver_type=receiver_type,
         )
 
     def func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
@@ -972,11 +1010,12 @@ class AstBuilder(Transformer):
         "def" name type_params? (params) -> type_expr with no body; only the
         leading modifier and the resulting flag differ.
         """
-        name, scope_path = self._declaration_head(args)
+        name, scope_path, receiver_type = self._function_declaration_head(args)
         type_params_val: tuple[str, ...] = ()
         for a in args:
             if _is_str_tuple(a):
                 type_params_val = cast(tuple[str, ...], a)
+        type_params_val = self._receiver_type_params(receiver_type) + type_params_val
         params, return_type, body = self._split_params_type_body(args)
         assert return_type is not None, "bodyless func def: no return type"
         assert body is None, "bodyless func def: unexpected body"
@@ -991,7 +1030,33 @@ class AstBuilder(Transformer):
             is_builtin=is_builtin,
             is_extern=is_extern,
             scope_path=scope_path,
+            receiver_type=receiver_type,
         )
+
+    def func_decl_head(self, meta: Meta, args: _Args) -> object:
+        """Unwrap an ordinary function declaration head."""
+        return args[0]
+
+    def builtin_receiver_head(self, meta: Meta, args: _Args) -> _BuiltinReceiverHead:
+        """Build an applied builtin receiver declaration head."""
+        segment = next(arg for arg in args if isinstance(arg, _QualifierChainSegment)).segment
+        name = str(next(arg for arg in args if _is_name_token(arg)))
+        type_args = segment.type_args
+        assert type_args is not None
+        if segment.name == "array" and len(type_args) == 1:
+            receiver_type: TypeExpr = ArrayT(
+                elem=type_args[0], span=segment.span, node_id=self._next_id()
+            )
+        elif segment.name == "dict" and len(type_args) == 2 and isinstance(type_args[0], TextT):
+            receiver_type = DictT(value=type_args[1], span=segment.span, node_id=self._next_id())
+        else:
+            receiver_type = AppliedT(
+                name=segment.name,
+                args=type_args,
+                span=segment.span,
+                node_id=self._next_id(),
+            )
+        return _BuiltinReceiverHead(name=name, receiver_type=receiver_type, span=segment.span)
 
     def builtin_func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
         """builtin_func_def: "builtin" "def" name type_params? (...) -> type_expr"""
@@ -1343,7 +1408,9 @@ class AstBuilder(Transformer):
                 params = cast(tuple[syntax.Param, ...], a)
             elif isinstance(a, _ALL_TYPE_EXPRS):
                 return_type = a
-            elif a is not None and not isinstance(a, (Token, tuple, _ScopePath)):
+            elif a is not None and not isinstance(
+                a, (Token, tuple, _ScopePath, _BuiltinReceiverHead)
+            ):
                 body = cast(syntax.Expr, a)
         return params, return_type, body
 

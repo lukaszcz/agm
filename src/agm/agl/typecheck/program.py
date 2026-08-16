@@ -93,6 +93,7 @@ from agm.agl.typecheck.builder import _TypeBuilder
 from agm.agl.typecheck.checker import _check_prepared_module, prepare_module_headers
 from agm.agl.typecheck.declaration_validation import (
     validate_builtin_declaration_uniqueness,
+    validate_builtin_method_ownership,
     validate_method_declaration_collisions,
 )
 from agm.agl.typecheck.env import (
@@ -965,6 +966,9 @@ def check_program(
             entry_seed_env=entry_seed_env if mid.is_entry else None,
         )
 
+    program_modules = {module_id: module.resolved for module_id, module in resolved.modules.items()}
+    validate_builtin_method_ownership(program_modules)
+
     for mid in ordered_mids:
         prepare_module_headers(
             resolved.modules[mid].resolved,
@@ -973,7 +977,6 @@ def check_program(
             module_id=mid,
         )
 
-    program_modules = {module_id: module.resolved for module_id, module in resolved.modules.items()}
     validate_builtin_declaration_uniqueness(program_modules)
     validate_method_declaration_collisions(program_modules, shared_type_table)
 

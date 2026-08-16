@@ -297,9 +297,12 @@ concrete type arguments (`Box[int]`, `Outcome[int, text]`). The built-in
 ## Function declarations
 
 ```ebnf
-func_def         ::= "def" decl_head type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
-builtin_func_def ::= "builtin" NEWLINE? "def" decl_head type_params? "(" param_list? ")" "->" type_expr
-extern_func_def  ::= "extern" NEWLINE? "def" decl_head type_params? "(" param_list? ")" "->" type_expr
+func_def         ::= "def" func_decl_head type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
+builtin_func_def ::= "builtin" NEWLINE? "def" func_decl_head type_params? "(" param_list? ")" "->" type_expr
+extern_func_def  ::= "extern" NEWLINE? "def" func_decl_head type_params? "(" param_list? ")" "->" type_expr
+func_decl_head   ::= decl_head | builtin_receiver "::" name
+builtin_receiver ::= "array" "[" name "]" | "dict" "[" "text" "," name "]"
+                   | "text" | "json" | "int" | "decimal" | "bool"
 func_body        ::= expr | suite
 param_list      ::= param_entry ("," param_entry)* ","?
 param_entry     ::= param | param_marker
@@ -323,9 +326,12 @@ positional-fillable (pos-only/standard) parameter may follow a defaulted one
 in the same zone. An optional `type_params` list after the function name makes
 the `def` generic (e.g. `def id[T](x: T) -> T`); see [Generics](generics.md).
 
-`extern_func_def` shares this signature surface with `func_def` but is never
-followed by a body; it declares a function implemented by a companion Python
-file (see [Python FFI](ffi.md)) rather than an AgL expression.
+All three function declaration forms accept the same `func_decl_head` surface.
+A builtin receiver is valid only in its owning standard-library module and must
+use the bare generic form (`array[E]` or `dict[text, V]`); see
+[Methods](functions.md#methods). `extern_func_def` is never followed by a body;
+it declares a function implemented by a companion Python file (see
+[Python FFI](ffi.md)) rather than an AgL expression.
 
 ## Infix declarations
 

@@ -26,7 +26,71 @@ from agm.agl.syntax.nodes import (
     static_type_items,
 )
 from agm.agl.syntax.spans import SourceSpan
+from agm.agl.syntax.types import AppliedT, ArrayT, DictT, NameT
 from agm.agl.typecheck.env import AglTypeError
+
+BUILTIN_METHOD_OWNERS: dict[str, ModuleId] = {
+    "array": ModuleId(("std", "array")),
+    "dict": ModuleId(("std", "dict")),
+    "text": ModuleId(("std", "text")),
+    "json": ModuleId(("std", "json")),
+    "int": ModuleId(("std", "math")),
+    "decimal": ModuleId(("std", "math")),
+    "bool": ModuleId(("std", "math")),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class BuiltinMethodReceiver:
+    """A validated builtin method receiver and its optional binding parameter."""
+
+    name: str
+    type_parameter: str | None = None
+
+
+def builtin_method_receiver_for(
+    function: FuncDef, owner_path: tuple[str, ...]
+) -> BuiltinMethodReceiver | None:
+    """Resolve a builtin receiver spelling, rejecting unsupported applied forms."""
+    receiver = function.receiver_type
+    if isinstance(receiver, ArrayT):
+        if not isinstance(receiver.elem, NameT):
+            raise AglTypeError(
+                "Builtin method receivers must use their bare generic form.", span=receiver.span
+            )
+        return BuiltinMethodReceiver("array", receiver.elem.name)
+    if isinstance(receiver, DictT):
+        if not isinstance(receiver.value, NameT):
+            raise AglTypeError(
+                "Builtin method receivers must use their bare generic form.", span=receiver.span
+            )
+        return BuiltinMethodReceiver("dict", receiver.value.name)
+    if isinstance(receiver, AppliedT):
+        raise AglTypeError("Unknown builtin method receiver.", span=receiver.span)
+    if receiver is None and len(owner_path) == 1 and owner_path[0] in BUILTIN_METHOD_OWNERS:
+        return BuiltinMethodReceiver(owner_path[0])
+    return None
+
+
+def validate_builtin_method_ownership(
+    modules: Mapping[ModuleId, ModuleResolution],
+) -> None:
+    """Apply the builtin receiver orphan rule before function headers are resolved."""
+    for module_id, resolved in modules.items():
+        for function in static_function_items(resolved.program.body.items):
+            owner_path = resolved.receiver_owner_for(module_id, function)
+            if owner_path is None:
+                continue
+            receiver = builtin_method_receiver_for(function, owner_path)
+            if receiver is None:
+                continue
+            owner_module = BUILTIN_METHOD_OWNERS[receiver.name]
+            if module_id != owner_module:
+                raise AglTypeError(
+                    f"Methods on builtin type '{receiver.name}' may only be declared in "
+                    f"'{owner_module.path_str()}'.",
+                    span=function.span,
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,7 +158,7 @@ def _member_declarations(
                     )
         for function in static_function_items(resolved.program.body.items):
             owner_path = resolved.receiver_owner_for(module_id, function)
-            if owner_path is None:
+            if owner_path is None or builtin_method_receiver_for(function, owner_path) is not None:
                 continue
             method_owner_id = owner_ids.get((module_id, owner_path))
             if method_owner_id is None:

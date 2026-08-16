@@ -11,9 +11,13 @@ from other functions. The type of a function value is written
 ## `def` — named function declarations
 
 ```ebnf
-func_def      ::= "def" decl_head type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
-                | "builtin" NEWLINE? "def" decl_head type_params? "(" param_list? ")" "->" type_expr
+func_def         ::= "def" func_decl_head type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
+builtin_func_def ::= "builtin" NEWLINE? "def" func_decl_head type_params? "(" param_list? ")" "->" type_expr
+extern_func_def  ::= "extern" NEWLINE? "def" func_decl_head type_params? "(" param_list? ")" "->" type_expr
+func_decl_head   ::= decl_head | builtin_receiver "::" name
 decl_head     ::= [scope_path "::"] name
+builtin_receiver ::= "array" "[" name "]" | "dict" "[" "text" "," name "]"
+                   | "text" | "json" | "int" | "decimal" | "bool"
 func_body     ::= expr | suite
 type_params   ::= "[" name ("," name)* "]"
 param_list    ::= param_entry ("," param_entry)* ","?
@@ -208,6 +212,17 @@ A `def` in a record, enum, or exception scope is a **method** when its first
 parameter is `self`. The receiver is supplied by member access: `p.f(x)` is
 the same call as `Type::f(p, x)`. A method names its enclosing type explicitly
 in its annotations; there is no implicit receiver type name.
+
+The standard library may also declare a method for a builtin receiver directly
+in its declaration head. This syntax is available to ordinary, `builtin`, and
+`extern` definitions. `array[E]::name` and `dict[text, V]::name` bind their
+receiver element or value parameter; `text`, `json`, `int`, `decimal`, and
+`bool` are bare receivers. Such a declaration belongs only in its owning
+module: `std/array`, `std/dict`, `std/text`, `std/json`, and `std/math`
+respectively. A builtin receiver must use its bare generic form, so
+`array[int]::name` and `dict[text, array[int]]::name` are invalid. As with a
+nominal generic receiver, `_` may occupy an unused builtin receiver slot; it
+binds a private rigid parameter and cannot be named by the method body.
 
 ```agl
 record Person

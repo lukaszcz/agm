@@ -208,6 +208,10 @@ _BUILTIN_CONSTRUCTOR_NODE_ID = -1
 # The set of names that may NOT be used as any kind of binding.
 _RESERVED_NAMES: frozenset[str] = frozenset(_BUILTIN_CALL_NAMES)
 
+_BUILTIN_METHOD_RECEIVER_NAMES: frozenset[str] = frozenset(
+    {"array", "dict", "text", "json", "int", "decimal", "bool"}
+)
+
 _TEXTUALLY_ORDERED_BINDER_KINDS: frozenset[BinderKind] = frozenset(
     {
         BinderKind.let_binding,
@@ -735,7 +739,11 @@ class _Resolver:
                     f"which targets '{target_text}'.",
                     span=receiver.span,
                 )
-            if owner_path in self._type_paths:
+            if (
+                owner_path in self._type_paths
+                or declaration.receiver_type is not None
+                or (len(owner_path) == 1 and owner_path[0] in _BUILTIN_METHOD_RECEIVER_NAMES)
+            ):
                 if receiver.default is not None:
                     raise AglScopeError(
                         f"Receiver 'self' for method '{declaration.name}' "

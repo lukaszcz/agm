@@ -99,18 +99,7 @@ items get an independent check.
 
 ## Static Guarantees
 
-A `def` whose
-first parameter is `self` in a record, enum, or exception scope is classified as
-a method and published in `method_declarations`, keyed by structured declaration
-identity with its nominal owner path. This applies equally to a `builtin def`;
-typecheck later accepts only a method signature with a host dispatch contract.
-Classification follows path collection, so declaration shorthand and scope regions
-agree; aliases reject `self`, while an annotated `self` outside a type scope remains
-an ordinary parameter. The pass
-owns every rule about a classified receiver, including that it carries no
-default value; the parser keeps only the token-order rules. Scoped
-externs resolve their member names through the declaring module's companion,
-and collection rejects duplicate scoped companion symbols.
+A `def` whose first parameter is `self` in a record, enum, or exception scope is classified as a method and published in `method_declarations`, keyed by structured declaration identity with its nominal owner path. An applied builtin receiver declaration (`array[E]::map` or `dict[text, V]::get`) is classified the same way; typechecking later validates its type form and standard-library owner. A `builtin def` on a nominal owner needs a host dispatch contract; a builtin receiver declaration instead retains its checked signature for later selection. Classification follows path collection, so declaration shorthand and scope regions agree; aliases reject `self`, while an annotated `self` outside a type scope remains an ordinary parameter. The pass owns every rule about a classified receiver, including that it carries no default value; the parser keeps only the token-order rules. Scoped externs resolve their member names through the declaring module's companion, and collection rejects duplicate scoped companion symbols.
 `let _ = value` and `var _ = value` still resolve their right-hand sides but
 register no binding, so `_` may be repeated. `_` never resolves as a readable
 identifier, even when another binding form uses that name in an enclosing scope.

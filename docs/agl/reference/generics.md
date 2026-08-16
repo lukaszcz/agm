@@ -54,8 +54,11 @@ def singleton[T](x: T) -> array[T] =
 For a method on a generic type with `N` type parameters, the method's first
 `N` type parameters bind those receiver parameters in positional order. The
 names need not match the type declaration's names. A method must provide every
-receiver slot; `_` may occupy an unused slot and may repeat. Type parameters
-after those slots belong to the method itself.
+receiver slot; `_` may occupy an unused slot and may repeat. Each `_` slot is a
+private rigid binding: it participates in receiver matching but is not readable
+in the method body. Type parameters after those slots belong to the method
+itself. The same positional rule applies to `array[E]` and `dict[text, V]`
+builtin receiver declarations.
 
 ```agl
 record Box[T]

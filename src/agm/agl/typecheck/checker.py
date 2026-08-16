@@ -830,7 +830,14 @@ class _Checker:
         self, node: FuncDef, sig: FunctionSignature, func_type: FunctionType, *, is_method: bool
     ) -> None:
         """Register a resolved ``def`` signature in every function side table."""
-        if node.is_builtin:
+        if node.is_builtin and not (
+            is_method
+            and (
+                node.receiver_type is not None
+                or tuple(segment.name for segment in node.scope_path)
+                in {(name,) for name in ("text", "json", "int", "decimal", "bool")}
+            )
+        ):
             own_path = tuple(segment.name for segment in node.scope_path)
             # A method's final scope segment names its receiver. Its receiver
             # and sibling types live in the enclosing scope, so remove that

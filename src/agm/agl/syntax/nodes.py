@@ -504,6 +504,7 @@ class FuncDef(GenericDeclaration):
     is_program: bool = False
     is_synthetic: bool = False
     scope_path: tuple[ScopeSegment, ...] = ()
+    receiver_type: TypeExpr | None = None
 
 
 @dataclass(frozen=True, slots=True)

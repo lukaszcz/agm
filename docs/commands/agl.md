@@ -21,7 +21,13 @@ available and agent calls fire exactly once.
 The REPL reuses `[exec]` settings for `default-agent`, the max-iters valve,
 call-depth limit, JSON strictness, and timeout. Imported-module params resolve from
 their qualified config tables; params declared directly at the prompt use only source
-defaults (or are required). Like `agm exec`, each typed
+defaults (or are required). Free `ask` lazily opens one default agent conversation
+and snapshots `default-agent` at that first use; later free calls reuse it even if
+the setting changes. Explicit `Session::open` sessions also remain live until closed
+or the REPL exits. `:reset` clears AgL bindings and settings but does **not** close
+host sessions, including the default session used by free `ask`; a later free
+`ask` continues that default conversation. Close unneeded explicit sessions yourself.
+Like `agm exec`, each typed
 `Agent` value selects its own backend command; settings do not select it. Like
 `agm exec`, `--agent` combined with `--no-stdlib` still fails — at session-open
 time, before the prompt appears — if the session never loads `std/config`;
@@ -97,10 +103,11 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
 - By default the REPL is in **auto** mode: agent calls fire immediately without
   prompting, matching `agm exec`.
 - `--confirm-agents` (or `:agent confirm`) starts/switches to **confirm** mode: before
-  every live agent call it shows the callee and the rendered prompt (truncated, with a
-  `[v]iew` option to print the full text) and asks `[Y]es / [n]o / [a]lways`. `yes` runs
-  the call, `no` aborts the entry (rolling its bindings back), and `always` switches the
-  session to auto mode for the rest of the session.
+  every live agent prompt, including `Session::ask` and each parse-retry follow-up, it
+  shows the selected agent and rendered prompt (truncated, with a `[v]iew` option to
+  print the full text) and asks `[Y]es / [n]o / [a]lways`. `yes` runs the call, `no`
+  aborts the entry (rolling its bindings back), and `always` switches the session to
+  auto mode for the rest of the session.
 - `exec` shell calls are **not** gated; only agent calls are confirmed.
 
 ### Options
@@ -143,7 +150,9 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
   qualified target (`std/config::max-iters := 3`). The write takes effect positionally,
   so subsequent entries in the session see the new value, including when a later
   expression in the writing entry fails; `log` or `log-file` reconfigures the
-  trace destination. `:reset` clears
+  trace destination. The initial `[exec] timeout` is also the idle timeout for CLI and
+  Pi RPC agent sessions; a source `timeout` write changes only shell `exec`, not agent
+  session timeouts. `:reset` clears
   the session, restoring the settings to the CLI/`[exec]` defaults set before the loop
   starts.
 

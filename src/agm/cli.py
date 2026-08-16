@@ -1100,7 +1100,7 @@ def exec_cmd(
         None,
         "--agent",
         metavar="AGL_LITERAL",
-        help="Seed std/config::default-agent from an AgL Agent literal.",
+        help="Seed the free-ask default session from an AgL Agent literal.",
     ),
     log_file: str | None = typer.Option(
         None,
@@ -1146,8 +1146,8 @@ def exec_cmd(
         None,
         "--timeout",
         help=(
-            "Override the shell-exec timeout (e.g. '30s', '5m', '120').  "
-            "Seeds the in-program 'std/config::timeout' setting to some(VALUE).  "
+            "Override initial shell-exec and agent idle timeouts (e.g. '30s', '5m', '120').  "
+            "Seeds the in-program 'std/config::timeout' setting to Some(VALUE).  "
             "Mutually exclusive with --no-timeout."
         ),
     ),
@@ -1155,8 +1155,8 @@ def exec_cmd(
         False,
         "--no-timeout",
         help=(
-            "Remove any configured timeout (no shell-exec timeout).  "
-            "Seeds the in-program 'std/config::timeout' setting to none.  "
+            "Remove any configured initial shell-exec and agent timeout.  "
+            "Seeds the in-program 'std/config::timeout' setting to None.  "
             "Mutually exclusive with --timeout."
         ),
     ),
@@ -1269,7 +1269,7 @@ def repl_cmd(
         None,
         "--agent",
         metavar="AGL_LITERAL",
-        help="Seed std/config::default-agent from an AgL Agent literal.",
+        help="Seed the free-ask default session from an AgL Agent literal.",
     ),
     confirm_agents: bool = typer.Option(
         False,

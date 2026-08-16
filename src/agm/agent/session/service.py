@@ -349,18 +349,18 @@ class SessionService:
         """Compact a live session when its backend supports compaction."""
         entry = self._entry_for(handle, SessionOperation.COMPACT)
         self._require_capability(entry, SessionOperation.COMPACT)
-        entry.backend.compact(instructions)
+        self._run_lifecycle(SessionOperation.COMPACT, lambda: entry.backend.compact(instructions))
 
     def reset(self, handle: str) -> None:
         """Reset a live session while retaining its handle, agent, and transport."""
         entry = self._entry_for(handle, "reset")
-        entry.backend.reset()
+        self._run_lifecycle("reset", entry.backend.reset)
 
     def fork(self, handle: str) -> str:
         """Fork a live session, returning a distinct host handle for the child."""
         entry = self._entry_for(handle, SessionOperation.FORK)
         self._require_capability(entry, SessionOperation.FORK)
-        forked_backend = entry.backend.fork()
+        forked_backend = self._run_lifecycle(SessionOperation.FORK, entry.backend.fork)
         forked_handle = str(uuid4())
         self._entries[forked_handle] = _SessionEntry(
             backend=forked_backend,
@@ -374,13 +374,13 @@ class SessionService:
         """Set a live session's backend-visible name."""
         entry = self._entry_for(handle, SessionOperation.SET_NAME)
         self._require_capability(entry, SessionOperation.SET_NAME)
-        entry.backend.set_name(name)
+        self._run_lifecycle(SessionOperation.SET_NAME, lambda: entry.backend.set_name(name))
 
     def stats(self, handle: str) -> SessionStats:
         """Return usage statistics for a live session."""
         entry = self._entry_for(handle, SessionOperation.STATS)
         self._require_capability(entry, SessionOperation.STATS)
-        return entry.backend.stats()
+        return self._run_lifecycle(SessionOperation.STATS, entry.backend.stats)
 
     def close(self, handle: str) -> None:
         """Close a live session; closing an already closed known handle is a no-op."""
@@ -389,7 +389,7 @@ class SessionService:
             raise self._unknown_handle_error(handle, "close")
         if entry.closed:
             return
-        entry.backend.close()
+        self._run_lifecycle("close", entry.backend.close)
         if entry.ephemeral:
             del self._entries[handle]
         else:
@@ -453,6 +453,18 @@ class SessionService:
             name=name,
             one_shot=True,
         )
+
+    @staticmethod
+    def _run_lifecycle(operation: SessionOperation | str, action: Callable[[], _T]) -> _T:
+        """Map backend transport failures to the public lifecycle error model."""
+        operation_name = SessionService._operation_name(operation)
+        try:
+            return action()
+        except SessionAskError as error:
+            raise SessionHostError(
+                f"session {operation_name} transport failed ({error.cause}): {error.stderr_tail}",
+                operation_name,
+            ) from error
 
     def _entry_for(self, handle: str, operation: SessionOperation | str) -> _SessionEntry:
         entry = self._entries.get(handle)

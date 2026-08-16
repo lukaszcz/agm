@@ -271,6 +271,25 @@ stderr: text
 timed_out: bool
 ```
 
+### `SessionError`
+
+A catchable session lifecycle or capability failure. It covers opening or
+obtaining the default session, use of a closed or unknown session, an
+unsupported transport or lifecycle operation, and a host failure while running
+`compact`, `reset`, `fork`, `stats`, `set-name`, or `close`. The backend
+capabilities for each agent/transport combination are listed in
+[Sessions](agent-calls.md#sessions).
+
+```text
+operation: text   # the host operation that failed, e.g. "open", "default",
+                  # "ask", "compact", "reset", "fork", "stats",
+                  # "set-name", or "close"
+```
+
+A prompt transport failure from `Session::ask` is instead `AgentCallError`;
+output received from a prompt that fails its requested contract is
+`AgentParseError`.
+
 ### `ExternError`
 
 An `extern def` call failed: the companion Python callable raised, or returned
@@ -444,6 +463,8 @@ a cycle arises, which operations raise this and which tolerate a cycle instead
 | Failing shell command (parsed or unit form) | `ExecError` |
 | Timed-out shell command (any exec form) | `ExecError` |
 | Spawn failure (either exec form) | `ExecError` |
+| Session open/default failure; unsupported transport or lifecycle capability; closed or unknown session; or failed `compact`, `reset`, `fork`, `stats`, `set-name`, or `close` | `SessionError` (`operation` identifies the failed host operation) |
+| Session prompt transport failure | `AgentCallError` |
 | Extern (Python FFI) companion raised, or its return value violated the contract | `ExternError` |
 | Loop bound exhausted | `MaxIterationsExceeded` |
 | Non-positive range `for` step (`by k` with `k ≤ 0`) | `RangeError` |

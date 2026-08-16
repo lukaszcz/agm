@@ -14,6 +14,7 @@ from agm.agent.session import (
     SessionHostError,
     SessionOpenRequest,
     SessionOperation,
+    SessionService,
 )
 from agm.agent.session.cli_adapters import (
     CLI_SESSION_BACKENDS,
@@ -620,6 +621,25 @@ def test_first_invocation_transport_failure_consumes_creation_state_until_reset(
             "t",
         ],
     )
+
+
+@pytest.mark.parametrize("operation", ["compact", "fork"])
+def test_service_maps_cli_lifecycle_transport_failures_to_host_errors(
+    monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    transport = CaptureTransport([CaptureOutcome(returncode=1, stderr="failed")])
+    transport.install(monkeypatch)
+    backend = ClaudeCliSessionBackend()
+    service = SessionService(lambda _agent, _transport: backend)
+    handle = service.open(AgentClaude("", ""), "cli")
+
+    with pytest.raises(SessionHostError) as raised:
+        if operation == "compact":
+            service.compact(handle)
+        else:
+            service.fork(handle)
+
+    assert raised.value.operation == operation
 
 
 @pytest.mark.parametrize(

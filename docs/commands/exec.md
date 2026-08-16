@@ -119,7 +119,7 @@ either is a static error.
 - `--agent AGL_LITERAL`: Seed `std/config::default-agent` with one constant `Agent`
   expression, for example `AgentClaude("sonnet", "medium")`. The literal is parsed and
   typechecked before execution; it overrides qualified program-table/`[exec]` configuration. It
-  selects the value used by `ask` calls that omit `agent`. An `AgentCommand(...)`
+  seeds the default session used by free `ask`. An `AgentCommand(...)`
   literal's command text is shell-split and validated the same way as `[exec] runner`
   before execution; a malformed command (e.g. an unclosed quote) exits 1 with nothing run.
   Because `--agent` is an explicit request, it still exits 1 when combined with
@@ -170,6 +170,10 @@ let answer: text = ask("Summarize")
 `AgentCommand(command)`, `AgentClaude(model, thinking)`,
 `AgentCodex(model, thinking)`, and `AgentPi(provider, model, thinking)` each
 build their own argv; use an `Agent` value or `default-agent` to select one.
+To retain a conversation explicitly, open `Session::open(agent, transport = None,
+name = "")` and call `session.ask`. Omitted transport defaults to `Rpc` for
+`AgentPi` and `Cli` otherwise; RPC is Pi-only. See [Agent calls](../agl/reference/agent-calls.md#sessions)
+for session operations and backend support.
 
 ### Agent command interpolation
 
@@ -255,7 +259,7 @@ program def main() -> unit =
   std/config::strict-json := true     # require bare JSON from agents
   std/config::max-iters := 10         # host safety valve cap for unbounded loops
   std/config::default-agent := AgentClaude("sonnet", "medium")
-  std/config::timeout := Some("30s")  # shell-exec idle timeout
+  std/config::timeout := Some("30s")  # shell-exec timeout
 
   let result = ask "Process %{spec}"
   print result
@@ -298,8 +302,10 @@ logging; a later `log := false` disables it without clearing the path. Writing
 unbounded loops, or `exec` calls, respectively.
 
 A CLI, qualified program table, or `[exec]` timeout initially seeds both shell execution and
-agent idle timeout. A source write to the `timeout` setting changes only the
-**shell-exec** timeout; agent idle timeout cannot be changed mid-program.
+agent idle timeout, including CLI and Pi RPC sessions opened by the run. A source
+write to the `timeout` setting changes only the **shell-exec** timeout; agent/RPC
+idle timeout cannot be changed mid-program. An agent/RPC idle timeout fails that
+`ask` with `AgentCallError`, not a parse retry.
 
 A bad duration in `std/config::timeout := Some("…")` is a runtime AgL error (exit 2),
 because a source write is a runtime-evaluated expression. A valid assigned timeout

@@ -383,9 +383,13 @@ enum SessionTransport
   | Rpc
 ```
 
+`Cli` uses a backend CLI continuation adapter. `Rpc` is available only to
+`AgentPi` and keeps a Pi RPC child process. `Session::open` defaults to `Rpc`
+for `AgentPi` and `Cli` for every other agent.
+
 ### `Session`
 
-`Session` is an opaque host-minted value:
+`Session` is a host-minted capability record:
 
 ```text
 record Session
@@ -394,14 +398,19 @@ record Session
   transport: SessionTransport
 ```
 
-It is not source-constructible and has no JSON wire representation, so it
-cannot be used as an agent output type, a parameter type, or the source of an
-`as json` cast.
+The fields identify the host handle, selected agent, and transport and can be
+read, but source cannot construct a `Session`. A session has no JSON wire
+representation: it cannot be an agent-output or program-parameter type and
+cannot be cast `as json`. It can be stored and passed to functions during the
+same run or REPL session.
+
+`copy(session)` and `shallow_copy(session)` produce record copies that retain
+the same opaque `id`; they alias the same host conversation. Closing, resetting,
+or otherwise changing one is therefore observed through every copy.
 
 ### Session calls
 
-The following are call-only **typechecked** members; their signatures do not
-specify runtime session behavior:
+The canonical `std/core::Session` owns these call-only members:
 
 ```text
 Session::open(agent: Agent,
@@ -421,15 +430,14 @@ Session::close(self) -> unit
 ```
 
 `Session::ask` has the same target-type and output-contract rules as `ask`,
-but accepts no `agent` argument; see [Agent calls](agent-calls.md#sessionask).
+but its receiver supplies the agent and it accepts no `agent` argument. The
+operations and backend support are described in [Agent calls](agent-calls.md#sessions).
 Only the canonical `std/core::Session` nominal declaration owns these special
-members. Their dispatch, and validation of the `Session::open`/`default`
-builtin headers, require that exact declaration identity — never a matching
-name or shape — so another `Session` type has only its ordinary members.
+members; another type named `Session` has only ordinary members.
 
 ### `SessionStats`
 
-A plain data record for session counters:
+A plain data record returned by backends that report usage:
 
 ```text
 record SessionStats
@@ -439,10 +447,16 @@ record SessionStats
   context-percent: decimal
 ```
 
+`stats()` raises `SessionError` when its backend does not support statistics.
+For Pi RPC, absent context-usage data is represented by `context-percent = 0`.
+
 ### `SessionError`
 
-`SessionError` is an exception with the standard `message: text` field and an
-`operation: text` field describing the failed session operation.
+`SessionError` has the standard `message: text` field and an `operation: text`
+field. It reports session lifecycle/capability failures, such as an unsupported
+transport or operation, or a closed or unknown handle. A failed prompt transport
+is `AgentCallError`; invalid output after a
+prompt arrives is `AgentParseError` (see [Agent calls](agent-calls.md#transport-and-session-failures)).
 
 ## Members of nominal types
 

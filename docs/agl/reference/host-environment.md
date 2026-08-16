@@ -48,6 +48,40 @@ Transport failures (spawn failure, nonzero exit, timeout) surface as the
 catchable `AgentCallError` with an enumerated `cause`; exit 0 with empty
 output is a valid empty response ([Exceptions](exceptions.md)).
 
+### Session host seam
+
+The evaluator addresses a host-owned `SessionHost` through opaque session ids.
+The host opens/defaults a session, sends prompts, exposes lifecycle operations,
+and closes all live sessions when an `agm exec` run or `agm repl` ends. Free
+`ask` asks the host for its one lazy default session; `Agent::ask` opens an
+ephemeral session that survives its full retry loop; `Session::ask` uses the
+handle carried by its receiver. The host snapshots the agent and transport when
+the default session first opens.
+
+AGM dispatches `Cli` sessions by agent variant: `AgentCommand`, Claude, Codex,
+and Pi each use their CLI continuation adapter. `AgentPi` also supports `Rpc`,
+its default transport; no other variant does. All CLI calls use the configured
+agent idle timeout. Command sessions need an unescaped `%{SESSION_ID}` command
+placeholder when a continuing session is opened; AGM substitutes the generated
+id in argv only and does not export it to the child environment.
+
+An RPC session starts `pi --mode rpc` once and communicates over UTF-8 JSONL:
+requests have a generated `id`, a command `type`, and command payload; responses
+must acknowledge the same id and command. A prompt request carries `message`;
+its text is assembled from `message_update` text deltas and completes only after
+both its response and an `agent_settled` event. The same process handles
+`compact`, `new_session` (reset), `clone` (fork), `set_session_name`, and
+`get_session_stats` requests. The protocol is strict: malformed, oversized,
+non-UTF-8, or unexpected records terminate the child and fail the operation.
+
+For an RPC **prompt**, process death, protocol failure, or an idle timeout kills
+and discards the child and raises `AgentCallError` (`timeout` for inactivity,
+otherwise `nonzero_exit`). For an RPC lifecycle operation, the same failures
+raise `SessionError`. A discarded child cannot be reused, so a later operation
+other than the idempotent `close` also raises `SessionError`. CLI prompt process
+failures likewise raise `AgentCallError`; unsupported lifecycle capabilities
+raise `SessionError`.
+
 ## Codecs
 
 The built-in codecs are `text` and `json`. Hosts may register additional
@@ -118,8 +152,9 @@ key:
 
 Import `std/config` and read or write a setting through a qualified target
 (`std/config::max-iters`); writing zero disables that safety valve.
-`default-agent` is a typed `Agent` value used by `ask` when its `agent` option
-is omitted. The `Option[text]` settings (`log-file`, `timeout`) take a
+`default-agent` is the typed `Agent` value snapshotted when free `ask` first
+opens its default session; free `ask` has no `agent` option. The `Option[text]`
+settings (`log-file`, `timeout`) take a
 `Some("…")` or `None` value.
 
 ### Precedence
@@ -179,8 +214,9 @@ of the run without rolling back the assigned `log` or `log-file` value.
   ([Exceptions](exceptions.md#typeerror)), terminating the run (exit 2) when
   uncaught.
 - A CLI, qualified program table, or `[exec]` timeout initially seeds both shell execution
-  and agent idle timeout. A source write to the `timeout` setting changes only
-  the **shell-exec** timeout; agent idle timeout cannot be changed mid-program.
+  and agent idle timeout, including CLI and Pi RPC sessions. A source write to
+  the `timeout` setting changes only the **shell-exec** timeout; agent idle
+  timeout cannot be changed mid-program.
 - Reading `timeout` returns the exact `Option[text]` value assigned or supplied
   initially; duration parsing does not normalize its text.
 

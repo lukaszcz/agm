@@ -37,9 +37,11 @@ Agent::ask(self, prompt: text, format: text = "",
 
 Free `ask` uses the snapshot default `Session`, whose agent is selected from
 `std/config::default-agent`; it accepts no `agent` named argument. The receiver
-of `reviewer.ask(...)` selects that method call's agent. Both support contextual
-and explicit `::[T]` target types and named parse options. Built-in methods are call-only; `let f = reviewer.ask`
-and `let f = reviewer.ask::[text]` are static errors.
+of `reviewer.ask(...)` selects an explicit agent for that one call. It opens a
+short-lived session for the call and all of its parse retries, then closes it.
+Both forms support contextual and explicit `::[T]` target types and named parse
+options. Built-in methods are call-only; `let f = reviewer.ask` and
+`let f = reviewer.ask::[text]` are static errors.
 
 `ask` is a **contextual keyword**: it cannot be declared with `let`, `var`,
 or `param`; it may not be bound as a function value (`let f = ask` is a static error, because `ask`'s type is
@@ -48,7 +50,7 @@ record/enum **field name**.
 
 ### `Session::ask`
 
-`Session` also has the call-only typechecked method form:
+`Session` also has the call-only method form:
 
 ```text
 Session::ask[T](self, prompt: text, format: text = "",
@@ -56,11 +58,12 @@ Session::ask[T](self, prompt: text, format: text = "",
                 on_parse_error: ParsePolicy = ParsePolicy::Abort) -> T
 ```
 
-It uses the same contextual or explicit `::[T]` target, concrete-target
-restriction, parse options, and output-contract checking as `ask`; it has no
-`agent` argument. `session.ask!` has the same raw-tail spelling rules as
-`reviewer.ask!`. This is a static API contract only; it does not specify
-session execution behavior.
+It sends the prompt through that live session, so the session's stored agent
+and transport select the backend; it has no `agent` argument. It uses the same
+contextual or explicit `::[T]` target, concrete-target restriction, parse
+options, and output-contract checking as `ask`. `session.ask!` has the same
+raw-tail spelling rules as `reviewer.ask!`. Parse retries remain in this same
+conversation.
 
 ### Single-argument sugar
 
@@ -103,11 +106,10 @@ program def main() -> unit =
 Raw-tail prompt text is verbatim except for `%{expr}` interpolation and
 trailing spaces and tabs in an inline prompt; `\%{` writes a literal `%{`.
 A raw call needs a nonempty inline prompt or a block with at least one nonblank
-line. A bare `ask!` uses `std/config::default-agent` and the ordinary
-call defaults; `reviewer.ask!` uses its receiver. Use `ask(...)` or
-`reviewer.ask(...)` when setting `format`, `strict_json`, or `on_parse_error`;
-the parenthesized forms are also available outside a raw-tail line-final
-position.
+line. A bare `ask!` uses the default session and `reviewer.ask!` opens the
+short-lived session for its receiver. Use `ask(...)` or `reviewer.ask(...)`
+when setting `format`, `strict_json`, or `on_parse_error`; the parenthesized
+forms are also available outside a raw-tail line-final position.
 
 ## Agents as values
 
@@ -146,9 +148,11 @@ that matters.
 
 ### The default agent
 
-Free `ask` uses `Session::default`, which snapshots the current
-`std/config::default-agent` when it is first used. The standard library supplies
-a default; CLI `--agent` and `[exec] default-agent` seeds override it, and a
+Free `ask` uses `Session::default`, which lazily opens one session and snapshots
+the current `std/config::default-agent` when it is first used. Every later free
+`ask` in that run or REPL session uses the same conversation and agent; a later
+`default-agent` write does not switch it. The standard library supplies a
+default; CLI `--agent` and `[exec] default-agent` seeds override it, and a
 source write takes effect before that snapshot is created:
 
 ```agl
@@ -158,6 +162,50 @@ program def main() -> unit =
   std/config::default-agent := AgentClaude("sonnet", "medium")
   let answer: text = ask("Summarize")
 ```
+
+## Sessions
+
+Open an explicit conversation when several calls or lifecycle operations must
+share it:
+
+<!-- agl-check: fragment -->
+```agl
+let session = Session::open(AgentClaude("sonnet", "medium"), name = "review")
+let first: text = session.ask("Read the artifact.")
+let second: text = session.ask("Now list the risks.")
+let branch = session.fork()
+session.close()
+branch.close()
+```
+
+`Session::open(agent, transport = None, name = "")` opens a session;
+`Session::default()` returns the same lazy default session used by free `ask`.
+`compact(instructions = "")`, `reset()`, `fork()`, `stats()`,
+`set-name(name)`, and `close()` are session operations. `reset` keeps the
+AgL session value but starts a fresh backend conversation; `fork` returns a
+new session whose history begins from the parent; `close` is idempotent, but
+later use of that session raises `SessionError`. Backend support for the other
+operations is runtime-dependent; an unsupported operation raises
+`SessionError`.
+
+When `transport` is omitted or `None`, `AgentPi` uses `Rpc`; every other
+agent uses `Cli`. `Rpc` is supported only for `AgentPi`; selecting it for
+another agent raises `SessionError` while opening. The CLI backends use their
+respective continuation conventions, while Pi RPC keeps one `pi --mode rpc`
+process for the session.
+
+| Agent and transport | Native optional operations | Notes |
+| --- | --- | --- |
+| `AgentCommand`, `Cli` | none | `ask`, `reset`, and `close` work. A continuing session requires an unescaped `%{SESSION_ID}` in the command. |
+| `AgentClaude`, `Cli` | `compact`, `fork` | `name` is accepted when opened; later `set-name` and `stats` are unsupported. |
+| `AgentCodex`, `Cli` | none | The first ask starts a thread; later asks resume it. |
+| `AgentPi`, `Cli` | `fork` | `name` is accepted when opened; later `compact`, `set-name`, and `stats` are unsupported. |
+| `AgentPi`, `Rpc` | `compact`, `fork`, `set-name`, `stats` | Persistent Pi RPC process; this is the default for `AgentPi`. |
+
+Every row supports `ask`, `reset`, and `close`. A nonempty `name` passed to
+`Session::open` is rejected for command and Codex CLI sessions. An explicit `Agent::ask` has
+the same transport default, but its session lasts only for that call and its
+retries; use `Session::open` to keep the conversation after the call.
 
 ## Target types: types as contracts
 
@@ -453,25 +501,29 @@ exactly one bare JSON value with nothing but surrounding whitespace.
 
 ## Parse policies and retries
 
-For a call with `on_parse_error = Retry(n = N)`:
+For a call with `on_parse_error = Retry(n = N)`, attempt 1 sends the rendered
+prompt plus its output-format instructions. The output is then parsed and
+validated. Each failed parse or validation sends at most `N` corrective
+follow-ups in the **same session** (`N + 1` attempts total). A follow-up contains
+only a category-based validation summary and a reminder to return valid JSON;
+it does not repeat the original prompt, output contract, or invalid response.
+The summary never exposes response-derived paths, keys, or values. Success
+returns the typed value; exhausting the attempts raises **`AgentParseError`**.
 
-1. The agent is called with the rendered prompt and the output contract.
-2. The raw output is parsed and validated.
-3. On success, the typed value is the call's result.
-4. On failure, a corrective retry sends only a category-based validation
-   summary and JSON-format reminder in the existing conversation. The summary
-   never includes validation paths, keys, or other response-derived details.
-5. At most `N` retries are made (`N + 1` total attempts).
-6. If every attempt fails, **`AgentParseError`** is raised.
+With `Abort` (the default), the first parse or validation failure raises
+`AgentParseError` directly. This retry rule applies equally to the default,
+explicit-agent, and explicit-session forms.
 
-With `Abort` (the default), the first failure raises `AgentParseError` directly.
+## Transport and session failures
 
-## Transport failures
-
-A failure to *run* the agent at all — the agent process cannot be spawned,
-exits nonzero, or times out — is distinct from a parse failure. It raises
-**`AgentCallError`**, is catchable in-language, and is not eligible for
-`on_parse_error` retries.
+A failed `ask` transport — for example a process spawn failure, nonzero exit,
+idle timeout, or a failed Pi RPC prompt — raises **`AgentCallError`**. It is
+catchable and is never retried by `on_parse_error`. **`SessionError`** instead
+reports a session lifecycle, capability, or non-ask backend failure: opening or
+using a closed session, an unsupported operation or transport, and failed
+compaction/fork/reset/name/stats operations. `SessionError.operation` names the
+operation. `AgentParseError` is only for output that arrived but could not meet
+the requested structured contract.
 
 ## Text targets
 

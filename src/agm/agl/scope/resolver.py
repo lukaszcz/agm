@@ -165,6 +165,7 @@ from agm.agl.syntax.nodes import (
     WildcardPattern,
     declares_source_entry,
     pattern_binder_candidates,
+    simple_let_pattern_name,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TYPE_PARAMETER_WILDCARD, AppliedT, NameT, render_type_expr
@@ -390,6 +391,7 @@ class _Resolver:
         # companion, so distinct scope paths cannot share a Python symbol.
         self._scoped_extern_symbols: dict[str, FuncDef] = {}
         self._scope_paths: set[ScopePath] = {(), *self._repl_session_scope_nodes}
+        self._ordered_binding_paths: set[ScopePath] = set()
         self._scope_node_ids: dict[ScopePath, int] = {
             path: node.node_id for path, node in self._repl_session_scope_nodes.items() if path
         }
@@ -599,14 +601,22 @@ class _Resolver:
             self._ensure_scope_path(path, item.node_id, item.span)
             self._register_declaration(item, path)
             return
-        if isinstance(item, (LetDecl, VarDecl)) and item.scope_path:
-            # A binder's scope layer is order-independent even though its
-            # membership is not: create the path here so a binder with no
-            # sibling declaration still gets a scope node, but leave the
-            # member itself to be registered during the body walk, which is
-            # what makes textual precedence fall out of the mechanism.
-            path = tuple(segment.name for segment in item.scope_path)
-            self._ensure_scope_path(path, item.node_id, item.span)
+        if isinstance(item, (LetDecl, VarDecl)):
+            path = tuple(segment.name for segment in item.scope_path) or enclosing_path
+            if path:
+                # A binder's scope layer is order-independent even though its
+                # membership is not: create the path here so a binder with no
+                # sibling declaration still gets a scope node, but leave the
+                # member itself to be registered during the body walk, which is
+                # what makes textual precedence fall out of the mechanism.
+                self._ensure_scope_path(path, item.node_id, item.span)
+                name = (
+                    item.name
+                    if isinstance(item, VarDecl)
+                    else simple_let_pattern_name(item.pattern)
+                )
+                if name is not None and name != "_":
+                    self._ordered_binding_paths.add((*path, name))
 
     def _ensure_scope_path(self, path: ScopePath, node_id: int, span: SourceSpan) -> None:
         """Create every scope layer in *path*, rejecting ordinary-name clashes."""
@@ -1787,7 +1797,7 @@ class _Resolver:
             bases = [()] if decl.current_module else self._scope_bases_for_use()
             ordinary = any(
                 (scope := self._scope_nodes.get(base + parent)) is not None
-                and member in scope.members
+                and (member in scope.members or base + target in self._ordered_binding_paths)
                 and base + target not in self._scope_nodes
                 for base in bases
             )

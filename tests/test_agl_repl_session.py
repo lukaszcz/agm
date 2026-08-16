@@ -4622,10 +4622,7 @@ class TestImports:
         assert session.eval_entry("scope Outer\nuse Source::{old}\nend Outer").ok
 
         replacement = session.eval_entry(
-            "scope Outer\n"
-            "use Source::{new}\n"
-            "def captured() -> int = old()\n"
-            "end Outer"
+            "scope Outer\nuse Source::{new}\ndef captured() -> int = old()\nend Outer"
         )
 
         assert not replacement.ok

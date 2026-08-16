@@ -367,9 +367,7 @@ def build_import_env(
     for decl in decls:
         target = targets[decl.node_id]
         modules = _targets(target)
-        if decl.alias is not None and (
-            decl.wildcard_origin or isinstance(target, WildcardTarget)
-        ):
+        if decl.alias is not None and (decl.wildcard_origin or isinstance(target, WildcardTarget)):
             facade_aliases.setdefault(decl.alias, set()).update(modules)
         for module in modules:
             module_exports = exports.get(module, {})

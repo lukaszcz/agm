@@ -3636,24 +3636,6 @@ class _Resolver:
                 imported = self._cross_module_constructor_refs.get(qname)
                 if imported is not None:
                     return (imported,)
-                # A root record, exception, or alias constructor is reached as an
-                # ordinary imported member; its declaration kind is what makes it
-                # a constructor spelling.
-                atom_path = _bare_path(qname[1])
-                decl_node_id, _decl_span, kind, _is_builtin = self._decl_info.get(
-                    qname, (-1, node.span, BinderKind.let_binding, False)
-                )
-                if kind is BinderKind.constructor_binding:
-                    return (
-                        ConstructorRef(
-                            owner_name=atom_path[-1],
-                            variant=None,
-                            owner_decl_node_id=decl_node_id,
-                            type_params=(),
-                            owner_module_id=qname[0],
-                            owner_path=atom_path[:-1],
-                        ),
-                    )
         if self._resolve_constructor_chain(
             node.node_id, chain, node.name, defer_route_diagnostics=True
         ):

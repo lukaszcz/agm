@@ -374,6 +374,40 @@ def test_qualified_use_and_import_route_collision_is_ambiguous(tmp_path: Path) -
         resolve_program(graph)
 
 
+def test_qualified_use_collision_preserves_ambiguous_import_verdict(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import a/lib\n"
+                "import b/lib\n"
+                "use S as lib\n"
+                "scope S\n"
+                "def x() -> int = 3\n"
+                "end S\n"
+                "lib::x()\n"
+            ),
+            "a/lib": "def x() -> int = 1\n",
+            "b/lib": "def x() -> int = 2\n",
+        },
+    )
+
+    with pytest.raises(AglScopeError, match="ambiguous"):
+        resolve_program(graph)
+
+
+def test_qualified_use_and_import_route_deduplicate_the_same_origin(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import lib\nuse /lib as lib\nlib::x()\n",
+            "lib": "def x() -> int = 1\n",
+        },
+    )
+
+    resolve_program(graph)
+
+
 def test_qualified_constructor_use_and_import_route_collision_is_ambiguous(
     tmp_path: Path,
 ) -> None:
@@ -411,6 +445,28 @@ def test_qualified_type_use_and_import_route_collision_is_ambiguous(tmp_path: Pa
                 "def identity(value: lib::T) -> lib::T = value\n"
             ),
             "lib": "type T = text\n",
+        },
+    )
+
+    with pytest.raises(AglTypeError, match="both"):
+        check_program(resolve_program(graph), base_caps())
+
+
+def test_qualified_applied_type_use_and_import_route_collision_is_ambiguous(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import lib\n"
+                "use S as lib\n"
+                "scope S\n"
+                "record T[A](value: A)\n"
+                "end S\n"
+                "def identity(value: lib::T[int]) -> lib::T[int] = value\n"
+            ),
+            "lib": "record T[A](value: A)\n",
         },
     )
 

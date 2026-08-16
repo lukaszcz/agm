@@ -1090,7 +1090,7 @@ class EntryPipeline:
                 direct = module_path == route
             elif import_decl.alias == target[0]:
                 direct = True
-            elif import_decl.alias is None and len(module_path) >= len(route):
+            elif import_decl.alias is None:
                 direct = module_path[-len(route) :] == route
             if direct:
                 candidates.add((module_id, target[1:]))

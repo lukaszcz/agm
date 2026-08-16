@@ -1,0 +1,7 @@
+import library using RefEnum
+
+program def main() -> unit =
+  let value: RefEnum = Shared(value = 2)
+  let result = case value of
+    | Shared(value) => value
+  print result

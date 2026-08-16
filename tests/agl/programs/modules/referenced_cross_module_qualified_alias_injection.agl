@@ -1,0 +1,5 @@
+import qualified using E
+
+program def main() -> unit =
+  let value: E[int] = Shared(value = 6)
+  print value

@@ -180,7 +180,7 @@ from agm.agl.syntax.nodes import (
     static_items,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import AppliedT, TypeExpr
+from agm.agl.syntax.types import TypeExpr
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck.arguments import bind_call_args, bind_pattern_args
 from agm.agl.typecheck.builder import _BUILTIN_TYPE_NAMES as _BUILTIN_TYPE_NAMES
@@ -1668,46 +1668,15 @@ class _Checker:
     def _owner_applied_member_type(
         self, node: VarRef, ctor_ref: ConstructorRef
     ) -> RecordType | None:
-        """Return a member record specialized by an explicitly applied enum owner.
-
-        ``Outcome[int, text]::ok`` applies ``int`` and ``text`` to the enum,
-        not to ``ok``.  The member record captures only the owner parameters
-        used by its fields, so the type table performs that owner-to-member
-        substitution after the owner has been resolved.
-        """
-        if node.qualifier is None or not node.qualifier.segments:
+        """Return a member record specialized by an explicitly applied enum owner."""
+        if node.qualifier is None:
             return None
-        owner_segment = node.qualifier.segments[-1]
-        if not owner_segment.type_args:
-            return None
-        prefix_segments = node.qualifier.segments[:-1]
-        owner_qualifier = (
-            None
-            if not prefix_segments and node.qualifier.anchor is None
-            else QualifierChain(
-                anchor=node.qualifier.anchor,
-                segments=prefix_segments,
-                member=owner_segment.name,
-                span=node.qualifier.span,
-                node_id=node.qualifier.node_id,
-            )
-        )
-        owner = self._env.resolve_type_expr(
-            AppliedT(
-                name=owner_segment.name,
-                args=owner_segment.type_args,
-                qualifier=owner_qualifier,
-                span=owner_segment.span,
-                node_id=owner_segment.node_id,
-            ),
-            span=node.span,
+        return self._env.resolve_owner_applied_inline_member_type(
+            node.qualifier,
+            ctor_ref.owner_name,
             type_vars=self._current_type_vars,
+            span=node.span,
         )
-        if not isinstance(owner, EnumType):
-            raise AglTypeError(
-                f"'{owner_segment.name}' is not a generic enum type.", span=node.span
-            )
-        return self._env.type_table.enum_member_names(owner)[ctor_ref.owner_name]
 
     def _check_varref(self, node: VarRef, *, expected: Type | None = None) -> Type:
         # Constructor references, qualified or bare, share one scope result.

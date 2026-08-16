@@ -1,0 +1,5 @@
+type First = Second
+type Second = First
+enum E = ::First
+
+program def main() -> unit = ()

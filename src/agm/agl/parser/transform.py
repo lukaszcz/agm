@@ -875,12 +875,32 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
+    def member_type_args(self, meta: Meta, args: _Args) -> tuple[TypeExpr, ...]:
+        """Return a referenced member's ordinary bracketed type arguments."""
+        return next(
+            (
+                cast(tuple[TypeExpr, ...], arg)
+                for arg in args
+                if isinstance(arg, tuple) and (not arg or isinstance(arg[0], _ALL_TYPE_EXPRS))
+            ),
+            (),
+        )
+
     def variant_ref(self, meta: Meta, args: _Args) -> syntax.VariantRef:
         chain = next(arg for arg in args if isinstance(arg, syntax.QualifierChain))
+        type_args = next(
+            (
+                arg
+                for arg in args
+                if isinstance(arg, tuple) and (not arg or isinstance(arg[0], _ALL_TYPE_EXPRS))
+            ),
+            (),
+        )
         return syntax.VariantRef(
             chain=chain,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
+            type_args=cast(tuple[TypeExpr, ...], type_args),
         )
 
     def variant_ref_with_payload(self, meta: Meta, args: _Args) -> syntax.VariantRef:

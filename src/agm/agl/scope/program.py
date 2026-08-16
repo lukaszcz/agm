@@ -42,6 +42,7 @@ from agm.agl.scope.imports import (
     WildcardTarget,
     build_import_env,
     resolve_alias_target,
+    try_resolve_qualified_member,
 )
 from agm.agl.scope.resolver import _Resolver
 from agm.agl.scope.symbols import (
@@ -64,6 +65,7 @@ from agm.agl.syntax.nodes import (
     FuncDef,
     ImportDecl,
     Program,
+    QualifierAnchor,
     QualifierChain,
     RecordDef,
     TypeAlias,
@@ -151,15 +153,112 @@ class ResolvedProgram:
 # ---------------------------------------------------------------------------
 
 
-def _reject_enum_member_references(program: Program) -> None:
-    """Reject member references until scope can resolve their record targets."""
-    for item in static_items(program.body.items):
-        if isinstance(item, EnumDef):
-            for member in item.members:
-                if isinstance(member, VariantRef):
-                    raise AglScopeError(
-                        "Enum member references are not yet supported.", span=member.span
-                    )
+def _referenced_member_constructor_refs(
+    member: VariantRef,
+    module_id: ModuleId,
+    import_env: ImportEnv,
+    all_public_types: Mapping[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias],
+    cross_module_constructor_refs: Mapping[QName, ConstructorRef],
+    import_envs: Mapping[ModuleId, ImportEnv],
+) -> tuple[ConstructorRef, ...]:
+    """Resolve a member reference to every record constructor it transparently denotes."""
+    chain = member.chain
+    local_atom = _atom((*chain.route_segments, chain.member))
+    qnames: tuple[QName, ...] = ()
+    if (module_id, local_atom) in all_public_types or (
+        module_id,
+        local_atom,
+    ) in cross_module_constructor_refs:
+        qnames = ((module_id, local_atom),)
+    elif chain.segments and chain.anchor is not QualifierAnchor.CURRENT_MODULE:
+        route = tuple(part for part in chain.segments[0].name.split("/"))
+        atom = _atom((*tuple(segment.name for segment in chain.segments[1:]), chain.member))
+        qname = try_resolve_qualified_member(import_env, route, atom, anchored=chain.anchored)
+        if qname is not None:
+            qnames = (qname,)
+    return dedupe_constructor_candidates(
+        cref
+        for qname in qnames
+        for cref in _constructor_refs_through_aliases(
+            qname, all_public_types, cross_module_constructor_refs, import_envs
+        )
+    )
+
+
+def _constructor_refs_through_aliases(
+    qname: QName,
+    all_public_types: Mapping[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias],
+    cross_module_constructor_refs: Mapping[QName, ConstructorRef],
+    import_envs: Mapping[ModuleId, ImportEnv],
+) -> tuple[ConstructorRef, ...]:
+    """Follow aliases from *qname* while retaining every reachable record identity."""
+    pending = [qname]
+    seen: set[QName] = set()
+    result: list[ConstructorRef] = []
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        constructor = cross_module_constructor_refs.get(current)
+        if constructor is not None:
+            result.append(constructor)
+            continue
+        declaration = all_public_types.get(current)
+        if not isinstance(declaration, TypeAlias) or not isinstance(
+            declaration.type_expr, (NameT, AppliedT)
+        ):
+            continue
+        current_module, atom = current
+        path = (atom,) if isinstance(atom, str) else atom
+        pending.extend(
+            _alias_target_qnames(
+                declaration.type_expr,
+                current_module,
+                path[:-1],
+                all_public_types,
+                cross_module_constructor_refs,
+                import_envs,
+            )
+        )
+    return dedupe_constructor_candidates(result)
+
+
+def _alias_target_qnames(
+    type_expr: NameT | AppliedT,
+    module_id: ModuleId,
+    scope_path: PathAtom,
+    all_public_types: Mapping[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias],
+    cross_module_constructor_refs: Mapping[QName, ConstructorRef],
+    import_envs: Mapping[ModuleId, ImportEnv],
+) -> tuple[QName, ...]:
+    """Return the declaration identities a named alias target can denote."""
+    qualifier = type_expr.qualifier
+    if qualifier is None or not qualifier.segments:
+        local_paths = (
+            ((),)
+            if qualifier is not None and qualifier.anchor is QualifierAnchor.CURRENT_MODULE
+            else (scope_path, ())
+            if scope_path
+            else ((),)
+        )
+        for path in local_paths:
+            qname = (module_id, _atom((*path, type_expr.name)))
+            if qname in all_public_types or qname in cross_module_constructor_refs:
+                return (qname,)
+        return tuple(import_envs[module_id].unqualified.get(type_expr.name, ()))
+    local_qname = (module_id, _atom((*qualifier.route_segments, type_expr.name)))
+    if local_qname in all_public_types or local_qname in cross_module_constructor_refs:
+        return (local_qname,)
+    if qualifier.anchor is QualifierAnchor.CURRENT_MODULE:
+        return ()
+    route_qname = try_resolve_qualified_member(
+        import_envs[module_id],
+        tuple(part for part in qualifier.segments[0].name.split("/")),
+        _atom((*tuple(segment.name for segment in qualifier.segments[1:]), type_expr.name)),
+        anchored=qualifier.anchored,
+    )
+    return () if route_qname is None else (route_qname,)
 
 
 def _build_cross_module_constructor_candidates(
@@ -243,13 +342,26 @@ def _build_cross_module_constructor_candidates(
                 )
             elif isinstance(decl, EnumDef):
                 for member in decl.members:
-                    variant = cast(VariantDef, member)
-                    if (mid, variant.name) in all_public_types and isinstance(
-                        all_public_types[(mid, variant.name)], ExceptionDef
+                    if isinstance(member, VariantRef):
+                        referenced_crefs = _referenced_member_constructor_refs(
+                            member,
+                            mid,
+                            import_envs[mid],
+                            all_public_types,
+                            cross_module_constructor_refs,
+                            import_envs,
+                        )
+                        for referenced_cref in referenced_crefs:
+                            candidates.setdefault(referenced_cref.owner_name, []).append(
+                                referenced_cref
+                            )
+                        continue
+                    if (mid, member.name) in all_public_types and isinstance(
+                        all_public_types[(mid, member.name)], ExceptionDef
                     ):
                         continue
-                    member_atom = _atom((*owner_path, decl.name, variant.name))
-                    candidates.setdefault(variant.name, []).append(
+                    member_atom = _atom((*owner_path, decl.name, member.name))
+                    candidates.setdefault(member.name, []).append(
                         cross_module_constructor_refs[(mid, member_atom)]
                     )
     return (
@@ -275,12 +387,13 @@ def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[NameAtom
             result[atom] = (self_id, atom)
             if isinstance(item, EnumDef):
                 for member in item.members:
-                    variant = cast(VariantDef, member)
+                    if not isinstance(member, VariantDef):
+                        continue
                     variant_atom = _atom(
                         (
                             *tuple(segment.name for segment in item.scope_path),
                             item.name,
-                            variant.name,
+                            member.name,
                         )
                     )
                     result[variant_atom] = (self_id, variant_atom)
@@ -314,19 +427,20 @@ def _member_record_constructor_refs(
             )
         elif isinstance(declaration, EnumDef):
             for member in declaration.members:
-                variant = cast(VariantDef, member)
-                variant_path = (*path, variant.name)
+                if not isinstance(member, VariantDef):
+                    continue
+                variant_path = (*path, member.name)
                 variant_atom = _atom(variant_path)
                 result[(module_id, variant_atom)] = ConstructorRef(
-                    owner_name=variant.name,
-                    owner_decl_node_id=variant.node_id,
+                    owner_name=member.name,
+                    owner_decl_node_id=member.node_id,
                     type_params=member_type_params(
-                        (cast(TypeExpr, field.type_expr) for field in variant.fields),
+                        (cast(TypeExpr, field.type_expr) for field in member.fields),
                         declaration.type_params,
                     ),
                     owner_module_id=module_id,
                     owner_path=path,
-                    can_match_bare_pattern=not variant.fields,
+                    can_match_bare_pattern=not member.fields,
                     is_builtin=declaration.is_builtin,
                 )
     return result
@@ -566,9 +680,6 @@ def resolve_program(
     AglScopeError
         On the first static scope violation (first-error abort).
     """
-    for loaded in graph.modules.values():
-        _reject_enum_member_references(loaded.program)
-
     # ------------------------------------------------------------------
     # Step 1: Build local export maps (own declarations only).
     # ------------------------------------------------------------------
@@ -648,6 +759,24 @@ def resolve_program(
                 )
 
     cross_module_constructor_refs = _member_record_constructor_refs(all_public_types)
+    referenced_member_constructor_refs: dict[tuple[ModuleId, int], tuple[ConstructorRef, ...]] = {}
+    for mid, loaded in graph.modules.items():
+        for item in static_items(loaded.program.body.items):
+            if not isinstance(item, EnumDef):
+                continue
+            for member in item.members:
+                if not isinstance(member, VariantRef):
+                    continue
+                crefs = _referenced_member_constructor_refs(
+                    member,
+                    mid,
+                    import_envs[mid],
+                    all_public_types,
+                    cross_module_constructor_refs,
+                    import_envs,
+                )
+                if crefs:
+                    referenced_member_constructor_refs[mid, member.node_id] = crefs
     cross_module_constructible_types = frozenset(
         qname
         for qname, declaration in all_public_types.items()
@@ -680,6 +809,7 @@ def resolve_program(
             import_env=import_envs[mid],
             decl_info=decl_info,
             cross_module_constructor_refs=cross_module_constructor_refs,
+            referenced_member_constructor_refs=referenced_member_constructor_refs,
             cross_module_constructible_types=cross_module_constructible_types,
             cross_module_type_scopes=frozenset(all_public_types),
             all_public_types=all_public_types,

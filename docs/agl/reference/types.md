@@ -63,6 +63,11 @@ the complete type name before its brackets, as in `mylib::Box[int]` or
 are the same applied-type form. See [Named scopes](scopes.md) for scope-path
 resolution.
 
+An inline enum member may also be selected from an applied enum owner:
+`Source[text]::Member` specializes every owner parameter captured by
+`Member`. That selection is already concrete, so it cannot take another type
+application; use `Source::Member[T]` when applying the member directly.
+
 `dict[text, T]` keys are always `text`, and the key position must be spelled
 literally as `text`. There are no union types, no string-literal types, and no
 optional/nullable types; model alternatives and optionality with enums.
@@ -474,9 +479,9 @@ at the same path (see [Built-in functions](functions.md#built-in-functions)).
 
 ## Enum types
 
-An `enum` declares a tagged union (algebraic data type). Variants are
-introduced by `|`; each variant is either nullary or carries named, typed
-fields:
+An `enum` declares a closed nominal union of record members. A bare member
+name introduces a new record in the enum's scope; it is either fieldless or
+carries named, typed fields:
 
 ```agl
 enum FixResult
@@ -485,10 +490,27 @@ enum FixResult
   | Blocked(reason: text, recoverable: bool)
 ```
 
-Enums are the intended model for agent outcomes. An enum also establishes a
-same-named scope; its variants are members of that scope, so `Review::Pass` is
-a qualified member access. The unqualified variant spelling remains available
-under the ordinary constructor rules.
+A qualified member spelling instead references an existing record. The
+reference may apply the enum's type parameters, and aliases are transparent:
+
+```agl
+record Saved(id: int)
+record Box[T](value: T)
+
+enum Result[T] = ::Saved | ::Box[T] | Fresh(value: T)
+```
+
+A reference must name a record. Each member declaration and terminal member
+name may appear only once in an enum. The enum's scope contains only its
+newly declared members: `Result::Fresh` is available, while `Result::Saved`
+is not; `Saved` remains reachable at its original declaration path. Every
+member's terminal name remains available as an ordinary constructor and
+pattern candidate wherever the enum is visible.
+
+Enums are the intended model for agent outcomes. An enum establishes a
+same-named scope for its declared members, so `Review::Pass` is a qualified
+member access. The unqualified variant spelling remains available under the
+ordinary constructor rules.
 
 ```agl
 enum Review

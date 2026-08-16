@@ -76,6 +76,7 @@ from agm.agl.semantics.types import (
     UnitType,
     contains_inference_var,
     match_nominal_owner_template,
+    substitute,
 )
 from agm.agl.syntax.nodes import Expr, ParamKind, Pattern, QualifierAnchor, QualifierChain
 from agm.agl.syntax.spans import SourceSpan
@@ -859,6 +860,69 @@ class TypeEnvironment:
             ambiguous=lambda message: AglTypeError(message, span=span),
         )
 
+    def resolve_owner_applied_inline_member_type(
+        self,
+        qualifier: QualifierChain,
+        member: str,
+        *,
+        type_vars: frozenset[str],
+        span: SourceSpan | None,
+    ) -> RecordType | None:
+        """Resolve an inline enum member after applying its owner type.
+
+        ``Source[T]::Member`` applies ``T`` to ``Source``.  An inline member
+        captures only the owner parameters used by its fields, so selecting it
+        from the instantiated enum yields its concrete record handle directly.
+        """
+        if not qualifier.segments:
+            return None
+        owner_segment = qualifier.segments[-1]
+        if owner_segment.type_args is None:
+            return None
+        from agm.agl.syntax.types import AppliedT
+
+        prefix_segments = qualifier.segments[:-1]
+        owner_qualifier = (
+            None
+            if not prefix_segments and qualifier.anchor is None
+            else QualifierChain(
+                anchor=qualifier.anchor,
+                segments=prefix_segments,
+                member=owner_segment.name,
+                span=qualifier.span,
+                node_id=qualifier.node_id,
+            )
+        )
+        owner = self.resolve_type_expr(
+            AppliedT(
+                name=owner_segment.name,
+                args=owner_segment.type_args,
+                qualifier=owner_qualifier,
+                span=owner_segment.span,
+                node_id=owner_segment.node_id,
+            ),
+            span=span,
+            type_vars=type_vars,
+        )
+        if not isinstance(owner, EnumType):
+            raise AglTypeError(f"'{owner_segment.name}' is not a generic enum type.", span=span)
+        owner_template = self.source_type_template_qname(
+            owner.module_id, owner.name, scope_path=owner.scope_path
+        )
+        assert owner_template is not None
+        member_template = self.source_type_template_qname(
+            owner.module_id,
+            member,
+            scope_path=(*owner.scope_path, owner.name),
+        )
+        if member_template is None:
+            return None
+        resolved = substitute(
+            member_template.template,
+            dict(zip(owner_template.type_params, owner.type_args, strict=True)),
+        )
+        return resolved if isinstance(resolved, RecordType) else None
+
     def register_type(self, name: str, typ: Type) -> None:
         self._assert_mutable()
         self._types[name] = typ
@@ -1584,6 +1648,11 @@ class TypeEnvironment:
         if _resolving is None:
             _resolving = frozenset()
 
+        if isinstance(type_expr, (NameT, AppliedT)) and type_expr.qualifier is not None:
+            for segment in type_expr.qualifier.segments:
+                for type_arg in segment.type_args or ():
+                    self.resolve_type_expr(type_arg, _resolving=_resolving, type_vars=type_vars)
+
         if isinstance(type_expr, TextT):
             return TextType()
         if isinstance(type_expr, JsonT):
@@ -1618,6 +1687,14 @@ class TypeEnvironment:
         if isinstance(type_expr, NameT):
             eff_span = span if span is not None else type_expr.span
             if type_expr.qualifier is not None:
+                owner_member = self.resolve_owner_applied_inline_member_type(
+                    type_expr.qualifier,
+                    type_expr.name,
+                    type_vars=type_vars,
+                    span=eff_span,
+                )
+                if owner_member is not None:
+                    return owner_member
                 return self._resolve_qualified_name_type(
                     type_expr.qualifier, type_expr.name, span=eff_span
                 )
@@ -1635,6 +1712,14 @@ class TypeEnvironment:
             )
             eff_span = span if span is not None else type_expr.span
             qualifier = type_expr.qualifier
+            rendered_owner = "" if qualifier is None else qualifier.render()
+            owner_member = (
+                None
+                if qualifier is None
+                else self.resolve_owner_applied_inline_member_type(
+                    qualifier, name, type_vars=type_vars, span=eff_span
+                )
+            )
             if qualifier is not None:
                 local_name = self._local_qualified_type_name(qualifier, name)
                 if local_name is not None:
@@ -1652,6 +1737,11 @@ class TypeEnvironment:
                 self.resolve_type_expr(a, span=None, _resolving=_resolving, type_vars=type_vars)
                 for a in type_expr.args
             )
+            if owner_member is not None:
+                raise AglTypeError(
+                    f"Type '{rendered_owner}::{type_expr.name}' does not take type arguments.",
+                    span=eff_span,
+                )
             if qualifier is not None and qualifier.anchor is None:
                 opened = self._resolve_opened_applied_type(
                     _type_path_atom(

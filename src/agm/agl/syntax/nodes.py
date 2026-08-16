@@ -1159,11 +1159,12 @@ class VariantDef:
 
 @dataclass(frozen=True, slots=True)
 class VariantRef:
-    """A referenced member inside an ``enum`` declaration."""
+    """A referenced record member inside an ``enum`` declaration."""
 
     chain: QualifierChain
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    type_args: tuple[TypeExpr, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

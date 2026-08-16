@@ -165,6 +165,7 @@ from agm.agl.syntax.nodes import (
     UnitLit,
     VarDecl,
     VariantDef,
+    VariantRef,
     VarPattern,
     VarRef,
     WildcardPattern,
@@ -267,6 +268,10 @@ class _Resolver:
         | None = None,
         cross_module_constructor_refs: Mapping[tuple[ModuleId, NameAtom], ConstructorRef]
         | None = None,
+        referenced_member_constructor_refs: Mapping[
+            tuple[ModuleId, int], tuple[ConstructorRef, ...]
+        ]
+        | None = None,
         cross_module_constructible_types: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
         cross_module_type_scopes: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
         allow_root_statements: bool = False,
@@ -290,6 +295,11 @@ class _Resolver:
         ] = decl_info if decl_info is not None else {}
         self._cross_module_constructor_refs: Mapping[tuple[ModuleId, NameAtom], ConstructorRef] = (
             cross_module_constructor_refs if cross_module_constructor_refs is not None else {}
+        )
+        self._referenced_member_constructor_refs = (
+            referenced_member_constructor_refs
+            if referenced_member_constructor_refs is not None
+            else {}
         )
         # One canonical metadata object represents each member-record
         # declaration. Import routes, local candidates, and retained REPL
@@ -682,27 +692,28 @@ class _Resolver:
         self._type_paths.add(type_scope)
         if isinstance(item, EnumDef):
             for member in item.members:
-                variant = cast(VariantDef, member)
-                variant_key = (self._module_id, type_scope, variant.name)
+                if not isinstance(member, VariantDef):
+                    continue
+                variant_key = (self._module_id, type_scope, member.name)
                 existing_variant = self._scope_entity_kinds.get(variant_key)
                 if existing_variant in {"ordinary", "type"}:
                     raise AglScopeError(
-                        f"Name '{variant.name}' is already declared in this scope.",
-                        span=variant.span,
+                        f"Name '{member.name}' is already declared in this scope.",
+                        span=member.span,
                     )
                 self._scope_entity_kinds[variant_key] = "type"
                 self._declarations[variant_key] = BindingRef(
-                    name=variant.name,
+                    name=member.name,
                     mutable=False,
-                    decl_span=variant.span,
-                    decl_node_id=variant.node_id,
+                    decl_span=member.span,
+                    decl_node_id=member.node_id,
                     kind=BinderKind.constructor_binding,
                     module_id=self._module_id,
                     scope_path=type_scope,
                 )
-                member_scope = type_scope + (variant.name,)
+                member_scope = type_scope + (member.name,)
                 self._scope_paths.add(member_scope)
-                self._scope_node_ids.setdefault(member_scope, variant.node_id)
+                self._scope_node_ids.setdefault(member_scope, member.node_id)
                 self._type_paths.add(member_scope)
 
     def _classify_method_declarations(self) -> None:
@@ -1183,11 +1194,18 @@ class _Resolver:
                 type_scope = path + (item.name,)
                 self._remove_constructor_candidates_in_type_scope(type_scope)
                 for member in item.members:
-                    variant = cast(VariantDef, member)
-                    cref = self._constructor_metadata_by_decl_id[(self._module_id, variant.node_id)]
-                    self._add_constructor_candidate(
-                        variant.name, cref, scope_path=type_scope, inject_bare=not path
-                    )
+                    if isinstance(member, VariantDef):
+                        cref = self._constructor_metadata_by_decl_id[
+                            (self._module_id, member.node_id)
+                        ]
+                        self._add_constructor_candidate(
+                            member.name, cref, scope_path=type_scope, inject_bare=not path
+                        )
+                        continue
+                    assert isinstance(member, VariantRef)
+                    if not path:
+                        for cref in self._referenced_member_constructor_candidates(member):
+                            self._add_constructor_candidate(cref.owner_name, cref)
             elif isinstance(item, ExceptionDef):
                 cref = self._constructor_metadata_by_decl_id[(self._module_id, item.node_id)]
                 self._add_constructor_candidate(
@@ -1740,21 +1758,35 @@ class _Resolver:
         owner_path = _bare_path(source)
         scope = self._current_scope()
         for member in declaration.members:
-            variant = cast(VariantDef, member)
+            if isinstance(member, VariantRef):
+                constructors = self._referenced_member_constructor_refs.get(
+                    (module, member.node_id), ()
+                )
+                for referenced_constructor in constructors:
+                    ref = BindingRef(
+                        name=referenced_constructor.owner_name,
+                        mutable=False,
+                        decl_span=span,
+                        decl_node_id=referenced_constructor.owner_decl_node_id,
+                        kind=BinderKind.constructor_binding,
+                        module_id=referenced_constructor.owner_module_id,
+                        scope_path=referenced_constructor.owner_path,
+                    )
+                    scope.contribute_bare(referenced_constructor.owner_name, ref)
+                    scope.contribute_bare_constructor(
+                        referenced_constructor.owner_name, referenced_constructor
+                    )
+                continue
             # A same-named top-level exception already owns the bare name
             # (checked by its own plain atom, not the variant's owner-path
             # key); the exception's own bare contribution stands alone.
-            if isinstance(self._all_public_types.get((module, variant.name)), ExceptionDef):
+            if isinstance(self._all_public_types.get((module, member.name)), ExceptionDef):
                 continue
-            variant_qname = (module, _bare_atom((*owner_path, variant.name)))
-            ref, constructor = self._cross_module_member_ref(variant.name, variant_qname, span)
-            scope.contribute_bare(variant.name, ref)
-            # Every enum variant has a constructor: `_cross_module_constructor_refs`
-            # is built from the same `_all_public_types` table by iterating this
-            # same declaration's variants unconditionally (see
-            # `_cross_module_constructor_refs` in scope/program.py).
+            variant_qname = (module, _bare_atom((*owner_path, member.name)))
+            ref, constructor = self._cross_module_member_ref(member.name, variant_qname, span)
+            scope.contribute_bare(member.name, ref)
             assert constructor is not None
-            scope.contribute_bare_constructor(variant.name, constructor)
+            scope.contribute_bare_constructor(member.name, constructor)
 
     def _open_target_members(
         self, decl: OpenDecl
@@ -3251,8 +3283,14 @@ class _Resolver:
     # Pattern variable binding
     # ------------------------------------------------------------------
 
+    def _referenced_member_constructor_candidates(
+        self, member: VariantRef
+    ) -> tuple[ConstructorRef, ...]:
+        """Find metadata for a member reference during declaration collection."""
+        return self._referenced_member_constructor_refs.get((self._module_id, member.node_id), ())
+
     def _qualified_pattern_constructor_candidates(
-        self, node: ConstructorPattern
+        self, node: ConstructorPattern | VarRef
     ) -> tuple[ConstructorRef, ...]:
         """Select the constructors a qualified pattern spelling can match.
 

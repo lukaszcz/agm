@@ -1,0 +1,33 @@
+# Referenced records remain their own values while inhabiting each declared enum slot.
+record R1(x: int)
+record R2(label: text)
+record Box[T](value: T)
+type TextBox = Box[text]
+
+enum RR = ::R1 | ::R2 | R3(child: RR)
+enum RRPrime = ::R1 | RR::R3
+enum Generic[T] = ::Box[T] | ::R1
+enum Aliased = ::TextBox
+
+program def main() -> unit =
+  let r = R1(x = 1)
+  let rr: RR = r
+  let also: RRPrime = r
+  let generic: Generic[text] = Box(value = "ok")
+  let aliased: Aliased = Box(value = "alias")
+  let nested: RR = R3(child = rr)
+  let from_rr = case rr of
+    | R1(x) => "rr %{x}"
+    | R2(label) => label
+    | R3() => "nested"
+  let from_also = case also of
+    | R1(x) => "prime %{x}"
+    | R3() => "nested"
+  let wire = nested as json
+  let decoded: RR = wire as RR
+  print from_rr
+  print from_also
+  print generic
+  print aliased
+  print wire
+  print decoded

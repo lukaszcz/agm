@@ -74,11 +74,12 @@ from agm.agl.syntax.nodes import (
     RecordDef,
     TypeAlias,
     VariantDef,
+    VariantRef,
     scoped_public_name,
     static_type_items,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import TypeExpr, member_type_params
+from agm.agl.syntax.types import AppliedT, NameT, TypeExpr, member_type_params
 from agm.agl.typecheck.env import (
     AglTypeError,
     ConstructorSignature,
@@ -262,7 +263,8 @@ class _TypeBuilder:
                 self._clear_inline_member_names(item)
                 self._register_record_or_enum_handle(item, is_enum=True)
                 for member in item.members:
-                    self._register_inline_member_handle(item, cast(VariantDef, member))
+                    if isinstance(member, VariantDef):
+                        self._register_inline_member_handle(item, member)
                 self._enum_defs[item.name] = item
             elif isinstance(item, ExceptionDef):
                 self._register_name(
@@ -488,8 +490,37 @@ class _TypeBuilder:
         member_defs: list[TypeDef] = []
         members: list[RecordType] = []
         enum_decl_id = _decl_identity(module_id, scope_path, bare_name, stmt.node_id)
+        member_spans: list[SourceSpan] = []
         for member in stmt.members:
-            vd = cast(VariantDef, member)
+            if isinstance(member, VariantRef):
+                reference = (
+                    AppliedT(
+                        name=member.chain.member,
+                        args=member.type_args,
+                        qualifier=member.chain,
+                        span=member.span,
+                        node_id=member.node_id,
+                    )
+                    if member.type_args
+                    else NameT(
+                        name=member.chain.member,
+                        qualifier=member.chain,
+                        span=member.span,
+                        node_id=member.node_id,
+                    )
+                )
+                resolved = self._env.resolve_type_expr(
+                    reference, span=member.span, type_vars=type_vars
+                )
+                if not isinstance(resolved, RecordType):
+                    raise AglTypeError(
+                        f"Enum member reference '{member.chain.member}' must name a record.",
+                        span=member.span,
+                    )
+                members.append(resolved)
+                member_spans.append(member.span)
+                continue
+            vd = member
             fields: dict[str, Type] = {}
             seen_fields: dict[str, SourceSpan] = {}
             for fd in vd.fields:
@@ -525,6 +556,22 @@ class _TypeBuilder:
                     decl_id=decl_id,
                 )
             )
+            member_spans.append(vd.span)
+        seen_declarations: set[int] = set()
+        seen_names: set[str] = set()
+        for record_member, span in zip(members, member_spans, strict=True):
+            if record_member.decl_id in seen_declarations:
+                raise AglTypeError(
+                    "Enum members must name distinct record declarations.", span=span
+                )
+            if record_member.name in seen_names:
+                raise AglTypeError(
+                    "Enum members must have distinct terminal names; "
+                    f"'{record_member.name}' is repeated.",
+                    span=span,
+                )
+            seen_declarations.add(record_member.decl_id)
+            seen_names.add(record_member.name)
         return (
             TypeDef(
                 kind="enum",
@@ -545,10 +592,11 @@ class _TypeBuilder:
         scope_path = tuple(segment.name for segment in stmt.scope_path)
         bare_name = _bare_name(stmt.name)
         for member in stmt.members:
-            vd = cast(VariantDef, member)
+            if not isinstance(member, VariantDef):
+                continue
             self._env.register_constructor_field_kinds(
-                vd.name,
-                tuple((fd.name, fd.kind) for fd in vd.fields),
+                member.name,
+                tuple((fd.name, fd.kind) for fd in member.fields),
                 scope_path=(*scope_path, bare_name),
                 module_id=module_id,
             )
@@ -857,9 +905,10 @@ class _TypeBuilder:
         self._validate_builtin_shape(stmt, typedef, _BUILTIN_ENUM_TYPE_DEFS)
         self._env.type_table.register(typedef)
         for member in stmt.members:
-            vd = cast(VariantDef, member)
+            if not isinstance(member, VariantDef):
+                continue
             member_type = next(
-                member_type for member_type in typedef.members if member_type.name == vd.name
+                member_type for member_type in typedef.members if member_type.name == member.name
             )
             fields = self._env.type_table.record_fields(member_type)
             self._env.register_constructor_signature(

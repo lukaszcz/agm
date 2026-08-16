@@ -1,0 +1,1 @@
+{"scenarios": [{"name": "imported_direct_and_generic_aliases_target_inline_member", "module_roots": ["program_modules/referenced_inline_member_aliases"], "expect": {"stdout": "Source::Member(value = 4)\nSource::Member(value = \"five\")\n"}}]}

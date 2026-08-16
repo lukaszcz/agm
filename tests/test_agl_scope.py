@@ -117,12 +117,6 @@ def diag(err: AglScopeError) -> tuple[int, str]:
     return d.line, d.message
 
 
-def test_enum_member_reference_is_rejected_during_scope_resolution() -> None:
-    error = reject_scope("enum RR = ::R1")
-
-    assert error.to_diagnostic().line == 1
-
-
 def _find_varref(program: object, name: str, occurrence: int = -1) -> VarRef:
     """Walk *program* depth-first; return the VarRef named *name* at *occurrence*.
 

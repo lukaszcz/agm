@@ -1,0 +1,5 @@
+import outer using E
+
+program def main() -> unit =
+  let value: E = Shared(value = 4)
+  print value

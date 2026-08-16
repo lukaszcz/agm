@@ -1,0 +1,12 @@
+scope One
+record Shared(value: int)
+end One
+
+type First = One::Shared
+type Second = One::Shared
+enum FirstEnum = ::First
+enum SecondEnum = ::Second
+
+program def main() -> unit =
+  let value = Shared(value = 1)
+  print value.value

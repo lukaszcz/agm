@@ -2645,3 +2645,20 @@ def test_bare_pattern_constructor_shared_spelling_defers_to_scrutinee(tmp_path: 
         for ref in entry.resolved.pattern_constructor_candidates[pattern.node_id]
     }
     assert candidate_owners == {(("Local",), "same"), (("Foreign",), "same")}
+
+
+def test_scoped_invalid_referenced_member_does_not_create_a_constructor_candidate(
+    tmp_path: Path,
+) -> None:
+    """Scope collection leaves an invalid referenced member to type checking."""
+    graph = _make_graph_from_files(
+        tmp_path,
+        {
+            "entry": "open import lib\nscope Local\nimport lib using E\nend Local\n()",
+            "lib": "import target\nenum E = target::NotRecord",
+            "target": "enum NotRecord\n  | variant",
+        },
+    )
+
+    result = resolve_program(graph)
+    assert result.modules[ENTRY_ID].resolved.constructor_candidates.get("NotRecord") is None

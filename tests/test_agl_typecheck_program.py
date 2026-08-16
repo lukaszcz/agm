@@ -940,6 +940,94 @@ def test_std_core_generic_member_type_resolves_to_an_inhabited_record() -> None:
     )
 
 
+def test_owner_applied_inline_member_aliases_substitute_captured_parameters() -> None:
+    """Aliases retain the inline member type specialized by its enum owner."""
+    checked = _check(
+        "enum Source[T]\n"
+        "  | Member(value: T)\n"
+        "type Direct = Source[text]::Member\n"
+        "type Generic[T] = Source[T]::Member\n"
+        "record Holder\n"
+        "  direct: Direct\n"
+        "  generic: Generic[int]\n"
+        "()"
+    )
+
+    holder = next(typ for typ in checked.type_env.type_table.entries() if typ.name == "Holder")
+    fields = dict(checked.type_env.type_table.record_fields(holder.handle()))
+    assert strip_decl_ids(fields["direct"]) == RecordType(
+        "Member", (TextType(),), scope_path=("Source",)
+    )
+    assert strip_decl_ids(fields["generic"]) == RecordType(
+        "Member", (IntType(),), scope_path=("Source",)
+    )
+
+
+def test_cross_module_owner_applied_inline_member_aliases_substitute_captured_parameters(
+    tmp_path: Path,
+) -> None:
+    """Imported aliases preserve owner-applied inline member specialization."""
+    checked = _check_program(
+        tmp_path,
+        {
+            "entry": (
+                "import lib\nrecord Holder\n  direct: lib::Direct\n  generic: lib::Generic[int]\n()"
+            ),
+            "lib": (
+                "enum Source[T]\n"
+                "  | Member(value: T)\n"
+                "type Direct = Source[text]::Member\n"
+                "type Generic[T] = Source[T]::Member"
+            ),
+        },
+    )
+
+    entry_env = checked.modules[ENTRY_ID].type_env
+    holder = next(typ for typ in entry_env.type_table.entries() if typ.name == "Holder")
+    fields = dict(entry_env.type_table.record_fields(holder.handle()))
+    library = ModuleId.from_path("lib")
+    assert strip_decl_ids(fields["direct"]) == RecordType(
+        "Member", (TextType(),), module_id=library, scope_path=("Source",)
+    )
+    assert strip_decl_ids(fields["generic"]) == RecordType(
+        "Member", (IntType(),), module_id=library, scope_path=("Source",)
+    )
+
+
+def test_owner_applied_inline_member_rejects_a_second_type_application() -> None:
+    """An applied owner makes its member concrete before a member application."""
+    with pytest.raises(AglTypeError, match="does not take type arguments"):
+        _check(
+            "enum Source[T]\n  | Member(value: T)\ntype Invalid[T] = Source[text]::Member[T]\n()"
+        )
+
+
+def test_owner_applied_inline_member_rejects_non_enum_owners_and_unknown_members() -> None:
+    """Owner application uses the enum member namespace rather than a raw path."""
+    with pytest.raises(AglTypeError, match="not a generic enum"):
+        _check("record Source[T](value: T)\ntype Invalid = Source[text]::Member\n()")
+    with pytest.raises(AglTypeError, match="Unknown scoped type"):
+        _check("enum Source[T]\n  | Known(value: T)\ntype Invalid = Source[text]::Member\n()")
+
+
+def test_cross_module_owner_applied_inline_member_rejects_a_second_type_application(
+    tmp_path: Path,
+) -> None:
+    """An imported generic alias cannot reapply a member after its owner."""
+    with pytest.raises(AglTypeError, match="does not take type arguments"):
+        _check_program(
+            tmp_path,
+            {
+                "entry": "import lib\n()",
+                "lib": (
+                    "enum Source[T]\n"
+                    "  | Member(value: T)\n"
+                    "type Invalid[T] = Source[text]::Member[T]"
+                ),
+            },
+        )
+
+
 def test_inline_member_records_resolve_in_local_type_positions() -> None:
     checked = _check(
         "scope Forest\n"

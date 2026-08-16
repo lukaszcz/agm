@@ -1,0 +1,3 @@
+import target using Shared
+type Alias[T] = Shared[T]
+enum E[T] = ::Alias[T]

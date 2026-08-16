@@ -199,11 +199,13 @@ enum_body: enum_variant_seq
 enum_variant_seq: first_variant_def variant_tail*
 
 first_variant_def: PIPE? name variant_payload?               -> variant_def
-                 | PIPE? qual_ref_chain                       -> variant_ref
+                 | PIPE? qual_ref_chain member_type_args?     -> variant_ref
                  | PIPE? qual_ref_chain variant_payload       -> variant_ref_with_payload
 variant_tail: PIPE name variant_payload?                       -> variant_def
-            | PIPE qual_ref_chain                             -> variant_ref
+            | PIPE qual_ref_chain member_type_args?           -> variant_ref
             | PIPE qual_ref_chain variant_payload             -> variant_ref_with_payload
+
+member_type_args: type_lsqb type_arg_list RSQB
 
 variant_payload: LPAR field_list? RPAR
 

@@ -464,6 +464,8 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
 
     elif isinstance(node, VariantRef):
         walk(node.chain, callback)
+        for type_arg in node.type_args:
+            walk(type_arg, callback)
 
     elif isinstance(node, EnumDef):
         for scope_segment in node.scope_path:

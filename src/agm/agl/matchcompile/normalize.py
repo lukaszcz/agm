@@ -349,13 +349,10 @@ def _canonical_enum_pattern_variant(
     if recorded_spelling is not None and recorded_spelling != source_name:
         enum_constructor(subject_type, source_name, checked.type_env.type_table)
         raise MatchCompileInvariantError("invalid final constructor classification")
-    if source_name in variants:
-        if constructor_ref.variant != source_name:
-            raise MatchCompileInvariantError("invalid final constructor classification")
-        return source_name
-    if constructor_ref.variant is None or constructor_ref.variant not in variants:
+    canonical_variant = constructor_ref.variant
+    if canonical_variant is None or canonical_variant not in variants:
         raise MatchCompileInvariantError("invalid final constructor classification")
-    return constructor_ref.variant
+    return canonical_variant
 
 
 def normalize_pattern(

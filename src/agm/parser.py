@@ -588,8 +588,8 @@ _HELP_TEXTS: dict[str, str] = {
           --no-log              Disable trace logging (overrides config).
           --log, --log-file, and --no-log are mutually exclusive.
           --log-file and --no-log-file are mutually exclusive.
-          --no-stdlib           Disable automatic std/core opening throughout the
-                                loaded program (entry and library modules).
+          --no-stdlib           Disable the automatic import std/core::* prelude
+                                throughout the loaded program (entry and library modules).
           -I DIR, --module-path DIR
                                 Add DIR as an additional module search root
                                 (repeatable). Resolved relative to the invocation
@@ -617,8 +617,8 @@ _HELP_TEXTS: dict[str, str] = {
         that accumulates bindings, types, and declarations across entries, so
         earlier results stay available and agent calls fire exactly once.  The
         session reuses the [exec] configuration (default agent, call-depth
-        limit, JSON strictness, timeout). Like agm exec, it
-        automatically opens std/core throughout each loaded program, so
+        limit, JSON strictness, timeout). Like agm exec, it supplies an automatic
+        import std/core::* prelude to each loaded program, so
         standard-library names are available unqualified. Other imports are
         qualified by default; use --no-stdlib to require an explicit std/core
         import instead.
@@ -644,8 +644,8 @@ _HELP_TEXTS: dict[str, str] = {
           --confirm-agents     Confirm each agent call before dispatching it
                                 (default: fire agent calls without confirming).
           --quiet               Suppress automatic echoing of entry results.
-          --no-stdlib           Disable automatic std/core opening for each loaded
-                                REPL program (entries and library modules).
+          --no-stdlib           Disable the automatic import std/core::* prelude for
+                                each loaded REPL program (entries and library modules).
                                 Explicit imports remain available, and :reset
                                 keeps this choice.
           --log                 Enable trace logging (auto timestamped path).

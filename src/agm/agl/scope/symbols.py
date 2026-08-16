@@ -523,6 +523,14 @@ def resolve_bare_contribution(
 
 
 @dataclass(frozen=True, slots=True)
+class ResolvedUseTarget:
+    """Stable semantic identity of one local or imported ``use`` target."""
+
+    local_path: ScopePath | None = None
+    imported_routes: tuple[tuple[ModuleId, ScopePath], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class ModuleResolution:
     """Output of the scope resolution pass.
 
@@ -614,6 +622,7 @@ class ModuleResolution:
     pattern_slots: dict[int, PatternSlot] = field(default_factory=dict)
     match_site_pattern_slots: dict[int, tuple[int, ...]] = field(default_factory=dict)
     method_declarations: dict[DeclarationKey, ScopePath] = field(default_factory=dict)
+    use_targets: dict[int, ResolvedUseTarget] = field(default_factory=dict)
 
     def receiver_owner_for(self, module_id: ModuleId, node: FuncDef) -> ScopePath | None:
         """Return scope's receiver classification for *node*, if it has one.

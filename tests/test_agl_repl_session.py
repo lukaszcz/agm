@@ -4577,6 +4577,79 @@ class TestImports:
         assert not s.eval_entry("original()").ok
         assert s.eval_entry("replacement()").value == IntValue(2)
 
+    def test_single_member_alias_use_is_replaced_by_parent_target(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("def Source::old() -> int = 1").ok
+        assert session.eval_entry("def Source::new() -> int = 2").ok
+        assert session.eval_entry("use Source::old as selected").ok
+
+        replacement = session.eval_entry("use Source::{new}")
+
+        assert replacement.ok, replacement.diagnostics
+        assert session.eval_entry("new()").value == IntValue(2)
+        assert not session.eval_entry("selected()").ok
+
+    def test_nested_relative_and_current_module_use_targets_replace_each_other(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("def Outer::Source::old() -> int = 1").ok
+        assert session.eval_entry("def Outer::Source::new() -> int = 2").ok
+        assert session.eval_entry("scope Outer\nuse Source::{old}\nend Outer").ok
+
+        replacement = session.eval_entry("scope Outer\nuse ::Outer::Source::{new}\nend Outer")
+
+        assert replacement.ok, replacement.diagnostics
+        assert not session.eval_entry(
+            "scope Outer\ndef read() -> int = old()\nend Outer\nOuter::read()"
+        ).ok
+
+    def test_regional_import_tail_does_not_canonicalize_an_unrelated_use(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "lib.agl").write_text(
+            "scope Source\ndef old() -> int = 9\nend Source\n", encoding="utf-8"
+        )
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("def Right::Source::old() -> int = 1").ok
+        assert session.eval_entry("def Right::Source::new() -> int = 2").ok
+        assert session.eval_entry(
+            "scope Left\nimport lib::{Source}\nend Left\nscope Right\nuse Source::{old}\nend Right"
+        ).ok
+
+        replacement = session.eval_entry("scope Right\nuse ::Right::Source::{new}\nend Right")
+
+        assert replacement.ok, replacement.diagnostics
+        assert not session.eval_entry(
+            "scope Right\ndef read() -> int = old()\nend Right\nRight::read()"
+        ).ok
+
+    def test_glob_imported_scope_use_is_replaced_by_anchored_target(self, tmp_path: Path) -> None:
+        (tmp_path / "lib.agl").write_text(
+            "scope Source\ndef old() -> int = 1\ndef new() -> int = 2\nend Source\n",
+            encoding="utf-8",
+        )
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("import lib::*\nuse Source::{old}").ok
+
+        replacement = session.eval_entry("use /lib::Source::{new}")
+
+        assert replacement.ok, replacement.diagnostics
+        assert session.eval_entry("new()").value == IntValue(2)
+        assert not session.eval_entry("old()").ok
+
+    def test_wildcard_facade_use_survives_alias_replacement(self, tmp_path: Path) -> None:
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text("def old() -> int = 1\n", encoding="utf-8")
+        (package / "b.agl").write_text("def new() -> int = 2\n", encoding="utf-8")
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("import pkg/* as Old\nuse Old::{old}").ok
+
+        replacement = session.eval_entry("import pkg/* as New\nuse New::{new}")
+
+        assert replacement.ok, replacement.diagnostics
+        assert session.eval_entry("new()").value == IntValue(2)
+        assert not session.eval_entry("old()").ok
+
     def test_anchored_use_replaces_suffix_use_of_same_module(self, tmp_path: Path) -> None:
         package = tmp_path / "pkg"
         package.mkdir()

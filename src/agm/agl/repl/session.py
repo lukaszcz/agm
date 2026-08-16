@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.agents import AgentFn
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.host_settings import HostSettingsPolicy
-    from agm.agl.scope.symbols import ConstructorRef, ScopeNode
+    from agm.agl.scope.symbols import ConstructorRef, ResolvedUseTarget, ScopeNode
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import EnumValue, Frame, Value
     from agm.agl.setting_overrides import SettingOverride
@@ -292,6 +292,7 @@ class ReplSession:
         # context for reuse. Uses follow the same entry retention model.
         self._accumulated_imports: list[tuple["ImportDecl", ...]] = []
         self._accumulated_uses: list[tuple["UseDecl | ImportDecl | ScopeRegion", ...]] = []
+        self._accumulated_use_targets: list[dict[int, "ResolvedUseTarget"]] = []
         # Resolved user infix fixity declared in prior promoted entries
         # (operator name → ``(priority, associativity)``). Passed to the parser
         # as ambient fixity so an ``infixl``/``infixr`` declaration made in one
@@ -1506,6 +1507,7 @@ class ReplSession:
         self._active_imported_params = {}
         self._accumulated_imports = []
         self._accumulated_uses = []
+        self._accumulated_use_targets = []
         self._accumulated_infix = {}
         # Discard the session's extern (Python FFI) registry like every other
         # session-scoped binding: a companion resolves and imports again on

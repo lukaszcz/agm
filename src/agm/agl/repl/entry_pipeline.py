@@ -14,7 +14,9 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Protocol, cast
 
 from agm.agl.diagnostics import Diagnostic, diagnostic_from_span
+from agm.agl.modules.ids import ModuleId
 from agm.agl.repl.entry import EntryKind, EntryResult
+from agm.agl.scope.symbols import ResolvedUseTarget
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -25,7 +27,6 @@ if TYPE_CHECKING:
     from agm.agl.ir.program import IrParam
     from agm.agl.lower import LinkImage
     from agm.agl.matchcompile import MatchCompiledProgram
-    from agm.agl.modules.ids import ModuleId
     from agm.agl.modules.loader import LoadedModule
     from agm.agl.modules.roots import RootSet
     from agm.agl.pipeline import RunError
@@ -42,7 +43,7 @@ if TYPE_CHECKING:
     from agm.agl.typecheck.program import CheckedProgram
 
 
-_UseGenerationKey = tuple[tuple[str, ...], bool, bool, tuple[str, ...]]
+_UseGenerationKey = tuple[tuple[str, ...], ResolvedUseTarget]
 
 
 # ---------------------------------------------------------------------------
@@ -57,6 +58,7 @@ class EntryPipelineCtx(Protocol):
     _active_imported_params: dict[SymbolId, IrParam]
     _accumulated_imports: list[tuple[ImportDecl, ...]]
     _accumulated_uses: list[tuple[UseDecl | ImportDecl | ScopeRegion, ...]]
+    _accumulated_use_targets: list[dict[int, ResolvedUseTarget]]
     _link_image: LinkImage
     _ir_base_frame: Frame
     _setting_overrides: dict[str, SettingOverride]
@@ -921,7 +923,7 @@ class EntryPipeline:
         retain_library_state(
             frozenset(module_id for module_id in checked_program.modules if not module_id.is_entry)
         )
-        self._retain_import_context(entry_imports, entry_uses)
+        self._retain_import_context(entry_imports, entry_uses, checked.resolved.use_targets)
         marker = lowered.trailing_expression
         initializer_values = interp.module_initializer_values.get(lowered.program.entry_module)
         captured = (
@@ -976,8 +978,11 @@ class EntryPipeline:
         latest_use_generation: dict[_UseGenerationKey, int] = {}
         generation_use_keys: dict[int, _UseGenerationKey] = {}
         effective_imports: dict[tuple[tuple[str, ...], tuple[str, ...]], list[ImportDecl]] = {}
-        for retained_root_decls, scoped_items in zip(
-            self._ctx._accumulated_imports, self._ctx._accumulated_uses, strict=True
+        for retained_root_decls, scoped_items, resolved_use_targets in zip(
+            self._ctx._accumulated_imports,
+            self._ctx._accumulated_uses,
+            self._ctx._accumulated_use_targets,
+            strict=True,
         ):
             expanded_root_decls, next_start_id = self._expand_decls(
                 retained_root_decls, roots, next_start_id
@@ -1001,7 +1006,11 @@ class EntryPipeline:
                 decl for declarations in effective_imports.values() for decl in declarations
             )
             for use_decl in self._use_decls(expanded_scoped):
-                use_key = self._use_generation_key(use_decl, visible_imports)
+                target = resolved_use_targets[use_decl.node_id]
+                use_key = (
+                    tuple(segment.name for segment in use_decl.scope_path),
+                    target,
+                )
                 generation_use_keys[use_decl.node_id] = use_key
                 latest_use_generation[use_key] = index
 
@@ -1064,58 +1073,51 @@ class EntryPipeline:
 
     @staticmethod
     def _use_generation_key(decl: UseDecl, imports: tuple[ImportDecl, ...]) -> _UseGenerationKey:
-        """Return *decl*'s replacement key using its resolved target identity."""
+        """Return a provisional key; retained uses use scope's semantic identity."""
+        region = tuple(segment.name for segment in decl.scope_path)
         target = tuple(segment.name for segment in decl.target)
-        canonical: tuple[str, ...] | None = None
         if decl.current_module:
-            canonical = ("\0current", "\0scope", *target)
-        elif decl.anchored and target:
-            canonical = (
-                "\0module",
-                *tuple(part for part in target[0].split("/") if part),
-                "\0scope",
-                *target[1:],
+            return region, ResolvedUseTarget(local_path=target)
+
+        assert target
+        candidates: set[tuple[ModuleId, tuple[str, ...]]] = set()
+        route = tuple(part for part in target[0].split("/") if part)
+        for import_decl in imports:
+            module_path = tuple(import_decl.module_path)
+            module_id = ModuleId(module_path)
+            direct = False
+            if decl.anchored:
+                direct = module_path == route
+            elif import_decl.alias == target[0]:
+                direct = True
+            elif import_decl.alias is None and len(module_path) >= len(route):
+                direct = module_path[-len(route) :] == route
+            if direct:
+                candidates.add((module_id, target[1:]))
+
+            import_region = tuple(segment.name for segment in import_decl.scope_path)
+            tail_visible = region[: len(import_region)] == import_region
+            if decl.anchored or not tail_visible or import_decl.tail is None:
+                continue
+            if import_decl.tail == ():
+                candidates.add((module_id, target))
+                continue
+            for item in import_decl.tail:
+                source = (*tuple(segment.name for segment in item.scope_path), item.name)
+                exposed = (item.rename,) if item.rename is not None else source
+                if target[: len(exposed)] == exposed:
+                    candidates.add((module_id, (*source, *target[len(exposed) :])))
+
+        if candidates:
+
+            def route_key(item: tuple[ModuleId, tuple[str, ...]]) -> str:
+                return item[0].path_str()
+
+            return region, ResolvedUseTarget(
+                imported_routes=tuple(sorted(candidates, key=route_key))
             )
-        else:
-            assert target
-            candidates: set[tuple[str, ...]] = set()
-            route = tuple(part for part in target[0].split("/") if part)
-            for import_decl in imports:
-                module_path = tuple(import_decl.module_path)
-                if import_decl.alias == target[0]:
-                    candidates.add(("\0module", *module_path, "\0scope", *target[1:]))
-                elif import_decl.alias is None and module_path[-len(route) :] == route:
-                    candidates.add(("\0module", *module_path, "\0scope", *target[1:]))
-                for item in import_decl.tail or ():
-                    source = (*tuple(segment.name for segment in item.scope_path), item.name)
-                    exposed = (item.rename,) if item.rename is not None else source
-                    if target[: len(exposed)] == exposed:
-                        candidates.add(
-                            (
-                                "\0module",
-                                *module_path,
-                                "\0scope",
-                                *source,
-                                *target[len(exposed) :],
-                            )
-                        )
-            if len(candidates) == 1:
-                canonical = next(iter(candidates))
-            elif not candidates:
-                canonical = ("\0current", "\0scope", *target)
-        if canonical is not None:
-            return (
-                tuple(segment.name for segment in decl.scope_path),
-                False,
-                False,
-                canonical,
-            )
-        return (
-            tuple(segment.name for segment in decl.scope_path),
-            decl.anchored,
-            decl.current_module,
-            target,
-        )
+        local_path = target if decl.anchored else (*region, *target)
+        return region, ResolvedUseTarget(local_path=local_path)
 
     @staticmethod
     def _expand_decls(
@@ -1295,6 +1297,7 @@ class EntryPipeline:
         self,
         entry_imports: tuple[ImportDecl, ...],
         entry_uses: tuple[UseDecl | ImportDecl | ScopeRegion, ...],
+        resolved_use_targets: Mapping[int, ResolvedUseTarget],
     ) -> None:
         """Retain one successful entry's aligned root/scoped import generation.
 
@@ -1306,6 +1309,7 @@ class EntryPipeline:
             return
         self._ctx._accumulated_imports.append(entry_imports)
         self._ctx._accumulated_uses.append(entry_uses)
+        self._ctx._accumulated_use_targets.append(dict(resolved_use_targets))
 
     def _persist_interpreter_settings(self, interp: "IrInterpreter", trace: "TraceStore") -> None:
         """Persist completed setting writes and the live trace destination."""

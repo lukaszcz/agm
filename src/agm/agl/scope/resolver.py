@@ -77,6 +77,7 @@ from agm.agl.scope.symbols import (
     LocalUseContribution,
     ModuleResolution,
     PatternSlot,
+    ResolvedUseTarget,
     ScopeNode,
     ScopePath,
     SlotCandidate,
@@ -347,6 +348,7 @@ class _Resolver:
 
         self._resolution: dict[int, BindingRef] = {}
         self._builtin_calls: dict[int, BuiltinKind] = {}
+        self._use_targets: dict[int, ResolvedUseTarget] = {}
         # Scope stack — top is the current scope.
         self._scope: ScopeNode | None = None
         # The module's root ScopeNode (set in run()); used by _lookup_own_root
@@ -558,6 +560,7 @@ class _Resolver:
             pattern_slots=dict(self._pattern_slots),
             match_site_pattern_slots=dict(self._match_site_pattern_slots_by_node),
             method_declarations=dict(self._method_declarations),
+            use_targets=dict(self._use_targets),
         )
 
     # ------------------------------------------------------------------
@@ -1756,16 +1759,21 @@ class _Resolver:
                 span=decl.span,
             )
         if local is not None:
+            self._use_targets[decl.node_id] = ResolvedUseTarget(local_path=local)
             self._current_scope().contribute_local_use(
                 LocalUseContribution(declaration=decl, source=self._scope_nodes[local])
             )
             return
         if shared_alias_facade:
+            self._use_targets[decl.node_id] = ResolvedUseTarget(
+                imported_routes=tuple(route for route, _members in direct_imports)
+            )
             self._contribute_use_facade_members(
                 decl, tuple(members for _route, members in direct_imports)
             )
             return
-        _imported_route, imported_members = imported[0]
+        imported_route, imported_members = imported[0]
+        self._use_targets[decl.node_id] = ResolvedUseTarget(imported_routes=(imported_route,))
         self._contribute_use_members(decl, imported_members)
 
     def _reinterpret_single_member_use_alias(self, decl: UseDecl) -> UseDecl:

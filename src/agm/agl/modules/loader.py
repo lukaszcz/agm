@@ -894,6 +894,13 @@ def _load_into_graph(
 
     _resolve_dependencies(ENTRY_ID, (*entry_loaded.imports, *entry_loaded.export_decls))
 
+    # Cached modules were loaded in an earlier REPL compilation. Rebuild their
+    # adjacency before draining the queue so any dependency absent from this
+    # invocation's cache is loaded normally.
+    for mid, loaded in modules.items():
+        if mid != ENTRY_ID:
+            _resolve_dependencies(mid, (*loaded.imports, *loaded.export_decls))
+
     ambient_roots: set[ModuleId] = set()
     if default_stdlib:
         registry_decl = _ambient_builtin_methods_import()
@@ -944,13 +951,6 @@ def _load_into_graph(
         modules[mid] = loaded
         newly_loaded[mid] = loaded
         _resolve_dependencies(mid, (*loaded.imports, *loaded.export_decls))
-
-    # Seeded (cached) modules are reused as-is and were never re-walked above;
-    # record their adjacency so SCCs cover the whole program.  Their import targets
-    # were all loaded when they were first discovered, so nothing new is queued.
-    for mid, loaded in modules.items():
-        if mid not in adj:
-            _resolve_dependencies(mid, (*loaded.imports, *loaded.export_decls))
 
     sccs = _tarjan_sccs(adj)
     ambient_modules: set[ModuleId] = set()

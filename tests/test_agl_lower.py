@@ -2227,7 +2227,7 @@ class TestLowerGraph:
         - Both modules appear in ``program.modules`` with distinct entries.
         - Both modules' functions appear in ``program.functions`` with DISTINCT FunctionIds.
         - ``program.nominals`` contains types from both modules (one record per module).
-        - Exactly one ``SourceFile`` per module (3 sources total, including std/core).
+        - Exactly one ``SourceFile`` per loaded module, including ambient method libraries.
         - The library ``ExecutableModule.initializers`` contains ONLY function binds
           (IrBind wrapping IrMakeClosure).
         - The entry module is LAST in ``program.modules`` insertion order.
@@ -2279,8 +2279,9 @@ class TestLowerGraph:
 
         prog = lower_program(_compiled_checked(cg))
 
-        # The library, entry, and automatic standard-library modules must appear.
-        assert len(prog.modules) == 8
+        # The library, entry, automatic standard-library modules, and ambient
+        # method libraries must appear.
+        assert set(prog.modules) == set(cg.modules)
 
         # Entry module is LAST in insertion order
         module_ids = list(prog.modules.keys())
@@ -2288,8 +2289,8 @@ class TestLowerGraph:
             "Entry module must be last in program.modules insertion order"
         )
 
-        # Exactly one SourceFile per module, including functional stdlib imports.
-        assert len(prog.sources) == 8
+        # Exactly one SourceFile per module, including ambient method libraries.
+        assert len(prog.sources) == len(prog.modules)
 
         # Both modules' functions appear in program.functions with DISTINCT FunctionIds.
         # lib has make_point; entry has no user functions here, but they share one table.
@@ -2356,6 +2357,8 @@ class TestLowerGraph:
         program = lower_program(_compiled_checked(checked), _link=link)
 
         for mid, executable_module in program.modules.items():
+            if mid != lib_mid:
+                continue
             items = checked.modules[mid].resolved.program.body.items
             origins = link.initializer_origins[mid]
             assert len(origins) == len(executable_module.initializers)

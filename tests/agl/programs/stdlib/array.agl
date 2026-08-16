@@ -1,0 +1,101 @@
+# Array methods are ambient; free functions require this explicit import.
+import std/array
+
+param mode: int
+
+def by_order(left: int, right: int) -> int = left - right
+
+program def main() -> unit =
+  case mode of
+    | 1 =>
+        let empty: array[int] = []
+        print(empty.size())
+        print(empty.is-empty())
+        print(empty.first?())
+        print(empty.last?())
+        print(empty.pop?())
+        print(empty.index-of?(2))
+        print(empty.find?(fn(value: int) => value > 0))
+        print(empty.find-index?(fn(value: int) => value > 0))
+        print(empty.all(fn(value: int) => value > 0))
+        print(empty.any(fn(value: int) => value > 0))
+        print(empty.take(3))
+        print(empty.drop(3))
+    | 2 =>
+        let offset = 10
+        var values = [3, 1, 2]
+        let mapped = values.map(fn(value: int) => value + offset)
+        let filtered = values.filter(fn(value: int) => value > 1)
+        print(values)
+        print(mapped)
+        print(filtered)
+        print(values.count(fn(value: int) => value > 1))
+        print(values.index-of(2))
+        values.each(fn(value: int) => print(value))
+        print(values.fold(0, fn(total: int, value: int) => total + value))
+        print(values.fold-right(0, fn(total: int, value: int) => total * 10 + value))
+        print(values.any(fn(value: int) => value == 2))
+        print(values.all(fn(value: int) => value > 0))
+        print(values.find?(fn(value: int) => value == 2))
+        print(values.find-index?(fn(value: int) => value == 2))
+        print(values.reverse())
+        print(values.sort(by_order))
+        print(values.slice(1, 3))
+        print(values.take(2))
+        print(values.drop(1))
+        print(values.concat([4, 5]))
+        values.map!(fn(value: int) => value + offset)
+        values.filter!(fn(value: int) => value > 11)
+        values.reverse!()
+        values.sort!(by_order)
+        values.append(14)
+        values.insert(1, 12)
+        print(values.remove-at(0))
+        print(values.pop())
+        values.extend([15, 16])
+        print(values)
+        values.clear()
+        print(values.is-empty())
+    | 3 =>
+        var singleton = ["one"]
+        let many = array::range(1, 5)
+        print(singleton.first())
+        print(singleton.last())
+        print(singleton.contains("one"))
+        print(singleton.pop?())
+        print(singleton)
+        print(many.zip(["a", "b", "c"]))
+        print(many.enumerate())
+        print(array::join(["a", "b", "c"], ","))
+        print(array::flatten([[1, 2], [], [3, 4]]))
+        print(array::unzip([Pair(first = 1, second = "a"), Pair(first = 2, second = "b")]))
+        print(array::repeat("x", 3))
+        print(many |> (fn(values: array[int]) => values.map(fn(value: int) => value * 2)) |> (fn(values: array[int]) => values.take(3)))
+    | 4 =>
+        let empty: array[int] = []
+        let _ = empty.first()
+        ()
+    | 5 =>
+        let empty: array[int] = []
+        let _ = empty.pop()
+        ()
+    | 6 =>
+        let nested = [[1, 2], [3]]
+        let json_values: array[json] = [[true], [1]]
+        print(nested.index-of([1, 2]))
+        print(nested.index-of?([3]))
+        print(json_values.index-of([1] as json))
+        print(json_values.index-of?([true] as json))
+    | 7 =>
+        var values = [1, 3]
+        values.insert(-2, 0)
+        values.insert(3, 4)
+        print(values)
+    | 8 =>
+        let values = [1]
+        let _ = values.insert(2, 3)
+        ()
+    | _ =>
+        let values = [1]
+        let _ = values.insert(-2, 0)
+        ()

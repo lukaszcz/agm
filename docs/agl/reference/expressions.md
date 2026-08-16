@@ -326,8 +326,9 @@ program def main() -> unit =
 
 Thus `meter.add(3)` calls the method with `meter` as its receiver, while
 `meter.add` can be stored, passed to another function, or partially applied.
-A member access is statically checked. Dictionaries and arrays have no members;
-use indexing for those values. Enum payloads are still extracted by pattern
+A member access is statically checked. Arrays and dictionaries have no fields,
+but their standard-library methods are available by member access; use indexing
+to read their elements or values. Enum payloads are still extracted by pattern
 matching rather than field access.
 
 ## Record update

@@ -249,7 +249,10 @@ def lower_program(
 
     payloads = contract_payloads if contract_payloads is not None else {}
     dry_run_entries: list[DryRunEntry] = []
+    runtime_modules = checked.runtime_modules or frozenset(checked.modules)
     for module_id, cm in checked.modules.items():
+        if module_id not in runtime_modules:
+            continue
         for csr in cm.call_sites:
             dry_run_entries.append(
                 DryRunEntry(

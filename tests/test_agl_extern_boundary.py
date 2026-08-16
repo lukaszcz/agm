@@ -356,6 +356,16 @@ def test_array_view_contains_returns_true_for_a_present_value() -> None:
     assert 2 in view
 
 
+def test_array_view_index_uses_agl_equality_for_nested_arrays_and_json() -> None:
+    nested = AglArrayView(ArrayValue([ArrayValue([IntValue(1)])]))
+    json_values = AglArrayView(ArrayValue([JsonValue([True]), JsonValue([1])]))
+
+    assert nested.index(AglArrayView(ArrayValue([IntValue(1)]))) == 0
+    assert json_values.index(AglJson([1])) == 1
+    assert json_values.index(AglJson([1]), -1) == 1
+    assert json_values.index(AglJson([True]), 0, -1) == 0
+
+
 def test_array_view_clear_empties_the_array() -> None:
     view = AglArrayView(ArrayValue([IntValue(1)]))
 

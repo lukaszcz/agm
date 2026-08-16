@@ -255,10 +255,62 @@ rules.
 - `std/either` declares the neutral `Either[A, B]` sum and its mapping, query, optional-projection, and swapping methods.
 - `std/result` declares `Result[T, E]`, its outcome methods, and `attempt`, which turns a raising nullary function into a `Result`.
 - `std/config` exposes the host engine settings as `builtin var` bindings.
+- `std/array` owns array methods and array utility functions; see
+  [`std/array`](#stdarray).
 - `std/text` exposes `interp(template, vars) -> text` for name-only runtime
   interpolation; see [Strings and interpolation](strings-and-interpolation.md#runtime-interpolation).
 - `std/fs` exposes explicit text filesystem operations: `read`, `write`,
   `append`, `exists`, and `list`; see [`std/fs`](expressions.md#stdfs).
+
+## `std/array`
+
+`std/array` owns methods on `array[E]`. The `std/builtin-methods` registry makes
+these methods available on every array without an import. Import `std/array` to
+call its free functions, for example `array::range(1, 5)`; a plain import keeps
+them qualified, while `open import std/array` also makes them bare.
+
+Operations with a `?` suffix return `Option`; `first`, `last`, and `pop`
+raise `IndexError` when no element is available. `index-of` instead returns
+`-1` when absent, while `index-of?` returns `Option::None`. A `!` suffix marks
+an in-place counterpart of a pure operation. `append`, `insert`, `pop`,
+`remove-at`, `clear`, and `extend` are inherently mutating. `remove-at(i)`
+accepts the same negative positions as normal array indexing. `insert` accepts
+insertion boundaries from `-size()`
+(the start) through `size()` (the end) and raises `IndexError` outside that
+range. `slice` follows the half-open `[start, end)` convention; `take` and
+`drop` clamp a negative count to zero. `range(a, b)` includes both endpoints
+and descends when `a > b`.
+
+| Method | Result |
+| --- | --- |
+| `size()` / `is-empty()` | Element count / whether it is zero. |
+| `first()` / `first?()` / `last()` / `last?()` | First or last element, raising or as `Option`. |
+| `append(x)` / `insert(i, x)` / `clear()` / `extend(other)` | Mutate the receiver and return `unit`. |
+| `pop()` / `pop?()` / `remove-at(i)` | Remove and return an element, raising or optional where provided. |
+| `contains(x)` / `index-of(x)` / `index-of?(x)` | Membership and the first index (`-1` or `Option::None` when absent); all use AgL equality. |
+| `count(p)` / `any(p)` / `all(p)` | Count matching elements, or test whether any/all match. |
+| `map(f)` / `map!(f)` | Transform every element into a new array (possibly with a new element type) / mutate the receiver while preserving its element type. |
+| `filter(p)` / `filter!(p)` | Keep matching elements in a new array / mutate the receiver. |
+| `each(f)` | Call `f` for each element in order and return `unit`. |
+| `fold(init, f)` / `fold-right(init, f)` | Reduce left-to-right / right-to-left; `f` receives `(accumulator, element)`. |
+| `find?(p)` / `find-index?(p)` | First matching element or index as `Option`. |
+| `reverse()` / `reverse!()` | Reversed copy / reverse the receiver. |
+| `sort(cmp)` / `sort!(cmp)` | Sorted copy / sort the receiver with `cmp(left, right) -> int`. |
+| `slice(start, end)` / `take(n)` / `drop(n)` | A half-open slice, first `n`, or all but first `n` elements. |
+| `concat(other)` | A new array containing both arrays. |
+| `zip(other)` | `array[Pair[E, F]]`, truncated to the shorter input. |
+| `enumerate()` | `array[Pair[int, E]]` pairing each element with its zero-based index. |
+
+The callback-taking methods invoke their AgL closures in encounter order. A
+callback may capture local bindings and may raise normally.
+
+| Free function | Result |
+| --- | --- |
+| `join(xs, sep)` | Concatenates `array[text]` with `sep`. |
+| `flatten(xs)` | Concatenates nested arrays in order. |
+| `unzip(xs)` | `Pair(first = array[A], second = array[B])`. |
+| `repeat(x, n)` | `n` copies of `x` (empty when `n` is negative). |
+| `range(a, b)` | Inclusive integer sequence from `a` to `b`. |
 
 ## Library modules and cycles
 

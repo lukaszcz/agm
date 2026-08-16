@@ -122,6 +122,14 @@ def test_ambient_builtin_methods_are_inferred_before_consumers_without_source_im
     assert selected.checked is not None, selected.diagnostics
 
 
+def test_dry_run_omits_extern_calls_in_ambient_method_modules() -> None:
+    prepared = PipelineDriver.prepare_program("program def main() -> unit = print([1].size())\n")
+    discovery = PipelineDriver().discover_params(prepared)
+
+    assert discovery.compiled is not None, discovery.diagnostics
+    assert lower_program(discovery.compiled).dry_run_inventory == ()
+
+
 def test_builtin_methods_are_ambient_but_owning_module_free_functions_are_not() -> None:
     stdlib_root = Path(__file__).parent / "agl" / "program_modules" / "builtin_method_stdlib"
     prepared = PipelineDriver.prepare_program(

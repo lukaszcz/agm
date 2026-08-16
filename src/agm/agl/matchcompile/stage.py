@@ -127,8 +127,11 @@ def _compile_owner_sites(
 ) -> tuple[dict[int, CompiledMatchSite], list[MatchIssue]]:
     sites: dict[int, CompiledMatchSite] = {}
     issues: list[MatchIssue] = []
+    source_sites = _source_sites(owner.resolved.program)
+    if not source_sites:
+        return sites, issues
     case_context = match_case_context(owner)
-    for site_node_id, source_site in _source_sites(owner.resolved.program).items():
+    for site_node_id, source_site in source_sites.items():
         compiled = compile_match_site(_normalize_source_site(source_site, owner, case_context))
         sites[site_node_id] = compiled
         issues.extend(compiled.issues)

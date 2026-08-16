@@ -26,6 +26,7 @@ from agm.agl.semantics.values import (
     TextValue,
     UnitValue,
     Value,
+    value_equal,
 )
 
 
@@ -363,10 +364,37 @@ class AglArrayView(MutableSequence[object]):
 
     def __contains__(self, value: object) -> bool:
         try:
+            self.index(value)
+        except ValueError:
+            return False
+        return True
+
+    def index(self, value: object, start: int = 0, stop: int | None = None) -> int:
+        """Find *value* using the language's equality relation.
+
+        A companion sees encoded values, but array search must agree with AgL
+        ``in`` rather than Python view identity or Python's JSON bool/number
+        comparison. This intentionally mirrors ``list.index`` bounds.
+        """
+        try:
             probe = decode_boundary_value(value)
         except BoundaryViolation:
-            return False
-        return any(probe == item for item in self._value.elements)
+            raise ValueError(f"{value!r} is not in array") from None
+        length = len(self._value.elements)
+        lower = operator.index(start)
+        upper = length if stop is None else operator.index(stop)
+        if lower < 0:
+            lower = max(lower + length, 0)
+        else:
+            lower = min(lower, length)
+        if upper < 0:
+            upper = max(upper + length, 0)
+        else:
+            upper = min(upper, length)
+        for position in range(lower, upper):
+            if value_equal(probe, self._value.elements[position]):
+                return position
+        raise ValueError(f"{value!r} is not in array")
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, AglArrayView) and self._value is other._value

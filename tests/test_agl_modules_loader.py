@@ -166,12 +166,18 @@ class TestGraphBuild:
         root = tmp_path / "r"
         root.mkdir()
         graph = load_graph("let x = 1", entry_path=None, roots=_roots(root))
-        assert len(graph.modules) == 7
+        registry_id = ModuleId.from_path("std/builtin-methods")
+        array_id = ModuleId.from_path("std/array")
+
         assert ENTRY_ID in graph.modules
         assert STD_CORE_ID in graph.modules
         assert STD_OPTION_ID in graph.modules
         assert ModuleId.from_path("std/config") in graph.modules
         assert graph.modules[STD_CORE_ID].path == (_REPO_STDLIB_ROOT / "std" / "core.agl").resolve()
+        assert {registry_id, array_id}.issubset(graph.ambient_modules)
+        assert graph.adjacency[ENTRY_ID] == (STD_CORE_ID,)
+        assert array_id in graph.adjacency[registry_id]
+        assert ModuleId.from_path("std/text") not in graph.modules
 
     def test_imported_module_appears_in_graph(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
@@ -512,10 +518,13 @@ class TestCycles:
         _write_module(root, "a", "import b")
         _write_module(root, "b", "import a")
         graph = load_graph("import a", entry_path=None, roots=_roots(root))
-        assert ModuleId.from_path("a") in graph.modules
-        assert ModuleId.from_path("b") in graph.modules
-        # std/core, std/option, std/pair, std/either, std/result, std/config, entry, a, and b.
-        assert len(graph.modules) == 9
+        a_id = ModuleId.from_path("a")
+        b_id = ModuleId.from_path("b")
+        assert a_id in graph.modules
+        assert b_id in graph.modules
+        assert set(graph.adjacency[a_id]) == {b_id, STD_CORE_ID}
+        assert set(graph.adjacency[b_id]) == {a_id, STD_CORE_ID}
+        assert any({a_id, b_id}.issubset(component) for component in graph.sccs)
 
     def test_longer_cycle_terminates(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
@@ -524,9 +533,9 @@ class TestCycles:
         _write_module(root, "y", "import z")
         _write_module(root, "z", "import x")
         graph = load_graph("import x", entry_path=None, roots=_roots(root))
-        assert (
-            len(graph.modules) == 10
-        )  # std/core, functional modules, std/config, entry, x, y, and z
+        cycle_ids = {ModuleId.from_path("x"), ModuleId.from_path("y"), ModuleId.from_path("z")}
+        assert cycle_ids.issubset(graph.modules)
+        assert any(cycle_ids.issubset(component) for component in graph.sccs)
 
     def test_cycle_nodes_linked_in_sccs(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
@@ -1102,14 +1111,14 @@ class TestBuildReplGraph:
         )
         assert ENTRY_ID in graph.modules
         assert STD_CORE_ID in graph.modules
-        assert new_modules == {
-            STD_CORE_ID: graph.modules[STD_CORE_ID],
-            STD_OPTION_ID: graph.modules[STD_OPTION_ID],
-            ModuleId.from_path("std/pair"): graph.modules[ModuleId.from_path("std/pair")],
-            ModuleId.from_path("std/either"): graph.modules[ModuleId.from_path("std/either")],
-            ModuleId.from_path("std/result"): graph.modules[ModuleId.from_path("std/result")],
-            ModuleId.from_path("std/config"): graph.modules[ModuleId.from_path("std/config")],
-        }
+        assert {
+            ModuleId.from_path("std/builtin-methods"),
+            ModuleId.from_path("std/array"),
+        }.issubset(graph.ambient_modules)
+        assert ModuleId.from_path("std/text") not in graph.modules
+        assert ENTRY_ID not in new_modules
+        assert set(new_modules) == set(graph.modules) - {ENTRY_ID}
+        assert all(graph.modules[mid] is module for mid, module in new_modules.items())
 
     def test_import_loads_lib_module(self, tmp_path: Path) -> None:
         """A program with import declarations loads the referenced lib module."""
@@ -1143,6 +1152,36 @@ class TestBuildReplGraph:
             program2, next_id, path=None, cached=cached, roots=_roots(tmp_path)
         )
         assert mid not in new2
+
+    def test_cached_module_loads_an_uncached_transitive_dependency(self, tmp_path: Path) -> None:
+        _write_module(tmp_path, "dependency", "def value() -> int = 1")
+        _write_module(
+            tmp_path,
+            "library",
+            "import dependency\ndef value() -> int = dependency::value()",
+        )
+        library_id = ModuleId.from_path("library")
+        dependency_id = ModuleId.from_path("dependency")
+
+        program1 = _parse_for_repl("import library\n()")
+        _, next_id, new1 = build_repl_graph(
+            program1, 0, path=None, cached={}, roots=_roots(tmp_path)
+        )
+        cached_library = new1[library_id]
+
+        program2 = _parse_for_repl("import library\n()")
+        graph2, _next_id, new2 = build_repl_graph(
+            program2,
+            next_id,
+            path=None,
+            cached={library_id: cached_library},
+            roots=_roots(tmp_path),
+        )
+
+        assert graph2.modules[library_id] is cached_library
+        assert dependency_id in new2
+        assert graph2.modules[dependency_id] is new2[dependency_id]
+        assert dependency_id in graph2.adjacency[library_id]
 
     def test_cached_std_core_not_reloaded(self, tmp_path: Path) -> None:
         """The REPL graph builder reuses cached std/core when present."""

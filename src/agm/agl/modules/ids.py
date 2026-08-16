@@ -15,6 +15,10 @@ _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # can produce a ModuleId with this segment via from_path.
 _ENTRY_SEGMENT = "\x00entry"
 
+# The ambient standard-library registry predates ordinary module-name
+# validation. It is a fixed loader-owned path, not a user-definable spelling.
+_SPECIAL_MODULE_PATHS: frozenset[tuple[str, ...]] = frozenset({("std", "builtin-methods")})
+
 ENTRY_DISPLAY = "<entry>"
 """The entry module's user-facing label, standing in for a name it has not got.
 
@@ -83,11 +87,14 @@ class ModuleId:
         """Parse a slash-separated module path into a :class:`ModuleId`.
 
         Raises :class:`ValueError` if *s* is empty or any segment is not a
-        valid identifier (``[A-Za-z_][A-Za-z0-9_]*``).
+        valid identifier (``[A-Za-z_][A-Za-z0-9_]*``), except the fixed
+        ``std/builtin-methods`` standard-library registry path.
         """
         if not s:
             raise ValueError("module id must not be empty")
         segments = s.split("/")
+        if tuple(segments) in _SPECIAL_MODULE_PATHS:
+            return cls(segments=tuple(segments))
         for seg in segments:
             if not seg:
                 raise ValueError(

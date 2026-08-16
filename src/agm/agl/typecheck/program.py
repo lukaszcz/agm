@@ -166,6 +166,10 @@ class CheckedProgram:
     ``import_sccs``
         Loader-computed reverse-topological import components, retained for
         dependency-ordered lowering after this pass's presentation ordering.
+    ``runtime_modules``
+        Entry-reachable modules in the source import/export graph. Ambient
+        builtin-method modules do not add dry-run call sites unless source
+        imports them directly.
     """
 
     modules: dict[ModuleId, CheckedModule]
@@ -175,6 +179,7 @@ class CheckedProgram:
     capabilities: HostCapabilities | None = None
     import_sccs: tuple[tuple[ModuleId, ...], ...] = ()
     resource_roots: Mapping[ModuleId, Path | None] = field(default_factory=dict)
+    runtime_modules: frozenset[ModuleId] | None = None
 
 
 def _assert_checked_module_closed(module: CheckedModule) -> None:
@@ -1040,6 +1045,15 @@ def check_program(
     presentation_order = tuple(mid for mid in resolved.modules if not mid.is_entry) + (
         resolved.entry_id,
     )
+    runtime_modules: set[ModuleId] = set()
+    pending_modules = [resolved.entry_id]
+    while pending_modules:
+        module_id = pending_modules.pop()
+        if module_id in runtime_modules:
+            continue
+        runtime_modules.add(module_id)
+        pending_modules.extend(resolved.graph.adjacency[module_id])
+
     checked = CheckedProgram(
         modules={mid: checked_modules[mid] for mid in presentation_order},
         entry_id=resolved.entry_id,
@@ -1050,6 +1064,7 @@ def check_program(
         capabilities=capabilities,
         import_sccs=resolved.import_sccs,
         resource_roots={mid: resolved.graph.resource_root_for(mid) for mid in presentation_order},
+        runtime_modules=frozenset(runtime_modules),
     )
     if self_validation_enabled():
         assert_checked_program_closed(checked)

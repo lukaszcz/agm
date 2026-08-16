@@ -166,12 +166,7 @@ def test_simple_let_name_binds_even_when_it_matches_a_nullary_constructor() -> N
 @pytest.mark.parametrize(
     "entry",
     [
-        (
-            "import lib\n"
-            "use lib::*\n"
-            "let instance = R(value = 1)\n"
-            "let R(value) = instance\n"
-        ),
+        ("import lib\nuse lib::*\nlet instance = R(value = 1)\nlet R(value) = instance\n"),
         (
             "scope Region\n"
             "import lib::*\n"

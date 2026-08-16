@@ -510,11 +510,22 @@ def _nearest_layer_contribution(
 
 
 def resolve_bare_contribution(
-    scope: ScopeNode, name: BareAtom, scope_nodes: Mapping[ScopePath, ScopeNode]
+    scope: ScopeNode,
+    name: BareAtom,
+    scope_nodes: Mapping[ScopePath, ScopeNode],
+    *,
+    predicate: Callable[[BindingRef], bool] | None = None,
 ) -> set[BindingRef] | None:
-    """Return the nearest region's bare candidates for *name*."""
+    """Return the nearest region's bare candidates for *name* in one namespace."""
     del scope_nodes
-    return _nearest_layer_contribution(scope, name, lambda layer: layer.bare_contributions)
+    layer: ScopeNode | None = scope
+    while layer is not None:
+        stored = layer.bare_contributions.get(name, ())
+        selected = set(stored) if predicate is None else {ref for ref in stored if predicate(ref)}
+        if selected:
+            return selected
+        layer = layer.parent
+    return None
 
 
 # ---------------------------------------------------------------------------

@@ -1376,13 +1376,14 @@ class TypeEnvironment:
         """Return the unique type declaration contributed to this type region."""
         scope = self._scope_nodes.get(self._type_scope)
         candidates = (
-            () if scope is None else resolve_bare_contribution(scope, name, self._scope_nodes) or ()
+            ()
+            if scope is None
+            else resolve_bare_contribution(
+                scope, name, self._scope_nodes, predicate=self._is_type_contribution
+            )
+            or ()
         )
-        keys = {
-            (ref.module_id, ref.scope_path, ref.name)
-            for ref in candidates
-            if self._is_type_contribution(ref)
-        }
+        keys = {(ref.module_id, ref.scope_path, ref.name) for ref in candidates}
         if not keys:
             return None
         if len(keys) == 1:

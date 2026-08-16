@@ -129,6 +129,64 @@ def test_constructor_consumers_honor_use_hiding(tmp_path: Path, expression: str)
         check_program(resolve_program(graph), base_caps())
 
 
+def test_use_contributions_keep_type_and_value_namespaces_separate(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use Types::*\n"
+                "use Values::*\n"
+                "scope Types\n"
+                "enum T\n  | member\n"
+                "end Types\n"
+                "scope Values\n"
+                "def T() -> int = 7\n"
+                "end Values\n"
+                "T()\n"
+            ),
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_import_tails_keep_type_and_value_namespaces_separate(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import types::*\nimport values::*\nT()\n",
+            "types": "enum T\n  | member\n",
+            "values": "def T() -> int = 7\n",
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_type_use_lookup_continues_past_inner_value_contribution(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use Types::*\n"
+                "scope Inner\n"
+                "use Values::*\n"
+                "def identity(value: T) -> T = value\n"
+                "end Inner\n"
+                "scope Types\n"
+                "enum T\n  | member\n"
+                "end Types\n"
+                "scope Values\n"
+                "def T() -> int = 7\n"
+                "end Values\n"
+                "Inner::identity(Types::T::member)\n"
+            ),
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
 def test_use_imported_nested_scope_selects_its_relative_public_subtree(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,

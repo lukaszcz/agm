@@ -2899,9 +2899,12 @@ class _Resolver:
         return replace(candidate, variant=variant)
 
     def _nearest_bare_contribution_layer(
-        self, name: NameAtom
+        self,
+        name: NameAtom,
+        *,
+        binding_predicate: Callable[[BindingRef], bool] | None = None,
     ) -> tuple[set[BindingRef], set[ConstructorRef]] | None:
-        """Return the nearest static and live-use candidates for one bare atom."""
+        """Return the nearest static and live-use candidates in one namespace."""
         layer: ScopeNode | None = self._current_scope()
         while layer is not None:
             bindings = set(layer.bare_contributions.get(name, ()))
@@ -2926,14 +2929,39 @@ class _Resolver:
                         continue
                     bindings.add(source)
                     constructors.update(self._declaring_constructor_candidates(source.name, source))
+            if binding_predicate is not None:
+                bindings = {ref for ref in bindings if binding_predicate(ref)}
+                constructors = {
+                    constructor
+                    for constructor in constructors
+                    if any(
+                        constructor.owner_module_id == ref.module_id
+                        and constructor.owner_decl_node_id == ref.decl_node_id
+                        for ref in bindings
+                    )
+                }
             if bindings or constructors:
                 return bindings, constructors
             layer = layer.parent
         return None
 
-    def _bare_contribution_candidates(self, name: NameAtom) -> set[BindingRef] | None:
-        """Return the nearest region's bare contributions, including live local uses."""
-        nearest = self._nearest_bare_contribution_layer(name)
+    def _is_value_contribution(self, ref: BindingRef) -> bool:
+        """Whether a shared contribution denotes a value in addition to any type."""
+        atom = _bare_atom((*ref.scope_path, ref.name))
+        return (
+            ref.kind is not BinderKind.constructor_binding
+            or (ref.module_id, atom) in self._cross_module_constructor_refs
+            or bool(self._declaring_constructor_candidates(ref.name, ref))
+        )
+
+    def _bare_contribution_candidates(
+        self, name: NameAtom, *, values_only: bool = False
+    ) -> set[BindingRef] | None:
+        """Return the nearest region's bare contributions in the requested namespace."""
+        nearest = self._nearest_bare_contribution_layer(
+            name,
+            binding_predicate=self._is_value_contribution if values_only else None,
+        )
         return None if nearest is None else nearest[0]
 
     def _regional_constructor_candidates(self, name: NameAtom) -> set[ConstructorRef] | None:
@@ -2943,13 +2971,19 @@ class _Resolver:
 
     def _lookup_bare_contribution(self, name: NameAtom, span: SourceSpan) -> BindingRef | None:
         """Resolve one region's bare contributions, deferring clashes to use sites."""
-        resolved = self._bare_contribution_candidates(name)
+        resolved = self._bare_contribution_candidates(name, values_only=True)
         if resolved is None:
-            return None
+            # Keep a lone type-only spelling available for the checker's
+            # dedicated "type name, not a value" diagnostic.
+            resolved = self._bare_contribution_candidates(name)
+            if resolved is None:
+                return None
         assert self._root_scope is not None
         if name in self._root_scope.bare_contributions:
             for qname in self._import_env.unqualified.get(name, frozenset()):
                 ref, _constructor = self._cross_module_member_ref(name, qname, span)
+                if not self._is_value_contribution(ref):
+                    continue
                 if not any(
                     (existing.module_id, existing.scope_path, existing.decl_node_id, existing.kind)
                     == (ref.module_id, ref.scope_path, ref.decl_node_id, ref.kind)
@@ -2984,9 +3018,16 @@ class _Resolver:
         name is not contributed by a tailed import. Shared by bare value
         references and bare assignment targets.
         """
-        qnames = self._import_env.unqualified.get(name)
-        if qnames is None:
+        exposed = self._import_env.unqualified.get(name)
+        if exposed is None:
             return None
+        qnames = {
+            qname
+            for qname in exposed
+            if self._is_value_contribution(self._cross_module_member_ref(name, qname, span)[0])
+        }
+        if not qnames:
+            qnames = set(exposed)
         if len(qnames) > 1:
             # Clash-on-use: more than one module exposes this name.
             qualifiers = sorted(

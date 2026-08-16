@@ -3836,10 +3836,18 @@ class TestImportDecl:
         assert decl.alias == alias
         assert decl.tail == tail
 
-    def test_use_nested_target_alias(self) -> None:
-        (decl,) = items(parse("use m/n::Outer::Inner as Alias"))
+    @pytest.mark.parametrize(
+        ("source", "target"),
+        (
+            ("use m/n::Outer::Inner as Alias", ("m/n", "Outer", "Inner")),
+            ("use m::A::B::C as Alias", ("m", "A", "B", "C")),
+            ("use m::A::B::C::D as Alias", ("m", "A", "B", "C", "D")),
+        ),
+    )
+    def test_use_nested_target_alias(self, source: str, target: tuple[str, ...]) -> None:
+        (decl,) = items(parse(source))
         assert isinstance(decl, syntax.UseDecl)
-        assert tuple(segment.name for segment in decl.target) == ("m/n", "Outer", "Inner")
+        assert tuple(segment.name for segment in decl.target) == target
         assert decl.alias == "Alias"
 
     def test_prefixed_scope_preserves_a_use_declaration(self) -> None:

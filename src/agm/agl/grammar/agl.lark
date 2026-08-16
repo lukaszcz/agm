@@ -854,6 +854,7 @@ use_decl : USE MODPATH use_suffix? hiding_clause?
 use_suffix : use_alias                    -> use_suffix_alias
            | DCOLON selection             -> use_suffix_tail
            | DCOLON USEQUAL use_suffix    -> use_suffix_prefixed
+           | USEQUAL use_suffix           -> use_suffix_prefixed
            | DCOLON USEQUAL+ selection     -> use_suffix_prefixed_tail
            | DCOLON USE_TARGET_NAME use_alias -> use_suffix_target_alias
            | USE_TARGET_NAME use_alias    -> use_suffix_target_alias

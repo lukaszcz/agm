@@ -150,16 +150,16 @@ _MODULE_ROUTE_MESSAGE = "scope paths use '::' between name segments."
 
 def _prefix_scope_path(
     item: syntax.ScopeItem, prefix: tuple[syntax.ScopeSegment, ...]
-) -> syntax.ScopeItem:
+) -> syntax.ScopeItem | None:
     """Add *prefix* to every declaration path contained by a scope item."""
     if isinstance(item, syntax.ScopeRegion):
         return replace(
             item,
-            items=tuple(_prefix_scope_path(child, prefix) for child in item.items),
+            items=tuple(
+                cast(syntax.ScopeItem, _prefix_scope_path(child, prefix)) for child in item.items
+            ),
         )
-    if isinstance(item, _SCOPED_DECLARATIONS):
-        return replace(item, scope_path=prefix + item.scope_path)
-    return item
+    return replace(item, scope_path=prefix + item.scope_path)
 
 
 # ---------------------------------------------------------------------------
@@ -674,12 +674,6 @@ class AstBuilder(Transformer):
         )
         if disallowed is not None:
             form, span = _rejected_scope_item(cast(_RejectedScopeItem, disallowed))
-            if (
-                isinstance(disallowed, syntax.Call)
-                and isinstance(disallowed.callee, syntax.VarRef)
-                and disallowed.callee.name == "open"
-            ):
-                raise AglSyntaxError("'open' is not defined.", span=span)
             raise AglSyntaxError(
                 f"scope regions cannot contain {form}.",
                 span=span,
@@ -2817,17 +2811,16 @@ class AstBuilder(Transformer):
         ending = (
             anchored_target.ending
             if anchored_target is not None
-            else next((a for a in args if isinstance(a, _UseEnding)), None)
+            else next(a for a in args if isinstance(a, _UseEnding))
         )
-        if ending is not None:
-            for token in ending.prefixes:
-                target_segments.append(
-                    (str(token).removesuffix("::"), self._trim_token_span(token, end=2))
-                )
-        if ending is not None and ending.target is not None:
+        for token in ending.prefixes:
+            target_segments.append(
+                (str(token).removesuffix("::"), self._trim_token_span(token, end=2))
+            )
+        if ending.target is not None:
             target_segments.append((str(ending.target), self._span_from_token(ending.target)))
-        alias = None if ending is None else ending.alias
-        tail = None if ending is None else ending.tail
+        alias = ending.alias
+        tail = ending.tail
         hidden_paths = cast(
             tuple[_ScopePath, ...], next((a for a in args if isinstance(a, tuple)), ())
         )

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from agm.agl.lexer import spaced_qualifier_collector, tokenize, unclosed_scope_path
+from agm.agl.lexer.errors import LexError
 
 
 def _tokens(source: str) -> list[tuple[str, str]]:
@@ -21,7 +22,7 @@ def _non_layout_tokens(source: str) -> list[tuple[str, str]]:
     "fixture",
     (
         "programs/scope/scoped_destructuring.agl",
-        "rejections/scope/opened_scope_members_do_not_escape.agl",
+        "rejections/scope/used_scope_members_do_not_escape.agl",
     ),
 )
 def test_use_in_scope_fixtures_remains_an_identifier(fixture: str) -> None:
@@ -66,6 +67,32 @@ def test_use_in_expression_position_remains_an_identifier() -> None:
 @pytest.mark.parametrize("source", ("use()", "use + 1", "use(1)"))
 def test_use_at_item_start_remains_an_identifier_without_a_declaration_form(source: str) -> None:
     assert _non_layout_tokens(source)[0] == ("NAME", "use")
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    (
+        ("use", ("NAME", "use")),
+        ("use /module/nested/deeper::*", ("USE", "use")),
+        ("use ::Scope::*", ("USE", "use")),
+        ("use ::Scope", ("NAME", "use")),
+        ("use ::Scope::member", ("USE", "use")),
+    ),
+)
+def test_use_promotion_requires_a_complete_declaration_form(
+    source: str, expected: tuple[str, str]
+) -> None:
+    assert _non_layout_tokens(source)[0] == expected
+
+
+@pytest.mark.parametrize("source", ("use /module", "use /module/"))
+def test_incomplete_anchored_module_use_is_rejected_as_a_path_error(source: str) -> None:
+    with pytest.raises(LexError):
+        _non_layout_tokens(source)
+
+
+def test_incomplete_current_module_use_is_not_promoted() -> None:
+    assert _non_layout_tokens("use ::*")[0] == ("NAME", "use")
 
 
 def test_use_declaration_form_is_promoted_at_item_start() -> None:

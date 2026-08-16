@@ -7,12 +7,14 @@ import pytest
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import (
     ImportEnv,
+    ModuleContribution,
     NameAtom,
     QName,
     QualResolutionFound,
     QualResolutionMissingMember,
     SingleTarget,
     build_import_env,
+    qualifier_members,
     resolve_qualified,
 )
 from agm.agl.scope.symbols import AglScopeError
@@ -70,6 +72,18 @@ def _build(decls: list[ImportDecl], exports: dict[ModuleId, dict[NameAtom, QName
         {decl.node_id: SingleTarget(_module("/".join(decl.module_path))) for decl in decls},
         exports,
     )
+
+
+def test_alias_route_without_members_is_not_a_use_target() -> None:
+    module = _module("tools/text")
+    env = ImportEnv(
+        contributions={
+            module: ModuleContribution(module, {}, frozenset(), False, frozenset({"text"}))
+        },
+        unqualified={},
+    )
+
+    assert qualifier_members(env, ("text",), anchored=False) == ()
 
 
 def test_plain_import_contributes_the_full_qualified_surface_without_bare_names() -> None:

@@ -798,6 +798,15 @@ class TestScopedBindingRetention:
         assert result.ok, result.diagnostics
         assert result.value == IntValue(2)
 
+    def test_replacing_a_scoped_use_discards_its_empty_prior_region(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope A\ndef member() -> int = 1\nend A").ok
+        assert s.eval_entry("scope B\nuse A::*\nend B").ok
+
+        replacement = s.eval_entry("scope B\nuse A::*\nend B")
+
+        assert replacement.ok, replacement.diagnostics
+
     def test_scoped_declarations_and_bindings_coexist_at_one_path(self) -> None:
         s = ReplSession()
         assert s.eval_entry("let A::x = 1").ok
@@ -5958,12 +5967,18 @@ class TestBareTypeEntry:
             is None
         )
 
+        missing = ModuleId(("missing",))
         no_generic_env = TypeEnvironment(
             program_generic_table={},
             import_env=ImportEnv(
                 contributions={
-                    lib: ModuleContribution(
-                        lib, {"Box": (lib, "Box")}, frozenset(), False, frozenset({"missing"})
+                    missing: ModuleContribution(
+                        missing,
+                        {"Box": (missing, "Box")},
+                        frozenset(),
+                        True,
+                        frozenset(),
+                        {"Box": (missing, "Box")},
                     )
                 },
                 unqualified={},

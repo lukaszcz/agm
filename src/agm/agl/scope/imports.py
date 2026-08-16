@@ -321,14 +321,7 @@ def _targets(target: ImportTarget) -> tuple[ModuleId, ...]:
     )
 
 
-def _merge_member(
-    members: dict[NameAtom, QName], exposed: NameAtom, qname: QName, decl: ImportDecl
-) -> None:
-    existing = members.get(exposed)
-    if existing is not None and existing != qname:
-        raise AglScopeError(
-            f"conflicting origins for exposed name {_path_sort_key(exposed)!r}", span=decl.span
-        )
+def _merge_member(members: dict[NameAtom, QName], exposed: NameAtom, qname: QName) -> None:
     members[exposed] = qname
 
 
@@ -364,8 +357,8 @@ def build_import_env(
                 acc.aliases.add(decl.alias)
             for source, qname in module_exports.items():
                 if source not in hidden:
-                    _merge_member(acc.members, source, qname, decl)
-                    _merge_member(route_members, source, qname, decl)
+                    _merge_member(acc.members, source, qname)
+                    _merge_member(route_members, source, qname)
             for exposed, qname in _tail_exposures(decl, module, module_exports, hidden):
                 if decl.scope_path:
                     decl_bare.setdefault(decl.node_id, {}).setdefault(exposed, set()).add(qname)

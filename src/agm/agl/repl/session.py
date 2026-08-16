@@ -1072,9 +1072,7 @@ class ReplSession:
             if isinstance(item, EnumDef) and type_name_path(item) == (path, name)
         }
         for path in promoted_enum_paths:
-            type_scope = self._session_scope_nodes.get(path)
-            if type_scope is not None:
-                type_scope.clear_members()
+            self._session_scope_nodes[path].clear_members()
 
         for path, node in checked.resolved.scope_nodes.items():
             session_node = self._session_scope_nodes.get(path)

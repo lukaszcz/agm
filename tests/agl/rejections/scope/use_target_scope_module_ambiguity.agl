@@ -1,0 +1,6 @@
+import std/core
+use core::*
+scope core
+def local() -> int = 1
+end core
+program def main() -> unit = ()

@@ -3806,6 +3806,25 @@ class TestImportDecl:
         assert decl.alias == alias
         assert decl.tail == tail
 
+    def test_use_nested_target_alias(self) -> None:
+        (decl,) = items(parse("use m/n::Outer::Inner as Alias"))
+        assert isinstance(decl, syntax.UseDecl)
+        assert tuple(segment.name for segment in decl.target) == ("m/n", "Outer", "Inner")
+        assert decl.alias == "Alias"
+
+    def test_prefixed_scope_preserves_a_use_declaration(self) -> None:
+        (region,) = items(parse("scope A::B\nuse C::*\nend A::B"))
+        assert isinstance(region, syntax.ScopeRegion)
+        nested = region.items[0]
+        assert isinstance(nested, syntax.ScopeRegion)
+        (decl,) = nested.items
+        assert isinstance(decl, syntax.UseDecl)
+        assert tuple(segment.name for segment in decl.target) == ("C",)
+
+    def test_import_alias_tail_with_whitespace_is_rejected_by_the_transformer(self) -> None:
+        with pytest.raises(AglSyntaxError, match="alias"):
+            parse("import module as Alias ::*")
+
     @pytest.mark.parametrize(
         "source",
         (

@@ -223,12 +223,6 @@ def _is_use_declaration(tokens: list[Token], index: int) -> bool:
         if next_index >= len(tokens) or tokens[next_index].type != NAME:
             return False
         next_index += 1
-        while (
-            next_index + 1 < len(tokens)
-            and tokens[next_index].type == SLASH
-            and tokens[next_index + 1].type == NAME
-        ):
-            next_index += 2
         return next_index < len(tokens) and tokens[next_index].type in {"AS", DCOLON}
     if tokens[next_index].type != DCOLON:
         return False

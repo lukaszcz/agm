@@ -856,6 +856,7 @@ use_suffix : use_alias                    -> use_suffix_alias
            | DCOLON USEQUAL use_suffix    -> use_suffix_prefixed
            | DCOLON USEQUAL+ selection     -> use_suffix_prefixed_tail
            | DCOLON USE_TARGET_NAME use_alias -> use_suffix_target_alias
+           | USE_TARGET_NAME use_alias    -> use_suffix_target_alias
 use_anchored_suffix : USEQUAL+ selection                  -> use_anchored_tail
                     | USEQUAL* USE_TARGET_NAME use_alias -> use_anchored_alias
 export_decl : EXPORT MODPATH WILDCARD? export_tail_clause? hiding_clause?

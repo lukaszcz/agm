@@ -1467,8 +1467,8 @@ class _Resolver:
 
         - Every static module root rejects assignments and bare expressions.
           The REPL is the sole incremental-host exception.
-        - Every module root and every region's own item sequence: ``ImportDecl``,
-          ``UseDecl``, and ``ExportDecl`` must precede all other items *in that same items
+        - Every module root and every region's own item sequence: ``ImportDecl`` and
+          ``ExportDecl`` must precede all other items *in that same items
           sequence* (header-only; ``seen_non_import_item`` tracks this locally
           to this call, regardless of module kind). A region is one item of its
           enclosing sequence for this purpose, so the enclosing sequence's
@@ -1482,19 +1482,6 @@ class _Resolver:
 
         for item in items:
             if isinstance(item, UseDecl):
-                in_entry_body = items is self._synthetic_entry_items
-                if not self._at_root and not in_entry_body:
-                    raise AglScopeError(
-                        "'use' declarations are only allowed at the program root, "
-                        "not inside a nested block.",
-                        span=item.span,
-                    )
-                if seen_non_import_item or in_entry_body:
-                    raise AglScopeError(
-                        "Import, use, and export declarations must appear before "
-                        "any other declarations in a module or scope region.",
-                        span=item.span,
-                    )
                 self._resolve_use_decl(item)
                 continue
             if isinstance(item, (ImportDecl, ExportDecl)):
@@ -1816,27 +1803,20 @@ class _Resolver:
                     for constructor in self._declaring_constructor_candidates(ref.name, ref):
                         scope.contribute_bare_constructor(exposed, constructor)
 
-    def _contribute_use_members(
-        self, decl: UseDecl, members: Mapping[NameAtom, BindingRef | QName]
-    ) -> None:
+    def _contribute_use_members(self, decl: UseDecl, members: Mapping[NameAtom, QName]) -> None:
         """Select, rename, and add one use declaration's bare contribution."""
         selected = self._select_use_members(decl, members)
         scope = self._current_scope()
 
-        def contribute(exposed: NameAtom, source: BindingRef | QName) -> None:
-            if isinstance(source, tuple):
-                ref, constructor = self._cross_module_member_ref(exposed, source, decl.span)
-                scope.contribute_bare(exposed, ref)
-                if constructor is not None:
-                    scope.contribute_bare_constructor(exposed, constructor)
-                self._contribute_regional_enum_variants(source, decl.span)
-            else:
-                scope.contribute_bare(exposed, source)
-                for constructor in self._declaring_constructor_candidates(source.name, source):
-                    scope.contribute_bare_constructor(exposed, constructor)
+        def contribute(exposed: NameAtom, source: QName) -> None:
+            ref, constructor = self._cross_module_member_ref(exposed, source, decl.span)
+            scope.contribute_bare(exposed, ref)
+            if constructor is not None:
+                scope.contribute_bare_constructor(exposed, constructor)
+            self._contribute_regional_enum_variants(source, decl.span)
 
         for exposed, source in selected.items():
-            contribute(exposed, source)
+            contribute(exposed, cast(QName, source))
         if decl.tail is not None:
             for item in decl.tail:
                 if item.rename is None:
@@ -1874,8 +1854,8 @@ class _Resolver:
         selected: dict[NameAtom, BindingRef | QName] = {}
         if decl.tail == ():
             selected.update(members)
-        elif decl.tail is not None:
-            for item in decl.tail:
+        else:
+            for item in cast(tuple[ImportItem, ...], decl.tail):
                 for atom in matching(item):
                     selected[atom] = members[atom]
                     if item.rename is not None:

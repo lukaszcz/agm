@@ -2946,6 +2946,7 @@ class _Resolver:
         name: NameAtom,
         *,
         binding_predicate: Callable[[BindingRef], bool] | None = None,
+        constructors_only: bool = False,
     ) -> tuple[ScopeNode, set[BindingRef], set[ConstructorRef]] | None:
         """Return the nearest static and live-use candidates in one namespace."""
         layer: ScopeNode | None = self._current_scope()
@@ -2983,7 +2984,7 @@ class _Resolver:
                         for ref in bindings
                     )
                 }
-            if bindings or constructors:
+            if constructors if constructors_only else bindings or constructors:
                 return layer, bindings, constructors
             layer = layer.parent
         return None
@@ -3009,7 +3010,7 @@ class _Resolver:
 
     def _regional_constructor_candidates(self, name: NameAtom) -> set[ConstructorRef] | None:
         """Return the nearest region's constructor candidates, including live local uses."""
-        nearest = self._nearest_bare_contribution_layer(name)
+        nearest = self._nearest_bare_contribution_layer(name, constructors_only=True)
         return None if nearest is None else nearest[2]
 
     def _lookup_bare_contribution(self, name: NameAtom, span: SourceSpan) -> BindingRef | None:

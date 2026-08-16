@@ -271,6 +271,33 @@ def test_type_use_lookup_continues_past_inner_value_contribution(tmp_path: Path)
     check_program(resolve_program(graph), base_caps())
 
 
+def test_constructor_lookup_continues_past_inner_value_contribution(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use Types::{E::A as X}\n"
+                "scope Inner\n"
+                "use Values::{X}\n"
+                "def selected(value: Types::E) -> int =\n"
+                "  case value of | X => 1 | _ => 0\n"
+                "def matches(value: Types::E) -> bool = value is X\n"
+                "def call() -> int = X()\n"
+                "end Inner\n"
+                "scope Types\n"
+                "enum E | A\n"
+                "end Types\n"
+                "scope Values\n"
+                "def X() -> int = 7\n"
+                "end Values\n"
+                "Inner::selected(Types::E::A)\n"
+            ),
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
 def test_unbraced_single_member_use_tail_can_be_renamed(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,
@@ -311,14 +338,7 @@ def test_root_local_use_and_import_tail_collision_is_ambiguous(tmp_path: Path) -
     graph = make_graph_from_files(
         tmp_path,
         {
-            "entry": (
-                "import lib::{x}\n"
-                "use S::*\n"
-                "scope S\n"
-                "def x() -> int = 2\n"
-                "end S\n"
-                "x()\n"
-            ),
+            "entry": ("import lib::{x}\nuse S::*\nscope S\ndef x() -> int = 2\nend S\nx()\n"),
             "lib": "def x() -> int = 1\n",
         },
     )

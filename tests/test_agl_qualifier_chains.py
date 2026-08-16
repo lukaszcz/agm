@@ -474,6 +474,21 @@ def test_use_target_local_module_ambiguity_requires_an_anchor(tmp_path: Path) ->
     )
 
 
+def test_use_keeps_distinct_targets_from_one_module_ambiguous() -> None:
+    with pytest.raises(AglScopeError, match="ambiguous"):
+        _resolve_without_loader(
+            {
+                "entry": (
+                    "import lib as Scope\n"
+                    "import lib::{Scope}\n"
+                    "use Scope::*\n"
+                    "def selected() -> int = member()"
+                ),
+                "lib": ("def member() -> int = 1\nscope Scope\ndef member() -> int = 2\nend Scope"),
+            }
+        )
+
+
 def test_use_target_suffix_ambiguity_has_no_preferred_module_route() -> None:
     modules = {
         "entry": "import one/Target\nimport two/Target\nuse Target::*\n",

@@ -51,6 +51,7 @@ from typing import TYPE_CHECKING, TypeVar, cast
 from agm.agl.diagnostics import static_root_message
 from agm.agl.modules.ids import STD_CONFIG_ID, STD_CORE_ID, ModuleId, spell_declaration
 from agm.agl.scope.imports import (
+    BareRoute,
     NameAtom,
     QName,
     QualResolutionFound,
@@ -168,6 +169,10 @@ from agm.agl.syntax.types import TYPE_PARAMETER_WILDCARD, AppliedT, NameT, rende
 from agm.agl.syntax.visitor import walk
 
 _T = TypeVar("_T")
+
+
+def _bare_route_sort_key(route: BareRoute) -> tuple[str, ScopePath]:
+    return route[0].path_str(), route[1]
 
 
 # ---------------------------------------------------------------------------
@@ -758,6 +763,15 @@ class _Resolver:
             decl_scope_path = self._import_decl_scope_paths.get(node_id, ())
             if path[: len(decl_scope_path)] == decl_scope_path:
                 yield bare
+
+    def _reachable_decl_bare_routes(
+        self, import_env: ImportEnv, path: ScopePath
+    ) -> Iterator[Mapping[NameAtom, frozenset[BareRoute]]]:
+        """Yield route provenance for region-scoped bare imports reaching *path*."""
+        for node_id, routes in import_env.decl_bare_routes.items():
+            decl_scope_path = self._import_decl_scope_paths.get(node_id, ())
+            if path[: len(decl_scope_path)] == decl_scope_path:
+                yield routes
 
     def _is_orphan_receiver(self, owner_path: ScopePath) -> bool:
         """Return whether *owner_path* names a type imported from another module.
@@ -1657,26 +1671,28 @@ class _Resolver:
         local = self._use_local_target(decl, target)
         route = () if decl.current_module else tuple(target[0].split("/"))
         route_target = () if decl.current_module else target[1:]
-        direct_imports: tuple[tuple[ModuleId, Mapping[NameAtom, QName]], ...] = (
+        direct_candidates = (
             ()
             if decl.current_module
             else qualifier_members(self._import_env, route, anchored=decl.anchored)
         )
-        direct_imports = tuple(
-            (module, relative_members)
-            for module, members in direct_imports
+        direct_imports: tuple[tuple[BareRoute, Mapping[NameAtom, QName]], ...] = tuple(
+            ((module, route_target), relative_members)
+            for module, members in direct_candidates
             if (relative_members := self._relative_use_import_members(members, route_target))
+            is not None
         )
         bare_imports = () if decl.anchored else self._bare_use_import_targets(target)
         imported = self._merge_use_import_targets(direct_imports, bare_imports)
         if local is not None and imported:
-            candidates = ", ".join(module.display() for module, _members in imported)
-            direct_modules = {module for module, _members in direct_imports}
+            candidates = ", ".join(module.display() for (module, _root), _members in imported)
+            direct_routes = {imported_route for imported_route, _members in direct_imports}
             module_targets = ", ".join(
                 self._render_use_module_target(
-                    module, route_target if module in direct_modules else target
+                    imported_route[0],
+                    route_target if imported_route in direct_routes else target,
                 )
-                for module, _members in imported
+                for imported_route, _members in imported
             )
             rendered = "::".join(target)
             raise AglScopeError(
@@ -1687,7 +1703,10 @@ class _Resolver:
             )
         if len(imported) > 1:
             rendered = "/".join(route)
-            candidates = ", ".join(module.display() for module, _members in imported)
+            candidates = ", ".join(
+                f"{module.display()}::{'::'.join(root)}" if root else module.display()
+                for (module, root), _members in imported
+            )
             raise AglScopeError(
                 f"use target '{rendered}' is ambiguous across imported modules: {candidates}. "
                 f"Use a longer suffix, a /-anchored path, or as to name one import distinctly.",
@@ -1704,20 +1723,24 @@ class _Resolver:
                 LocalUseContribution(declaration=decl, source=self._scope_nodes[local])
             )
             return
-        _module, imported_members = imported[0]
+        _imported_route, imported_members = imported[0]
         self._contribute_use_members(decl, imported_members)
 
     @staticmethod
     def _relative_use_import_members(
         members: Mapping[NameAtom, QName], target: ScopePath
-    ) -> dict[NameAtom, QName]:
-        """Return a target scope's public subtree under target-relative paths."""
+    ) -> dict[NameAtom, QName] | None:
+        """Return an existing target's public subtree under target-relative paths."""
         relative_members: dict[NameAtom, QName] = {}
+        exists = not target
         for atom, qname in members.items():
             path = _bare_path(atom)
-            if path[: len(target)] == target and len(path) > len(target):
+            if path == target:
+                exists = True
+            elif path[: len(target)] == target:
+                exists = True
                 relative_members[_bare_atom(path[len(target) :])] = qname
-        return relative_members
+        return relative_members if exists else None
 
     @staticmethod
     def _render_use_module_target(module: ModuleId, target: ScopePath) -> str:
@@ -1727,40 +1750,54 @@ class _Resolver:
 
     def _bare_use_import_targets(
         self, target: ScopePath
-    ) -> tuple[tuple[ModuleId, Mapping[NameAtom, QName]], ...]:
+    ) -> tuple[tuple[BareRoute, Mapping[NameAtom, QName]], ...]:
         """Find scope subtrees exposed by an already-bare import tail."""
-        members_by_module: dict[ModuleId, dict[NameAtom, QName]] = {}
+        members_by_route: dict[BareRoute, dict[NameAtom, QName]] = {}
         bare_contributions = (
-            self._import_env.unqualified,
-            *self._reachable_decl_bare(self._import_env, self._current_scope().scope_path),
+            (self._import_env.unqualified, self._import_env.unqualified_routes),
+            *zip(
+                self._reachable_decl_bare(self._import_env, self._current_scope().scope_path),
+                self._reachable_decl_bare_routes(
+                    self._import_env, self._current_scope().scope_path
+                ),
+                strict=True,
+            ),
         )
-        for contributions in bare_contributions:
-            for atom, qnames in contributions.items():
+        for contributions, provenances in bare_contributions:
+            for atom, routes in provenances.items():
                 path = _bare_path(atom)
-                if path[: len(target)] != target or len(path) == len(target):
+                if path[: len(target)] != target:
                     continue
-                exposed = _bare_atom(path[len(target) :])
-                for module, qname in qnames:
-                    members_by_module.setdefault(module, {}).setdefault(exposed, (module, qname))
+                relative = path[len(target) :]
+                for module, source in routes:
+                    source_root = source[: len(source) - len(relative)] if relative else source
+                    members = members_by_route.setdefault((module, source_root), {})
+                    if not relative:
+                        continue
+                    exposed = _bare_atom(relative)
+                    qnames = contributions.get(atom, frozenset())
+                    matching = tuple(qname for qname in qnames if qname[0] == module)
+                    for qname in matching or tuple(qnames) if len(routes) == 1 else ():
+                        members.setdefault(exposed, qname)
         return tuple(
-            (module, members_by_module[module])
-            for module in sorted(members_by_module, key=ModuleId.path_str)
+            (imported_route, members_by_route[imported_route])
+            for imported_route in sorted(members_by_route, key=_bare_route_sort_key)
         )
 
     @staticmethod
     def _merge_use_import_targets(
-        *targets: tuple[tuple[ModuleId, Mapping[NameAtom, QName]], ...],
-    ) -> tuple[tuple[ModuleId, Mapping[NameAtom, QName]], ...]:
-        """Combine equivalent import routes without choosing between modules."""
-        members_by_module: dict[ModuleId, dict[NameAtom, QName]] = {}
+        *targets: tuple[tuple[BareRoute, Mapping[NameAtom, QName]], ...],
+    ) -> tuple[tuple[BareRoute, Mapping[NameAtom, QName]], ...]:
+        """Combine genuinely equivalent import routes without choosing between targets."""
+        members_by_route: dict[BareRoute, dict[NameAtom, QName]] = {}
         for routes in targets:
-            for module, members in routes:
-                merged = members_by_module.setdefault(module, {})
+            for imported_route, members in routes:
+                merged = members_by_route.setdefault(imported_route, {})
                 for atom, qname in members.items():
                     merged.setdefault(atom, qname)
         return tuple(
-            (module, members_by_module[module])
-            for module in sorted(members_by_module, key=ModuleId.path_str)
+            (imported_route, members_by_route[imported_route])
+            for imported_route in sorted(members_by_route, key=_bare_route_sort_key)
         )
 
     def _use_local_target(self, decl: UseDecl, target: ScopePath) -> ScopePath | None:

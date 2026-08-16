@@ -471,6 +471,7 @@ class _Resolver:
         parent_scope: ScopeNode | None = None,
         ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
         ambient_type_names: frozenset[str] = frozenset(),
+        use_targets_only: bool = False,
     ) -> ModuleResolution:
         """Execute the resolution pass over *program*.
 
@@ -540,8 +541,12 @@ class _Resolver:
         # Define constructor bindings in root scope.
         self._define_constructor_bindings()
 
-        # Main walk: resolve all block items in order.
-        self._resolve_block_items(program.body.items)
+        # Main walk: resolve either the complete module or just enough header
+        # context for an incremental host to classify use replacement keys.
+        if use_targets_only:
+            self._resolve_use_context(program.body.items)
+        else:
+            self._resolve_block_items(program.body.items)
         self._validate_local_use_contributions()
 
         self._at_root = False
@@ -1508,6 +1513,18 @@ class _Resolver:
     # ------------------------------------------------------------------
     # Block item resolution
     # ------------------------------------------------------------------
+
+    def _resolve_use_context(self, items: tuple[Item, ...]) -> None:
+        """Resolve use targets without letting entry bodies observe retained uses."""
+        for item in items:
+            if isinstance(item, UseDecl):
+                self._resolve_use_decl(item)
+            elif isinstance(item, ImportDecl) and item.scope_path:
+                self._contribute_regional_import_bare(item)
+            elif isinstance(item, ScopeRegion):
+                path = self._current_scope().scope_path + (item.segment.name,)
+                with self._named_scope(path):
+                    self._resolve_use_context(cast(tuple[Item, ...], item.items))
 
     def _resolve_block_items(self, items: tuple[Item, ...]) -> None:
         """Resolve items in order; each binder adds to the current scope.

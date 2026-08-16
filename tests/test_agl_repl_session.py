@@ -4589,6 +4589,75 @@ class TestImports:
         assert session.eval_entry("new()").value == IntValue(2)
         assert not session.eval_entry("selected()").ok
 
+    def test_single_member_alias_replacement_applies_to_its_entry_transactionally(
+        self,
+    ) -> None:
+        session = ReplSession()
+        assert session.eval_entry("def Source::old() -> int = 1").ok
+        assert session.eval_entry("def Source::new() -> int = 2").ok
+        assert session.eval_entry("use Source::{old}").ok
+
+        failed = session.eval_entry("use Source::new as selected\nold()")
+
+        assert not failed.ok
+        assert session.eval_entry("old()").value == IntValue(1)
+
+        replacement = session.eval_entry("use Source::new as selected\nselected()")
+
+        assert replacement.ok, replacement.diagnostics
+        assert replacement.value == IntValue(2)
+        assert not session.eval_entry("old()").ok
+
+    def test_single_member_alias_replacement_can_reuse_the_exposed_name(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("def Source::old() -> int = 1").ok
+        assert session.eval_entry("def Source::new() -> int = 2").ok
+        assert session.eval_entry("use Source::old as selected").ok
+
+        replacement = session.eval_entry("use Source::new as selected\nselected()")
+
+        assert replacement.ok, replacement.diagnostics
+        assert replacement.value == IntValue(2)
+
+    def test_nested_whole_target_alias_does_not_replace_its_parent_use(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("def Source::old() -> int = 1").ok
+        assert session.eval_entry("def Source::Nested::value() -> int = 2").ok
+        assert session.eval_entry("use Source::{old}").ok
+
+        aliased = session.eval_entry("use Source::Nested as N\nold() + N::value()")
+
+        assert aliased.ok, aliased.diagnostics
+        assert aliased.value == IntValue(3)
+        assert session.eval_entry("old()").value == IntValue(1)
+
+    def test_nested_single_member_alias_replacement_keeps_other_retained_headers(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "lib.agl").write_text("def value() -> int = 0\n", encoding="utf-8")
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("def Source::old() -> int = 1").ok
+        assert session.eval_entry("def Source::new() -> int = 2").ok
+        assert session.eval_entry(
+            "scope Outer\nimport lib\nscope Inner\nuse ::Source::{old}\nend Inner\nend Outer"
+        ).ok
+
+        replacement = session.eval_entry(
+            "scope Outer\n"
+            "scope Inner\n"
+            "use ::Source::new as selected\n"
+            "def read() -> int = selected()\n"
+            "end Inner\n"
+            "end Outer\n"
+            "Outer::Inner::read()"
+        )
+
+        assert replacement.ok, replacement.diagnostics
+        assert replacement.value == IntValue(2)
+        assert not session.eval_entry(
+            "scope Outer\nscope Inner\ndef stale() -> int = old()\nend Inner\nend Outer"
+        ).ok
+
     def test_unrelated_import_alias_does_not_key_a_local_use(self, tmp_path: Path) -> None:
         (tmp_path / "lib.agl").write_text("def value() -> int = 0\n", encoding="utf-8")
         session = self._make_session_with_root(tmp_path)

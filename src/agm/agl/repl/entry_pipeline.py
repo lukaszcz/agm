@@ -27,18 +27,19 @@ if TYPE_CHECKING:
     from agm.agl.ir.program import IrParam
     from agm.agl.lower import LinkImage
     from agm.agl.matchcompile import MatchCompiledProgram
-    from agm.agl.modules.loader import LoadedModule
+    from agm.agl.modules.loader import LoadedModule, ModuleGraph
     from agm.agl.modules.roots import RootSet
     from agm.agl.pipeline import RunError
     from agm.agl.runtime.host_settings import HostSettingsPolicy
     from agm.agl.runtime.trace import TraceStore
     from agm.agl.runtime.types import HostEnvironment
+    from agm.agl.scope.program import ResolvedProgram
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import Frame, Value
     from agm.agl.setting_overrides import SettingOverride
     from agm.agl.syntax.advisories import SpacedQualifier
-    from agm.agl.syntax.nodes import ImportDecl, Item, Program, ScopeRegion, UseDecl
+    from agm.agl.syntax.nodes import ImportDecl, Item, Program, ScopeItem, ScopeRegion, UseDecl
     from agm.agl.typecheck.env import CheckedModule, TypeEnvironment
     from agm.agl.typecheck.program import CheckedProgram
 
@@ -210,7 +211,6 @@ class EntryPipeline:
         """
         from agm.agl.modules.loader import build_repl_graph
         from agm.agl.pipeline import apply_setting_overrides
-        from agm.agl.scope.program import resolve_program
         from agm.agl.typecheck.program import check_program
 
         roots = self._ctx._ensure_roots()
@@ -238,15 +238,7 @@ class EntryPipeline:
         if override_diagnostics:
             raise OverrideRejected(override_diagnostics)
 
-        resolved_program = resolve_program(
-            graph,
-            entry_ambient_constructor_candidates=self._ctx._ambient_constructor_candidates,
-            entry_ambient_type_names=self._ctx._ambient_type_names,
-            entry_parent_scope=self._ctx._session_scope,
-            entry_repl_session_scope=self._ctx._session_scope,
-            entry_repl_session_scope_nodes=self._ctx._session_scope_nodes,
-            entry_repl_session_type_paths=self._ctx._session_type_paths,
-        )
+        resolved_program = self._resolve_with_semantic_use_replacement(graph, entry_uses)
         checked_program = check_program(
             resolved_program, host_env.capabilities, entry_seed_env=self._ctx._type_env
         )
@@ -389,7 +381,6 @@ class EntryPipeline:
         must catch these themselves.
         """
         from agm.agl.modules.loader import build_repl_graph
-        from agm.agl.scope.program import resolve_program
         from agm.agl.typecheck.program import check_program
 
         roots = self._ctx._ensure_roots()
@@ -405,18 +396,113 @@ class EntryPipeline:
             default_stdlib=self._ctx._default_stdlib,
             spaced_qualifiers=spaced_qualifiers,
         )
-        resolved_program = resolve_program(
-            graph,
-            entry_ambient_constructor_candidates=self._ctx._ambient_constructor_candidates,
-            entry_ambient_type_names=self._ctx._ambient_type_names,
-            entry_parent_scope=self._ctx._session_scope,
-            entry_repl_session_scope=self._ctx._session_scope,
-            entry_repl_session_scope_nodes=self._ctx._session_scope_nodes,
-            entry_repl_session_type_paths=self._ctx._session_type_paths,
-        )
+        resolved_program = self._resolve_with_semantic_use_replacement(graph, _entry_uses)
         return check_program(
             resolved_program, host_env.capabilities, entry_seed_env=self._ctx._type_env
         )
+
+    def _resolve_with_semantic_use_replacement(
+        self,
+        graph: "ModuleGraph",
+        entry_uses: tuple[UseDecl | ImportDecl | ScopeRegion, ...],
+    ) -> "ResolvedProgram":
+        """Resolve after applying replacement with scope's semantic use targets.
+
+        The retained-preamble pass can classify ordinary use spellings directly,
+        but ``use Scope::member as alias`` is intentionally semantic: scope may
+        reinterpret it as a selected member, while a nested scope at the same
+        spelling remains a whole-target alias. Run scope's target-only header
+        walk to obtain that definitive classification, remove only superseded
+        retained uses, then resolve the effective entry that type checking will
+        consume.
+        """
+        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.scope.program import resolve_program
+        from agm.agl.syntax.nodes import UseDecl, static_items
+
+        def resolve(current_graph: ModuleGraph, *, use_targets_only: bool) -> ResolvedProgram:
+            return resolve_program(
+                current_graph,
+                entry_ambient_constructor_candidates=self._ctx._ambient_constructor_candidates,
+                entry_ambient_type_names=self._ctx._ambient_type_names,
+                entry_parent_scope=self._ctx._session_scope,
+                entry_repl_session_scope=self._ctx._session_scope,
+                entry_repl_session_scope_nodes=self._ctx._session_scope_nodes,
+                entry_repl_session_type_paths=self._ctx._session_type_paths,
+                _entry_use_targets_only=use_targets_only,
+            )
+
+        classified = resolve(graph, use_targets_only=True)
+        use_targets = classified.modules[ENTRY_ID].resolved.use_targets
+        effective_program = self._without_semantically_superseded_uses(
+            graph.modules[ENTRY_ID].program,
+            entry_uses,
+            use_targets,
+        )
+        if effective_program is graph.modules[ENTRY_ID].program:
+            return resolve(graph, use_targets_only=False)
+
+        entry_module = graph.modules[ENTRY_ID]
+        effective_entry = replace(
+            entry_module,
+            program=effective_program,
+            uses=tuple(
+                item
+                for item in static_items(effective_program.body.items)
+                if isinstance(item, UseDecl)
+            ),
+        )
+        modules = dict(graph.modules)
+        modules[ENTRY_ID] = effective_entry
+        return resolve(replace(graph, modules=modules), use_targets_only=False)
+
+    @staticmethod
+    def _without_semantically_superseded_uses(
+        program: Program,
+        entry_uses: tuple[UseDecl | ImportDecl | ScopeRegion, ...],
+        use_targets: Mapping[int, ResolvedUseTarget],
+    ) -> Program:
+        """Remove retained uses replaced by this entry's resolved targets."""
+        from agm.agl.syntax.nodes import ScopeRegion, UseDecl
+
+        current_ids = {decl.node_id for decl in EntryPipeline._use_decls(entry_uses)}
+        current_keys = {
+            (
+                tuple(segment.name for segment in decl.scope_path),
+                use_targets[decl.node_id],
+            )
+            for decl in EntryPipeline._use_decls(entry_uses)
+        }
+        superseded_ids = {
+            decl.node_id
+            for decl in EntryPipeline._use_decls(
+                EntryPipeline._retained_use_items(program.body.items)
+            )
+            if decl.node_id not in current_ids
+            and (
+                tuple(segment.name for segment in decl.scope_path),
+                use_targets[decl.node_id],
+            )
+            in current_keys
+        }
+        if not superseded_ids:
+            return program
+
+        def retained(items: tuple[Item, ...]) -> tuple[Item, ...]:
+            effective: list[Item] = []
+            for item in items:
+                if isinstance(item, UseDecl) and item.node_id in superseded_ids:
+                    continue
+                if isinstance(item, ScopeRegion):
+                    nested = retained(cast("tuple[Item, ...]", item.items))
+                    if item.items and not nested:
+                        continue
+                    if nested != item.items:
+                        item = replace(item, items=cast("tuple[ScopeItem, ...]", nested))
+                effective.append(item)
+            return tuple(effective)
+
+        return EntryPipeline._replace_body_items(program, list(retained(program.body.items)))
 
     @staticmethod
     def _checked_program_from_module(entry: CheckedModule) -> CheckedModule:

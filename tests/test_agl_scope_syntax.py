@@ -451,6 +451,11 @@ def test_import_and_export_clauses_accept_path_atoms(source: str, kind: type[obj
     assert atoms == expected
 
 
+def test_use_rejects_operator_alias_for_scope_route() -> None:
+    with pytest.raises(AglScopeError):
+        resolve_inline_entry("use Point as >>\nscope Point\ndef distance() -> int = 1\nend Point")
+
+
 def test_use_contributes_local_scope_members() -> None:
     resolved = resolve_inline_entry(
         "use Point::*\nscope Point\ndef distance() -> int = 1\nend Point\ndistance()"

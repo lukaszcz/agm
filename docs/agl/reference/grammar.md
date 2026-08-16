@@ -112,7 +112,9 @@ They remain valid identifiers elsewhere. An import alias and a tail are
 exclusive. Braces cannot be empty or nested, cannot contain `*`, and cannot
 be combined with `hiding`. `hiding` is valid on a plain import, an import glob,
 a module wildcard import, or a use glob. An export accepts brace tails but not
-`::*`.
+`::*`. A `use` alias for a complete scope or module target must be a `NAME`,
+because it becomes a qualifier segment; selected member renames may use any
+`name`.
 
 Examples:
 

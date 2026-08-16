@@ -1739,6 +1739,13 @@ class _Resolver:
                 f"use target '{rendered}' is not nameable. Import its module before using it.",
                 span=decl.span,
             )
+        if decl.alias is not None and not (
+            decl.alias[0] == "_" or decl.alias[0].isalpha()
+        ):
+            raise AglScopeError(
+                "a whole-target use alias must be an identifier.",
+                span=decl.span,
+            )
         if local is not None:
             self._current_scope().contribute_local_use(
                 LocalUseContribution(declaration=decl, source=self._scope_nodes[local])

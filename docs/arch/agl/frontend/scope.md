@@ -34,8 +34,10 @@ imports that reuse an alias remain ambiguous. `use` selects
 from an already nameable local scope or imported route,
 including a scope route exposed by an earlier `use`; imported `use` surfaces retain every filtered
 member and scope-route candidate on the owning lexical region, so colliding renamed routes remain
-ambiguous when subsequently used. It does not create a
-module-loading edge. Bare import-tail and `use` routes at the same region are
+ambiguous when subsequently used and selective bare imports cannot expose unselected nested scopes.
+The module's qualified route remains complete. Incremental replay falls back to that route only when
+the retained use target is no longer nameable through the current import spelling. `use` does not
+create a module-loading edge. Bare import-tail and `use` routes at the same region are
 resolved together: routes to one declaration deduplicate, while distinct origins
 are ambiguous. A nearer regional contribution shadows outer bare routes.
 Region-scoped bare contributions apply within that region and its nested regions,

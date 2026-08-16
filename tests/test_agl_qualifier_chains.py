@@ -522,6 +522,45 @@ def test_import_hiding_does_not_reintroduce_bare_enum_variant(tmp_path: Path) ->
         )
 
 
+def test_selective_import_does_not_expose_unselected_nested_scope_to_later_use(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(AglScopeError, match="not nameable"):
+        _entry_resolution(
+            tmp_path,
+            {
+                "entry": "import lib::{A::ok}\nuse A::*\nuse Secret::*",
+                "lib": (
+                    "scope A\n"
+                    "def ok() -> int = 1\n"
+                    "scope Secret\n"
+                    "def hidden() -> int = 2\n"
+                    "end Secret\n"
+                    "end A"
+                ),
+            },
+        )
+
+
+def test_selective_import_keeps_unselected_nested_scope_qualified_use_route(
+    tmp_path: Path,
+) -> None:
+    _entry_resolution(
+        tmp_path,
+        {
+            "entry": ("import lib::{A::ok}\nuse A::*\nuse lib::A::Secret::*\nhidden()"),
+            "lib": (
+                "scope A\n"
+                "def ok() -> int = 1\n"
+                "scope Secret\n"
+                "def hidden() -> int = 2\n"
+                "end Secret\n"
+                "end A"
+            ),
+        },
+    )
+
+
 @pytest.mark.parametrize(
     "entry",
     (

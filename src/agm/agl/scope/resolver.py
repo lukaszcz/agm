@@ -1784,6 +1784,7 @@ class _Resolver:
         bare_imports = () if decl.anchored else self._bare_use_import_targets(target)
         used_imports = () if decl.anchored else self._used_import_targets(target)
         imported = self._merge_use_import_targets(direct_imports, bare_imports, used_imports)
+        available_import_routes = frozenset(route for route, _members in imported)
         if retained_target is not None and retained_target.imported_routes:
             available = dict(imported)
             replayed: list[tuple[BareRoute, Mapping[NameAtom, QName]]] = []
@@ -1856,6 +1857,20 @@ class _Resolver:
                 LocalUseContribution(declaration=decl, source=self._scope_nodes[local])
             )
             return
+
+        def scope_routes_for(imported_route: BareRoute) -> Mapping[NameAtom, frozenset[BareRoute]]:
+            """Keep selected provenance unless replay requires the target's full route."""
+            direct = direct_import_scope_routes.get(imported_route)
+            if direct is not None:
+                return direct
+            selected = {
+                **self._bare_use_import_scope_routes(target, imported_route),
+                **self._used_import_scope_routes(target, imported_route),
+            }
+            if retained_target is not None and imported_route not in available_import_routes:
+                return {**self._import_scope_routes(imported_route), **selected}
+            return selected
+
         if shared_alias_facade:
             self._use_targets[decl.node_id] = ResolvedUseTarget(
                 imported_routes=tuple(route for route, _members in imported)
@@ -1863,23 +1878,12 @@ class _Resolver:
             self._contribute_use_facade_members(
                 decl,
                 tuple(members for _route, members in imported),
-                tuple(
-                    direct_import_scope_routes.get(route, self._import_scope_routes(route))
-                    for route, _members in imported
-                ),
+                tuple(scope_routes_for(route) for route, _members in imported),
             )
             return
         imported_route, imported_members = imported[0]
-        if imported_route in direct_import_scope_routes:
-            imported_scope_routes = direct_import_scope_routes[imported_route]
-        else:
-            imported_scope_routes = {
-                **self._import_scope_routes(imported_route),
-                **self._bare_use_import_scope_routes(target, imported_route),
-                **self._used_import_scope_routes(target, imported_route),
-            }
         self._use_targets[decl.node_id] = ResolvedUseTarget(imported_routes=(imported_route,))
-        self._contribute_use_members(decl, imported_members, imported_scope_routes)
+        self._contribute_use_members(decl, imported_members, scope_routes_for(imported_route))
 
     def _reinterpret_single_member_use_alias(self, decl: UseDecl) -> UseDecl:
         """Disambiguate ``use Scope::member as Alias`` from a whole-target alias."""

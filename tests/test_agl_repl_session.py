@@ -4824,6 +4824,22 @@ class TestImports:
         assert result.ok, result.diagnostics
         assert result.value == IntValue(1)
 
+    def test_retained_imported_use_keeps_nested_scope_routes_after_alias_change(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "lib.agl").write_text(
+            "scope Nested\ndef value() -> int = 1\nend Nested\n", encoding="utf-8"
+        )
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("import lib as Old").ok
+        assert session.eval_entry("use Old::*").ok
+        assert session.eval_entry("import lib as New").ok
+
+        result = session.eval_entry("use Nested::*\nvalue()")
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(1)
+
     def test_import_tail_rename_canonicalizes_use_replacement(self, tmp_path: Path) -> None:
         (tmp_path / "lib.agl").write_text(
             "scope Source\ndef old() -> int = 1\ndef new() -> int = 2\nend Source\n"

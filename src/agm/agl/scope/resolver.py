@@ -2152,13 +2152,15 @@ class _Resolver:
                 )
             self._check_local_scope_route_ambiguity(qualifier, target.name, local_path)
         else:
-            if not qualifier.route_segments:
-                raise AglScopeError(
-                    f"'{target.name}' is not declared; assignment requires an existing "
-                    f"mutable binding.",
-                    span=node.span,
-                )
-            ref = self._lookup_qualified_binding(qualifier, target.name, node.span)
+            ref = self._lookup_qualified_use_contribution(qualifier, target.name, node.span)
+            if ref is None:
+                if not qualifier.route_segments:
+                    raise AglScopeError(
+                        f"'{target.name}' is not declared; assignment requires an existing "
+                        f"mutable binding.",
+                        span=node.span,
+                    )
+                ref = self._lookup_qualified_binding(qualifier, target.name, node.span)
         self._require_textually_visible(ref, node.span)
         if not ref.mutable:
             raise AglScopeError(
@@ -2637,16 +2639,15 @@ class _Resolver:
         """
         chain = node.qualifier
         assert chain is not None
-        if chain.anchor is None:
-            atom = _bare_atom((*tuple(segment.name for segment in chain.segments), node.name))
-            ref = self._lookup_bare_contribution(atom, node.span)
-            if ref is not None:
-                self._record_varref_binding(
-                    node,
-                    ref,
-                    candidates=self._regional_constructor_candidates(atom),
-                )
-                return
+        atom = _bare_atom((*tuple(segment.name for segment in chain.segments), node.name))
+        ref = self._lookup_qualified_use_contribution(chain, node.name, node.span)
+        if ref is not None:
+            self._record_varref_binding(
+                node,
+                ref,
+                candidates=self._regional_constructor_candidates(atom),
+            )
+            return
         direct_error: AglScopeError | None = None
         local_type_path = self._validate_local_scope_chain(chain)
         if (
@@ -2687,6 +2688,15 @@ class _Resolver:
             )
             or missing_error
         )
+
+    def _lookup_qualified_use_contribution(
+        self, chain: QualifierChain, name: str, span: SourceSpan
+    ) -> BindingRef | None:
+        """Resolve a complete unanchored qualified atom contributed by ``use``."""
+        if chain.anchor is not None:
+            return None
+        atom = _bare_atom((*tuple(segment.name for segment in chain.segments), name))
+        return self._lookup_bare_contribution(atom, span)
 
     def _resolve_constructor_chain(
         self,

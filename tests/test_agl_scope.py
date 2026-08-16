@@ -881,6 +881,15 @@ class TestScopedAssignment:
         assert ref.scope_path == ("A",)
         assert ref.kind is BinderKind.var_binding
 
+    def test_qualified_assign_resolves_use_alias(self) -> None:
+        resolved = parse_and_resolve(
+            "use A as X\nscope A\nvar count = 0\nend A\nX::count := 1\nX::count"
+        )
+        ref = self._assign_ref(resolved)
+        assert ref.mutable is True
+        assert ref.scope_path == ("A",)
+        assert ref.kind is BinderKind.var_binding
+
     def test_qualified_assign_to_multi_segment_scoped_var(self) -> None:
         resolved = parse_and_resolve(
             "scope A\nscope B\nvar count = 0\nend B\nend A\nA::B::count := 1\nA::B::count"

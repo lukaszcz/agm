@@ -281,8 +281,9 @@ class ConstructorChecker:
         """Instantiate a generic constructor value from explicit type arguments.
 
         Shared core of the bare and qualified type-apply-as-value paths. A
-        payload member yields a ``FunctionType`` from its field types to its
-        concrete member record.
+        field-bearing constructor yields a ``FunctionType`` from its field
+        types to its concrete member record; a fieldless one constructs that
+        record immediately.
         """
         if len(type_args) != len(type_params):
             raise AglTypeError(
@@ -298,6 +299,8 @@ class ConstructorChecker:
         }
         concrete_params = tuple(substitute(ft, subst) for ft in sig.field_templates)
         concrete_result = substitute(sig.result_template, subst)
+        if not concrete_params:
+            return concrete_result
         return FunctionType(params=concrete_params, result=concrete_result)
 
     def check_constructor_type_apply(
@@ -309,7 +312,8 @@ class ConstructorChecker:
     ) -> Type:
         """Type a generic constructor with explicit type args used as a value.
 
-        ``some::[int]``  → ``FunctionType((int,), Option::some[int])``.
+        ``some::[int]`` yields ``FunctionType((int,), Option::some[int])``;
+        a fieldless constructor yields its instantiated record value.
         """
         if not ctor_ref.type_params:
             raise AglTypeError(

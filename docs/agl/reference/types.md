@@ -413,8 +413,11 @@ record Issue
   description: text
 ```
 
-All fields are required. By default, record fields are **standard**: they may be
-supplied positionally or as `field = value`:
+All fields are required. A fieldless record uses an empty parenthesized field
+list (`record R1()`). Its constructor reference in value position constructs an
+`R1` value; see [Expressions](expressions.md#fieldless-constructor-references).
+By default, record fields are **standard**: they may be supplied positionally
+or as `field = value`:
 
 <!-- agl-check: fragment -->
 ```agl

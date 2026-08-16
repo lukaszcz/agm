@@ -215,14 +215,14 @@ program def main() -> unit =
   let _ = print(make_text("hi")[0])
 ```
 
-## Constructors as values; generic constructor values
+## Constructor references and generic constructor values
 
-Record constructors and enum variants are **ordinary value bindings** (see
-[Bindings and scope](bindings-and-scope.md)). Direct construction uses
-positional-greedy binding — positional arguments fill positional-capable slots
-left to right, then named arguments follow. A constructor reached through a
-variable is a normal function value, called **positionally** in declaration
-field order:
+Field-bearing record constructors and enum variants are **ordinary function
+values** (see [Bindings and scope](bindings-and-scope.md)). Direct construction
+uses positional-greedy binding — positional arguments fill positional-capable
+slots left to right, then named arguments follow. A field-bearing constructor
+reached through a variable is a normal function value, called **positionally**
+in declaration field order:
 
 ```agl
 record Box[T]
@@ -235,9 +235,9 @@ program def main() -> unit =
   let _ = print one.value
 ```
 
-A **generic** constructor or generic `def` used as a first-class value needs
-constraints that pin its instantiation. An expected function type does this for
-a standalone value:
+A **generic field-bearing** constructor or generic `def` used as a
+first-class function value needs constraints that pin its instantiation. An
+expected function type does this for a standalone value:
 
 ```agl
 def id[T](x: T) -> T = x
@@ -270,8 +270,8 @@ program def main() -> unit =
 ```
 
 The same expression-local inference applies to every generic constructor form,
-including payload variants, nullary variants, and partial constructors. Evidence
-may come from a later sibling argument or the enclosing result:
+including payload variants, fieldless constructors, and partial constructors.
+Evidence may come from a later sibling argument or the enclosing result:
 
 ```agl
 enum Option[T]
@@ -316,8 +316,10 @@ immediately followed by `[` (`NAME[`):
 applies only to this constructor form; ordinary applied type expressions may
 have whitespace, so both `Option[int]` and `Option [int]` are valid type
 expressions. Both `Option` and the constructor (`some`/`none`) must be `NAME`,
-not `OP_NAME`. The result is an ordinary function value (payload) or member
-record value (nullary) and can be passed and called like any other.
+not `OP_NAME`. The result is an ordinary function value for a payload member
+or a constructed member-record value for a fieldless member. The latter can be
+passed as a value but is not callable; see
+[Fieldless constructor references](expressions.md#fieldless-constructor-references).
 
 ## Strict parametricity
 

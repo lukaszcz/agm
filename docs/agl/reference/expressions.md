@@ -234,8 +234,9 @@ should not) determine it:
 let be = Box::[int](value = 99)
 ```
 
-This also applies when a constructor value or partial constructor is an
-argument to another call: a sibling argument may determine its type arguments.
+This also applies when a field-bearing constructor value or partial
+constructor is an argument to another call: a sibling argument may determine
+its type arguments.
 
 ```agl
 record Box[T]
@@ -259,13 +260,13 @@ let s = some::[int](value = 1)      # T pinned explicitly
 let q = Option[int]::some(value = 2) # qualification disambiguates the owner
 ```
 
-### Constructors as values
+### Field-bearing constructors as values
 
-A record constructor or an enum variant is an **ordinary value binding**: it
-can be stored, passed to a function, and called like any other function value.
-When a constructor is reached **through a variable** rather than written
-directly, it is a positional callable — its arguments are supplied positionally
-in **declaration order**, since a function value has no named parameters
+A constructor with fields is an **ordinary function value**: it can be stored,
+passed to a function, and called like any other function value. When a
+constructor is reached **through a variable** rather than written directly, it
+is a positional callable — its arguments are supplied positionally in
+**declaration order**, since a function value has no named parameters
 ([Functions](functions.md)):
 
 <!-- agl-check: fragment -->
@@ -291,11 +292,40 @@ annotation supplies that evidence, and a surrounding higher-order call may
 supply it through another argument or its result. A bare `let f = some` is a
 static error because the binding has no such evidence.
 
-Nullary enum variants are likewise ordinary values:
+### Fieldless constructor references
 
-<!-- agl-check: fragment -->
+A fieldless constructor reference constructs its value immediately in value
+position. This applies uniformly to a standalone record and an enum member,
+whether bare or qualified:
+
 ```agl
-let n: Option[int] = none           # the nullary variant as a value
+record R1()
+enum Tree
+  | Leaf
+
+let record_value = R1
+let leaf = Leaf
+let qualified_leaf = Tree::Leaf
+```
+
+Calls remain direct constructor calls, so `R1()` and `Tree::Leaf()` construct
+the same values. A fieldless constructor reference is not a `() -> T` function
+value. Supply an explicit function when one is required:
+
+```agl
+record R1()
+def invoke(factory: () -> R1) -> R1 = factory()
+program def main() -> unit =
+  let result = invoke(fn() => R1)
+```
+
+A generic fieldless constructor may obtain its type arguments from context or
+from `::[…]`:
+
+```agl
+record Token[T]()
+let from_context: Token[int] = Token
+let explicit = Token::[int]
 ```
 
 ### Exception construction

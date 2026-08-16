@@ -1,0 +1,12 @@
+{
+  "scenarios": [
+    {
+      "name": "values_calls_higher_order_equality_and_patterns",
+      "agents": {},
+      "expect": {
+        "stdout": "true\ntrue\ntrue\nR1()\nTree::Leaf\nR1()\nToken()\nBox(value = 3)\nbare pattern\nqualified pattern\n",
+        "calls": {}
+      }
+    }
+  ]
+}

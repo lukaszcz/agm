@@ -1216,9 +1216,7 @@ class _Lowerer:
                             nominal=nominal,
                             display_name=display,
                         )
-                    # Nullary constructor used as a value → construct immediately.
-                    # AgL grammar requires ≥1 field in a record, so a nullary
-                    # record VarRef is impossible under the current grammar.
+                    # Fieldless constructor used as a value → construct immediately.
                     return self._lower_nullary_constructor(nid, span)
 
                 ref = self._checked.binding_for(nid)

@@ -6,6 +6,8 @@ public ``tokenize`` helper.  No scanner/layout internals are tested.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 from lark.lexer import LexerState, TextSlice
 
@@ -2821,6 +2823,47 @@ class TestDivisionRequiresSurroundingSpace:
     def test_slash_clinging_to_an_operand_is_rejected(self, source: str) -> None:
         with pytest.raises(LexError):
             lark_tok(source)
+
+    @pytest.mark.parametrize("lexer", (tok, lark_tok), ids=("public", "lark"))
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "true/ value",
+            "false/ value",
+            "null/ value",
+            '"text"/ value',
+            "{key: 1}/ value",
+            "break/ value",
+            "continue/ value",
+        ),
+    )
+    def test_slash_clinging_to_omitted_expression_end_kind_is_rejected(
+        self, source: str, lexer: Callable[[str], list[tuple[str, str]]]
+    ) -> None:
+        with pytest.raises(LexError):
+            lexer(source)
+
+    @pytest.mark.parametrize("lexer", (tok, lark_tok), ids=("public", "lark"))
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "value /true",
+            "value /false",
+            "value /null",
+            'value /"text"',
+            "value /[1]",
+            "value /{key: 1}",
+            "value /break",
+            "value /continue",
+            "value /not true",
+            "value /::member",
+        ),
+    )
+    def test_slash_clinging_to_omitted_expression_start_kind_is_rejected(
+        self, source: str, lexer: Callable[[str], list[tuple[str, str]]]
+    ) -> None:
+        with pytest.raises(LexError):
+            lexer(source)
 
     def test_spaced_dcolon_run_is_left_to_the_qualifier_advisory(self) -> None:
         # `app/config ::x` is a qualifier with a gap before its `::`; the

@@ -53,15 +53,19 @@ from agm.agl.lexer.tokens import (
     LBRACE,
     LPAR,
     LSQB,
+    MINUS,
     MODPATH,
     MODQUAL,
     NAME,
     OP_NAME,
+    RBRACE,
     RPAR,
     RSQB,
     SCOPE,
     SLASH,
     STAR,
+    TEMPLATE_END,
+    TEMPLATE_START,
     TYPEARG_LSQB,
     USE,
     USE_ALIAS_PATH,
@@ -71,19 +75,55 @@ from agm.agl.lexer.tokens import (
 )
 from agm.agl.syntax.advisories import SpacedQualifier
 
-_INDEX_PREDECESSORS = frozenset(
+_GRAMMAR_TOKEN_UNMAP = {
+    grammar_type: scanner_type for scanner_type, grammar_type in GRAMMAR_TOKEN_REMAP.items()
+}
+
+
+def _scanner_token_type(token_type: str) -> str:
+    """Return the public scanner spelling for a possibly parser-remapped token type."""
+    return _GRAMMAR_TOKEN_UNMAP.get(token_type, token_type)
+
+
+# Canonical scanner token types that delimit closed expressions and begin infix
+# operands. Keeping these sets in scanner form lets both the public tokenizer's
+# lowercase keywords and the Lark stream's remapped keywords use one inventory.
+_EXPRESSION_END_TYPES = frozenset(
     {
-        "NAME",
+        NAME,
         OP_NAME,
         INT,
-        "DECIMAL",
-        "TRUE",
-        "FALSE",
-        "NULL",
-        "TEMPLATE_END",
-        "RPAR",
+        DECIMAL,
+        "true",
+        "false",
+        "null",
+        TEMPLATE_END,
+        RPAR,
         RSQB,
-        "RBRACE",
+        RBRACE,
+        "break",
+        "continue",
+    }
+)
+_INFIX_OPERAND_START_TYPES = frozenset(
+    {
+        NAME,
+        OP_NAME,
+        INT,
+        DECIMAL,
+        "true",
+        "false",
+        "null",
+        TEMPLATE_START,
+        LPAR,
+        LSQB,
+        LBRACE,
+        MODQUAL,
+        DCOLON,
+        "break",
+        "continue",
+        "not",
+        MINUS,
     }
 )
 
@@ -703,11 +743,9 @@ def _merge_modqual(tokens: list[Token], source: str) -> list[Token]:
     return result
 
 
-# Tokens that can end an operand immediately left of a slash, and tokens that
-# can begin one immediately right of it. A slash touching either is reaching for
-# a path; a slash touching neither (the positional-parameter marker) is not.
-_OPERAND_END = frozenset({NAME, INT, DECIMAL, RPAR, RSQB, MODQUAL})
-_OPERAND_START = frozenset({NAME, INT, DECIMAL, LPAR})
+# A merged qualifier is not itself an expression, but a following slash still
+# clings to a path operand that failed to acquire its final name.
+_SLASH_LEFT_OPERAND_TYPES = _EXPRESSION_END_TYPES | {MODQUAL}
 
 
 def _reaches_a_spaced_dcolon(tokens: list[Token], slash_index: int) -> bool:
@@ -749,12 +787,12 @@ def _reject_clinging_slash(tokens: list[Token]) -> list[Token]:
         next_tok = tokens[index + 1] if index + 1 < len(tokens) else None
         tight_left = (
             prev_tok is not None
-            and prev_tok.type in _OPERAND_END
+            and _scanner_token_type(prev_tok.type) in _SLASH_LEFT_OPERAND_TYPES
             and prev_tok.end_pos == tok.start_pos
         )
         tight_right = (
             next_tok is not None
-            and next_tok.type in _OPERAND_START
+            and _scanner_token_type(next_tok.type) in _INFIX_OPERAND_START_TYPES
             and tok.end_pos == next_tok.start_pos
         )
         if tight_left or tight_right:
@@ -857,14 +895,14 @@ def _remap_adjacent_brackets(tokens: list[Token]) -> list[Token]:
         elif (
             tok.type == LSQB
             and previous is not None
-            and previous.type in _INDEX_PREDECESSORS
+            and _scanner_token_type(previous.type) in _EXPRESSION_END_TYPES
             and previous.end_pos == tok.start_pos
         ):
             tok = _retype(tok, INDEX_LSQB)
         elif (
             tok.type == LBRACE
             and previous is not None
-            and previous.type in _INDEX_PREDECESSORS
+            and _scanner_token_type(previous.type) in _EXPRESSION_END_TYPES
             and previous.end_pos == tok.start_pos
         ):
             tok = _retype(tok, CALL_LBRACE)

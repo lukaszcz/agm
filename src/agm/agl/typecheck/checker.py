@@ -4831,9 +4831,22 @@ class _Checker:
                 if constructor_ref is not None and constructor_ref.variant is not None
                 else pattern.name
             )
-            if constructor_ref is None:
+            qualifier = pattern.qualifier
+            raw_owner = (
+                "::".join(segment.name for segment in qualifier.segments)
+                if qualifier is not None
+                else ""
+            )
+            if constructor_ref is None or (
+                qualifier is not None
+                and (
+                    qualifier.anchor is not None
+                    or self._env.resolve_named_type(raw_owner) is not None
+                    or self._env.has_qualified_import_member(qualifier, pattern.name)
+                )
+            ):
                 self._check_variant_qualification(
-                    qualifier=pattern.qualifier,
+                    qualifier=qualifier,
                     variant=pattern.name,
                     enum_type=owner_type,
                     span=pattern.span,

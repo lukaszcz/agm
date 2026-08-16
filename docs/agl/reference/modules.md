@@ -2,8 +2,9 @@
 
 [← Index](index.md)
 
-AgL programs are composed from file-based modules. Imports expose public
-members through qualified routes and, when requested, bare names.
+AgL programs are composed from file-based modules. An `import` makes another
+module's public declarations available through qualified routes. An import tail
+or a `use` declaration adds selected declarations to a bare namespace.
 
 ## Slash-path identity
 
@@ -22,127 +23,45 @@ No matching file is an error; more than one matching file is also an error.
 There is no root-priority shadowing. Wildcard imports select matching modules
 from the same global module set.
 
-## One-set imports
+## Imports
 
 ```ebnf
-import_decl ::= ["open"] "import" module_path ["/*"]
-                ["as" ref_name]
-                [using_clause | hiding_clause]
+import_decl ::= "import" module_path ["/*"]
+                ["as" ref_name | "::" import_selection]
+                [hiding_clause]
 
-module_path ::= NAME ("/" NAME)*
-using_clause ::= "using" path_atom ["as" ref_name] ("," path_atom ["as" ref_name])*
-hiding_clause ::= "hiding" path_atom ("," path_atom)*
-path_atom ::= (NAME "::")* name
-name      ::= NAME | OP_NAME
+import_selection ::= "*" | import_item | "{" import_item ("," import_item)* [","] "}"
+import_item      ::= path_atom ["as" ref_name]
+hiding_clause    ::= "hiding" path_atom ("," path_atom)*
+path_atom        ::= (NAME "::")* name
+name             ::= NAME | OP_NAME
 ```
 
-Each import contributes a selected set **S** of its target module's public
-members:
+An import always contributes the target module's full public qualified surface,
+except for paths named by `hiding`. A positive `::` tail controls only its bare
+contribution:
 
-- no clause selects every public member;
-- `using` selects exactly its listed members;
-- `hiding` selects every public member except its listed members.
+- `import m` contributes qualified routes only.
+- `import m::*` makes every public member bare.
+- `import m::{f, Config::timeout}` makes those members bare.
 
-Both bare access and qualified access are bounded by **S**. Repeated imports
-of the same module union their selected sets and bare-name contributions.
-This makes a small bare surface plus a full qualified API explicit:
+A selected scope path includes its complete public subtree. An item rename adds
+a corresponding bare path while leaving the selected source path available.
+`hiding` removes a path and its subtree from both qualified and bare access.
+It may accompany a plain import or a `::*` tail, but not a positive selection.
+Selected and hidden paths must be public declarations of every module matched
+by a wildcard.
 
 <!-- agl-check: fragment -->
 ```agl
 import utils/strings
-import utils/strings using trim
+import text/format::{render as format}
+import app/vocabulary::* hiding internal-word
 ```
 
-`using` and `hiding` name public declaration paths. Selecting a scope path
-selects its complete public subtree, including a same-named type and its enum
-variants. Selecting a path with no public content is an error. A bare path
-contributed by several imports is an error when used, not when imported; scopes
-with the same spelling from different modules never merge.
-
-## `open`, `using`, and `hiding`
-
-A plain import contributes **S** only to qualified routes. `using` injects its
-selected names into the bare namespace. `open import` injects all of **S**
-bare; combining `open` and `using` is redundant and invalid.
-
-<!-- agl-check: fragment -->
-```agl
-import utils/strings
-open import app/vocabulary hiding internal-word
-import text/format using render as format
-```
-
-A `using N as M` rename is canonical: it replaces the selected path prefix
-for both bare and qualified access through that import. Thus `using Point as P`
-exposes `P::…`, while `using Point::distance as d` exposes `d`. The original
-path is inaccessible through that import. `hiding` removes a path and its
-subtree from both channels, so it can also remove a qualification ambiguity.
-
-## Import and export inside a scope region
-
-`import` and `export` are also legal [named scope](scopes.md) region items.
-Only the *bare* contribution narrows to the region: `open import` or
-`import … using` inside `scope A` makes the selected names bare inside `A`
-only, not at the module root or in a sibling region. The qualifier route a
-scoped import establishes is unaffected and stays available module-wide, so a
-plain `import m` inside a region behaves exactly as it does at the root — the
-meaningful scoped forms are `open import m` and `import m using …`:
-
-<!-- agl-check: fragment -->
-```agl
-scope Vec
-open import geom/planar
-def norm(p: Point) -> float = mag(p)
-end Vec
-```
-
-`import` and `export` are both header items inside a region, exactly like
-`open`: they precede the region's other items. A scoped `export` re-roots
-every atom it forwards under the region's own scope path, exactly as a
-`using … as` rename re-roots a selected atom:
-
-<!-- agl-check: fragment -->
-```agl
-scope Geo
-export geom/planar using Point
-end Geo
-```
-
-publishes the atom `Geo::Point`, forwarding to `geom/planar`'s `Point`. An
-importer reaches it as `facade::Geo::Point`. Wildcard and `hiding` forms
-re-root every forwarded atom the same way, and a rename composes with the
-re-rooting. Ordinary re-export cycles that preserve names are allowed, but a
-cycle that repeatedly expands a scoped path is rejected as a scope error.
-
-## Opening scopes
-
-An `open` declaration makes a [named scope](scopes.md)'s selected members
-available bare in its enclosing module or scope region:
-
-<!-- agl-check: fragment -->
-```agl
-open Point
-open Text using render as format
-open geo/shapes::Point hiding internal-distance
-```
-
-A plain `open` selects every member. `using` selects only the listed paths;
-its `as` renames re-root the selected path, so a direct member becomes the new
-plain name. `hiding` selects every member except its listed paths. Members of
-nested scopes retain their relative paths. An `open` in a scope region affects
-only that region and its nested regions.
-
-An opened scope may be local or reached through an imported module route.
-Selecting an unknown member is an error. Type-named scopes include enum variants and extension
-members. Opens neither export their members nor make another module's opens
-transitively available. Bare-name collisions are reported when the name is
-used, including collisions with an `open import` contribution.
-
-## Aliases
-
-`as A` gives an import the single-name alias `A` instead of a path route. It
-does not make names bare. An aliased import is reached only through its alias;
-it does not participate in suffix or anchored path matching.
+An import alias supplies a single-segment qualified route instead of the
+module's slash-path routes. It does not make names bare and cannot be combined
+with an import tail.
 
 <!-- agl-check: fragment -->
 ```agl
@@ -151,27 +70,96 @@ import company/tools/config as settings
 settings::timeout
 ```
 
-Distinct modules may share an alias. The alias then acts as a facade: the
-requested member resolves when exactly one aliased module contributes it.
-Imports of one module merge normally, so importing it both plainly and with an
-alias makes both routes available.
+Repeated imports of a module combine their qualified routes and bare
+contributions. A bare-name collision is reported at the use site. Qualified
+routes may also be ambiguous; a longer suffix, an anchored path, or an alias
+selects one route.
+
+## `use` declarations
+
+A `use` declaration selects public members of an already-nameable named scope
+or module root. Its target can be a local scope, a scope or module root reached
+through an import route, or a scope anchored at the current module root.
+
+```ebnf
+use_decl      ::= "use" use_target ("::" import_selection | "as" ref_name)
+                  [hiding_clause]
+use_target    ::= ["/"] module_path ["::" scope_path] | "::" scope_path
+scope_path    ::= NAME ("::" NAME)*
+```
+
+When an unanchored target with no `::` scope suffix names an imported module,
+it targets that module's root. The module must already be imported:
+
+<!-- agl-check: fragment -->
+```agl
+import library
+use library::*
+use library as Alias
+```
+
+`use Scope::*` contributes every member of `Scope` bare. A braced tail selects
+members, and item renames add renamed bare paths. `use Scope as Alias` and
+`use library as Alias` contribute every selected member beneath `Alias`.
+`hiding` is valid only with a `::*` tail. A `use` declaration contributes names
+only to its enclosing module or named scope region; it does not make a module
+available. Import the module first when its target is not local.
+
+```agl
+use Math::*
+
+scope Math
+def add(left: int, right: int) -> int = left + right
+end Math
+
+program def main() -> unit =
+  let _ = print(add(1, 2))
+```
+
+An explicit `/` anchors a module route, and a leading `::` anchors a local
+scope path. Without an anchor, a target can be resolved through a local scope
+or an already-bare imported scope; ambiguity is a static error.
+
+<!-- agl-check: fragment -->
+```agl
+import geo/shapes
+use geo/shapes::Point::{distance as point-distance}
+use /geo/shapes::Point::* hiding internal-distance
+```
+
+## Imports and `use` inside a scope region
+
+`import`, `use`, and `export` are header items inside a named scope region.
+They precede the region's other items. A scoped import's qualified route remains
+available throughout its module, while a tail's bare names belong only to that
+region and its nested regions. A scoped `use` likewise contributes only to its
+enclosing region and nested regions.
+
+<!-- agl-check: fragment -->
+```agl
+scope Vec
+import geom/planar::{Point}
+use Point::*
+def norm(p: Point) -> float = mag(p)
+end Vec
+```
+
+A scoped export re-roots every forwarded atom under the region's own scope
+path. An importer reaches it through that path.
 
 ## Wildcards
 
 `import prefix/*` expands to one import per module whose slash path is `prefix`
-or starts with `prefix/`. The import's `open`, selection clause, and alias
-apply independently to every matched module. A `using` or `hiding` path must
-be public in every matched module, so scoped path selections distribute to
-each matched module.
+or starts with `prefix/`. Its alias, tail, and hiding clause apply independently
+to every matched module. An alias on a wildcard is a shared alias facade, not a
+path rewrite.
 
 <!-- agl-check: fragment -->
 ```agl
-import tools/*
-open import domain/* hiding debug
+import tools/*::*
+import domain/*::{render}
 import codecs/* as codec
 ```
-
-An alias on a wildcard is a shared alias facade, not a path rewrite.
 
 ## Suffix and anchored references
 
@@ -183,54 +171,40 @@ import company/tools/config
 import service/config as settings
 
 company/tools/config::timeout
-config::timeout                 # suffix route
-settings::timeout               # alias route
-/company/tools/config::timeout  # anchored plain-path route
+config::timeout
+settings::timeout
+/company/tools/config::timeout
 ```
 
 A non-aliased imported path may be named by any trailing sequence of its path
-segments. A qualifier route may match several imported modules; AgL filters
-those candidates by the requested member's contributed set **S**. One
-remaining candidate resolves; several are ambiguous; none is an error.
-There is no preference by route length, alias, or import order.
-
-A leading `/` anchors a qualifier to the complete plain module path. Anchored
-qualifiers never match aliases and are always module routes. Aliases are
-single-segment routes only.
-
-Qualified type references follow the same rules and preserve module-and-scope
-nominal identity:
-
-<!-- agl-check: fragment -->
-```agl
-import shapes/points as points
-
-let p: points::Point = points::Point(x = 0, y = 0)
-```
+segments. A qualifier route may match several imported modules; the requested
+member resolves when exactly one matching route contributes it. A leading `/`
+anchors a qualifier to the complete plain module path. Anchored qualifiers never
+match aliases. Aliases are single-segment routes only.
 
 `::name` refers to a declaration in the current module root and bypasses a
 lexical shadow. The same form works for `::Type` and `::Type::Variant`.
-Type-qualified constructors use `Type::Variant`; a short spelling can name an
-in-scope type or a module route and is resolved at the use site.
+Qualified type references follow the same routing rules and preserve
+module-and-scope nominal identity.
 
 ## Re-exports and visibility
 
 `def`, `record`, `enum`, `exception`, and `type` declarations are exported
 under their full declaration paths. Grouping helpers in a
 [named scope](scopes.md) keeps them off a module's bare surface: an importer
-reaches such a member only through its full scope path. A module that must
-publish a narrower surface does so with a facade — the implementation lives in
-one module, and another re-exports the selection it means to publish.
+reaches such a member through its scope path or makes it bare with an import
+tail or `use` declaration.
 
-`export` re-exports members without injecting them into the exporting module's
-local scope. A method travels with its receiver type: any module with a value
-of that type can call the method without importing the module that declared it.
-Import selections and facades cannot hide a method; they control access to
-qualified declarations, not member calls.
+`export` forwards public declarations without injecting them into the exporting
+module's local scope. A brace tail selects the declarations to forward; a plain
+export forwards the complete public surface, and `hiding` removes paths from
+that surface. Renames in a brace tail change the forwarded path. A method
+travels with its receiver type: any module with a value of that type can call
+the method without importing the module that declared it.
 
 <!-- agl-check: fragment -->
 ```agl
-export math/basic using add, multiply as mul
+export math/basic::{add, multiply as mul}
 export math/advanced hiding internal-helper
 export math/*
 ```
@@ -241,15 +215,26 @@ origin are allowed.
 
 ## Prelude
 
-Every loaded entry and library module, except `std/core` itself, implicitly
-behaves as if it began with `open import std/core`. The `--no-stdlib` option
-disables that automatic opening throughout the loaded program; an explicit
-`import std/core` or `open import std/core` always follows the ordinary import
-rules.
+Every loaded entry and library module, except `std/core` itself, receives an
+implicit `import std/core::*`. Any explicit `import std/core` declaration in
+the module, including one inside a named scope region, supplies the core
+contribution instead. Thus `import std/core` makes the core public surface
+qualified-only, while `import std/core::* hiding ask` makes every core member
+except `ask` bare.
+
+```agl
+import std/core::* hiding ask
+
+program def main() -> unit =
+  let _ = print("ready")
+```
+
+The `--no-stdlib` option disables the implicit declaration. An explicit core
+import remains available with that option.
 
 ## Standard library modules
 
-- `std/core` declares the automatically opened core types, exceptions, and built-ins.
+- `std/core` declares the core types, exceptions, and built-ins.
 - `std/config` exposes the host engine settings as `builtin var` bindings.
 - `std/text` exposes `interp(template, vars) -> text` for name-only runtime
   interpolation; see [Strings and interpolation](strings-and-interpolation.md#runtime-interpolation).
@@ -259,18 +244,17 @@ rules.
 ## Library modules and cycles
 
 Every file-backed module has a static root: imports, declarations, parameters,
-and `let`/`var` bindings are allowed there, while bare expressions and assignments
-are not. Root binding initializers must be constant expressions: literals,
-literal containers, constructor applications, and unary operators over those.
-Put executable
-workflow code in a `program def` body. Parameters are also legal in named scope
-regions in every module. A program receives values for the params in its module
-and transitive imports before it starts.
-Imports and exports appear before other declarations at a module's root, in
-every module, entry or library; a named scope region is one declaration for
-this rule, so an import or export inside a region does not need to precede
-the module's other root-level declarations — only a region's own header rule
-governs its own items.
+and `let`/`var` bindings are allowed there, while bare expressions and
+assignments are not. Root binding initializers must be constant expressions:
+literals, literal containers, constructor applications, and unary operators
+over those. Put executable workflow code in a `program def` body. Parameters
+are also legal in named scope regions in every module. A program receives
+values for the params in its module and transitive import/export dependencies
+before it starts.
+
+Imports and exports appear before other declarations at a module root and in
+every named scope region. A region is one declaration for its enclosing root's
+ordering; its own headers are ordered within the region.
 
 Import cycles are valid. Functions and nominal types may refer to public
 declarations across an import cycle.
@@ -278,19 +262,20 @@ declarations across an import cycle.
 ## REPL
 
 REPL imports persist after a successful entry, retained as written: a retained
-wildcard expands again on every later entry, so it picks up modules added since.
-A later entry replaces the earlier import declaration for every module it names,
-so its selection, open mode, or alias takes effect for that module. Multiple
-declarations for one module in the same entry merge normally.
-A failed entry changes no imports, and `:reset` clears imports with the session
-bindings. Each REPL entry and its loaded library modules receive the
-`std/core` prelude unless the session was launched with `--no-stdlib`.
+wildcard expands again on every later entry, so it picks up modules added
+since. A later entry replaces the earlier import declaration for every module
+it names, so its tail, hiding clause, or alias takes effect for that module.
+Multiple declarations for one module in the same entry combine normally. A
+failed entry changes no imports, and `:reset` clears imports with the session
+bindings. Each REPL entry and its loaded library modules receive the `std/core`
+prelude unless the session was launched with `--no-stdlib`.
 
 ## Diagnostics
 
-Imports report a missing or ambiguous module path, a selected name the module
-does not declare, redundant `open ... using`, or an import placed after a non-import
-item. A qualified use reports an unknown qualifier, a member outside its
-contributed set, or every candidate of an ambiguous route. A bare use reports an ambiguous bare name only at its use
-site. These diagnostics identify a direct repair: add a longer suffix or an
-anchored path, use an alias, adjust `hiding`, or select the required name.
+Imports report a missing or ambiguous module path, a selected or hidden name
+the module does not declare, or a header placed after a non-header item. A
+`use` target must name a local or already imported scope. A qualified use
+reports an unknown qualifier, a hidden or absent member, or an ambiguous route.
+A bare use reports an ambiguous name at its use site. These diagnostics identify
+a direct repair: import the required module, use a longer suffix or an anchored
+path, add an alias, or adjust a tail or hiding clause.

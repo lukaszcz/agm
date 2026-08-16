@@ -61,7 +61,7 @@ from agm.agl.parser.wrap import wrap_inline_program
 from agm.agl.scope import ModuleResolution
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import ConstructorRef, ScopeNode
-from agm.agl.syntax.nodes import ExportDecl, ImportDecl, Program, static_items
+from agm.agl.syntax.nodes import ExportDecl, ImportDecl, Program, UseDecl, static_items
 from agm.agl.syntax.spans import SourceId
 from agm.agl.typecheck import CheckedModule
 from agm.agl.typecheck.checker import _check_prepared_module
@@ -461,6 +461,9 @@ def _single_module_graph(program: Program, *, origin_path: Path | None) -> Modul
                     item
                     for item in static_items(program.body.items)
                     if isinstance(item, ImportDecl)
+                ),
+                uses=tuple(
+                    item for item in static_items(program.body.items) if isinstance(item, UseDecl)
                 ),
                 export_decls=tuple(
                     item

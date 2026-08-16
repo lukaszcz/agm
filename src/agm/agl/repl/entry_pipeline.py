@@ -1050,17 +1050,44 @@ class EntryPipeline:
 
     @staticmethod
     def _use_generation_key(decl: UseDecl, imports: tuple[ImportDecl, ...]) -> _UseGenerationKey:
-        """Return *decl*'s replacement key, canonicalizing an imported alias."""
+        """Return *decl*'s replacement key using its resolved target identity."""
         target = tuple(segment.name for segment in decl.target)
-        if not decl.anchored and not decl.current_module and target:
+        canonical: tuple[str, ...] | None = None
+        if decl.current_module:
+            canonical = ("\0current", "\0scope", *target)
+        elif decl.anchored and target:
+            canonical = (
+                "\0module",
+                *tuple(part for part in target[0].split("/") if part),
+                "\0scope",
+                *target[1:],
+            )
+        elif target:
             aliases = {
                 import_decl.alias: tuple(import_decl.module_path)
                 for import_decl in imports
                 if import_decl.alias is not None
             }
             module_path = aliases.get(target[0])
+            if module_path is None:
+                route = tuple(part for part in target[0].split("/") if part)
+                candidates = {
+                    tuple(import_decl.module_path)
+                    for import_decl in imports
+                    if import_decl.alias is None
+                    and tuple(import_decl.module_path)[-len(route) :] == route
+                }
+                if len(candidates) == 1:
+                    module_path = next(iter(candidates))
             if module_path is not None:
-                target = ("\0module", *module_path, "\0scope", *target[1:])
+                canonical = ("\0module", *module_path, "\0scope", *target[1:])
+        if canonical is not None:
+            return (
+                tuple(segment.name for segment in decl.scope_path),
+                False,
+                False,
+                canonical,
+            )
         return (
             tuple(segment.name for segment in decl.scope_path),
             decl.anchored,

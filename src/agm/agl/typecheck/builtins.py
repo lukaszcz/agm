@@ -18,7 +18,7 @@ from agm.agl.ir.reserved_nominals import reserved_nominal_id
 from agm.agl.modules.ids import spell_declaration
 from agm.agl.scope.symbols import ConstructorRef
 from agm.agl.semantics.analyses import nominal_references
-from agm.agl.semantics.type_table import DeclId
+from agm.agl.semantics.type_table import OPTION_TYPE_DEF, DeclId
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
     BoolType,
@@ -40,16 +40,19 @@ from agm.agl.syntax.nodes import (
     Expr,
     IntLit,
     NamedArg,
+    ParamKind,
     QualifierAnchor,
     StringLit,
     VarRef,
 )
 from agm.agl.syntax.resources import ResourceError, resource_path
 from agm.agl.syntax.spans import SourceSpan
+from agm.agl.typecheck.arguments import bind_call_args
 from agm.agl.typecheck.env import (
     AglTypeError,
     CallSiteRecord,
     OutputContractSpec,
+    ParamSpec,
     TypeEnvironment,
 )
 
@@ -245,6 +248,75 @@ class BuiltinCallChecker:
         arg_type = self._ctx._check_expr(arg_expr, expected=explicit)
         self._ctx._assert_assignable_from(arg_type, explicit, arg_expr.span, arg_expr)
         return explicit
+
+    # --- Session statics ---
+
+    def check_session_open(self, node: Call) -> Type:
+        """Type-check ``Session::open(agent, transport?, name?)``."""
+        session_transport = self._builtin_contract_type("SessionTransport")
+        assert isinstance(session_transport, EnumType)
+        transport = OPTION_TYPE_DEF.handle((session_transport,))
+        return self._check_static_call(
+            node,
+            "Session::open",
+            (
+                ParamSpec(
+                    name="agent",
+                    type=self._builtin_contract_type("Agent"),
+                    kind=ParamKind.STANDARD,
+                    has_default=False,
+                ),
+                ParamSpec(
+                    name="transport",
+                    type=transport,
+                    kind=ParamKind.STANDARD,
+                    has_default=True,
+                ),
+                ParamSpec(
+                    name="name",
+                    type=TextType(),
+                    kind=ParamKind.STANDARD,
+                    has_default=True,
+                ),
+            ),
+            self._builtin_contract_type("Session"),
+        )
+
+    def check_session_default(self, node: Call) -> Type:
+        """Type-check the nullary ``Session::default()`` static."""
+        return self._check_static_call(
+            node,
+            "Session::default",
+            (),
+            self._builtin_contract_type("Session"),
+        )
+
+    def _check_static_call(
+        self,
+        node: Call,
+        name: str,
+        params: tuple[ParamSpec, ...],
+        result: Type,
+    ) -> Type:
+        """Bind and check one fixed-signature type-scoped builtin call."""
+        if node.type_args:
+            raise AglTypeError(
+                f"{name} does not accept type arguments.",
+                span=node.span,
+            )
+        binding = bind_call_args(
+            params,
+            node.args,
+            node.named_args,
+            call_span=node.span,
+            context_desc=f"call to '{name}'",
+        )
+        for param, argument in zip(params, binding, strict=True):
+            if argument is None:
+                continue
+            argument_type = self._ctx._check_expr(argument, expected=param.type)
+            self._ctx._assert_assignable_from(argument_type, param.type, argument.span, argument)
+        return result
 
     # --- resources ---
 

@@ -51,6 +51,7 @@ from agm.agl.scope.symbols import (
     ScopeNode,
     ScopePath,
     alias_denotes_constructible_type,
+    builtin_type_static_kind,
 )
 from agm.agl.scope.symbols import to_bare_atom as _atom
 from agm.agl.syntax.nodes import (
@@ -274,6 +275,23 @@ def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[NameAtom
             atom = _item_atom(item)
             result[atom] = (self_id, atom)
     return result
+
+
+def _builtin_static_decl_node_ids(
+    functions: Mapping[QName, FuncDef],
+    types: Mapping[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias],
+) -> frozenset[int]:
+    """Return static declarations whose owner is the prelude ``Session`` record."""
+    result: set[int] = set()
+    for (module_id, _atom_name), function in functions.items():
+        owner_path = tuple(segment.name for segment in function.scope_path)
+        if builtin_type_static_kind(module_id, owner_path, function.name) is None:
+            continue
+        owner_atom = _atom(owner_path)
+        owner = types.get((module_id, owner_atom))
+        if isinstance(owner, RecordDef) and owner.is_builtin:
+            result.add(function.node_id)
+    return frozenset(result)
 
 
 def _cross_module_constructor_refs(
@@ -620,6 +638,7 @@ def resolve_program(
                     False,
                 )
 
+    prelude_static_decl_node_ids = _builtin_static_decl_node_ids(all_public_funcs, all_public_types)
     cross_module_constructor_refs = _cross_module_constructor_refs(all_public_types)
     cross_module_constructible_types = frozenset(
         qname
@@ -651,6 +670,7 @@ def resolve_program(
             import_env=import_envs[mid],
             decl_info=decl_info,
             cross_module_constructor_refs=cross_module_constructor_refs,
+            builtin_static_decl_node_ids=prelude_static_decl_node_ids,
             cross_module_constructible_types=cross_module_constructible_types,
             cross_module_type_scopes=frozenset(all_public_types),
             all_public_types=all_public_types,

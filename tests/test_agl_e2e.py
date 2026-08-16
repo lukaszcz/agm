@@ -52,6 +52,14 @@ REJECTIONS_DIR = AGL_DIR / "rejections"
 REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 EXTERNS_PROGRAMS_DIR = PROGRAMS_DIR / "externs"
 RESOURCE_PROGRAMS_DIR = PROGRAMS_DIR / "resources"
+_SESSION_STATIC_DECLARATIONS = """\
+builtin def Session::open(
+  agent: Agent,
+  transport: Option[SessionTransport] = Option[SessionTransport]::None,
+  name: text = "",
+) -> Session
+builtin def Session::default() -> Session
+"""
 
 
 def _load_json(path: Path) -> Any:
@@ -444,6 +452,7 @@ def _scoped_stdlib_root(tmp_path: Path) -> Path:
         (REPO_STDLIB_ROOT / "std" / "core.agl")
         .read_text(encoding="utf-8")
         .replace("import std/config\n\n", "")
+        .replace(_SESSION_STATIC_DECLARATIONS, "")
         .replace("std/config::default-agent", 'AgentClaude("sonnet", "medium")')
     )
     scoped_stdlib_root = tmp_path / "scoped_stdlib"
@@ -459,8 +468,8 @@ def test_scoped_stdlib_arrangement_runs_end_to_end(
 ) -> None:
     """A whole stdlib module wrapped in a named scope region works end to end.
 
-    Wraps the real ``stdlib/std/core.agl`` verbatim in a ``scope Std ... end
-    Std`` region under a throwaway module root (never the installed/repo
+    Wraps the runtime-lowerable subset of ``stdlib/std/core.agl`` in a
+    ``scope Std ... end Std`` region under a throwaway module root (never the installed/repo
     stdlib — the standard ``module_roots`` scenario mechanism always adds
     ``REPO_STDLIB_ROOT`` too, which would collide with this substitute
     ``std/core``, so this test builds its own ``RootSet`` instead), then runs

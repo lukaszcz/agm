@@ -60,18 +60,22 @@ from agm.agl.scope.imports import (
     qualification_repair_guidance,
 )
 from agm.agl.scope.symbols import (
+    BUILTIN_CALL_DISPLAY_NAMES,
     BUILTIN_CALL_NAMES,
     BinderKind,
     BindingRef,
     BuiltinKind,
+    BuiltinStaticKind,
     ConstructorRef,
     ModuleResolution,
     PatternSlot,
+    builtin_type_static_kind,
     duplicate_binder_message,
     immutable_assignment_message,
 )
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import (
+    OPTION_TYPE_DEF,
     MethodDef,
     TypeTable,
     cast_classification,
@@ -179,6 +183,7 @@ from agm.agl.syntax.nodes import (
     pattern_binder_candidates,
     simple_let_pattern_name,
     static_items,
+    static_type_items,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TypeExpr
@@ -363,8 +368,49 @@ def _as_agent_method(signature: FunctionSignature) -> FunctionSignature:
     )
 
 
-def _builtin_function_signature(name: str, *, is_method: bool = False) -> FunctionSignature | None:
+def _builtin_static_kind(
+    resolved: ModuleResolution, module_id: ModuleId, node: FuncDef
+) -> BuiltinStaticKind | None:
+    """Return the kind of a static declared on the resolved prelude nominal."""
+    owner_path = tuple(segment.name for segment in node.scope_path)
+    kind = builtin_type_static_kind(module_id, owner_path, node.name)
+    if kind is None:
+        return None
+    owner_ref = resolved.declarations.get((module_id, owner_path[:-1], owner_path[-1]))
+    owner = next(
+        (
+            item
+            for item in static_type_items(resolved.program.body.items)
+            if item.node_id == (owner_ref.decl_node_id if owner_ref is not None else None)
+        ),
+        None,
+    )
+    if not isinstance(owner, RecordDef) or not owner.is_builtin:
+        return None
+    return kind
+
+
+def _builtin_function_signature(
+    name: str, *, is_method: bool = False, static_kind: BuiltinStaticKind | None = None
+) -> FunctionSignature | None:
     t = TypeVarType("T")
+    if static_kind is not None:
+        kind = static_kind
+        if kind is BuiltinStaticKind.SESSION_OPEN:
+            return FunctionSignature(
+                params=(
+                    _std_param("agent", BUILTIN_PRELUDE_TYPES["Agent"]),
+                    _std_param(
+                        "transport",
+                        OPTION_TYPE_DEF.handle((BUILTIN_PRELUDE_TYPES["SessionTransport"],)),
+                        has_default=True,
+                    ),
+                    _std_param("name", TextType(), has_default=True),
+                ),
+                result=BUILTIN_PRELUDE_TYPES["Session"],
+            )
+        assert kind is BuiltinStaticKind.SESSION_DEFAULT
+        return FunctionSignature(params=(), result=BUILTIN_PRELUDE_TYPES["Session"])
     if is_method:
         if name not in ("ask", "ask-request"):
             return None
@@ -424,9 +470,9 @@ def _builtin_function_signature(name: str, *, is_method: bool = False) -> Functi
 
 
 def _builtin_function_signature_alternates(
-    name: str, *, is_method: bool = False
+    name: str, *, is_method: bool = False, static_kind: BuiltinStaticKind | None = None
 ) -> tuple[FunctionSignature, ...]:
-    expected = _builtin_function_signature(name, is_method=is_method)
+    expected = _builtin_function_signature(name, is_method=is_method, static_kind=static_kind)
     if expected is None:
         return ()
     if name == "ask":
@@ -745,6 +791,7 @@ class _Checker:
                 )
             if is_method:
                 raise AglTypeError("Program def cannot be a method.", span=node.span)
+        static_kind = _builtin_static_kind(self._resolved, self._module_id, node)
         if not is_method and node.name in _BUILTIN_TYPE_NAMES:
             raise AglTypeError(
                 f"'{node.name}' is a built-in type name and cannot be used as a function name.",
@@ -756,10 +803,11 @@ class _Checker:
                 span=node.span,
             )
         if not is_method and node.is_builtin and node.name not in _BUILTIN_FUNC_NAMES:
-            raise AglTypeError(
-                f"Unknown builtin function '{node.name}'.",
-                span=node.span,
-            )
+            if static_kind is None:
+                raise AglTypeError(
+                    f"Unknown builtin function '{node.name}'.",
+                    span=node.span,
+                )
         if node.is_builtin and node.return_type is None:
             raise AglTypeError(
                 f"Builtin function '{node.name}' must declare a return type.",
@@ -831,14 +879,17 @@ class _Checker:
         self, node: FuncDef, sig: FunctionSignature, func_type: FunctionType, *, is_method: bool
     ) -> None:
         """Register a resolved ``def`` signature in every function side table."""
+        static_kind = _builtin_static_kind(self._resolved, self._module_id, node)
         if node.is_builtin:
             own_path = tuple(segment.name for segment in node.scope_path)
             # A method's final scope segment names its receiver. Its receiver
             # and sibling types live in the enclosing scope, so remove that
             # shared prefix before comparing with the root canonical contract.
-            reroot_prefix = own_path[:-1] if is_method else own_path
+            reroot_prefix = own_path[:-1] if is_method or static_kind is not None else own_path
             rerooted_sig = _rerooted_signature(sig, reroot_prefix)
-            expected_sigs = _builtin_function_signature_alternates(node.name, is_method=is_method)
+            expected_sigs = _builtin_function_signature_alternates(
+                node.name, is_method=is_method, static_kind=static_kind
+            )
             if not any(
                 _signature_matches(rerooted_sig, expected_sig) for expected_sig in expected_sigs
             ):
@@ -2676,12 +2727,11 @@ class _Checker:
         hole_indices: Mapping[int, int],
     ) -> Type:
         # Built-in?
-        if isinstance(node.callee, VarRef) and node.node_id in self._resolved.builtin_calls:
-            kind = self._resolved.builtin_calls[node.node_id]
+        builtin_kind = self._resolved.builtin_calls.get(node.node_id)
+        static_kind = self._resolved.builtin_static_calls.get(node.node_id)
+        if isinstance(node.callee, VarRef) and (kind := builtin_kind or static_kind) is not None:
             if hole_indices:
-                builtin_name = next(
-                    name for name, value in BUILTIN_CALL_NAMES.items() if value is kind
-                )
+                builtin_name = BUILTIN_CALL_DISPLAY_NAMES[kind]
                 raise AglTypeError(
                     f"Cannot use placeholder arguments with special builtin '{builtin_name}'; "
                     "partial application is not supported.",
@@ -2705,6 +2755,10 @@ class _Checker:
                 return self._builtins.check_resource(node)
             if kind == BuiltinKind.RESOURCE_DIR:
                 return self._builtins.check_resource_dir(node)
+            if kind == BuiltinStaticKind.SESSION_OPEN:
+                return self._builtins.check_session_open(node)
+            if kind == BuiltinStaticKind.SESSION_DEFAULT:
+                return self._builtins.check_session_default(node)
             # EXEC
             return self._builtins.check_exec(node, expected=expected)
 

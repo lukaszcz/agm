@@ -64,11 +64,13 @@ from agm.agl.scope.imports import (
     try_resolve_qualified_member,
 )
 from agm.agl.scope.symbols import (
+    BUILTIN_CALL_DISPLAY_NAMES,
     BUILTIN_CALL_NAMES,
     AglScopeError,
     BinderKind,
     BindingRef,
     BuiltinKind,
+    BuiltinStaticKind,
     ConstructorRef,
     DeclarationKey,
     LocalOpenSelection,
@@ -79,9 +81,11 @@ from agm.agl.scope.symbols import (
     SlotCandidate,
     alias_denotes_constructible_type,
     apply_open_selection,
+    builtin_type_static_kind,
     duplicate_binder_message,
     immutable_binder_phrase,
     import_item_path,
+    is_builtin_type_static_owner,
     local_scope_bindings,
     resolve_bare_constructor_contribution,
     resolve_bare_contribution,
@@ -270,6 +274,7 @@ class _Resolver:
         | None = None,
         cross_module_constructor_refs: Mapping[tuple[ModuleId, NameAtom], ConstructorRef]
         | None = None,
+        builtin_static_decl_node_ids: frozenset[int] = frozenset(),
         cross_module_constructible_types: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
         cross_module_type_scopes: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
         allow_root_statements: bool = False,
@@ -294,6 +299,7 @@ class _Resolver:
         self._cross_module_constructor_refs: Mapping[tuple[ModuleId, NameAtom], ConstructorRef] = (
             cross_module_constructor_refs if cross_module_constructor_refs is not None else {}
         )
+        self._builtin_static_decl_node_ids = builtin_static_decl_node_ids
         self._cross_module_constructible_types = cross_module_constructible_types
         # Public type declarations establish scope paths even when they have
         # no separately public child members.
@@ -344,6 +350,7 @@ class _Resolver:
 
         self._resolution: dict[int, BindingRef] = {}
         self._builtin_calls: dict[int, BuiltinKind] = {}
+        self._builtin_static_calls: dict[int, BuiltinStaticKind] = {}
         # Scope stack — top is the current scope.
         self._scope: ScopeNode | None = None
         # The module's root ScopeNode (set in run()); used by _lookup_own_root
@@ -538,6 +545,7 @@ class _Resolver:
             program=program,
             resolution=self._resolution,
             builtin_calls=self._builtin_calls,
+            builtin_static_calls=self._builtin_static_calls,
             root_scope=root,
             declarations=dict(self._declarations),
             scope_nodes=dict(self._scope_nodes),
@@ -2240,12 +2248,14 @@ class _Resolver:
             self._record_varref_binding(node, ref)
             return
         if self._resolve_local_scope_member(node):
+            self._raise_unrecognized_builtin_static(node)
             self._reject_builtin_value_ref(
                 node, self._resolution.get(node.node_id), is_call_target=is_call_target
             )
             return
         if node.qualifier is not None:
             self._resolve_qualified_chain(node)
+            self._raise_unrecognized_builtin_static(node)
             self._reject_builtin_value_ref(
                 node, self._resolution.get(node.node_id), is_call_target=is_call_target
             )
@@ -2284,6 +2294,34 @@ class _Resolver:
         self._reject_builtin_value_ref(node, ref, is_call_target=is_call_target)
         self._record_varref_binding(node, ref, candidates=regional_candidates)
 
+    def _builtin_static_kind(self, ref: BindingRef | None) -> BuiltinStaticKind | None:
+        """Return the static kind attached to its resolved prelude owner."""
+        if ref is None or not ref.is_builtin:
+            return None
+        kind = builtin_type_static_kind(ref.module_id, ref.scope_path, ref.name)
+        if kind is None or ref.decl_node_id not in self._builtin_static_decl_node_ids:
+            return None
+        return kind
+
+    def _is_unrecognized_builtin_static(self, node: VarRef) -> bool:
+        """Return whether a qualified prelude owner rejected an unknown static."""
+        constructor = self._constructor_refs.get(node.node_id)
+        if constructor is None:
+            return False
+        owner_path = (*constructor.owner_path, constructor.owner_name)
+        return is_builtin_type_static_owner(constructor.owner_module_id, owner_path)
+
+    def _raise_unrecognized_builtin_static(self, node: VarRef) -> None:
+        """Raise when a resolved prelude owner does not declare the requested static."""
+        if not self._is_unrecognized_builtin_static(node):
+            return
+        assert node.qualifier is not None
+        raise AglScopeError(
+            f"Unknown static '{node.qualifier.render()}::{node.name}' on prelude type "
+            f"'{node.qualifier.render()}'.",
+            span=node.span,
+        )
+
     def _reject_builtin_value_ref(
         self, node: VarRef, ref: BindingRef | None, *, is_call_target: bool
     ) -> None:
@@ -2297,6 +2335,12 @@ class _Resolver:
         built-in's spelling, so declaration provenance rather than the
         reference name distinguishes the host implementation.
         """
+        static_kind = self._builtin_static_kind(ref)
+        if not is_call_target and static_kind is not None:
+            static_name = BUILTIN_CALL_DISPLAY_NAMES[static_kind]
+            raise AglScopeError(
+                f"Built-in static '{static_name}' cannot be used as a value.", span=node.span
+            )
         if (
             not is_call_target
             and self._is_builtin_function_ref(ref)
@@ -2490,9 +2534,13 @@ class _Resolver:
                 and not has_leading_route
                 and not has_opened_member
             ):
-                raise AglScopeError(
-                    f"Unknown scope path '{'::'.join(relative_path)}'.", span=chain.span
-                )
+                try:
+                    self._resolve_qualified_chain(node)
+                except AglScopeError:
+                    raise AglScopeError(
+                        f"Unknown scope path '{'::'.join(relative_path)}'.", span=chain.span
+                    ) from None
+                return True
             return False
 
         ref = self._scope_nodes[path].members.get(node.name)
@@ -3016,7 +3064,10 @@ class _Resolver:
         if isinstance(callee, VarRef):
             self._resolve_varref(callee, is_call_target=True)
             ref = self._resolution.get(callee.node_id)
-            if ref is not None and self._is_builtin_function_ref(ref):
+            static_kind = self._builtin_static_kind(ref)
+            if static_kind is not None:
+                self._builtin_static_calls[node.node_id] = static_kind
+            elif ref is not None and self._is_builtin_function_ref(ref):
                 kind = _BUILTIN_CALL_NAMES.get(ref.name)
                 if kind is not None:
                     self._builtin_calls[node.node_id] = kind

@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import TypeVar
 
 from agm.agl.diagnostics import AglError
-from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 from agm.agl.semantics.types import EnumType
 from agm.agl.syntax.nodes import (
     EnumDef,
@@ -113,6 +113,13 @@ class BuiltinKind(enum.Enum):
     RESOURCE_DIR = "RESOURCE_DIR"
 
 
+class BuiltinStaticKind(enum.Enum):
+    """Type-scoped built-ins that have no lowering implementation."""
+
+    SESSION_OPEN = "SESSION_OPEN"
+    SESSION_DEFAULT = "SESSION_DEFAULT"
+
+
 # The single source of truth for the built-in call names and their kinds.
 # The resolver classifies calls by this mapping; the checker and any other
 # layer that needs the set of built-in names derives it from here.
@@ -127,6 +134,35 @@ BUILTIN_CALL_NAMES: dict[str, BuiltinKind] = {
     "shallow_copy": BuiltinKind.SHALLOW_COPY,
     "resource": BuiltinKind.RESOURCE,
     "resource-dir": BuiltinKind.RESOURCE_DIR,
+}
+
+# Built-in statics are registered by their owning prelude nominal's structured
+# identity, so similarly named user types and enum variants remain ordinary
+# declarations. Their final segments therefore remain ordinary names.
+BUILTIN_TYPE_STATICS: dict[tuple[ModuleId, ScopePath], dict[str, BuiltinStaticKind]] = {
+    (STD_CORE_ID, ("Session",)): {
+        "open": BuiltinStaticKind.SESSION_OPEN,
+        "default": BuiltinStaticKind.SESSION_DEFAULT,
+    },
+}
+
+
+def builtin_type_static_kind(
+    owner_module_id: ModuleId, owner_path: ScopePath, name: str
+) -> BuiltinStaticKind | None:
+    """Return the static kind registered for an owning nominal identity."""
+    return BUILTIN_TYPE_STATICS.get((owner_module_id, owner_path), {}).get(name)
+
+
+def is_builtin_type_static_owner(owner_module_id: ModuleId, owner_path: ScopePath) -> bool:
+    """Return whether a nominal identity owns registered built-in statics."""
+    return (owner_module_id, owner_path) in BUILTIN_TYPE_STATICS
+
+
+BUILTIN_CALL_DISPLAY_NAMES: dict[BuiltinKind | BuiltinStaticKind, str] = {
+    **{kind: name for name, kind in BUILTIN_CALL_NAMES.items()},
+    BuiltinStaticKind.SESSION_OPEN: "Session::open",
+    BuiltinStaticKind.SESSION_DEFAULT: "Session::default",
 }
 
 
@@ -766,6 +802,9 @@ class ModuleResolution:
         Maps every ``Call.node_id`` whose callee is a built-in name
         (``print``/``exec``/``ask``/``ask-request``) to its ``BuiltinKind``.  Calls whose
         callee resolves to a user-defined binding have no entry here.
+    ``builtin_static_calls``
+        Maps each type-scoped built-in static call to its ``BuiltinKind`` for
+        type checking only. These calls have no lowering path.
     ``root_scope``
         The root ``ScopeNode`` (tree root).  Nested scopes are linked via
         ``ScopeNode.parent``.
@@ -823,6 +862,7 @@ class ModuleResolution:
     resolution: dict[int, BindingRef]
     builtin_calls: dict[int, BuiltinKind]
     root_scope: ScopeNode
+    builtin_static_calls: dict[int, BuiltinStaticKind] = field(default_factory=dict)
     declarations: dict[DeclarationKey, BindingRef] = field(default_factory=dict)
     scope_nodes: dict[ScopePath, ScopeNode] = field(default_factory=dict)
     declared_functions: dict[str, FuncDef] = field(default_factory=dict)

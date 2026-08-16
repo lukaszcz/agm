@@ -186,4 +186,10 @@ builtin def ask-request(
   agent: Agent = std/config::default-agent,
 ) -> AgentRequest
 builtin def Agent::ask-request(self, prompt: text) -> AgentRequest
+builtin def Session::open(
+  agent: Agent,
+  transport: Option[SessionTransport] = Option[SessionTransport]::None,
+  name: text = "",
+) -> Session
+builtin def Session::default() -> Session
 builtin def exec(command: text) -> ExecResult

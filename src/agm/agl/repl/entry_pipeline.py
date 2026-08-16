@@ -1088,10 +1088,10 @@ class EntryPipeline:
             direct = False
             if decl.anchored:
                 direct = module_path == route
-            elif import_decl.alias == target[0]:
-                direct = True
             elif import_decl.alias is None:
                 direct = module_path[-len(route) :] == route
+            else:
+                direct = target[0] in frozenset((import_decl.alias,))
             if direct:
                 candidates.add((module_id, target[1:]))
 

@@ -4589,6 +4589,19 @@ class TestImports:
         assert session.eval_entry("new()").value == IntValue(2)
         assert not session.eval_entry("selected()").ok
 
+    def test_unrelated_import_alias_does_not_key_a_local_use(self, tmp_path: Path) -> None:
+        (tmp_path / "lib.agl").write_text("def value() -> int = 0\n", encoding="utf-8")
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("import lib as Other").ok
+        assert session.eval_entry("def Source::old() -> int = 1").ok
+        assert session.eval_entry("def Source::new() -> int = 2").ok
+        assert session.eval_entry("use Source::{old}").ok
+
+        replacement = session.eval_entry("use ::Source::{new}")
+
+        assert replacement.ok, replacement.diagnostics
+        assert not session.eval_entry("old()").ok
+
     def test_nested_relative_and_current_module_use_targets_replace_each_other(self) -> None:
         session = ReplSession()
         assert session.eval_entry("def Outer::Source::old() -> int = 1").ok

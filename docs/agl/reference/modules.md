@@ -256,7 +256,7 @@ are also legal in named scope regions in every module. A program receives
 values for the params in its module and transitive import/export dependencies
 before it starts.
 
-Imports and exports appear before other declarations at a module root and in
+Imports, uses, and exports appear before other declarations at a module root and in
 every named scope region. A region is one declaration for its enclosing root's
 ordering; its own headers are ordered within the region.
 

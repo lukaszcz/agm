@@ -580,13 +580,14 @@ class ModuleResolution:
         constructor ``VarRef``) to the single :class:`ConstructorRef` it
         resolved to (only present when the candidate set has exactly one entry
         and no nearer non-constructor binding shadows it).
-    ``pattern_constructor_candidates``
-        Maps bare ``VarPattern`` and constructor-pattern node ids to viable
+    ``pattern_constructor_candidates`` / ``pattern_constructor_spellings``
+        Map bare ``VarPattern`` and constructor-pattern node ids to viable
         candidates. Constructor patterns retain an empty tuple when their
         named owner is unavailable, preventing fallback to an unqualified
         spelling. Candidates are independent of ordinary value bindings; the
         checker selects a bare name's final interpretation from the matched
-        occurrence's type and field name.
+        occurrence's type and field name. The spelling table preserves each
+        immutable occurrence's source name alongside those candidates.
     ``pattern_slots``
         Scope-created field-directed pattern-slot metadata keyed by slot id.
         Branch-body references resolve directly to the shared slot binding.
@@ -620,6 +621,7 @@ class ModuleResolution:
     pattern_constructor_candidates: dict[int, tuple[ConstructorRef, ...]] = field(
         default_factory=dict
     )
+    pattern_constructor_spellings: dict[int, str] = field(default_factory=dict)
     pattern_slots: dict[int, PatternSlot] = field(default_factory=dict)
     match_site_pattern_slots: dict[int, tuple[int, ...]] = field(default_factory=dict)
     method_declarations: dict[DeclarationKey, ScopePath] = field(default_factory=dict)

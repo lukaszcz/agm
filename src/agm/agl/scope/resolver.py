@@ -414,6 +414,7 @@ class _Resolver:
         # checker classifies them after constructor fields have been mapped;
         # candidates do not depend on ordinary lexical value bindings.
         self._pattern_constructor_candidates: dict[int, tuple[ConstructorRef, ...]] = {}
+        self._pattern_constructor_spellings: dict[int, str] = {}
         # Each pattern-owning case branch or let declaration creates one shared
         # slot per binding name. The checker selects its final target after the
         # match site has been classified.
@@ -549,6 +550,7 @@ class _Resolver:
             },
             constructor_refs=dict(self._constructor_refs),
             pattern_constructor_candidates=dict(self._pattern_constructor_candidates),
+            pattern_constructor_spellings=dict(self._pattern_constructor_spellings),
             pattern_slots=dict(self._pattern_slots),
             match_site_pattern_slots=dict(self._match_site_pattern_slots_by_node),
             method_declarations=dict(self._method_declarations),
@@ -3625,6 +3627,7 @@ class _Resolver:
         def record_constructor_candidates(node: object) -> None:
             if not isinstance(node, ConstructorPattern):
                 return
+            self._pattern_constructor_spellings[node.node_id] = node.name
             if node.qualifier is None:
                 self._pattern_constructor_candidates[node.node_id] = (
                     self._bare_constructor_candidates(node.name)
@@ -3647,6 +3650,7 @@ class _Resolver:
             )
             if constructor_candidates:
                 self._pattern_constructor_candidates[candidate.node_id] = constructor_candidates
+                self._pattern_constructor_spellings[candidate.node_id] = candidate.name
             binds = candidate.is_as_pattern or candidate.nested or policy.root_bare_binds
             if not binds:
                 if not constructor_candidates:

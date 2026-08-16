@@ -4918,6 +4918,8 @@ class _Checker:
         """Return the candidate spelling that belongs to this enum field, if any."""
         if not isinstance(field_type, EnumType):
             return None
+        if self._resolved.pattern_constructor_spellings.get(pattern.node_id) != pattern.name:
+            return None
         for candidate in self._resolved.pattern_constructor_candidates.get(pattern.node_id, ()):
             variant = candidate.variant if candidate.variant is not None else pattern.name
             if candidate.matches(field_type, variant):

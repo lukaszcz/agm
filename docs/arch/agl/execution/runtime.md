@@ -31,6 +31,10 @@ value-driven transport boundary and sends that composed prompt verbatim.
 
 The trace destination is the sole live host service configured by an AgL `builtin var` write. The engine-key catalog names its `log`/`log-file` register pair explicitly; either write repoints the same trace store, while other host-consumed settings remain registers read on demand. `runtime/host_settings.py` applies the command-supplied trace-path policy without importing the command layer.
 
+## Sessions
+
+`runtime/sessions.py` defines the AgL-neutral `SessionHost` firewall protocol, opaque host errors, and normalized session statistics. The AGM adapter in `agent/session/service.py` owns the session table and selects CLI backends by default, with Pi using RPC by default; it is the only layer that converts AgL agent values into host specs. `exec` creates one host per run and closes it on exit. The REPL keeps one host for its lifetime and routes session asks through the same confirmation mode as ordinary agent asks.
+
 ## Pipeline Orchestrator
 
 The pipeline sits on top: it drives the compile → lower → evaluate sequence and assembles the host environment, and it is the public entry point used by `agm exec` and the REPL. Programs are parameterized by `param` declarations resolved at evaluation time (external value > default expression > error for a required param), and its discovery artifact also records `program def` declarations with their module and scope paths so a host can select an entry before execution; the selected entry runs after module initialization within the interpreter's normal execution boundary ([repl.md](../repl.md)). Every artifact a pass produces is handed forward rather than recomputed, so however many times a host resumes the pipeline, the program compiles and lowers exactly once. A preflight executable's source and host-capability provenance stays in a pipeline-owned sidecar rather than the typeless IR: only the issuing pipeline can resume it against the same prepared resolution, while changed capabilities invalidate it and trigger fresh checking and lowering. Pure compile-time schema and format-instruction generation lives in its own helper so lowering stays independent of runtime execution.
@@ -38,7 +42,7 @@ The pipeline sits on top: it drives the compile → lower → evaluate sequence 
 ## Code Entry Points
 
 - `src/agm/agl/eval/effects.py` — the evaluator's observable-effect seam for agent request/response logging and shell execution.
-- `src/agm/agl/runtime/agents.py` — decodes `Agent` enum values and runs their builder-produced argv through the shared prompt/process seam; `runtime/trace.py` writes the JSONL trace records.
+- `src/agm/agl/runtime/agents.py` — decodes `Agent` enum values and runs their builder-produced argv through the shared prompt/process seam; `runtime/sessions.py` defines the session firewall; `runtime/trace.py` writes the JSONL trace records.
 - `src/agm/agl/runtime/` — codecs, parameter conversion, host-environment types, and the renderer; `runtime/externs.py` owns extern loading/dispatch and `runtime/boundary.py` owns boundary conversion and live views.
 - `src/agm/agl/pipeline.py` — the orchestrator; `src/agm/agl/type_schema.py` — compile-time schema/format generation.
 - Tests: `tests/test_agl_runtime.py`, `tests/test_agl_codec.py`, `tests/test_agl_pipeline_*.py`, `tests/test_agl_extern_boundary.py`, `tests/test_agl_extern_views.py`.

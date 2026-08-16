@@ -85,6 +85,7 @@ class _ScriptedSession:
     closed: bool = False
     prompts: list[str] = field(default_factory=list)
     operations: list[tuple[str, str | None, str]] = field(default_factory=list)
+    backend: Any = field(init=False, repr=False)
 
 
 _SESSION_CAPABILITY_NAMES = frozenset(operation.value for operation in SessionOperation)
@@ -135,17 +136,73 @@ class ScriptedAgent:
         return _ScriptedSessionService(self)
 
     def _new_session_backend(self, agent: object, transport: str) -> Any:
-        del agent, transport
+        """Build the same transport-specific backend production would select."""
+        from agm.agent.runner import command_targets_session_id
+        from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi
+        from agm.agl.runtime.agents import decode_agent_value
+        from agm.util.interp import InterpolationError
+
+        if transport == "scripted":
+            session = _ScriptedSession(tag=f"session-{len(self.sessions) + 1}", parent=None)
+            self.sessions.append(session)
+            return _ScriptedSessionBackend(
+                self, session, frozenset(SessionOperation), supports_name=True
+            )
+        try:
+            spec = decode_agent_value(agent)
+        except (AttributeError, ValueError) as error:
+            raise SessionHostError(str(error), "open") from error
+        if transport == "rpc":
+            if not isinstance(spec, AgentPi):
+                raise SessionHostError("RPC transport is only supported by AgentPi", "open")
+            capabilities = frozenset(SessionOperation)
+            backend_type: type[_ScriptedSessionBackend] = _ScriptedPiRpcSessionBackend
+            supports_name = True
+        elif transport == "cli":
+            backend_type = _ScriptedSessionBackend
+            if isinstance(spec, AgentCommand):
+                try:
+                    command = spec.argv()
+                    targets_session_id = command_targets_session_id(command)
+                except (InterpolationError, ValueError) as error:
+                    raise SessionHostError(str(error), "open") from error
+                if not targets_session_id:
+                    raise SessionHostError(
+                        "command session requires a %{SESSION_ID} placeholder", "open"
+                    )
+                capabilities = frozenset({SessionOperation.ASK})
+                supports_name = False
+            elif isinstance(spec, AgentClaude):
+                capabilities = frozenset(
+                    {SessionOperation.ASK, SessionOperation.COMPACT, SessionOperation.FORK}
+                )
+                supports_name = True
+            elif isinstance(spec, AgentCodex):
+                capabilities = frozenset({SessionOperation.ASK})
+                supports_name = False
+            elif isinstance(spec, AgentPi):
+                capabilities = frozenset({SessionOperation.ASK, SessionOperation.FORK})
+                supports_name = True
+            else:
+                raise SessionHostError("unsupported session agent", "open")
+        else:
+            raise SessionHostError(f"unsupported session transport {transport!r}", "open")
         session = _ScriptedSession(tag=f"session-{len(self.sessions) + 1}", parent=None)
         self.sessions.append(session)
-        return _ScriptedSessionBackend(self, session)
+        return backend_type(self, session, capabilities, supports_name=supports_name)
 
     def _fork_session(self, parent: _ScriptedSession) -> Any:
         session = _ScriptedSession(
             tag=f"session-{len(self.sessions) + 1}", parent=parent.tag, opened=True
         )
         self.sessions.append(session)
-        return _ScriptedSessionBackend(self, session)
+        backend = parent.backend
+        return type(backend)(
+            self,
+            session,
+            backend._native_capabilities,
+            supports_name=backend._supports_name,
+        )
 
     def _next_response(self) -> str:
         index = self._response_count
@@ -190,16 +247,19 @@ class _ScriptedSessionService:
         self._agent = agent
         self._service = SessionService(agent._new_session_backend)
         self._sessions: dict[str, _ScriptedSession] = {}
+        self._backends: dict[str, _ScriptedSessionBackend] = {}
 
     def open(self, agent: object, transport: str, *, name: str = "") -> str:
         handle = self._service.open(agent, transport, name=name)
         self._sessions[handle] = self._agent.sessions[-1]
+        self._backends[handle] = self._agent.sessions[-1].backend
         return handle
 
     def default(self, agent: object, transport: str, *, name: str = "") -> str:
         handle = self._service.default(agent, transport, name=name)
         if handle not in self._sessions:
             self._sessions[handle] = self._agent.sessions[-1]
+            self._backends[handle] = self._agent.sessions[-1].backend
         return handle
 
     def ask(self, handle: str, request: Any) -> Any:
@@ -216,6 +276,7 @@ class _ScriptedSessionService:
     def fork(self, handle: str) -> str:
         forked = self._attempt(handle, "fork", None, lambda: self._service.fork(handle))
         self._sessions[forked] = self._agent.sessions[-1]
+        self._backends[forked] = self._agent.sessions[-1].backend
         return forked
 
     def set_name(self, handle: str, name: str) -> None:
@@ -241,10 +302,12 @@ class _ScriptedSessionService:
         action: Callable[[], Any],
     ) -> Any:
         session = self._sessions.get(handle)
+        backend = self._backends.get(handle)
         rejected = (
             session is not None
+            and backend is not None
             and operation != "reset"
-            and not self._agent._supports_operation(operation)
+            and not backend.supports(operation)
         )
         if rejected:
             session.operations.append((operation, arg, "unsupported"))
@@ -256,25 +319,181 @@ class _ScriptedSessionService:
             raise
 
 
-class _ScriptedSessionBackend:
-    """In-memory session backend that shares one agent response script."""
+class _ScenarioSessionHost:
+    """Route session requests to the scripted agent selected by an AgL value."""
 
-    def __init__(self, agent: ScriptedAgent, session: _ScriptedSession) -> None:
+    def __init__(self, agents: dict[str, ScriptedAgent]) -> None:
+        self._services = {name: agent.session_service() for name, agent in agents.items()}
+        self._handles: dict[str, _ScriptedSessionService] = {}
+        self._snapshots: dict[str, tuple[Any, str]] = {}
+        self._default_handle: str | None = None
+
+    def open(self, agent: Any, transport: str, *, name: str = "") -> str:
+        service = self._service_for(agent)
+        try:
+            handle = service.open(agent, transport.lower(), name=name)
+        except SessionHostError as error:
+            self._raise_host_error(error)
+        self._handles[handle] = service
+        self._snapshots[handle] = (agent, transport)
+        return handle
+
+    def default(self, agent: Any, transport: str, *, name: str = "") -> str:
+        if self._default_handle is not None:
+            return self._default_handle
+        service = self._service_for(agent)
+        try:
+            handle = service.default(agent, transport.lower(), name=name)
+        except SessionHostError as error:
+            self._raise_host_error(error)
+        self._handles[handle] = service
+        self._snapshots[handle] = (agent, transport)
+        self._default_handle = handle
+        return handle
+
+    def ask(self, handle: str, prompt: str) -> str:
+        from agm.agent.session import SessionAskRequest
+        from agm.agl.runtime.sessions import SessionAskError as AglSessionAskError
+
+        try:
+            return (
+                self._service_for_handle(handle, "ask")
+                .ask(handle, SessionAskRequest(prompt))
+                .content
+            )
+        except SessionHostError as error:
+            self._raise_host_error(error)
+        except Exception as error:
+            if hasattr(error, "cause"):
+                raise AglSessionAskError(
+                    cause=error.cause,
+                    exit_code=error.exit_code,
+                    stderr_tail=error.stderr_tail,
+                    elapsed=error.elapsed,
+                    call_info=None,
+                ) from error
+            raise
+
+    def compact(self, handle: str, instructions: str = "") -> None:
+        self._operation(handle, "compact", instructions)
+
+    def reset(self, handle: str) -> None:
+        self._operation(handle, "reset")
+
+    def fork(self, handle: str) -> str:
+        service = self._service_for_handle(handle, "fork")
+        try:
+            forked = service.fork(handle)
+        except SessionHostError as error:
+            self._raise_host_error(error)
+        self._handles[forked] = service
+        self._snapshots[forked] = self._snapshots[handle]
+        return forked
+
+    def set_name(self, handle: str, name: str) -> None:
+        self._operation(handle, "set_name", name)
+
+    def stats(self, handle: str) -> Any:
+        try:
+            return self._service_for_handle(handle, "stats").stats(handle)
+        except SessionHostError as error:
+            self._raise_host_error(error)
+
+    def snapshot(self, handle: str) -> Any:
+        from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
+        from agm.agl.runtime.sessions import SessionSnapshot
+
+        try:
+            agent, transport = self._snapshots[handle]
+        except KeyError:
+            raise AglSessionHostError("unknown session", "snapshot") from None
+        return SessionSnapshot(agent, transport)
+
+    def close(self, handle: str) -> None:
+        try:
+            self._service_for_handle(handle, "close").close(handle)
+        except SessionHostError as error:
+            self._raise_host_error(error)
+
+    def close_all(self) -> None:
+        failures: list[Exception] = []
+        for service in self._services.values():
+            try:
+                service.close_all()
+            except ExceptionGroup as error:
+                failures.extend(error.exceptions)
+        if failures:
+            raise ExceptionGroup("failed to close one or more scripted sessions", failures)
+
+    def _operation(self, handle: str, name: str, arg: str = "") -> None:
+        service = self._service_for_handle(handle, name.replace("_", "-"))
+        try:
+            if name == "compact":
+                service.compact(handle, arg)
+            elif name == "set_name":
+                service.set_name(handle, arg)
+            else:
+                service.reset(handle)
+        except SessionHostError as error:
+            self._raise_host_error(error)
+
+    def _service_for(self, agent: Any) -> _ScriptedSessionService:
+        from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
+
+        try:
+            return self._services[_scripted_agent_name(agent)]
+        except KeyError:
+            raise AglSessionHostError("unknown scripted agent", "open") from None
+
+    def _service_for_handle(self, handle: str, operation: str) -> _ScriptedSessionService:
+        try:
+            return self._handles[handle]
+        except KeyError:
+            from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
+
+            raise AglSessionHostError("unknown session", operation) from None
+
+    @staticmethod
+    def _raise_host_error(error: SessionHostError) -> None:
+        from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
+
+        raise AglSessionHostError(error.message, error.operation) from error
+
+
+class _ScriptedSessionBackend:
+    """In-memory backend constrained to one production transport's surface."""
+
+    def __init__(
+        self,
+        agent: ScriptedAgent,
+        session: _ScriptedSession,
+        native_capabilities: frozenset[SessionOperation],
+        *,
+        supports_name: bool,
+    ) -> None:
         self._agent = agent
         self._session = session
+        self._native_capabilities = native_capabilities
+        self._supports_name = supports_name
+        session.backend = self
 
     @property
     def capabilities(self) -> SessionCapabilities:
         return SessionCapabilities(
             frozenset(
                 operation
-                for operation in SessionOperation
+                for operation in self._native_capabilities
                 if self._agent._supports_operation(operation.value)
             )
         )
 
+    def supports(self, operation: str) -> bool:
+        return self.capabilities.supports(SessionOperation(operation))
+
     def open(self, request: Any) -> None:
-        del request
+        if request.name and not self._supports_name:
+            self._agent.sessions.remove(self._session)
+            raise SessionHostError("scripted session does not support names", "set-name")
         self._session.opened = True
 
     def ask(self, request: Any) -> Any:
@@ -321,6 +540,24 @@ class _ScriptedSessionBackend:
 
             raise SessionHostError(f"scripted session does not support {operation}", operation)
         return outcome
+
+
+class _ScriptedPiRpcSessionBackend(_ScriptedSessionBackend):
+    """Native Pi RPC mock used by lifecycle scenarios without a real agent."""
+
+
+def _scripted_agent_name(agent: Any) -> str:
+    """Map an AgL agent value onto one scenario's scripted service."""
+    import shlex
+
+    command = agent.fields.get("command")
+    if command is not None:
+        try:
+            return shlex.split(command.value)[0]
+        except (TypeError, ValueError):
+            return command.value
+    provider = agent.fields.get("provider")
+    return provider.value if provider is not None else "ask"
 
 
 def _agent_from_spec(name: str, spec: Any) -> ScriptedAgent:
@@ -410,13 +647,12 @@ def _run_program(
         runtime_options["default_strict_json"] = runtime_config["default_strict_json"]
 
     def dispatch_agent(request: Any) -> str:
-        agent_value = request.agent
-        command = agent_value.fields.get("command")
-        name = command.value if command is not None else "ask"
-        return agents[name](request)
+        return agents[_scripted_agent_name(request.agent)](request)
 
     if agents:
         runtime_options["agent_dispatcher"] = dispatch_agent
+    if agents:
+        runtime_options["session_host"] = _ScenarioSessionHost(agents)
     runtime = PipelineDriver(**runtime_options)
     module_roots = scenario.get("module_roots", [])
     default_stdlib = not scenario.get("no_stdlib", False)
@@ -616,6 +852,19 @@ def _assert_sessions(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -
         matches = [session for session in agents[agent_name].sessions if session.tag == tag]
         assert len(matches) == 1, f"no unique session {tag!r} for agent {agent_name!r}"
         return matches[0]
+
+    if "sessions" in expect:
+        expected_sessions = {
+            (spec["agent"], spec.get("session", spec.get("tag"))) for spec in expect["sessions"]
+        }
+        observed_sessions = {
+            (agent_name, session.tag)
+            for agent_name, agent in agents.items()
+            for session in agent.sessions
+        }
+        assert expected_sessions == observed_sessions, (
+            f"session set: expected {sorted(expected_sessions)}, got {sorted(observed_sessions)}"
+        )
 
     for spec in expect.get("sessions", []):
         session = session_for(spec)
@@ -880,6 +1129,44 @@ def test_scripted_sessions_reconcile_ordered_operation_outcomes() -> None:
             ]
         },
     )
+
+
+def test_session_expectations_reject_unlisted_empty_sessions() -> None:
+    agent = _agent_from_spec("writer", {"responses": []})
+    service = agent.session_service()
+    service.open(object(), "scripted")
+    service.open(object(), "scripted")
+
+    with pytest.raises(AssertionError, match="session set"):
+        _assert_sessions(
+            {"writer": agent},
+            {
+                "sessions": [
+                    {"agent": "writer", "tag": "session-1", "opened": True, "closed": False}
+                ]
+            },
+        )
+
+
+def test_scenario_host_reports_unknown_handles_by_attempted_operation() -> None:
+    from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
+
+    host = _ScenarioSessionHost({})
+    operations: tuple[tuple[str, Callable[[], object]], ...] = (
+        ("ask", lambda: host.ask("unknown", "prompt")),
+        ("compact", lambda: host.compact("unknown")),
+        ("reset", lambda: host.reset("unknown")),
+        ("fork", lambda: host.fork("unknown")),
+        ("set-name", lambda: host.set_name("unknown", "name")),
+        ("stats", lambda: host.stats("unknown")),
+        ("snapshot", lambda: host.snapshot("unknown")),
+        ("close", lambda: host.close("unknown")),
+    )
+
+    for operation, attempt in operations:
+        with pytest.raises(AglSessionHostError) as raised:
+            attempt()
+        assert raised.value.operation == operation
 
 
 def test_scripted_sessions_reject_extra_capability_rejection_operation() -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import sys
 import time
 from pathlib import Path
@@ -10,7 +11,52 @@ from typing import Any
 
 import pytest
 
+import agm.core.process as process_mod
 from agm.core.process import ProcessCaptureResult, run_capture, run_capture_result, run_foreground
+
+
+def test_stream_reader_start_restores_sigint_mask_after_interrupt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    previous_mask = {signal.SIGINT}
+    calls: list[tuple[int, object]] = []
+
+    class Process:
+        stdin = None
+        stdout = object()
+        stderr = None
+
+    class Thread:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def start(self) -> None:
+            raise KeyboardInterrupt
+
+    def mask(how: int, value: object) -> set[signal.Signals]:
+        calls.append((how, value))
+        return previous_mask
+
+    monkeypatch.setattr(process_mod.subprocess, "Popen", lambda *_args, **_kwargs: Process())
+    monkeypatch.setattr(process_mod.threading, "Thread", Thread)
+    monkeypatch.setattr(process_mod.signal, "pthread_sigmask", mask)
+
+    with pytest.raises(KeyboardInterrupt):
+        process_mod._start_process_with_readers(
+            ["command"],
+            cwd=None,
+            env=None,
+            capture_output=True,
+            stdout_callback=None,
+            stderr_callback=None,
+            isolate_process_group=False,
+            stdin_text=None,
+        )
+
+    assert calls == [
+        (signal.SIG_BLOCK, {signal.SIGINT}),
+        (signal.SIG_SETMASK, previous_mask),
+    ]
 
 
 def test_run_capture_streams_stdout_and_stderr_before_process_exit(tmp_path: Path) -> None:
@@ -41,12 +87,12 @@ def test_run_capture_streams_stdout_and_stderr_before_process_exit(tmp_path: Pat
     assert stdout == "out-1out-2\n"
     assert stderr == "err-1"
     assert events
-    assert ("stdout", "out-1", events[0][2]) == events[0]
-    # Streaming order: stdout chunks arrived in order (proven without timing bounds)
-    stdout_chunks = [c for s, c, _ in events if s == "stdout"]
-    assert stdout_chunks == ["out-1", "out-2\n"]
-    # Both streams delivered events incrementally (not just aggregated at exit)
-    assert any(s == "stderr" and c == "err-1" for s, c, _ in events)
+    # Pipe reads may coalesce adjacent writes under concurrent test load; callbacks
+    # must preserve each stream's content and order, not an OS-dependent chunking.
+    stdout_chunks = [chunk for stream, chunk, _ in events if stream == "stdout"]
+    stderr_chunks = [chunk for stream, chunk, _ in events if stream == "stderr"]
+    assert "".join(stdout_chunks) == stdout
+    assert "".join(stderr_chunks) == stderr
 
 
 def test_run_foreground_preserves_controlling_terminal_for_interactive_prompts(

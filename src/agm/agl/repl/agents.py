@@ -31,14 +31,15 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal
 
 from agm.agl.runtime.render import render_value
-from agm.agl.runtime.request import AgentCancelled
+from agm.agl.runtime.request import AgentCancelled, AgentRequest
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from agm.agl.repl.agentmode import AgentMode
     from agm.agl.runtime.agents import AgentFn
-    from agm.agl.runtime.request import AgentRequest, AgentResponse
+    from agm.agl.runtime.request import AgentResponse
+    from agm.agl.semantics.values import EnumValue
 
 
 # The injected confirmation callback: given the callee name and the rendered
@@ -75,15 +76,27 @@ class ConfirmingAgent:
         self._confirm = confirm
 
     def __call__(self, request: "AgentRequest") -> "AgentResponse | str":
-        if self._mode.mode == "confirm":
-            agent_label = render_value(request.agent)
-            decision = self._confirm(agent_label, request.prompt)
-            if decision == "no":
-                raise AgentCancelled(agent_label, "declined")
-            if decision == "always":
-                self._mode.mode = "auto"
-            # ``"yes"`` and ``"always"`` both fall through to dispatch.
+        self.confirm_session(request)
         return self._dispatch(request)
+
+    def confirm_session_values(self, agent: "EnumValue", prompt: str) -> None:
+        """Confirm a session ask expressed as its host-provided values."""
+        self.confirm_session(AgentRequest(agent=agent, prompt=prompt))
+
+    def confirm_session(self, request: "AgentRequest") -> None:
+        """Apply the shared REPL confirmation policy without dispatching.
+
+        Session asks are dispatched by the session host rather than ``AgentFn``;
+        exposing this narrow gate keeps them under the same user decision.
+        """
+        if self._mode.mode != "confirm":
+            return
+        agent_label = render_value(request.agent)
+        decision = self._confirm(agent_label, request.prompt)
+        if decision == "no":
+            raise AgentCancelled(agent_label, "declined")
+        if decision == "always":
+            self._mode.mode = "auto"
 
     def _dispatch(self, request: "AgentRequest") -> "AgentResponse | str":
         """Dispatch to the underlying agent, mapping Ctrl-C to a cancellation."""

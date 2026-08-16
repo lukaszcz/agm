@@ -1,0 +1,46 @@
+{
+  "scenarios": [
+    {
+      "name": "command_sessions_require_placeholders_and_reject_native_only_operations",
+      "params": {"check_invalid_opens": true},
+      "agents": {
+        "writer": {"responses": []},
+        "missing": {"responses": []},
+        "ask": {"responses": []}
+      },
+      "expect": {
+        "stdout": "compact\nfork\nrename\nstats\nname\nplaceholder\ncommand-rpc\nclaude-rpc\n",
+        "calls": {"writer": 0, "missing": 0, "ask": 0},
+        "sessions": [
+          {"agent": "writer", "tag": "session-1", "opened": true, "closed": true}
+        ],
+        "session_operations": [
+          {"agent": "writer", "session": "session-1", "operation": "reset", "outcome": "success"},
+          {"agent": "writer", "session": "session-1", "operation": "compact", "outcome": "unsupported"},
+          {"agent": "writer", "session": "session-1", "operation": "fork", "outcome": "unsupported"},
+          {"agent": "writer", "session": "session-1", "operation": "set-name", "arg": "renamed", "outcome": "unsupported"},
+          {"agent": "writer", "session": "session-1", "operation": "stats", "outcome": "unsupported"}
+        ]
+      }
+    },
+    {
+      "name": "command_sessions_reject_native_only_operations_without_open_attempts",
+      "params": {"check_invalid_opens": false},
+      "agents": {"writer": {"responses": []}},
+      "expect": {
+        "stdout": "compact\nfork\nrename\nstats\n",
+        "calls": {"writer": 0},
+        "sessions": [
+          {"agent": "writer", "tag": "session-1", "opened": true, "closed": true}
+        ],
+        "session_operations": [
+          {"agent": "writer", "session": "session-1", "operation": "reset", "outcome": "success"},
+          {"agent": "writer", "session": "session-1", "operation": "compact", "outcome": "unsupported"},
+          {"agent": "writer", "session": "session-1", "operation": "fork", "outcome": "unsupported"},
+          {"agent": "writer", "session": "session-1", "operation": "set-name", "arg": "renamed", "outcome": "unsupported"},
+          {"agent": "writer", "session": "session-1", "operation": "stats", "outcome": "unsupported"}
+        ]
+      }
+    }
+  ]
+}

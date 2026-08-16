@@ -1,0 +1,39 @@
+param check_invalid_opens: bool
+
+program def main() -> unit =
+  let command = AgentCommand("writer \%{SESSION_ID}")
+  let session = Session::open(command)
+  session.reset()
+  try
+    session.compact()
+  catch SessionError =>
+    print "compact"
+  try
+    let _ = session.fork()
+  catch SessionError =>
+    print "fork"
+  try
+    session.set-name("renamed")
+  catch SessionError =>
+    print "rename"
+  try
+    let _ = session.stats()
+  catch SessionError =>
+    print "stats"
+  if check_invalid_opens =>
+    try
+      let _ = Session::open(command, name = "named")
+    catch SessionError =>
+      print "name"
+    try
+      let _ = Session::open(AgentCommand("missing"))
+    catch SessionError =>
+      print "placeholder"
+    try
+      let _ = Session::open(command, transport = Some(SessionTransport::Rpc))
+    catch SessionError =>
+      print "command-rpc"
+    try
+      let _ = Session::open(AgentClaude("model", "high"), transport = Some(SessionTransport::Rpc))
+    catch SessionError =>
+      print "claude-rpc"

@@ -13,7 +13,16 @@ from collections.abc import Mapping, Sequence
 from typing import NoReturn, Protocol, cast
 
 from agm.agl.ir.ids import ContractId, Location
-from agm.agl.ir.nodes import IrAsk, IrAskRequest, IrExec, IrExpr
+from agm.agl.ir.nodes import (
+    IrAsk,
+    IrAskRequest,
+    IrExec,
+    IrExpr,
+    IrSessionAsk,
+    IrSessionDefault,
+    IrSessionOp,
+    IrSessionOpen,
+)
 from agm.agl.ir.program import ExecutableProgram, ExternFunctionBody
 from agm.agl.modules.ids import ModuleId
 from agm.agl.runtime.agents import AgentFn, dispatch_agent_value
@@ -32,6 +41,12 @@ from agm.agl.runtime.request import (
 from agm.agl.runtime.request import (
     ValidationError as ReqValidationError,
 )
+from agm.agl.runtime.sessions import (
+    SessionAskError,
+    SessionHost,
+    SessionHostError,
+    SessionTransport,
+)
 from agm.agl.runtime.trace import TraceStore
 from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise
 from agm.agl.semantics.exceptions import AglRaise
@@ -39,6 +54,7 @@ from agm.agl.semantics.exceptions import make_builtin_exception as _make_exc_val
 from agm.agl.semantics.values import (
     VOID_VALUE,
     BoolValue,
+    DecimalValue,
     EnumValue,
     ExceptionValue,
     IntValue,
@@ -59,6 +75,7 @@ class EffectCtx(Protocol):
     _program: ExecutableProgram
     _trace: TraceStore
     _agent_dispatcher: AgentFn | None
+    _session_host: SessionHost | None
     _strict_json: bool
     _shell_exec_timeout: float | None
     _host_contracts: Mapping[ContractId, OutputContract]
@@ -392,6 +409,214 @@ class EffectHandlers:
             target_type_label=contract.target_type_label,
             json_schema=contract.json_schema,
         )
+
+    def _session_error(self, error: SessionHostError) -> NoReturn:
+        """Map a host lifecycle failure to the catchable SessionError shape."""
+        raise AglRaise(
+            _make_exc_value(
+                "SessionError",
+                error.message,
+                nominals=self._ctx._program.builtin_nominals,
+                operation=TextValue(error.operation),
+            )
+        ) from error
+
+    def _require_session_host(self, operation: str) -> SessionHost:
+        host = self._ctx._session_host
+        if host is None:
+            self._session_error(SessionHostError("session host is unavailable", operation))
+        return host
+
+    def _session_value(self, handle: str, agent: EnumValue, transport: str) -> RecordValue:
+        declared = self._ctx._program.builtin_nominals.resolve("Session")
+        transport_declared = self._ctx._program.builtin_nominals.resolve("SessionTransport")
+        return RecordValue(
+            nominal=declared.nominal,
+            display_name=declared.display_name,
+            fields={
+                "id": TextValue(handle),
+                "agent": agent,
+                "transport": EnumValue(
+                    nominal=transport_declared.nominal,
+                    display_name=transport_declared.display_name,
+                    variant=transport,
+                    fields={},
+                ),
+            },
+        )
+
+    def _session_parts(self, value: Value, _operation: str) -> tuple[str, EnumValue, str]:
+        """Extract the statically guaranteed fields from a ``Session`` record."""
+        session = cast(RecordValue, value)
+        return (
+            cast(TextValue, session.fields["id"]).value,
+            cast(EnumValue, session.fields["agent"]),
+            cast(EnumValue, session.fields["transport"]).variant,
+        )
+
+    def _resolve_session_transport(self, agent: EnumValue, transport: Value | None) -> str:
+        if transport is None:
+            return SessionTransport.RPC if agent.variant == "AgentPi" else SessionTransport.CLI
+        selected_transport = cast(EnumValue, transport)
+        if selected_transport.variant == "None":
+            return SessionTransport.RPC if agent.variant == "AgentPi" else SessionTransport.CLI
+        return cast(EnumValue, selected_transport.fields["value"]).variant
+
+    def eval_ir_session_open(self, node: IrSessionOpen) -> Value:
+        """Open a host-backed session and mint its opaque AgL record."""
+        agent = cast(EnumValue, self._ctx._eval(node.agent))
+        transport = self._resolve_session_transport(
+            agent, None if node.transport is None else self._ctx._eval(node.transport)
+        )
+        name = self._text_of(self._ctx._eval(node.name))
+        try:
+            handle = self._require_session_host("open").open(agent, transport, name=name)
+        except SessionHostError as error:
+            self._session_error(error)
+        return self._session_value(handle, agent, transport)
+
+    def eval_ir_session_default(self, _node: IrSessionDefault, default_agent: Value) -> Value:
+        """Lazily obtain the session whose agent is current at first use."""
+        agent = cast(EnumValue, default_agent)
+        transport = self._resolve_session_transport(agent, None)
+        try:
+            host = self._require_session_host("default")
+            handle = host.default(agent, transport)
+            snapshot = host.snapshot(handle)
+        except SessionHostError as error:
+            self._session_error(error)
+        return self._session_value(handle, snapshot.agent, snapshot.transport)
+
+    def eval_ir_session_ask(self, node: IrSessionAsk) -> Value:
+        """Send one composed request through an existing session and parse its response."""
+        handle, agent, _transport = self._session_parts(self._ctx._eval(node.session), "ask")
+        prompt = self._text_of(self._ctx._eval(node.prompt))
+        contract = self._ctx._program.contracts[node.contract_id]
+        effective_strict = (
+            contract.strict_json if contract.strict_json is not None else self._ctx._strict_json
+        )
+        output_contract: OutputContract | None = (
+            None if contract.is_unit else self._ctx._host_contracts[node.contract_id]
+        )
+        request = AgentRequest(agent=agent, prompt=prompt, output_contract=output_contract)
+        request.prompt = compose_agent_prompt(request)
+        json_schema = (
+            None if contract.json_schema is None else cast(object, json.loads(contract.json_schema))
+        )
+        self._ctx._trace.agent_request(
+            agent=self._agent_trace_value(agent),
+            attempt=0,
+            max_attempts=1,
+            prompt=request.prompt,
+            target_type=contract.target_type_label,
+            codec=contract.codec_name,
+            strict_json=contract.strict_json,
+            json_schema=json_schema,
+            span=node.location,
+        )
+        try:
+            raw = self._require_session_host("ask").ask(handle, request.prompt)
+        except SessionAskError as error:
+            call_info = error.call_info.to_trace() if error.call_info is not None else None
+            if call_info is None:
+                call_info = {"exit_code": error.exit_code, "elapsed": error.elapsed}
+            call_info["stderr_tail"] = error.stderr_tail
+            self._ctx._trace.agent_response(
+                ok=False,
+                cause=error.cause,
+                call_info=call_info,
+                span=node.location,
+            )
+            self._raise_agent_call_error(
+                agent,
+                AgentCallHostError(
+                    cause=error.cause,
+                    exit_code=error.exit_code,
+                    stderr_tail=error.stderr_tail,
+                    elapsed=error.elapsed,
+                    call_info=error.call_info,
+                ),
+            )
+        except SessionHostError as error:
+            self._session_error(error)
+        except AgentCancelled as error:
+            self._ctx._trace.agent_response(
+                ok=False, cancelled=True, reason=error.reason, span=node.location
+            )
+            error.span = node.location
+            raise
+        except KeyboardInterrupt as error:
+            cancelled = AgentCancelled(render_value(agent), "interrupted", span=node.location)
+            self._ctx._trace.agent_response(
+                ok=False, cancelled=True, reason=cancelled.reason, span=node.location
+            )
+            raise cancelled from error
+        self._ctx._trace.agent_response(
+            ok=True, content=raw, metadata={}, call_info=None, span=node.location
+        )
+        if contract.is_unit:
+            return VOID_VALUE
+        result = self._ctx._parse_host_output(
+            raw, node.contract_id, effective_strict=effective_strict
+        )
+        self._ctx._trace.parse_result(
+            ok=result.ok,
+            raw=raw,
+            normalized_raw=result.normalized_raw or raw,
+            error_summary=result.error_msg or "; ".join(error.message for error in result.errors),
+            span=node.location,
+        )
+        if result.ok and result.value is not None:
+            return result.value
+        self._raise_agent_parse_error(
+            message=(
+                f"Agent {render_value(agent)!r} failed to produce a valid "
+                f"{contract.target_type_label} after 1 attempt(s). Last output: {raw!r}"
+            ),
+            agent=agent,
+            last_raw=raw,
+            last_normalized=result.normalized_raw,
+            last_errors=self._classify_parse_errors(result),
+            max_attempts=1,
+            target_type_label=contract.target_type_label,
+            json_schema=contract.json_schema,
+        )
+
+    def eval_ir_session_op(self, node: IrSessionOp) -> Value:
+        """Dispatch one lifecycle operation through the session host."""
+        handle, agent, transport = self._session_parts(self._ctx._eval(node.session), node.op)
+        argument = self._text_of(self._ctx._eval(node.arg)) if node.arg is not None else ""
+        host = self._require_session_host(node.op)
+        try:
+            if node.op == "compact":
+                host.compact(handle, argument)
+                return VOID_VALUE
+            if node.op == "reset":
+                host.reset(handle)
+                return VOID_VALUE
+            if node.op == "fork":
+                return self._session_value(host.fork(handle), agent, transport)
+            if node.op == "stats":
+                stats = host.stats(handle)
+                declared = self._ctx._program.builtin_nominals.resolve("SessionStats")
+                return RecordValue(
+                    nominal=declared.nominal,
+                    display_name=declared.display_name,
+                    fields={
+                        "input-tokens": IntValue(stats.input_tokens),
+                        "output-tokens": IntValue(stats.output_tokens),
+                        "cost": DecimalValue(stats.cost),
+                        "context-percent": DecimalValue(stats.context_percent),
+                    },
+                )
+            if node.op == "set-name":
+                host.set_name(handle, argument)
+                return VOID_VALUE
+            assert node.op == "close"
+            host.close(handle)
+            return VOID_VALUE
+        except SessionHostError as error:
+            self._session_error(error)
 
     def eval_ir_ask_request(
         self,

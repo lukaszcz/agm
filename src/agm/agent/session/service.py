@@ -4,9 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, NoReturn, Protocol, TypeVar, cast
 from uuid import uuid4
 
+if TYPE_CHECKING:
+    from agm.agl.runtime.sessions import SessionSnapshot
+    from agm.agl.runtime.sessions import SessionStats as AglSessionStats
+    from agm.agl.semantics.values import EnumValue
+
 from agm.agent.session.protocol import (
+    SessionAskError,
     SessionAskRequest,
     SessionAskResponse,
     SessionBackend,
@@ -16,7 +23,167 @@ from agm.agent.session.protocol import (
     SessionStats,
 )
 
+_T = TypeVar("_T")
+SessionConfirmation = Callable[["EnumValue", str], None]
+
 SessionBackendFactory = Callable[[object, str], SessionBackend]
+
+
+class _SessionBackendConstructor(Protocol):
+    def __call__(self, *, idle_timeout: float | None = None) -> SessionBackend: ...
+
+
+class AglSessionHost:
+    """Adapt the AGM session service to the firewall-safe AgL host protocol."""
+
+    def __init__(
+        self, service: SessionService, *, confirm_session: SessionConfirmation | None = None
+    ) -> None:
+        self._service = service
+        self._confirm_session = confirm_session
+        self._agents: dict[str, tuple[EnumValue, str]] = {}
+
+    def open(self, agent: EnumValue, transport: str, *, name: str = "") -> str:
+        handle = self._call_host(
+            lambda: self._service.open(self._agent_spec(agent), transport.lower(), name=name)
+        )
+        self._agents[handle] = (agent, transport)
+        return handle
+
+    def default(self, agent: EnumValue, transport: str, *, name: str = "") -> str:
+        handle = self._call_host(
+            lambda: self._service.default(self._agent_spec(agent), transport.lower(), name=name)
+        )
+        self._agents.setdefault(handle, (agent, transport))
+        return handle
+
+    def ask(self, handle: str, prompt: str) -> str:
+        try:
+            if self._confirm_session is not None:
+                try:
+                    agent, _transport = self._agents[handle]
+                except KeyError:
+                    from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
+
+                    raise AglSessionHostError("unknown session", "ask") from None
+                self._confirm_session(agent, prompt)
+            return self._service.ask(handle, SessionAskRequest(prompt)).content
+        except SessionAskError as error:
+            self._raise_ask_error(error)
+        except SessionHostError as error:
+            self._raise_host_error(error)
+
+    def compact(self, handle: str, instructions: str = "") -> None:
+        self._call_host(lambda: self._service.compact(handle, instructions))
+
+    def reset(self, handle: str) -> None:
+        self._call_host(lambda: self._service.reset(handle))
+
+    def fork(self, handle: str) -> str:
+        forked = self._call_host(lambda: self._service.fork(handle))
+        self._agents[forked] = self._agents[handle]
+        return forked
+
+    def set_name(self, handle: str, name: str) -> None:
+        self._call_host(lambda: self._service.set_name(handle, name))
+
+    def stats(self, handle: str) -> "AglSessionStats":
+        from agm.agl.runtime.sessions import SessionStats as AglSessionStats
+
+        stats = self._call_host(lambda: self._service.stats(handle))
+        return AglSessionStats(
+            input_tokens=stats.input_tokens,
+            output_tokens=stats.output_tokens,
+            cost=stats.cost,
+            context_percent=stats.context_percent,
+        )
+
+    def snapshot(self, handle: str) -> "SessionSnapshot":
+        from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
+        from agm.agl.runtime.sessions import SessionSnapshot
+
+        try:
+            agent, transport = self._agents[handle]
+        except KeyError:
+            raise AglSessionHostError("unknown session", "snapshot") from None
+        return SessionSnapshot(agent=agent, transport=transport)
+
+    def close(self, handle: str) -> None:
+        self._call_host(lambda: self._service.close(handle))
+
+    def close_all(self) -> None:
+        self._service.close_all()
+
+    @staticmethod
+    def _agent_spec(agent: object) -> object:
+        from agm.agl.runtime.agents import decode_agent_value
+        from agm.agl.semantics.values import EnumValue
+
+        if not isinstance(agent, EnumValue):
+            raise TypeError(f"session agent must be an EnumValue, got {type(agent).__name__}")
+        try:
+            return decode_agent_value(agent)
+        except ValueError as error:
+            from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
+
+            raise AglSessionHostError(str(error), "open") from error
+
+    @staticmethod
+    def _raise_host_error(error: SessionHostError) -> NoReturn:
+        from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
+
+        raise AglSessionHostError(error.message, error.operation) from error
+
+    @staticmethod
+    def _raise_ask_error(error: SessionAskError) -> NoReturn:
+        from agm.agl.runtime.request import AgentCallInfo
+        from agm.agl.runtime.sessions import SessionAskError as AglSessionAskError
+
+        call_info = (
+            AgentCallInfo(
+                argv=error.call_info.argv,
+                prompt_via_stdin=error.call_info.prompt_via_stdin,
+                elapsed=error.call_info.elapsed,
+                exit_code=error.call_info.exit_code,
+            )
+            if error.call_info is not None
+            else None
+        )
+        raise AglSessionAskError(
+            cause=error.cause,
+            exit_code=error.exit_code,
+            stderr_tail=error.stderr_tail,
+            elapsed=error.elapsed,
+            call_info=call_info,
+        ) from error
+
+    @staticmethod
+    def _call_host(action: Callable[[], _T]) -> _T:
+        try:
+            return action()
+        except SessionHostError as error:
+            AglSessionHost._raise_host_error(error)
+
+
+def create_agl_session_host(
+    *, idle_timeout: float | None, confirm_session: SessionConfirmation | None = None
+) -> AglSessionHost:
+    """Create the production AgL session host with transport-aware backends."""
+    from agm.agent.session.cli_adapters import CLI_SESSION_BACKENDS
+    from agm.agent.session.rpc import PiRpcSessionBackend
+    from agm.agent.spec import AgentPi
+
+    def backend_for(agent: object, transport: str) -> SessionBackend:
+        if transport == "rpc":
+            if isinstance(agent, AgentPi):
+                return PiRpcSessionBackend(idle_timeout=idle_timeout)
+            raise SessionHostError("RPC transport is only supported by AgentPi", "open")
+        if transport != "cli":
+            raise SessionHostError(f"unsupported session transport {transport!r}", "open")
+        backend_type = CLI_SESSION_BACKENDS[type(agent).__name__]
+        return cast(_SessionBackendConstructor, backend_type)(idle_timeout=idle_timeout)
+
+    return AglSessionHost(SessionService(backend_for), confirm_session=confirm_session)
 
 
 @dataclass(slots=True)

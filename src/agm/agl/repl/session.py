@@ -41,6 +41,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.agents import AgentFn
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.host_settings import HostSettingsPolicy
+    from agm.agl.runtime.sessions import SessionHost
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import EnumValue, Frame, Value
@@ -131,6 +132,7 @@ class ReplSession:
         default_loop_limit: int | None = None,
         default_call_depth_limit: int | None = None,
         agent_dispatcher: "AgentFn | None" = None,
+        session_host: "SessionHost | None" = None,
         shell_exec_timeout: float | None = None,
         trace_path: "Path | None" = None,
         engine_base: "Mapping[str, Value] | None" = None,
@@ -233,6 +235,7 @@ class ReplSession:
         self._runtime = PipelineDriver(
             default_call_depth_limit=default_call_depth_limit,
             agent_dispatcher=agent_dispatcher,
+            session_host=session_host,
         )
         # Reuse the driver's resolved (default-applied) limit for the per-entry
         # interpreters this session builds directly, so the canonical default

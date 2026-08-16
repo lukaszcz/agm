@@ -1,0 +1,13 @@
+# The default session retains the agent selected when it first opens.
+import std/config
+
+param explicit_close: bool
+
+program def main() -> unit =
+  std/config::default-agent := AgentPi("writer", "model", "high")
+  let first = Session::default()
+  std/config::default-agent := AgentPi("reviewer", "model", "high")
+  let second = Session::default()
+  first.ask("first prompt")
+  second.ask("second prompt")
+  if explicit_close => second.close()

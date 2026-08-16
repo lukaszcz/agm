@@ -1620,6 +1620,7 @@ def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
             default_loop_limit: int = 5,
             default_strict_json: bool = False,
             agent_dispatcher: Any | None = None,
+            session_host: Any | None = None,
             shell_exec_timeout: float | None = None,
             default_call_depth_limit: int | None = None,
         ) -> None:
@@ -1631,6 +1632,7 @@ def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
                 default_loop_limit=default_loop_limit,
                 default_strict_json=default_strict_json,
                 agent_dispatcher=agent_dispatcher,
+                session_host=session_host,
                 shell_exec_timeout=shell_exec_timeout,
                 default_call_depth_limit=default_call_depth_limit,
             )
@@ -1799,6 +1801,7 @@ def _exec_args_with_fallback_runtime(
             default_loop_limit: int = 5,
             default_strict_json: bool = False,
             agent_dispatcher: AgentFn | None = None,
+            session_host: Any | None = None,
             shell_exec_timeout: float | None = None,
             default_call_depth_limit: int | None = None,
         ) -> None:
@@ -1807,6 +1810,7 @@ def _exec_args_with_fallback_runtime(
                 default_loop_limit=default_loop_limit,
                 default_strict_json=default_strict_json,
                 agent_dispatcher=stub_agent,
+                session_host=session_host,
                 shell_exec_timeout=shell_exec_timeout,
                 default_call_depth_limit=default_call_depth_limit,
             )
@@ -1952,6 +1956,7 @@ class TestDryRunInventory:
                 default_loop_limit: int = 5,
                 default_strict_json: bool = False,
                 agent_dispatcher: AgentFn | None = None,
+                session_host: Any | None = None,
                 shell_exec_timeout: float | None = None,
                 default_call_depth_limit: int | None = None,
             ) -> None:
@@ -1960,6 +1965,7 @@ class TestDryRunInventory:
                     default_loop_limit=default_loop_limit,
                     default_strict_json=default_strict_json,
                     agent_dispatcher=spy_agent,
+                    session_host=session_host,
                     shell_exec_timeout=shell_exec_timeout,
                     default_call_depth_limit=default_call_depth_limit,
                 )

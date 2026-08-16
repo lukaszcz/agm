@@ -17,6 +17,7 @@ An `IrField` projection carries either exact nominal identity or a static upper-
 Host operations are dispatched by contract identity:
 
 - **Agents.** `ask` evaluates its `Agent` enum operand, decodes it to a host spec, and dispatches the spec's built argv through the shared agent runtime. The output is shaped by the contract's format metadata and compiled schema/decode descriptors. A unit contract dispatches once and discards the response. `AgentRequest` and agent call/parse errors retain the encoded enum value.
+- **Sessions.** `Session` records contain only an opaque handle and their opening agent/transport snapshot. The evaluator sends lifecycle operations and single-attempt asks through the AgL-side `SessionHost` protocol, maps lifecycle failures to `SessionError`, and uses the normal agent prompt, trace, and contract parser paths for session output. The host, not AgL, owns live backends and closes all remaining sessions when a non-REPL run ends.
 - **Shell.** `exec` either returns a structured result or parses stdout into a target type, as selected during checking. A structured contract exposes a nonzero exit as data, while spawn failures and timeouts raise `ExecError`; a unit contract also raises for a nonzero exit and discards successful stdout without resolving a codec.
 - **Conversions.** Casts and `parse_json` execute pre-resolved typeless recipes and always parse strictly; agent and `exec` output parsing uses the configurable strict/lenient codec pipeline.
 - **Resources.** Link-resolved `IrResource` nodes evaluate to their embedded absolute `text` paths; evaluation performs no filesystem lookup.
@@ -32,5 +33,5 @@ Every callable lives in one `functions` table; a descriptor's `impl` is either a
 
 - `src/agm/agl/eval/` — the interpreter, frame model, host dispatch, and conversion execution.
 - `src/agm/agl/semantics/copying.py` — the shared `copy`/`shallow_copy` value walks.
-- `src/agm/agl/runtime/externs.py` — the extern registry and companion loading; `src/agm/agl/runtime/boundary.py` — value-directed conversion, nominal synthesis, and container views.
+- `src/agm/agl/runtime/externs.py` — the extern registry and companion loading; `src/agm/agl/runtime/boundary.py` — value-directed conversion, nominal synthesis, and container views; `runtime/sessions.py` — the session-host firewall protocol.
 - Tests: `tests/test_agl_ir_*.py` (the IR semantics suite), `tests/test_agl_convert.py`, `tests/test_agl_extern_*.py`.

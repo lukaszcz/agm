@@ -9,6 +9,7 @@ from uuid import UUID
 import pytest
 
 from agm.agent.session import (
+    AglSessionHost,
     SessionAskError,
     SessionAskRequest,
     SessionAskResponse,
@@ -19,8 +20,12 @@ from agm.agent.session import (
     SessionOperation,
     SessionService,
     SessionStats,
+    create_agl_session_host,
 )
 from agm.agent.transport import AgentCallInfo
+from agm.agl.runtime.sessions import SessionAskError as AglSessionAskError
+from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
+from tests._agl_helpers import agent_value
 
 
 @dataclass
@@ -102,6 +107,112 @@ def _assert_error(operation: str, action: object) -> None:
     with pytest.raises(SessionHostError) as raised:
         action()
     assert raised.value.operation == operation
+
+
+def test_agl_session_host_adapts_all_lifecycle_operations() -> None:
+    capabilities = SessionCapabilities(frozenset(SessionOperation))
+    parent = FakeBackend(capabilities)
+    child = FakeBackend(capabilities)
+    parent.fork_result = child
+    created: list[tuple[object, str]] = []
+
+    def backend_for(agent: object, transport: str) -> SessionBackend:
+        created.append((agent, transport))
+        return parent
+
+    host = AglSessionHost(SessionService(backend_for))
+    agent = agent_value("AgentCommand", command="worker")
+    handle = host.open(agent, "Cli", name="primary")
+    assert host.ask(handle, "hello") == "answer"
+    host.compact(handle, "retain")
+    host.reset(handle)
+    child_handle = host.fork(handle)
+    host.set_name(child_handle, "child")
+    stats = host.stats(child_handle)
+    snapshot = host.snapshot(child_handle)
+    host.close(handle)
+    host.close_all()
+
+    assert created[0][1] == "cli"
+    assert parent.ask_requests == [SessionAskRequest("hello")]
+    assert parent.compact_requests == ["retain"]
+    assert parent.reset_calls == 1
+    assert child.names == ["child"]
+    assert stats.input_tokens == 3
+    assert snapshot.agent == agent
+    assert snapshot.transport == "Cli"
+    with pytest.raises(AglSessionHostError):
+        host.snapshot("unknown")
+    assert parent.close_calls == 1
+    assert child.close_calls == 1
+
+
+def test_production_session_host_selects_and_rejects_transports(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agm.agent.session.rpc import PiRpcSessionBackend
+
+    monkeypatch.setattr(PiRpcSessionBackend, "_start", lambda self, _argv, _operation: None)
+    host = create_agl_session_host(idle_timeout=1.0)
+    pi = agent_value("AgentPi", provider="provider", model="model", thinking="think")
+    handle = host.open(pi, "Rpc")
+    host.close(handle)
+    command = agent_value("AgentCommand", command="echo %{SESSION_ID}")
+    command_handle = host.open(command, "Cli")
+    host.close(command_handle)
+    with pytest.raises(AglSessionHostError):
+        host.open(command, "Rpc")
+    with pytest.raises(AglSessionHostError):
+        host.open(command, "bad")
+
+
+def test_agl_session_host_confirmation_and_invalid_agent_are_handled() -> None:
+    capabilities = SessionCapabilities(frozenset({SessionOperation.ASK}))
+    backend = FakeBackend(capabilities)
+    confirmed: list[tuple[object, str]] = []
+    host = AglSessionHost(
+        SessionService(lambda _agent, _transport: backend),
+        confirm_session=lambda agent, prompt: confirmed.append((agent, prompt)),
+    )
+    agent = agent_value("AgentCommand", command="worker")
+    handle = host.open(agent, "Cli")
+    assert host.ask(handle, "hello") == "answer"
+    assert confirmed == [(agent, "hello")]
+    host.close(handle)
+    with pytest.raises(AglSessionHostError):
+        host.ask(handle, "closed")
+    with pytest.raises(AglSessionHostError) as unknown:
+        host.ask("unknown", "missing")
+    assert unknown.value.operation == "ask"
+    with pytest.raises(TypeError):
+        host._agent_spec(object())
+    with pytest.raises(AglSessionHostError):
+        host._agent_spec(agent_value("Unknown"))
+
+
+def test_agl_session_host_translates_host_and_ask_failures() -> None:
+    capabilities = SessionCapabilities(frozenset({SessionOperation.ASK}))
+    backend = FakeBackend(capabilities)
+    host = AglSessionHost(SessionService(lambda _agent, _transport: backend))
+    agent = agent_value("AgentCommand", command="worker")
+    handle = host.default(agent, "Cli")
+    assert host.default(agent, "Cli") == handle
+
+    backend.ask_error = SessionAskError(
+        cause="failed",
+        exit_code=2,
+        stderr_tail="tail",
+        elapsed=1.5,
+        call_info=AgentCallInfo(argv=("worker",), prompt_via_stdin=True, elapsed=1.5, exit_code=2),
+    )
+    with pytest.raises(AglSessionAskError) as ask_error:
+        host.ask(handle, "hello")
+    assert ask_error.value.cause == "failed"
+
+    host.close(handle)
+    with pytest.raises(AglSessionHostError) as host_error:
+        host.reset(handle)
+    assert host_error.value.operation == "reset"
 
 
 def test_open_ask_and_close_manage_a_live_session() -> None:

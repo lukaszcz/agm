@@ -4,9 +4,8 @@ Every node is a frozen dataclass with a ``location: Location`` field.
 Child collections are ``tuple`` (never ``list``).
 
 ``IrExpr`` is the closed union of expression nodes currently supported by
-the evaluator. Session operation nodes remain distinct IR data while their
-host handlers are unavailable, so they are intentionally excluded from that
-execution union.
+the evaluator. Session operations are dedicated host-effect nodes, preserving their
+lifecycle boundaries through lowering and evaluation.
 
 Invariant: ``IrSequence`` and ``IrBlock``
 must be non-empty (``len(items) >= 1``).  The validator checks this; do not
@@ -1249,6 +1248,10 @@ IrExpr = (
     | IrCopyValue
     | IrAsk
     | IrAskRequest
+    | IrSessionOpen
+    | IrSessionDefault
+    | IrSessionAsk
+    | IrSessionOp
     | IrExec
     | IrBuiltinLoad
     | IrBuiltinStore

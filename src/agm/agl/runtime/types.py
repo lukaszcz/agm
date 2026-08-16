@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.agents import AgentFn
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.externs import ExternRegistry
+    from agm.agl.runtime.sessions import SessionHost
     from agm.agl.semantics.types import Type as AglType
 
 __all__ = [
@@ -53,6 +54,8 @@ class HostEnvironment:
 
     ``agent_dispatcher``
         The value-driven host dispatcher for ``Agent`` enum values.
+    ``session_host``
+        The opaque lifecycle service used by persistent ``Session`` values.
     ``capabilities``
         The ``HostCapabilities`` static catalog derived from codecs — consumed
         by the type checker.
@@ -66,6 +69,7 @@ class HostEnvironment:
     """
 
     agent_dispatcher: "AgentFn | None"
+    session_host: "SessionHost | None"
     capabilities: "HostCapabilities"
     codecs: dict[str, "OutputCodec"]
     extern_registry: "ExternRegistry"

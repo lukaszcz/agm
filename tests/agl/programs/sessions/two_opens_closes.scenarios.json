@@ -1,0 +1,34 @@
+{
+  "scenarios": [
+    {
+      "name": "two_explicit_opens_and_closes",
+      "params": {"explicit_close": true},
+      "agents": {
+        "writer": {"responses": []},
+        "reviewer": {"responses": []}
+      },
+      "expect": {
+        "calls": {"writer": 0, "reviewer": 0},
+        "sessions": [
+          {"agent": "writer", "tag": "session-1", "opened": true, "closed": true, "parent": null},
+          {"agent": "reviewer", "tag": "session-1", "opened": true, "closed": true, "parent": null}
+        ]
+      }
+    },
+    {
+      "name": "two_open_sessions_close_during_run_cleanup",
+      "params": {"explicit_close": false},
+      "agents": {
+        "writer": {"responses": []},
+        "reviewer": {"responses": []}
+      },
+      "expect": {
+        "calls": {"writer": 0, "reviewer": 0},
+        "sessions": [
+          {"agent": "writer", "tag": "session-1", "opened": true, "closed": true, "parent": null},
+          {"agent": "reviewer", "tag": "session-1", "opened": true, "closed": true, "parent": null}
+        ]
+      }
+    }
+  ]
+}

@@ -231,7 +231,8 @@ catch Exception as e =>
 ### `UnwrapError`
 
 `std/option` raises `UnwrapError` when `Option[T].unwrap()` is called on
-`None`. It carries only the inherited `message` field.
+`None`; `std/result` raises the same exception when `Result[T, E].unwrap()` is
+called on `Err`. It carries only the inherited `message` field.
 
 ## Built-in exception catalog
 

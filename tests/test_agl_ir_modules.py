@@ -15,7 +15,7 @@ from agm.agl.ir.nodes import IrBlock, IrConstUnit, IrDirectCall, IrPrint
 from agm.agl.ir.program import IrFunctionBody
 from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.lower.program import lower_program
-from agm.agl.modules.ids import STD_CONFIG_ID, STD_OPTION_ID, ModuleId
+from agm.agl.modules.ids import ModuleId
 from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, RecordValue, TextValue
 from agm.agl.typecheck import AglTypeError
 from tests.agl.ir_harness import (
@@ -223,13 +223,12 @@ def test_library_binding_initializers_follow_import_dependency_order(tmp_path: P
 
     executable = lower_program(_compiled_checked(checked))
 
-    assert list(executable.modules) == [
-        STD_CONFIG_ID,
-        STD_OPTION_ID,
-        ModuleId.from_path("dependency"),
-        ModuleId.from_path("library"),
-        executable.entry_module,
-    ]
+    modules = list(executable.modules)
+    dependency = ModuleId.from_path("dependency")
+    library = ModuleId.from_path("library")
+    assert (
+        modules.index(dependency) < modules.index(library) < modules.index(executable.entry_module)
+    )
 
 
 def test_imported_function_and_local_let(tmp_path: Path) -> None:

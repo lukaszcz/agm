@@ -249,8 +249,11 @@ rules.
 
 ## Standard library modules
 
-- `std/core` declares the automatically opened core types, exceptions, and built-ins. It re-exports `std/option`, so `Option` remains available through the prelude and through `import std/core using Option`.
+- `std/core` declares the automatically opened core types, exceptions, and built-ins. It re-exports `std/option`, `std/pair`, `std/either`, and `std/result`, so their types and helpers remain available through the prelude and through `import std/core using …`. It also defines the `|>`, `<|`, `>>`, and `<<` combinators.
 - `std/option` declares `Option[T]`, its methods, and `UnwrapError`.
+- `std/pair` declares `Pair[A, B]` and its mapping and swapping methods.
+- `std/either` declares the neutral `Either[A, B]` sum and its mapping, query, optional-projection, and swapping methods.
+- `std/result` declares `Result[T, E]`, its outcome methods, and `attempt`, which turns a raising nullary function into a `Result`.
 - `std/config` exposes the host engine settings as `builtin var` bindings.
 - `std/text` exposes `interp(template, vars) -> text` for name-only runtime
   interpolation; see [Strings and interpolation](strings-and-interpolation.md#runtime-interpolation).

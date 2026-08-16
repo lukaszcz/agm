@@ -419,6 +419,17 @@ The record-update operator `with` binds looser than every level in the table,
 on both sides; see
 [Record update](expressions.md#record-update).
 
+### Prelude combinators
+
+`std/core` makes four functional combinators available through the prelude:
+`|>` is left-associative at priority 5 and passes a value to a function; `<|`
+is right-associative at priority 4 and applies a function to a value; `>>` is
+left-associative at priority 60 and composes functions left-to-right; `<<` is
+right-associative at priority 60 and composes them right-to-left. Thus
+`increment <| 2 |> double` is `increment(double(2))`. A chain cannot mix `>>`
+and `<<` without parentheses because they have opposite associativity at the
+same priority.
+
 User-defined symbolic infix operators are declared with `infixl` or `infixr`:
 
 ```agl

@@ -29,7 +29,7 @@ from agm.agl.lower.lowerer import (
     builtin_nominals_from_declarations,
 )
 from agm.agl.matchcompile import MatchCompiledProgram
-from agm.agl.modules.ids import STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.types import ExceptionType, RecordType
 from agm.agl.syntax.nodes import BuiltinVarDecl, FuncDef, static_items
@@ -74,7 +74,7 @@ def lower_program(
     # Step 1: Register a SourceFile for every module.
     module_source_ids: dict[ModuleId, SourceId] = {}
     for mid, cm in checked.modules.items():
-        if mid in _already_linked or mid == STD_CORE_ID:
+        if mid in _already_linked:
             continue
         source_id = SourceId(link.next_source)
         link.next_source += 1
@@ -192,7 +192,7 @@ def lower_program(
     # their functions while their initializers retain dependency order below.
     module_lowerers: dict[ModuleId, _Lowerer] = {}
     for mid, cm in checked.modules.items():
-        if mid in _already_linked or mid == STD_CORE_ID:
+        if mid in _already_linked:
             continue
         source_id = module_source_ids[mid]
         lowerer = _Lowerer(
@@ -220,7 +220,7 @@ def lower_program(
         mid
         for component in import_sccs
         for mid in component
-        if not mid.is_entry and mid != STD_CORE_ID and mid not in _already_linked
+        if not mid.is_entry and mid not in _already_linked
     ]
     if checked.entry_id not in _already_linked:
         ordered_mids.append(checked.entry_id)

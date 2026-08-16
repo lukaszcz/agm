@@ -4404,7 +4404,7 @@ class TestInfixDecl:
         assert _int(r.value) == 3
 
     def test_infixr_usable_in_subsequent_entry(self) -> None:
-        s = ReplSession()
+        s = ReplSession(default_stdlib=False)
         s.eval_entry("infixr << at 40")
         s.eval_entry('def <<(x: text, y: text) -> text = "(" + x + y + ")"')
         r = s.eval_entry('"a" << "b" << "c"')
@@ -4415,7 +4415,7 @@ class TestInfixDecl:
     def test_infix_relative_priority_persists(self) -> None:
         # A relative priority (``at prio > + 1``) declared in one entry must
         # keep binding correctly when the operator is used in a later entry.
-        s = ReplSession()
+        s = ReplSession(default_stdlib=False)
         s.eval_entry("infixl |> at prio > + 1")
         s.eval_entry("def |>(x: int, y: int) -> int = x * 10 + y")
         r = s.eval_entry("1 + 2 |> 3 > 20")
@@ -4743,7 +4743,7 @@ class TestImports:
         std_dir = tmp_path / "std"
         std_dir.mkdir()
         source_std_dir = Path(__file__).resolve().parents[1] / "stdlib" / "std"
-        for name in ("core.agl", "option.agl"):
+        for name in ("core.agl", "option.agl", "pair.agl", "either.agl", "result.agl"):
             copyfile(source_std_dir / name, std_dir / name)
         config = std_dir / "config.agl"
         config.write_text(
@@ -6387,6 +6387,9 @@ class TestDeferredStdlibResolution:
         for name in (
             "core.agl",
             "option.agl",
+            "pair.agl",
+            "either.agl",
+            "result.agl",
             "config.agl",
             "fs.agl",
             "fs.py",

@@ -79,7 +79,7 @@ def _write_command_stdlib(root: Path, config: str) -> Path:
         'builtin var default-agent: Agent = AgentCommand("echo")\n' + config,
         encoding="utf-8",
     )
-    for name in ("core.agl", "option.agl"):
+    for name in ("core.agl", "option.agl", "pair.agl", "either.agl", "result.agl"):
         (config_path.parent / name).write_text(
             (_STDLIB / "std" / name).read_text(encoding="utf-8"), encoding="utf-8"
         )

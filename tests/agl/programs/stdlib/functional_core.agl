@@ -1,0 +1,111 @@
+# The core prelude re-exports the functional types and their methods. These
+# scenarios compose the combinators with the APIs, including both branches of
+# Either, Result, and the exception bridge.
+param mode: int
+
+def increment(value: int) -> int = value + 1
+def double(value: int) -> int = value * 2
+def append_mark(value: text) -> text = value + "!"
+def recover(_: text) -> Result[int, text] = Result::Ok(value = 7)
+def succeed() -> int = 9
+def fail() -> int = raise Abort(message = "failed")
+
+def project_result(result: Result[int, text]) -> int = result.with-default(0)
+
+program def main() -> unit =
+  case mode of
+    | 2 =>
+        let none: Option[int] = Option::None
+        let _ = none.unwrap()
+        ()
+    | 3 =>
+        let failure: Result[int, text] = Result::Err(error = "missing")
+        let _ = failure.unwrap()
+        ()
+    | _ =>
+        let pair = Pair(first = 2, second = "x")
+        print(2 |> increment |> double)
+        print(increment <| double <| 2)
+        print((increment >> double >> increment)(2))
+        print((increment << double << increment)(2))
+        print((increment >> double)(2))
+        print((increment << double)(2))
+        print(increment <| 2 |> double)
+        print(pair.map-first(double).map-second(append_mark))
+        print(pair.map-second(append_mark).map-first(double).swap())
+
+        let left: Either[int, text] = Either::Left(value = 2)
+        let right: Either[int, text] = Either::Right(value = "ok")
+        print(
+          left
+          |> (fn(value: Either[int, text]) =>
+            value.map-left(double).map-right(append_mark).left?()
+          )
+        )
+        print(
+          right
+          |> (fn(value: Either[int, text]) =>
+            value.map-left(double).map-right(append_mark).right?()
+          )
+        )
+        print(left.is-left())
+        print(right.is-left())
+        print(left.is-right())
+        print(right.is-right())
+        print(left.right?())
+        print(right.left?())
+        print(left.swap())
+        print(right.swap())
+
+        let option = Option::Some(value = 2)
+        let none: Option[int] = Option::None
+        print(
+          option
+          |> (fn(value: Option[int]) => value.map(increment >> double))
+          |> (fn(value: Option[int]) => value.to-result(error = "missing"))
+          |> (fn(value: Result[int, text]) =>
+            value.and-then(fn(item: int) => Result::Ok(value = item + 1))
+          )
+          |> project_result
+        )
+        print(none.to-result(error = "missing").err?())
+
+        let result: Result[int, text] = Result::Ok(value = 2)
+        let lost: Result[int, text] = Result::Err(error = "lost")
+        print(
+          result
+          |> (fn(value: Result[int, text]) => value.map(double))
+          |> (fn(value: Result[int, text]) => value.map-err(append_mark))
+          |> (fn(value: Result[int, text]) =>
+            value.and-then(fn(item: int) => Result::Ok(value = item + 1))
+          )
+          |> (fn(value: Result[int, text]) => value.or-else(recover))
+          |> (fn(value: Result[int, text]) => value.unwrap())
+        )
+        print(result.with-default(0))
+        print(result.is-ok())
+        print(result.is-err())
+        print(result.ok?())
+        print(result.err?())
+        print(
+          lost
+          |> (fn(value: Result[int, text]) => value.map(double))
+          |> (fn(value: Result[int, text]) => value.map-err(fn(_: text) => 4))
+          |> (fn(value: Result[int, int]) =>
+            value.and-then(fn(item: int) => Result::Ok(value = item + 1))
+          )
+          |> (fn(value: Result[int, int]) =>
+            value.or-else(fn(_: int) => Result::Ok(value = 7))
+          )
+          |> (fn(value: Result[int, int]) => value.with-default(0))
+        )
+        print(lost.with-default(0))
+        print(lost.is-ok())
+        print(lost.is-err())
+        print(lost.ok?())
+        print(lost.err?())
+        print(project_result <| Result::Ok(value = 8))
+
+        print(attempt(succeed).map(increment).ok?())
+        print(attempt(fail).err?().map(fn(error: Exception) => error.message))
+        print(attempt(fail).or-else(fn(_: Exception) => Result::Ok(value = 8)).unwrap())

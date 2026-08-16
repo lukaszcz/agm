@@ -1,3 +1,5 @@
+import std/result using Result
+
 builtin
 enum Option[T] =
   | None
@@ -46,3 +48,8 @@ def Option::each[T](self, f: (T) -> unit) -> unit =
   case self of
     | Option::None => ()
     | Option::Some(value) => f(value)
+
+def Option::to-result[T, E](self, error: E) -> Result[T, E] =
+  case self of
+    | Option::None => Result::Err(error = error)
+    | Option::Some(value) => Result::Ok(value = value)

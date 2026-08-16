@@ -498,42 +498,53 @@ def test_qualified_std_core_print_still_works(capsys: pytest.CaptureFixture[str]
 
 
 def _scoped_stdlib_root(tmp_path: Path) -> Path:
-    """Build a throwaway module root with ``std/core.agl`` wrapped in ``scope Std``.
+    """Build a throwaway module root with the real ``std/core`` scoped.
 
-    Never the installed/repo stdlib root — the standard ``module_roots``
-    scenario mechanism always adds ``REPO_STDLIB_ROOT`` too, which would
-    collide with this substitute ``std/core``, so callers build their own
-    ``RootSet`` from the returned root instead.
+    The real expanded core and its functional dependencies are copied, while
+    ``std/config`` is replaced by its default agent because its canonical
+    setting must remain unscoped. Its infix declarations stay at module root
+    because scope regions cannot contain them. This keeps host-boundary
+    coverage representative as the prelude grows.
     """
+    scoped_stdlib_root = tmp_path / "scoped_stdlib"
+    std_dir = scoped_stdlib_root / "std"
+    std_dir.mkdir(parents=True)
     core_source = (
         (REPO_STDLIB_ROOT / "std" / "core.agl")
         .read_text(encoding="utf-8")
         .replace("import std/config\n", "")
         .replace("std/config::default-agent", 'AgentClaude("sonnet", "medium")')
     )
-    scoped_stdlib_root = tmp_path / "scoped_stdlib"
-    std_dir = scoped_stdlib_root / "std"
-    std_dir.mkdir(parents=True)
-    (std_dir / "core.agl").write_text(f"scope Std\n{core_source}end Std\n", encoding="utf-8")
-    (std_dir / "option.agl").write_bytes((REPO_STDLIB_ROOT / "std" / "option.agl").read_bytes())
+    infix_declarations = "".join(
+        line for line in core_source.splitlines(keepends=True) if line.startswith("infix")
+    )
+    scoped_core_source = "".join(
+        line for line in core_source.splitlines(keepends=True) if not line.startswith("infix")
+    )
+    (std_dir / "core.agl").write_text(
+        f"{infix_declarations}\nscope Std\n{scoped_core_source}end Std\n", encoding="utf-8"
+    )
+    for name in ("option.agl", "pair.agl", "either.agl", "result.agl"):
+        source = (REPO_STDLIB_ROOT / "std" / name).read_text(encoding="utf-8")
+        if name == "result.agl":
+            source = source.replace(
+                "def attempt[T](f: () -> T) -> Result[T, Exception] =\n"
+                "  try Result::Ok(value = f()) catch Exception as e => Result::Err(error = e)\n",
+                "def attempt[T](f: () -> T) -> Result[T, Exception] = Result::Ok(value = f())\n",
+            )
+        (std_dir / name).write_text(source, encoding="utf-8")
     return scoped_stdlib_root
 
 
 def test_scoped_stdlib_arrangement_runs_end_to_end(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A whole stdlib module wrapped in a named scope region works end to end.
+    """A whole scoped ``std/core`` module works end to end.
 
-    Wraps the real ``stdlib/std/core.agl`` verbatim in a ``scope Std ... end
-    Std`` region under a throwaway module root (never the installed/repo
-    stdlib — the standard ``module_roots`` scenario mechanism always adds
-    ``REPO_STDLIB_ROOT`` too, which would collide with this substitute
-    ``std/core``, so this test builds its own ``RootSet`` instead), then runs
-    a program against it through parsing, scope resolution, typechecking,
-    lowering, and evaluation. Exercises a scoped ``builtin def`` (``exec``)
-    dispatching to a scoped ``builtin record`` (``ExecResult``) at a real host
-    boundary, and a fully scoped exception hierarchy (``Exception``/
-    ``RangeError`` both declared inside the region) raised and left uncaught.
+    This runs the real expanded prelude through parsing, scope resolution,
+    typechecking, lowering, and evaluation. It exercises scoped ``exec``
+    dispatching to scoped ``ExecResult`` at a real host boundary, plus a scoped
+    ``Exception`` / ``RangeError`` hierarchy raised and left uncaught.
     """
     from agm.agl import PipelineDriver
     from agm.agl.modules.roots import RootSet
@@ -634,14 +645,12 @@ def test_scoped_stdlib_arrangement_uncaught_host_raised_exec_error_reports_scope
 def test_scoped_stdlib_arrangement_bare_print_is_undefined_but_qualified_works(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """With the whole standard library wrapped in ``scope Std``, a bare
-    ``print`` call has no reachable declaration — only ``Std::print`` does.
+    """With the real core wrapped in ``scope Std``, only ``Std::print`` works.
 
     A built-in call is classified only once its callee resolves to a
-    ``builtin def`` declaration, the same as any other reference; wrapping
-    the whole standard library in a named region takes the bare route away
-    from every name it declares, ``print`` included, leaving only the
-    region's own qualified path."""
+    ``builtin def`` declaration, the same as any other reference. The named
+    region takes the bare route away from ``print``, leaving its qualified
+    path."""
     from agm.agl import PipelineDriver
     from agm.agl.modules.roots import RootSet
 
@@ -679,8 +688,8 @@ def test_scoped_builtin_hierarchy_declared_in_the_entry_module_catches_a_host_ra
     catch already uses. This program declares the whole exec/exception
     surface itself and loads without the standard library (``default_stdlib
     =False``), so its own ``scope Host`` module lowers normally (unlike the
-    real ``std/core`` module, which is excluded from per-module function
-    lowering). A failed (``text``-typed, non-structured) ``exec`` call
+    real ``std/core`` module, whose pure declarations are linked with the
+    prelude). A failed (``text``-typed, non-structured) ``exec`` call
     raises ``ExecError`` at the host boundary; before per-path identity was
     restored the host would have minted a path-free nominal while the type
     kept its declared path, so this bare ``catch`` could never match. Now

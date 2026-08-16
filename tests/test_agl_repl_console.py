@@ -762,7 +762,10 @@ class TestMetaThroughLoop:
         assert session.bindings() == []
 
     def test_type_meta_reports_type(self) -> None:
-        output = drive("1 + 2\r:type 1 + 2\r\x04")
+        # This command needs no prelude declarations. Avoid compiling the full
+        # standard library twice, which makes the headless-loop hang guard
+        # spuriously fire when the suite runs in parallel.
+        output = drive("1 + 2\r:type 1 + 2\r\x04", session=ReplSession(default_stdlib=False))
         assert "int" in output
 
     def test_agent_meta_mutates_shared_mode(self) -> None:

@@ -1582,11 +1582,11 @@ def test_nested_witness_selects_alias_for_each_concrete_instantiation(
                 ")\n"
             ),
             "entry": (
-                "import library/remote using IntRemote, TextRemote, Pair, make\n"
+                "import library/remote using IntRemote, TextRemote, Pair as RemotePair, make\n"
                 "let value = make()\n"
                 "case value of\n"
-                "  | Pair::pair(left = IntRemote::empty, right = _) => 0\n"
-                "  | Pair::pair(left = _, right = TextRemote::empty) => 1\n"
+                "  | RemotePair::pair(left = IntRemote::empty, right = _) => 0\n"
+                "  | RemotePair::pair(left = _, right = TextRemote::empty) => 1\n"
             ),
         },
     )

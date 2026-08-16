@@ -299,7 +299,7 @@ See [Functions](functions.md) for the declaration and call syntax.
 ## Standard library types
 
 The automatic `std/core` prelude exposes the core types and re-exports
-`std/option`.
+`std/option`, `std/pair`, `std/either`, and `std/result`.
 
 ### `Option[T]`
 
@@ -316,12 +316,54 @@ Use `Option[T]` when a value may be absent. `Option` is available through the
 prelude, directly from `std/option`, or through `import std/core using Option`.
 
 Its methods are `map`, `and-then`, `filter`, `or-else`, `with-default`,
-`unwrap`, `is-some`, `is-none`, and `each`. `map` transforms a present value;
-`and-then` chains an operation that returns an `Option`; `filter` retains a
-present value only when its predicate succeeds; and `or-else` supplies an
-alternative. `with-default` returns the contained value or its argument,
-while `unwrap` returns the contained value or raises `UnwrapError`. `each`
-invokes its callback only for `Some`.
+`unwrap`, `is-some`, `is-none`, `each`, and `to-result`. `map` transforms a
+present value; `and-then` chains an operation that returns an `Option`;
+`filter` retains a present value only when its predicate succeeds; and
+`or-else` supplies an alternative. `with-default` returns the contained value
+or its argument, while `unwrap` returns the contained value or raises
+`UnwrapError`. `each` invokes its callback only for `Some`. `to-result(error)`
+converts `Some(value)` to `Ok(value)` and `None` to `Err(error)`.
+
+### `Pair[A, B]`
+
+`std/pair` defines a two-field record:
+
+```text
+record Pair[A, B](first: A, second: B)
+```
+
+`map-first` and `map-second` transform one component while preserving the
+other; `swap` returns `Pair[B, A]` with the components reversed.
+
+### `Either[A, B]`
+
+`std/either` defines a neutral two-branch sum:
+
+```text
+enum Either[A, B]
+  | Left(value: A)
+  | Right(value: B)
+```
+
+It has no error convention. `map-left` and `map-right` transform their
+respective branches; `is-left` and `is-right` test the branch; `left?` and
+`right?` project a branch as an `Option`; and `swap` exchanges the branches.
+
+### `Result[T, E]`
+
+`std/result` represents an explicit successful or fallible outcome:
+
+```text
+enum Result[T, E]
+  | Ok(value: T)
+  | Err(error: E)
+```
+
+`map`, `map-err`, `and-then`, and `or-else` transform or chain outcomes.
+`with-default` returns the success value or a fallback; `unwrap` returns it or
+raises `UnwrapError`; `is-ok`/`is-err` test the branch; and `ok?`/`err?`
+project it as an `Option`. `attempt(f)` calls a nullary function and returns
+`Ok` on success or `Err` containing its raised `Exception`.
 
 ### `ExecResult`
 

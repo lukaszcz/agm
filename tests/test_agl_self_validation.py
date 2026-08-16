@@ -155,7 +155,9 @@ def test_repl_entry_lowering_does_not_validate_ir_when_disabled(
 ) -> None:
     """Production REPL lowering trusts its own output: structural IR validation is test-only."""
     entry = lower_repl_program(
-        _compiled_inline_program(_SOURCE), image=_broken_image(), source_text=_SOURCE
+        _compiled_inline_program(_SOURCE, default_stdlib=False),
+        image=_broken_image(),
+        source_text=_SOURCE,
     )
 
     # Returned rather than rejected, even though the IR is structurally invalid.
@@ -168,7 +170,9 @@ def test_repl_entry_lowering_validates_ir_when_enabled() -> None:
     """With the flag on (the suite default), every REPL lowering is an IR invariant oracle."""
     with pytest.raises(InvalidIrError):
         lower_repl_program(
-            _compiled_inline_program(_SOURCE), image=_broken_image(), source_text=_SOURCE
+            _compiled_inline_program(_SOURCE, default_stdlib=False),
+            image=_broken_image(),
+            source_text=_SOURCE,
         )
 
 
@@ -201,7 +205,9 @@ def test_lowering_does_not_validate_ir_when_disabled(
     self_validation_disabled: None,
 ) -> None:
     """Production lowering trusts its own output: structural IR validation is test-only."""
-    program = lower_program(_compiled_inline_program(_SOURCE), _link=_broken_link())
+    program = lower_program(
+        _compiled_inline_program(_SOURCE, default_stdlib=False), _link=_broken_link()
+    )
 
     # Returned rather than rejected, even though the IR is structurally invalid.
     assert program.symbols == {}
@@ -212,7 +218,7 @@ def test_lowering_does_not_validate_ir_when_disabled(
 def test_lowering_validates_ir_when_enabled() -> None:
     """With the flag on (the suite default), every lowering is an IR invariant oracle."""
     with pytest.raises(InvalidIrError):
-        lower_program(_compiled_inline_program(_SOURCE), _link=_broken_link())
+        lower_program(_compiled_inline_program(_SOURCE, default_stdlib=False), _link=_broken_link())
 
 
 # ---------------------------------------------------------------------------

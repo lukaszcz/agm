@@ -1,0 +1,55 @@
+import std/option using Option, UnwrapError
+
+enum Result[T, E] =
+  | Ok(value: T)
+  | Err(error: E)
+
+def Result::map[T, E, U](self, f: (T) -> U) -> Result[U, E] =
+  case self of
+    | Result::Ok(value) => Result::Ok(value = f(value))
+    | Result::Err(error) => Result::Err(error = error)
+
+def Result::map-err[T, E, F](self, f: (E) -> F) -> Result[T, F] =
+  case self of
+    | Result::Ok(value) => Result::Ok(value = value)
+    | Result::Err(error) => Result::Err(error = f(error))
+
+def Result::and-then[T, E, U](self, f: (T) -> Result[U, E]) -> Result[U, E] =
+  case self of
+    | Result::Ok(value) => f(value)
+    | Result::Err(error) => Result::Err(error = error)
+
+def Result::or-else[T, E](self, f: (E) -> Result[T, E]) -> Result[T, E] =
+  case self of
+    | Result::Ok(_) => self
+    | Result::Err(error) => f(error)
+
+def Result::with-default[T, E](self, x: T) -> T =
+  case self of
+    | Result::Ok(value) => value
+    | Result::Err(_) => x
+
+def Result::unwrap[T, E](self) -> T =
+  case self of
+    | Result::Ok(value) => value
+    | Result::Err(_) => raise UnwrapError(message = "Result has no value")
+
+def Result::is-ok[T, E](self) -> bool =
+  case self of
+    | Result::Ok(_) => true
+    | Result::Err(_) => false
+
+def Result::is-err[T, E](self) -> bool = not self.is-ok()
+
+def Result::ok?[T, E](self) -> Option[T] =
+  case self of
+    | Result::Ok(value) => Option::Some(value = value)
+    | Result::Err(_) => Option::None
+
+def Result::err?[T, E](self) -> Option[E] =
+  case self of
+    | Result::Ok(_) => Option::None
+    | Result::Err(error) => Option::Some(value = error)
+
+def attempt[T](f: () -> T) -> Result[T, Exception] =
+  try Result::Ok(value = f()) catch Exception as e => Result::Err(error = e)

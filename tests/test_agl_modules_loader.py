@@ -166,7 +166,7 @@ class TestGraphBuild:
         root = tmp_path / "r"
         root.mkdir()
         graph = load_graph("let x = 1", entry_path=None, roots=_roots(root))
-        assert len(graph.modules) == 4
+        assert len(graph.modules) == 7
         assert ENTRY_ID in graph.modules
         assert STD_CORE_ID in graph.modules
         assert STD_OPTION_ID in graph.modules
@@ -514,8 +514,8 @@ class TestCycles:
         graph = load_graph("import a", entry_path=None, roots=_roots(root))
         assert ModuleId.from_path("a") in graph.modules
         assert ModuleId.from_path("b") in graph.modules
-        # std/core, std/option, std/config, entry, a, and b.
-        assert len(graph.modules) == 6
+        # std/core, std/option, std/pair, std/either, std/result, std/config, entry, a, and b.
+        assert len(graph.modules) == 9
 
     def test_longer_cycle_terminates(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
@@ -524,7 +524,9 @@ class TestCycles:
         _write_module(root, "y", "import z")
         _write_module(root, "z", "import x")
         graph = load_graph("import x", entry_path=None, roots=_roots(root))
-        assert len(graph.modules) == 7  # std/core, std/option, std/config, entry, x, y, and z
+        assert (
+            len(graph.modules) == 10
+        )  # std/core, functional modules, std/config, entry, x, y, and z
 
     def test_cycle_nodes_linked_in_sccs(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
@@ -1103,6 +1105,9 @@ class TestBuildReplGraph:
         assert new_modules == {
             STD_CORE_ID: graph.modules[STD_CORE_ID],
             STD_OPTION_ID: graph.modules[STD_OPTION_ID],
+            ModuleId.from_path("std/pair"): graph.modules[ModuleId.from_path("std/pair")],
+            ModuleId.from_path("std/either"): graph.modules[ModuleId.from_path("std/either")],
+            ModuleId.from_path("std/result"): graph.modules[ModuleId.from_path("std/result")],
             ModuleId.from_path("std/config"): graph.modules[ModuleId.from_path("std/config")],
         }
 

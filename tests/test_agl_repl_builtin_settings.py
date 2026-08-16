@@ -33,7 +33,7 @@ _STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 
 def _copy_core_and_option(directory: Path) -> None:
     """Copy the standard-library modules required by a custom ``std/config``."""
-    for name in ("core.agl", "option.agl"):
+    for name in ("core.agl", "option.agl", "pair.agl", "either.agl", "result.agl"):
         (directory / name).write_text(
             (_STDLIB_ROOT / "std" / name).read_text(encoding="utf-8"), encoding="utf-8"
         )

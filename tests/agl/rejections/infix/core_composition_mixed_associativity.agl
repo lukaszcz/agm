@@ -1,0 +1,6 @@
+# The core prelude exposes both composition directions at the same priority.
+def increment(value: int) -> int = value + 1
+def double(value: int) -> int = value * 2
+
+program def main() -> unit =
+  print((increment >> double << increment)(2))

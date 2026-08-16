@@ -1219,8 +1219,17 @@ class _Resolver:
                 # classification, but an ordinary session binding retains its
                 # expression-position meaning.
                 continue
-            # Use the first candidate's decl as the representative binding.
-            rep = crefs[0]
+            # A local root constructor shadows an imported candidate with the
+            # same bare spelling. Otherwise retain the stable first imported
+            # candidate as the representative for clash-on-use diagnostics.
+            rep = next(
+                (
+                    candidate
+                    for candidate in crefs
+                    if candidate.owner_module_id == self._module_id and not candidate.owner_path
+                ),
+                crefs[0],
+            )
             ref = BindingRef(
                 name=name,
                 mutable=False,
@@ -2266,7 +2275,9 @@ class _Resolver:
             ref = None
         regional_candidates = self._regional_constructor_candidates(node.name)
         if ref is None or (
-            ref.kind is BinderKind.constructor_binding and regional_candidates is not None
+            ref.kind is BinderKind.constructor_binding
+            and ref.module_id != self._module_id
+            and regional_candidates is not None
         ):
             contributed = self._lookup_bare_contribution(node.name, node.span)
             if contributed is not None:
@@ -2355,8 +2366,14 @@ class _Resolver:
         A member of a named scope is selected by that scope's structured
         identity; only a module-root binding uses the root-only candidate map.
         """
-        if ref.scope_path and ref.module_id == self._module_id:
-            return tuple(self._scoped_constructor_candidates.get((ref.scope_path, name), ()))
+        if ref.module_id == self._module_id:
+            if ref.scope_path:
+                return tuple(self._scoped_constructor_candidates.get((ref.scope_path, name), ()))
+            return tuple(
+                candidate
+                for candidate in self._constructor_candidates.get(name, ())
+                if candidate.owner_module_id == self._module_id and not candidate.owner_path
+            )
         return tuple(self._constructor_candidates.get(name, ()))
 
     def _validate_qualifier_chains(self, program: object) -> None:

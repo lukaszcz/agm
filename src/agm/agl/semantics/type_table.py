@@ -63,6 +63,7 @@ from agm.agl.ir.reserved_nominals import require_reserved_nominal_id as _reserve
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.types import (
+    HOST_MINTED_PRELUDE_TYPE_IDS,
     ArrayType,
     BoolType,
     BottomType,
@@ -1295,6 +1296,8 @@ def is_json_convertible(t: Type, table: TypeTable) -> bool:
             return is_json_convertible(t.elem, table)
         case DictType():
             return is_json_convertible(t.value, table)
+        case RecordType() if t.decl_id in HOST_MINTED_PRELUDE_TYPE_IDS:
+            return False
         case ExceptionType():
             return table.nominal_is_json_convertible(t)
         case RecordType() | EnumType():
@@ -1399,7 +1402,8 @@ def cast_classification(source: Type, target: Type, table: TypeTable) -> CastKin
 #
 # These ``TypeDef`` literals are the canonical shapes for AgL's built-in
 # prelude types (``ExecResult``, ``ParsePolicy``, ``Agent``, ``OutputContract``,
-# ``OutputContractOption``, ``AgentRequest``) and the generic ``Option``
+# ``OutputContractOption``, ``AgentRequest``, ``SessionTransport``, ``Session``,
+# ``SessionStats``, ``SessionError``) and the generic ``Option``
 # template.  ``create_seeded_type_table``, the scope resolver's builtin
 # constructor-candidate seeding, ``TypeEnvironment`` init seeding, and builtin
 # shape validation in the type builder all read these same literals — there
@@ -1538,6 +1542,48 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
             ),
             ("metadata", JsonType()),
         ),
+    ),
+    "SessionTransport": TypeDef(
+        kind="enum",
+        name="SessionTransport",
+        module_id=STD_CORE_ID,
+        variants=(("Cli", ()), ("Rpc", ())),
+    ),
+    "Session": TypeDef(
+        kind="record",
+        name="Session",
+        module_id=STD_CORE_ID,
+        fields=(
+            ("id", TextType()),
+            ("agent", EnumType(name="Agent", module_id=STD_CORE_ID, decl_id=_reserved_id("Agent"))),
+            (
+                "transport",
+                EnumType(
+                    name="SessionTransport",
+                    module_id=STD_CORE_ID,
+                    decl_id=_reserved_id("SessionTransport"),
+                ),
+            ),
+        ),
+    ),
+    "SessionStats": TypeDef(
+        kind="record",
+        name="SessionStats",
+        module_id=STD_CORE_ID,
+        fields=(
+            ("input-tokens", IntType()),
+            ("output-tokens", IntType()),
+            ("cost", DecimalType()),
+            ("context-percent", DecimalType()),
+        ),
+    ),
+    "SessionError": TypeDef(
+        kind="exception",
+        name="SessionError",
+        module_id=STD_CORE_ID,
+        fields=(("operation", TextType()),),
+        base=_reserved_id("Exception"),
+        field_kinds=("standard",),
     ),
 }
 

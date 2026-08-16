@@ -14,6 +14,7 @@ from typing import Literal, Protocol
 
 from agm.agl.scope.symbols import BindingRef, ConstructorRef, ModuleResolution, ScopePath
 from agm.agl.semantics.types import (
+    HOST_MINTED_PRELUDE_TYPE_IDS,
     EnumType,
     ExceptionType,
     FunctionType,
@@ -626,6 +627,7 @@ class ConstructorChecker:
         first-class value.
         """
         owner = self._ctx._zonk_constructor_owner(owner)
+        self._reject_host_minted_record_constructor(owner, span)
         if isinstance(owner, ExceptionType):
             raise AglTypeError(
                 "Exception constructors cannot be used as a first-class value; "
@@ -821,6 +823,7 @@ class ConstructorChecker:
                 f"'{callee_ref.name}' is an enum type, not a record constructor.",
                 span=node.span,
             )
+        self._reject_host_minted_record_constructor(owner_type, node.span)
         self._reject_abstract_exception_constructor(owner_type, node.span)
         return self._check_constructor_call(
             owner=owner_type,
@@ -867,6 +870,7 @@ class ConstructorChecker:
                 span=node.span,
             )
         owner = self.resolve_constructor_owner(ctor_ref, node.span)
+        self._reject_host_minted_record_constructor(owner, node.span)
         self._reject_abstract_exception_constructor(owner, node.span)
         return self._check_constructor_call(
             owner=owner,
@@ -879,6 +883,17 @@ class ConstructorChecker:
         )
 
     # --- Constructor call validation (private helper) ---
+
+    @staticmethod
+    def _reject_host_minted_record_constructor(
+        owner: RecordType | EnumType | ExceptionType, span: SourceSpan
+    ) -> None:
+        if isinstance(owner, RecordType) and owner.decl_id in HOST_MINTED_PRELUDE_TYPE_IDS:
+            raise AglTypeError(
+                f"'{owner.name}' values are created by the host and cannot be "
+                "constructed in source.",
+                span=span,
+            )
 
     def _reject_abstract_exception_constructor(
         self, owner: RecordType | EnumType | ExceptionType, span: SourceSpan

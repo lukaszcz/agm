@@ -1739,6 +1739,11 @@ class TestBuiltinSeeding:
             if isinstance(typ, RecordType):
                 handle = RecordType(name=name, module_id=STD_CORE_ID, decl_id=typedef.decl_node_id)
                 assert dict(table.record_fields(handle)) == dict(expected.fields)
+            elif isinstance(typ, ExceptionType):
+                handle = ExceptionType(
+                    name=name, module_id=STD_CORE_ID, decl_id=typedef.decl_node_id
+                )
+                assert table.exception_def(handle) == expected
             else:
                 handle = EnumType(name=name, module_id=STD_CORE_ID, decl_id=typedef.decl_node_id)
                 result = table.enum_variants(handle)

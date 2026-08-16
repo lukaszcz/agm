@@ -12056,6 +12056,56 @@ def test_agent_is_an_ordinary_declaration_name(source: str) -> None:
     assert checked.resolved.program is not None
 
 
+class TestSessionPreludeTypes:
+    def test_session_prelude_types_are_visible_with_their_declared_members(self) -> None:
+        checked = accept_type(
+            "def transport_name(transport: SessionTransport) -> text =\n"
+            "  case transport of\n"
+            '    | Cli => "cli"\n'
+            '    | Rpc => "rpc"\n'
+            "def session_cost(stats: SessionStats) -> decimal = stats.cost\n"
+            "def session_error_details() -> text =\n"
+            "  try\n"
+            '    "no error"\n'
+            "  catch SessionError as error =>\n"
+            '    "%{error.message}: %{error.operation}"\n'
+            "session_cost(SessionStats(input-tokens = 1, output-tokens = 2, cost = 3.0, "
+            "context-percent = 4.0))"
+        )
+        assert checked.resolved.program is not None
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            'ask::[Session]("Q")',
+            "param session: Session\nsession",
+            "def encode(session: Session) -> json = session as json\n()",
+        ),
+    )
+    def test_session_is_rejected_at_json_schema_boundaries(self, source: str) -> None:
+        err = reject_type(source)
+        assert "session" in str(err).lower()
+        assert "json" in str(err).lower()
+
+    def test_session_transport_and_stats_remain_json_serializable(self) -> None:
+        checked = accept_type(
+            "param transport: SessionTransport\n"
+            "param stats: SessionStats\n"
+            "let transport_json: json = Cli as json\n"
+            "let stats_json: json = SessionStats(input-tokens = 1, output-tokens = 2, "
+            "cost = 3.0, context-percent = 4.0) as json\n"
+            "stats_json"
+        )
+        assert checked.resolved.program is not None
+
+    def test_session_cannot_be_constructed_by_user_code(self) -> None:
+        with pytest.raises((AglScopeError, AglTypeError)) as exc_info:
+            parse_resolve_check(
+                'Session(id = "session", agent = AgentCommand(command = "agent"), transport = Cli)'
+            )
+        assert "session" in str(exc_info.value).lower()
+
+
 def test_agent_enum_is_a_json_serializable_param_type() -> None:
     """Agent values are ordinary enum data at the JSON parameter boundary."""
     checked = accept_type("param selected: Agent\nselected")

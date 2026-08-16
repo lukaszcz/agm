@@ -206,8 +206,11 @@ def test_std_core_declares_every_public_builtin() -> None:
     # ``BUILTIN_PRELUDE_TYPES`` (see ``create_seeded_type_table``), so it is
     # declared ``builtin`` in ``std/core`` without appearing in that table.
     public_prelude = set(BUILTIN_PRELUDE_TYPES) - set(COMPATIBILITY_PRELUDE_TYPE_NAMES) | {"Option"}
-    assert records | enums == public_prelude
-    assert exceptions == set(BUILTIN_EXCEPTIONS)
+    session_nominals = {"SessionTransport", "Session", "SessionStats", "SessionError"}
+    assert session_nominals <= records | enums | exceptions
+    assert session_nominals <= set(BUILTIN_PRELUDE_TYPES)
+    assert records | enums | exceptions == public_prelude | set(BUILTIN_EXCEPTIONS)
+    assert exceptions == set(BUILTIN_EXCEPTIONS) | {"SessionError"}
     assert functions == set(BUILTIN_CALL_NAMES)
 
 

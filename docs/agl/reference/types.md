@@ -373,6 +373,48 @@ record AgentRequest
 `previous_error` is `None` because it constructs only the first-attempt
 request.
 
+### `SessionTransport`
+
+A plain enum that identifies the host transport for a session:
+
+```text
+enum SessionTransport
+  | Cli
+  | Rpc
+```
+
+### `Session`
+
+`Session` identifies a host-created agent conversation:
+
+```text
+record Session
+  id:        text
+  agent:     Agent
+  transport: SessionTransport
+```
+
+It is not source-constructible and has no JSON wire representation, so it
+cannot be used as an agent output type, a parameter type, or the source of an
+`as json` cast.
+
+### `SessionStats`
+
+A plain data record for session counters:
+
+```text
+record SessionStats
+  input-tokens:    int
+  output-tokens:   int
+  cost:            decimal
+  context-percent: decimal
+```
+
+### `SessionError`
+
+`SessionError` is an exception with the standard `message: text` field and an
+`operation: text` field describing the failed session operation.
+
 ## Members of nominal types
 
 A method is a member of a record, enum, or exception's nominal type. It is

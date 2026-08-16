@@ -298,6 +298,17 @@ def _add_builtin_nominals(
                 variants=(),
             )
             continue
+        if isinstance(typ, ExceptionType):
+            nominals[nominal] = NominalDescriptor(
+                nominal=nominal,
+                module_id=STD_CORE_ID,
+                scope_path=(),
+                declared_name=name,
+                kind=NominalKind.EXCEPTION,
+                fields=tuple(type_table.exception_fields(typ).keys()),
+                variants=(),
+            )
+            continue
         enum_type = cast(EnumType, typ)
         nominals[nominal] = NominalDescriptor(
             nominal=nominal,

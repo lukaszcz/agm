@@ -25,6 +25,22 @@ enum Agent
   | AgentPi(provider: text, model: text, thinking: text)
 
 builtin
+enum SessionTransport
+  | Cli
+  | Rpc
+
+builtin record Session(id: text, agent: Agent, transport: SessionTransport)
+
+builtin record SessionStats(
+  input-tokens: int,
+  output-tokens: int,
+  cost: decimal,
+  context-percent: decimal,
+)
+
+builtin exception SessionError extends Exception(operation: text)
+
+builtin
 record AgentRequest
   agent: Agent
   prompt: text

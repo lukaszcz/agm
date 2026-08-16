@@ -25,6 +25,7 @@ from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPE_NAMES,
     BUILTIN_PRELUDE_TYPES,
     EnumType,
+    ExceptionType,
     RecordType,
     Type,
 )
@@ -32,7 +33,7 @@ from agm.agl.semantics.types import (
 
 def _decl_id(t: Type) -> int:
     """Return *t*'s ``decl_id``, asserting it is a nominal handle that has one."""
-    assert isinstance(t, (RecordType, EnumType))
+    assert isinstance(t, (RecordType, EnumType, ExceptionType))
     return t.decl_id
 
 
@@ -60,6 +61,16 @@ class TestReservedNominalCatalog:
 
     def test_reserved_nominal_id_returns_none_for_an_unreserved_name(self) -> None:
         assert reserved_nominal_id("NotARealType") is None
+
+
+class TestSessionNominalWiring:
+    def test_session_nominals_are_wired_through_every_prelude_catalog(self) -> None:
+        for name in ("SessionTransport", "Session", "SessionStats", "SessionError"):
+            assert name in BUILTIN_PRELUDE_TYPE_NAMES
+            assert name in BUILTIN_PRELUDE_TYPES
+            assert name in BUILTIN_PRELUDE_TYPE_DEFS
+            assert name in RESERVED_NOMINAL_NAMES
+            assert reserved_nominal_id(name) is not None
 
 
 class TestBuiltinHandlesCarryReservedIds:

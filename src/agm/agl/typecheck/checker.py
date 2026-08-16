@@ -80,6 +80,7 @@ from agm.agl.semantics.type_table import (
 )
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
+    HOST_MINTED_PRELUDE_TYPE_IDS,
     ArrayType,
     BoolType,
     BottomType,
@@ -1168,6 +1169,8 @@ class _Checker:
         if isinstance(schema_type, DictType):
             return self._wire_type_is_serializable(schema_type.value, seen=seen)
         if isinstance(schema_type, RecordType):
+            if schema_type.decl_id in HOST_MINTED_PRELUDE_TYPE_IDS:
+                return False
             if schema_type in seen:
                 return True
             next_seen = seen | {schema_type}

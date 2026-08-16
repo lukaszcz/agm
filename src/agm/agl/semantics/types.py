@@ -1028,6 +1028,26 @@ _AGENT_REQUEST_TYPE = RecordType(
     name="AgentRequest", module_id=STD_CORE_ID, decl_id=_reserved_id("AgentRequest")
 )
 
+_SESSION_TRANSPORT_TYPE = EnumType(
+    name="SessionTransport", module_id=STD_CORE_ID, decl_id=_reserved_id("SessionTransport")
+)
+
+_SESSION_TYPE = RecordType(name="Session", module_id=STD_CORE_ID, decl_id=_reserved_id("Session"))
+
+_SESSION_STATS_TYPE = RecordType(
+    name="SessionStats", module_id=STD_CORE_ID, decl_id=_reserved_id("SessionStats")
+)
+
+_SESSION_ERROR_TYPE = ExceptionType(
+    name="SessionError", module_id=STD_CORE_ID, decl_id=_reserved_id("SessionError")
+)
+
+# These records represent host resources rather than source-constructible data.
+HOST_MINTED_PRELUDE_TYPE_NAMES: frozenset[str] = frozenset({"Session"})
+HOST_MINTED_PRELUDE_TYPE_IDS: frozenset[int] = frozenset(
+    _reserved_id(name) for name in HOST_MINTED_PRELUDE_TYPE_NAMES
+)
+
 BUILTIN_PRELUDE_TYPES: dict[str, Type] = {
     "ExecResult": _EXEC_RESULT_TYPE,
     "ParsePolicy": _PARSE_POLICY_TYPE,
@@ -1035,6 +1055,10 @@ BUILTIN_PRELUDE_TYPES: dict[str, Type] = {
     "OutputContract": _OUTPUT_CONTRACT_TYPE,
     "OutputContractOption": _OUTPUT_CONTRACT_OPTION_TYPE,
     "AgentRequest": _AGENT_REQUEST_TYPE,
+    "SessionTransport": _SESSION_TRANSPORT_TYPE,
+    "Session": _SESSION_TYPE,
+    "SessionStats": _SESSION_STATS_TYPE,
+    "SessionError": _SESSION_ERROR_TYPE,
 }
 
 # Names of built-in prelude types (non-shadowable, like built-in exceptions).

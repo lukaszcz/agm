@@ -83,6 +83,10 @@ RESERVED_NOMINAL_NAMES: tuple[str, ...] = (
     "OutputContract",
     "OutputContractOption",
     "AgentRequest",
+    "SessionTransport",
+    "Session",
+    "SessionStats",
+    "SessionError",
     # Host-minted std/core::Option (see runtime/option.py).
     "Option",
 )

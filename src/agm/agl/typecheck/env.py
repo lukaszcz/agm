@@ -782,6 +782,8 @@ class TypeEnvironment:
                     (fname, ParamKind.STANDARD) for fname, _ in typedef.fields
                 )
                 continue
+            if typedef.kind == "exception":
+                continue
             for variant, vfields in typedef.variants:
                 self._constructor_field_kinds[((STD_CORE_ID, (), prelude_name), variant)] = tuple(
                     (fname, ParamKind.STANDARD) for fname, _ in vfields

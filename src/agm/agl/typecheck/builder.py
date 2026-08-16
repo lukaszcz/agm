@@ -105,6 +105,13 @@ _BUILTIN_ENUM_TYPE_DEFS: Mapping[str, TypeDef] = {
 }
 
 
+def _builtin_exception_shape_defs(name: str) -> Mapping[str, TypeDef]:
+    """Return the canonical table that defines the builtin exception *name*."""
+    if name in BUILTIN_PRELUDE_TYPE_DEFS:
+        return BUILTIN_PRELUDE_TYPE_DEFS
+    return BUILTIN_EXCEPTION_TYPE_DEFS
+
+
 def _decl_identity(
     module_id: ModuleId, scope_path: tuple[str, ...], bare_name: str, node_id: int
 ) -> int:
@@ -251,7 +258,7 @@ class _TypeBuilder:
                     item.name,
                     item.span,
                     is_builtin=item.is_builtin,
-                    expected_defs=BUILTIN_EXCEPTION_TYPE_DEFS,
+                    expected_defs=_builtin_exception_shape_defs(_bare_name(item.name)),
                 )
                 self._env.unregister_name(item.name)
                 module_id = self._module_id
@@ -506,7 +513,10 @@ class _TypeBuilder:
             decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
         )
         self._validate_builtin_shape(
-            stmt, typedef, BUILTIN_EXCEPTION_TYPE_DEFS, base_type=base_type
+            stmt,
+            typedef,
+            _builtin_exception_shape_defs(bare_name),
+            base_type=base_type,
         )
         self._env.type_table.register(typedef)
 

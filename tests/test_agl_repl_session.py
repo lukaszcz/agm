@@ -26,8 +26,10 @@ from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPES,
     COMPATIBILITY_PRELUDE_TYPE_NAMES,
+    HOST_MINTED_PRELUDE_TYPE_NAMES,
     BoolType,
     BottomType,
+    DecimalType,
     EnumType,
     ExceptionType,
     IntType,
@@ -72,6 +74,8 @@ def _literal_for_type(typ: Type) -> str:
         return '"x"'
     if isinstance(typ, IntType):
         return "1"
+    if isinstance(typ, DecimalType):
+        return "1.0"
     if isinstance(typ, BoolType):
         return "false"
     if isinstance(typ, JsonType):
@@ -971,7 +975,7 @@ class TestStdlib:
         s = ReplSession()
 
         for name, typ in BUILTIN_PRELUDE_TYPES.items():
-            if name in COMPATIBILITY_PRELUDE_TYPE_NAMES:
+            if name in COMPATIBILITY_PRELUDE_TYPE_NAMES | HOST_MINTED_PRELUDE_TYPE_NAMES:
                 continue
             typedef = BUILTIN_PRELUDE_TYPE_DEFS[name]
             if isinstance(typ, RecordType):

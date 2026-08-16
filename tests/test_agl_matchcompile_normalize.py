@@ -858,7 +858,7 @@ def test_bare_variant_normalization_rejects_missing_and_wrong_owner_metadata() -
 
 def test_malformed_checked_constructor_metadata_raise_invariants() -> None:
     checked = _check(
-        "enum Choice\n  | some(value: int)\n"
+        "enum Choice\n  | some(value: int)\n  | other(value: int)\n"
         "let value: Choice = some(value = 1)\n"
         "case value of | some(value = _ as captured) => captured | _ => 0"
     )
@@ -886,6 +886,10 @@ def test_malformed_checked_constructor_metadata_raise_invariants() -> None:
     unknown_variant = replace(pattern, name="missing")
     with pytest.raises(MatchCompileInvariantError, match="unknown variant"):
         normalize_case(_replace_case_pattern(case, unknown_variant), checked)
+
+    different_variant = replace(pattern, name="other")
+    with pytest.raises(MatchCompileInvariantError, match="invalid final constructor"):
+        normalize_case(_replace_case_pattern(case, different_variant), checked)
 
     choice_type = checked.node_types[case.subject.node_id]
     assert isinstance(choice_type, EnumType)
@@ -942,6 +946,33 @@ def test_malformed_checked_constructor_metadata_raise_invariants() -> None:
     )
     with pytest.raises(MatchCompileInvariantError, match="unknown fields"):
         normalize_case(case, replace(checked, argument_bindings=unknown))
+
+
+def test_renamed_constructor_rejects_unknown_canonical_variant_metadata() -> None:
+    checked = _check(
+        "use S::{E::some as X}\n"
+        "scope S\n"
+        "enum E | some(value: int)\n"
+        "end S\n"
+        "let value = X(value = 1)\n"
+        "case value of | X(value = _ as captured) => captured | _ => 0"
+    )
+    case = _only_case(checked.resolved.program)
+    pattern = case.branches[0].pattern
+    assert isinstance(pattern, ConstructorPattern)
+    constructor_ref = checked.pattern_constructor_ref_for(pattern.node_id)
+    assert constructor_ref is not None
+
+    with pytest.raises(MatchCompileInvariantError, match="invalid final constructor"):
+        normalize_case(
+            case,
+            replace(
+                checked,
+                pattern_constructor_refs={
+                    pattern.node_id: replace(constructor_ref, variant="missing")
+                },
+            ),
+        )
 
 
 def test_source_reference_matcher_preserves_priority_and_partial_constructor_fields() -> None:

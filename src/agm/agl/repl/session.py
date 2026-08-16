@@ -48,10 +48,10 @@ if TYPE_CHECKING:
     from agm.agl.syntax.nodes import (
         ImportDecl,
         InfixAssoc,
-        OpenDecl,
         Program,
         ScopeRegion,
         TypeAlias,
+        UseDecl,
     )
     from agm.agl.syntax.types import TypeExpr
     from agm.agl.typecheck.env import CheckedModule, TypeEnvironment
@@ -289,9 +289,9 @@ class ReplSession:
         # one retained generation per entry, kept as written so a wildcard keeps
         # tracking the module set. Declarations for a module named in a later
         # generation replace earlier ones; the rest are prepended in program
-        # context for reuse. Scope opens use the same entry retention model.
+        # context for reuse. Uses follow the same entry retention model.
         self._accumulated_imports: list[tuple["ImportDecl", ...]] = []
-        self._accumulated_opens: list[tuple["OpenDecl | ImportDecl | ScopeRegion", ...]] = []
+        self._accumulated_uses: list[tuple["UseDecl | ImportDecl | ScopeRegion", ...]] = []
         # Resolved user infix fixity declared in prior promoted entries
         # (operator name → ``(priority, associativity)``). Passed to the parser
         # as ambient fixity so an ``infixl``/``infixr`` declaration made in one
@@ -606,7 +606,7 @@ class ReplSession:
 
         # [1d] REPL entries use the program pipeline by default because that
         # is where the synthetic ``import std/core`` prelude is injected.  This
-        # keeps the REPL aligned with ``agm exec``: stdlib names are open unless
+        # keeps the REPL aligned with ``agm exec``: stdlib names are bare unless
         # a host explicitly opts out.
         return self._entry_pipeline.eval_entry(
             text=text,
@@ -1295,7 +1295,7 @@ class ReplSession:
         # AssignStmt → "statement"
         if isinstance(last, AssignStmt):
             return "statement", None
-        # Import, export, open, infix, and builtin declarations name nothing the
+        # Import, export, use, infix, and builtin declarations name nothing the
         # echo can confirm, so they read as statements.
         return "statement", None
 
@@ -1492,7 +1492,7 @@ class ReplSession:
         self._loaded_lib_modules = {}
         self._active_imported_params = {}
         self._accumulated_imports = []
-        self._accumulated_opens = []
+        self._accumulated_uses = []
         self._accumulated_infix = {}
         # Discard the session's extern (Python FFI) registry like every other
         # session-scoped binding: a companion resolves and imports again on

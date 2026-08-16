@@ -323,20 +323,20 @@ class TestPersistence:
         assert result.ok, result.diagnostics
         assert result.value == IntValue(5)
 
-    def test_opened_scope_members_persist_into_later_entries(self) -> None:
+    def test_use_exposes_scope_members_in_later_entries(self) -> None:
         s = ReplSession()
         assert s.eval_entry("scope Tools\ndef twice(x: int) -> int = x * 2\nend Tools").ok
-        assert s.eval_entry("open Tools").ok
+        assert s.eval_entry("use Tools::*").ok
 
         result = s.eval_entry("twice(3)")
 
         assert result.ok, result.diagnostics
         assert result.value == IntValue(6)
 
-    def test_opened_scope_members_persist_in_later_scope_extensions(self) -> None:
+    def test_use_exposes_scope_members_in_later_scope_extensions(self) -> None:
         s = ReplSession()
         assert s.eval_entry("def Source::value() -> int = 2").ok
-        assert s.eval_entry("scope Target\nopen Source\nend Target").ok
+        assert s.eval_entry("scope Target\nuse Source::*\nend Target").ok
         assert s.eval_entry("scope Target\ndef doubled() -> int = value() * 2\nend Target").ok
 
         result = s.eval_entry("Target::doubled()")
@@ -774,25 +774,23 @@ class TestScopedBindingRetention:
         assert result.ok, result.diagnostics
         assert result.value == IntValue(1)
 
-    def test_retained_scoped_var_assignable_bare_after_open_in_a_later_entry(self) -> None:
+    def test_retained_scoped_var_assignable_bare_after_use_in_a_later_entry(self) -> None:
         s = ReplSession()
         assert s.eval_entry("scope A\nvar counter = 0\nend A").ok
         assert s.eval_entry("A::counter := 5").ok
 
-        assign = s.eval_entry("open A\ncounter := counter + 1")
+        assign = s.eval_entry("use A::*\ncounter := counter + 1")
         result = s.eval_entry("A::counter")
 
         assert assign.ok, assign.diagnostics
         assert result.ok, result.diagnostics
         assert result.value == IntValue(6)
 
-    def test_retained_open_sees_a_member_promoted_by_a_later_entry(self) -> None:
-        """An ``open`` recorded in one entry still resolves a member a later
-        entry's promotion adds to the opened path, live rather than from
-        whatever the path held when the ``open`` itself was promoted."""
+    def test_retained_use_sees_a_member_promoted_by_a_later_entry(self) -> None:
+        """A retained use resolves a member a later entry adds to its target."""
         s = ReplSession()
         assert s.eval_entry("scope A\nvar x = 1\nend A").ok
-        assert s.eval_entry("open A").ok
+        assert s.eval_entry("use A::*").ok
         assert s.eval_entry("scope A\nvar y = 2\nend A").ok
 
         result = s.eval_entry("y")
@@ -910,7 +908,7 @@ class TestCrossEntryScopeCollision:
 
 
 class TestStdlib:
-    def test_core_stdlib_is_opened_unqualified_by_default(self) -> None:
+    def test_implicit_core_import_makes_names_available_unqualified(self) -> None:
         s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
 
         some_result = s.eval_entry("let present: Option[int] = Some(value = 1)")
@@ -919,10 +917,17 @@ class TestStdlib:
         assert some_result.ok, some_result.diagnostics
         assert none_result.ok, none_result.diagnostics
 
-    def test_type_of_uses_opened_core_stdlib(self) -> None:
+    def test_type_of_uses_implicit_core_import(self) -> None:
         s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
 
         assert "Option[int]" in s.type_of("Some(value = 1)")
+
+    def test_retained_explicit_core_import_suppresses_later_preludes(self) -> None:
+        s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
+
+        assert s.eval_entry("import std/core").ok
+        assert not s.eval_entry("Some(value = 1)").ok
+        assert s.eval_entry("std/core::Some(value = 1)").ok
 
     def test_no_stdlib_requires_explicit_core_import_after_reset(self) -> None:
         s = ReplSession(
@@ -931,7 +936,7 @@ class TestStdlib:
         )
 
         assert not s.eval_entry("Some(value = 1)").ok
-        assert s.eval_entry("open import std/core\nSome(value = 1)").ok
+        assert s.eval_entry("import std/core::*\nSome(value = 1)").ok
 
         s.reset()
 
@@ -1937,7 +1942,7 @@ class TestParsePolicyBuiltinIdentity:
     def test_parse_policy_declared_in_an_imported_library_module_accepted_by_exec(
         self, tmp_path: Path
     ) -> None:
-        """``open import`` brings ``Lib::ParsePolicy`` into scope at its own
+        """A wildcard import brings ``Lib::ParsePolicy`` into scope at its own
         path without the module route prefix -- the qualifier spelling this
         fix recognizes (a module-route-qualified spelling like
         ``lib::Lib::ParsePolicy::Retry`` is outside this fix's scope, exactly
@@ -1947,7 +1952,7 @@ class TestParsePolicyBuiltinIdentity:
             f"scope Lib\nbuiltin enum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}end Lib\n"
         )
         s = _session_with_import_root(tmp_path)
-        declare = s.eval_entry("open import lib")
+        declare = s.eval_entry("import lib::*")
         assert declare.ok, declare.diagnostics
 
         shell = FakeShell(stdout="2")
@@ -2066,12 +2071,12 @@ enum Agent
         assert not stale.ok
         assert fresh.ok, fresh.diagnostics
 
-    def test_redeclaring_an_opened_enum_drops_its_stale_bare_variant(self) -> None:
-        """A local ``open`` recorded before the enum is redeclared must not
+    def test_redeclaring_a_used_enum_drops_its_stale_bare_variant(self) -> None:
+        """A local use recorded before the enum is redeclared must not
         resurrect a variant the redeclaration's fresh member layer dropped."""
         s = ReplSession()
         assert s.eval_entry("enum Color\n  | Red\n  | Green").ok
-        assert s.eval_entry("open Color").ok
+        assert s.eval_entry("use Color::*").ok
         assert s.eval_entry("enum Color\n  | Blue").ok
 
         stale = s.eval_entry("Red")
@@ -3495,10 +3500,10 @@ class TestReset:
         assert r.ok
         assert _int({name: value for name, _typ, value in s.bindings()}["a"]) == 2
 
-    def test_reset_clears_retained_scope_opens(self) -> None:
+    def test_reset_clears_retained_uses(self) -> None:
         s = ReplSession()
         assert s.eval_entry("scope Tools\ndef twice(x: int) -> int = x * 2\nend Tools").ok
-        assert s.eval_entry("open Tools").ok
+        assert s.eval_entry("use Tools::*").ok
         assert s.eval_entry("twice(3)").ok
 
         s.reset()
@@ -4468,7 +4473,7 @@ class TestInfixDecl:
 
 
 class TestImports:
-    """REPL import declaration support."""
+    """REPL import and use declaration support."""
 
     def _make_session_with_root(self, root: Path) -> ReplSession:
         """Create a ReplSession with *root* as the only module search root."""
@@ -4490,8 +4495,8 @@ class TestImports:
         lib = tmp_path / "mylib.agl"
         lib.write_text("def add(a: int, b: int) -> int = a + b\n")
         s = self._make_session_with_root(tmp_path)
-        # Open import: functions are in unqualified scope
-        r = s.eval_entry("open import mylib\nadd(3, 4)")
+        # A wildcard import makes functions available unqualified.
+        r = s.eval_entry("import mylib::*\nadd(3, 4)")
         assert r.ok, r.diagnostics
         assert r.kind == "expression"
         assert _int(r.value) == 7
@@ -4524,18 +4529,57 @@ class TestImports:
         lib = tmp_path / "util.agl"
         lib.write_text("def double(x: int) -> int = x * 2\n")
         s = self._make_session_with_root(tmp_path)
-        r1 = s.eval_entry("open import util")
+        r1 = s.eval_entry("import util::*")
         assert r1.ok, r1.diagnostics
-        # Open import: double() is in unqualified scope in next entry too
         r2 = s.eval_entry("double(5)")
         assert r2.ok, r2.diagnostics
         assert _int(r2.value) == 10
 
-    def test_import_using_hiding(self, tmp_path: Path) -> None:
+    def test_same_target_use_replaces_prior_selection_and_failed_entries_preserve_it(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("def First::value() -> int = 1").ok
+        assert s.eval_entry("use First::*").ok
+        assert s.eval_entry("value()").value == IntValue(1)
+
+        assert s.eval_entry("use First::{value as first_value}").ok
+        assert not s.eval_entry("value()").ok
+        assert s.eval_entry("first_value()").value == IntValue(1)
+
+        failed = s.eval_entry('use First::*\nlet bad: int = "not an int"')
+        assert not failed.ok
+        assert not s.eval_entry("value()").ok
+        assert s.eval_entry("first_value()").value == IntValue(1)
+
+    def test_distinct_use_targets_with_clashing_bare_names_remain_ambiguous(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("def First::value() -> int = 1").ok
+        assert s.eval_entry("def Second::value() -> int = 2").ok
+        assert s.eval_entry("use First::*").ok
+        assert s.eval_entry("use Second::*").ok
+
+        assert not s.eval_entry("value()").ok
+        assert s.eval_entry("First::value()").value == IntValue(1)
+        assert s.eval_entry("Second::value()").value == IntValue(2)
+
+    def test_same_target_uses_in_different_regions_remain_independent(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("def Source::value() -> int = 3").ok
+        assert s.eval_entry("scope Left\nuse Source::*\nend Left").ok
+        assert s.eval_entry("scope Right\nuse Source::*\nend Right").ok
+
+        left = s.eval_entry("scope Left\ndef read() -> int = value()\nend Left\nLeft::read()")
+        right = s.eval_entry("scope Right\ndef read() -> int = value()\nend Right\nRight::read()")
+
+        assert left.ok, left.diagnostics
+        assert left.value == IntValue(3)
+        assert right.ok, right.diagnostics
+        assert right.value == IntValue(3)
+
+    def test_import_selected_members(self, tmp_path: Path) -> None:
         lib = tmp_path / "funcs.agl"
         lib.write_text("def square(n: int) -> int = n * n\ndef cube(n: int) -> int = n * n * n\n")
         s = self._make_session_with_root(tmp_path)
-        r = s.eval_entry("import funcs using square\nsquare(4)")
+        r = s.eval_entry("import funcs::{square}\nsquare(4)")
         assert r.ok, r.diagnostics
         assert _int(r.value) == 16
 
@@ -4637,8 +4681,8 @@ class TestImports:
         from agm.agl.modules.ids import ModuleId
 
         cached_id = ModuleId(segments=("cached",))
-        # Import once to cache it (open import: greet() in unqualified scope)
-        r1 = s.eval_entry("open import cached\ngreet()")
+        # Import once to cache it with its bare members.
+        r1 = s.eval_entry("import cached::*\ngreet()")
         assert r1.ok, r1.diagnostics
         # Now cached_id should be in loaded_lib_modules
         assert cached_id in s._loaded_lib_modules
@@ -4650,7 +4694,7 @@ class TestImports:
         lib = tmp_path / "temp.agl"
         lib.write_text("def f() -> int = 1\n")
         s = self._make_session_with_root(tmp_path)
-        r = s.eval_entry("open import temp\nf()")
+        r = s.eval_entry("import temp::*\nf()")
         assert r.ok, r.diagnostics
         s.reset()
         assert not s._loaded_lib_modules
@@ -4668,7 +4712,7 @@ class TestImports:
         )
         config = std_dir / "config.agl"
         config.write_text(
-            "import std/core using Option, Agent\n"
+            "import std/core::{Option, Agent}\n"
             'builtin var default-agent: Agent = AgentCommand("runner")\n'
             'builtin var timeout: Option[text] = Some("not-a-timeout")\n',
             encoding="utf-8",
@@ -4683,7 +4727,7 @@ class TestImports:
         assert next_node_id > 0
 
         config.write_text(
-            "import std/core using Option, Agent\n"
+            "import std/core::{Option, Agent}\n"
             'builtin var default-agent: Agent = AgentCommand("runner")\n'
             'builtin var timeout: Option[text] = Some("2s")\n',
             encoding="utf-8",
@@ -4707,7 +4751,7 @@ class TestImports:
         (tmp_path / "broken.py").write_text("raise RuntimeError('boom')\n")
         s = self._make_session_with_root(tmp_path)
 
-        failed = s.eval_entry("open import broken\ndef helper() -> int\n  7\nlet stale = helper()")
+        failed = s.eval_entry("import broken::*\ndef helper() -> int\n  7\nlet stale = helper()")
 
         assert not failed.ok
         assert s._link_image == LinkImage()
@@ -4732,7 +4776,7 @@ class TestImports:
         assert boom_id in s._loaded_lib_modules
         assert boom_id in s._link_image._linked_modules
 
-        r2 = s.eval_entry("open import boom\nf()")
+        r2 = s.eval_entry("import boom::*\nf()")
         assert r2.ok, r2.diagnostics
         assert _int(r2.value) == 42
 
@@ -4744,7 +4788,7 @@ class TestImports:
         )
         session = self._make_session_with_root(tmp_path)
 
-        failed = session.eval_entry("open import unstable\ndef retained() -> int = get_seed()")
+        failed = session.eval_entry("import unstable::*\ndef retained() -> int = get_seed()")
 
         assert not failed.ok
         assert "retained" not in failed.installed
@@ -4765,7 +4809,7 @@ class TestImports:
         lib = tmp_path / "mylib.agl"
         lib.write_text("def add(a: int, b: int) -> int = a + b\n")
         s = self._make_session_with_root(tmp_path)
-        r = s.eval_entry("open import mylib\nadd(1, 2)", check_only=True)
+        r = s.eval_entry("import mylib::*\nadd(1, 2)", check_only=True)
         assert r.ok, r.diagnostics
         # check_only does not promote session state.
         assert s.bindings() == []
@@ -4795,7 +4839,7 @@ class TestImports:
         lib = tmp_path / "mylib.agl"
         lib.write_text('def boom() -> int = raise Abort(message = "boom")\n')
         s = self._make_session_with_root(tmp_path)
-        r = s.eval_entry("open import mylib\nboom()")
+        r = s.eval_entry("import mylib::*\nboom()")
         assert not r.ok
         assert r.error is not None
 
@@ -4808,7 +4852,7 @@ class TestImports:
         s = self._make_session_with_root(tmp_path)
         s._trace_path = trace
 
-        r = s.eval_entry("open import mylib\nboom()")
+        r = s.eval_entry("import mylib::*\nboom()")
 
         assert not r.ok
         records = [json.loads(line) for line in trace.read_text().splitlines() if line]
@@ -4825,7 +4869,7 @@ class TestImports:
         (tmp_path / "tools" / "mul.agl").write_text("def mul() -> int = 2\n")
         s = self._make_session_with_root(tmp_path)
 
-        assert s.eval_entry("open import tools/*\nadd() + mul()").ok
+        assert s.eval_entry("import tools/*::*\nadd() + mul()").ok
         replacement = s.eval_entry("import tools/add as arithmetic\narithmetic::add()")
 
         assert replacement.ok, replacement.diagnostics
@@ -4843,7 +4887,7 @@ class TestImports:
         s = self._make_session_with_root(tmp_path)
 
         assert s.eval_entry(
-            "open import tools/add\nimport tools/mul as old_mul\nadd() + old_mul::mul()"
+            "import tools/add::*\nimport tools/mul as old_mul\nadd() + old_mul::mul()"
         ).ok
         replacement = s.eval_entry(
             "import tools/* as all_tools\nall_tools::add() + all_tools::mul()"
@@ -4863,9 +4907,9 @@ class TestImports:
         lib.write_text("def add() -> int = 1\ndef mul() -> int = 2\n")
         s = self._make_session_with_root(tmp_path)
 
-        assert s.eval_entry("open import math\nadd() + mul()").ok
+        assert s.eval_entry("import math::*\nadd() + mul()").ok
         result = s.eval_entry(
-            "import math using add\nimport math as arithmetic\nadd() + arithmetic::mul()"
+            "import math::{add}\nimport math as arithmetic\nadd() + arithmetic::mul()"
         )
 
         assert result.ok, result.diagnostics
@@ -4882,7 +4926,7 @@ class TestImports:
         s = self._make_session_with_root(tmp_path)
 
         assert s.eval_entry(
-            "import math using add\nimport math as arithmetic\nadd() + arithmetic::mul()"
+            "import math::{add}\nimport math as arithmetic\nadd() + arithmetic::mul()"
         ).ok
         replacement = s.eval_entry("import math hiding add\nmath::mul()")
 
@@ -4892,17 +4936,17 @@ class TestImports:
         assert not s.eval_entry("math::add()").ok
         assert s.eval_entry("math::mul()").ok
 
-    def test_replacement_removes_alias_using_hiding_and_open_options(self, tmp_path: Path) -> None:
+    def test_replacement_removes_alias_selection_and_hiding_options(self, tmp_path: Path) -> None:
         lib = tmp_path / "api.agl"
         lib.write_text("def alpha() -> int = 1\ndef beta() -> int = 2\n")
         s = self._make_session_with_root(tmp_path)
 
-        assert s.eval_entry("open import api\nalpha() + beta()").ok
+        assert s.eval_entry("import api::*\nalpha() + beta()").ok
         assert s.eval_entry("import api as old_api\nold_api::alpha()").ok
         assert not s.eval_entry("alpha()").ok
         assert not s.eval_entry("beta()").ok
 
-        assert s.eval_entry("import api using beta\nbeta()").ok
+        assert s.eval_entry("import api::{beta}\nbeta()").ok
         assert not s.eval_entry("old_api::alpha()").ok
         assert s.eval_entry("beta()").ok
 
@@ -4936,7 +4980,7 @@ class TestImports:
         lib = tmp_path / "lazylib.agl"
         lib.write_text("def val() -> int = 42\n")
         s = ReplSession(cwd=tmp_path)
-        r = s.eval_entry("open import lazylib\nval()")
+        r = s.eval_entry("import lazylib::*\nval()")
         assert r.ok, r.diagnostics
         assert _int(r.value) == 42
         # Roots were assembled lazily.
@@ -5006,10 +5050,10 @@ class TestImports:
         (tmp_path / "foo.agl").write_text("def top() -> int = 99\n")
         s = self._make_session_with_root(tmp_path)
         # Entry 1: wildcard import of foo.* (imports foo.a, brings val into scope)
-        r1 = s.eval_entry("open import foo/*\nval()")
+        r1 = s.eval_entry("import foo/*::*\nval()")
         assert r1.ok, r1.diagnostics
         # Entry 2: plain import of foo (brings top() into scope)
-        r2 = s.eval_entry("open import foo\ntop()")
+        r2 = s.eval_entry("import foo::*\ntop()")
         assert r2.ok, r2.diagnostics
         # Entry 3: val() from foo.a must still resolve (wildcard import persists)
         r3 = s.eval_entry("val()")
@@ -5023,7 +5067,7 @@ class TestImports:
         (tmp_path / "tools" / "add.agl").write_text("def add() -> int = 1\n")
         s = self._make_session_with_root(tmp_path)
 
-        assert s.eval_entry("open import tools/*\nadd()").ok
+        assert s.eval_entry("import tools/*::*\nadd()").ok
 
         (tmp_path / "tools" / "mul.agl").write_text("def mul() -> int = 2\n")
         later = s.eval_entry("mul()")
@@ -5040,7 +5084,7 @@ class TestImports:
         (tmp_path / "tools" / "mul.agl").write_text("def mul() -> int = 2\n")
         s = self._make_session_with_root(tmp_path)
 
-        assert s.eval_entry("open import tools/*\nadd() + mul()").ok
+        assert s.eval_entry("import tools/*::*\nadd() + mul()").ok
         assert s.eval_entry("import tools/add as arithmetic\narithmetic::add()").ok
 
         assert not s.eval_entry("add()").ok
@@ -5079,7 +5123,7 @@ class TestImports:
         s = self._make_session_with_root(tmp_path)
 
         assert s.eval_entry(
-            "scope A\nopen import mylib\ndef go() -> int = add(1, 2)\nend A\nA::go()"
+            "scope A\nimport mylib::*\ndef go() -> int = add(1, 2)\nend A\nA::go()"
         ).ok
         r = s.eval_entry("mylib::add(1, 2)")
         assert r.ok, r.diagnostics
@@ -5093,7 +5137,7 @@ class TestImports:
         s = self._make_session_with_root(tmp_path)
 
         assert s.eval_entry(
-            "scope A\nopen import mylib\ndef go() -> int = add(1, 2)\nend A\nA::go()"
+            "scope A\nimport mylib::*\ndef go() -> int = add(1, 2)\nend A\nA::go()"
         ).ok
         r = s.eval_entry("scope A\ndef go2() -> int = add(3, 4)\nend A\nA::go2()")
         assert r.ok, r.diagnostics
@@ -5103,8 +5147,8 @@ class TestImports:
         (tmp_path / "mylib.agl").write_text("def x() -> int = 1\ndef y() -> int = 2\n")
         s = self._make_session_with_root(tmp_path)
 
-        assert s.eval_entry("scope A\nimport mylib using x\nend A").ok
-        replacement = s.eval_entry("scope A\nimport mylib using y\nend A")
+        assert s.eval_entry("scope A\nimport mylib::{x}\nend A").ok
+        replacement = s.eval_entry("scope A\nimport mylib::{y}\nend A")
 
         assert replacement.ok, replacement.diagnostics
         old_selection = s.eval_entry("scope A\ndef old() -> int = x()\nend A")
@@ -5120,14 +5164,14 @@ class TestImports:
         (tmp_path / "mylib.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
         s = self._make_session_with_root(tmp_path)
 
-        assert s.eval_entry("scope A\nopen import mylib\nend A").ok
+        assert s.eval_entry("scope A\nimport mylib::*\nend A").ok
         r = s.eval_entry("add(1, 2)")
         assert not r.ok
 
-    def test_non_open_region_scoped_import_retains_its_qualifier_route_across_entries(
+    def test_plain_region_scoped_import_retains_its_qualifier_route_across_entries(
         self, tmp_path: Path
     ) -> None:
-        """A plain (non-``open``) region-scoped import also persists across entries.
+        """A plain region-scoped import also persists across entries.
 
         A later entry extending the same region must still resolve the
         qualifier the import established, without redeclaring it.
@@ -5156,7 +5200,7 @@ class TestImports:
         (tmp_path / "other.agl").write_text("def mul(a: int, b: int) -> int = a * b\n")
         s = self._make_session_with_root(tmp_path)
 
-        assert s.eval_entry("scope A\nopen import mylib\nend A").ok
+        assert s.eval_entry("scope A\nimport mylib::*\nend A").ok
 
         r = s.eval_entry("import other\nother::mul(2, 3)")
 
@@ -5170,27 +5214,27 @@ class TestImports:
         (tmp_path / "other.agl").write_text("def val() -> int = 5\n")
         s = self._make_session_with_root(tmp_path)
 
-        assert s.eval_entry("scope Src\ndef v() -> int = 1\nend Src\nscope T\nopen Src\nend T").ok
+        assert s.eval_entry("scope Src\ndef v() -> int = 1\nend Src\nscope T\nuse Src::*\nend T").ok
 
         r = s.eval_entry("import other\nother::val()")
 
         assert r.ok, r.diagnostics
         assert _int(r.value) == 5
 
-    def test_root_open_import_survives_a_later_region_scoped_import_of_the_same_module(
+    def test_root_wildcard_import_survives_a_later_region_scoped_import_of_the_same_module(
         self, tmp_path: Path
     ) -> None:
         """A region-scoped import must not revoke an earlier root import's bare names.
 
         Regression: retention keyed the replacement decision on module identity
         alone, so a region-scoped ``import mylib`` clobbered the generation
-        recorded for the earlier ROOT ``open import mylib``, silently removing
+        recorded for the earlier ROOT ``import mylib::*``, silently removing
         its bare names from later entries.
         """
         (tmp_path / "mylib.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
         s = self._make_session_with_root(tmp_path)
 
-        assert s.eval_entry("open import mylib\nadd(1, 2)").ok
+        assert s.eval_entry("import mylib::*\nadd(1, 2)").ok
         assert s.eval_entry("scope A\nimport mylib\nend A").ok
 
         r = s.eval_entry("add(1, 2)")
@@ -5402,7 +5446,7 @@ class TestExternRepl:
             "def add_one(x):\n    return x + 1\n",
         )
         s = self._make_session_with_root(tmp_path)
-        r1 = s.eval_entry("open import extlib")
+        r1 = s.eval_entry("import extlib::*")
         assert r1.ok, r1.diagnostics
         r2 = s.eval_entry("add_one(41)")
         assert r2.ok, r2.diagnostics
@@ -5416,7 +5460,7 @@ class TestExternRepl:
             "def add_one(x):\n    return x + 1\n",
         )
         s = self._make_session_with_root(tmp_path)
-        s.eval_entry("open import extlib")
+        s.eval_entry("import extlib::*")
         r1 = s.eval_entry("let g = add_one")
         assert r1.ok, r1.diagnostics
         r2 = s.eval_entry("g(9)")
@@ -5445,7 +5489,7 @@ class TestExternRepl:
         )
         session = self._make_session_with_root(tmp_path)
 
-        result = session.eval_entry("open import broken\nf()")
+        result = session.eval_entry("import broken::*\nf()")
 
         assert not result.ok
         assert result.diagnostics
@@ -5463,12 +5507,12 @@ class TestExternRepl:
             f"open({str(marker)!r}, 'a').write('x')\ndef touch():\n    return 1\n",
         )
         s = self._make_session_with_root(tmp_path)
-        r1 = s.eval_entry("open import counting\ntouch()")
+        r1 = s.eval_entry("import counting::*\ntouch()")
         assert r1.ok, r1.diagnostics
         r2 = s.eval_entry("touch()")
         assert r2.ok, r2.diagnostics
         # Re-importing the same module in a later entry is a no-op import.
-        r3 = s.eval_entry("open import counting\ntouch()")
+        r3 = s.eval_entry("import counting::*\ntouch()")
         assert r3.ok, r3.diagnostics
         assert marker.read_text() == "x"
 
@@ -5495,11 +5539,11 @@ class TestExternRepl:
         )
         s = self._make_session_with_root(tmp_path)
         roots = s._roots
-        r1 = s.eval_entry("open import extlib\nadd_one(1)")
+        r1 = s.eval_entry("import extlib::*\nadd_one(1)")
         assert r1.ok, r1.diagnostics
         s.reset()
         s._roots = roots  # :reset clears roots too; a real host re-supplies them
-        r2 = s.eval_entry("open import extlib\nadd_one(1)")
+        r2 = s.eval_entry("import extlib::*\nadd_one(1)")
         assert r2.ok, r2.diagnostics
         assert _int(r2.value) == 2
 
@@ -5515,7 +5559,7 @@ class TestExternRepl:
             "def boom():\n    raise ValueError('kaboom')\n",
         )
         s = self._make_session_with_root(tmp_path)
-        s.eval_entry("open import extlib")
+        s.eval_entry("import extlib::*")
         r = s.eval_entry("boom()")
         assert not r.ok
         assert r.error is not None
@@ -5535,7 +5579,7 @@ class TestExternRepl:
             "def boom():\n    raise ValueError('kaboom')\n",
         )
         s = self._make_session_with_root(tmp_path)
-        s.eval_entry("open import extlib")
+        s.eval_entry("import extlib::*")
         r = s.eval_entry(
             "let r = try\n  boom()\ncatch ExternError as e =>\n  print(e.function)\n  -1\n"
         )
@@ -5779,7 +5823,7 @@ class TestBareTypeEntry:
             == "<type:\nenum Option[T]\n  | none\n  | some(value: T)\n>"
         )
 
-    def test_opened_stdlib_bare_generic_type_echoes_definition(self) -> None:
+    def test_implicit_core_import_bare_generic_type_echoes_definition(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
         s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
@@ -5792,7 +5836,7 @@ class TestBareTypeEntry:
             == "<type:\nenum Option[T]\n  | None\n  | Some(value: T)\n>"
         )
 
-    def test_opened_stdlib_qualified_bare_generic_type_echoes_definition(self) -> None:
+    def test_implicit_core_import_qualified_generic_type_echoes_definition(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
         s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")

@@ -744,12 +744,8 @@ class TestClashDeferred:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": (
-                    "import core::{S}\nimport facade::{S}\nuse S::*\nalpha() + beta()"
-                ),
-                "core": (
-                    "scope S\ndef alpha() -> int = 1\ndef beta() -> int = 2\nend S"
-                ),
+                "entry": ("import core::{S}\nimport facade::{S}\nuse S::*\nalpha() + beta()"),
+                "core": ("scope S\ndef alpha() -> int = 1\ndef beta() -> int = 2\nend S"),
                 "facade": "export core hiding S::beta",
             },
         )

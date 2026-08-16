@@ -801,9 +801,7 @@ class TestScopedBindingRetention:
             "scope Outer\nscope Source\ndef value() -> int = 2\nend Source\nend Outer"
         ).ok
 
-        declared = session.eval_entry(
-            "scope Outer\ndef selected() -> int = value()\nend Outer"
-        )
+        declared = session.eval_entry("scope Outer\ndef selected() -> int = value()\nend Outer")
         result = session.eval_entry("Outer::selected()")
 
         assert declared.ok, declared.diagnostics
@@ -6146,8 +6144,7 @@ class TestBareTypeEntry:
 
         assert result.ok, result.diagnostics
         assert (
-            render_entry_result(result, echo=True)
-            == "<type:\nrecord Alias::Box[T]\n  value: T\n>"
+            render_entry_result(result, echo=True) == "<type:\nrecord Alias::Box[T]\n  value: T\n>"
         )
 
     def test_bare_scoped_generic_record_name_echoes_definition(self) -> None:

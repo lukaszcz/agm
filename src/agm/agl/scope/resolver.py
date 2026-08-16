@@ -1797,9 +1797,7 @@ class _Resolver:
                     members = self._relative_use_import_members(
                         contribution.members,
                         source,
-                        target_exists=(
-                            imported_route in self._import_env.scope_origins_by_route
-                        ),
+                        target_exists=(imported_route in self._import_env.scope_origins_by_route),
                     )
                 if members is not None:
                     replayed.append((imported_route, members))
@@ -1904,12 +1902,9 @@ class _Resolver:
             local_parent = self._use_contributed_local_target(parent, decl.span)
             if local_parent is not None:
                 source_path = (*local_parent, member)
-                ordinary = (
-                    source_path not in self._scope_nodes
-                    and (
-                        member in self._scope_nodes[local_parent].members
-                        or source_path in self._ordered_binding_paths
-                    )
+                ordinary = source_path not in self._scope_nodes and (
+                    member in self._scope_nodes[local_parent].members
+                    or source_path in self._ordered_binding_paths
                 )
         if not ordinary and not decl.anchored:
             ordinary = any(
@@ -2126,9 +2121,7 @@ class _Resolver:
         self, *targets: tuple[tuple[BareRoute, Mapping[NameAtom, QName]], ...]
     ) -> tuple[tuple[BareRoute, Mapping[NameAtom, QName]], ...]:
         """Merge scope routes that retain the same defining origins."""
-        grouped: dict[
-            frozenset[QName], tuple[BareRoute, dict[NameAtom, QName]]
-        ] = {}
+        grouped: dict[frozenset[QName], tuple[BareRoute, dict[NameAtom, QName]]] = {}
         for routes in targets:
             for imported_route, members in routes:
                 module, path = imported_route
@@ -2140,6 +2133,7 @@ class _Resolver:
                     grouped[origins] = (imported_route, merged)
                 for atom, qname in members.items():
                     merged.setdefault(atom, qname)
+
         def route_key(
             item: tuple[BareRoute, dict[NameAtom, QName]],
         ) -> tuple[str, ScopePath]:

@@ -518,10 +518,7 @@ def _local_use_contribution_refs(
     selected: dict[BareAtom, BindingRef] = {}
     if decl.alias is not None:
         selected.update(
-            {
-                to_bare_atom((decl.alias, *to_bare_path(atom))): ref
-                for atom, ref in members.items()
-            }
+            {to_bare_atom((decl.alias, *to_bare_path(atom))): ref for atom, ref in members.items()}
         )
     elif decl.tail == ():
         selected.update(members)

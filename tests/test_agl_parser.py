@@ -3822,6 +3822,20 @@ class TestImportDecl:
         parse(source)
 
     @pytest.mark.parametrize(
+        "source",
+        (
+            "use Root :: Child::*",
+            "use :: Root::Child::*",
+            "use /m:: Scope::*",
+            "use Root:: Child::*",
+            "use /m ::Scope::*",
+        ),
+    )
+    def test_use_target_qualifiers_require_byte_adjacency(self, source: str) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse(source)
+
+    @pytest.mark.parametrize(
         ("source", "alias", "tail"),
         (
             ("use ::Scope::*", None, ()),

@@ -207,6 +207,14 @@ def _is_use_declaration(tokens: list[Token], index: int) -> bool:
     while end < len(tokens) and tokens[end].type not in _ITEM_START_TYPES:
         end += 1
 
+    def tight_dcolon(position: int) -> bool:
+        return (
+            0 < position < end - 1
+            and tokens[position].type == DCOLON
+            and tokens[position - 1].end_pos == tokens[position].start_pos
+            and tokens[position].end_pos == tokens[position + 1].start_pos
+        )
+
     def path_atom(position: int) -> int | None:
         if position >= end or tokens[position].type not in {NAME, OP_NAME}:
             return None
@@ -280,9 +288,7 @@ def _is_use_declaration(tokens: list[Token], index: int) -> bool:
     if position < end and tokens[position].type in {SLASH, DCOLON}:
         anchor = tokens[position]
         position += 1
-        if anchor.type == SLASH and (
-            position >= end or anchor.end_pos != tokens[position].start_pos
-        ):
+        if position >= end or anchor.end_pos != tokens[position].start_pos:
             return False
     if position >= end or tokens[position].type != NAME:
         return False
@@ -300,7 +306,7 @@ def _is_use_declaration(tokens: list[Token], index: int) -> bool:
     alias_position = position
     while (
         alias_position + 1 < end
-        and tokens[alias_position].type == DCOLON
+        and tight_dcolon(alias_position)
         and tokens[alias_position + 1].type == NAME
     ):
         alias_position += 2
@@ -313,9 +319,11 @@ def _is_use_declaration(tokens: list[Token], index: int) -> bool:
 
     # Otherwise any remaining ``::`` may separate the target from its tail.
     while position < end:
-        if tokens[position].type == DCOLON and tail(position + 1):
+        if tokens[position].type != DCOLON or not tight_dcolon(position):
+            return False
+        if tail(position + 1):
             return True
-        if position + 1 >= end or tokens[position].type != DCOLON:
+        if position + 1 >= end:
             return False
         position += 2
     return False

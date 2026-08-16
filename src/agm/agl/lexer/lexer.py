@@ -256,12 +256,10 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
 
     Rules:
     - 'import' → IMPORT, 'use' → USE, and 'export' → EXPORT at item-start.
-    - 'hiding' → HIDING within an import, use, or export declaration.
     - 'scope' → SCOPE at item-start before a scope path.
     - 'end' → END only for a complete closer at its region's layout level.
     """
     result: list[Token] = []
-    in_module_header = False
     scope_layouts: list[int] = []
     layout_depth = 0
     prev_type: str | None = None  # None means start-of-stream
@@ -275,21 +273,14 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
         elif tt == "_DEDENT":
             layout_depth -= 1
 
-        # Track the module-header window: close on line/stmt terminators
-        if tt in ("_NEWLINE", "_INDENT", "_DEDENT", "SEMICOLON"):
-            in_module_header = False
-
         if tt == NAME:
             at_item_start = prev_type is None or prev_type in _ITEM_START_TYPES
             if tv == "import" and at_item_start:
                 tok = _retype(tok, IMPORT)
-                in_module_header = True
             elif tv == "use" and at_item_start and _is_use_declaration(tokens, index):
                 tok = _retype(tok, USE)
-                in_module_header = True
             elif tv == "export" and at_item_start:
                 tok = _retype(tok, EXPORT)
-                in_module_header = True
             elif tv == "scope" and at_item_start and _is_scope_path(tokens, index + 1):
                 tok = _retype(tok, SCOPE)
                 scope_layouts.append(layout_depth)
@@ -302,12 +293,46 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
             ):
                 tok = _retype(tok, END)
                 scope_layouts.pop()
-            elif in_module_header and tv == "hiding":
-                tok = _retype(tok, HIDING)
 
         result.append(tok)
         prev_type = tok.type
 
+    return result
+
+
+def _promote_hiding(tokens: list[Token]) -> list[Token]:
+    """Promote only a header's hiding-clause delimiter, not path atoms named ``hiding``."""
+    result: list[Token] = []
+    header: str | None = None
+    hiding_promoted = False
+    brace_depth = 0
+    for tok in tokens:
+        if tok.type in {IMPORT, USE, EXPORT}:
+            header = tok.type
+            hiding_promoted = False
+            brace_depth = 0
+        elif tok.type in {"_NEWLINE", "_INDENT", "_DEDENT", "SEMICOLON"}:
+            header = None
+        elif tok.type == LBRACE:
+            brace_depth += 1
+        elif tok.type == "RBRACE":
+            brace_depth -= 1
+        elif (
+            header is not None
+            and not hiding_promoted
+            and brace_depth == 0
+            and tok.type == NAME
+            and str(tok) == "hiding"
+            and result
+            and (
+                result[-1].type in {STAR, WILDCARD}
+                or (header in {IMPORT, EXPORT} and result[-1].type == MODPATH)
+                or (header == IMPORT and len(result) >= 2 and result[-2].type in {"as", "AS"})
+            )
+        ):
+            tok = _retype(tok, HIDING)
+            hiding_promoted = True
+        result.append(tok)
     return result
 
 
@@ -662,9 +687,8 @@ def _reject_clinging_slash(tokens: list[Token]) -> list[Token]:
 
 def apply_module_passes(tokens: list[Token], source: str) -> list[Token]:
     """Apply soft-keyword promotion, import path merging, and module-qualifier merging."""
-    return _reject_clinging_slash(
-        _merge_modqual(_merge_modpath(_promote_soft_keywords(tokens)), source)
-    )
+    promoted = _promote_soft_keywords(tokens)
+    return _reject_clinging_slash(_merge_modqual(_promote_hiding(_merge_modpath(promoted)), source))
 
 
 def unclosed_scope_path(source: str) -> str | None:

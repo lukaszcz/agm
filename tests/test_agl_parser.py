@@ -3792,6 +3792,22 @@ class TestImportDecl:
         assert tuple(item.name for item in decl.hidden) == ("x",)
 
     @pytest.mark.parametrize(
+        "source",
+        (
+            "use hiding::*",
+            "use S::{hiding}",
+            "use S::* hiding hiding",
+            "import hiding",
+            "import foo::{hiding}",
+            "import foo hiding hiding",
+            "export hiding",
+            "export foo::{hiding}",
+        ),
+    )
+    def test_hiding_remains_available_as_a_header_path_atom(self, source: str) -> None:
+        parse(source)
+
+    @pytest.mark.parametrize(
         ("source", "alias", "tail"),
         (
             ("use ::Scope::*", None, ()),

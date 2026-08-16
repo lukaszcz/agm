@@ -712,6 +712,20 @@ class TestClashDeferred:
         msg = str(exc_info.value)
         assert "libA" in msg or "libB" in msg or "ambiguous" in msg.lower()
 
+    def test_use_deduplicates_routes_to_same_reexport_origin(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import core::{S}\nimport facade::{S}\nuse S::*\nmember()",
+                "core": "scope S\ndef member() -> int = 1\nend S",
+                "facade": "export core::{S}",
+            },
+        )
+
+        result = resolve_program(graph)
+
+        assert ENTRY_ID in result.modules
+
     def test_no_clash_same_qname(self, tmp_path: Path) -> None:
         """Two imports of the same module's same function don't clash (idempotent)."""
         graph = _make_graph_from_files(

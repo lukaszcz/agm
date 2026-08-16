@@ -1739,9 +1739,7 @@ class _Resolver:
                 f"use target '{rendered}' is not nameable. Import its module before using it.",
                 span=decl.span,
             )
-        if decl.alias is not None and not (
-            decl.alias[0] == "_" or decl.alias[0].isalpha()
-        ):
+        if decl.alias is not None and not (decl.alias[0] == "_" or decl.alias[0].isalpha()):
             raise AglScopeError(
                 "a whole-target use alias must be an identifier.",
                 span=decl.span,
@@ -1846,10 +1844,11 @@ class _Resolver:
                 relative = path[len(target) :]
                 for module, source in routes:
                     qnames = contributions.get(atom, frozenset())
-                    matching = tuple(qname for qname in qnames if qname[0] == module)
-                    selected = matching or tuple(qnames) if len(routes) == 1 else ()
-                    if not relative and not any(
-                        qname in self._cross_module_type_scopes for qname in selected
+                    origin = self._import_env.contributions[module].members.get(_bare_atom(source))
+                    selected = (origin,) if origin in qnames else ()
+                    if not selected or (
+                        not relative
+                        and not any(qname in self._cross_module_type_scopes for qname in selected)
                     ):
                         continue
                     source_root = source[: len(source) - len(relative)] if relative else source
@@ -1875,10 +1874,16 @@ class _Resolver:
                 merged = members_by_route.setdefault(imported_route, {})
                 for atom, qname in members.items():
                     merged.setdefault(atom, qname)
-        return tuple(
-            (imported_route, members_by_route[imported_route])
-            for imported_route in sorted(members_by_route, key=_bare_route_sort_key)
-        )
+        result: list[tuple[BareRoute, Mapping[NameAtom, QName]]] = []
+        seen_surfaces: set[frozenset[tuple[NameAtom, QName]]] = set()
+        for imported_route in sorted(members_by_route, key=_bare_route_sort_key):
+            members = members_by_route[imported_route]
+            surface = frozenset(members.items())
+            if surface and surface in seen_surfaces:
+                continue
+            seen_surfaces.add(surface)
+            result.append((imported_route, members))
+        return tuple(result)
 
     def _use_local_target(self, decl: UseDecl, target: ScopePath) -> ScopePath | None:
         """Resolve a use target through exact lexical scope paths."""

@@ -537,6 +537,26 @@ def test_inner_use_shadows_root_import_and_use_contributions(tmp_path: Path) -> 
     check_program(resolve_program(graph), base_caps())
 
 
+def test_use_can_target_local_scope_exposed_by_an_earlier_use(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use Outer::*\n"
+                "use Inner::*\n"
+                "scope Outer\n"
+                "scope Inner\n"
+                "def value() -> int = 1\n"
+                "end Inner\n"
+                "end Outer\n"
+                "value()\n"
+            ),
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
 def test_use_imported_nested_scope_selects_its_relative_public_subtree(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,

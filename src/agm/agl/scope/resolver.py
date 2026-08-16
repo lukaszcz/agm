@@ -1698,6 +1698,8 @@ class _Resolver:
         decl = self._reinterpret_single_member_use_alias(decl)
         target = tuple(segment.name for segment in decl.target)
         local = self._use_local_target(decl, target)
+        if local is None and not decl.anchored:
+            local = self._use_contributed_local_target(target, decl.span)
         route = () if decl.current_module else tuple(target[0].split("/"))
         route_target = () if decl.current_module else target[1:]
         direct_candidates = (
@@ -1933,6 +1935,49 @@ class _Resolver:
                 bases.append(scope.scope_path)
             scope = scope.parent
         return bases
+
+    def _use_contributed_local_target(
+        self, target: ScopePath, span: SourceSpan
+    ) -> ScopePath | None:
+        """Resolve a scope route exposed by an earlier local ``use``."""
+        layer: ScopeNode | None = self._current_scope()
+        while layer is not None:
+            candidates: set[ScopePath] = set()
+            for contribution in layer.local_use_contributions:
+                source_members = self._local_use_members(contribution.source.scope_path)
+                selected = self._select_use_members(
+                    contribution.declaration, source_members, validate=False
+                )
+                exposed_members: list[tuple[NameAtom, BindingRef]] = [
+                    (exposed, source)
+                    for exposed, source in selected.items()
+                    if isinstance(source, BindingRef)
+                ]
+                exposed_members.extend(
+                    self._use_renamed_members(contribution.declaration, source_members)
+                )
+                for exposed, source in exposed_members:
+                    exposed_path = _bare_path(exposed)
+                    if exposed_path[: len(target)] != target:
+                        continue
+                    source_path = (*source.scope_path, source.name)
+                    trailing_length = len(exposed_path) - len(target)
+                    candidate = (
+                        source_path if trailing_length == 0 else source_path[:-trailing_length]
+                    )
+                    if candidate in self._scope_nodes:
+                        candidates.add(candidate)
+            if len(candidates) > 1:
+                rendered = "::".join(target)
+                options = ", ".join("::".join(candidate) for candidate in sorted(candidates))
+                raise AglScopeError(
+                    f"use target '{rendered}' is ambiguous across local scopes: {options}.",
+                    span=span,
+                )
+            if candidates:
+                return next(iter(candidates))
+            layer = layer.parent
+        return None
 
     def _local_use_members(self, target: ScopePath) -> dict[NameAtom, BindingRef]:
         """Expose one local scope subtree relative to its selected root."""

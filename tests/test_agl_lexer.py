@@ -2659,6 +2659,28 @@ class TestModuleSystemLexer:
     @pytest.mark.parametrize(
         "source",
         (
+            "use S::* hiding",
+            "use S::* hiding x,",
+            "use S::",
+            "use S::{x as}",
+            "use S::{x, *}",
+            "use S::{x, y as}",
+            "use S::x as",
+        ),
+    )
+    def test_incomplete_use_headers_remain_identifier_expressions(self, source: str) -> None:
+        assert tok(source)[0] == ("NAME", "use")
+
+    def test_complete_use_header_recognizer_handles_trailing_brace_comma(self) -> None:
+        assert tok("use S::{x,}")[0] == ("USE", "use")
+
+    def test_use_header_rejects_an_incomplete_slash_segment(self) -> None:
+        with pytest.raises(LexError):
+            tok("use a/::x")
+
+    @pytest.mark.parametrize(
+        "source",
+        (
             "use library as L",
             "use /pkg as P",
             "use m/n::Scope as S",

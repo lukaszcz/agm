@@ -4544,6 +4544,12 @@ class TestImports:
         assert r2.ok, r2.diagnostics
         assert _int(r2.value) == 10
 
+    def test_current_module_use_is_retained(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("def Source::value() -> int = 1").ok
+        assert s.eval_entry("use ::Source::*").ok
+        assert s.eval_entry("value()").value == IntValue(1)
+
     def test_same_target_use_is_replaced_and_failed_entries_preserve_it(self) -> None:
         s = ReplSession()
         assert s.eval_entry("def Source::original() -> int = 1").ok

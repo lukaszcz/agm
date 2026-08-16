@@ -262,7 +262,9 @@ def _is_use_declaration(tokens: list[Token], index: int) -> bool:
                     if position >= end or tokens[position].type not in {NAME, OP_NAME}:
                         return False
                     position += 1
-            return position < end and tokens[position].type == "RBRACE" and position + 1 == end
+            return (
+                position < end and tokens[position].type == "RBRACE" and hiding_clause(position + 1)
+            )
         parsed = path_atom(position)
         if parsed is None:
             return False
@@ -272,7 +274,7 @@ def _is_use_declaration(tokens: list[Token], index: int) -> bool:
             if position >= end or tokens[position].type not in {NAME, OP_NAME}:
                 return False
             position += 1
-        return position == end
+        return hiding_clause(position)
 
     position = index + 1
     if position < end and tokens[position].type in {SLASH, DCOLON}:
@@ -393,8 +395,13 @@ def _promote_hiding(tokens: list[Token]) -> list[Token]:
             and str(tok) == "hiding"
             and result
             and (
-                result[-1].type in {STAR, WILDCARD}
+                result[-1].type in {STAR, WILDCARD, "RBRACE"}
                 or (header in {IMPORT, EXPORT} and result[-1].type == MODPATH)
+                or (
+                    header in {IMPORT, USE}
+                    and result[-1].type in {NAME, OP_NAME}
+                    and any(previous.type == DCOLON for previous in result)
+                )
                 or (header == IMPORT and len(result) >= 2 and result[-2].type in {"as", "AS"})
             )
         ):

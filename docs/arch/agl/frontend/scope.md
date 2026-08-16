@@ -15,8 +15,8 @@ Ambiguous bare or qualified routes are static errors.
 
 ## Imports and `use`
 
-`scope/imports.py` is the import-policy seam. An import contributes its full
-public qualified surface, except paths hidden by that declaration. A positive
+`scope/imports.py` builds contribution environments for import declarations.
+An import contributes its full public qualified surface, except paths hidden by that declaration. A positive
 import tail or `use` declaration contributes selected bare names without
 narrowing qualified access. `use` selects from an already nameable local scope
 or imported route; it does not create a module-loading edge. Region-scoped
@@ -30,8 +30,9 @@ rewriting source nodes.
 ## Code Entry Points
 
 - `src/agm/agl/scope/` — whole-program resolution and resolution side tables.
-- `src/agm/agl/scope/imports.py` — import, export, and bare-contribution policy.
-- `src/agm/agl/scope/resolver.py` and `program.py` — declaration collection and
-  cross-module resolution.
+- `src/agm/agl/scope/imports.py` — import contribution environments and qualified resolution.
+- `src/agm/agl/scope/program.py` — export maps, re-exports, and cross-module resolution.
+- `src/agm/agl/scope/resolver.py` — declaration collection, `use` selection, and regional bare
+  contributions.
 - Tests: `tests/test_agl_scope*.py`, `tests/test_agl_namespace_*.py`, and
   `tests/test_agl_qualifier_*.py`.

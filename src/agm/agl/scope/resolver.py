@@ -793,6 +793,15 @@ class _Resolver:
             if path[: len(decl_scope_path)] == decl_scope_path:
                 yield routes
 
+    def _reachable_decl_bare_scope_routes(
+        self, import_env: ImportEnv, path: ScopePath
+    ) -> Iterator[Mapping[NameAtom, frozenset[BareRoute]]]:
+        """Yield scope-identity routes from regional imports reaching *path*."""
+        for node_id, routes in import_env.decl_bare_scope_routes.items():
+            decl_scope_path = self._import_decl_scope_paths.get(node_id, ())
+            if path[: len(decl_scope_path)] == decl_scope_path:
+                yield routes
+
     def _is_orphan_receiver(self, owner_path: ScopePath) -> bool:
         """Return whether *owner_path* names a type imported from another module.
 
@@ -1893,6 +1902,22 @@ class _Resolver:
                     exposed = _bare_atom(relative)
                     for qname in selected:
                         members.setdefault(exposed, qname)
+
+        scope_routes = (
+            self._import_env.unqualified_scope_routes,
+            *self._reachable_decl_bare_scope_routes(
+                self._import_env, self._current_scope().scope_path
+            ),
+        )
+        for provenances in scope_routes:
+            for atom, routes in provenances.items():
+                path = _bare_path(atom)
+                if path[: len(target)] != target:
+                    continue
+                relative = path[len(target) :]
+                for module, source in routes:
+                    source_root = source[: len(source) - len(relative)] if relative else source
+                    members_by_route.setdefault((module, source_root), {})
         return tuple(
             (imported_route, members_by_route[imported_route])
             for imported_route in sorted(members_by_route, key=_bare_route_sort_key)

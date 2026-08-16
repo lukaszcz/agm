@@ -1051,16 +1051,16 @@ class TestScopedModuleSelections:
         assert result.ok is True
         assert capsys.readouterr().out == "99\n"
 
-    def test_selecting_a_scope_without_members_fails(self, tmp_path: Path) -> None:
+    def test_selecting_an_empty_scope_makes_its_identity_bare(self, tmp_path: Path) -> None:
         source = MULTI_FILE_DIR / "scoped_selection" / "empty.agl"
         (tmp_path / "geo.agl").write_text(source.read_text())
 
         result = _run_program(
-            "import geo::{Empty}\n()\n",
+            "import geo::{Empty}\nuse Empty::*\n()\n",
             roots_dirs=[tmp_path],
         )
 
-        assert result.ok is False
+        assert result.ok is True
 
 
 class TestCrossModuleScopedPaths:

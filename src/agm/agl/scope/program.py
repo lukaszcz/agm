@@ -7,9 +7,9 @@ results plus whole-program pre-pass tables.
 
 Design
 ------
-- **Export maps**: top-level ``def``/``record``/``enum``/``type`` names per
-  module plus explicit ``export`` declarations, computed before any body is
-  resolved.
+- **Public surfaces**: declaration export maps and separate named-scope
+  identity maps per module, including explicit ``export`` declarations,
+  computed before any body is resolved.
 - **Contribution import environment per module**: built from each module's
   import declarations against the already-loaded graph (no re-reading files).
 - **Whole-program pre-pass tables**: ``all_public_funcs`` and ``all_public_types``
@@ -40,6 +40,7 @@ from agm.agl.scope.imports import (
     NameAtom,
     PathAtom,
     QName,
+    ScopeOrigins,
     SingleTarget,
     WildcardTarget,
     build_import_env,
@@ -56,6 +57,7 @@ from agm.agl.scope.symbols import (
     alias_denotes_constructible_type,
 )
 from agm.agl.scope.symbols import to_bare_atom as _atom
+from agm.agl.scope.symbols import to_bare_path as _path
 from agm.agl.syntax.nodes import (
     BuiltinVarDecl,
     EnumDef,
@@ -64,11 +66,13 @@ from agm.agl.syntax.nodes import (
     ExportItem,
     FuncDef,
     ImportDecl,
+    LetDecl,
     Program,
     QualifierChain,
     RecordDef,
     ScopeRegion,
     TypeAlias,
+    VarDecl,
     static_items,
 )
 from agm.agl.syntax.spans import SourceSpan
@@ -96,16 +100,19 @@ class ResolvedModule:
     ``import_env``
         The import environment computed from this module's import declarations.
     ``exports``
-        Export map for this module: maps each exported name to its origin
-        :data:`~agm.agl.scope.imports.QName`.  For locally-declared names
-        the origin is ``(self_module_id, name)``; for re-exported imported names
-        it is the original defining module and name, preserved through chains.
+        Declaration export map for this module: maps each exported name to its
+        origin :data:`~agm.agl.scope.imports.QName`.
+    ``scope_exports``
+        Named-scope export map. Scope identities are separate from declaration
+        exports because an empty scope is public without denoting a value.
+        Re-exports preserve and merge the scope's original module/path origins.
     """
 
     module_id: ModuleId
     resolved: ModuleResolution
     import_env: ImportEnv
     exports: dict[NameAtom, QName]
+    scope_exports: dict[NameAtom, ScopeOrigins]
     source_text: str
 
 
@@ -274,21 +281,33 @@ def _item_atom(
     return _atom((*tuple(segment.name for segment in item.scope_path), item.name))
 
 
-def _compute_local_scope_paths(self_id: ModuleId, program: Program) -> frozenset[QName]:
-    """Collect ordinary named scopes independently of their declarations."""
-    result: set[QName] = set()
+def _compute_local_scope_exports(
+    self_id: ModuleId, program: Program
+) -> dict[NameAtom, ScopeOrigins]:
+    """Collect public named-scope identities from regions and shorthand paths."""
+    result: dict[NameAtom, ScopeOrigins] = {}
 
-    def collect(items: Iterable[object], parent: PathAtom) -> None:
+    def add_path(path: PathAtom) -> None:
+        for length in range(1, len(path) + 1):
+            atom = _atom(path[:length])
+            result[atom] = frozenset({(self_id, atom)})
+
+    def collect_regions(items: Iterable[object], parent: PathAtom) -> None:
         for item in items:
             if not isinstance(item, ScopeRegion):
                 continue
             path = (*parent, item.segment.name)
-            atom = _atom(path)
-            result.add((self_id, atom))
-            collect(item.items, path)
+            add_path(path)
+            collect_regions(item.items, path)
 
-    collect(program.body.items, ())
-    return frozenset(result)
+    collect_regions(program.body.items, ())
+    for item in static_items(program.body.items):
+        if isinstance(
+            item,
+            (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias, LetDecl, VarDecl),
+        ):
+            add_path(tuple(segment.name for segment in item.scope_path))
+    return result
 
 
 def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[NameAtom, QName]:
@@ -358,6 +377,7 @@ def _raise_reexport_conflict(
 
 def _resolve_reexports(
     export_maps: dict[ModuleId, dict[NameAtom, QName]],
+    scope_export_maps: dict[ModuleId, dict[NameAtom, ScopeOrigins]],
     all_targets: dict[int, ImportTarget],
     graph: ModuleGraph,
 ) -> None:
@@ -388,19 +408,27 @@ def _resolve_reexports(
                     target_mids = sorted(target.modules, key=_mid_sort_key)
 
                 for target_mid in target_mids:
-                    target_exports = export_maps.get(target_mid, {})
-                    additions = _compute_reexport_additions(
-                        decl, target_exports, allow_missing=True
+                    additions, scope_additions = _compute_reexport_additions(
+                        decl,
+                        export_maps.get(target_mid, {}),
+                        scope_export_maps.get(target_mid, {}),
+                        allow_missing=True,
                     )
-                    current_exports = export_maps[mid]
                     for exposed, qname in additions.items():
-                        existing = current_exports.get(exposed)
+                        existing = export_maps[mid].get(exposed)
                         if existing is None:
-                            current_exports[exposed] = qname
+                            export_maps[mid][exposed] = qname
                             changed = True
                             changed_decl = decl
                         elif existing != qname:
                             _raise_reexport_conflict(exposed, existing, qname, decl)
+                    for exposed, origins in scope_additions.items():
+                        existing_origins = scope_export_maps[mid].get(exposed, frozenset())
+                        merged_origins = existing_origins | origins
+                        if merged_origins != existing_origins:
+                            scope_export_maps[mid][exposed] = merged_origins
+                            changed = True
+                            changed_decl = decl
         return changed, changed_decl
 
     declaration_count = sum(len(loaded.export_decls) for loaded in graph.modules.values())
@@ -428,76 +456,97 @@ def _resolve_reexports(
                 else tuple(sorted(target.modules, key=_mid_sort_key))
             )
             for target_mid in validation_targets:
-                _compute_reexport_additions(decl, export_maps.get(target_mid, {}))
+                _compute_reexport_additions(
+                    decl,
+                    export_maps.get(target_mid, {}),
+                    scope_export_maps.get(target_mid, {}),
+                )
 
 
 def _compute_reexport_additions(
     decl: ExportDecl,
-    target_exports: dict[NameAtom, QName],
+    target_exports: Mapping[NameAtom, QName],
+    target_scopes: Mapping[NameAtom, ScopeOrigins],
     *,
     allow_missing: bool = False,
-) -> dict[NameAtom, QName]:
-    """Compute names to add to the current module's exports from one ExportDecl.
-
-    Returns a dict of ``exposed_name → origin_qname``.  This is called once
-    per (module, export-decl, target-module) triple during the fixed-point.
-    A region-scoped ``decl`` re-roots every forwarded atom under its own
-    scope path, exactly as an ``import …::{… as …}`` tail re-roots a selected atom.
-    """
+) -> tuple[dict[NameAtom, QName], dict[NameAtom, ScopeOrigins]]:
+    """Compute declaration and scope identities forwarded by one export."""
     result: dict[NameAtom, QName] = {}
+    scope_result: dict[NameAtom, ScopeOrigins] = {}
     region_prefix = tuple(segment.name for segment in decl.scope_path)
 
     def item_path(item: ExportItem) -> PathAtom:
         return (*tuple(segment.name for segment in item.scope_path), item.name)
 
-    def matches(prefix: PathAtom) -> tuple[NameAtom, ...]:
-        return tuple(
-            atom
-            for atom in target_exports
-            if ((atom,) if isinstance(atom, str) else atom)[: len(prefix)] == prefix
-        )
+    def matches(surface: Mapping[NameAtom, object], prefix: PathAtom) -> tuple[NameAtom, ...]:
+        return tuple(atom for atom in surface if _path(atom)[: len(prefix)] == prefix)
 
-    matched_items: list[tuple[ExportItem, tuple[NameAtom, ...]]] = []
+    matched_items: list[tuple[ExportItem, tuple[NameAtom, ...], tuple[NameAtom, ...]]] = []
     for item in (*decl.items, *decl.hidden):
-        matched = matches(item_path(item))
-        if not matched and not allow_missing:
+        prefix = item_path(item)
+        declarations = matches(target_exports, prefix)
+        scopes = matches(target_scopes, prefix)
+        if not declarations and not scopes and not allow_missing:
             raise AglScopeError(
-                f"name {'::'.join(item_path(item))!r} is not exported by module "
+                f"name {'::'.join(prefix)!r} is not exported by module "
                 f"{'/'.join(decl.module_path)!r}",
                 span=decl.span,
             )
-        matched_items.append((item, matched))
+        matched_items.append((item, declarations, scopes))
 
-    hidden_sources = {
-        source for _item, matched in matched_items[len(decl.items) :] for source in matched
+    hidden_declarations = {
+        source
+        for _item, declarations, _scopes in matched_items[len(decl.items) :]
+        for source in declarations
+    }
+    hidden_scopes = {
+        source
+        for _item, _declarations, scopes in matched_items[len(decl.items) :]
+        for source in scopes
     }
 
-    def add(source: NameAtom, exposed: NameAtom) -> None:
-        exposed_path = (exposed,) if isinstance(exposed, str) else exposed
+    def add(
+        source: NameAtom,
+        exposed: NameAtom,
+        origins: Mapping[NameAtom, QName],
+        destination: dict[NameAtom, QName],
+    ) -> None:
+        exposed_path = _path(exposed)
         rooted = _atom(region_prefix + exposed_path) if region_prefix else exposed
-        origin = target_exports[source]
-        existing = result.get(rooted)
+        origin = origins[source]
+        existing = destination.get(rooted)
         if existing is not None and existing != origin:
             _raise_reexport_conflict(rooted, existing, origin, decl)
-        result[rooted] = origin
+        destination[rooted] = origin
 
     if not decl.items:
         for source in target_exports:
-            if source not in hidden_sources:
-                add(source, source)
-        return result
+            if source not in hidden_declarations:
+                add(source, source, target_exports, result)
+        for source, origins in target_scopes.items():
+            if source not in hidden_scopes:
+                exposed_path = _path(source)
+                rooted = _atom(region_prefix + exposed_path) if region_prefix else source
+                scope_result[rooted] = scope_result.get(rooted, frozenset()) | origins
+        return result, scope_result
 
-    for item, matched in matched_items[: len(decl.items)]:
+    for item, declarations, scopes in matched_items[: len(decl.items)]:
         prefix = item_path(item)
-        for source in matched:
-            source_path = (source,) if isinstance(source, str) else source
-            if item.rename is None:
-                exposed = source
-            else:
-                routed = (item.rename, *source_path[len(prefix) :])
-                exposed = _atom(routed)
-            add(source, exposed)
-    return result
+        for source in declarations:
+            source_path = _path(source)
+            exposed = (
+                source if item.rename is None else _atom((item.rename, *source_path[len(prefix) :]))
+            )
+            add(source, exposed, target_exports, result)
+        for source in scopes:
+            source_path = _path(source)
+            exposed = (
+                source if item.rename is None else _atom((item.rename, *source_path[len(prefix) :]))
+            )
+            exposed_path = _path(exposed)
+            rooted = _atom(region_prefix + exposed_path) if region_prefix else exposed
+            scope_result[rooted] = scope_result.get(rooted, frozenset()) | target_scopes[source]
+    return result, scope_result
 
 
 def _decl_to_import_target(
@@ -587,10 +636,10 @@ def resolve_program(
     # Step 1: Build local export maps (own declarations only).
     # ------------------------------------------------------------------
     export_maps: dict[ModuleId, dict[NameAtom, QName]] = {}
-    cross_module_named_scopes: set[QName] = set()
+    scope_export_maps: dict[ModuleId, dict[NameAtom, ScopeOrigins]] = {}
     for mid, loaded in graph.modules.items():
         export_maps[mid] = _compute_local_exports(mid, loaded.program)
-        cross_module_named_scopes.update(_compute_local_scope_paths(mid, loaded.program))
+        scope_export_maps[mid] = _compute_local_scope_exports(mid, loaded.program)
 
     # ------------------------------------------------------------------
     # Step 2: Map ImportDecl and ExportDecl → ImportTarget for every module.
@@ -607,7 +656,13 @@ def resolve_program(
     # ------------------------------------------------------------------
     # Step 3: Resolve re-exports (fixed-point propagation).
     # ------------------------------------------------------------------
-    _resolve_reexports(export_maps, all_targets, graph)
+    _resolve_reexports(export_maps, scope_export_maps, all_targets, graph)
+
+    cross_module_named_scopes = frozenset(
+        (module_id, atom)
+        for module_id, scope_exports in scope_export_maps.items()
+        for atom in scope_exports
+    )
 
     # ------------------------------------------------------------------
     # Step 4: Build ImportEnv per module.
@@ -619,7 +674,7 @@ def resolve_program(
         module_targets: dict[int, ImportTarget] = {
             decl.node_id: all_targets[decl.node_id] for decl in decls
         }
-        import_envs[mid] = build_import_env(decls, module_targets, export_maps)
+        import_envs[mid] = build_import_env(decls, module_targets, export_maps, scope_export_maps)
 
     # ------------------------------------------------------------------
     # Step 5: Whole-program pre-pass — collect all funcs/types and
@@ -696,7 +751,7 @@ def resolve_program(
             cross_module_constructor_refs=cross_module_constructor_refs,
             cross_module_constructible_types=cross_module_constructible_types,
             cross_module_type_scopes=frozenset(all_public_types),
-            cross_module_named_scopes=frozenset(cross_module_named_scopes),
+            cross_module_named_scopes=cross_module_named_scopes,
             all_public_types=all_public_types,
             allow_root_statements=is_entry and entry_parent_scope is not None,
             repl_session_scope=entry_repl_session_scope if is_entry else None,
@@ -716,6 +771,7 @@ def resolve_program(
             resolved=resolved,
             import_env=import_envs[mid],
             exports=export_maps[mid],
+            scope_exports=scope_export_maps[mid],
             source_text=graph.modules[mid].source_text,
         )
 

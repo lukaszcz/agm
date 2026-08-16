@@ -2302,6 +2302,76 @@ class TestExportDecl:
         assert facade_exports["foo"] == (lib_id, "foo")
         assert facade_exports["bar"] == (lib_id, "bar")
 
+    def test_reexport_all_preserves_an_empty_scope_for_consumers(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import facade\nuse facade::Empty::*\n()",
+                "facade": "export lib",
+                "lib": "scope Empty\nend Empty",
+            },
+            default_stdlib=False,
+        )
+
+        result = resolve_program(graph)
+
+        lib_id = ModuleId.from_path("lib")
+        facade = result.modules[ModuleId.from_path("facade")]
+        assert facade.scope_exports["Empty"] == frozenset({(lib_id, "Empty")})
+
+    @pytest.mark.parametrize("tail", ("", "::*"), ids=("plain", "wildcard-tail"))
+    def test_hiding_accepts_an_empty_scope_identity(self, tmp_path: Path, tail: str) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": f"import lib{tail} hiding Empty\n()",
+                "lib": "scope Empty\nend Empty",
+            },
+            default_stdlib=False,
+        )
+
+        resolve_program(graph)
+
+    def test_reexport_hiding_removes_an_empty_scope_identity(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import facade\n()",
+                "facade": "export lib hiding Empty",
+                "lib": "scope Empty\nend Empty",
+            },
+            default_stdlib=False,
+        )
+
+        result = resolve_program(graph)
+
+        assert "Empty" not in result.modules[ModuleId.from_path("facade")].scope_exports
+
+    @pytest.mark.parametrize(
+        "declaration",
+        (
+            "scope Public\ndef hidden() -> int = 1\nend Public",
+            "def Public::hidden() -> int = 1",
+        ),
+        ids=("region", "shorthand"),
+    )
+    def test_scope_identity_survives_hiding_its_only_member(
+        self, tmp_path: Path, declaration: str
+    ) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import lib hiding Public::hidden\nuse lib::Public::*\n()",
+                "lib": declaration,
+            },
+            default_stdlib=False,
+        )
+
+        result = resolve_program(graph)
+
+        lib_id = ModuleId.from_path("lib")
+        assert result.modules[lib_id].scope_exports["Public"] == frozenset({(lib_id, "Public")})
+
     def test_reexport_origin_is_preserved_through_chain(self, tmp_path: Path) -> None:
         """Re-export is transparent: B re-exports from A, C uses B — origin is A, not B."""
         graph = _make_graph_from_files(

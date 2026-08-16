@@ -3980,13 +3980,15 @@ class _Checker:
                 if constructor is not None and constructor.variant is not None
                 else node.variant
             )
-            if constructor is None or not constructor.matches(expr_type, variant):
+            if constructor is None:
                 self._check_variant_qualification(
                     qualifier=node.qualifier,
                     variant=node.variant,
                     enum_type=expr_type,
                     span=node.span,
                 )
+            elif not constructor.matches(expr_type, variant):
+                raise _variant_not_in_enum(variant, expr_type, node.span)
             if variant not in self._env.type_table.enum_variants(expr_type):
                 raise _variant_not_in_enum(variant, expr_type, node.span)
             return BoolType()

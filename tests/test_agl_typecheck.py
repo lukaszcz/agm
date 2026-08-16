@@ -5685,6 +5685,20 @@ class TestIsTest:
         err = reject_type("enum A\n  | X\nenum B\n  | X\nlet a = A::X()\na is B::X")
         assert "qualifier" in str(err).lower() or "enum" in str(err).lower()
 
+    def test_is_test_rejects_variant_alias_owned_by_another_enum(self) -> None:
+        reject_type(
+            "use First::F::A as AliasForFirstA\n"
+            "scope First\n"
+            "enum F | A\n"
+            "end First\n"
+            "scope Second\n"
+            "enum E | A\n"
+            "end Second\n"
+            "let value = Second::E::A\n"
+            "value is AliasForFirstA",
+            default_stdlib=False,
+        )
+
     def test_is_test_self_qualified_enum_variant(self) -> None:
         r = accept_type("enum Status\n  | Pass\n  | Fail\nlet s = Pass()\ns is ::Status::Pass")
         assert r.resolved.program is not None

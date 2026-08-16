@@ -163,6 +163,36 @@ def test_simple_let_name_binds_even_when_it_matches_a_nullary_constructor() -> N
     assert strip_decl_ids(checked.type_env.get_binding_type(let.pattern.node_id)) == EnumType("Opt")
 
 
+@pytest.mark.parametrize(
+    "entry",
+    [
+        (
+            "import lib\n"
+            "use lib::*\n"
+            "let instance = R(value = 1)\n"
+            "let R(value) = instance\n"
+        ),
+        (
+            "scope Region\n"
+            "import lib::*\n"
+            "let instance = R(value = 1)\n"
+            "let R(value) = instance\n"
+            "end Region\n"
+        ),
+    ],
+)
+def test_root_record_patterns_work_through_use_and_regional_import_tails(
+    tmp_path: Path, entry: str
+) -> None:
+    accept_graph(
+        tmp_path,
+        {
+            "lib": "record R\n  value: int\n",
+            "entry": entry,
+        },
+    )
+
+
 def test_record_patterns_support_imported_and_qualified_alias_spellings(tmp_path: Path) -> None:
     checked = accept_graph(
         tmp_path,

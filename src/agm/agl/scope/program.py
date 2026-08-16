@@ -296,7 +296,7 @@ def _cross_module_constructor_refs(
     result: dict[QName, ConstructorRef] = {}
     for (module_id, atom), declaration in all_public_types.items():
         path = (atom,) if isinstance(atom, str) else atom
-        if isinstance(declaration, (RecordDef, ExceptionDef)) and path[:-1]:
+        if isinstance(declaration, (RecordDef, ExceptionDef)):
             result[(module_id, atom)] = ConstructorRef(
                 owner_name=declaration.name,
                 variant=None,

@@ -42,7 +42,6 @@ from agm.agl.semantics.values import (
     ArrayValue,
     BoolValue,
     DecimalValue,
-    EnumValue,
     IntValue,
     JsonValue,
     RecordValue,
@@ -335,7 +334,7 @@ def test_golden_finite_recursive_json_cast_uses_a_static_plan() -> None:
     assert value.recipe.encode_defs
 
 
-def test_golden_growing_recursive_json_cast_uses_planless_strategy() -> None:
+def test_golden_growing_recursive_json_cast_uses_dynamic_template_strategy() -> None:
     value = _bound_value(
         "record Pair[A, B]\n"
         "  first: A\n"
@@ -352,6 +351,7 @@ def test_golden_growing_recursive_json_cast_uses_planless_strategy() -> None:
     assert value.recipe.strategy is ConversionStrategy.TO_JSON_VALUE_DIRECTED
     assert value.recipe.encode is None
     assert value.recipe.encode_defs == ()
+    assert value.recipe.dynamic_encode is not None
 
 
 _BOTTOM_JSON_CAST_SOURCES = (
@@ -361,7 +361,7 @@ _BOTTOM_JSON_CAST_SOURCES = (
 
 
 @pytest.mark.parametrize("source", _BOTTOM_JSON_CAST_SOURCES)
-def test_golden_bottom_json_cast_lowers_to_planless_noop(source: str) -> None:
+def test_golden_bottom_json_cast_lowers_to_noop(source: str) -> None:
     value = _bound_value(source, "result")
     assert isinstance(value, IrConvert)
     assert value.recipe.strategy is ConversionStrategy.NOOP
@@ -432,17 +432,17 @@ def test_decode_scalar_success_branches() -> None:
             "Missing field 'a'",
         ),
         (
-            EnumDecode(_RED, "Color", (VariantDecode("Red", ()),)),
+            EnumDecode(_RED, "Color", (VariantDecode("Red", NominalId(999), "Red", ()),)),
             5,
             "Expected object for enum, got int",
         ),
         (
-            EnumDecode(_RED, "Color", (VariantDecode("Red", ()),)),
+            EnumDecode(_RED, "Color", (VariantDecode("Red", NominalId(999), "Red", ()),)),
             {},
             "Enum object must have a string '$case' field",
         ),
         (
-            EnumDecode(_RED, "Color", (VariantDecode("Red", ()),)),
+            EnumDecode(_RED, "Color", (VariantDecode("Red", NominalId(999), "Red", ()),)),
             {"$case": "Purple"},
             "Unknown enum variant 'Purple' for 'Color'. Valid variants: ['Red']",
         ),
@@ -450,7 +450,11 @@ def test_decode_scalar_success_branches() -> None:
             EnumDecode(
                 _FOO,
                 "Shape",
-                (VariantDecode("Circle", (("r", ScalarDecode(ScalarKind.INT)),)),),
+                (
+                    VariantDecode(
+                        "Circle", NominalId(999), "Circle", (("r", ScalarDecode(ScalarKind.INT)),)
+                    ),
+                ),
             ),
             {"$case": "Circle"},
             "Enum variant 'Circle' is missing field 'r'",
@@ -465,20 +469,32 @@ def test_decode_error_branches(schema, obj, message: str) -> None:
 def test_decode_nested_record_and_enum_success() -> None:
     rec = _decode(RecordDecode(_FOO, "Foo", (("a", ScalarDecode(ScalarKind.INT)),)), {"a": 3})
     assert rec == RecordValue(nominal=_FOO, display_name="Foo", fields={"a": IntValue(3)})
-    enum_val = _decode(EnumDecode(_RED, "Color", (VariantDecode("Red", ()),)), {"$case": "Red"})
-    assert enum_val == EnumValue(nominal=_RED, display_name="Color", variant="Red", fields={})
+    enum_val = _decode(
+        EnumDecode(_RED, "Color", (VariantDecode("Red", NominalId(999), "Color::Red", ()),)),
+        {"$case": "Red"},
+    )
+    assert enum_val == RecordValue(nominal=NominalId(999), display_name="Color::Red", fields={})
     lst = _decode(ArrayDecode(ScalarDecode(ScalarKind.INT)), [1, 2])
     assert lst == ArrayValue([IntValue(1), IntValue(2)])
     dct = _decode(DictDecode(ScalarDecode(ScalarKind.INT)), {"k": 1})
     assert dct.entries == {"k": IntValue(1)}
     variant_with_field = _decode(
         EnumDecode(
-            _FOO, "Shape", (VariantDecode("Circle", (("r", ScalarDecode(ScalarKind.INT)),)),)
+            _FOO,
+            "Shape",
+            (
+                VariantDecode(
+                    "Circle",
+                    NominalId(999),
+                    "Shape::Circle",
+                    (("r", ScalarDecode(ScalarKind.INT)),),
+                ),
+            ),
         ),
         {"$case": "Circle", "r": 5},
     )
-    assert variant_with_field == EnumValue(
-        nominal=_FOO, display_name="Shape", variant="Circle", fields={"r": IntValue(5)}
+    assert variant_with_field == RecordValue(
+        nominal=NominalId(999), display_name="Shape::Circle", fields={"r": IntValue(5)}
     )
 
 
@@ -561,15 +577,28 @@ def test_validate_rejects_to_json_without_encode_plan() -> None:
         validate_ir(_convert_program(recipe), deep=True)
 
 
-def test_validate_accepts_planless_value_directed_json_recipe() -> None:
-    from agm.agl.ir.validate import validate_ir
+def test_dynamic_value_directed_recipe_requires_a_plan_at_evaluation() -> None:
+    with pytest.raises(AssertionError, match="requires a dynamic encode plan"):
+        run_recipe(
+            ConversionRecipe(
+                strategy=ConversionStrategy.TO_JSON_VALUE_DIRECTED,
+                source_label="Growing",
+                target_label="json",
+            ),
+            IntValue(1),
+        )
+
+
+def test_validate_rejects_dynamic_value_directed_recipe_without_a_plan() -> None:
+    from agm.agl.ir.validate import InvalidIrError, validate_ir
 
     recipe = ConversionRecipe(
         strategy=ConversionStrategy.TO_JSON_VALUE_DIRECTED,
         source_label="Perfect[int]",
         target_label="json",
     )
-    validate_ir(_convert_program(recipe), deep=True)
+    with pytest.raises(InvalidIrError, match="requires dynamic_encode"):
+        validate_ir(_convert_program(recipe), deep=True)
 
 
 def test_validate_rejects_to_json_with_decode_or_malformed_encode_plan() -> None:
@@ -753,6 +782,315 @@ def test_validate_accepts_well_formed_convert() -> None:
     validate_ir(_convert_program(recipe), deep=True)  # no exception
 
 
+def test_run_error_encodes_attached_nominal_plan_without_display_name_inspection() -> None:
+    """Host-error fields use their attached static plan, not value display metadata."""
+    from agm.agl.ir.contracts import EncodePlan, ExceptionFieldEncode
+    from agm.agl.pipeline import exception_value_to_run_error
+    from agm.agl.semantics.values import ExceptionValue
+
+    agent = NominalId(4)
+    command = NominalId(5)
+    plan = EncodePlan(
+        EnumEncode(
+            agent,
+            (VariantEncode("AgentCommand", command, (("command", ScalarEncode()),)),),
+        )
+    )
+    error = exception_value_to_run_error(
+        ExceptionValue(
+            nominal=NominalId(3),
+            display_name="AgentCallError",
+            fields={
+                "message": TextValue("failed"),
+                "agent": RecordValue(command, "not-a-tag", {"command": TextValue("worker")}),
+            },
+        ),
+        exception_field_encodes={NominalId(3): (ExceptionFieldEncode("agent", plan),)},
+    )
+
+    assert error.fields["agent"] == {"$case": "AgentCommand", "command": "worker"}
+
+
+@pytest.mark.parametrize(
+    "descriptor",
+    (None, NominalDescriptor(NominalId(1), ENTRY_ID, (), "NotAnException", NominalKind.RECORD)),
+)
+def test_validate_rejects_exception_field_encodes_for_non_exception_nominal(
+    descriptor: NominalDescriptor | None,
+) -> None:
+    """Exception encoding provenance must name a linked exception nominal."""
+    from agm.agl.ir.validate import InvalidIrError, validate_ir
+
+    program = _convert_program(
+        ConversionRecipe(ConversionStrategy.NOOP, source_label="int", target_label="int")
+    )
+    nominal = NominalId(1)
+    program.exception_field_encodes[nominal] = ()
+    if descriptor is not None:
+        program.nominals[nominal] = descriptor
+
+    with pytest.raises(InvalidIrError):
+        validate_ir(program, deep=True)
+
+
+def test_validate_rejects_invalid_exception_field_encode_metadata() -> None:
+    """Exception provenance names real, unique fields and well-formed plans."""
+    from agm.agl.ir.contracts import EncodePlan, ExceptionFieldEncode
+    from agm.agl.ir.validate import InvalidIrError, validate_ir
+
+    nominal = NominalId(1)
+    program = _convert_program(
+        ConversionRecipe(ConversionStrategy.NOOP, source_label="int", target_label="int")
+    )
+    program.nominals[nominal] = NominalDescriptor(
+        nominal, ENTRY_ID, (), "Problem", NominalKind.EXCEPTION, ("message", "choice")
+    )
+    bad_field_encodes = (
+        (ExceptionFieldEncode("missing", EncodePlan(ScalarEncode())),),
+        (
+            ExceptionFieldEncode("choice", EncodePlan(ScalarEncode())),
+            ExceptionFieldEncode("choice", EncodePlan(ScalarEncode())),
+        ),
+        (ExceptionFieldEncode("choice", EncodePlan(RefEncode("missing"))),),
+    )
+    for field_encodes in bad_field_encodes:
+        program.exception_field_encodes[nominal] = field_encodes
+        with pytest.raises(InvalidIrError):
+            validate_ir(program, deep=True)
+
+
+def test_validate_rejects_dynamic_encode_metadata_outside_its_strategy() -> None:
+    from agm.agl.ir.contracts import DynamicEncodePlan
+    from agm.agl.ir.validate import InvalidIrError, validate_ir
+
+    recipe = ConversionRecipe(
+        strategy=ConversionStrategy.NOOP,
+        source_label="int",
+        target_label="int",
+        dynamic_encode=DynamicEncodePlan(ScalarEncode(), ()),
+    )
+    with pytest.raises(InvalidIrError, match="dynamic_encode"):
+        validate_ir(_convert_program(recipe), deep=True)
+
+
+def test_validate_rejects_invalid_dynamic_enum_mapping() -> None:
+    from agm.agl.ir.contracts import (
+        DynamicApplyEncode,
+        DynamicEncodeDefinition,
+        DynamicEncodePlan,
+        DynamicEnumEncode,
+        DynamicVariantEncode,
+    )
+    from agm.agl.ir.validate import InvalidIrError, validate_ir
+
+    enum = NominalId(1)
+    member = NominalId(2)
+    recipe = ConversionRecipe(
+        strategy=ConversionStrategy.TO_JSON_VALUE_DIRECTED,
+        source_label="Growing",
+        target_label="json",
+        dynamic_encode=DynamicEncodePlan(
+            DynamicApplyEncode(enum, ()),
+            (
+                DynamicEncodeDefinition(
+                    enum,
+                    0,
+                    DynamicEnumEncode(enum, (DynamicVariantEncode("Wrong", member, ()),)),
+                ),
+            ),
+        ),
+    )
+    program = _convert_program(recipe)
+    program.nominals.update(
+        {
+            enum: NominalDescriptor(
+                enum,
+                ENTRY_ID,
+                (),
+                "Choice",
+                NominalKind.ENUM,
+                variants=(VariantDescriptor("Actual", (), member),),
+            ),
+            member: NominalDescriptor(member, ENTRY_ID, (), "Actual", NominalKind.RECORD),
+        }
+    )
+    with pytest.raises(InvalidIrError, match="disagrees"):
+        validate_ir(program, deep=True)
+
+    duplicate_recipe = ConversionRecipe(
+        strategy=ConversionStrategy.TO_JSON_VALUE_DIRECTED,
+        source_label="Growing",
+        target_label="json",
+        dynamic_encode=DynamicEncodePlan(
+            DynamicApplyEncode(enum, ()),
+            (
+                DynamicEncodeDefinition(
+                    enum,
+                    0,
+                    DynamicEnumEncode(enum, (DynamicVariantEncode("Actual", member, ()),)),
+                ),
+                DynamicEncodeDefinition(
+                    enum,
+                    0,
+                    DynamicEnumEncode(enum, (DynamicVariantEncode("Actual", member, ()),)),
+                ),
+            ),
+        ),
+    )
+    duplicate_program = _convert_program(duplicate_recipe)
+    duplicate_program.nominals.update(program.nominals)
+    with pytest.raises(InvalidIrError, match="duplicate"):
+        validate_ir(duplicate_program, deep=True)
+
+
+def test_validate_checks_each_dynamic_encode_metadata_shape() -> None:
+    from agm.agl.ir.contracts import (
+        DynamicApplyEncode,
+        DynamicEncodeDefinition,
+        DynamicEncodePlan,
+        DynamicEnumEncode,
+        DynamicExceptionEncode,
+        DynamicRecordEncode,
+        DynamicTypeParameterEncode,
+        DynamicVariantEncode,
+        ExceptionFieldEncode,
+    )
+    from agm.agl.ir.validate import InvalidIrError, validate_ir
+
+    record = NominalId(1)
+    exception = NominalId(2)
+    enum = NominalId(3)
+    member = NominalId(4)
+    report = NominalId(5)
+
+    def program_for(plan: object):
+        program = _convert_program(
+            ConversionRecipe(ConversionStrategy.NOOP, source_label="int", target_label="int")
+        )
+        program.nominals.update(
+            {
+                record: NominalDescriptor(
+                    record, ENTRY_ID, (), "Record", NominalKind.RECORD, ("field",)
+                ),
+                exception: NominalDescriptor(
+                    exception, ENTRY_ID, (), "Problem", NominalKind.EXCEPTION, ("field",)
+                ),
+                enum: NominalDescriptor(
+                    enum,
+                    ENTRY_ID,
+                    (),
+                    "Choice",
+                    NominalKind.ENUM,
+                    variants=(VariantDescriptor("Case", ("field",), member),),
+                ),
+                member: NominalDescriptor(
+                    member, ENTRY_ID, (), "Case", NominalKind.RECORD, ("field",)
+                ),
+                report: NominalDescriptor(
+                    report, ENTRY_ID, (), "Report", NominalKind.EXCEPTION, ("payload",)
+                ),
+            }
+        )
+        program.exception_field_encodes[report] = (ExceptionFieldEncode("payload", plan),)
+        return program
+
+    valid = DynamicEncodePlan(
+        DynamicApplyEncode(record, ()),
+        (
+            DynamicEncodeDefinition(
+                record,
+                0,
+                DynamicRecordEncode(
+                    record,
+                    (
+                        (
+                            "field",
+                            DynamicExceptionEncode(
+                                exception,
+                                (
+                                    (
+                                        "field",
+                                        DynamicEnumEncode(
+                                            enum,
+                                            (
+                                                DynamicVariantEncode(
+                                                    "Case",
+                                                    member,
+                                                    (("field", ScalarEncode()),),
+                                                ),
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+    validate_ir(program_for(valid), deep=True)
+    invalid = (
+        DynamicEncodePlan(
+            DynamicApplyEncode(record, ()),
+            (DynamicEncodeDefinition(record, -1, DynamicRecordEncode(record, ())),),
+        ),
+        DynamicEncodePlan(
+            DynamicApplyEncode(record, ()),
+            (DynamicEncodeDefinition(record, 0, ScalarEncode()),),
+        ),
+        DynamicEncodePlan(
+            DynamicApplyEncode(record, ()),
+            (DynamicEncodeDefinition(record, 0, DynamicRecordEncode(exception, ())),),
+        ),
+        DynamicEncodePlan(
+            DynamicApplyEncode(exception, ()),
+            (DynamicEncodeDefinition(exception, 0, DynamicExceptionEncode(record, ())),),
+        ),
+        DynamicEncodePlan(
+            DynamicApplyEncode(enum, ()),
+            (DynamicEncodeDefinition(enum, 0, DynamicEnumEncode(record, ())),),
+        ),
+        DynamicEncodePlan(DynamicTypeParameterEncode(0), ()),
+        DynamicEncodePlan(DynamicApplyEncode(NominalId(99), ()), ()),
+        DynamicEncodePlan(
+            DynamicApplyEncode(record, (ScalarEncode(),)),
+            (DynamicEncodeDefinition(record, 0, DynamicRecordEncode(record, ())),),
+        ),
+        DynamicEncodePlan(DynamicRecordEncode(record, (("wrong", ScalarEncode()),)), ()),
+        DynamicEncodePlan(DynamicRecordEncode(exception, ()), ()),
+        DynamicEncodePlan(DynamicExceptionEncode(exception, (("wrong", ScalarEncode()),)), ()),
+        DynamicEncodePlan(DynamicExceptionEncode(record, ()), ()),
+        DynamicEncodePlan(
+            DynamicEnumEncode(record, ()),
+            (),
+        ),
+        DynamicEncodePlan(DynamicEnumEncode(enum, ()), ()),
+        DynamicEncodePlan(
+            DynamicEnumEncode(
+                enum, (DynamicVariantEncode("Case", member, (("wrong", ScalarEncode()),)),)
+            ),
+            (),
+        ),
+    )
+    for plan in invalid:
+        with pytest.raises(InvalidIrError):
+            validate_ir(program_for(plan), deep=True)
+
+    unreachable_definition = DynamicEncodePlan(
+        ScalarEncode(),
+        (
+            DynamicEncodeDefinition(
+                record,
+                0,
+                DynamicRecordEncode(record, (("field", ScalarEncode()),)),
+            ),
+        ),
+    )
+    with pytest.raises(InvalidIrError, match="unreachable nominal definitions"):
+        validate_ir(program_for(unreachable_definition), deep=True)
+
+
 def test_validate_rejects_decode_with_unregistered_nominal() -> None:
     """Deep validate rejects a decode schema referencing a nominal not in program.nominals."""
     from agm.agl.ir.validate import InvalidIrError, validate_ir
@@ -770,15 +1108,154 @@ def test_validate_rejects_decode_with_unregistered_nominal() -> None:
         validate_ir(_convert_program(recipe), deep=True)
 
 
+@pytest.mark.parametrize(
+    ("decode", "descriptor", "error"),
+    (
+        (
+            RecordDecode(NominalId(10), "Tree", ()),
+            NominalDescriptor(NominalId(10), ENTRY_ID, (), "Tree", NominalKind.ENUM),
+            "non-record nominal",
+        ),
+        (
+            RecordDecode(NominalId(10), "Record", (("wrong", ScalarDecode(ScalarKind.INT)),)),
+            NominalDescriptor(
+                NominalId(10), ENTRY_ID, (), "Record", NominalKind.RECORD, ("value",)
+            ),
+            "fields disagree",
+        ),
+        (
+            RecordDecode(NominalId(10), "Wrong", (("value", ScalarDecode(ScalarKind.INT)),)),
+            NominalDescriptor(
+                NominalId(10), ENTRY_ID, (), "Record", NominalKind.RECORD, ("value",)
+            ),
+            "display name disagrees",
+        ),
+    ),
+)
+def test_validate_rejects_record_decode_that_disagrees_with_linked_record(
+    decode: RecordDecode, descriptor: NominalDescriptor, error: str
+) -> None:
+    """A record decode must exactly describe its linked record nominal."""
+    from agm.agl.ir.validate import InvalidIrError, validate_ir
+
+    recipe = ConversionRecipe(
+        strategy=ConversionStrategy.DECODE_JSON,
+        source_label="json",
+        target_label="Record",
+        json_schema="{}",
+        decode=decode,
+    )
+    program = _convert_program(recipe)
+    program.nominals[descriptor.nominal] = descriptor
+
+    with pytest.raises(InvalidIrError, match=error):
+        validate_ir(program, deep=True)
+
+
+@pytest.mark.parametrize(
+    "variant",
+    (
+        VariantDecode("Leaf", NominalId(12), "Tree::Leaf", ()),
+        VariantDecode("Branch", NominalId(11), "Tree::Leaf", ()),
+        VariantDecode("Leaf", NominalId(11), "Wrong::Leaf", ()),
+        VariantDecode(
+            "Leaf", NominalId(11), "Tree::Leaf", (("value", ScalarDecode(ScalarKind.INT)),)
+        ),
+    ),
+)
+def test_validate_rejects_decode_variant_that_disagrees_with_linked_member(
+    variant: VariantDecode,
+) -> None:
+    """A decode variant must exactly describe its linked enum member record."""
+    from agm.agl.ir.validate import InvalidIrError, validate_ir
+
+    enum = NominalId(10)
+    member = NominalId(11)
+    recipe = ConversionRecipe(
+        strategy=ConversionStrategy.DECODE_JSON,
+        source_label="json",
+        target_label="Tree",
+        json_schema="{}",
+        decode=EnumDecode(enum, "Tree", (variant,)),
+    )
+    program = _convert_program(recipe)
+    program.nominals.update(
+        {
+            enum: NominalDescriptor(
+                enum,
+                ENTRY_ID,
+                (),
+                "Tree",
+                NominalKind.ENUM,
+                variants=(VariantDescriptor("Leaf", (), member),),
+            ),
+            member: NominalDescriptor(member, ENTRY_ID, ("Tree",), "Leaf", NominalKind.RECORD),
+        }
+    )
+
+    with pytest.raises(InvalidIrError):
+        validate_ir(program, deep=True)
+
+
+@pytest.mark.parametrize(
+    ("enum_descriptor", "member_descriptor", "display_name"),
+    (
+        (
+            NominalDescriptor(NominalId(10), ENTRY_ID, (), "Tree", NominalKind.RECORD),
+            None,
+            "Tree",
+        ),
+        (
+            NominalDescriptor(
+                NominalId(10),
+                ENTRY_ID,
+                (),
+                "OtherTree",
+                NominalKind.ENUM,
+                variants=(VariantDescriptor("Leaf", (), NominalId(11)),),
+            ),
+            NominalDescriptor(NominalId(11), ENTRY_ID, ("Tree",), "Leaf", NominalKind.RECORD),
+            "Tree",
+        ),
+    ),
+)
+def test_validate_rejects_decode_with_invalid_linked_enum_metadata(
+    enum_descriptor: NominalDescriptor,
+    member_descriptor: NominalDescriptor | None,
+    display_name: str,
+) -> None:
+    """Deep validation requires the linked enum and member-record identities."""
+    from agm.agl.ir.validate import InvalidIrError, validate_ir
+
+    enum = NominalId(10)
+    member = NominalId(11)
+    recipe = ConversionRecipe(
+        strategy=ConversionStrategy.DECODE_JSON,
+        source_label="json",
+        target_label="Tree",
+        json_schema="{}",
+        decode=EnumDecode(enum, display_name, (VariantDecode("Leaf", member, "Tree::Leaf", ()),)),
+    )
+    program = _convert_program(recipe)
+    program.nominals[enum] = enum_descriptor
+    if member_descriptor is not None:
+        program.nominals[member] = member_descriptor
+
+    with pytest.raises(InvalidIrError):
+        validate_ir(program, deep=True)
+
+
 def _tree_decode_defs() -> tuple[tuple[str, EnumDecode], ...]:
     """A self-recursive `Tree` decode $defs table (matches the recursive e2e programs)."""
     tree_body = EnumDecode(
         nominal=_TREE,
         display_name="Tree",
         variants=(
-            VariantDecode("Leaf", ()),
+            VariantDecode("Leaf", NominalId(1), "Tree::Leaf", ()),
             VariantDecode(
                 "Node",
+                NominalId(2),
+                "Tree::Node",
                 (
                     ("value", ScalarDecode(ScalarKind.INT)),
                     ("left", RefDecode("Tree")),
@@ -901,8 +1378,8 @@ def test_run_recipe_decode_json_resolves_recursive_defs() -> None:
         "right": {"$case": "Leaf"},
     }
     result = run_recipe(recipe, JsonValue(payload))
-    assert isinstance(result, EnumValue)
-    assert result.variant == "Node"
+    assert isinstance(result, RecordValue)
+    assert result.display_name.rsplit("::", maxsplit=1)[-1] == "Node"
     assert result.fields["value"] == IntValue(1)
 
 

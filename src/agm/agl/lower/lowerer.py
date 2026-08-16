@@ -93,7 +93,6 @@ from agm.agl.ir.nodes import (
     IrMakeClosure,
     IrMakeConstructor,
     IrMakeDict,
-    IrMakeEnum,
     IrMakeException,
     IrMakeJsonArray,
     IrMakeJsonObject,
@@ -1210,12 +1209,13 @@ class _Lowerer:
                     node_typ = self._node_type(nid)
                     if isinstance(node_typ, FunctionType):
                         # Constructor with fields used as a value → IrMakeConstructor.
-                        nominal, display = self._nominal_for_constructor_result(node_typ.result)
+                        nominal, display = self._nominal_for_constructor_result(
+                            node_typ.result, cref.variant
+                        )
                         return IrMakeConstructor(
                             location=self._loc(span),
                             nominal=nominal,
                             display_name=display,
-                            variant=cref.variant,
                         )
                     # Nullary constructor used as a value → construct immediately.
                     # AgL grammar requires ≥1 field in a record, so a nullary
@@ -1236,7 +1236,6 @@ class _Lowerer:
                         location=self._loc(span),
                         nominal=NominalId(node_typ.result.decl_id),
                         display_name="::".join((*node_typ.result.scope_path, node_typ.result.name)),
-                        variant=None,
                     )
                 sym = self._sym_for_decl(ref.decl_node_id)
                 return IrLoad(location=self._loc(span), symbol=sym)
@@ -2057,10 +2056,17 @@ class _Lowerer:
     # Constructor lowering helpers
     # ------------------------------------------------------------------
 
-    def _nominal_for_constructor_result(self, typ: Type) -> tuple[NominalId, str]:
-        """Return the runtime nominal represented by a constructor function result."""
-        if isinstance(typ, (RecordType, EnumType, ExceptionType)):
+    def _nominal_for_constructor_result(
+        self, typ: Type, variant: str | None = None
+    ) -> tuple[NominalId, str]:
+        """Return the record or exception identity constructed by a callable."""
+        if isinstance(typ, (RecordType, ExceptionType)):
             return NominalId(typ.decl_id), "::".join((*typ.scope_path, typ.name))
+        if isinstance(typ, EnumType):
+            assert variant is not None, "compiler bug: enum constructor lacks a variant"
+            member = self._type_table.enum_member_names(typ).get(variant)
+            assert member is not None, "compiler bug: enum constructor has no member"
+            return NominalId(member.decl_id), "::".join((*member.scope_path, member.name))
         raise AssertionError(f"constructor function has non-nominal result {typ!r}")
 
     def _nominal_for_field_projection(self, typ: Type) -> tuple[NominalId, str, IrFieldMode]:
@@ -2199,7 +2205,7 @@ class _Lowerer:
         """Lower a Call node.
 
         Constructor calls (VarRef callee resolving to a constructor) are lowered
-        to IrMakeRecord/IrMakeEnum/IrMakeException.  Direct user function
+        to IrMakeRecord/IrMakeException. Direct user function
         calls are lowered to IrDirectCall.  Lambda calls are lowered to IrMakeClosure,
         indirect calls to IrIndirectCall, and host builtins to
         IrPrint/IrRenderValue/IrParseJson/IrCopyValue/IrAsk/
@@ -2488,15 +2494,15 @@ class _Lowerer:
 
         if isinstance(typ, EnumType):
             assert variant is not None, "compiler bug: enum constructor must have variant"
-            nominal = NominalId(typ.decl_id)
             member = self._type_table.enum_member_names(typ).get(variant)
-            variant_fields = {} if member is None else self._type_table.record_fields(member)
-            enum_fields = tuple((fname, arg_slots[fname]) for fname in variant_fields)
-            return IrMakeEnum(
+            assert member is not None, "compiler bug: enum constructor has no member"
+            enum_fields = tuple(
+                (fname, arg_slots[fname]) for fname in self._type_table.record_fields(member)
+            )
+            return IrMakeRecord(
                 location=loc,
-                nominal=nominal,
-                display_name="::".join((*typ.scope_path, typ.name)),
-                variant=variant,
+                nominal=NominalId(member.decl_id),
+                display_name="::".join((*member.scope_path, member.name)),
                 fields=enum_fields,
             )
 

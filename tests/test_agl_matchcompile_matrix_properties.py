@@ -33,7 +33,6 @@ from agm.agl.semantics.types import EnumType
 from agm.agl.semantics.values import (
     BoolValue,
     DecimalValue,
-    EnumValue,
     IntValue,
     JsonValue,
     RecordValue,
@@ -212,7 +211,7 @@ def _head_arguments(
     if not canonical_cell_matches(head_only, value, enum_variant_members):
         return None
     if isinstance(constructor, NominalConstructor):
-        assert isinstance(value, EnumValue)
+        assert isinstance(value, RecordValue)
         return tuple(value.fields[field.name] for field in constructor.fields)
     return ()
 
@@ -277,7 +276,8 @@ def test_boolean_and_enum_decompositions_partition_complete_finite_domains() -> 
     enum_type = cast(EnumType, enum_matrix.occurrences[0].type)
     nominal = NominalId(enum_type.decl_id)
     subjects = tuple(
-        EnumValue(nominal, enum_type.name, variant, {}) for variant in ("red", "green", "blue")
+        RecordValue(nominal=nominal, display_name=f"{enum_type.name}::{variant}", fields={})
+        for variant in ("red", "green", "blue")
     )
     _assert_decomposition_partition(enum_checked, enum_case, enum_matrix, enum_allocator, subjects)
 
@@ -420,45 +420,43 @@ def test_nested_enum_and_literal_decomposition_preserves_first_match_actions() -
     payload_type = cast(EnumType, wrapped_cell.constructor.fields[0].type)
     payload_nominal = NominalId(payload_type.decl_id)
 
-    def payload(variant: str, value: Value) -> EnumValue:
-        return EnumValue(payload_nominal, payload_type.name, variant, {"value": value})
+    def payload(variant: str, value: Value) -> RecordValue:
+        return RecordValue(
+            nominal=payload_nominal,
+            display_name=f"{payload_type.name}::{variant}",
+            fields={"value": value},
+        )
 
     subjects = (
-        EnumValue(
-            envelope_nominal,
-            envelope_type.name,
-            wrapped.terminal_name,
-            {"payload": payload("number", IntValue(1))},
+        RecordValue(
+            nominal=envelope_nominal,
+            display_name=f"{envelope_type.name}::{wrapped.terminal_name}",
+            fields={"payload": payload("number", IntValue(1))},
         ),
-        EnumValue(
-            envelope_nominal,
-            envelope_type.name,
-            wrapped.terminal_name,
-            {"payload": payload("number", DecimalValue(decimal.Decimal("1.0")))},
+        RecordValue(
+            nominal=envelope_nominal,
+            display_name=f"{envelope_type.name}::{wrapped.terminal_name}",
+            fields={"payload": payload("number", DecimalValue(decimal.Decimal("1.0")))},
         ),
-        EnumValue(
-            envelope_nominal,
-            envelope_type.name,
-            wrapped.terminal_name,
-            {"payload": payload("number", DecimalValue(decimal.Decimal("2.5")))},
+        RecordValue(
+            nominal=envelope_nominal,
+            display_name=f"{envelope_type.name}::{wrapped.terminal_name}",
+            fields={"payload": payload("number", DecimalValue(decimal.Decimal("2.5")))},
         ),
-        EnumValue(
-            envelope_nominal,
-            envelope_type.name,
-            wrapped.terminal_name,
-            {"payload": payload("word", TextValue("x"))},
+        RecordValue(
+            nominal=envelope_nominal,
+            display_name=f"{envelope_type.name}::{wrapped.terminal_name}",
+            fields={"payload": payload("word", TextValue("x"))},
         ),
-        EnumValue(
-            envelope_nominal,
-            envelope_type.name,
-            wrapped.terminal_name,
-            {"payload": payload("word", TextValue("other"))},
+        RecordValue(
+            nominal=envelope_nominal,
+            display_name=f"{envelope_type.name}::{wrapped.terminal_name}",
+            fields={"payload": payload("word", TextValue("other"))},
         ),
-        EnumValue(
-            envelope_nominal,
-            envelope_type.name,
-            empty.terminal_name,
-            {},
+        RecordValue(
+            nominal=envelope_nominal,
+            display_name=f"{envelope_type.name}::{empty.terminal_name}",
+            fields={},
         ),
     )
     _assert_decomposition_partition(checked, case, matrix, allocator, subjects)

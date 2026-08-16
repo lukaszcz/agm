@@ -92,7 +92,6 @@ from agm.agl.ir.nodes import (
     IrMakeClosure,
     IrMakeConstructor,
     IrMakeDict,
-    IrMakeEnum,
     IrMakeException,
     IrMakeJsonArray,
     IrMakeJsonObject,
@@ -130,7 +129,6 @@ from agm.agl.ir.program import (
     FunctionDescriptor,
     IrFunctionBody,
     IrParam,
-    NominalKind,
 )
 from agm.agl.ir.validate import InvalidIrError
 from agm.agl.modules.ids import ModuleId
@@ -156,7 +154,6 @@ from agm.agl.semantics.values import (
     ConstructorValue,
     DecimalValue,
     DictValue,
-    EnumValue,
     ExceptionValue,
     Frame,
     IntValue,
@@ -326,10 +323,9 @@ def _project_nominal_field(
     check identity because the static layer already proved the field exists on
     every value admitted by the bound.
     """
-    if not isinstance(value, (RecordValue, EnumValue, ExceptionValue)):
+    if not isinstance(value, (RecordValue, ExceptionValue)):
         raise InvalidIrError(
-            "IrField: expected RecordValue, EnumValue, or ExceptionValue, "
-            f"got {type(value).__name__}"
+            f"IrField: expected RecordValue or ExceptionValue, got {type(value).__name__}"
         )
     match mode:
         case IrFieldMode.EXACT:
@@ -551,7 +547,7 @@ class IrInterpreter:
                 if shell_exec_timeout is not None
                 else defaults["timeout"]
             )
-        assert isinstance(timeout_setting, EnumValue)
+        assert isinstance(timeout_setting, RecordValue)
         self._timeout_setting = timeout_setting
         self._apply_config_effect("timeout", timeout_setting)
 
@@ -564,7 +560,7 @@ class IrInterpreter:
             key: effective[key] for key in HOST_CONSUMED_ENGINE_KEYS if key in effective
         }
         default_agent = self._builtin_host_settings.get("default-agent")
-        if isinstance(default_agent, EnumValue):
+        if isinstance(default_agent, RecordValue):
             self._check_default_agent_dispatchable(default_agent)
         if self._host_reconfigurer is not None:
             self._reconfigure_host_service()
@@ -612,7 +608,7 @@ class IrInterpreter:
         return self._loop_limit
 
     @property
-    def timeout_setting(self) -> EnumValue:
+    def timeout_setting(self) -> RecordValue:
         """Current raw ``Option[text]`` timeout value."""
         return self._timeout_setting
 
@@ -908,27 +904,13 @@ class IrInterpreter:
         callee_val = self._eval(callee_expr)
         if isinstance(callee_val, ConstructorValue):
             constructor_desc = self._program.nominals[callee_val.nominal]
-            field_names = (
-                constructor_desc.fields
-                if callee_val.variant is None
-                else next(
-                    v.fields for v in constructor_desc.variants if v.name == callee_val.variant
-                )
-            )
             fields = {
                 name: self._eval(argument)
-                for name, argument in zip(field_names, arguments, strict=True)
+                for name, argument in zip(constructor_desc.fields, arguments, strict=True)
             }
-            if callee_val.variant is None:
-                return RecordValue(
-                    nominal=callee_val.nominal,
-                    display_name=callee_val.display_name,
-                    fields=fields,
-                )
-            return EnumValue(
+            return RecordValue(
                 nominal=callee_val.nominal,
                 display_name=callee_val.display_name,
-                variant=callee_val.variant,
                 fields=fields,
             )
         if not isinstance(callee_val, IrClosureValue):
@@ -1123,26 +1105,10 @@ class IrInterpreter:
     # Expression evaluator (closed IrExpr dispatch)
     # ------------------------------------------------------------------
 
-    def _dispatch_nominal(self, value: RecordValue | EnumValue | ExceptionValue) -> NominalId:
-        """Resolve an enum's linked member-record identity for nominal dispatch."""
-        if not isinstance(value, EnumValue):
-            return value.nominal
-        descriptor = self._program.nominals.get(value.nominal)
-        if descriptor is None or descriptor.kind is not NominalKind.ENUM:
-            raise InvalidIrError(
-                f"enum value references non-enum nominal {value.nominal!r} in program descriptors"
-            )
-        variant = next((item for item in descriptor.variants if item.name == value.variant), None)
-        if variant is None:
-            raise InvalidIrError(
-                f"enum value references variant {value.variant!r} absent from {value.nominal!r}"
-            )
-        member = self._program.nominals.get(variant.member)
-        if member is None or member.kind is not NominalKind.RECORD:
-            raise InvalidIrError(
-                f"enum variant {value.variant!r} links non-record member {variant.member!r}"
-            )
-        return variant.member
+    @staticmethod
+    def _dispatch_nominal(value: RecordValue | ExceptionValue) -> NominalId:
+        """Return a nominal value's declaration identity for dispatch."""
+        return value.nominal
 
     def _eval(self, node: IrExpr) -> Value:
         """Evaluate *node* in the current frame and return its value.
@@ -1390,7 +1356,7 @@ class IrInterpreter:
                 value = self._eval(val_expr)
                 member = (
                     self._dispatch_nominal(value)
-                    if isinstance(value, (RecordValue, EnumValue, ExceptionValue))
+                    if isinstance(value, (RecordValue, ExceptionValue))
                     else None
                 )
                 return _project_nominal_field(value, nominal, field_name, mode, member)
@@ -1449,22 +1415,6 @@ class IrInterpreter:
                     fields=record_fields,
                 )
 
-            case IrMakeEnum(
-                nominal=nominal,
-                display_name=display_name,
-                variant=variant,
-                fields=fields,
-            ):
-                enum_fields: dict[str, Value] = {
-                    fname: self._eval(fexpr) for fname, fexpr in fields
-                }
-                return EnumValue(
-                    nominal=nominal,
-                    display_name=display_name,
-                    variant=variant,
-                    fields=enum_fields,
-                )
-
             case IrMakeException(nominal=nominal, display_name=display_name, fields=fields):
                 exc_fields: dict[str, Value] = {
                     fname: self._eval(field_expr) for fname, field_expr in fields
@@ -1475,16 +1425,12 @@ class IrInterpreter:
                     fields=exc_fields,
                 )
 
-            case IrMakeConstructor(nominal=nominal, display_name=display_name, variant=variant):
-                return ConstructorValue(
-                    nominal=nominal,
-                    display_name=display_name,
-                    variant=variant,
-                )
+            case IrMakeConstructor(nominal=nominal, display_name=display_name):
+                return ConstructorValue(nominal=nominal, display_name=display_name)
 
             case IrNominalIs(nominal=nominal, value=val_expr, negated=negated):
                 value = self._eval(val_expr)
-                if not isinstance(value, (RecordValue, EnumValue, ExceptionValue)):
+                if not isinstance(value, (RecordValue, ExceptionValue)):
                     raise InvalidIrError(
                         f"IrNominalIs: value is not nominal, got {type(value).__name__}"
                     )
@@ -1562,15 +1508,15 @@ class IrInterpreter:
                 for arm in arms:
                     key = arm.key
                     if isinstance(key, IrNominalCaseKey):
-                        selected = isinstance(
-                            subject_val, (RecordValue, EnumValue, ExceptionValue)
-                        ) and (self._dispatch_nominal(subject_val) == key.nominal)
+                        selected = isinstance(subject_val, (RecordValue, ExceptionValue)) and (
+                            self._dispatch_nominal(subject_val) == key.nominal
+                        )
                     else:
                         selected = value_eq(subject_val, _literal_key_value(key))
                     if not selected:
                         continue
                     if arm.field_bindings:
-                        if not isinstance(subject_val, (RecordValue, EnumValue, ExceptionValue)):
+                        if not isinstance(subject_val, (RecordValue, ExceptionValue)):
                             raise InvalidIrError(
                                 "IrCase: selected payload arm for a non-nominal subject"
                             )
@@ -1808,7 +1754,7 @@ class IrInterpreter:
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
 
-    def _check_default_agent_dispatchable(self, value: EnumValue) -> None:
+    def _check_default_agent_dispatchable(self, value: RecordValue) -> None:
         """Eagerly validate a materialized ``default-agent`` value's command shape.
 
         Only the ``AgentCommand`` variant needs this: its command text is
@@ -1867,14 +1813,14 @@ class IrInterpreter:
         if key in RUNTIME_LIVE_ENGINE_KEYS:
             self._apply_config_effect(key, value)
             if key == "timeout":
-                assert isinstance(value, EnumValue)
+                assert isinstance(value, RecordValue)
                 self._timeout_setting = value
             return
 
         previous = dict(self._builtin_host_settings)
         self._builtin_host_settings[key] = value
         if trace_write_implies_enabled(
-            key, isinstance(value, EnumValue) and value.variant == "Some"
+            key, isinstance(value, RecordValue) and option_text(value) is not None
         ):
             self._builtin_host_settings["log"] = BoolValue(True)
         if self._host_reconfigurer is None or key not in TRACE_ENGINE_KEYS:
@@ -1895,7 +1841,7 @@ class IrInterpreter:
         log = self._builtin_host_settings["log"]
         assert isinstance(log, BoolValue)
         log_file_reg = self._builtin_host_settings["log-file"]
-        assert isinstance(log_file_reg, EnumValue)
+        assert isinstance(log_file_reg, RecordValue)
         self._host_reconfigurer.reconfigure_trace(
             enabled=log.value, log_file=option_text(log_file_reg)
         )
@@ -1926,7 +1872,7 @@ class IrInterpreter:
             self._loop_limit = config_value.value or None
         else:
             assert public_name == "timeout"
-            assert isinstance(config_value, EnumValue)
+            assert isinstance(config_value, RecordValue)
             raw = option_text(config_value)
             if raw is None:
                 self._shell_exec_timeout = None

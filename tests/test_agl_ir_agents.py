@@ -14,7 +14,6 @@ import pytest
 from agm.agl.semantics.values import (
     ArrayValue,
     BoolValue,
-    EnumValue,
     ExceptionValue,
     IntValue,
     RecordValue,
@@ -60,10 +59,9 @@ request
 
     request = ir["request"]
     assert isinstance(request, RecordValue)
-    assert request.fields["agent"] == EnumValue(
+    assert request.fields["agent"] == RecordValue(
         nominal=request.fields["agent"].nominal,
-        display_name="Agent",
-        variant="AgentCommand",
+        display_name=f"{'Agent'}::{'AgentCommand'}",
         fields={"command": TextValue("worker")},
     )
 
@@ -222,8 +220,8 @@ status
         source,
         scripts={"checker": ['{"$case": "Ok"}']},
     )
-    assert isinstance(ir["status"], EnumValue)
-    assert ir["status"].variant == "Ok"
+    assert isinstance(ir["status"], RecordValue)
+    assert ir["status"].display_name == "Status::Ok"
 
 
 # ---------------------------------------------------------------------------
@@ -456,15 +454,15 @@ prompt_text
     req = ir["req"]
     assert isinstance(req, RecordValue)
     assert req.nominal == NO_BUILTIN_DECLARATIONS.nominal("AgentRequest")
-    assert isinstance(req.fields["agent"], EnumValue)
-    assert req.fields["agent"].variant == "AgentCommand"
-    assert isinstance(req.fields["target_type"], EnumValue)
-    assert req.fields["target_type"].variant == "Some"
+    assert isinstance(req.fields["agent"], RecordValue)
+    assert req.fields["agent"].display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
+    assert isinstance(req.fields["target_type"], RecordValue)
+    assert req.fields["target_type"].display_name.rsplit("::", maxsplit=1)[-1] == "Some"
     assert req.fields["target_type"].fields["value"] == TextValue("text")
-    assert isinstance(req.fields["format_instructions"], EnumValue)
-    assert req.fields["format_instructions"].variant == "None"
-    assert isinstance(req.fields["json_schema"], EnumValue)
-    assert req.fields["json_schema"].variant == "None"
+    assert isinstance(req.fields["format_instructions"], RecordValue)
+    assert req.fields["format_instructions"].display_name.rsplit("::", maxsplit=1)[-1] == "None"
+    assert isinstance(req.fields["json_schema"], RecordValue)
+    assert req.fields["json_schema"].display_name.rsplit("::", maxsplit=1)[-1] == "None"
 
 
 # ---------------------------------------------------------------------------
@@ -511,8 +509,13 @@ def test_enum_bad_case_raises_agent_parse_error() -> None:
         nominal=nominal,
         display_name="Status",
         variants=(
-            VariantDecode(name="Ok", fields=()),
-            VariantDecode(name="Err", fields=(("msg", ScalarDecode(ScalarKind.TEXT)),)),
+            VariantDecode(name="Ok", nominal=NominalId(999), display_name="Ok", fields=()),
+            VariantDecode(
+                name="Err",
+                nominal=NominalId(999),
+                display_name="Err",
+                fields=(("msg", ScalarDecode(ScalarKind.TEXT)),),
+            ),
         ),
     )
     schema = {
@@ -580,8 +583,8 @@ s
         source,
         scripts={"checker": ['{"$case": "Bad"}', '{"$case": "Ok"}']},
     )
-    assert isinstance(ir["s"], EnumValue)
-    assert ir["s"].variant == "Ok"
+    assert isinstance(ir["s"], RecordValue)
+    assert ir["s"].display_name == "Status::Ok"
 
 
 # ---------------------------------------------------------------------------
@@ -992,7 +995,10 @@ def test_enum_instance_not_dict_bad_case() -> None:
     decode = EnumDecode(
         nominal=nominal,
         display_name="Flag",
-        variants=(VariantDecode(name="On", fields=()), VariantDecode(name="Off", fields=())),
+        variants=(
+            VariantDecode(name="On", nominal=NominalId(999), display_name="On", fields=()),
+            VariantDecode(name="Off", nominal=NominalId(999), display_name="Off", fields=()),
+        ),
     )
     schema = _json.dumps(
         {
@@ -1041,7 +1047,10 @@ def test_enum_no_case_tag_bad_case() -> None:
     decode = EnumDecode(
         nominal=nominal,
         display_name="Flag",
-        variants=(VariantDecode(name="On", fields=()), VariantDecode(name="Off", fields=())),
+        variants=(
+            VariantDecode(name="On", nominal=NominalId(999), display_name="On", fields=()),
+            VariantDecode(name="Off", nominal=NominalId(999), display_name="Off", fields=()),
+        ),
     )
     schema = _json.dumps(
         {
@@ -1126,7 +1135,7 @@ def test_find_enum_decode_at_path_through_array() -> None:
     enum_dec = EnumDecode(
         nominal=nominal,
         display_name="Status",
-        variants=(VariantDecode(name="Ok", fields=()),),
+        variants=(VariantDecode(name="Ok", nominal=NominalId(999), display_name="Ok", fields=()),),
     )
     array_dec = ArrayDecode(elem=enum_dec)
     contract = ContractRequest(
@@ -1160,7 +1169,7 @@ def test_find_enum_decode_at_path_through_dict() -> None:
     enum_dec = EnumDecode(
         nominal=nominal,
         display_name="Status",
-        variants=(VariantDecode(name="Ok", fields=()),),
+        variants=(VariantDecode(name="Ok", nominal=NominalId(999), display_name="Ok", fields=()),),
     )
     dict_dec = DictDecode(value=enum_dec)
     contract = ContractRequest(
@@ -1194,7 +1203,7 @@ def test_find_enum_decode_at_path_through_record() -> None:
     enum_dec = EnumDecode(
         nominal=nominal,
         display_name="Status",
-        variants=(VariantDecode(name="Ok", fields=()),),
+        variants=(VariantDecode(name="Ok", nominal=NominalId(999), display_name="Ok", fields=()),),
     )
     rec_nominal = NominalId(2)
     rec_dec = RecordDecode(
@@ -1239,7 +1248,7 @@ def test_find_enum_decode_at_path_enum_at_top_navigated_into() -> None:
     enum_dec = EnumDecode(
         nominal=nominal,
         display_name="Status",
-        variants=(VariantDecode(name="Ok", fields=()),),
+        variants=(VariantDecode(name="Ok", nominal=NominalId(999), display_name="Ok", fields=()),),
     )
     contract = ContractRequest(
         codec_name="json",
@@ -1328,8 +1337,13 @@ def test_enum_known_case_with_additional_props_error() -> None:
         nominal=nominal,
         display_name="Status",
         variants=(
-            VariantDecode(name="Ok", fields=()),
-            VariantDecode(name="Err", fields=(("msg", ScalarDecode(ScalarKind.TEXT)),)),
+            VariantDecode(name="Ok", nominal=NominalId(999), display_name="Ok", fields=()),
+            VariantDecode(
+                name="Err",
+                nominal=NominalId(999),
+                display_name="Err",
+                fields=(("msg", ScalarDecode(ScalarKind.TEXT)),),
+            ),
         ),
     )
     schema = _json.dumps(
@@ -1472,14 +1486,16 @@ def test_validate_contract_request_recursive_decode_defs() -> None:
 
     src_id = SourceId(0)
     dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    tree_nominal = NominalId(1)
+    tree_nominal = NominalId(10)
     tree_body = EnumDecode(
         nominal=tree_nominal,
         display_name="Tree",
         variants=(
-            VariantDecode("Leaf", ()),
+            VariantDecode("Leaf", NominalId(11), "Tree::Leaf", ()),
             VariantDecode(
                 "Node",
+                NominalId(12),
+                "Tree::Node",
                 (
                     ("value", ScalarDecode(ScalarKind.INT)),
                     ("left", RefDecode("Tree")),
@@ -1517,15 +1533,15 @@ def test_validate_contract_request_recursive_decode_defs() -> None:
                 declared_name="Tree",
                 kind=NominalKind.ENUM,
                 variants=(
-                    VariantDescriptor("Leaf", (), NominalId(1)),
-                    VariantDescriptor("Node", ("value", "left", "right"), NominalId(2)),
+                    VariantDescriptor("Leaf", (), NominalId(11)),
+                    VariantDescriptor("Node", ("value", "left", "right"), NominalId(12)),
                 ),
             ),
-            NominalId(1): NominalDescriptor(
-                NominalId(1), ENTRY_ID, ("Tree",), "Leaf", NominalKind.RECORD
+            NominalId(11): NominalDescriptor(
+                NominalId(11), ENTRY_ID, ("Tree",), "Leaf", NominalKind.RECORD
             ),
-            NominalId(2): NominalDescriptor(
-                NominalId(2),
+            NominalId(12): NominalDescriptor(
+                NominalId(12),
                 ENTRY_ID,
                 ("Tree",),
                 "Node",
@@ -1745,8 +1761,8 @@ target
         source,
         scripts={"a": []},
     )
-    assert isinstance(ir["target"], EnumValue)
-    assert ir["target"].variant == "Some"
+    assert isinstance(ir["target"], RecordValue)
+    assert ir["target"].display_name == "Option::Some"
     assert ir["target"].fields["value"] == TextValue("text")
 
 
@@ -1967,6 +1983,8 @@ def test_enum_required_field_loop_partial_coverage() -> None:
         variants=(
             VariantDecode(
                 name="Both",
+                nominal=NominalId(999),
+                display_name="Both",
                 fields=(("a", ScalarDecode(ScalarKind.INT)), ("b", ScalarDecode(ScalarKind.INT))),
             ),
         ),
@@ -2092,8 +2110,13 @@ def test_classify_enum_sub_error_type_only_fallback() -> None:
         nominal=nominal,
         display_name="Status",
         variants=(
-            VariantDecode(name="Ok", fields=()),
-            VariantDecode(name="Err", fields=(("msg", ScalarDecode(ScalarKind.TEXT)),)),
+            VariantDecode(name="Ok", nominal=NominalId(999), display_name="Ok", fields=()),
+            VariantDecode(
+                name="Err",
+                nominal=NominalId(999),
+                display_name="Err",
+                fields=(("msg", ScalarDecode(ScalarKind.TEXT)),),
+            ),
         ),
     )
     # Schema WITHOUT additionalProperties: False → sub-errors will be 'const' and 'type' only.
@@ -2143,7 +2166,9 @@ def test_classify_enum_failure_nullary_case_all_fields_present() -> None:
     decode = EnumDecode(
         nominal=nominal,
         display_name="Status",
-        variants=(VariantDecode(name="Err", fields=()),),
+        variants=(
+            VariantDecode(name="Err", nominal=NominalId(999), display_name="Err", fields=()),
+        ),
     )
     # instance has only "$case" → no missing or extra fields in the nullary "Err" variant.
     main_error = MagicMock(spec=JsError)
@@ -2172,8 +2197,13 @@ def test_classify_enum_failure_known_case_all_payload_present() -> None:
         nominal=nominal,
         display_name="Status",
         variants=(
-            VariantDecode(name="Ok", fields=()),
-            VariantDecode(name="Err", fields=(("msg", ScalarDecode(ScalarKind.TEXT)),)),
+            VariantDecode(name="Ok", nominal=NominalId(999), display_name="Ok", fields=()),
+            VariantDecode(
+                name="Err",
+                nominal=NominalId(999),
+                display_name="Err",
+                fields=(("msg", ScalarDecode(ScalarKind.TEXT)),),
+            ),
         ),
     )
     # "msg" IS present — no missing, no extra → defensive fallback.
@@ -2386,5 +2416,5 @@ def test_ir_ask_request_rejects_a_non_agent_value(request_only: bool) -> None:
         contracts=contracts,
     )
 
-    with pytest.raises(TypeError, match="Agent enum value"):
+    with pytest.raises(TypeError, match="Agent member record"):
         IrInterpreter(program).run()

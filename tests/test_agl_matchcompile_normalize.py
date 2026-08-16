@@ -59,7 +59,7 @@ from agm.agl.semantics.types import (
     Type,
     TypeVarType,
 )
-from agm.agl.semantics.values import DecimalValue, EnumValue, TextValue
+from agm.agl.semantics.values import DecimalValue, RecordValue, TextValue
 from agm.agl.syntax.nodes import AsPattern, Case, ConstructorPattern, LetDecl, Pattern
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.visitor import walk
@@ -950,17 +950,16 @@ def test_source_reference_matcher_preserves_priority_and_partial_constructor_fie
     case = _only_case(checked.resolved.program)
     enum_type = checked.node_types[case.subject.node_id]
     assert isinstance(enum_type, EnumType)
-    nominal = NominalId(enum_type.decl_id)
+    nominal = NominalId(checked.type_env.type_table.enum_member_names(enum_type)["present"].decl_id)
 
     assert (
         reference_action(
             case,
             checked,
-            EnumValue(
-                nominal,
-                "Choice",
-                "present",
-                {"value": DecimalValue(decimal.Decimal("1.0")), "note": TextValue("x")},
+            RecordValue(
+                nominal=nominal,
+                display_name=f"{'Choice'}::{'present'}",
+                fields={"value": DecimalValue(decimal.Decimal("1.0")), "note": TextValue("x")},
             ),
         )
         == case.branches[0].node_id
@@ -969,11 +968,10 @@ def test_source_reference_matcher_preserves_priority_and_partial_constructor_fie
         reference_action(
             case,
             checked,
-            EnumValue(
-                nominal,
-                "Choice",
-                "present",
-                {"value": DecimalValue(decimal.Decimal("2")), "note": TextValue("x")},
+            RecordValue(
+                nominal=nominal,
+                display_name=f"{'Choice'}::{'present'}",
+                fields={"value": DecimalValue(decimal.Decimal("2")), "note": TextValue("x")},
             ),
         )
         == case.branches[1].node_id
@@ -982,7 +980,13 @@ def test_source_reference_matcher_preserves_priority_and_partial_constructor_fie
         reference_action(
             case,
             checked,
-            EnumValue(nominal, "Choice", "absent", {}),
+            RecordValue(
+                nominal=NominalId(
+                    checked.type_env.type_table.enum_member_names(enum_type)["absent"].decl_id
+                ),
+                display_name="Choice::absent",
+                fields={},
+            ),
         )
         == case.branches[2].node_id
     )

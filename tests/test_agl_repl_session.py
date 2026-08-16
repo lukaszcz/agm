@@ -6074,7 +6074,7 @@ class TestSessionOpen:
         assert s._loaded_lib_modules == {}
 
     def test_open_applies_a_well_formed_override_before_the_first_entry(self) -> None:
-        from agm.agl.semantics.values import EnumValue, TextValue
+        from agm.agl.semantics.values import RecordValue, TextValue
         from agm.agl.setting_overrides import SettingOverride
 
         s = ReplSession(
@@ -6088,8 +6088,8 @@ class TestSessionOpen:
 
         result = s.eval_entry("import std/config\nstd/config::default-agent")
         assert result.ok
-        assert isinstance(result.value, EnumValue)
-        assert result.value.variant == "AgentCommand"
+        assert isinstance(result.value, RecordValue)
+        assert result.value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
         assert result.value.fields["command"] == TextValue("preloaded")
 
     def test_open_rejects_an_unparseable_override_naming_its_origin(self) -> None:
@@ -6139,7 +6139,7 @@ class TestSessionOpen:
         assert any("--agent" in format_diagnostic(d) for d in diagnostics)
 
     def test_reset_leaves_the_override_in_force(self) -> None:
-        from agm.agl.semantics.values import EnumValue, TextValue
+        from agm.agl.semantics.values import RecordValue, TextValue
         from agm.agl.setting_overrides import SettingOverride
 
         s = ReplSession(
@@ -6156,8 +6156,8 @@ class TestSessionOpen:
 
         result = s.eval_entry("import std/config\nstd/config::default-agent")
         assert result.ok
-        assert isinstance(result.value, EnumValue)
-        assert result.value.variant == "AgentCommand"
+        assert isinstance(result.value, RecordValue)
+        assert result.value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
         assert result.value.fields["command"] == TextValue("preloaded")
 
     def test_stdlib_is_loaded_exactly_once_across_open_and_two_entries(

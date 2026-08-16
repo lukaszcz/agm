@@ -5,8 +5,8 @@ the AgL execution pipeline: leaf primitive value tags, container and nominal
 types, IR closures, and the per-invocation frame model (``Cell``, ``Slot``,
 ``Frame``).
 
-There is exactly one ``Value`` union — the broad 14-member union covering all
-leaf primitive, container, nominal, and callable value kinds.
+There is exactly one ``Value`` union covering all leaf primitive, container,
+nominal, and callable value kinds.
 
 Design constraints
 ------------------
@@ -167,23 +167,18 @@ VOID_VALUE: UnitValue = UnitValue(printable_in_repl=False)
 class ConstructorValue:
     """A first-class constructor used as a callable value — opaque.
 
-    Carries only the owner/variant identity needed to build a record or enum
-    at the call site.  Field order and types (and concreteness) come from the
-    call site's checked result type; type arguments are erased — never
-    represented at runtime.  It is not renderable or
-    comparable by the language.
+    Carries the record identity needed to build a value at the call site.
+    Field order and types (and concreteness) come from the call site's checked
+    result type; type arguments are erased — never represented at runtime. It
+    is not renderable or comparable by the language.
 
-    ``nominal`` is the opaque ``NominalId`` of the owning type.
-    ``display_name`` is the user-facing name for rendering.  ``variant``
-    is the enum variant name, or ``None`` for a record constructor.
-
-    Equality and hash are by ``(nominal, variant)``; ``display_name`` is
-    excluded (rendering metadata only).
+    ``nominal`` is the opaque ``NominalId`` of the record type and
+    ``display_name`` is its user-facing name for rendering. Equality and hash
+    are by ``nominal``; ``display_name`` is excluded as rendering metadata.
     """
 
     nominal: NominalId
     display_name: str = field(compare=False, hash=False)
-    variant: str | None
 
 
 # ---------------------------------------------------------------------------
@@ -267,32 +262,6 @@ class RecordValue:
 
 
 @dataclass(frozen=True, slots=True, eq=False)
-class EnumValue:
-    """An enum-typed value: the active variant name plus any payload fields.
-
-    ``nominal`` is the opaque ``NominalId`` — the identity
-    key.  ``display_name`` is the user-facing name for rendering and
-    diagnostics; it is excluded from equality.  ``variant`` is the
-    active variant name.  ``fields`` holds the variant's payload field values.
-
-    Equality is by ``(nominal, variant, fields)``; ``display_name``
-    is excluded (rendering metadata only). Unhashable: ``fields`` may hold a
-    mutable array or dict, so a stable hash is impossible. Delegates to
-    :func:`values_equal` (cycle-safe, co-inductive) — see :class:`ArrayValue`.
-    """
-
-    nominal: NominalId
-    display_name: str
-    variant: str
-    fields: dict[str, Value] = field(default_factory=dict)
-
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, EnumValue):
-            return values_equal(self, other)
-        return NotImplemented
-
-
-@dataclass(frozen=True, slots=True, eq=False)
 class ExceptionValue:
     """A built-in AgL exception value.
 
@@ -331,7 +300,7 @@ class ExceptionValue:
 #: Everything else (scalars, ``json``, agents, constructors, closures,
 #: iterators, ``unit``) is compared by its own ``__eq__``, so the common
 #: scalar comparison leaves :func:`values_equal` after a single check.
-_STRUCTURAL_KINDS = (ArrayValue, DictValue, RecordValue, EnumValue, ExceptionValue)
+_STRUCTURAL_KINDS = (ArrayValue, DictValue, RecordValue, ExceptionValue)
 
 
 def values_equal(a: Value, b: Value, _seen: "set[tuple[int, int]] | None" = None) -> bool:
@@ -347,10 +316,10 @@ def values_equal(a: Value, b: Value, _seen: "set[tuple[int, int]] | None" = None
     relation. This must never raise.
 
     Every structural kind extends ``_seen``, including the nominal ones.
-    Records, enums, and exceptions cannot be self-referential (their fields
-    are fixed at construction), so for them the entry is never needed to
-    *terminate* — but it is what keeps a shared subterm from being re-compared
-    once per path that reaches it.
+    Records and exceptions cannot be self-referential (their fields are fixed
+    at construction), so for them the entry is never needed to *terminate* —
+    but it is what keeps a shared subterm from being re-compared once per path
+    that reaches it.
 
     Every other value kind (scalars, ``json``, agents, constructors,
     closures) falls through to its own ``__eq__`` unchanged — this function
@@ -377,10 +346,6 @@ def values_equal(a: Value, b: Value, _seen: "set[tuple[int, int]] | None" = None
         return _children_equal(a, b, _seen, ((v, b.entries[k]) for k, v in a.entries.items()))
     if isinstance(a, RecordValue):
         if not isinstance(b, RecordValue) or a.nominal != b.nominal:
-            return False
-        return _fields_equal(a, b, a.fields, b.fields, _seen)
-    if isinstance(a, EnumValue):
-        if not isinstance(b, EnumValue) or a.nominal != b.nominal or a.variant != b.variant:
             return False
         return _fields_equal(a, b, a.fields, b.fields, _seen)
     if not isinstance(b, ExceptionValue) or a.nominal != b.nominal:
@@ -489,7 +454,6 @@ Value: TypeAlias = (
     | ArrayValue
     | DictValue
     | RecordValue
-    | EnumValue
     | ExceptionValue
     | UnitValue
     | ConstructorValue
@@ -533,7 +497,6 @@ __all__ = [
     "ConstructorValue",
     "DecimalValue",
     "DictValue",
-    "EnumValue",
     "ExceptionValue",
     "Frame",
     "IntValue",

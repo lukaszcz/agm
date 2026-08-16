@@ -26,6 +26,17 @@ from typing import assert_never
 from agm.agl.ir.contracts import (
     ArrayEncode,
     DictEncode,
+    DynamicApplyEncode,
+    DynamicArrayEncode,
+    DynamicDictEncode,
+    DynamicEncodeDefinition,
+    DynamicEncodePlan,
+    DynamicEncodeSchema,
+    DynamicEnumEncode,
+    DynamicExceptionEncode,
+    DynamicRecordEncode,
+    DynamicTypeParameterEncode,
+    DynamicVariantEncode,
     EncodePlan,
     EncodeSchema,
     EnumEncode,
@@ -35,6 +46,7 @@ from agm.agl.ir.contracts import (
     ScalarEncode,
     VariantEncode,
 )
+from agm.agl.ir.ids import NominalId
 from agm.agl.semantics.cycles import CYCLIC_VALUE_MARKER, AglCyclicValue, enter_container
 from agm.agl.semantics.values import (
     ArrayValue,
@@ -42,7 +54,6 @@ from agm.agl.semantics.values import (
     ConstructorValue,
     DecimalValue,
     DictValue,
-    EnumValue,
     ExceptionValue,
     IntValue,
     IrClosureValue,
@@ -94,12 +105,9 @@ def encode_value(plan: EncodePlan, value: Value) -> object:
     """Encode *value* through its lowering-derived static JSON plan.
 
     Static plans select enum ``$case`` tags from the slot type rather than the
-    value-directed fallback. Enum plans retain the current ``EnumValue`` wire
-    representation; member-record values are deliberately not supported until
-    the enum-record runtime migration changes that representation. Lowered
-    casts use this path whenever their statically known source has a finite
-    plan; only a growing polymorphic-recursive source uses
-    :func:`value_to_json_obj` instead.
+    runtime value. Lowered casts use this path whenever their statically known
+    source has a finite plan; a growing polymorphic-recursive source uses
+    :func:`encode_dynamic_value` instead.
     """
     return _encode(plan.root, value, dict(plan.defs), None)
 
@@ -174,17 +182,153 @@ def _encode(
 
 
 def _variant_for_encode(schema: EnumEncode, value: Value) -> tuple[VariantEncode, dict[str, Value]]:
-    """Select the current enum wrapper's member in the static enum slot."""
-    if not isinstance(value, EnumValue):
+    """Select the member record carried by an enum-typed static slot."""
+    if not isinstance(value, RecordValue):
         raise AssertionError(f"enum encode plan received {type(value).__name__}")
-    if value.nominal != schema.nominal:
-        raise AssertionError(
-            f"enum encode plan received {value.nominal!r}, expected {schema.nominal!r}"
-        )
     for variant in schema.variants:
-        if variant.name == value.variant:
+        if variant.nominal == value.nominal:
             return variant, value.fields
-    raise AssertionError(f"enum encode plan has no variant {value.variant!r}")
+    raise AssertionError(f"enum encode plan has no member {value.nominal!r}")
+
+
+def encode_dynamic_value(plan: DynamicEncodePlan, value: Value) -> object:
+    """Encode through a generic-template plan without runtime tag inference."""
+    definitions = {definition.nominal: definition for definition in plan.definitions}
+    return _encode_dynamic(plan.root, value, definitions, (), None)
+
+
+def _encode_dynamic(
+    schema: DynamicEncodeSchema,
+    value: Value,
+    definitions: dict[NominalId, DynamicEncodeDefinition],
+    arguments: tuple[DynamicEncodeSchema, ...],
+    active: set[int] | None,
+) -> object:
+    if isinstance(schema, DynamicTypeParameterEncode):
+        index = schema.index
+        try:
+            resolved = arguments[index]
+        except IndexError as exc:
+            raise AssertionError(f"dynamic encode parameter {index} is unbound") from exc
+        return _encode_dynamic(resolved, value, definitions, arguments, active)
+    if isinstance(schema, DynamicApplyEncode):
+        definition = definitions.get(schema.nominal)
+        if definition is None:
+            raise AssertionError(f"dynamic encode plan has no definition for {schema.nominal!r}")
+        if len(schema.arguments) != definition.parameter_count:
+            raise AssertionError(
+                f"dynamic encode application has wrong arity for {schema.nominal!r}"
+            )
+        bound_arguments = tuple(
+            _instantiate_dynamic(argument, arguments) for argument in schema.arguments
+        )
+        return _encode_dynamic(definition.body, value, definitions, bound_arguments, active)
+    if isinstance(schema, ScalarEncode):
+        return _encode(schema, value, {}, active)
+    if isinstance(schema, DynamicArrayEncode):
+        if not isinstance(value, ArrayValue):
+            raise AssertionError(f"array encode plan received {type(value).__name__}")
+        active = enter_container(id(value), active)
+        try:
+            return [
+                _encode_dynamic(schema.elem, item, definitions, arguments, active)
+                for item in value.elements
+            ]
+        finally:
+            active.discard(id(value))
+    if isinstance(schema, DynamicDictEncode):
+        if not isinstance(value, DictValue):
+            raise AssertionError(f"dict encode plan received {type(value).__name__}")
+        active = enter_container(id(value), active)
+        try:
+            return {
+                name: _encode_dynamic(schema.value, item, definitions, arguments, active)
+                for name, item in value.entries.items()
+            }
+        finally:
+            active.discard(id(value))
+    if isinstance(schema, DynamicRecordEncode):
+        if not isinstance(value, RecordValue) or value.nominal != schema.nominal:
+            raise AssertionError("dynamic record encode plan received the wrong nominal value")
+        return {
+            name: _encode_dynamic(field, value.fields[name], definitions, arguments, active)
+            for name, field in schema.fields
+        }
+    if isinstance(schema, DynamicExceptionEncode):
+        if not isinstance(value, ExceptionValue) or value.nominal != schema.nominal:
+            raise AssertionError("dynamic exception encode plan received the wrong nominal value")
+        return {
+            name: _encode_dynamic(field, value.fields[name], definitions, arguments, active)
+            for name, field in schema.fields
+        }
+    if isinstance(schema, DynamicEnumEncode):
+        variant, fields = _dynamic_variant_for_encode(schema, value)
+        result: dict[str, object] = {"$case": variant.name}
+        result.update(
+            {
+                name: _encode_dynamic(field, fields[name], definitions, arguments, active)
+                for name, field in variant.fields
+            }
+        )
+        return result
+    raise AssertionError(f"unknown dynamic encode schema {schema!r}")  # pragma: no cover
+
+
+def _dynamic_variant_for_encode(
+    schema: DynamicEnumEncode, value: Value
+) -> tuple[DynamicVariantEncode, dict[str, Value]]:
+    if not isinstance(value, RecordValue):
+        raise AssertionError(f"enum encode plan received {type(value).__name__}")
+    for variant in schema.variants:
+        if variant.nominal == value.nominal:
+            return variant, value.fields
+    raise AssertionError(f"enum encode plan has no member {value.nominal!r}")
+
+
+def _instantiate_dynamic(
+    schema: DynamicEncodeSchema, arguments: tuple[DynamicEncodeSchema, ...]
+) -> DynamicEncodeSchema:
+    """Substitute a caller's type parameters before entering an application."""
+    if isinstance(schema, DynamicTypeParameterEncode):
+        try:
+            return arguments[schema.index]
+        except IndexError as exc:
+            raise AssertionError(f"dynamic encode parameter {schema.index} is unbound") from exc
+    if isinstance(schema, DynamicApplyEncode):
+        return DynamicApplyEncode(
+            schema.nominal,
+            tuple(_instantiate_dynamic(argument, arguments) for argument in schema.arguments),
+        )
+    if isinstance(schema, DynamicArrayEncode):
+        return DynamicArrayEncode(_instantiate_dynamic(schema.elem, arguments))
+    if isinstance(schema, DynamicDictEncode):
+        return DynamicDictEncode(_instantiate_dynamic(schema.value, arguments))
+    if isinstance(schema, DynamicRecordEncode):
+        return DynamicRecordEncode(
+            schema.nominal,
+            tuple((name, _instantiate_dynamic(field, arguments)) for name, field in schema.fields),
+        )
+    if isinstance(schema, DynamicExceptionEncode):
+        return DynamicExceptionEncode(
+            schema.nominal,
+            tuple((name, _instantiate_dynamic(field, arguments)) for name, field in schema.fields),
+        )
+    if isinstance(schema, DynamicEnumEncode):
+        return DynamicEnumEncode(
+            schema.nominal,
+            tuple(
+                DynamicVariantEncode(
+                    variant.name,
+                    variant.nominal,
+                    tuple(
+                        (name, _instantiate_dynamic(field, arguments))
+                        for name, field in variant.fields
+                    ),
+                )
+                for variant in schema.variants
+            ),
+        )
+    return schema
 
 
 def _resolve_encode_ref(key: str, defs: dict[str, EncodeSchema]) -> EncodeSchema:
@@ -221,10 +365,10 @@ def value_to_json_obj(value: Value, active: "set[int] | None" = None) -> object:
     :class:`AglNonDataValue` rather than a bare :class:`TypeError`, so a
     caller that can legitimately receive one (e.g. because it carries the
     field of an in-flight exception) can degrade it to a marker instead of
-    crashing. Lowered casts use this value-directed walk only through their
-    explicit planless strategy for statically JSON-convertible growing
-    polymorphic-recursive source types; ordinary lowered casts use
-    :func:`encode_value` and its static plan.
+    crashing. This untyped walk deliberately emits no enum tags. Lowered casts
+    use :func:`encode_value` or :func:`encode_dynamic_value`, both of which
+    retain source-slot context; this fallback serves reporting values that have
+    no associated static slot plan.
     """
     if isinstance(value, TextValue):
         return value.value
@@ -250,10 +394,6 @@ def value_to_json_obj(value: Value, active: "set[int] | None" = None) -> object:
             active.discard(id(value))
     if isinstance(value, RecordValue):
         return {k: value_to_json_obj(v, active) for k, v in value.fields.items()}
-    if isinstance(value, EnumValue):
-        result: dict[str, object] = {"$case": value.variant}
-        result.update({k: value_to_json_obj(v, active) for k, v in value.fields.items()})
-        return result
     if isinstance(value, ExceptionValue):
         return {k: value_to_json_obj(v, active) for k, v in value.fields.items()}
     if isinstance(value, UnitValue):

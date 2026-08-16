@@ -15,6 +15,16 @@ from agm.agl.ir.contracts import (
     ConversionRecipe,
     ConversionStrategy,
     DictEncode,
+    DynamicApplyEncode,
+    DynamicArrayEncode,
+    DynamicDictEncode,
+    DynamicEncodeDefinition,
+    DynamicEncodePlan,
+    DynamicEnumEncode,
+    DynamicExceptionEncode,
+    DynamicRecordEncode,
+    DynamicTypeParameterEncode,
+    DynamicVariantEncode,
     EncodePlan,
     EnumEncode,
     ExceptionEncode,
@@ -27,7 +37,12 @@ from agm.agl.ir.ids import NominalId
 from agm.agl.ir.operations import ToJson
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.runtime.params import decode_param_value
-from agm.agl.runtime.serialize import dumps_exact, encode_value, value_to_json_obj
+from agm.agl.runtime.serialize import (
+    dumps_exact,
+    encode_dynamic_value,
+    encode_value,
+    value_to_json_obj,
+)
 from agm.agl.semantics.type_table import TypeDef
 from agm.agl.semantics.types import (
     ArrayType,
@@ -42,14 +57,13 @@ from agm.agl.semantics.values import (
     BoolValue,
     DecimalValue,
     DictValue,
-    EnumValue,
     ExceptionValue,
     IntValue,
     JsonValue,
     RecordValue,
     TextValue,
 )
-from agm.agl.type_schema import build_encode_plan, build_param_decoder
+from agm.agl.type_schema import build_dynamic_encode_plan, build_encode_plan, build_param_decoder
 from tests._agl_helpers import enum_type, next_decl_id, record_type, type_table_for
 from tests.agl.ir_harness import (
     evaluate_ir,
@@ -81,8 +95,8 @@ def test_encode_plan_derives_enum_members_and_nested_records() -> None:
     assert isinstance(many.fields[0][1].elem, RecordEncode)
 
 
-def test_encode_plan_matches_legacy_enum_record_and_exception_corpus() -> None:
-    """Typed plans preserve the exact legacy JSON shape across nested values."""
+def test_encode_plan_preserves_enum_tags_for_member_records() -> None:
+    """Static enum slots add the legacy tag while plain records remain untagged."""
     item, item_def = record_type("Item", {"value": IntType()})
     choice, choice_def = enum_type(
         "Choice",
@@ -99,13 +113,24 @@ def test_encode_plan_matches_legacy_enum_record_and_exception_corpus() -> None:
     )
     table = type_table_for(item_def, choice_def, problem_def)
     item_value = RecordValue(NominalId(item.decl_id), "Item", {"value": IntValue(7)})
-    choice_value = EnumValue(
-        NominalId(choice.decl_id), "Choice", "Many", {"items": ArrayValue([item_value])}
+    choice_value = RecordValue(
+        nominal=NominalId(choice_def.members[1].decl_id),
+        display_name="Choice::Many",
+        fields={"items": ArrayValue([item_value])},
     )
     problem_value = ExceptionValue(NominalId(problem.decl_id), "Problem", {"choice": choice_value})
 
-    for typ, value in ((item, item_value), (choice, choice_value), (problem, problem_value)):
-        assert encode_value(build_encode_plan(typ, table), value) == value_to_json_obj(value)
+    assert value_to_json_obj(choice_value) == {"items": [{"value": 7}]}
+    assert encode_value(build_encode_plan(choice, table), choice_value) == {
+        "$case": "Many",
+        "items": [{"value": 7}],
+    }
+    assert encode_value(build_encode_plan(problem, table), problem_value) == {
+        "choice": {"$case": "Many", "items": [{"value": 7}]}
+    }
+    assert encode_dynamic_value(build_dynamic_encode_plan(problem, table), problem_value) == {
+        "choice": {"$case": "Many", "items": [{"value": 7}]}
+    }
 
 
 def test_encode_plan_executes_all_shapes_and_member_identity() -> None:
@@ -129,7 +154,9 @@ def test_encode_plan_executes_all_shapes_and_member_identity() -> None:
     }
 
     enum = EncodePlan(EnumEncode(NominalId(1), (VariantEncode("Member", NominalId(2), ()),)))
-    assert encode_value(enum, EnumValue(NominalId(1), "E", "Member", {})) == {"$case": "Member"}
+    assert encode_value(
+        enum, RecordValue(nominal=NominalId(2), display_name=f"{'E'}::{'Member'}", fields={})
+    ) == {"$case": "Member"}
 
 
 def test_to_json_coercion_uses_the_static_scalar_encoder() -> None:
@@ -161,9 +188,9 @@ def test_encode_plan_reports_malformed_static_plans() -> None:
         (RecordEncode(NominalId(1), ()), RecordValue(NominalId(2), "Other", {})),
         (ExceptionEncode(NominalId(1), ()), IntValue(1)),
         (ExceptionEncode(NominalId(1), ()), ExceptionValue(NominalId(2), "Other", {})),
-        (enum, EnumValue(NominalId(1), "E", "Other", {})),
-        (enum, EnumValue(NominalId(1), "E", "Other", {})),
-        (enum, EnumValue(NominalId(3), "Other", "Member", {})),
+        (enum, RecordValue(nominal=NominalId(1), display_name=f"{'E'}::{'Other'}", fields={})),
+        (enum, RecordValue(nominal=NominalId(1), display_name=f"{'E'}::{'Other'}", fields={})),
+        (enum, RecordValue(nominal=NominalId(3), display_name=f"{'Other'}::{'Member'}", fields={})),
         (enum, IntValue(1)),
     )
     for schema, value in cases:
@@ -202,10 +229,22 @@ def test_encode_plan_preserves_legacy_json_bytes_for_a_complete_corpus() -> None
     table = type_table_for(leaf_def, box_def, choice_def, envelope_def, tree_def)
     leaf_value = RecordValue(NominalId(leaf.decl_id), "Leaf", {})
     box_value = RecordValue(NominalId(box.decl_id), "Box", {"item": leaf_value})
-    one_value = EnumValue(NominalId(choice.decl_id), "Choice", "One", {"box": box_value})
+    one_value = RecordValue(
+        nominal=NominalId(choice_def.members[1].decl_id),
+        display_name=f"{'Choice'}::{'One'}",
+        fields={"box": box_value},
+    )
     cases: tuple[tuple[object, object, str], ...] = (
         (leaf, leaf_value, "{}"),
-        (choice, EnumValue(NominalId(choice.decl_id), "Choice", "Empty", {}), '{"$case": "Empty"}'),
+        (
+            choice,
+            RecordValue(
+                nominal=NominalId(choice_def.members[0].decl_id),
+                display_name=f"{'Choice'}::{'Empty'}",
+                fields={},
+            ),
+            '{"$case": "Empty"}',
+        ),
         (
             choice,
             one_value,
@@ -218,7 +257,16 @@ def test_encode_plan_preserves_legacy_json_bytes_for_a_complete_corpus() -> None
         ),
         (
             ArrayType(choice),
-            ArrayValue([EnumValue(NominalId(choice.decl_id), "Choice", "Empty", {}), one_value]),
+            ArrayValue(
+                [
+                    RecordValue(
+                        nominal=NominalId(choice_def.members[0].decl_id),
+                        display_name=f"{'Choice'}::{'Empty'}",
+                        fields={},
+                    ),
+                    one_value,
+                ]
+            ),
             '[{"$case": "Empty"}, {"$case": "One", "box": {"item": {}}}]',
         ),
         (
@@ -228,11 +276,10 @@ def test_encode_plan_preserves_legacy_json_bytes_for_a_complete_corpus() -> None
         ),
         (
             choice,
-            EnumValue(
-                NominalId(choice.decl_id),
-                "Choice",
-                "Many",
-                {"boxes": ArrayValue([box_value])},
+            RecordValue(
+                nominal=NominalId(choice_def.members[2].decl_id),
+                display_name=f"{'Choice'}::{'Many'}",
+                fields={"boxes": ArrayValue([box_value])},
             ),
             '{"$case": "Many", "boxes": [{"item": {}}]}',
         ),
@@ -359,6 +406,142 @@ def test_lowered_json_cast_preserves_legacy_bytes_for_a_recursive_enum() -> None
     )
 
 
+def test_dynamic_plan_distinguishes_record_and_enum_slots_for_a_shared_member() -> None:
+    """A member nominal gets a tag only where the static slot is an enum."""
+    envelope = NominalId(1)
+    enum = NominalId(2)
+    member = NominalId(3)
+    plan = DynamicEncodePlan(
+        root=DynamicApplyEncode(envelope, ()),
+        definitions=(
+            DynamicEncodeDefinition(
+                envelope,
+                0,
+                DynamicRecordEncode(
+                    envelope,
+                    (
+                        ("plain", DynamicRecordEncode(member, (("value", ScalarEncode()),))),
+                        (
+                            "selected",
+                            DynamicEnumEncode(
+                                enum,
+                                (
+                                    DynamicVariantEncode(
+                                        "Shared", member, (("value", ScalarEncode()),)
+                                    ),
+                                ),
+                            ),
+                        ),
+                        ("items", DynamicArrayEncode(ScalarEncode())),
+                        ("by_name", DynamicDictEncode(ScalarEncode())),
+                    ),
+                ),
+            ),
+        ),
+    )
+    shared = RecordValue(member, "other::name", {"value": IntValue(7)})
+
+    assert encode_dynamic_value(
+        plan,
+        RecordValue(
+            envelope,
+            "Envelope",
+            {
+                "plain": shared,
+                "selected": shared,
+                "items": ArrayValue([IntValue(1)]),
+                "by_name": DictValue({"n": IntValue(2)}),
+            },
+        ),
+    ) == {
+        "plain": {"value": 7},
+        "selected": {"$case": "Shared", "value": 7},
+        "items": [1],
+        "by_name": {"n": 2},
+    }
+
+
+def test_dynamic_encode_plan_rejects_malformed_runtime_shapes() -> None:
+    """Dynamic plans retain the same runtime shape checks as static plans."""
+    nominal = NominalId(1)
+    member = NominalId(2)
+    cases = (
+        (DynamicEncodePlan(DynamicTypeParameterEncode(0), ()), IntValue(1)),
+        (DynamicEncodePlan(DynamicApplyEncode(nominal, ()), ()), IntValue(1)),
+        (
+            DynamicEncodePlan(
+                DynamicApplyEncode(nominal, ()),
+                (DynamicEncodeDefinition(nominal, 1, ScalarEncode()),),
+            ),
+            IntValue(1),
+        ),
+        (DynamicEncodePlan(DynamicArrayEncode(ScalarEncode()), ()), IntValue(1)),
+        (DynamicEncodePlan(DynamicDictEncode(ScalarEncode()), ()), IntValue(1)),
+        (DynamicEncodePlan(DynamicRecordEncode(nominal, ()), ()), IntValue(1)),
+        (DynamicEncodePlan(DynamicExceptionEncode(nominal, ()), ()), IntValue(1)),
+        (DynamicEncodePlan(DynamicEnumEncode(nominal, ()), ()), IntValue(1)),
+        (
+            DynamicEncodePlan(
+                DynamicEnumEncode(nominal, (DynamicVariantEncode("Case", member, ()),)),
+                (),
+            ),
+            RecordValue(NominalId(3), "Other", {}),
+        ),
+        (
+            DynamicEncodePlan(
+                DynamicApplyEncode(nominal, (DynamicTypeParameterEncode(0),)),
+                (DynamicEncodeDefinition(nominal, 1, ScalarEncode()),),
+            ),
+            IntValue(1),
+        ),
+    )
+    for plan, value in cases:
+        with pytest.raises(AssertionError):
+            encode_dynamic_value(plan, value)
+
+
+def test_build_dynamic_encode_plan_rejects_unbound_or_unknown_types() -> None:
+    from agm.agl.semantics.types import TypeVarType
+
+    table = type_table_for()
+    with pytest.raises(AssertionError):
+        build_dynamic_encode_plan(TypeVarType("T"), table)
+    with pytest.raises(AssertionError):
+        build_dynamic_encode_plan(RecordType("Ghost", decl_id=999), table)
+    with pytest.raises(AssertionError):
+        build_dynamic_encode_plan(UnitType(), table)
+
+
+def test_dynamic_application_instantiates_every_composite_argument_shape() -> None:
+    root = NominalId(1)
+    record = DynamicRecordEncode(NominalId(2), (("value", ScalarEncode()),))
+    exception = DynamicExceptionEncode(NominalId(3), (("value", ScalarEncode()),))
+    enum = DynamicEnumEncode(
+        NominalId(4), (DynamicVariantEncode("Case", NominalId(5), (("value", ScalarEncode()),)),)
+    )
+    definition = DynamicEncodeDefinition(root, 1, DynamicTypeParameterEncode(0))
+    cases = (
+        (record, RecordValue(NominalId(2), "Record", {"value": IntValue(1)}), {"value": 1}),
+        (
+            exception,
+            ExceptionValue(NominalId(3), "Problem", {"value": IntValue(2)}),
+            {"value": 2},
+        ),
+        (
+            enum,
+            RecordValue(NominalId(5), "Case", {"value": IntValue(3)}),
+            {"$case": "Case", "value": 3},
+        ),
+    )
+    for argument, value, expected in cases:
+        assert (
+            encode_dynamic_value(
+                DynamicEncodePlan(DynamicApplyEncode(root, (argument,)), (definition,)), value
+            )
+            == expected
+        )
+
+
 def test_growing_polymorphic_recursive_json_cast_lowers_and_evaluates() -> None:
     """A finite Perfect[int] value needs no finite plan for all possible values."""
     result = evaluate_ir(
@@ -367,8 +550,8 @@ def test_growing_polymorphic_recursive_json_cast_lowers_and_evaluates() -> None:
         "  second: B\n"
         "enum Perfect[T]\n"
         "  | Single(value: T)\n"
-        "  | Succ(next: Perfect[Pair[T, T]])\n"
-        "let p: Perfect[int] = Succ(next = Single(value = Pair(first = 1, second = 2)))\n"
+        "  | Succ(next: Perfect[Pair[array[T], dict[text, T]]])\n"
+        'let p: Perfect[int] = Succ(next = Single(value = Pair(first = [1], second = {"x": 2})))\n'
         "let encoded = p as json\n"
         "()\n"
     )
@@ -376,7 +559,8 @@ def test_growing_polymorphic_recursive_json_cast_lowers_and_evaluates() -> None:
     encoded = result["encoded"]
     assert isinstance(encoded, JsonValue)
     assert dumps_exact(encoded.raw, indent=None) == (
-        '{"$case": "Succ", "next": {"$case": "Single", "value": {"first": 1, "second": 2}}}'
+        '{"$case": "Succ", "next": {"$case": "Single", "value": '
+        '{"first": [1], "second": {"x": 2}}}}'
     )
 
 

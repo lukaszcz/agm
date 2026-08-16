@@ -16,7 +16,7 @@ Some tests guard architectural properties rather than feature behavior:
 
 - **Package layering.** A dependency-contract test asserts the AgL package boundaries — `semantics` as the shared semantic foundation, `syntax` as an AST-only leaf, `typecheck` confined to scope's output and the frontend layers beneath it, match compilation importing no IR/lowering/evaluator/runtime code, the IR importing no frontend or match-compiler code, the evaluator never importing the frontend, the runtime staying eval-free, and the pipeline on top.
 - **End-to-end acceptance.** Whole-program suites for module and multi-file AgL programs are part of the standing gate and must stay green. Their scenario harness scripts agent and shell boundaries, so workflow coverage remains deterministic without executing real agents or shell commands.
-- **Match/IR contracts.** Match-compilation and lowering suites cover the shared member-record constructor key, singleton decomposition, descriptor-backed nominal case dispatch, and static JSON encode plans independently of end-to-end programs.
+- **Match/IR contracts.** Match-compilation and lowering suites cover the shared member-record constructor key, singleton decomposition, record-nominal case dispatch, static JSON encode plans, and member-record equality, copying, codec, agent, and FFI crossings independently of end-to-end programs.
 - **Coverage.** The project maintains 100% test coverage of `src/` and 100% command coverage in end-to-end tests.
 
 ## AgL Self-Validation

@@ -75,6 +75,17 @@ from agm.agl.ir.contracts import (
     DecodeSchema,
     DictDecode,
     DictEncode,
+    DynamicApplyEncode,
+    DynamicArrayEncode,
+    DynamicDictEncode,
+    DynamicEncodeDefinition,
+    DynamicEncodePlan,
+    DynamicEncodeSchema,
+    DynamicEnumEncode,
+    DynamicExceptionEncode,
+    DynamicRecordEncode,
+    DynamicTypeParameterEncode,
+    DynamicVariantEncode,
     EncodePlan,
     EncodeSchema,
     EnumDecode,
@@ -576,6 +587,8 @@ def _emit_decode_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -> 
             variants=tuple(
                 VariantDecode(
                     name=vname,
+                    nominal=NominalId(member.decl_id),
+                    display_name="::".join((*member.scope_path, member.name)),
                     fields=tuple(
                         (fname, _emit_decode(ftype, type_table, plan))
                         for fname, ftype in vfields.items()
@@ -609,6 +622,88 @@ def build_encode_plan(typ: Type, type_table: TypeTable) -> EncodePlan:
             for handle in plan.order
         ),
     )
+
+
+def build_dynamic_encode_plan(typ: Type, type_table: TypeTable) -> DynamicEncodePlan:
+    """Compile a finite generic-template plan for a growing JSON source.
+
+    Concrete instantiations such as ``Perfect[Pair[T, T]]`` grow without a
+    finite closure, but their declaration templates are finite. ``Apply``
+    nodes retain every static slot choice and bind the template's parameters at
+    the point of use, so the runtime never guesses enum membership from a
+    record's nominal identity.
+    """
+    definitions: dict[NominalId, DynamicEncodeDefinition] = {}
+
+    def emit(current: Type, parameters: dict[str, int]) -> DynamicEncodeSchema:
+        if isinstance(current, (TextType, IntType, DecimalType, BoolType, JsonType)):
+            return ScalarEncode()
+        if isinstance(current, ArrayType):
+            return DynamicArrayEncode(emit(current.elem, parameters))
+        if isinstance(current, DictType):
+            return DynamicDictEncode(emit(current.value, parameters))
+        if isinstance(current, TypeVarType):
+            index = parameters.get(current.name)
+            if index is None:
+                raise AssertionError(f"unbound encode type parameter {current.name!r}")
+            return DynamicTypeParameterEncode(index)
+        if isinstance(current, (RecordType, EnumType, ExceptionType)):
+            nominal = NominalId(current.decl_id)
+            ensure_definition(current)
+            args = current.type_args if isinstance(current, (RecordType, EnumType)) else ()
+            return DynamicApplyEncode(nominal, tuple(emit(arg, parameters) for arg in args))
+        raise AssertionError(f"build a dynamic JSON encode plan: unencodable type {current!r}")
+
+    def ensure_definition(handle: RecordType | EnumType | ExceptionType) -> None:
+        nominal = NominalId(handle.decl_id)
+        if nominal in definitions:
+            return
+        typedef = type_table.get_by_id(handle.decl_id)
+        if typedef is None:
+            raise AssertionError(f"dynamic encode plan references unknown nominal {nominal!r}")
+        if typedef.kind == "exception":
+            template: RecordType | EnumType | ExceptionType = typedef.handle()
+        else:
+            template = typedef.handle(tuple(TypeVarType(name) for name in typedef.type_params))
+        parameters = {name: index for index, name in enumerate(typedef.type_params)}
+        # Register first so a recursive template can refer to itself while its
+        # body is being compiled; replace the temporary once complete.
+        definitions[nominal] = DynamicEncodeDefinition(nominal, len(parameters), ScalarEncode())
+        if isinstance(template, RecordType):
+            body: DynamicEncodeSchema = DynamicRecordEncode(
+                nominal,
+                tuple(
+                    (name, emit(field_type, parameters))
+                    for name, field_type in type_table.record_fields(template).items()
+                ),
+            )
+        elif isinstance(template, ExceptionType):
+            body = DynamicExceptionEncode(
+                nominal,
+                tuple(
+                    (name, emit(field_type, parameters))
+                    for name, field_type in type_table.exception_fields(template).items()
+                ),
+            )
+        else:
+            body = DynamicEnumEncode(
+                nominal,
+                tuple(
+                    DynamicVariantEncode(
+                        name=member_name,
+                        nominal=NominalId(member.decl_id),
+                        fields=tuple(
+                            (field_name, emit(field_type, parameters))
+                            for field_name, field_type in type_table.record_fields(member).items()
+                        ),
+                    )
+                    for member_name, member in type_table.enum_member_names(template).items()
+                ),
+            )
+        definitions[nominal] = DynamicEncodeDefinition(nominal, len(parameters), body)
+
+    root = emit(typ, {})
+    return DynamicEncodePlan(root=root, definitions=tuple(definitions.values()))
 
 
 def _emit_encode(typ: Type, type_table: TypeTable, plan: _SchemaPlan) -> EncodeSchema:

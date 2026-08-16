@@ -1471,13 +1471,13 @@ class TestUnsupportedNodes:
         assert isinstance(indirect.value.callee, IrMakeClosure)
 
     def test_qualified_enum_constructor_lowers_correctly(self) -> None:
-        """Qualified constructor (e.g. Color::Red) lowers to IrMakeEnum/IrMakeConstructor.
+        """Qualified constructor (e.g. Color::Red) lowers to IrMakeRecord/IrMakeConstructor.
 
         Qualified constructor lowering supports a nullary variant (no fields)
-        lowers to IrMakeEnum (eagerly constructed).  A variant with fields lowers to
-        IrMakeConstructor.  Here Red is nullary, so the binding value must be IrMakeEnum.
+        lowers to IrMakeRecord (eagerly constructed).  A variant with fields lowers to
+        IrMakeConstructor.  Here Red is nullary, so the binding value must be IrMakeRecord.
         """
-        from agm.agl.ir.nodes import IrMakeEnum
+        from agm.agl.ir.nodes import IrMakeRecord
 
         source = """\
 enum Color
@@ -1490,8 +1490,8 @@ let c = Color::Red
         prog = _lower(source)
         entry = prog.modules[prog.entry_module]
         root_capture = _let_root_capture(entry.initializers[0])
-        assert isinstance(root_capture.value, IrMakeEnum)
-        assert root_capture.value.variant == "Red"
+        assert isinstance(root_capture.value, IrMakeRecord)
+        assert root_capture.value.display_name == "Color::Red"
 
     def test_lambda_lowers_to_make_closure_in_unsupported_class(self) -> None:
         """Lambda expressions now lower to IrMakeClosure."""

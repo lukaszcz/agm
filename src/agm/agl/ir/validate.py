@@ -58,6 +58,15 @@ from agm.agl.ir.contracts import (
     DecodeSchema,
     DictDecode,
     DictEncode,
+    DynamicApplyEncode,
+    DynamicArrayEncode,
+    DynamicDictEncode,
+    DynamicEncodePlan,
+    DynamicEncodeSchema,
+    DynamicEnumEncode,
+    DynamicExceptionEncode,
+    DynamicRecordEncode,
+    DynamicTypeParameterEncode,
     EncodeSchema,
     EnumDecode,
     EnumEncode,
@@ -117,7 +126,6 @@ from agm.agl.ir.nodes import (
     IrMakeClosure,
     IrMakeConstructor,
     IrMakeDict,
-    IrMakeEnum,
     IrMakeException,
     IrMakeJsonArray,
     IrMakeJsonObject,
@@ -149,7 +157,6 @@ from agm.agl.ir.program import (
     IrParam,
     NominalKind,
     SourceFile,
-    VariantDescriptor,
 )
 from agm.agl.modules.ids import ModuleId
 from agm.config.engine_keys import ENGINE_KEY_NAMES
@@ -303,26 +310,6 @@ def _check_nominal_field(nominal: NominalId, field: str, mode: IrFieldMode, ctx:
         raise InvalidIrError(f"IrField references unknown field {field!r} of nominal {nominal!r}")
 
 
-def _enum_variant_descriptor(nominal: NominalId, variant: str, ctx: _Context) -> VariantDescriptor:
-    """Return the linked descriptor for an enum variant, or raise."""
-    desc = ctx.program.nominals[nominal]
-    if desc.kind is not NominalKind.ENUM:
-        raise InvalidIrError(f"IR node references non-enum nominal {nominal!r} as an enum")
-    for item in desc.variants:
-        if item.name == variant:
-            return item
-    known = sorted(item.name for item in desc.variants)
-    raise InvalidIrError(
-        f"IR node references variant {variant!r} of {nominal!r}"
-        f" which is not in the descriptor's variants {known!r}"
-    )
-
-
-def _check_enum_variant(nominal: NominalId, variant: str, ctx: _Context) -> None:
-    """Require a first-class variant constructor to resolve through its enum descriptor."""
-    _enum_variant_descriptor(nominal, variant, ctx)
-
-
 def _check_record_nominal(nominal: NominalId, ctx: _Context, node_name: str) -> None:
     """Require a nominal-dispatch target to be a member-record identity."""
     _check_nominal_in_table(nominal, ctx)
@@ -346,6 +333,7 @@ def _check_recipe_consistency(
     defs: "tuple[tuple[str, DecodeSchema], ...]",
     encode: EncodeSchema | None,
     encode_defs: "tuple[tuple[str, EncodeSchema], ...]",
+    dynamic_encode: DynamicEncodePlan | None,
 ) -> None:
     """Require only the conversion metadata selected by each strategy."""
     needs_decode = strategy in _DECODE_STRATEGIES
@@ -358,9 +346,6 @@ def _check_recipe_consistency(
         raise InvalidIrError(
             f"ConversionRecipe strategy {strategy.value!r} must not carry json_schema/decode/defs"
         )
-    # ``TO_JSON_VALUE_DIRECTED`` is deliberately planless: lowering selects it
-    # only for statically JSON-convertible sources with no finite encode plan.
-    # It therefore falls through the no-encode-metadata rule below.
     needs_encode = strategy is ConversionStrategy.TO_JSON
     if needs_encode and encode is None:
         raise InvalidIrError("ConversionRecipe strategy 'to_json' requires encode")
@@ -368,6 +353,125 @@ def _check_recipe_consistency(
         raise InvalidIrError(
             f"ConversionRecipe strategy {strategy.value!r} must not carry encode/encode_defs"
         )
+    needs_dynamic_encode = strategy is ConversionStrategy.TO_JSON_VALUE_DIRECTED
+    if needs_dynamic_encode and dynamic_encode is None:
+        raise InvalidIrError(
+            "ConversionRecipe strategy 'to_json_value_directed' requires dynamic_encode"
+        )
+    if not needs_dynamic_encode and dynamic_encode is not None:
+        raise InvalidIrError(
+            f"ConversionRecipe strategy {strategy.value!r} must not carry dynamic_encode"
+        )
+
+
+def _check_dynamic_encode_plan(plan: DynamicEncodePlan, ctx: _Context) -> None:
+    """Validate a finite source-slot-directed generic encode plan."""
+    definitions = {definition.nominal: definition for definition in plan.definitions}
+    if len(definitions) != len(plan.definitions):
+        raise InvalidIrError("DynamicEncodePlan has duplicate nominal definitions")
+    for definition in plan.definitions:
+        if definition.parameter_count < 0:
+            raise InvalidIrError("DynamicEncodeDefinition has a negative parameter count")
+        _check_nominal_in_table(definition.nominal, ctx)
+        kind = ctx.program.nominals[definition.nominal].kind
+        valid_body = (
+            (
+                isinstance(definition.body, DynamicRecordEncode)
+                and kind is NominalKind.RECORD
+                and definition.body.nominal == definition.nominal
+            )
+            or (
+                isinstance(definition.body, DynamicExceptionEncode)
+                and kind is NominalKind.EXCEPTION
+                and definition.body.nominal == definition.nominal
+            )
+            or (
+                isinstance(definition.body, DynamicEnumEncode)
+                and kind is NominalKind.ENUM
+                and definition.body.nominal == definition.nominal
+            )
+        )
+        if not valid_body:
+            raise InvalidIrError(
+                f"DynamicEncodeDefinition body disagrees with nominal {definition.nominal!r}"
+            )
+    reached: set[NominalId] = set()
+
+    def walk(schema: DynamicEncodeSchema, parameter_count: int) -> None:
+        match schema:
+            case DynamicTypeParameterEncode(index=index):
+                if index < 0 or index >= parameter_count:
+                    raise InvalidIrError(
+                        "DynamicTypeParameterEncode is outside its definition arity"
+                    )
+            case DynamicApplyEncode(nominal=nominal, arguments=arguments):
+                definition = definitions.get(nominal)
+                if definition is None:
+                    raise InvalidIrError(
+                        f"DynamicApplyEncode references unknown nominal {nominal!r}"
+                    )
+                if len(arguments) != definition.parameter_count:
+                    raise InvalidIrError(
+                        f"DynamicApplyEncode arguments disagree with nominal {nominal!r} arity"
+                    )
+                reached.add(nominal)
+                for argument in arguments:
+                    walk(argument, parameter_count)
+            case ScalarEncode():
+                return
+            case DynamicArrayEncode(elem=elem):
+                walk(elem, parameter_count)
+            case DynamicDictEncode(value=value):
+                walk(value, parameter_count)
+            case DynamicRecordEncode(nominal=nominal, fields=fields):
+                _check_nominal_in_table(nominal, ctx)
+                descriptor = ctx.program.nominals[nominal]
+                if descriptor.kind is not NominalKind.RECORD:
+                    raise InvalidIrError(f"RecordEncode references non-record nominal {nominal!r}")
+                _check_encode_fields(fields, descriptor.fields, "RecordEncode")
+                for _field_name, field in fields:
+                    walk(field, parameter_count)
+            case DynamicExceptionEncode(nominal=nominal, fields=fields):
+                _check_nominal_in_table(nominal, ctx)
+                descriptor = ctx.program.nominals[nominal]
+                if descriptor.kind is not NominalKind.EXCEPTION:
+                    raise InvalidIrError(
+                        f"ExceptionEncode references non-exception nominal {nominal!r}"
+                    )
+                _check_encode_fields(fields, descriptor.fields, "ExceptionEncode")
+                for _field_name, field in fields:
+                    walk(field, parameter_count)
+            case DynamicEnumEncode(nominal=nominal, variants=variants):
+                _check_nominal_in_table(nominal, ctx)
+                descriptor = ctx.program.nominals[nominal]
+                if descriptor.kind is not NominalKind.ENUM:
+                    raise InvalidIrError(f"EnumEncode references non-enum nominal {nominal!r}")
+                if len(variants) != len(descriptor.variants):
+                    raise InvalidIrError(
+                        f"EnumEncode variants disagree with enum nominal {nominal!r}"
+                    )
+                for variant, expected in zip(variants, descriptor.variants, strict=True):
+                    if variant.name != expected.name or variant.nominal != expected.member:
+                        raise InvalidIrError(
+                            f"EnumEncode variant {variant.name!r} disagrees with"
+                            f" enum nominal {nominal!r}"
+                        )
+                    _check_encode_fields(variant.fields, expected.fields, "EnumEncode variant")
+                    for _field_name, field in variant.fields:
+                        walk(field, parameter_count)
+            case _ as unreachable:  # pragma: no cover
+                assert_never(unreachable)
+
+    walk(plan.root, 0)
+    pending = list(reached)
+    while pending:
+        nominal = pending.pop()
+        definition = definitions[nominal]
+        before = set(reached)
+        walk(definition.body, definition.parameter_count)
+        pending.extend(reached - before)
+    if reached != set(definitions):
+        raise InvalidIrError("DynamicEncodePlan has unreachable nominal definitions")
 
 
 def _check_decode_nominals(
@@ -466,7 +570,7 @@ def _walk_encode_schema(
 
 
 def _check_encode_fields(
-    fields: "tuple[tuple[str, EncodeSchema], ...]", expected: tuple[str, ...], owner: str
+    fields: "tuple[tuple[str, object], ...]", expected: tuple[str, ...], owner: str
 ) -> None:
     """Require an encoder to select exactly its linked declaration's fields."""
     if tuple(name for name, _schema in fields) != expected:
@@ -492,13 +596,39 @@ def _walk_decode_schema(
             _walk_decode_schema(elem, defs, ctx)
         case DictDecode(value=value_schema):
             _walk_decode_schema(value_schema, defs, ctx)
-        case RecordDecode(nominal=nominal, fields=fields):
+        case RecordDecode(nominal=nominal, display_name=display_name, fields=fields):
             _check_nominal_in_table(nominal, ctx)
+            record = ctx.program.nominals[nominal]
+            if record.kind is not NominalKind.RECORD:
+                raise InvalidIrError(f"RecordDecode references non-record nominal {nominal!r}")
+            if display_name != record.display_name:
+                raise InvalidIrError(
+                    f"RecordDecode display name disagrees with nominal {nominal!r}"
+                )
+            _check_decode_fields(fields, record.fields, "RecordDecode")
             for _fname, fschema in fields:
                 _walk_decode_schema(fschema, defs, ctx)
-        case EnumDecode(nominal=nominal, variants=variants):
+        case EnumDecode(nominal=nominal, display_name=display_name, variants=variants):
             _check_nominal_in_table(nominal, ctx)
-            for variant in variants:
+            enum = ctx.program.nominals[nominal]
+            if enum.kind is not NominalKind.ENUM:
+                raise InvalidIrError(f"EnumDecode references non-enum nominal {nominal!r}")
+            if display_name != enum.display_name or len(variants) != len(enum.variants):
+                raise InvalidIrError(f"EnumDecode disagrees with enum nominal {nominal!r}")
+            for variant, expected in zip(variants, enum.variants, strict=True):
+                if variant.name != expected.name or variant.nominal != expected.member:
+                    raise InvalidIrError(
+                        f"EnumDecode variant {variant.name!r} disagrees with"
+                        f" enum nominal {nominal!r}"
+                    )
+                _check_nominal_in_table(variant.nominal, ctx)
+                member = ctx.program.nominals[variant.nominal]
+                if variant.display_name != member.display_name:
+                    raise InvalidIrError(
+                        f"EnumDecode variant {variant.name!r} display name disagrees with"
+                        f" member nominal {variant.nominal!r}"
+                    )
+                _check_decode_fields(variant.fields, expected.fields, "EnumDecode variant")
                 for _fname, fschema in variant.fields:
                     _walk_decode_schema(fschema, defs, ctx)
         case _ as unreachable:  # pragma: no cover
@@ -506,6 +636,14 @@ def _walk_decode_schema(
 
 
 _RefT = TypeVar("_RefT")
+
+
+def _check_decode_fields(
+    fields: "tuple[tuple[str, DecodeSchema], ...]", expected: tuple[str, ...], owner: str
+) -> None:
+    """Require a decoder to select exactly its linked declaration's fields."""
+    if tuple(name for name, _schema in fields) != expected:
+        raise InvalidIrError(f"{owner} fields disagree with its nominal descriptor")
 
 
 def _check_ref_chain(
@@ -915,14 +1053,6 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             for _fname, fexpr in fields:
                 _validate_expr(fexpr, ctx)
 
-        case IrMakeEnum(nominal=nominal, variant=variant, fields=fields):
-            _validate_location(node.location, ctx)
-            if ctx.deep:
-                _check_nominal_in_table(nominal, ctx)
-                _enum_variant_descriptor(nominal, variant, ctx)
-            for _fname, fexpr in fields:
-                _validate_expr(fexpr, ctx)
-
         case IrMakeException(nominal=nominal, fields=fields):
             _validate_location(node.location, ctx)
             if ctx.deep:
@@ -930,12 +1060,10 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             for _fname, field_expr in fields:
                 _validate_expr(field_expr, ctx)
 
-        case IrMakeConstructor(nominal=nominal, variant=variant):
+        case IrMakeConstructor(nominal=nominal):
             _validate_location(node.location, ctx)
             if ctx.deep:
-                _check_nominal_in_table(nominal, ctx)
-                if variant is not None:
-                    _check_enum_variant(nominal, variant, ctx)
+                _check_record_nominal(nominal, ctx, "IrMakeConstructor")
 
         case IrNominalIs(nominal=nominal, value=val):
             _validate_location(node.location, ctx)
@@ -952,11 +1080,14 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                 recipe.defs,
                 recipe.encode,
                 recipe.encode_defs,
+                recipe.dynamic_encode,
             )
             if ctx.deep and recipe.decode is not None:
                 _check_decode_nominals(recipe.decode, recipe.defs, ctx)
             if ctx.deep and recipe.encode is not None:
                 _check_encode_nominals(recipe.encode, recipe.encode_defs, ctx)
+            if ctx.deep and recipe.dynamic_encode is not None:
+                _check_dynamic_encode_plan(recipe.dynamic_encode, ctx)
             _validate_expr(val, ctx)
 
         case IrIf(branches=branches):
@@ -1411,6 +1542,29 @@ def validate_ir(program: ExecutableProgram, *, deep: bool = True) -> None:
 
     if deep:
         _validate_program_tables(ctx)
+        for nominal, field_encodes in program.exception_field_encodes.items():
+            descriptor = program.nominals.get(nominal)
+            if descriptor is None or descriptor.kind is not NominalKind.EXCEPTION:
+                raise InvalidIrError(
+                    "exception field encodes reference an unregistered non-exception nominal "
+                    f"{nominal!r}"
+                )
+            field_names: set[str] = set()
+            for field_encode in field_encodes:
+                if field_encode.field_name in field_names:
+                    raise InvalidIrError(
+                        f"exception field encodes duplicate field {field_encode.field_name!r}"
+                    )
+                field_names.add(field_encode.field_name)
+                if field_encode.field_name not in descriptor.fields:
+                    raise InvalidIrError(
+                        "exception field encodes reference unknown field "
+                        f"{field_encode.field_name!r} of nominal {nominal!r}"
+                    )
+                if isinstance(field_encode.plan, DynamicEncodePlan):
+                    _check_dynamic_encode_plan(field_encode.plan, ctx)
+                else:
+                    _check_encode_nominals(field_encode.plan.root, field_encode.plan.defs, ctx)
 
     for _module_id, em in program.modules.items():
         for node in em.initializers:

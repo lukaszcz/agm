@@ -16,7 +16,7 @@ from agm.agl.ir.program import IrFunctionBody
 from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.lower.program import lower_program
 from agm.agl.modules.ids import STD_CONFIG_ID, ModuleId
-from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, RecordValue, TextValue
+from agm.agl.semantics.values import BoolValue, IntValue, RecordValue, TextValue
 from agm.agl.typecheck import AglTypeError
 from tests.agl.ir_harness import (
     _checked,
@@ -385,8 +385,8 @@ let is_red = case c of
     assert p.fields["x"] == IntValue(1)
     assert p.fields["y"] == IntValue(2)
     c = r["c"]
-    assert isinstance(c, EnumValue)
-    assert c.variant == "Red"
+    assert isinstance(c, RecordValue)
+    assert c.display_name.rsplit("::", maxsplit=1)[-1] == "Red"
 
 
 def test_same_named_types_in_two_modules(tmp_path: Path) -> None:
@@ -452,5 +452,5 @@ let is_running = case s of
     r = evaluate_ir_graph(entry_source, {"status": status_source}, tmp_path)
     assert r["is_running"] == BoolValue(True)
     s = r["s"]
-    assert isinstance(s, EnumValue)
-    assert s.variant == "Running"
+    assert isinstance(s, RecordValue)
+    assert s.display_name.rsplit("::", maxsplit=1)[-1] == "Running"

@@ -21,7 +21,7 @@ from agm.agl.ir import (
     IrLiteralCaseKey,
     IrLiteralKind,
     IrLoad,
-    IrMakeEnum,
+    IrMakeRecord,
     IrNominalCaseKey,
     Location,
     NominalDescriptor,
@@ -90,29 +90,21 @@ def _literal_case(*arms: IrCaseArm, default: IrConstInt | None = None) -> IrCase
     return IrCase(_LOC, IrConstInt(_LOC, 1), arms, default)
 
 
-def test_validation_requires_enum_variant_member_record() -> None:
-    enum_value = IrMakeEnum(_LOC, _COLOR, "Color", "Plain", ())
+def test_validation_requires_enum_member_record() -> None:
+    enum_value = IrMakeRecord(_LOC, _PLAIN, "Color::Plain", ())
     validate_ir(_program(enum_value, nominals=_color_nominals()))
 
     incomplete = _color_nominals()
     del incomplete[_PLAIN]
-    with pytest.raises(InvalidIrError, match="member"):
+    with pytest.raises(InvalidIrError, match="links non-record member"):
         validate_ir(_program(enum_value, nominals=incomplete))
 
     wrong_shape = _color_nominals()
     wrong_shape[_PLAIN] = NominalDescriptor(
         _PLAIN, ENTRY_ID, ("Color",), "Plain", NominalKind.RECORD, ("unexpected",)
     )
-    with pytest.raises(InvalidIrError, match="fields disagree"):
+    with pytest.raises(InvalidIrError, match="fields"):
         validate_ir(_program(enum_value, nominals=wrong_shape))
-
-    unknown_variant = IrMakeEnum(_LOC, _COLOR, "Color", "Missing", ())
-    with pytest.raises(InvalidIrError, match="variant"):
-        validate_ir(_program(unknown_variant, nominals=_color_nominals()))
-
-    non_enum = IrMakeEnum(_LOC, _PLAIN, "Plain", "Missing", ())
-    with pytest.raises(InvalidIrError, match="non-enum"):
-        validate_ir(_program(non_enum, nominals=_color_nominals()))
 
 
 def test_numeric_keys_are_runtime_canonical_and_duplicate_semantics_are_rejected() -> None:
@@ -346,11 +338,10 @@ def test_direct_malformed_no_match_raises_invalid_ir_not_match_error() -> None:
 
 
 def test_direct_enum_dispatch_copies_fields_and_rejects_missing_payload() -> None:
-    subject = IrMakeEnum(
+    subject = IrMakeRecord(
         _LOC,
-        _COLOR,
-        "Color",
-        "With",
+        _WITH,
+        "Color::With",
         (("value", IrConstInt(_LOC, 42)), ("unused", IrConstInt(_LOC, 0))),
     )
     enum_case = IrCase(
@@ -374,7 +365,7 @@ def test_direct_enum_dispatch_copies_fields_and_rejects_missing_payload() -> Non
         "result": IntValue(42)
     }
 
-    missing_field_subject = IrMakeEnum(_LOC, _COLOR, "Color", "With", ())
+    missing_field_subject = IrMakeRecord(_LOC, _WITH, "Color::With", ())
     malformed = IrCase(
         _LOC,
         missing_field_subject,
@@ -391,17 +382,16 @@ def test_direct_enum_dispatch_copies_fields_and_rejects_missing_payload() -> Non
         IrInterpreter(_program(malformed)).run()
 
 
-def test_enum_dispatch_rejects_a_malformed_variant_link() -> None:
-    """A malformed enum value cannot fall back to its enclosing enum identity."""
+def test_enum_dispatch_defaults_for_an_unmatched_member_record() -> None:
+    """Case dispatch compares direct member identities without enum fallback."""
     malformed = IrCase(
         _LOC,
-        IrMakeEnum(_LOC, _COLOR, "Color", "Missing", ()),
+        IrMakeRecord(_LOC, _OTHER, "Color::Missing", ()),
         (IrCaseArm(IrNominalCaseKey(_WITH), (), IrConstInt(_LOC, 1)),),
         IrConstInt(_LOC, 0),
     )
 
-    with pytest.raises(InvalidIrError):
-        IrInterpreter(_program(malformed, nominals=_color_nominals())).run()
+    assert IrInterpreter(_program(malformed, nominals=_color_nominals())).run() == {}
 
 
 def test_direct_malformed_literal_payload_binding_rejects_non_enum_subject() -> None:

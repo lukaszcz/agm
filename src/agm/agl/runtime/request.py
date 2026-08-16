@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 from agm.agl.ir.ids import Location
-from agm.agl.semantics.values import EnumValue
+from agm.agl.semantics.values import RecordValue
 
 if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract, TypelessOutputContract
@@ -86,7 +86,7 @@ class AgentCallHostError(Exception):
 class AgentRequest:
     """The fully composed request passed verbatim to a host dispatcher."""
 
-    agent: EnumValue
+    agent: RecordValue
     prompt: str
     attempt: int = 0
     previous_invalid_output: str | None = None

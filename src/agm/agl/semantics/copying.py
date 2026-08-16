@@ -4,11 +4,11 @@ Single implementation of the two copy builtins, so the IR interpreter only
 evaluates the argument and dispatches here.
 
 ``shallow_copy_value`` rebuilds exactly one container level — a fresh array,
-dict, record, enum, or exception holding the *same* element/field
+dict, record, or exception holding the *same* element/field
 references as the original. It never recurses, so it can never loop and
 never raises, even on a cyclic value.
 
-``deep_copy_value`` recurses through every array, dict, record, enum, and
+``deep_copy_value`` recurses through every array, dict, record, and
 exception reachable from the value, rebuilding each with independently
 copied contents. An ``id()``-keyed memo makes two references to the same
 object copy to the same new object: a diamond stays a diamond, and — because
@@ -51,7 +51,6 @@ from collections.abc import Callable
 from agm.agl.semantics.values import (
     ArrayValue,
     DictValue,
-    EnumValue,
     ExceptionValue,
     JsonValue,
     RecordValue,
@@ -76,7 +75,7 @@ def deep_copy_value(value: Value) -> Value:
 #: The value kinds :func:`_deep_copy` rebuilds. Everything else — scalars,
 #: ``unit``, constructors, closures — is returned as-is and never
 #: enters the memo, so copying an array of scalars costs no lookups.
-_SHELL_KINDS = (ArrayValue, DictValue, RecordValue, EnumValue, ExceptionValue)
+_SHELL_KINDS = (ArrayValue, DictValue, RecordValue, ExceptionValue)
 _COPIED_KINDS = (*_SHELL_KINDS, JsonValue)
 
 
@@ -104,7 +103,7 @@ def _update_fields(
 
 
 def _copy_container(
-    value: ArrayValue | DictValue | RecordValue | EnumValue | ExceptionValue,
+    value: ArrayValue | DictValue | RecordValue | ExceptionValue,
     transform: Callable[[Value], Value] | None,
     register: Callable[[Value], None],
 ) -> Value:
@@ -136,16 +135,6 @@ def _copy_container(
         register(record_shell)
         _update_fields(record_shell.fields, value.fields, transform)
         return record_shell
-    if isinstance(value, EnumValue):
-        enum_shell = EnumValue(
-            nominal=value.nominal,
-            display_name=value.display_name,
-            variant=value.variant,
-            fields={},
-        )
-        register(enum_shell)
-        _update_fields(enum_shell.fields, value.fields, transform)
-        return enum_shell
     exception_shell = ExceptionValue(
         nominal=value.nominal, display_name=value.display_name, fields={}
     )

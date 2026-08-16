@@ -32,7 +32,6 @@ from agm.agl.semantics.values import (
     ConstructorValue,
     DecimalValue,
     DictValue,
-    EnumValue,
     ExceptionValue,
     IntValue,
     JsonValue,
@@ -87,9 +86,9 @@ class TestValueDirectedBoundary:
         companion = "def relay(a): return a\n"
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
         agent = result["result"]
-        assert isinstance(agent, EnumValue)
-        assert agent.display_name == "Agent"
-        assert agent.variant == "AgentCommand"
+        assert isinstance(agent, RecordValue)
+        assert agent.display_name == "Agent::AgentCommand"
+        assert agent.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
         assert agent.fields == {"command": TextValue("runner")}
 
     def test_bare_python_container_is_not_an_agl_value(self, tmp_path: Path) -> None:
@@ -646,7 +645,7 @@ def test_encode_boundary_value_rejects_an_unregistered_nominal() -> None:
 
 def test_encode_boundary_value_rejects_a_constructor_value() -> None:
     with pytest.raises(BoundaryViolation):
-        encode_boundary_value(ConstructorValue(_fresh_nominal(), "Choice", "Some"))
+        encode_boundary_value(ConstructorValue(_fresh_nominal(), "Choice"))
 
 
 def test_decode_boundary_value_rejects_an_unsupported_python_object() -> None:
@@ -719,18 +718,26 @@ def test_synthesized_enum_variant_instance_is_an_instance_of_the_enum_class() ->
 
 
 def test_synthesized_enum_variant_round_trips_through_decode() -> None:
-    nominal, choice_cls = _synthesize_choice_classes()
+    _, choice_cls = _synthesize_choice_classes()
     some = choice_cls.Some(value=2)
 
-    assert decode_boundary_value(some) == EnumValue(
-        nominal, "Choice", "Some", {"value": IntValue(2)}
+    assert decode_boundary_value(some) == RecordValue(
+        nominal=getattr(choice_cls.Some, "_agl_nominal"),
+        display_name="Choice::Some",
+        fields={"value": IntValue(2)},
     )
 
 
 def test_encoding_an_enum_value_produces_the_matching_variant_class() -> None:
-    nominal, choice_cls = _synthesize_choice_classes()
+    _, choice_cls = _synthesize_choice_classes()
 
-    encoded = encode_boundary_value(EnumValue(nominal, "Choice", "None", {}))
+    encoded = encode_boundary_value(
+        RecordValue(
+            nominal=getattr(getattr(choice_cls, "None"), "_agl_nominal"),
+            display_name="Choice::None",
+            fields={},
+        )
+    )
 
     assert isinstance(encoded, getattr(choice_cls, "None"))
 

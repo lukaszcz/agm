@@ -43,7 +43,6 @@ from agm.agl.semantics.values import (
     BoolValue,
     DecimalValue,
     DictValue,
-    EnumValue,
     IntValue,
     JsonValue,
     RecordValue,
@@ -344,12 +343,16 @@ class TestDecodeValueHappy:
             nominal=nominal,
             display_name="Color",
             variants=(
-                VariantDecode(name="Red", fields=()),
-                VariantDecode(name="Blue", fields=()),
+                VariantDecode(
+                    name="Red", nominal=NominalId(2), display_name="Color::Red", fields=()
+                ),
+                VariantDecode(
+                    name="Blue", nominal=NominalId(3), display_name="Color::Blue", fields=()
+                ),
             ),
         )
         result = decode_value(schema, {"$case": "Red"})
-        assert result == EnumValue(nominal=nominal, display_name="Color", variant="Red", fields={})
+        assert result == RecordValue(nominal=NominalId(2), display_name="Color::Red", fields={})
 
     def test_enum_with_payload(self) -> None:
         nominal = NominalId(1)
@@ -357,19 +360,20 @@ class TestDecodeValueHappy:
             nominal=nominal,
             display_name="Result",
             variants=(
-                VariantDecode(name="Ok", fields=()),
+                VariantDecode(
+                    name="Ok", nominal=NominalId(2), display_name="Result::Ok", fields=()
+                ),
                 VariantDecode(
                     name="Err",
+                    nominal=NominalId(3),
+                    display_name="Result::Err",
                     fields=(("code", ScalarDecode(kind=ScalarKind.INT)),),
                 ),
             ),
         )
         result = decode_value(schema, {"$case": "Err", "code": 42})
-        assert result == EnumValue(
-            nominal=nominal,
-            display_name="Result",
-            variant="Err",
-            fields={"code": IntValue(42)},
+        assert result == RecordValue(
+            nominal=NominalId(3), display_name="Result::Err", fields={"code": IntValue(42)}
         )
 
 
@@ -440,7 +444,9 @@ class TestDecodeValueErrors:
         schema = EnumDecode(
             nominal=NominalId(1),
             display_name="E",
-            variants=(VariantDecode(name="A", fields=()),),
+            variants=(
+                VariantDecode(name="A", nominal=NominalId(2), display_name="E::A", fields=()),
+            ),
         )
         with pytest.raises(ValueError, match="object for enum"):
             decode_value(schema, "oops")
@@ -449,7 +455,9 @@ class TestDecodeValueErrors:
         schema = EnumDecode(
             nominal=NominalId(1),
             display_name="E",
-            variants=(VariantDecode(name="A", fields=()),),
+            variants=(
+                VariantDecode(name="A", nominal=NominalId(2), display_name="E::A", fields=()),
+            ),
         )
         with pytest.raises(ValueError, match=r"\$case"):
             decode_value(schema, {})
@@ -458,7 +466,9 @@ class TestDecodeValueErrors:
         schema = EnumDecode(
             nominal=NominalId(1),
             display_name="E",
-            variants=(VariantDecode(name="A", fields=()),),
+            variants=(
+                VariantDecode(name="A", nominal=NominalId(2), display_name="E::A", fields=()),
+            ),
         )
         with pytest.raises(ValueError, match=r"\$case"):
             decode_value(schema, {"$case": 42})
@@ -467,7 +477,9 @@ class TestDecodeValueErrors:
         schema = EnumDecode(
             nominal=NominalId(1),
             display_name="E",
-            variants=(VariantDecode(name="A", fields=()),),
+            variants=(
+                VariantDecode(name="A", nominal=NominalId(2), display_name="E::A", fields=()),
+            ),
         )
         with pytest.raises(ValueError, match="Unknown enum variant"):
             decode_value(schema, {"$case": "X"})
@@ -479,6 +491,8 @@ class TestDecodeValueErrors:
             variants=(
                 VariantDecode(
                     name="B",
+                    nominal=NominalId(2),
+                    display_name="E::B",
                     fields=(("x", ScalarDecode(kind=ScalarKind.INT)),),
                 ),
             ),
@@ -503,9 +517,13 @@ class TestDecodeValueRefDecode:
             nominal=nominal,
             display_name="Tree",
             variants=(
-                VariantDecode(name="Leaf", fields=()),
+                VariantDecode(
+                    name="Leaf", nominal=NominalId(2), display_name="Tree::Leaf", fields=()
+                ),
                 VariantDecode(
                     name="Node",
+                    nominal=NominalId(3),
+                    display_name="Tree::Node",
                     fields=(
                         ("value", ScalarDecode(kind=ScalarKind.INT)),
                         ("left", RefDecode("Tree")),
@@ -530,20 +548,20 @@ class TestDecodeValueRefDecode:
                 "right": payload,
             }
         result = decode_value(schema, payload, defs)
-        assert isinstance(result, EnumValue)
-        assert result.nominal == NominalId(1)
-        assert result.variant == "Node"
+        assert isinstance(result, RecordValue)
+        assert result.nominal == NominalId(3)
+        assert result.display_name.rsplit("::", maxsplit=1)[-1] == "Node"
         assert result.fields["value"] == IntValue(4)
         # Walk down the "right" spine to confirm every level decoded.
         node = result
         for expected in range(4, -1, -1):
-            assert isinstance(node, EnumValue)
-            assert node.variant == "Node"
+            assert isinstance(node, RecordValue)
+            assert node.display_name.rsplit("::", maxsplit=1)[-1] == "Node"
             assert node.fields["value"] == IntValue(expected)
             next_node = node.fields["right"]
-            assert isinstance(next_node, EnumValue)
+            assert isinstance(next_node, RecordValue)
             node = next_node
-        assert node.variant == "Leaf"
+        assert node.display_name.rsplit("::", maxsplit=1)[-1] == "Leaf"
 
     def test_ref_nested_inside_array_and_record(self) -> None:
         """A RefDecode reachable through ArrayDecode/RecordDecode fields resolves the same way."""
@@ -568,8 +586,14 @@ class TestDecodeValueRefDecode:
         assert len(trees.elements) == 2
         first = trees.elements[0]
         second = trees.elements[1]
-        assert isinstance(first, EnumValue) and first.variant == "Leaf"
-        assert isinstance(second, EnumValue) and second.variant == "Node"
+        assert (
+            isinstance(first, RecordValue)
+            and first.display_name.rsplit("::", maxsplit=1)[-1] == "Leaf"
+        )
+        assert (
+            isinstance(second, RecordValue)
+            and second.display_name.rsplit("::", maxsplit=1)[-1] == "Node"
+        )
 
     def test_unknown_defs_key_is_internal_error(self) -> None:
         """An unresolvable RefDecode key is an internal-invariant violation, not a user error."""

@@ -65,7 +65,6 @@ from agm.agl.ir import (
     IrMakeClosure,
     IrMakeConstructor,
     IrMakeDict,
-    IrMakeEnum,
     IrMakeException,
     IrMakeJsonArray,
     IrMakeJsonObject,
@@ -933,7 +932,7 @@ class TestEnumMemberDispatch:
                 IrBind(
                     _LOC,
                     constructor,
-                    IrMakeConstructor(_LOC, enum, "Packet", "data"),
+                    IrMakeConstructor(_LOC, member, "Packet::data"),
                 ),
                 IrBind(
                     _LOC,
@@ -1006,7 +1005,7 @@ class TestEnumMemberDispatch:
                     NominalId(45),
                     IrIndirectCall(
                         _LOC,
-                        IrMakeConstructor(_LOC, enum, "Packet", "data"),
+                        IrMakeConstructor(_LOC, NominalId(45), "Packet::data"),
                         (IrConstInt(_LOC, 7),),
                     ),
                     False,
@@ -1024,8 +1023,10 @@ class TestEnumMemberDispatch:
             },
         )
 
+        from agm.agl.ir.validate import validate_ir
+
         with pytest.raises(InvalidIrError):
-            IrInterpreter(program).run()
+            validate_ir(program)
 
 
 # ---------------------------------------------------------------------------
@@ -1171,11 +1172,10 @@ class TestIrField:
                 IrBind(
                     _LOC,
                     enum_sym,
-                    IrMakeEnum(
+                    IrMakeRecord(
                         _LOC,
-                        nominal,
-                        "Wrapper",
-                        "wrap",
+                        member,
+                        "Wrapper::wrap",
                         (("value", IrConstInt(_LOC, 9)),),
                     ),
                 ),

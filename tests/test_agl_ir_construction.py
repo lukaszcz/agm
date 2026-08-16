@@ -1,6 +1,6 @@
 """IR evaluation tests for record/enum/exception construction and constructor refs.
 
-Tests all node types: IrMakeRecord, IrMakeEnum, IrMakeException, IrMakeConstructor.
+Tests all node types: IrMakeRecord, IrMakeException, IrMakeConstructor.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from agm.agl.ir.ids import NominalId, SourceId
 from agm.agl.ir.nodes import (
     IrBind,
     IrMakeConstructor,
-    IrMakeEnum,
     IrMakeException,
     IrMakeRecord,
     IrSequence,
@@ -31,7 +30,6 @@ from agm.agl.semantics.values import (
     BoolValue,
     ConstructorValue,
     DecimalValue,
-    EnumValue,
     ExceptionValue,
     IntValue,
     RecordValue,
@@ -177,8 +175,8 @@ let c = Color::Red()
 """
     ir = evaluate_ir(source)
     c = ir["c"]
-    assert isinstance(c, EnumValue)
-    assert c.variant == "Red"
+    assert isinstance(c, RecordValue)
+    assert c.display_name == "Color::Red"
     assert c.fields == {}
 
 
@@ -191,8 +189,8 @@ let s = Shape::Circle(radius = 3.0)
 """
     ir = evaluate_ir(source)
     s = ir["s"]
-    assert isinstance(s, EnumValue)
-    assert s.variant == "Circle"
+    assert isinstance(s, RecordValue)
+    assert s.display_name == "Shape::Circle"
     assert s.fields["radius"] == DecimalValue(decimal.Decimal("3.0"))
 
 
@@ -226,7 +224,7 @@ def test_enum_inequality_different_nominals() -> None:
     """Two enum values from different nominals produce different NominalIds.
 
     We cannot compare them with != in AgL (the checker requires same type for ==).
-    Instead we verify that evaluation produces EnumValues with different nominals.
+    Instead we verify that evaluation produces RecordValues with different nominals.
 
     NominalId is an opaque per-declaration handle unique within a single
     ``ExecutableProgram`` (see ``agm.agl.ir.ids.NominalId``), not a globally
@@ -243,8 +241,8 @@ let cb = ColorB::Red()
     ir = evaluate_ir(source)
     ca = ir["ca"]
     cb = ir["cb"]
-    assert isinstance(ca, EnumValue)
-    assert isinstance(cb, EnumValue)
+    assert isinstance(ca, RecordValue)
+    assert isinstance(cb, RecordValue)
     assert ca.nominal != cb.nominal, "Different enum types must have different NominalIds"
 
 
@@ -257,7 +255,7 @@ let s = Size::Big(amount = 7)
 """
     ir = evaluate_ir(source)
     sv = ir["s"]
-    assert isinstance(sv, EnumValue)
+    assert isinstance(sv, RecordValue)
     assert sv.fields["amount"] == DecimalValue(decimal.Decimal(7))
 
 
@@ -300,11 +298,11 @@ let p3 = Point(x = 9, y = 9)
 
 
 def test_nominal_id_equality_enum() -> None:
-    """NominalId-based equality: constructed enum values compare by nominal + variant + fields.
+    """NominalId-based equality: member records compare by nominal and fields.
 
-    Two equal enum values (same variant, same nominal) compare equal; a value
-    from a different variant does not. An ``EnumValue`` is unhashable for the
-    same reason a ``RecordValue`` is — its ``fields`` may hold an array or dict.
+    Two equal member records (same variant identity) compare equal; a value
+    from a different variant does not. A ``RecordValue`` is unhashable because
+    its ``fields`` may hold an array or dict.
     """
     source = """\
 enum Color | Red | Blue
@@ -318,9 +316,9 @@ let c3 = Color::Blue()
     c1 = ir["c1"]
     c2 = ir["c2"]
     c3 = ir["c3"]
-    assert isinstance(c1, EnumValue)
-    assert isinstance(c2, EnumValue)
-    assert isinstance(c3, EnumValue)
+    assert isinstance(c1, RecordValue)
+    assert isinstance(c2, RecordValue)
+    assert isinstance(c3, RecordValue)
 
     assert c1 == c2
     assert c1 != c3
@@ -367,11 +365,10 @@ let mk = Pt
     mk = ir["mk"]
     assert isinstance(mk, ConstructorValue), f"ir: {mk!r}"
     assert mk.display_name == "Pt"
-    assert mk.variant is None
 
 
 def test_first_class_enum_constructor_ref_nullary_gives_enum_value() -> None:
-    """A nullary enum variant accessed without calling it produces an EnumValue directly.
+    """A nullary enum variant accessed without calling it produces an RecordValue directly.
 
     Nullary variants (no fields) are always eagerly evaluated — no ConstructorValue
     wrapper is created.
@@ -383,8 +380,8 @@ let mk = Color::Red
 """
     ir = evaluate_ir(source)
     mk = ir["mk"]
-    assert isinstance(mk, EnumValue), f"ir: {mk!r}"
-    assert mk.variant == "Red"
+    assert isinstance(mk, RecordValue), f"ir: {mk!r}"
+    assert mk.display_name == "Color::Red"
 
 
 def test_first_class_enum_constructor_ref_with_fields_gives_constructor_value() -> None:
@@ -403,8 +400,7 @@ let mk = Shape::Circle
     ir = evaluate_ir(source)
     mk = ir["mk"]
     assert isinstance(mk, ConstructorValue), f"ir: {mk!r}"
-    assert mk.display_name == "Shape"
-    assert mk.variant == "Circle"
+    assert mk.display_name == "Shape::Circle"
 
 
 def test_bare_payload_constructor_type_apply_is_callable_value() -> None:
@@ -420,10 +416,10 @@ let v = mk(7)
     ir = evaluate_ir(source)
     mk = ir["mk"]
     assert isinstance(mk, ConstructorValue)
-    assert mk.display_name == "Option" and mk.variant == "some"
+    assert mk.display_name == "Option::some"
     v = ir["v"]
-    assert isinstance(v, EnumValue)
-    assert v.variant == "some" and v.fields["value"] == IntValue(7)
+    assert isinstance(v, RecordValue)
+    assert v.display_name == "Option::some" and v.fields["value"] == IntValue(7)
 
 
 def test_bare_nullary_constructor_type_apply_constructs_directly() -> None:
@@ -437,8 +433,8 @@ let z = none::[int]
 """
     ir = evaluate_ir(source)
     z = ir["z"]
-    assert isinstance(z, EnumValue)
-    assert z.variant == "none" and z.fields == {}
+    assert isinstance(z, RecordValue)
+    assert z.display_name == "Option::none" and z.fields == {}
 
 
 def test_qualified_constructor_type_apply_is_callable_value() -> None:
@@ -455,9 +451,9 @@ let z = Option[int]::none
     ir = evaluate_ir(source)
     mk = ir["mk"]
     assert isinstance(mk, ConstructorValue)
-    assert mk.variant == "some"
-    assert isinstance(ir["v"], EnumValue) and ir["v"].variant == "some"
-    assert isinstance(ir["z"], EnumValue) and ir["z"].variant == "none"
+    assert mk.display_name == "Option::some"
+    assert isinstance(ir["v"], RecordValue) and ir["v"].display_name == "Option::some"
+    assert isinstance(ir["z"], RecordValue) and ir["z"].display_name == "Option::none"
 
 
 # ---------------------------------------------------------------------------
@@ -492,7 +488,7 @@ let p = Point(x = 3, y = 4)
 
 
 def test_golden_enum_lowers_to_ir_make_enum() -> None:
-    """Enum variant call lowers to IrMakeEnum with correct variant."""
+    """Enum variant call lowers to IrMakeRecord with correct variant."""
     source = """\
 enum Color | Red | Blue
 let c = Color::Red()
@@ -503,14 +499,13 @@ let c = Color::Red()
     found = False
     for node in inline_main_items(prog):
         if isinstance(node, (IrSequence, IrBind)) and isinstance(
-            let_root_capture(node).value, IrMakeEnum
+            let_root_capture(node).value, IrMakeRecord
         ):
             me = let_root_capture(node).value
-            assert me.display_name == "Color"
-            assert me.variant == "Red"
+            assert me.display_name == "Color::Red"
             assert me.fields == ()
             found = True
-    assert found, "Expected IrBind(value=IrMakeEnum) in initializers"
+    assert found, "Expected IrBind(value=IrMakeRecord) in initializers"
 
 
 def test_golden_exception_lowers_to_ir_make_exception() -> None:
@@ -579,7 +574,6 @@ let mk = Pt
         ):
             mc = let_root_capture(node).value
             assert mc.display_name == "Pt"
-            assert mc.variant is None
             assert prog.nominals[mc.nominal].declared_name == "Pt"
             found = True
     assert found, "Expected IrBind(value=IrMakeConstructor) in initializers"
@@ -706,8 +700,8 @@ def test_validate_rejects_ir_make_record_with_unknown_nominal() -> None:
         validate_ir(prog, deep=True)
 
 
-def test_validate_rejects_ir_make_enum_with_unknown_variant() -> None:
-    """Validator rejects IrMakeEnum whose variant is absent from the descriptor."""
+def test_validate_accepts_enum_member_ir_make_record() -> None:
+    """An enum constructor is an ordinary record construction of its member."""
     from agm.agl.ir.ids import Location, SourceId
     from agm.agl.ir.program import (
         ExecutableModule,
@@ -729,11 +723,10 @@ def test_validate_rejects_ir_make_enum_with_unknown_variant() -> None:
         fields=(),
         variants=(VariantDescriptor(name="Red", fields=(), member=NominalId(2)),),
     )
-    node = IrMakeEnum(
+    node = IrMakeRecord(
         location=loc,
-        nominal=nominal_id,
-        display_name="Color",
-        variant="Purple",  # not in descriptor
+        nominal=NominalId(2),
+        display_name="Color::Red",
         fields=(),
     )
     from agm.agl.modules.ids import ENTRY_ID as EID
@@ -750,8 +743,7 @@ def test_validate_rejects_ir_make_enum_with_unknown_variant() -> None:
         },
         sources={sid: SourceFile(display_name="<test>", normalized_text=" ")},
     )
-    with pytest.raises(InvalidIrError, match="variant"):
-        validate_ir(prog, deep=True)
+    validate_ir(prog, deep=True)
 
 
 @pytest.mark.parametrize(
@@ -929,19 +921,18 @@ def test_validate_non_deep_accepts_unknown_nominal_in_ir_make_record() -> None:
     validate_ir(prog, deep=False)  # must not raise
 
 
-def test_validate_non_deep_accepts_unknown_nominal_in_ir_make_enum() -> None:
-    """Non-deep validation skips nominal and variant checks for IrMakeEnum."""
+def test_validate_non_deep_accepts_unknown_nominal_in_member_ir_make_record() -> None:
+    """Non-deep validation skips nominal checks for member records too."""
     from agm.agl.ir.ids import Location, SourceId
     from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
     from agm.agl.ir.validate import validate_ir
 
     sid = SourceId(0)
     loc = Location(source_id=sid, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    node = IrMakeEnum(
+    node = IrMakeRecord(
         location=loc,
         nominal=NominalId(1),
         display_name="Ghost",
-        variant="Purple",
         fields=(),
     )
     from agm.agl.modules.ids import ENTRY_ID as EID
@@ -983,7 +974,7 @@ def test_validate_non_deep_accepts_unknown_nominal_in_ir_make_exception() -> Non
 
 
 def test_validate_non_deep_accepts_ir_make_constructor_with_unknown_nominal() -> None:
-    """Non-deep validation skips nominal/variant checks for IrMakeConstructor."""
+    """Non-deep validation skips nominal checks for IrMakeConstructor."""
     from agm.agl.ir.ids import Location, SourceId
     from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
     from agm.agl.ir.validate import validate_ir
@@ -994,7 +985,6 @@ def test_validate_non_deep_accepts_ir_make_constructor_with_unknown_nominal() ->
         location=loc,
         nominal=NominalId(1),
         display_name="Ghost",
-        variant="Missing",
     )
     from agm.agl.modules.ids import ENTRY_ID as EID
 
@@ -1008,8 +998,8 @@ def test_validate_non_deep_accepts_ir_make_constructor_with_unknown_nominal() ->
     validate_ir(prog, deep=False)  # must not raise
 
 
-def test_validate_rejects_ir_make_constructor_variant_on_a_record() -> None:
-    """A first-class variant constructor must name a linked enum variant."""
+def test_validate_accepts_ir_make_constructor_for_a_record() -> None:
+    """A first-class constructor carries its record identity directly."""
     from agm.agl.ir.ids import Location
     from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
     from agm.agl.ir.validate import validate_ir
@@ -1022,7 +1012,7 @@ def test_validate_rejects_ir_make_constructor_variant_on_a_record() -> None:
         modules={
             ENTRY_ID: ExecutableModule(
                 module_id=ENTRY_ID,
-                initializers=(IrMakeConstructor(loc, nominal, "Point", "not-a-variant"),),
+                initializers=(IrMakeConstructor(loc, nominal, "Point"),),
             )
         },
         symbols={},
@@ -1034,5 +1024,4 @@ def test_validate_rejects_ir_make_constructor_variant_on_a_record() -> None:
         sources={sid: SourceFile(display_name="<test>", normalized_text=" ")},
     )
 
-    with pytest.raises(InvalidIrError):
-        validate_ir(program, deep=True)
+    validate_ir(program, deep=True)

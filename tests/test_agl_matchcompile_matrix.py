@@ -52,7 +52,7 @@ from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import BoolType, EnumType, IntType, RecordType, TextType
-from agm.agl.semantics.values import BoolValue, EnumValue
+from agm.agl.semantics.values import BoolValue, RecordValue
 from agm.agl.syntax.nodes import Case
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck import CheckedModule, check_program
@@ -308,21 +308,26 @@ def test_paper_decomposition_partition_preserves_first_match_actions() -> None:
     pair_result = specialize(matrix, 0, pair, allocator)
     defaulted = default_matrix(matrix, 0)
     enum_type = cast(EnumType, matrix.occurrences[0].type)
-    nominal = NominalId(enum_type.decl_id)
+    nominal = NominalId(pair.record_type.decl_id)
 
     for left in (False, True):
         for right in (False, True):
-            subject = EnumValue(
-                nominal,
-                enum_type.name,
-                pair.terminal_name,
-                {"left": BoolValue(left), "right": BoolValue(right)},
+            subject = RecordValue(
+                nominal=nominal,
+                display_name=f"{enum_type.name}::{pair.terminal_name}",
+                fields={"left": BoolValue(left), "right": BoolValue(right)},
             )
             assert matrix_action(
                 pair_result.matrix, (BoolValue(left), BoolValue(right))
             ) == reference_action(case, checked, subject)
 
-    empty = EnumValue(nominal, enum_type.name, "empty", {})
+    empty = RecordValue(
+        nominal=NominalId(
+            checked.type_env.type_table.enum_member_names(enum_type)["empty"].decl_id
+        ),
+        display_name=f"{enum_type.name}::empty",
+        fields={},
+    )
     assert matrix_action(defaulted, ()) == reference_action(case, checked, empty)
 
 

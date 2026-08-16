@@ -43,7 +43,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.host_settings import HostSettingsPolicy
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
-    from agm.agl.semantics.values import EnumValue, Frame, Value
+    from agm.agl.semantics.values import Frame, RecordValue, Value
     from agm.agl.setting_overrides import SettingOverride
     from agm.agl.syntax.nodes import (
         ImportDecl,
@@ -664,7 +664,7 @@ class ReplSession:
         }
 
     @staticmethod
-    def _resolve_timeout_seconds(seed: "EnumValue | None") -> float | None:
+    def _resolve_timeout_seconds(seed: "RecordValue | None") -> float | None:
         """Unwrap a ``timeout`` register value (``Option[text]``) into seconds, or ``None``.
 
         ``None`` covers both an absent register and an explicit ``None``
@@ -711,10 +711,10 @@ class ReplSession:
         completed entry instead overwrites the field with the interpreter's
         own already-parsed value (:meth:`_update_engine_settings`).
         """
-        from agm.agl.semantics.values import EnumValue
+        from agm.agl.semantics.values import RecordValue
 
         seed = self._engine_seed.get("timeout")
-        assert seed is None or isinstance(seed, EnumValue)
+        assert seed is None or isinstance(seed, RecordValue)
         return self._resolve_timeout_seconds(seed)
 
     @staticmethod

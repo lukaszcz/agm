@@ -34,7 +34,7 @@ from agm.agl.runtime.convert import (
     validator_for_schema,
 )
 from agm.agl.runtime.render import render_value
-from agm.agl.runtime.serialize import encode_value, value_to_json_obj
+from agm.agl.runtime.serialize import encode_dynamic_value, encode_value
 from agm.agl.semantics.values import (
     DecimalValue,
     IntValue,
@@ -79,7 +79,11 @@ def run_recipe(recipe: ConversionRecipe, value: Value) -> Value:
                 raise AssertionError("TO_JSON strategy requires an encode plan")
             return JsonValue(encode_value(EncodePlan(recipe.encode, recipe.encode_defs), value))
         case ConversionStrategy.TO_JSON_VALUE_DIRECTED:
-            return JsonValue(value_to_json_obj(value))
+            if recipe.dynamic_encode is None:
+                raise AssertionError(
+                    "TO_JSON_VALUE_DIRECTED strategy requires a dynamic encode plan"
+                )
+            return JsonValue(encode_dynamic_value(recipe.dynamic_encode, value))
         case ConversionStrategy.NARROW_DECIMAL_TO_INT:
             if not isinstance(value, DecimalValue):
                 raise AssertionError(  # pragma: no cover

@@ -17,7 +17,6 @@ from agm.agl.semantics.values import (
     BoolValue,
     DecimalValue,
     DictValue,
-    EnumValue,
     ExceptionValue,
     IntValue,
     JsonValue,
@@ -164,7 +163,11 @@ def _create_enum(descriptor: NominalDescriptor, name: str) -> type[object]:
         ),
     )
     for variant in descriptor.variants:
-        attrs = {**_nominal_attrs(descriptor, variant.fields), "_agl_variant": variant.name}
+        attrs = {
+            **_nominal_attrs(descriptor, variant.fields),
+            "_agl_nominal": variant.member,
+            "_agl_variant": variant.name,
+        }
         variant_cls = type(
             variant.name,
             (cast(type[object], _AglNominal), enum_cls),
@@ -207,16 +210,18 @@ def synthesize_nominal_classes(
     current = existing if existing is not None else {}
     result: dict[NominalId, type[object]] = {}
     for descriptor in descriptors:
-        reused = current.get(descriptor.nominal)
+        reused = result.get(descriptor.nominal) or current.get(descriptor.nominal)
         if reused is not None:
             result[descriptor.nominal] = reused
             continue
         name = _nominal_class_name(descriptor)
-        result[descriptor.nominal] = (
-            _create_enum(descriptor, name)
-            if descriptor.kind is NominalKind.ENUM
-            else _create_nominal(descriptor, name)
-        )
+        if descriptor.kind is not NominalKind.ENUM:
+            result[descriptor.nominal] = _create_nominal(descriptor, name)
+            continue
+        enum_cls = _create_enum(descriptor, name)
+        result[descriptor.nominal] = enum_cls
+        for variant in descriptor.variants:
+            result[variant.member] = cast(type[object], getattr(enum_cls, variant.name))
     _NOMINAL_CLASSES.update(result)
     return result
 
@@ -417,14 +422,12 @@ def encode_boundary_value(value: Value) -> object:
         return AglArrayView(value)
     if isinstance(value, DictValue):
         return AglDictView(value)
-    if isinstance(value, (RecordValue, EnumValue, ExceptionValue)):
+    if isinstance(value, (RecordValue, ExceptionValue)):
         try:
             cls = _NOMINAL_CLASSES[value.nominal]
         except KeyError as exc:
             raise BoundaryViolation(f"unknown AgL nominal {value.display_name!r}") from exc
         fields = {name: encode_boundary_value(field) for name, field in value.fields.items()}
-        if isinstance(value, EnumValue):
-            cls = getattr(cls, value.variant)
         return cls(**fields)
     raise BoundaryViolation(f"cannot encode {type(value).__name__}")
 
@@ -465,7 +468,11 @@ def decode_boundary_value(obj: object) -> Value:
             return RecordValue(descriptor.nominal, descriptor.display_name, fields)
         if descriptor.kind is NominalKind.EXCEPTION:
             return ExceptionValue(descriptor.nominal, descriptor.display_name, fields)
-        return EnumValue(
-            descriptor.nominal, descriptor.display_name, type(nominal_obj)._agl_variant, fields
+        variant_name = type(nominal_obj)._agl_variant
+        variant = next(item for item in descriptor.variants if item.name == variant_name)
+        return RecordValue(
+            variant.member,
+            f"{descriptor.display_name}::{variant.name}",
+            fields,
         )
     raise BoundaryViolation(f"unsupported Python extern value {type(obj).__name__}")

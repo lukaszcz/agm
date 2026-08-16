@@ -719,7 +719,11 @@ class EntryPipeline:
                 builtin_host_settings=dict(self._ctx._current),
             )
         except AglRaise as exc:
-            error = exception_value_to_run_error(exc.exc, span=exc.span)
+            error = exception_value_to_run_error(
+                exc.exc,
+                span=exc.span,
+                exception_field_encodes=program_to_run.exception_field_encodes,
+            )
             trace.exception(
                 type_name=error.type_name,
                 message=str(error.fields.get("message", "")),
@@ -882,7 +886,11 @@ class EntryPipeline:
         try:
             interp.run()
         except AglRaise as exc:
-            error = exception_value_to_run_error(exc.exc, span=exc.span)
+            error = exception_value_to_run_error(
+                exc.exc,
+                span=exc.span,
+                exception_field_encodes=program_to_run.exception_field_encodes,
+            )
             trace.exception(
                 type_name=error.type_name,
                 message=str(error.fields.get("message", "")),

@@ -31,7 +31,6 @@ from agm.agl.semantics.types import EnumType, RecordType, Type
 from agm.agl.semantics.values import (
     BoolValue,
     DecimalValue,
-    EnumValue,
     IntValue,
     JsonValue,
     RecordValue,
@@ -89,17 +88,19 @@ def _matches(
             return (
                 classification is not None
                 and isinstance(subject_type, EnumType)
-                and isinstance(value, EnumValue)
-                and value.nominal.value == subject_type.decl_id
-                and value.variant == variant
+                and isinstance(value, RecordValue)
+                and value.nominal
+                == NominalId(
+                    checked.type_env.type_table.enum_member_names(subject_type)[variant].decl_id
+                )
             )
         case LiteralPattern():
             return value_eq(value, _literal_value(pattern))
         case ConstructorPattern(node_id=node_id, name=variant):
-            if isinstance(subject_type, EnumType) and isinstance(value, EnumValue):
-                if value.nominal.value != subject_type.decl_id or value.variant != variant:
-                    return False
+            if isinstance(subject_type, EnumType) and isinstance(value, RecordValue):
                 member = checked.type_env.type_table.enum_member_names(subject_type)[variant]
+                if value.nominal != NominalId(member.decl_id):
+                    return False
                 fields = checked.type_env.type_table.record_fields(member)
             elif isinstance(subject_type, RecordType) and isinstance(value, RecordValue):
                 if value.nominal.value != subject_type.decl_id:
@@ -161,15 +162,9 @@ def canonical_cell_matches(
         return isinstance(value, BoolValue) and value.value is constructor.value
     if isinstance(constructor, LiteralConstructor):
         return value_eq(value, _constructor_literal_value(constructor))
-    if isinstance(constructor, NominalConstructor) and isinstance(value, EnumValue):
-        if enum_variant_members.get((value.nominal, value.variant)) != NominalId(
-            constructor.record_type.decl_id
-        ):
-            return False
-    elif isinstance(constructor, NominalConstructor) and isinstance(value, RecordValue):
-        if value.nominal.value != constructor.record_type.decl_id:
-            return False
-    else:
+    if not isinstance(constructor, NominalConstructor) or not isinstance(value, RecordValue):
+        return False
+    if value.nominal != NominalId(constructor.record_type.decl_id):
         return False
     return all(
         canonical_cell_matches(argument, value.fields[field.name], enum_variant_members)

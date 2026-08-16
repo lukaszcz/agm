@@ -95,7 +95,6 @@ __all__ = [
     "IrMakeConstructor",
     "IrMakeClosure",
     "IrMakeDict",
-    "IrMakeEnum",
     "IrMakeException",
     "IrMakeArray",
     "IrMakeJsonArray",
@@ -546,24 +545,6 @@ class IrMakeRecord:
 
 
 @dataclass(frozen=True, slots=True)
-class IrMakeEnum:
-    """IR enum-variant construction: ``EnumName::Variant(field = expr, ...)``.
-
-    ``nominal`` — the ``NominalId`` of the owning enum type.
-    ``display_name`` — user-facing enum type name.
-    ``variant`` — the variant name.
-    ``fields`` — declaration-order tuple of ``(field_name, expr)`` pairs;
-        each ``expr`` is already coerced by the lowerer.
-    """
-
-    location: Location
-    nominal: NominalId
-    display_name: str
-    variant: str
-    fields: "tuple[tuple[str, IrExpr], ...]"
-
-
-@dataclass(frozen=True, slots=True)
 class IrMakeException:
     """IR exception construction: ``ExcName(field: expr, ...)``.
 
@@ -587,18 +568,14 @@ class IrMakeException:
 class IrMakeConstructor:
     """IR first-class constructor reference.
 
-    Evaluates to a ``ConstructorValue(nominal, display_name, variant)`` without
-    constructing the record/enum.  Used when a constructor is referenced as a
-    value (non-call position).
-
-    ``variant`` is ``None`` for a record constructor; non-``None`` for an enum
-    variant constructor.
+    Evaluates to a ``ConstructorValue(nominal, display_name)`` without
+    constructing the record. Used when a constructor is referenced as a value
+    (non-call position).
     """
 
     location: Location
     nominal: NominalId
     display_name: str
-    variant: "str | None"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1160,7 +1137,6 @@ IrExpr = (
     | IrIndexSet
     | IrRenderTemplate
     | IrMakeRecord
-    | IrMakeEnum
     | IrMakeException
     | IrMakeConstructor
     | IrNominalIs

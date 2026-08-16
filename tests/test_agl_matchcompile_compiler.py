@@ -74,7 +74,7 @@ from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID
 from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import EnumType, IntType, RecordType, Type, TypeTemplate
-from agm.agl.semantics.values import BoolValue, EnumValue, RecordValue, Value
+from agm.agl.semantics.values import BoolValue, RecordValue, Value
 from agm.agl.syntax.nodes import Case, LetDecl
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck import (
@@ -209,9 +209,9 @@ def _branch_matches(
     if isinstance(constructor, BoolConstructor):
         return isinstance(value, BoolValue) and value.value is constructor.value
     if isinstance(constructor, NominalConstructor):
-        return isinstance(value, EnumValue) and enum_variant_members.get(
-            (value.nominal, value.variant)
-        ) == NominalId(constructor.record_type.decl_id)
+        return isinstance(value, RecordValue) and value.nominal == NominalId(
+            constructor.record_type.decl_id
+        )
     raise AssertionError("finite generated tests only use boolean and enum constructors")
 
 
@@ -226,7 +226,7 @@ def _decision_action(compiled: CompiledMatchSite, subject: Value) -> int | None:
             return decision.action_id
         value = values[decision.occurrence.id]
         if isinstance(decision, DecisionDecompose):
-            assert isinstance(value, (EnumValue, RecordValue))
+            assert isinstance(value, RecordValue)
             next_values = dict(values)
             children = sorted(
                 (
@@ -246,7 +246,7 @@ def _decision_action(compiled: CompiledMatchSite, subject: Value) -> int | None:
                 continue
             next_values = dict(values)
             if isinstance(branch.constructor, NominalConstructor):
-                assert isinstance(value, EnumValue)
+                assert isinstance(value, RecordValue)
 
                 def creation_order(occurrence: Occurrence) -> int:
                     return occurrence.creation_order
@@ -385,15 +385,23 @@ def _nested_pair_value(
     bit_type: EnumType,
     left: str,
     right: str,
-) -> EnumValue:
-    bit_nominal = NominalId(bit_type.decl_id)
-    return EnumValue(
-        NominalId(pair_type.decl_id),
-        pair_type.name,
-        "pair",
-        {
-            "left": EnumValue(bit_nominal, bit_type.name, left, {}),
-            "right": EnumValue(bit_nominal, bit_type.name, right, {}),
+    type_table: TypeTable,
+) -> RecordValue:
+    bit_members = type_table.enum_member_names(bit_type)
+    return RecordValue(
+        nominal=NominalId(type_table.enum_member_names(pair_type)["pair"].decl_id),
+        display_name=f"{pair_type.name}::{'pair'}",
+        fields={
+            "left": RecordValue(
+                nominal=NominalId(bit_members[left].decl_id),
+                display_name=f"{bit_type.name}::{left}",
+                fields={},
+            ),
+            "right": RecordValue(
+                nominal=NominalId(bit_members[right].decl_id),
+                display_name=f"{bit_type.name}::{right}",
+                fields={},
+            ),
         },
     )
 
@@ -734,14 +742,12 @@ def test_qba_reordering_preserves_source_priority_for_every_pair_value() -> None
     root = cast(DecisionDecompose, compiled.root)
     pair = cast(NominalConstructor, root.constructor)
     enum_type = cast(EnumType, compiled.normalized.root.type)
-    nominal = NominalId(enum_type.decl_id)
 
     for left, right in itertools.product((False, True), repeat=2):
-        value = EnumValue(
-            nominal,
-            enum_type.name,
-            pair.terminal_name,
-            {"left": BoolValue(left), "right": BoolValue(right)},
+        value = RecordValue(
+            nominal=NominalId(pair.record_type.decl_id),
+            display_name=f"{enum_type.name}::{pair.terminal_name}",
+            fields={"left": BoolValue(left), "right": BoolValue(right)},
         )
         assert _decision_action(compiled, value) == reference_action(case, checked, value)
 
@@ -762,23 +768,20 @@ def test_decision_oracle_distinguishes_same_named_enum_members() -> None:
     pair = cast(NominalConstructor, root.constructor)
     pair_type = cast(EnumType, compiled.normalized.root.type)
     right_type = cast(EnumType, pair.fields[1].type)
-    foreign_left = EnumValue(
-        NominalId(right_type.decl_id),
-        right_type.name,
-        "same",
-        {"payload": BoolValue(False)},
+    foreign_left = RecordValue(
+        nominal=NominalId(right_type.decl_id),
+        display_name=f"{right_type.name}::{'same'}",
+        fields={"payload": BoolValue(False)},
     )
-    subject = EnumValue(
-        NominalId(pair_type.decl_id),
-        pair_type.name,
-        pair.terminal_name,
-        {
+    subject = RecordValue(
+        nominal=NominalId(pair_type.decl_id),
+        display_name=f"{pair_type.name}::{pair.terminal_name}",
+        fields={
             "left": foreign_left,
-            "right": EnumValue(
-                NominalId(right_type.decl_id),
-                right_type.name,
-                "same",
-                {"payload": BoolValue(False)},
+            "right": RecordValue(
+                nominal=NominalId(right_type.decl_id),
+                display_name=f"{right_type.name}::{'same'}",
+                fields={"payload": BoolValue(False)},
             ),
         },
     )
@@ -803,15 +806,16 @@ def test_generated_finite_matrices_match_reference_reachability_and_failure() ->
         )
         checked, case, compiled = _compile(source)
         pair_type = cast(EnumType, compiled.normalized.root.type)
-        nominal = NominalId(pair_type.decl_id)
+        pair_nominal = NominalId(
+            compiled.normalized.type_table.enum_member_names(pair_type)["pair"].decl_id
+        )
         expected_actions: set[int] = set()
         unmatched = False
         for left, right in itertools.product((False, True), repeat=2):
-            value = EnumValue(
-                nominal,
-                pair_type.name,
-                "pair",
-                {"left": BoolValue(left), "right": BoolValue(right)},
+            value = RecordValue(
+                nominal=pair_nominal,
+                display_name=f"{pair_type.name}::{'pair'}",
+                fields={"left": BoolValue(left), "right": BoolValue(right)},
             )
             expected = reference_action(case, checked, value)
             actual = _decision_action(compiled, value)
@@ -865,14 +869,15 @@ def test_generated_nested_multi_column_matrices_match_the_reference() -> None:
         bit_type = cast(EnumType, pair_constructor.fields[0].type)
         values: tuple[Value, ...] = (
             *(
-                _nested_pair_value(pair_type, bit_type, left, right)
+                _nested_pair_value(pair_type, bit_type, left, right, checked.type_env.type_table)
                 for left, right in itertools.product(("zero", "one"), repeat=2)
             ),
-            EnumValue(
-                NominalId(pair_type.decl_id),
-                pair_type.name,
-                "missing",
-                {},
+            RecordValue(
+                nominal=NominalId(
+                    checked.type_env.type_table.enum_member_names(pair_type)["missing"].decl_id
+                ),
+                display_name=f"{pair_type.name}::{'missing'}",
+                fields={},
             ),
         )
         expected_actions: set[int] = set()

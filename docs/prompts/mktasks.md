@@ -1,8 +1,8 @@
-Read the supplied design brief and create implementation tasks. Each task must fit an agent's 200k context; split larger work.
+Read %{PLAN_FILE} and create implementation tasks. Each task must fit an agent's 200k context; split larger work.
 
 Give each task a brief `Context` section that summarizes the design goals and distinguishes those goals from the task-specific acceptance criteria.
 
-Save the task briefs, an index, and a concise status tracker in the project's designated task location.
+Save task briefs to `.agent-files/tasks/TASK_*.md`, the index to `.agent-files/tasks/TASK_INDEX.md`, and the status tracker to `.agent-files/tasks/PROGRESS.md`.
 
 ## Status tracker format
 

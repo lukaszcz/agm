@@ -1,4 +1,4 @@
-Implement the supplied design brief.
+Implement the design brief from `.agent-files/PLAN.md`.
 
 Divide the work into well-scoped tasks doable by an agent in 200k context. Split work that is too large.
 

@@ -1,4 +1,4 @@
-Implement the pending task briefs tracked by the project status file.
+Implement the tasks from `.agent-files/tasks/TASK_*.md`, tracked in `.agent-files/tasks/PROGRESS.md`. The tasks implement the design in `.agent-files/PLAN.md`.
 
 Use subagents sequentially. Choose the next unblocked task from the tracker.
 

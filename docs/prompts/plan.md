@@ -1,7 +1,7 @@
 
 %{PROBLEM}
 
-Develop an implementation design for the request and save it to the requested destination.
+Develop an implementation design for the request and save it to %{PLAN_FILE}.
 
 All solutions must be general, principled, and extensible; avoid pragmatic fixes.
 

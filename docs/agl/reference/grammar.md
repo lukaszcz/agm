@@ -96,14 +96,14 @@ use_decl    ::= "use" use_target ("::" tail | "as" ref_name) [hiding_clause]
 export_decl ::= "export" module_path ["/*"] ["::" braces] [hiding_clause]
 
 tail          ::= "*" | braces | path_atom ["as" ref_name]
-braces        ::= "{" brace_item ("," brace_item)* "}"
+braces        ::= "{" brace_item ("," brace_item)* ","? "}"
 brace_item    ::= path_atom ["as" ref_name]
 use_target    ::= ("/" | "::")? qualifier_path
 module_path   ::= NAME ("/" NAME)*    (* byte-adjacent, as is a trailing "/*" *)
 qualifier_path ::= NAME ("/" NAME)* ("::" NAME)*
 ref_name      ::= name
 hiding_clause ::= "hiding" path_atom ("," path_atom)*
-path_atom     ::= NAME ("::" NAME)*
+path_atom     ::= (NAME "::")* name
 ```
 
 `"import"`, `"use"`, and `"export"` are contextual at item start when they

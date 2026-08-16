@@ -298,8 +298,10 @@ See [Functions](functions.md) for the declaration and call syntax.
 
 ## Standard core types
 
-The following types are defined by `std/core`, which the automatic prelude
-opens in every loaded entry and library module except `std/core` itself.
+The following types are defined by `std/core`. Every loaded entry and library
+module except `std/core` itself receives an automatic `import std/core::*`, unless
+`--no-stdlib` disables it or an explicit import whose expansion includes `std/core`
+supplies the core contribution instead.
 
 ### `Option[T]`
 

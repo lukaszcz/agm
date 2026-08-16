@@ -22,6 +22,34 @@ def test_is_test_lowers_renamed_use_variant() -> None:
     assert values["matches"] == BoolValue(True)
 
 
+def test_case_lowers_renamed_nullary_use_variant() -> None:
+    values = evaluate_ir(
+        "use S::{E::A as X}\n"
+        "scope S\n"
+        "enum E | A | B\n"
+        "end S\n"
+        "let value = X\n"
+        "let result = case value of | X => 1 | _ => 0\n"
+        "result\n"
+    )
+
+    assert values["result"] == IntValue(1)
+
+
+def test_case_lowers_renamed_applied_use_variant() -> None:
+    values = evaluate_ir(
+        "use S::{E::A as X}\n"
+        "scope S\n"
+        "enum E | A(value: int) | B\n"
+        "end S\n"
+        "let value = X(4)\n"
+        "let result = case value of | X(value = _ as n) => n | _ => 0\n"
+        "result\n"
+    )
+
+    assert values["result"] == IntValue(4)
+
+
 # ---------------------------------------------------------------------------
 # IR evaluation tests — literal patterns
 # ---------------------------------------------------------------------------

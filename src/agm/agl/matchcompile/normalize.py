@@ -355,11 +355,11 @@ def normalize_pattern(
                     binders=(BinderProvenance(node_id=node_id, name=name, span=pattern.span),),
                 )
             constructor_ref = classifications.get(node_id)
-            if constructor_ref is None or constructor_ref.variant != name:
+            if constructor_ref is None:
                 raise MatchCompileInvariantError(
                     "missing final constructor classification for bare pattern"
                 )
-            if not isinstance(subject_type, EnumType):
+            if not isinstance(subject_type, EnumType) or constructor_ref.variant is None:
                 raise MatchCompileInvariantError(
                     "final bare constructor has a non-enum checked type"
                 )
@@ -371,7 +371,7 @@ def normalize_pattern(
                     constructor_ref.owner_path,
                     decl_id=subject_type.decl_id,
                 ),
-                name,
+                constructor_ref.variant,
                 checked.type_env.type_table,
             )
             if constructor.enum_type != subject_type or constructor.arity != 0:
@@ -383,7 +383,7 @@ def normalize_pattern(
                 arguments=(),
                 provenance=provenance,
             )
-        case ConstructorPattern(name=variant):
+        case ConstructorPattern():
             constructor_ref = checked.pattern_constructor_ref_for(pattern.node_id)
             if constructor_ref is None:
                 raise MatchCompileInvariantError(
@@ -402,11 +402,13 @@ def normalize_pattern(
                     "with the checked occurrence type"
                 )
             if isinstance(subject_type, EnumType):
+                if constructor_ref.variant is None:
+                    raise MatchCompileInvariantError(
+                        "enum constructor classification is missing its variant"
+                    )
                 nominal_constructor: FieldBearingNominalConstructor = enum_constructor(
-                    subject_type, variant, checked.type_env.type_table
+                    subject_type, constructor_ref.variant, checked.type_env.type_table
                 )
-                if constructor_ref.variant != variant:
-                    raise MatchCompileInvariantError("invalid final constructor classification")
             else:
                 nominal_constructor = record_constructor(subject_type, checked.type_env.type_table)
             supplied_pairs = checked.argument_bindings.constructor_patterns.get(pattern.node_id)

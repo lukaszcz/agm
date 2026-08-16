@@ -12,7 +12,7 @@ param integer: int
 param decimal_number: decimal
 let picker = AgentCommand("picker")
 
-def pick() -> Pair = ask("Pick a pair.", agent = picker)
+def pick() -> Pair = picker.ask("Pick a pair.")
 
 program def main() -> unit =
   case pick() of

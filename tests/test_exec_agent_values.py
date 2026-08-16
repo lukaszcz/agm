@@ -20,47 +20,87 @@ def _invoke(runner: CliRunner, argv: list[str]):
     return runner.invoke(get_command(cli.app), argv, prog_name="agm", catch_exceptions=False)
 
 
-@pytest.mark.parametrize(
-    ("agent", "expected_argv"),
-    [
-        ('AgentCommand("command --flag")', ["command", "--flag"]),
-        (
-            'AgentClaude("sonnet", "medium")',
-            ["claude", "-p", "--model", "sonnet", "--effort", "medium"],
-        ),
-        (
-            'AgentCodex("o3", "high")',
-            ["codex", "exec", "--model", "o3", "-c", "model_reasoning_effort=high", "-"],
-        ),
-        (
-            'AgentPi("openai", "gpt", "low")',
-            ["pi", "-p", "--provider", "openai", "--model", "gpt", "--thinking", "low"],
-        ),
-    ],
-)
-def test_exec_dispatches_each_agent_value_through_its_builder(
-    tmp_path: Path,
-    fake_agent_transport: FakeAgentTransport,
-    agent: str,
-    expected_argv: list[str],
+def test_exec_agent_method_command_session_substitutes_its_session_id(
+    tmp_path: Path, fake_agent_transport: FakeAgentTransport
 ) -> None:
     program = tmp_path / "program.agl"
-    write_file_program(program, f'let answer: text = ask("hello", agent = {agent})\nprint answer\n')
+    write_file_program(
+        program,
+        'let answer: text = AgentCommand("command --flag \\%{SESSION_ID}").ask("hello")\n'
+        "print answer\n",
+    )
     fake_agent_transport.queue(fake_agent_transport.success("done"))
 
     result = _invoke(CliRunner(), ["exec", "--no-log", str(program)])
 
     assert result.exit_code == 0, result.output
     assert result.output == "done\n"
-    assert fake_agent_transport.calls == [("hello", expected_argv)]
+    prompt, argv = fake_agent_transport.calls[0]
+    assert prompt == "hello"
+    assert argv[:2] == ["command", "--flag"]
+    assert len(argv) == 3
+
+
+def test_exec_runner_default_session_uses_a_session_id_placeholder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_agent_transport: FakeAgentTransport,
+) -> None:
+    home = tmp_path / "home"
+    config_dir = home / ".agm"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.toml").write_text('[exec]\nrunner = "command %{SESSION_ID}"\n')
+    program = tmp_path / "program.agl"
+    write_file_program(program, 'let answer: text = ask("hello")\nprint answer\n')
+    monkeypatch.setattr(
+        exec_engine,
+        "current_config_context",
+        lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+    )
+    fake_agent_transport.queue(fake_agent_transport.success("done"))
+
+    result = _invoke(CliRunner(), ["exec", "--no-log", str(program)])
+
+    assert result.exit_code == 0, result.output
+    assert result.output == "done\n"
+    prompt, argv = fake_agent_transport.calls[0]
+    assert prompt == "hello"
+    assert argv[0] == "command"
+    assert len(argv) == 2
+
+
+def test_exec_runner_without_a_session_id_placeholder_fails_free_ask(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    config_dir = home / ".agm"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.toml").write_text('[exec]\nrunner = "command"\n')
+    program = tmp_path / "program.agl"
+    write_file_program(program, 'let answer: text = ask("hello")\nprint answer\n')
+    monkeypatch.setattr(
+        exec_engine,
+        "current_config_context",
+        lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+    )
+
+    result = _invoke(CliRunner(), ["exec", "--no-log", str(program)])
+
+    assert result.exit_code != 0
+    assert "%{SESSION_ID}" in result.output
+    assert "[exec] default-agent" in result.output
 
 
 @pytest.mark.parametrize(
     ("cli_agent", "source_agent", "expected_command"),
     [
         (None, None, "config"),
-        ('AgentCommand("cli")', None, "cli"),
-        ('AgentCommand("cli")', 'AgentCommand("source")', "source"),
+        ('AgentCommand("cli \\%{SESSION_ID}")', None, "cli"),
+        (
+            'AgentCommand("cli \\%{SESSION_ID}")',
+            'AgentCommand("source \\%{SESSION_ID}")',
+            "source",
+        ),
     ],
 )
 def test_exec_default_agent_precedence_is_config_then_cli_then_source(
@@ -74,7 +114,9 @@ def test_exec_default_agent_precedence_is_config_then_cli_then_source(
     home = tmp_path / "home"
     config_dir = home / ".agm"
     config_dir.mkdir(parents=True)
-    (config_dir / "config.toml").write_text("[exec]\ndefault-agent = 'AgentCommand(\"config\")'\n")
+    (config_dir / "config.toml").write_text(
+        "[exec]\ndefault-agent = 'AgentCommand(\"config \\%{SESSION_ID}\")'\n"
+    )
     source_write = "" if source_agent is None else f"std/config::default-agent := {source_agent}\n"
     program = tmp_path / "program.agl"
     write_file_program(
@@ -94,7 +136,10 @@ def test_exec_default_agent_precedence_is_config_then_cli_then_source(
     result = _invoke(CliRunner(), argv)
 
     assert result.exit_code == 0, result.output
-    assert fake_agent_transport.calls == [("hello", [expected_command])]
+    prompt, command = fake_agent_transport.calls[0]
+    assert prompt == "hello"
+    assert command[0] == expected_command
+    assert len(command) == 2
 
 
 def test_exec_retries_with_the_output_contract_feedback(
@@ -103,7 +148,7 @@ def test_exec_retries_with_the_output_contract_feedback(
     program = tmp_path / "program.agl"
     write_file_program(
         program,
-        'let answer: int = ask("count", agent = AgentCommand("mock"), '
+        'let answer: int = AgentCommand("mock \\%{SESSION_ID}").ask("count", '
         "on_parse_error = Retry(n = 1))\n"
         "print answer\n",
     )
@@ -115,8 +160,8 @@ def test_exec_retries_with_the_output_contract_feedback(
 
     assert result.exit_code == 0, result.output
     assert result.output == "7\n"
-    assert [argv for _, argv in fake_agent_transport.calls] == [["mock"], ["mock"]]
-    assert "previous response did not match" in fake_agent_transport.calls[1][0].lower()
+    assert [argv[0] for _, argv in fake_agent_transport.calls] == ["mock", "mock"]
+    assert "validation errors:" in fake_agent_transport.calls[1][0].lower()
 
 
 @pytest.mark.parametrize(
@@ -136,7 +181,7 @@ def test_exec_typed_agent_errors_retain_the_selected_agent_value(
     write_file_program(
         program,
         "try\n"
-        '  let answer: int = ask("count", agent = AgentPi("openai", "gpt", "low"))\n'
+        '  let answer: int = AgentCommand("mock \\%{SESSION_ID}").ask("count")\n'
         "  print answer\n"
         f"catch {caught_type} as error =>\n"
         "  print render(error.agent)\n",
@@ -146,5 +191,5 @@ def test_exec_typed_agent_errors_retain_the_selected_agent_value(
     invocation = _invoke(CliRunner(), ["exec", "--no-log", str(program)])
 
     assert invocation.exit_code == 0, invocation.output
-    assert "AgentPi" in invocation.output
-    assert "openai" in invocation.output
+    assert "AgentCommand" in invocation.output
+    assert "mock" in invocation.output

@@ -345,7 +345,7 @@ when you need the payload:
 until review is Pass
 
 case review of
-  | Fail(issues) => artifact := ask("Fix %{issues}", agent = impl)
+  | Fail(issues) => artifact := impl.ask("Fix %{issues}")
   | Pass => ()
 ```
 

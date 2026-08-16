@@ -1748,11 +1748,10 @@ class IrInterpreter:
                 prompt=prompt_expr,
                 contract_id=contract_id,
                 max_attempts=max_attempts,
-                origin=origin,
             ):
                 try:
                     return self._effects.eval_ir_ask(
-                        node, agent_expr, prompt_expr, contract_id, max_attempts, origin
+                        node, agent_expr, prompt_expr, contract_id, max_attempts
                     )
                 except AglRaise as exc:
                     if exc.span is None:
@@ -1779,7 +1778,8 @@ class IrInterpreter:
                 try:
                     return self._effects.eval_ir_session_ask(node)
                 except AglRaise as exc:
-                    exc.span = node.location
+                    if exc.span is None:
+                        exc.span = node.location
                     raise
 
             case IrSessionOp():

@@ -111,7 +111,7 @@ class TestRegisterAgent:
         result = run_inline_command(
             rt,
             'let my_agent = AgentCommand("my_agent")\n'
-            'let answer = ask("meaningful prompt", agent = my_agent)\nprint answer',
+            'let answer = my_agent.ask("meaningful prompt")\nprint answer',
         )
 
         assert result.ok
@@ -198,9 +198,7 @@ class TestFallbackAgent:
 
     def test_named_agent_registered_accepted(self) -> None:
         rt = PipelineDriver(agent_dispatcher=lambda req: "output")
-        result = run_inline_command(
-            rt, 'let impl = AgentCommand("impl")\nask("do it", agent = impl)'
-        )
+        result = run_inline_command(rt, 'let impl = AgentCommand("impl")\nimpl.ask("do it")')
         assert result.ok is True
 
     def test_undeclared_named_agent_is_static_error(self) -> None:
@@ -215,10 +213,7 @@ class TestFallbackAgent:
         rt = PipelineDriver(agent_dispatcher=lambda req: "ok")
         result = run_inline_command(
             rt,
-            (
-                'let any_agent_name = AgentCommand("any-agent-name")\n'
-                'ask("hi", agent = any_agent_name)'
-            ),
+            ('let any_agent_name = AgentCommand("any-agent-name")\nany_agent_name.ask("hi")'),
         )
         assert result.ok is True
 
@@ -341,7 +336,7 @@ class TestAgentRequest:
 
         rt = PipelineDriver(agent_dispatcher=reviewer)
         run_inline_command(
-            rt, 'let reviewer = AgentCommand("reviewer")\nask("Review this", agent = reviewer)'
+            rt, 'let reviewer = AgentCommand("reviewer")\nreviewer.ask("Review this")'
         )
         assert received[0].agent.variant == "AgentCommand"
         assert received[0].agent.fields["command"] == TextValue("reviewer")
@@ -2426,16 +2421,14 @@ class TestLegacyAgentRegistry:
             return "output"
 
         rt = PipelineDriver(agent_dispatcher=agent)
-        result = run_inline_command(
-            rt, 'let impl = AgentCommand("impl")\nask("do it", agent = impl)'
-        )
+        result = run_inline_command(rt, 'let impl = AgentCommand("impl")\nimpl.ask("do it")')
         assert result.ok
         assert calls == ["do it"]
 
     def test_command_value_uses_the_default_dispatcher(self) -> None:
         rt = PipelineDriver(agent_dispatcher=lambda req: "ok")
         result = run_inline_command(
-            rt, 'let any_name = AgentCommand("any-name")\nask("hi", agent = any_name)'
+            rt, 'let any_name = AgentCommand("any-name")\nany_name.ask("hi")'
         )
         assert result.ok
 
@@ -2927,10 +2920,10 @@ class TestV2ExecStructuredForm:
         assert result.error is not None
 
 
-class TestV2AskWithAgentValue:
-    """ask(..., agent: <agent_value>) dispatches to the named agent."""
+class TestV2AgentMethodAsk:
+    """``Agent::ask`` dispatches to its receiver."""
 
-    def test_ask_dispatches_to_named_agent(self) -> None:
+    def test_ask_dispatches_to_its_receiver(self) -> None:
         received: list[str] = []
 
         def agent(req: AgentRequest) -> str:
@@ -2939,7 +2932,7 @@ class TestV2AskWithAgentValue:
 
         rt = PipelineDriver(agent_dispatcher=agent)
         result = run_inline_command(
-            rt, 'let helper = AgentCommand("helper")\nask("question", agent = helper)\n'
+            rt, 'let helper = AgentCommand("helper")\nhelper.ask("question")\n'
         )
         assert result.ok is True
         assert received == ["question"]
@@ -3524,8 +3517,8 @@ end A
 scope B
 let bot = AgentCommand("b-bot")
 end B
-print(ask("first", agent = A::bot))
-print(ask("second", agent = B::bot))
+print(A::bot.ask("first"))
+print(B::bot.ask("second"))
 """
 
         def dispatch(request: AgentRequest) -> str:
@@ -3566,7 +3559,7 @@ let bot = 42
 scope A
 let bot = AgentCommand("a-bot")
 end A
-print(ask("hi", agent = A::bot))
+print(A::bot.ask("hi"))
 """
         runtime = PipelineDriver(agent_dispatcher=lambda _request: "hi there")
 

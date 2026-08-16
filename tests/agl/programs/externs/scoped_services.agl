@@ -24,4 +24,4 @@ program def main() -> unit =
   print(Math::even(7))
   print(Math::echo::[text]("typed chain"))
   print(Math::increment(41))
-  print(ask("Review the scoped service.", agent = Math::reviewer))
+  print(Math::reviewer.ask("Review the scoped service."))

@@ -155,12 +155,15 @@ either is a static error.
 
 ### Agents
 
-`ask` selects an ordinary typed `Agent` value. Pass one explicitly, or omit
-`agent` to read `std/config::default-agent` at that call:
+Free `ask` lazily opens its default session on first use, snapshotting the
+then-current `std/config::default-agent`; every later free `ask` reuses that
+session and agent. A later `default-agent` write therefore does not switch free
+calls already using that session. Select an agent explicitly for a call with its
+`Agent::ask` method:
 
 ```agl
 let reviewer = AgentClaude("sonnet", "medium")
-let review: Review = ask("Review %{artifact}", agent = reviewer)
+let review: Review = reviewer.ask("Review %{artifact}")
 let answer: text = ask("Summarize")
 ```
 
@@ -173,15 +176,20 @@ build their own argv; use an `Agent` value or `default-agent` to select one.
 The argv an `Agent` value builds — the command string of an `AgentCommand`, and the
 provider variants' fixed flags — interpolates `%{name}` holes strictly from the process
 environment overlaid with `PROMPT_FILE`, which wins on conflicts. Unlike `agm loop`'s
-runner and selector, no workflow-specific variables are added. See
+runner and selector, no workflow-specific variables are added. When an `AgentCommand`
+opens a session, AGM generates an id and substitutes it **only** into that runner's
+unescaped `%{SESSION_ID}` interpolation holes; it does not export `SESSION_ID` in the
+child process environment. This applies to the default session opened by free `ask`,
+the ephemeral session that scopes an `Agent::ask` call and its retries, and an explicit
+`Session::open(AgentCommand(...))` session. See
 [Runner command interpolation](agents.md#runner-command-interpolation) for the shared
-`%%`/`PROMPT_FILE` alias, `\%{` escape, and shlex-split rules. A prompt-file placeholder
-places the rendered prompt file at that position; otherwise AGM appends `@<path>`, except
-for `AgentCodex`, which pipes the prompt in on standard input instead of appending a
-target. Because an AgL text literal interpolates `%{…}` itself, spell the placeholder as
-`\%{PROMPT_FILE}` inside `AgentCommand("…")` so it reaches the host as literal text. An
-unresolvable hole fails the call with a catchable `AgentCallError` whose `cause` is
-`"spawn_failure"`.
+`%%`/`PROMPT_FILE` alias, `\%{` escape, and shlex-split rules. A prompt-file
+placeholder places the rendered prompt file at that position; otherwise AGM appends
+`@<path>`, except for `AgentCodex`, which pipes the prompt in on standard input instead
+of appending a target. Because an AgL text literal interpolates `%{…}` itself, spell a
+host placeholder as `\%{PROMPT_FILE}` or `\%{SESSION_ID}` inside `AgentCommand("…")` so
+it reaches the host as literal text. An unresolvable hole fails the call with a catchable
+`AgentCallError` whose `cause` is `"interpolation_failure"`.
 
 ### Configuration
 
@@ -191,7 +199,7 @@ source `std/config` writes can override:
 ```toml
 [exec]
 default-agent = 'AgentClaude("sonnet", "medium")' # typed default Agent value
-# runner = "claude"         # bare host agent command; lower precedence than default-agent
+# runner = "my-agent --session %{SESSION_ID}" # bare session-aware host command; lower precedence
 strict-json = false         # lenient JSON recovery is the default
 max-iters = 5               # opt into a safety-valve cap for unbounded loops
 timeout = "30m"             # initial shell-exec and agent idle timeout
@@ -201,12 +209,21 @@ log = false                 # trace logging off by default; set true to enable
 ```
 
 `runner` is a bare host command (like `[loop] runner`), not AgL literal syntax; when
-set, it seeds `default-agent` as `AgentCommand(runner)`. It applies only when neither
-`--agent` nor `default-agent` (CLI or config) supplies a value: precedence, highest
-first, is `--agent` > qualified program-table/`[exec] default-agent` > `[exec] runner` > the
-`std/config` declaration's own default. `runner` is shell-split and validated as soon
-as configuration is read, before the module graph loads; a malformed command exits 1
-with nothing run.
+set, it seeds `default-agent` as `AgentCommand(runner)`. An `AgentCommand` needs an
+unescaped `%{SESSION_ID}` placeholder only when it opens a continuation session. That
+includes a `runner` (or `default-agent` value) used by free `ask`, an
+`AgentCommand(...).ask(...)` call's ephemeral session, and an explicit
+`Session::open(AgentCommand(...))`; the command must accept the generated id to
+continue that session. A bare runner such as `"claude"` is therefore not usable for
+free `ask`, but an `AgentCommand` value is not invalid merely because it lacks that
+placeholder when it is not used to open a session. If the command has no session-id
+convention, leave `runner` unset and select a session-capable provider explicitly with
+`[exec] default-agent` (for example, `AgentClaude("sonnet", "medium")`) or `--agent`.
+`runner` applies only when neither `--agent` nor `default-agent` (CLI or config) supplies
+a value: precedence, highest first, is `--agent` > qualified program-table/`[exec]
+default-agent` > `[exec] runner` > the `std/config` declaration's own default. `runner`
+is shell-split and validated as soon as configuration is read, before the module graph
+loads; a malformed command exits 1 with nothing run.
 
 Qualified tables address declarations by module suffix and scope path. A loose entry
 file's `.agl` stem is its module component. A file executed directly from a package — a

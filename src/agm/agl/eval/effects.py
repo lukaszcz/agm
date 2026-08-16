@@ -15,7 +15,6 @@ from typing import NoReturn, Protocol, cast
 from agm.agl.ir.ids import ContractId, Location
 from agm.agl.ir.nodes import (
     IrAsk,
-    IrAskOrigin,
     IrAskRequest,
     IrExec,
     IrExpr,
@@ -36,7 +35,6 @@ from agm.agl.runtime.request import (
     AgentCallHostError,
     AgentCancelled,
     AgentRequest,
-    compose_agent_prompt,
     compose_initial_agent_prompt,
     compose_session_corrective_follow_up,
 )
@@ -243,7 +241,6 @@ class EffectHandlers:
         prompt_expr: IrExpr,
         contract_id: ContractId,
         max_attempts: int,
-        origin: IrAskOrigin,
     ) -> Value:
         """Handle IrAsk: dispatch an Agent enum value and parse output."""
         agent_val = self._ctx._eval(agent_expr)
@@ -276,26 +273,6 @@ class EffectHandlers:
         json_schema = (
             None if contract.json_schema is None else cast(object, json.loads(contract.json_schema))
         )
-        if origin is IrAskOrigin.FREE:
-            return self._eval_session_ask_attempts(
-                agent=agent_val,
-                prompt=prompt_text,
-                contract_id=contract_id,
-                max_attempts=max_attempts,
-                node=_node,
-                output_contract=output_contract,
-                compose_prompt=compose_agent_prompt,
-                dispatch=lambda request: self._dispatch_ephemeral_session_agent(
-                    agent_val,
-                    request,
-                    _node,
-                    max_attempts=max_attempts,
-                    target_type=contract.target_type_label,
-                    codec=contract.codec_name,
-                    strict_json=contract.strict_json,
-                    json_schema=json_schema,
-                ),
-            )
         return self._eval_agent_method_ask(
             agent=agent_val,
             prompt=prompt_text,
@@ -527,49 +504,6 @@ class EffectHandlers:
         except SessionHostError as error:
             self._session_error(error)
 
-    def _dispatch_ephemeral_session_agent(
-        self,
-        agent: EnumValue,
-        request: AgentRequest,
-        node: IrAsk,
-        *,
-        max_attempts: int,
-        target_type: str,
-        codec: str,
-        strict_json: bool | None,
-        json_schema: object | None,
-    ) -> str:
-        """Dispatch one free-ask attempt through a fresh host session.
-
-        Free asks deliberately retain their complete-prompt retry policy, so
-        retries do not share a conversation. Each attempt still uses the same
-        host lifecycle as an explicit session: open, ask, then close.
-        """
-        # Free asks use the CLI backend even for Pi so their single attempt
-        # retains the agent value's ordinary one-shot command shape.
-        transport = SessionTransport.CLI
-        try:
-            return with_ephemeral_session(
-                self._require_session_host("open"),
-                agent,
-                transport,
-                lambda handle: self._dispatch_session_agent(
-                    handle,
-                    request,
-                    node,
-                    max_attempts=max_attempts,
-                    target_type=target_type,
-                    codec=codec,
-                    strict_json=strict_json,
-                    json_schema=json_schema,
-                ),
-                one_shot=True,
-            )
-        except SessionAgentError as error:
-            self._invalid_agent_error(agent, error)
-        except SessionHostError as error:
-            self._session_error(error)
-
     def eval_ir_session_ask(self, node: IrSessionAsk) -> Value:
         """Send a prompt through a session and run its shared retry engine."""
         handle, agent, _transport = self._session_parts(self._ctx._eval(node.session), "ask")
@@ -617,7 +551,7 @@ class EffectHandlers:
         compose_prompt: Callable[[AgentRequest], str],
         dispatch: Callable[[AgentRequest], str],
     ) -> Value:
-        """Run the session ask retry loop; free asks delegate their one-shot transport here."""
+        """Run the session ask retry loop."""
         contract = self._ctx._program.contracts[contract_id]
         effective_strict = (
             contract.strict_json if contract.strict_json is not None else self._ctx._strict_json

@@ -63,7 +63,7 @@ class CaptureTransport:
         monkeypatch.setattr("agm.agent.runner.run_capture_result", run)
 
 
-def _open(backend: object, agent: object, *, name: str = "") -> None:
+def _open(backend: object, agent: object, *, name: str = "", one_shot: bool = False) -> None:
     if not isinstance(
         backend,
         (
@@ -74,7 +74,7 @@ def _open(backend: object, agent: object, *, name: str = "") -> None:
         ),
     ):
         raise AssertionError("unexpected backend")
-    backend.open(SessionOpenRequest(agent=agent, transport="cli", name=name))
+    backend.open(SessionOpenRequest(agent=agent, transport="cli", name=name, one_shot=one_shot))
 
 
 def _file_prompt_argv(argv: list[str], command: list[str]) -> None:
@@ -336,6 +336,21 @@ def test_pi_forks_immediately_after_open_then_child_is_live_without_repeating_fo
             "t",
         ],
     )
+
+
+def test_codex_one_shot_session_uses_the_standard_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = CaptureTransport([CaptureOutcome("answer")])
+    transport.install(monkeypatch)
+    backend = CodexCliSessionBackend()
+    _open(backend, AgentCodex("m", "t"), one_shot=True)
+
+    assert backend.ask(SessionAskRequest("prompt")).content == "answer"
+    assert transport.calls == [
+        (
+            ["codex", "exec", "--model", "m", "-c", "model_reasoning_effort=t", "-"],
+            "prompt",
+        )
+    ]
 
 
 def test_codex_reset_after_successful_creation_starts_a_new_jsonl_thread(

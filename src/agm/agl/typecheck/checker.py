@@ -23,7 +23,7 @@ Rules implemented
 4.  ``name := e`` — expected type is the binding's declared type.
 5.  ``print(expr)`` — accepts any value and yields ``unit``.
 6.  ``render(expr, pretty:, quote_strings:)`` — accepts any value and yields ``text``.
-7.  ``ask(prompt, ...)`` — named-agent or default-agent call with codec.
+7.  ``ask(prompt, ...)`` — default-session call with codec; ``Agent::ask`` selects a receiver.
 8.  ``exec(cmd, ...)`` — shell call; requires ``supports_shell_exec``.
 9.  Declared-name calls — checked against the full ``FunctionSignature``.
 10. Value calls — checked against the ``FunctionType``; named args disallowed.
@@ -490,7 +490,6 @@ def _builtin_function_signature(
             return FunctionSignature(
                 params=(
                     _std_param("prompt", TextType()),
-                    _std_param("agent", BUILTIN_PRELUDE_TYPES["Agent"], has_default=True),
                     _std_param("format", TextType(), has_default=True),
                     _std_param("strict_json", BoolType(), has_default=True),
                     _std_param(

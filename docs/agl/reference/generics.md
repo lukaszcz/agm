@@ -457,7 +457,7 @@ rejected with a static error at that specific use site:
 
 <!-- agl-check: error -->
 ```agl
-let bad: Perfect[int] = ask("Give me a value.", agent = source)
+let bad: Perfect[int] = source.ask("Give me a value.")
 # static error: type 'Perfect[int]' cannot be used as an agent output type:
 # its recursive instantiations never close, so it has no finite JSON schema.
 

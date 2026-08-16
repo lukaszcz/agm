@@ -26,7 +26,7 @@ A param declared inside a named scope region has a short external spelling — w
 
 ## Agent Values
 
-Each `ask` evaluates an `Agent` enum value and dispatches the argv built from that value. The direct form receives that value through its `agent` parameter; the call-only `Agent::ask` and `Agent::ask-request` methods receive it as their selected receiver. The pipeline prepares a program once (lex, parse, scope) and reuses that prepared object for both parameter discovery and execution. `agm exec` and the REPL seed `std/config::default-agent`; source writes can replace it in program order.
+Free `ask` lowers through the snapshot default session, which captures the current `std/config::default-agent` at first use; later free asks reuse it. `ask-request` with no explicit agent instead reads the current setting when its request is evaluated, while call-only `Agent::ask` and `Agent::ask-request` methods receive their agent as the selected receiver. The pipeline prepares a program once (lex, parse, scope) and reuses that prepared object for both parameter discovery and execution. `agm exec` and the REPL seed `std/config::default-agent`; source writes can replace it in program order.
 
 ## Engine Settings
 

@@ -2348,7 +2348,7 @@ class TestAsk:
         )
 
     def test_ask_with_explicit_agent(self) -> None:
-        r = accept_type('let reviewer = AgentCommand("reviewer")\nask("Q", agent = reviewer)')
+        r = accept_type('let reviewer = AgentCommand("reviewer")\nreviewer.ask("Q")')
         assert r.resolved.program is not None
 
     def test_ask_default_agent_is_available_without_a_host_capability(self) -> None:
@@ -2365,8 +2365,8 @@ class TestAsk:
         assert "prompt" in str(err).lower() or "argument" in str(err).lower()
 
     def test_ask_wrong_agent_type(self) -> None:
-        err = reject_type('let x = "not_agent"\nask("Q", agent = x)')
-        assert "agent" in str(err).lower()
+        err = reject_type('let x = "not_agent"\nx.ask("Q")')
+        assert "member access" in str(err).lower()
 
     def test_ask_with_json_codec(self) -> None:
         r = accept_type('let n: int = ask("Q", format = "json")\nn')
@@ -2883,7 +2883,7 @@ class TestRawTailTypingParity:
     def test_ask_raw_payload_has_no_agent_slot(self) -> None:
         accept_type("ask! agent = reviewer", capabilities=no_agent_caps())
         accept_type(
-            'let reviewer = AgentCommand("reviewer")\nask("prompt", agent = reviewer)',
+            'let reviewer = AgentCommand("reviewer")\nreviewer.ask("prompt")',
             capabilities=no_agent_caps(),
         )
 
@@ -8747,9 +8747,9 @@ class TestAskUnknownArgs:
         assert "ask" in str(err).lower() or "positional" in str(err).lower()
 
     def test_ask_valid_named_arg_combinations_still_accepted(self) -> None:
-        # All four known named args together must be accepted.
+        # All supported parse options work on an explicit Agent receiver.
         r = accept_type(
-            'let a = AgentCommand("a")\nlet n: int = ask("Q", agent = a, format = "json",'
+            'let a = AgentCommand("a")\nlet n: int = a.ask("Q", format = "json",'
             " strict_json = true, on_parse_error = Abort())\nn"
         )
         assert r.resolved.program is not None

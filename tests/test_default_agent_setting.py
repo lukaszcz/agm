@@ -514,4 +514,4 @@ def test_source_write_of_malformed_agent_command_stays_a_runtime_error(
     assert exc_info.value.code == 2
     out, err = capsys.readouterr()
     assert out == "before ask\n"
-    assert "AgentCallError" in err
+    assert "SessionError" in err

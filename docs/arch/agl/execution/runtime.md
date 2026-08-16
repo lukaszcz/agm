@@ -29,20 +29,16 @@ request before dispatch, and records every response path, including unit calls,
 transport failures, and cancellation. Initial requests include format instructions;
 corrective retries use a category-based validation summary that excludes
 response-derived validation paths, keys, and values. The session ask runner owns
-the shared typed-attempt loop: session retries and `Agent::ask` send only that
-summary and a format reminder in an existing conversation; an agent method opens
-one ephemeral handle for its complete call without changing its continuation-
-capable backend. Free asks retain their complete one-shot composer and open, ask
-through, and close an ephemeral host session with a one-shot backend for every
-attempt.
-`runtime/agents.py` remains the value-driven transport boundary and sends each
-one-shot composed prompt verbatim.
+the shared typed-attempt loop: free `ask`, session retries, and `Agent::ask`
+send only that summary and a format reminder in an existing conversation. Free
+asks use the snapshot default session; an agent method opens one ephemeral
+handle for its complete call without changing its continuation-capable backend.
 
 The trace destination is the sole live host service configured by an AgL `builtin var` write. The engine-key catalog names its `log`/`log-file` register pair explicitly; either write repoints the same trace store, while other host-consumed settings remain registers read on demand. `runtime/host_settings.py` applies the command-supplied trace-path policy without importing the command layer.
 
 ## Sessions
 
-`runtime/sessions.py` defines the AgL-neutral `SessionHost` firewall protocol, opaque host errors, normalized session statistics, and the optional complete-ephemeral-lifecycle seam. Its ephemeral-only dispatcher adapter gives evaluator-only hosts the same open/ask/close path while retaining the legacy dispatcher's full request envelope; persistent session operations still require a supplied host. The AGM adapter in `agent/session/service.py` owns the session table, forwards successful response metadata and call information through the optional request-host seam, and selects CLI backends by default, with Pi using RPC by default. It is the only layer that converts AgL agent values into host specs and separately carries one-shot backend selection: successful ephemeral closes retire their service and adapter mappings, while explicit closed handles remain known for their defined close behavior. A free ask opens an ephemeral one-shot backend for one attempt and closes it afterward; `Agent::ask` scopes a normal continuation backend through the lifecycle seam for its whole retry loop, and explicit-session retries remain on their opaque handle so corrective feedback and later asks share a conversation. `exec` creates one host per run and closes it on exit. The REPL keeps one host for its lifetime and routes session asks through the same confirmation mode as ordinary agent asks.
+`runtime/sessions.py` defines the AgL-neutral `SessionHost` firewall protocol, opaque host errors, normalized session statistics, and the optional complete-ephemeral-lifecycle seam. Its ephemeral-only dispatcher adapter gives evaluator-only hosts the open/ask/close path for `Agent::ask`; persistent session operations, including free `ask`, require a supplied host. The AGM adapter in `agent/session/service.py` owns the session table, forwards successful response metadata and call information through the optional request-host seam, and selects CLI backends by default, with Pi using RPC by default. It is the only layer that converts AgL agent values into host specs and separately carries one-shot backend selection: successful ephemeral closes retire their service and adapter mappings, while explicit closed handles remain known for their defined close behavior. Free ask uses the default session, `Agent::ask` scopes a normal continuation backend through the lifecycle seam for its whole retry loop, and explicit-session retries remain on their opaque handle so corrective feedback and later asks share a conversation. `exec` creates one host per run and closes it on exit. The REPL keeps one host for its lifetime and routes session asks through the same confirmation mode as ordinary agent asks.
 
 ## Pipeline Orchestrator
 

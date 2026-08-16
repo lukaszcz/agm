@@ -98,6 +98,14 @@ def test_session_default_lowers_to_its_dedicated_node() -> None:
     assert isinstance(values["session"], IrSessionDefault)
 
 
+def test_free_ask_lowers_through_the_default_session() -> None:
+    values = _main_let_values('let answer: text = ask("question")\n()')
+
+    answer = values["answer"]
+    assert isinstance(answer, IrSessionAsk)
+    assert isinstance(answer.session, IrSessionDefault)
+
+
 def test_session_ask_lowers_a_formatted_strict_json_contract_with_retries() -> None:
     program = lower_inline_ir(
         "let session = Session::default()\n"

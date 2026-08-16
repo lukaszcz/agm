@@ -8685,8 +8685,9 @@ class TestExecCommand:
         program = work / "ask.agl"
         write_file_program(
             program,
-            'let reviewer = AgentCommand("claude -p")\n'
-            'let r = ask("ping", agent = reviewer)\nprint r\n',
+            'let reviewer = AgentCommand("claude -p \\%{SESSION_ID}")\n'
+            'let r = reviewer.ask("ping")\n'
+            "print r\n",
             encoding="utf-8",
         )
         # Install a fake runner named ``claude`` (the built-in default) that
@@ -8718,16 +8719,16 @@ class TestExecCommand:
             "  | Fail(issues: array[Issue])\n"
             "enum Fix\n"
             "  | Complete(output: text)\n"
-            'let impl = AgentCommand("impl-runner")\n'
-            'let reviewer = AgentCommand("review-runner")\n'
-            'var artifact: text = ask("Implement %{task}", agent = impl)\n'
+            'let impl = AgentCommand("impl-runner \\%{SESSION_ID}")\n'
+            'let reviewer = AgentCommand("review-runner \\%{SESSION_ID}")\n'
+            'var artifact: text = impl.ask("Implement %{task}")\n'
             "var review: Review = Pass\n"
             "do[3]\n"
-            '  review := ask("Review %{artifact}", agent = reviewer)\n'
+            '  review := reviewer.ask("Review %{artifact}")\n'
             "  case review of\n"
             "    | Pass() => ()\n"
             "    | Fail(issues) =>\n"
-            '        let fix: Fix = ask("Fix %{issues} in %{artifact}", agent = impl)\n'
+            '        let fix: Fix = impl.ask("Fix %{issues} in %{artifact}")\n'
             "        case fix of\n"
             "          | Complete(output) =>\n"
             "              artifact := output\n"
@@ -8784,8 +8785,8 @@ class TestExecCommand:
             program,
             "enum Review\n"
             "  | Pass\n"
-            'let reviewer = AgentCommand("review-runner")\n'
-            'let review: Review = ask("Review now", agent = reviewer, '
+            'let reviewer = AgentCommand("review-runner \\%{SESSION_ID}")\n'
+            'let review: Review = reviewer.ask("Review now", '
             "on_parse_error = Retry(n = 1))\n"
             "case review of\n"
             '  | Pass => print "accepted"\n',
@@ -8815,9 +8816,9 @@ class TestExecCommand:
         assert result.stdout == "accepted\n"
         assert count_file.read_text().strip() == "2"
         prompts = prompt_log.read_text()
-        assert prompts.count("Review now") == 2
-        assert "previous response did not match" in prompts
-        assert "not json" in prompts
+        assert prompts.count("Review now") == 1
+        assert "Validation errors:" in prompts
+        assert "not json" not in prompts
 
     def test_exec_uncaught_language_exception_exits_two(
         self, tmp_path: Path, env: dict[str, str]

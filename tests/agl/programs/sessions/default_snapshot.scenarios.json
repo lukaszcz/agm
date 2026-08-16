@@ -1,20 +1,23 @@
 {
   "scenarios": [
     {
-      "name": "default_session_snapshots_the_first_default_agent",
+      "name": "free_asks_share_the_snapshot_default_session",
       "params": {"explicit_close": true},
       "agents": {
-        "writer": {"responses": ["first", "second"]},
-        "reviewer": {"responses": []}
+        "writer": {"responses": ["first", "direct", "second"]},
+        "reviewer": {"responses": ["explicit"]}
       },
       "expect": {
         "calls": {"writer": 0, "reviewer": 0},
         "sessions": [
-          {"agent": "writer", "tag": "session-1", "opened": true, "closed": true, "parent": null}
+          {"agent": "writer", "tag": "session-1", "opened": true, "closed": true, "parent": null},
+          {"agent": "reviewer", "tag": "session-1", "opened": true, "closed": true, "parent": null}
         ],
         "session_prompts": [
           {"agent": "writer", "session": "session-1", "call": 0, "equals": "first prompt"},
-          {"agent": "writer", "session": "session-1", "call": 1, "follow_up": {"equals": "second prompt"}}
+          {"agent": "writer", "session": "session-1", "call": 1, "follow_up": {"equals": "direct prompt"}},
+          {"agent": "writer", "session": "session-1", "call": 2, "follow_up": {"equals": "second prompt"}},
+          {"agent": "reviewer", "session": "session-1", "call": 0, "equals": "explicit prompt"}
         ]
       }
     },
@@ -22,17 +25,20 @@
       "name": "default_session_cleanup_keeps_its_first_agent_snapshot",
       "params": {"explicit_close": false},
       "agents": {
-        "writer": {"responses": ["first", "second"]},
-        "reviewer": {"responses": []}
+        "writer": {"responses": ["first", "direct", "second"]},
+        "reviewer": {"responses": ["explicit"]}
       },
       "expect": {
         "calls": {"writer": 0, "reviewer": 0},
         "sessions": [
-          {"agent": "writer", "tag": "session-1", "opened": true, "closed": true, "parent": null}
+          {"agent": "writer", "tag": "session-1", "opened": true, "closed": true, "parent": null},
+          {"agent": "reviewer", "tag": "session-1", "opened": true, "closed": true, "parent": null}
         ],
         "session_prompts": [
           {"agent": "writer", "session": "session-1", "call": 0, "equals": "first prompt"},
-          {"agent": "writer", "session": "session-1", "call": 1, "follow_up": {"equals": "second prompt"}}
+          {"agent": "writer", "session": "session-1", "call": 1, "follow_up": {"equals": "direct prompt"}},
+          {"agent": "writer", "session": "session-1", "call": 2, "follow_up": {"equals": "second prompt"}},
+          {"agent": "reviewer", "session": "session-1", "call": 0, "equals": "explicit prompt"}
         ]
       }
     }

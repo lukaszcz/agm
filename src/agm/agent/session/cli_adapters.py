@@ -193,7 +193,8 @@ class AgentCommandSessionBackend(_CliPromptBackend):
             raise SessionAgentError(str(exc), "open") from exc
         if not targets_session_id and not request.one_shot:
             raise SessionHostError(
-                "command session requires a %{SESSION_ID} placeholder",
+                "command session requires a %{SESSION_ID} placeholder; "
+                "use [exec] default-agent instead",
                 "open",
             )
         self._session = _CommandSession(

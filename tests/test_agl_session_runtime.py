@@ -8,6 +8,7 @@ from decimal import Decimal
 import pytest
 
 from agm.agl import PipelineDriver
+from agm.agl.pipeline import RunResult
 from agm.agl.runtime.request import (
     AgentCallHostError,
     AgentCallInfo,
@@ -21,6 +22,7 @@ from agm.agl.runtime.sessions import (
     SessionHostError,
     SessionSnapshot,
     SessionStats,
+    with_ephemeral_session,
 )
 from agm.agl.semantics.values import EnumValue
 from tests._agl_helpers import agent_value
@@ -40,6 +42,10 @@ class _Host:
         self.prompts[handle] = []
         self.operations.append((handle, "open", name))
         return handle
+
+    def open_ephemeral(self, agent: EnumValue, transport: str, *, one_shot: bool = False) -> str:
+        del one_shot
+        return self.open(agent, transport)
 
     def default(self, agent: EnumValue, transport: str, *, name: str = "") -> str:
         if self.default_handle is None:
@@ -93,7 +99,41 @@ class _Host:
         return self.handles[handle]
 
 
-def test_dispatcher_session_host_is_ephemeral_only_and_preserves_requests() -> None:
+@dataclass
+class _LifecycleHost(_Host):
+    one_shot_flags: list[bool] = field(default_factory=list)
+
+    def with_ephemeral(
+        self, _agent: EnumValue, _transport: str, action: object, *, one_shot: bool = False
+    ) -> object:
+        self.one_shot_flags.append(one_shot)
+        if not callable(action):
+            raise AssertionError("expected callable action")
+        return action("lifecycle")
+
+
+def test_with_ephemeral_session_opens_and_closes_non_lifecycle_hosts() -> None:
+    host = _Host()
+    agent = agent_value("AgentCommand", command="worker")
+
+    first = with_ephemeral_session(host, agent, "Cli", lambda handle: handle)
+    second = with_ephemeral_session(host, agent, "Cli", lambda handle: handle, one_shot=True)
+
+    assert {first, second} == host.closed
+
+
+def test_with_ephemeral_session_delegates_one_shot_lifecycle_hosts() -> None:
+    host = _LifecycleHost()
+    agent = agent_value("AgentCommand", command="worker")
+
+    assert (
+        with_ephemeral_session(host, agent, "Cli", lambda handle: handle, one_shot=True)
+        == "lifecycle"
+    )
+    assert host.one_shot_flags == [True]
+
+
+def test_dispatcher_session_host_snapshots_its_default_and_preserves_requests() -> None:
     requests: list[AgentRequest] = []
     host = AgentDispatcherSessionHost(
         lambda request: requests.append(request) or AgentResponse("answer", {"source": "test"})
@@ -108,6 +148,13 @@ def test_dispatcher_session_host_is_ephemeral_only_and_preserves_requests() -> N
     assert requests == [request]
     assert host.ask(handle, "another question") == "answer"
     host.close(handle)
+    assert host.active_session_count == 0
+    assert (
+        with_ephemeral_session(
+            host, agent, "Cli", lambda handle: host.ask(handle, "one shot"), one_shot=True
+        )
+        == "answer"
+    )
     assert host.active_session_count == 0
 
     no_dispatcher = AgentDispatcherSessionHost(None)
@@ -127,9 +174,13 @@ def test_dispatcher_session_host_is_ephemeral_only_and_preserves_requests() -> N
         failed_dispatcher.ask(failed_handle, "question")
     assert dispatch_error.value.cause == "timeout"
 
+    default = host.default(agent, "Cli")
+    assert host.default(agent_value("AgentCommand", command="other"), "Rpc") == default
+    assert host.snapshot(default).agent == agent
+    assert host.snapshot(default).transport == "Cli"
+
     unavailable_operations = (
         lambda: host.open(agent, "Cli"),
-        lambda: host.default(agent, "Cli"),
         lambda: host.compact("missing"),
         lambda: host.reset("missing"),
         lambda: host.fork("missing"),
@@ -143,7 +194,7 @@ def test_dispatcher_session_host_is_ephemeral_only_and_preserves_requests() -> N
             operation()
 
 
-def _run(source: str, host: _Host) -> object:
+def _run(source: str, host: _Host) -> RunResult:
     return PipelineDriver(session_host=host).run(source)
 
 
@@ -177,6 +228,67 @@ def test_open_ask_copy_and_lifecycle_operations_reach_their_session() -> None:
         ("s3", "set-name", "child"),
     ]
     assert host.closed == {"s1", "s2", "s3"}
+
+
+def test_free_ask_uses_the_default_session_and_snapshots_its_agent() -> None:
+    host = _Host()
+    result = _run(
+        "import std/config\n"
+        "program def main() -> unit =\n"
+        '  std/config::default-agent := AgentCommand("first")\n'
+        "  let direct = Session::default()\n"
+        '  let first: text = ask("one")\n'
+        '  std/config::default-agent := AgentCommand("second")\n'
+        "  let second: text = ask! two\n"
+        '  direct.ask("three")\n',
+        host,
+    )
+
+    assert result.ok
+    assert list(host.handles) == ["s1"]
+    assert host.handles["s1"][0].fields["command"].value == "first"
+    assert host.prompts["s1"] == ["one", "two", "three"]
+
+
+def test_default_session_stays_snapshotted_while_ask_request_reads_the_live_default(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    host = _Host()
+    result = _run(
+        "import std/config\n"
+        "program def main() -> unit =\n"
+        '  std/config::default-agent := AgentCommand("first")\n'
+        '  let first: text = ask("one")\n'
+        '  std/config::default-agent := AgentCommand("second")\n'
+        '  let request = ask-request("inspect")\n'
+        '  let second: text = ask("two")\n'
+        '  print (request.agent == AgentCommand("second"))\n',
+        host,
+    )
+
+    assert result.ok
+    assert host.handles["s1"][0].fields["command"].value == "first"
+    assert host.prompts["s1"] == ["one", "two"]
+    assert capsys.readouterr().out == "true\n"
+
+
+def test_free_ask_retries_in_the_default_session() -> None:
+    class RetryingHost(_Host):
+        def ask(self, handle: str, prompt: str) -> str:
+            super().ask(handle, prompt)
+            return ["not a number", "7"][len(self.prompts[handle]) - 1]
+
+    host = RetryingHost()
+    result = _run(
+        "program def main() -> unit =\n"
+        '  let number: int = ask("count", on_parse_error = Retry(n = 1))\n',
+        host,
+    )
+
+    assert result.ok
+    assert list(host.handles) == ["s1"]
+    assert host.prompts["s1"][0].startswith("count")
+    assert "Validation errors:" in host.prompts["s1"][1]
 
 
 def test_default_session_snapshots_agent_and_closed_use_is_catchable() -> None:

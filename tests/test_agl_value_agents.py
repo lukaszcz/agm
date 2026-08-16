@@ -81,7 +81,7 @@ def test_ask_dispatches_each_agent_value(
     runtime = PipelineDriver(agent_dispatcher=value_driven_agent_factory(idle_timeout=None))
     result = run_inline_command(
         runtime,
-        f'let answer: text = ask("hello", agent = {source})\nanswer',
+        f'let answer: text = {source}.ask("hello")\nanswer',
     )
 
     assert result.ok
@@ -105,7 +105,7 @@ def test_agent_transport_failures_become_typed_errors(
 
     run = run_inline_command(
         runtime,
-        'let answer: text = ask("hello", agent = AgentCommand("runner"))\nanswer',
+        'let answer: text = AgentCommand("runner").ask("hello")\nanswer',
     )
 
     assert not run.ok
@@ -124,7 +124,7 @@ def test_nonzero_exit_message_includes_the_exit_code(
 
     run = run_inline_command(
         runtime,
-        'let answer: text = ask("hello", agent = AgentCommand("runner"))\nanswer',
+        'let answer: text = AgentCommand("runner").ask("hello")\nanswer',
     )
 
     assert not run.ok
@@ -344,8 +344,8 @@ def test_escaped_command_hole_reaches_the_host_interpolator() -> None:
 
     run = run_inline_command(
         runtime,
-        'let answer: text = ask("hello", '
-        'agent = AgentCommand("runner --flag=\\%{AGM_NO_SUCH_VARIABLE}"))\nanswer',
+        'let answer: text = AgentCommand("runner --flag=\\%{AGM_NO_SUCH_VARIABLE}")'
+        '.ask("hello")\nanswer',
     )
 
     assert not run.ok
@@ -359,7 +359,7 @@ def test_invalid_agent_value_becomes_typed_error() -> None:
 
     run = run_inline_command(
         runtime,
-        'let answer: text = ask("hello", agent = AgentCommand(""))\nanswer',
+        'let answer: text = AgentCommand("").ask("hello")\nanswer',
     )
 
     assert not run.ok
@@ -367,7 +367,7 @@ def test_invalid_agent_value_becomes_typed_error() -> None:
     assert run.error.type_name == "AgentCallError"
 
 
-def test_default_agent_value_is_read_at_each_call_and_errors_stay_typed() -> None:
+def test_default_agent_value_is_snapshotted_at_first_free_ask() -> None:
     requests: list[EnumValue] = []
 
     def agent(request: object) -> str:
@@ -390,9 +390,5 @@ def test_default_agent_value_is_read_at_each_call_and_errors_stay_typed() -> Non
     assert not result.ok
     assert result.error is not None
     assert result.error.type_name == "AgentParseError"
-    assert result.error.fields["agent"] == {
-        "$case": "AgentClaude",
-        "model": "sonnet",
-        "thinking": "medium",
-    }
-    assert [request.variant for request in requests] == ["AgentCommand", "AgentClaude"]
+    assert result.error.fields["agent"] == {"$case": "AgentCommand", "command": "first"}
+    assert [request.variant for request in requests] == ["AgentCommand", "AgentCommand"]

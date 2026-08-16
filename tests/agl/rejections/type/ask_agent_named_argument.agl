@@ -1,0 +1,4 @@
+program def main() -> unit =
+  let worker = AgentCommand("worker")
+  let response = ask("question", agent = worker)
+  print response

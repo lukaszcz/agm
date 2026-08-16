@@ -31,7 +31,6 @@ from agm.agl.typecheck.checker import (
 )
 from agm.agl.typecheck.env import AglTypeError, FunctionSignature, ParamSpec
 from agm.agl.typecheck.program import check_program
-from tests._agl_helpers import strip_decl_ids
 from tests.agl.module_graph import resolve_and_check_inline_entry, resolve_inline_entry
 
 _ROOTS = RootSet(frozenset({Path(__file__).resolve().parents[1] / "stdlib"}))
@@ -91,17 +90,11 @@ def test_stdlib_ask_signature_is_context_inferred_with_optional_arguments() -> N
     assert ask_sig.result == TypeVarType("T")
     params = ask_sig.params
     assert params[0].name == "prompt" and params[0].type == TextType() and not params[0].has_default
+    assert params[1].name == "format" and params[1].type == TextType() and params[1].has_default
     assert (
-        params[1].name == "agent"
-        and strip_decl_ids(params[1].type)
-        == EnumType("Agent", module_id=ModuleId.from_path("std/core"))
-        and params[1].has_default
+        params[2].name == "strict_json" and params[2].type == BoolType() and params[2].has_default
     )
-    assert params[2].name == "format" and params[2].type == TextType() and params[2].has_default
-    assert (
-        params[3].name == "strict_json" and params[3].type == BoolType() and params[3].has_default
-    )
-    p4 = params[4]
+    p4 = params[3]
     assert p4.name == "on_parse_error"
     assert isinstance(p4.type, EnumType)
     assert p4.type.name == "ParsePolicy"
@@ -115,7 +108,6 @@ def test_canonical_builtin_signatures_name_the_shared_prelude_handles() -> None:
     ask = _builtin_function_signature("ask")
     assert ask is not None
     ask_params = {param.name: param.type for param in ask.params}
-    assert ask_params["agent"] == BUILTIN_PRELUDE_TYPES["Agent"]
     assert ask_params["on_parse_error"] == BUILTIN_PRELUDE_TYPES["ParsePolicy"]
     ask_request = _builtin_function_signature("ask-request")
     assert ask_request is not None

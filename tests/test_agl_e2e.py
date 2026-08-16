@@ -116,10 +116,12 @@ class ScriptedAgent:
     session_ask_outcomes: list[Any] | None = None
     prompts: list[str] = field(default_factory=list)
     schemas: list[Any] = field(default_factory=list)
+    prompt_events: list[tuple[str, Any]] = field(default_factory=list)
     sessions: list[_ScriptedSession] = field(default_factory=list)
     overflowed: bool = False
     session_operations_overflowed: bool = False
     session_ask_outcomes_overflowed: bool = False
+    require_session_id: bool = False
     _response_count: int = 0
 
     def __post_init__(self) -> None:
@@ -132,7 +134,9 @@ class ScriptedAgent:
     def __call__(self, request: Any) -> str:
         self.prompts.append(request.prompt)
         contract = request.output_contract
-        self.schemas.append(contract.json_schema if contract is not None else None)
+        schema = contract.json_schema if contract is not None else None
+        self.schemas.append(schema)
+        self.prompt_events.append((request.prompt, schema))
         return self._next_response()
 
     def session_service(self) -> Any:
@@ -141,6 +145,7 @@ class ScriptedAgent:
 
     def _new_session_backend(self, agent: object, transport: str) -> Any:
         """Build the same transport-specific backend production would select."""
+        from agm.agent.runner import command_targets_session_id
         from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi
         from agm.agl.runtime.agents import decode_agent_value
 
@@ -164,9 +169,15 @@ class ScriptedAgent:
             backend_type = _ScriptedSessionBackend
             if isinstance(spec, AgentCommand):
                 try:
-                    spec.argv()
+                    argv = spec.argv()
                 except ValueError as error:
                     raise SessionHostError(str(error), "open") from error
+                if self.require_session_id and not command_targets_session_id(argv):
+                    raise SessionHostError(
+                        "command session requires a %{SESSION_ID} placeholder; "
+                        "use [exec] default-agent instead",
+                        "open",
+                    )
                 capabilities = frozenset({SessionOperation.ASK})
                 supports_name = False
             elif isinstance(spec, AgentClaude):
@@ -459,6 +470,15 @@ class _ScenarioSessionHost:
                 ) from error
             raise
 
+    def ask_request(self, handle: str, request: Any) -> Any:
+        from agm.agl.runtime.request import AgentResponse
+
+        content = self.ask(handle, request.prompt)
+        service = self._service_for_handle(handle, "ask")
+        schema = None if request.output_contract is None else request.output_contract.json_schema
+        service._agent.prompt_events[-1] = (request.prompt, schema)
+        return AgentResponse(content)
+
     def compact(self, handle: str, instructions: str = "") -> None:
         self._operation(handle, "compact", instructions)
 
@@ -580,16 +600,6 @@ class _ScriptedSessionBackend:
         return self.capabilities.supports(SessionOperation(operation))
 
     def open(self, request: Any) -> None:
-        from agm.agent.runner import command_targets_session_id
-        from agm.agent.spec import AgentCommand
-        from agm.agl.runtime.agents import decode_agent_value
-
-        agent = decode_agent_value(request.agent) if request.transport == "cli" else request.agent
-        if isinstance(agent, AgentCommand) and (
-            not command_targets_session_id(agent.argv()) and not request.one_shot
-        ):
-            self._agent.sessions.remove(self._session)
-            raise SessionHostError("command session requires a %{SESSION_ID} placeholder", "open")
         if request.name and not self._supports_name:
             self._agent.sessions.remove(self._session)
             raise SessionHostError("scripted session does not support names", "set-name")
@@ -602,6 +612,7 @@ class _ScriptedSessionBackend:
         from agm.agent.transport import AgentCallInfo
 
         self._session.prompts.append(request.prompt)
+        self._agent.prompt_events.append((request.prompt, None))
         outcome = self._agent._next_session_ask_outcome()
         if isinstance(outcome, dict):
             elapsed = float(outcome.get("elapsed", 0.0))
@@ -764,6 +775,9 @@ def _run_program(
     shell = FakeShell(scenario.get("shell", []))
     runtime_options: dict[str, Any] = {}
     runtime_config = scenario.get("runtime", {})
+    if runtime_config.get("enforce_command_sessions") is True:
+        for agent in agents.values():
+            agent.require_session_id = True
     if "default_call_depth_limit" in runtime_config:
         runtime_options["default_call_depth_limit"] = runtime_config["default_call_depth_limit"]
     if "default_strict_json" in runtime_config:
@@ -774,7 +788,7 @@ def _run_program(
 
     if agents:
         runtime_options["agent_dispatcher"] = dispatch_agent
-    if agents and ("Session::" in source or runtime_config.get("session_host") is True):
+    if agents:
         runtime_options["session_host"] = _ScenarioSessionHost(agents)
     runtime = PipelineDriver(**runtime_options)
     module_roots = scenario.get("module_roots", [])
@@ -932,7 +946,7 @@ def _assert_calls(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -> N
     )
     for name, agent in agents.items():
         count = expected_calls[name]
-        actual = len(agent.prompts)
+        actual = len(agent.prompt_events) if "session_prompts" not in expect else len(agent.prompts)
         assert actual == count, f"agent {name!r}: expected {count} calls, got {actual}"
     for spec in expect.get("prompts", []):
         agent_spec = spec["agent"]
@@ -941,13 +955,14 @@ def _assert_calls(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -> N
         else:
             name = agent_spec
         assert isinstance(name, str)
-        prompts = agents[name].prompts
+        prompt_events = agents[name].prompt_events
+        prompts = [prompt for prompt, _schema in prompt_events]
         call = spec["call"]
         assert call < len(prompts), (
             f"agent {spec['agent']!r} made only {len(prompts)} calls, no call {call}"
         )
         _assert_prompt_text(prompts[call], spec)
-        schema = agents[name].schemas[call]
+        schema = prompt_events[call][1]
         for needle in spec.get("schema_contains", []):
             assert _schema_contains(schema, needle), f"{needle!r} not in schema {schema!r}"
         _assert_schema_paths(schema, spec.get("schema_paths", []))
@@ -1012,17 +1027,18 @@ def _assert_sessions(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -
         assert isinstance(tag, str)
         prompt_specs.setdefault((agent_name, tag), []).append(spec)
 
-    for agent_name, agent in agents.items():
-        for session in agent.sessions:
-            specs = prompt_specs.get((agent_name, session.tag), [])
-            assert len(specs) == len(session.prompts), (
-                f"session {session.tag!r} prompt count: expected {len(specs)}, "
-                f"got {len(session.prompts)}"
-            )
-            calls = sorted(spec["call"] for spec in specs)
-            assert calls == list(range(len(session.prompts))), (
-                f"session {session.tag!r} prompt calls must cover each prompt exactly once"
-            )
+    if "sessions" in expect or "session_prompts" in expect:
+        for agent_name, agent in agents.items():
+            for session in agent.sessions:
+                specs = prompt_specs.get((agent_name, session.tag), [])
+                assert len(specs) == len(session.prompts), (
+                    f"session {session.tag!r} prompt count: expected {len(specs)}, "
+                    f"got {len(session.prompts)}"
+                )
+                calls = sorted(spec["call"] for spec in specs)
+                assert calls == list(range(len(session.prompts))), (
+                    f"session {session.tag!r} prompt calls must cover each prompt exactly once"
+                )
 
     for spec in expect.get("session_prompts", []):
         session = session_for(spec)

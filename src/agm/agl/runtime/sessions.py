@@ -174,16 +174,17 @@ def with_ephemeral_session(
 
 
 class AgentDispatcherSessionHost(SessionHost):
-    """Ephemeral session host backed by the legacy one-shot dispatcher.
+    """Dispatcher-backed session host used when no native session service exists.
 
-    This is the evaluator's default host when a caller supplies a dispatcher
-    but no session service. It deliberately supports only short-lived asks:
-    persistent sessions need a host that can provide a continuation backend.
+    Its default handle snapshots an agent for the run, while each dispatch still
+    uses the legacy one-shot dispatcher. Explicit Agent-method calls retain
+    their short-lived lifecycle.
     """
 
     def __init__(self, dispatcher: "AgentFn | None") -> None:
         self._dispatcher = dispatcher
-        self._sessions: dict[str, EnumValue] = {}
+        self._sessions: dict[str, SessionSnapshot] = {}
+        self._default_handle: str | None = None
         self._next_handle = 0
 
     @property
@@ -195,16 +196,18 @@ class AgentDispatcherSessionHost(SessionHost):
         del name
         self._unavailable("open")
 
-    def open_ephemeral(self, agent: EnumValue, _transport: str, *, one_shot: bool = False) -> str:
+    def open_ephemeral(self, agent: EnumValue, transport: str, *, one_shot: bool = False) -> str:
         del one_shot
-        handle = f"ephemeral-{self._next_handle}"
-        self._next_handle += 1
-        self._sessions[handle] = agent
+        handle = self._new_handle()
+        self._sessions[handle] = SessionSnapshot(agent, transport)
         return handle
 
-    def default(self, _agent: EnumValue, _transport: str, *, name: str = "") -> str:
+    def default(self, agent: EnumValue, transport: str, *, name: str = "") -> str:
         del name
-        self._unavailable("default")
+        if self._default_handle is None:
+            self._default_handle = self._new_handle()
+            self._sessions[self._default_handle] = SessionSnapshot(agent, transport)
+        return self._default_handle
 
     def ask(self, handle: str, prompt: str) -> str:
         request = AgentRequest(agent=self._agent_for(handle, "ask"), prompt=prompt)
@@ -248,8 +251,11 @@ class AgentDispatcherSessionHost(SessionHost):
     def stats(self, _handle: str) -> SessionStats:
         self._unavailable("stats")
 
-    def snapshot(self, _handle: str) -> SessionSnapshot:
-        self._unavailable("snapshot")
+    def snapshot(self, handle: str) -> SessionSnapshot:
+        try:
+            return self._sessions[handle]
+        except KeyError:
+            raise SessionHostError("unknown session", "snapshot") from None
 
     def close(self, handle: str) -> None:
         self._agent_for(handle, "close")
@@ -258,9 +264,14 @@ class AgentDispatcherSessionHost(SessionHost):
     def close_all(self) -> None:
         self._sessions.clear()
 
+    def _new_handle(self) -> str:
+        handle = f"ephemeral-{self._next_handle}"
+        self._next_handle += 1
+        return handle
+
     def _agent_for(self, handle: str, operation: str) -> EnumValue:
         try:
-            return self._sessions[handle]
+            return self._sessions[handle].agent
         except KeyError:
             raise SessionHostError("unknown session", operation) from None
 

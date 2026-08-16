@@ -405,10 +405,12 @@ class BuiltinCallChecker:
         *,
         expected: Type | None,
         receiver_type: Type | None = None,
-        allows_agent: bool = True,
+        allows_agent: bool | None = None,
     ) -> Type:
         """Type-check ``ask``. *receiver_type* is set for an ``Agent`` receiver."""
         # Target type: explicit type argument overrides context.
+        if allows_agent is None:
+            allows_agent = receiver_type is not None
         explicit = self._resolve_explicit_target(node, "ask")
         target_type: Type = (
             explicit if explicit is not None else (expected if expected is not None else TextType())
@@ -518,11 +520,11 @@ class BuiltinCallChecker:
         receiver call drops ``agent`` because the receiver already supplies it.
 
         Every ``ask``/``ask-request`` call resolves the ``AgentRequest``
-        contract unconditionally, whether or not ``agent`` is itself supplied:
-        the host builds an ``AgentRequest`` (directly for ``ask-request``, via
-        its retry machinery for ``ask``) either way, filling a missing
-        ``agent`` from the canonical default agent, so the contract must be
-        host-coherent (:meth:`_resolve_host_record_contract`) regardless.
+        contract unconditionally: the host builds an ``AgentRequest`` directly
+        for ``ask-request`` and through its retry machinery for ``ask``. A
+        free ``ask`` has no agent operand; it obtains its runtime agent through
+        the default session, so the contract must be host-coherent
+        (:meth:`_resolve_host_record_contract`) regardless.
         *agent_request_type* lets a caller that already resolved the contract
         itself (``check_ask_request``, which needs it before this method runs
         anyway) pass the resolved handle through instead of paying the
@@ -533,9 +535,9 @@ class BuiltinCallChecker:
         ``agent`` FIELD type -- the type the value is actually stored as --
         rather than an independently resolved ``Agent`` type, so the two can
         never name different declarations of the same bare name. That single
-        expected type governs both ways of supplying the agent: the ``agent``
-        named argument, and *receiver_type* for a receiver call
-        (``x.ask(...)``), whose receiver IS the agent.
+        expected type governs both ways of supplying the agent: the
+        ``ask-request`` ``agent`` named argument, and *receiver_type* for a
+        receiver call (``x.ask(...)``), whose receiver IS the agent.
         """
         named = {na.name: na for na in node.named_args}
         for arg_name, na in named.items():

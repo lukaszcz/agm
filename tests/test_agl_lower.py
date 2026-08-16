@@ -2680,7 +2680,7 @@ class TestHostOpLowering:
         """ask() now lowers to IrAsk."""
         from agm.agl.ir.nodes import IrAsk
 
-        source = 'let impl = AgentCommand("impl")\nlet r: text = ask("prompt", agent = impl)\n()'
+        source = 'let impl = AgentCommand("impl")\nlet r: text = impl.ask("prompt")\n()'
         prog = _lower(source)
         # The let site's private root captures the IrAsk result.
         inits = prog.modules[prog.entry_module].initializers
@@ -2765,7 +2765,7 @@ class TestHostOpLowering:
         source = (
             'let worker = AgentCommand("worker")\n'
             'let req = ask-request("my prompt", agent = worker)\n'
-            'let answer: text = ask("question", agent = worker)\n'
+            'let answer: text = worker.ask("question")\n'
             'exec("ls")\n()'
         )
         prog = _lower(source)

@@ -10,8 +10,8 @@ value that should receive the request:
 <!-- agl-check: fragment -->
 ```agl
 ask "Summarize %{topic}"
-ask("Review this artifact:\n%{artifact}", agent = reviewer)
-ask("Review %{artifact}", agent = reviewer, on_parse_error = Retry(n = 2))
+reviewer.ask("Review this artifact:\n%{artifact}")
+reviewer.ask("Review %{artifact}", on_parse_error = Retry(n = 2))
 reviewer.ask::[Review]("Review %{artifact}", on_parse_error = Retry(n = 2))
 ```
 
@@ -20,8 +20,7 @@ reviewer.ask::[Review]("Review %{artifact}", on_parse_error = Retry(n = 2))
 `ask` is a built-in function with the following declared-name signature:
 
 ```text
-ask(prompt: text, agent: Agent = std/config::default-agent,
-    format: text = "", strict_json: bool = false,
+ask(prompt: text, format: text = "", strict_json: bool = false,
     on_parse_error: ParsePolicy = ParsePolicy::Abort) -> T
 ```
 
@@ -36,10 +35,10 @@ Agent::ask(self, prompt: text, format: text = "",
            on_parse_error: ParsePolicy = ParsePolicy::Abort) -> T
 ```
 
-`reviewer.ask(...)` is equivalent to `ask(..., agent = reviewer)`: its receiver
-supplies the agent, so the method form has no `agent` named argument. It supports
-contextual and explicit `::[T]` target types, named parse options, and defaults
-just like the direct form. Built-in methods are call-only; `let f = reviewer.ask`
+Free `ask` uses the snapshot default `Session`, whose agent is selected from
+`std/config::default-agent`; it accepts no `agent` named argument. The receiver
+of `reviewer.ask(...)` selects that method call's agent. Both support contextual
+and explicit `::[T]` target types and named parse options. Built-in methods are call-only; `let f = reviewer.ask`
 and `let f = reviewer.ask::[text]` are static errors.
 
 `ask` is a **contextual keyword**: it cannot be declared with `let`, `var`,
@@ -77,7 +76,7 @@ With named arguments, parentheses are required:
 
 <!-- agl-check: fragment -->
 ```agl
-let r: Review = ask("Review %{artifact}", agent = reviewer)
+let r: Review = reviewer.ask("Review %{artifact}")
 ```
 
 ## Raw-tail `ask!`
@@ -120,7 +119,7 @@ program def main() -> unit =
   let reviewer = AgentClaude("sonnet", "medium")
   let local = AgentCodex("o3", "high")
   let pi = AgentPi("openai", "gpt", "low")
-  let review: text = ask("Review this artifact", agent = reviewer)
+  let review: text = reviewer.ask("Review this artifact")
   let same_review: text = reviewer.ask("Review this artifact")
 ```
 
@@ -147,10 +146,10 @@ that matters.
 
 ### The default agent
 
-When `agent` is omitted, `ask` evaluates the defaulted
-`std/config::default-agent` parameter. The standard library supplies a default;
-CLI `--agent` and `[exec] default-agent` seeds override it, and a source
-write takes effect from its program point onward:
+Free `ask` uses `Session::default`, which snapshots the current
+`std/config::default-agent` when it is first used. The standard library supplies
+a default; CLI `--agent` and `[exec] default-agent` seeds override it, and a
+source write takes effect before that snapshot is created:
 
 ```agl
 import std/config
@@ -174,9 +173,9 @@ expected types propagate ([Expressions](expressions.md)):
 <!-- agl-check: fragment -->
 ```agl
 let x = ask "A"                          # target: text
-let review: Review = ask("…", agent = reviewer)   # target: Review
-var proposal: Turn = ask("…", agent = researcher)
-proposal := ask("Revise.", agent = researcher)  # target: Turn
+let review: Review = reviewer.ask("…")   # target: Review
+var proposal: Turn = researcher.ask("…")
+proposal := researcher.ask("Revise.")  # target: Turn
 let completed: unit = ask("Perform this task")  # response ignored
 ```
 
@@ -246,7 +245,7 @@ enum Option[T]
   | none
   | some(value: T)
 
-let n: Option[int] = ask("Pick a number, or nothing.", agent = picker)
+let n: Option[int] = picker.ask("Pick a number, or nothing.")
 ```
 
 ### Recursive target types
@@ -262,7 +261,7 @@ enum Tree
   | Leaf
   | Node(value: int, left: Tree, right: Tree)
 
-let t: Tree = ask("Build a tree.", agent = builder)
+let t: Tree = builder.ask("Build a tree.")
 ```
 
 The one restriction is on the type's **shape**, not on recursion itself: the
@@ -276,16 +275,6 @@ other position, only its JSON Schema is unbounded. See
 
 ## Named parameters
 
-### `agent`
-
-Selects the agent. The value must have type `Agent`. When omitted, the
-defaulted `std/config::default-agent` value applies:
-
-<!-- agl-check: fragment -->
-```agl
-ask("Plan the next step.", agent = planner)
-```
-
 ### `format`
 
 Selects the output codec by name, as a `text` value. Normally unnecessary:
@@ -296,7 +285,7 @@ that supports the call's target type; both are checked statically.
 
 <!-- agl-check: fragment -->
 ```agl
-let r: Review = ask("Review %{a}", agent = reviewer, format = "json")
+let r: Review = reviewer.ask("Review %{a}", format = "json")
 ```
 
 ### `strict_json`
@@ -326,9 +315,8 @@ enum ParsePolicy
 
 <!-- agl-check: fragment -->
 ```agl
-let r: Review = ask(
+let r: Review = reviewer.ask(
   "Review %{artifact}",
-  agent = reviewer,
   on_parse_error = Retry(n = 2)
 )
 ```
@@ -342,12 +330,12 @@ The `prompt` argument is a template rendered using the uniform interpolation
 rules ([Strings and interpolation](strings-and-interpolation.md)). The
 rendered prompt is delivered to the agent verbatim, together with the
 contract's format instructions; the host must not perform further template
-or environment-variable expansion over it. One-shot retries resend the same
-rendered prompt with corrective feedback appended. Corrective feedback includes
-a category-based validation summary, never validation paths, keys, or other
-response-derived details. A `Session::ask` retry stays in its existing
-conversation and sends only that summary plus a JSON-format reminder; it never
-resends the original prompt or invalid response.
+or environment-variable expansion over it. The prompt is delivered through its
+session. Corrective feedback includes a
+category-based validation summary, never validation paths, keys, or other
+response-derived details. Retries stay in their existing conversation and send
+only that summary plus a JSON-format reminder; they never resend the original
+prompt or invalid response.
 
 ## The JSON wire format
 
@@ -470,11 +458,9 @@ For a call with `on_parse_error = Retry(n = N)`:
 1. The agent is called with the rendered prompt and the output contract.
 2. The raw output is parsed and validated.
 3. On success, the typed value is the call's result.
-4. On failure, a one-shot **corrective retry** is dispatched with the same
-   prompt and contract plus the previous invalid output and a category-based
-   validation summary. The summary never includes validation paths, keys, or
-   other response-derived details. A `Session::ask` corrective retry instead
-   sends only that summary and a JSON-format reminder in the open conversation.
+4. On failure, a corrective retry sends only a category-based validation
+   summary and JSON-format reminder in the existing conversation. The summary
+   never includes validation paths, keys, or other response-derived details.
 5. At most `N` retries are made (`N + 1` total attempts).
 6. If every attempt fails, **`AgentParseError`** is raised.
 
@@ -500,10 +486,9 @@ Each dispatch delivers to the host agent:
 - the fully rendered prompt;
 - the output contract: target type, format instructions, and derived JSON
   Schema;
-- the 0-based attempt number; one-shot retries also include the previous
-  invalid output and a category-based validation summary, while session retries
-  include only that summary and a format reminder. The summary excludes
-  response-derived validation paths, keys, and values.
+- the 0-based attempt number; retries include only a category-based validation
+  summary and a format reminder. The summary excludes response-derived
+  validation paths, keys, and values.
 
 See [Host environment](host-environment.md).
 

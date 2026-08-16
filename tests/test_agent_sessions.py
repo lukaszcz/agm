@@ -355,6 +355,21 @@ def test_ephemeral_lifecycle_retires_its_handle_after_closing() -> None:
     assert service._entries == {}
 
 
+def test_agl_host_one_shot_ephemeral_lifecycle_retires_its_agent_mapping() -> None:
+    service, factory = _service()
+    host = AglSessionHost(service)
+    agent = agent_value("AgentCommand", command="worker")
+
+    assert (
+        host.with_ephemeral(agent, "Cli", lambda handle: host.ask(handle, "hello"), one_shot=True)
+        == "answer"
+    )
+    assert factory.backends[0].open_requests == [
+        SessionOpenRequest(agent=AgentCommand("worker"), transport="cli", one_shot=True)
+    ]
+    assert host._agents == {}
+
+
 def test_agl_host_ephemeral_lifecycle_retires_its_agent_mapping() -> None:
     service, factory = _service()
     host = AglSessionHost(service)

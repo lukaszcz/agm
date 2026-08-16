@@ -29,19 +29,18 @@ prevent execution.
 
 ## Agents
 
-Each `ask` evaluates an `Agent` enum value that selects the backend command.
-The value may be passed explicitly or supplied by the
-`std/config::default-agent` setting. `AgentCommand` carries a command string;
-the provider variants carry their provider-specific fields. The host dispatches
-the selected value and does not contribute agent names or reconcile a registry.
+Free `ask` uses the snapshot default session, whose agent comes from
+`std/config::default-agent`; `Agent::ask` receives its agent as a method
+receiver. `AgentCommand` carries a command string; the provider variants carry
+their provider-specific fields. The host dispatches the selected value and does
+not contribute agent names or reconcile a registry.
 
 Per dispatch, an agent receives the rendered prompt, the output contract
 (format instructions plus derived JSON Schema, so schema-capable backends
-can use native structured output), and the attempt number. One-shot corrective
-retries include the previous invalid output with a category-based validation
-summary; `Session::ask` corrective retries instead include only that summary and
-a format reminder ([Agent calls](agent-calls.md)). The summary excludes
-response-derived validation paths, keys, and values. The agent returns raw text.
+can use native structured output), and the attempt number. Corrective retries
+include only a category-based validation summary and a format reminder
+([Agent calls](agent-calls.md)). The summary excludes response-derived
+validation paths, keys, and values. The agent returns raw text.
 Hosts must pass the rendered prompt through verbatim, with no second template
 or environment-variable expansion.
 

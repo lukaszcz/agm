@@ -21,26 +21,26 @@ program def main() -> unit =
   let impl = AgentCommand("impl")
   let reviewer = AgentCommand("reviewer")
   let critic = AgentCommand("critic")
-  var artifact: text = ask("Implement %{spec}", agent = impl)
+  var artifact: text = impl.ask("Implement %{spec}")
 
   # review declared as var so the until condition can reference it.
   var review: Review = Pass
 
   try
     do[5]
-      review := ask("""
+      review := reviewer.ask("""
       Review the artifact for correctness, completeness, and maintainability.
 
       Artifact:
       %{artifact}
-      """, agent = reviewer, on_parse_error = Retry(n = 2))
+      """, on_parse_error = Retry(n = 2))
 
       case review of
         | Pass() =>
             ()
 
         | Fail(issues) =>
-            let result: FixResult = ask("""
+            let result: FixResult = impl.ask("""
             Fix valid issues.
 
             Issues:
@@ -48,7 +48,7 @@ program def main() -> unit =
 
             Current artifact:
             %{artifact}
-            """, agent = impl, on_parse_error = Retry(n = 2))
+            """, on_parse_error = Retry(n = 2))
 
             case result of
               | Complete(output) =>
@@ -56,13 +56,13 @@ program def main() -> unit =
               | Changed(output) =>
                   artifact := output
               | Blocked(reason) =>
-                  let blocker_report = ask("Explain blocker:\n%{reason}", agent = critic)
+                  let blocker_report = critic.ask("Explain blocker:\n%{reason}")
                   raise Abort(message = blocker_report)
 
     until review is Pass
 
   catch AgentParseError as e =>
-    let diagnostic = ask("""
+    let diagnostic = critic.ask("""
     An agent failed to return valid structured output.
 
     Agent:
@@ -76,11 +76,11 @@ program def main() -> unit =
 
     Validation errors:
     %{e.validation_errors}
-    """, agent = critic)
+    """)
     raise e
 
   catch MaxIterationsExceeded as e =>
-    let summary = ask("""
+    let summary = critic.ask("""
     The review/fix loop did not converge.
 
     Last artifact:
@@ -88,7 +88,7 @@ program def main() -> unit =
 
     Loop metadata:
     %{e}
-    """, agent = critic)
+    """)
     raise e
 
   print artifact

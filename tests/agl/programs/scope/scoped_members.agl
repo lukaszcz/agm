@@ -67,6 +67,6 @@ program def main() -> unit =
   print(Outer::Inner::nearest_flag(Outer::Inner::Flag::inner))
   print(Outer::outer_flag(Outer::Flag::outer))
   print(Tools::greeting())
-  print(ask("Reply with scoped agent.", agent = Tools::helper))
+  print(Tools::helper.ask("Reply with scoped agent."))
   let signal = Tools::Signal::ready
   print(signal is Tools::Signal::ready)

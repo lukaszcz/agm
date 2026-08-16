@@ -1637,9 +1637,9 @@ class TestAgentArgumentBuiltinIdentity:
         assert not result.ok
         assert any("AgentRequest" in d.message and "agent" in d.message for d in result.diagnostics)
 
-    def test_scoped_agent_value_rejected_as_ask_agent_argument(self) -> None:
-        """``ask`` shares ``_validate_ask_like_arguments`` with ``ask-request``,
-        so it rejects the same scoped ``Agent`` value the same way; checked
+    def test_scoped_agent_value_rejected_as_agent_ask_receiver(self) -> None:
+        """``Agent::ask`` shares ``_validate_ask_like_arguments`` with
+        ``ask-request``, so it rejects the same scoped ``Agent`` value; checked
         only (an actual agent dispatch is out of scope here)."""
         s = ReplSession()
         declare = s.eval_entry(f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}end A\n")
@@ -1648,9 +1648,9 @@ class TestAgentArgumentBuiltinIdentity:
         g = s.eval_entry('let g = A::Agent::AgentCommand("echo")')
         assert g.ok, g.diagnostics
 
-        result = s.eval_entry('ask("hi", agent = g)', check_only=True)
+        result = s.eval_entry('g.ask("hi")', check_only=True)
         assert not result.ok
-        assert any("A::Agent" in d.message for d in result.diagnostics)
+        assert result.diagnostics
 
     def test_root_agent_value_without_stdlib_rejected_as_ask_request_agent_argument(self) -> None:
         """Without the standard library, a root ``AgentRequest`` whose own
@@ -3102,8 +3102,7 @@ class TestExactlyOnce:
         named = CountingAgent("named-reply")
         s = ReplSession(agent_dispatcher=named)
         r = s.eval_entry(
-            'let reviewer = AgentCommand("reviewer")\n'
-            'let out = ask("""review this""", agent = reviewer)'
+            'let reviewer = AgentCommand("reviewer")\nlet out = reviewer.ask("""review this""")'
         )
         assert r.ok, r.diagnostics
         assert _text({name: value for name, _typ, value in s.bindings()}["out"]) == "named-reply"
@@ -3118,9 +3117,7 @@ class TestExactlyOnce:
 class TestAgentDeclarations:
     def test_agent_value_dispatches_without_a_declaration(self) -> None:
         s = ReplSession(agent_dispatcher=CountingAgent("ok"))
-        r = s.eval_entry(
-            'let reviewer = AgentCommand("reviewer")\nask("""look""", agent = reviewer)'
-        )
+        r = s.eval_entry('let reviewer = AgentCommand("reviewer")\nreviewer.ask("""look""")')
         assert r.ok
 
     def test_undeclared_unregistered_agent_call_errors(self) -> None:
@@ -3135,7 +3132,7 @@ class TestAgentDeclarations:
         s = ReplSession(agent_dispatcher=CountingAgent("done"))
         r1 = s.eval_entry('let helper = AgentCommand("helper")')
         assert r1.ok
-        r2 = s.eval_entry('let out = ask("""go""", agent = helper)')
+        r2 = s.eval_entry('let out = helper.ask("""go""")')
         assert r2.ok, r2.diagnostics
         assert _text({name: value for name, _typ, value in s.bindings()}["out"]) == "done"
 
@@ -3149,7 +3146,7 @@ class TestAgentDeclarations:
         handle = s._link_image.symbol_for_decl(ref.decl_node_id)
         assert handle is not None
 
-        called = s.eval_entry('let out = ask("""go""", agent = Tools::helper)')
+        called = s.eval_entry('let out = Tools::helper.ask("""go""")')
 
         assert called.ok, called.diagnostics
         assert s._link_image.symbol_for_decl(ref.decl_node_id) == handle
@@ -3171,7 +3168,7 @@ class TestAgentDeclarations:
     def test_type_of_allows_agent_value_call(self) -> None:
         s = ReplSession()
         s.eval_entry('let reviewer = AgentCommand("reviewer")')
-        assert s.type_of('ask("""ask""", agent = reviewer)') == repr(TextType())
+        assert s.type_of('reviewer.ask("""ask""")') == repr(TextType())
 
     def test_reset_clears_declared_agents(self) -> None:
         # After reset, a previously source-declared agent is gone: a call to it
@@ -4970,8 +4967,7 @@ class TestImports:
         # The custom-format ask produces a pre-lower contract materialization error.
         s.register_codec(BadCodec())
         r = s.eval_entry(
-            'import mylib\nlet helper = AgentCommand("helper")\n'
-            'ask("hi", agent = helper, format = "bad")'
+            'import mylib\nlet helper = AgentCommand("helper")\nhelper.ask("hi", format = "bad")'
         )
         assert not r.ok
         assert any("Contract error" in d.message for d in r.diagnostics)

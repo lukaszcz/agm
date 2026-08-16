@@ -9,7 +9,7 @@ program def main() -> unit =
 
   do[4]
     rounds := rounds + 1
-    let verdict = ask("Round %{rounds}: have %{hits} of %{target}.", agent = oracle)
+    let verdict = oracle.ask("Round %{rounds}: have %{hits} of %{target}.")
     if verdict == "hit" =>
       hits := hits + 1
     else =>

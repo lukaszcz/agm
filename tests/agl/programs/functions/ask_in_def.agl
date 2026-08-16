@@ -1,4 +1,4 @@
-# ask(agent:) called from inside a user-defined function body.
+# Agent::ask called from inside a user-defined function body.
 # Also exercises on_parse_error: Retry and the RecursionError depth limit
 # (caught with try/catch).
 param topic: text
@@ -9,10 +9,10 @@ enum Verdict
   | Fail(issues: array[text])
 
 def review_once(doc: text) -> Verdict =
-  ask("Review this document: " + doc, agent = reviewer)
+  reviewer.ask("Review this document: " + doc)
 
 def review_with_retry(doc: text) -> Verdict =
-  ask("Review this document: " + doc, agent = reviewer, on_parse_error = Retry(n = 2))
+  reviewer.ask("Review this document: " + doc, on_parse_error = Retry(n = 2))
 
 # Direct call via function — result printed.
 def infinite(n: int) -> int = infinite(n + 1)

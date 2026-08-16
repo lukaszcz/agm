@@ -135,14 +135,13 @@ initializer exits, in which case it has bottom type. See
 <!-- agl-check: fragment -->
 ```agl
 try
-  let review: Review = ask(
+  let review: Review = reviewer.ask(
     "Review %{artifact}",
-    agent = reviewer,
     on_parse_error = Retry(n = 2)
   )
   print "reviewed: %{review}"
 catch AgentParseError as e =>
-  let report = ask("Explain invalid output:\n%{e.raw}", agent = critic)
+  let report = critic.ask("Explain invalid output:\n%{e.raw}")
   raise e
 catch _ as e =>
   print "unexpected: %{e.message}"
@@ -237,7 +236,7 @@ An agent **transport** failure: the agent could not run. Not eligible for
 
 ```text
 agent: Agent      # the selected backend
-cause: text       # "spawn_failure" | "nonzero_exit" | "timeout"
+cause: text       # "spawn_failure" | "nonzero_exit" | "timeout" | "interpolation_failure" | "invalid_agent"
 metadata: json    # host details: exit code, stderr tail, elapsed seconds
 ```
 

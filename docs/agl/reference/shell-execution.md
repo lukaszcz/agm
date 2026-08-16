@@ -192,11 +192,10 @@ invalid for a `unit` target.
 
 ## Retries
 
-**Retries re-run the command.** Unlike a one-shot `ask` retry — which
-resends its prompt with corrective feedback — an `exec` retry executes the
-command again; each invocation is traced separately. A `Session::ask` retry
-sends only corrective feedback in its existing conversation. If every attempt
-fails to parse, `ExecError` is raised.
+**Retries re-run the command.** Unlike an `ask` retry — which sends
+corrective feedback in its existing session — an `exec` retry executes the
+command again; each invocation is traced separately. If every attempt fails to
+parse, `ExecError` is raised.
 
 ## Exceptions
 

@@ -3,13 +3,14 @@
     {
       "name": "command_sessions_require_placeholders_and_reject_native_only_operations",
       "params": {"check_invalid_opens": true},
+      "runtime": {"enforce_command_sessions": true},
       "agents": {
         "writer": {"responses": []},
         "missing": {"responses": []},
         "ask": {"responses": []}
       },
       "expect": {
-        "stdout": "compact\nfork\nrename\nstats\nname\nplaceholder\ncommand-rpc\nclaude-rpc\n",
+        "stdout": "compact\nfork\nrename\nstats\nname\ncommand session requires a %{SESSION_ID} placeholder; use [exec] default-agent instead\ncommand-rpc\nclaude-rpc\n",
         "calls": {"writer": 0, "missing": 0, "ask": 0},
         "sessions": [
           {"agent": "writer", "tag": "session-1", "opened": true, "closed": true}

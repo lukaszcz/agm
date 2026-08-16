@@ -14,7 +14,7 @@ param who
 
 program def main() -> unit =
   let picker = AgentCommand("picker")
-  let shape: Shape = ask("Pick a shape.", agent = picker)
+  let shape: Shape = picker.ask("Pick a shape.")
 
   case shape of
     | Shape::Dot() => print "dot"

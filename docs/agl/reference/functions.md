@@ -818,9 +818,8 @@ def summarize_issues(issues: array[text]) -> text =
   "Issues found:\n%{issues}"
 
 def review_artifact(artifact: text) -> Review =
-  let r: Review = ask(
+  let r: Review = reviewer.ask(
     "Review this artifact:\n%{artifact}",
-    agent = reviewer,
     on_parse_error = Retry(n = 2)
   )
   r

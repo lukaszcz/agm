@@ -15,7 +15,7 @@ exception Halt extends Exception
 def classify(n: int) -> text =
   if n < 0 => return "negative" else => return "non-negative"
 
-def review(i: int) -> Verdict = ask("Review %{i}.", agent = reviewer)
+def review(i: int) -> Verdict = reviewer.ask("Review %{i}.")
 
 program def main() -> unit =
   # `:=` as a whole inline branch body, and a parenthesized block as the inline

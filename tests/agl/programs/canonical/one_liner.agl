@@ -7,13 +7,13 @@ enum Review
 program def main() -> unit =
   let impl = AgentCommand("impl")
   let reviewer = AgentCommand("reviewer")
-  var artifact: text = ask("Implement %{spec}", agent = impl)
+  var artifact: text = impl.ask("Implement %{spec}")
   var review: Review = Pass
   do[5]
-    review := ask("Review %{artifact}", agent = reviewer, on_parse_error = Retry(n = 2))
+    review := reviewer.ask("Review %{artifact}", on_parse_error = Retry(n = 2))
     case review of
       | Fail(issues) =>
-          artifact := ask("Fix %{issues} in %{artifact}", agent = impl)
+          artifact := impl.ask("Fix %{issues} in %{artifact}")
       | Pass() => ()
   until review is Pass
   print artifact

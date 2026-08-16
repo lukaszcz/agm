@@ -28,7 +28,7 @@ Layout:
 | `errors/` | Exception types, field access in catch, rethrow |
 | `exec/` | Shell execution, `ExecResult` structured handle |
 | `exprs/` | Arithmetic, comparisons, string operations |
-| `functions/` | User-defined functions: recursion, default args, first-class values, lambdas, `ask(agent:)` in a `def` body |
+| `functions/` | User-defined functions: recursion, default args, first-class values, lambdas, `Agent::ask` in a `def` body |
 | `generics/` | Generic types/functions: inference, explicit `::[…]` overrides, erasure, HOFs, imported generics |
 | `inline/` | Single-expression programs and host-wrapped `inline_entry` sources |
 | `methods/` | Record and enum methods: direct and bound calls, generic receivers, partial application, and scope opening |

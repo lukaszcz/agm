@@ -31,7 +31,7 @@ program def main() -> unit =
   print issue.author.name
   print issue.author.active
 
-  let fetched: Issue = ask("Fetch the top issue.", agent = tracker)
+  let fetched: Issue = tracker.ask("Fetch the top issue.")
   print fetched.title
   print fetched.severity
 

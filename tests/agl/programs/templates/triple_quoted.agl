@@ -5,18 +5,18 @@ param body
 program def main() -> unit =
   let critic = AgentCommand("critic")
   if true =>
-    let block = ask("""
+    let block = critic.ask("""
     Header line:
       keep two spaces
     A "quoted" tail.
-    """, agent = critic)
+    """)
     print "block sent"
   else =>
     ()
 
-  let mixed = ask("""
+  let mixed = critic.ask("""
   Wrap:
   %{body}
   End.
-  """, agent = critic)
+  """)
   print "mixed sent"

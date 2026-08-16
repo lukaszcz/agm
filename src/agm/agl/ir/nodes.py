@@ -46,7 +46,6 @@ __all__ = [
     "IrAnd",
     "IrArith",
     "IrAsk",
-    "IrAskOrigin",
     "IrAskRequest",
     "IrAssign",
     "IrBind",
@@ -1057,22 +1056,11 @@ class IrCopyValue:
     value: "IrExpr"
 
 
-class IrAskOrigin(enum.StrEnum):
-    """Source form that determines an ask's transport lifecycle."""
-
-    FREE = "free"
-    AGENT_METHOD = "agent-method"
-
-
 @dataclass(frozen=True, slots=True)
 class IrAsk:
-    """IR host-op: ask(prompt, agent:, on_parse_error:) builtin call.
+    """IR host-op: ``Agent::ask`` on a short-lived session.
 
-    ``origin`` preserves whether lowering selected free ``ask`` or
-    ``Agent::ask``. Free asks retain complete one-shot retry prompts; agent
-    methods keep corrective retries in one ephemeral continuation session.
-
-    ``max_attempts``  — 1 for Abort/absent, 1+n for Retry(n).
+    ``max_attempts`` is 1 for Abort/absent and 1+n for Retry(n).
     """
 
     location: Location
@@ -1080,7 +1068,6 @@ class IrAsk:
     prompt: "IrExpr"
     contract_id: "ContractId"
     max_attempts: int
-    origin: IrAskOrigin = IrAskOrigin.FREE
 
 
 @dataclass(frozen=True, slots=True)
@@ -1100,7 +1087,11 @@ class IrSessionOpen:
 
 @dataclass(frozen=True, slots=True)
 class IrSessionDefault:
-    """IR host-op: obtain the lazily managed default session."""
+    """IR host-op: obtain the lazily managed default session.
+
+    Evaluation reads the current ``default-agent`` register; the host creates
+    its default session from that agent once, then returns the same snapshot.
+    """
 
     location: Location
 
@@ -1109,8 +1100,10 @@ class IrSessionDefault:
 class IrSessionAsk:
     """IR host-op: send a prompt through an existing session.
 
-    The response contract and retry count have the same meaning as on
-    :class:`IrAsk`; the session supplies the agent selection.
+    Free ``ask`` supplies an :class:`IrSessionDefault` session expression;
+    explicit ``Session::ask`` supplies its receiver. The response contract and
+    retry count have the same meaning as on :class:`IrAsk`; the session
+    supplies the agent selection.
     """
 
     location: Location
@@ -1137,11 +1130,13 @@ class IrSessionOp:
 
 @dataclass(frozen=True, slots=True)
 class IrAskRequest:
-    """IR host-op: ask-request(prompt, agent:) builtin call.
+    """IR host-op: ``ask-request(prompt, agent:)`` builtin call.
 
     Builds the AgentRequest record value WITHOUT dispatching the agent. Only
-    ``agent`` and ``prompt`` are evaluated; the record's contract fields are
-    fixed constants describing a text request. So, unlike ``IrAsk`` and
+    ``agent`` and ``prompt`` are evaluated; an omitted direct agent is an
+    ``IrBuiltinLoad("default-agent")`` at this node's evaluation time. The
+    record's contract fields are fixed constants describing a text request. So,
+    unlike ``IrAsk`` and
     ``IrExec``, this node carries no contract id and no retry count — there is
     nothing to dispatch and no output to parse.
     """

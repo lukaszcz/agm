@@ -1,13 +1,15 @@
-# The default session retains the agent selected when it first opens.
+# Free asks and Session::default share one snapshot default session.
 import std/config
 
 param explicit_close: bool
 
 program def main() -> unit =
   std/config::default-agent := AgentPi("writer", "model", "high")
-  let first = Session::default()
+  let direct = Session::default()
+  let first = ask("first prompt")
   std/config::default-agent := AgentPi("reviewer", "model", "high")
-  let second = Session::default()
-  first.ask("first prompt")
-  second.ask("second prompt")
-  if explicit_close => second.close()
+  let explicit = Session::open(AgentPi("reviewer", "model", "high"))
+  let interleaved = explicit.ask("explicit prompt")
+  let through_default = direct.ask("direct prompt")
+  let second = ask! second prompt
+  if explicit_close => direct.close()

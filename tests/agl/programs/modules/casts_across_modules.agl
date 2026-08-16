@@ -26,7 +26,7 @@ program def main() -> unit =
 
   # An agent supplies JSON text; the imported helper validates it to a record.
   try
-    let raw: text = ask("Return a point as JSON.", agent = source)
+    let raw: text = source.ask("Return a point as JSON.")
     let pt = p::parse_point(raw)
     print "agent point %{pt.x},%{pt.y}"
   catch CastError as e =>

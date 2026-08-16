@@ -210,7 +210,7 @@ those positions must be parenthesized. Loop bodies also admit `case`, `if`,
 let x = 3; let y = x + 1; y
 
 # Inline do loop: body items, then until condition
-do[5] r := ask("Review %{a}", agent = reviewer); case r of Fail(issues) => a := ask("Fix %{issues} in %{a}", agent = impl) | Pass => () until r is Pass
+do[5] r := reviewer.ask("Review %{a}"); case r of Fail(issues) => a := impl.ask("Fix %{issues} in %{a}") | Pass => () until r is Pass
 
 # A case expression as a loop condition must be parenthesized:
 do[3] n := n + 1 until (case st of Done => true | _ => false)
@@ -223,7 +223,7 @@ branch body:
 ```agl
 case review of
   Pass => ()
-  | Fail(issues) => artifact := ask("Fix %{issues}", agent = impl)
+  | Fail(issues) => artifact := impl.ask("Fix %{issues}")
 ```
 
 ### Branch bodies

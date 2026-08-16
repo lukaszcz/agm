@@ -1,8 +1,7 @@
-# Free ask retries remain isolated one-shot prompts.
+# Explicit Agent asks keep parse-error retries in one ephemeral session.
 program def main() -> unit =
-  let answer: int = ask(
+  let answer: int = AgentCommand("writer").ask(
     "calculate the total",
-    agent = AgentCommand("writer"),
     on_parse_error = Retry(n = 1),
   )
   print answer

@@ -13,14 +13,16 @@ import pytest
 
 from agm.agl import PipelineDriver
 from agm.agl.eval.ir_interpreter import IrInterpreter
+from agm.agl.ir.ids import Location, SourceId
 from agm.agl.runtime.sessions import (
     AgentDispatcherSessionHost,
     SessionAgentError,
     SessionAskError,
     SessionHost,
     SessionHostError,
+    SessionSnapshot,
 )
-from agm.agl.semantics.exceptions import AglRaise
+from agm.agl.semantics.exceptions import AglRaise, make_builtin_exception
 from agm.agl.semantics.values import (
     ArrayValue,
     BoolValue,
@@ -75,6 +77,25 @@ def test_agent_ask_without_a_configured_host_uses_and_releases_default_ephemeral
     assert interpreter._session_host.active_session_count == 0
 
 
+def test_agent_ask_preserves_an_existing_error_span() -> None:
+    executable = lower_inline_ir('AgentCommand("worker").ask("question")')
+    span = Location(SourceId(99), 0, 1, 1, 0)
+
+    def dispatch(_request: object) -> str:
+        raise AglRaise(
+            make_builtin_exception(
+                "AgentCallError", "failed", nominals=executable.builtin_nominals
+            ),
+            span=span,
+        )
+
+    interpreter = IrInterpreter(executable, agent_dispatcher=dispatch)
+    with pytest.raises(AglRaise) as raised:
+        interpreter.run(program_symbol=executable.synthetic_main_symbol)
+
+    assert raised.value.span == span
+
+
 def test_agent_ask_without_a_configured_host_closes_after_dispatch_failure() -> None:
     """The default ephemeral session is released when dispatch raises."""
     executable = lower_inline_ir('AgentCommand("worker").ask("How many?")')
@@ -87,8 +108,8 @@ def test_agent_ask_without_a_configured_host_closes_after_dispatch_failure() -> 
     assert interpreter._session_host.active_session_count == 0
 
 
-def test_free_ask_opens_uses_and_closes_ephemeral_sessions_per_retry() -> None:
-    """Free asks retain their one-shot lifecycle and complete-prompt retries."""
+def test_agent_ask_keeps_one_ephemeral_session_for_retries() -> None:
+    """An Agent method keeps corrective retries in one ephemeral session."""
 
     class EphemeralSessionHost:
         def __init__(self) -> None:
@@ -121,8 +142,8 @@ def test_free_ask_opens_uses_and_closes_ephemeral_sessions_per_retry() -> None:
     host = EphemeralSessionHost()
     result = run_inline_command(
         PipelineDriver(session_host=cast(SessionHost, host)),
-        'let worker = AgentPi("provider", "model", "high")\n'
-        'let answer: int = ask("How many?", agent = worker, on_parse_error = Retry(n = 1))\n'
+        'let worker = AgentCommand("worker")\n'
+        'let answer: int = worker.ask("How many?", on_parse_error = Retry(n = 1))\n'
         "answer",
     )
 
@@ -130,17 +151,15 @@ def test_free_ask_opens_uses_and_closes_ephemeral_sessions_per_retry() -> None:
     assert host.events == [
         ("open", "session-1"),
         ("ask", "session-1"),
+        ("ask", "session-1"),
         ("close", "session-1"),
-        ("open", "session-2"),
-        ("ask", "session-2"),
-        ("close", "session-2"),
         ("close_all", ""),
     ]
-    assert host.transports == ["Cli", "Cli"]
-    assert host.one_shot_flags == [True, True]
+    assert host.transports == ["Cli"]
+    assert host.one_shot_flags == [False]
     assert host.prompts[0].startswith("How many?")
-    assert "How many?" in host.prompts[1]
-    assert "not a number" in host.prompts[1]
+    assert "How many?" not in host.prompts[1]
+    assert "Validation errors:" in host.prompts[1]
 
 
 def test_agent_ask_keeps_retries_in_one_ephemeral_session_and_closes_once() -> None:
@@ -223,7 +242,7 @@ def test_free_ask_maps_ephemeral_open_failure_to_session_error() -> None:
     result = run_inline_command(
         PipelineDriver(session_host=cast(SessionHost, FailingOpenSessionHost())),
         "try\n"
-        '  let answer: text = ask("question", agent = AgentCommand("worker"))\n'
+        '  let answer: text = AgentCommand("worker").ask("question")\n'
         "  ()\n"
         "catch SessionError =>\n"
         "  ()",
@@ -331,7 +350,7 @@ def test_agent_ask_closes_its_one_session_after_transport_failure() -> None:
 @pytest.mark.parametrize(
     "source",
     [
-        'ask("question", agent = AgentCommand("worker"))',
+        'AgentCommand("worker").ask("question")',
         'AgentCommand("worker").ask("question")',
     ],
 )
@@ -440,7 +459,7 @@ def test_text_ask_basic() -> None:
     """Text-codec ask: passthrough, no JSON involved."""
     source = """\
 let summarizer = AgentCommand("summarizer")
-let summary: text = ask("Summarise it.", agent = summarizer)
+let summary: text = summarizer.ask("Summarise it.")
 summary
 """
     ir = evaluate_ir_with_agents(
@@ -459,7 +478,7 @@ def test_json_int_ask() -> None:
     """JSON-int ask: agent returns a bare integer."""
     source = """\
 let counter = AgentCommand("counter")
-let n: int = ask("How many?", agent = counter)
+let n: int = counter.ask("How many?")
 n
 """
     ir = evaluate_ir_with_agents(
@@ -482,7 +501,7 @@ record Point
   y: int
 
 let locator = AgentCommand("locator")
-let pt: Point = ask("Find the point.", agent = locator)
+let pt: Point = locator.ask("Find the point.")
 pt
 """
     ir = evaluate_ir_with_agents(
@@ -503,7 +522,7 @@ def test_json_array_ask() -> None:
     """JSON-array ask: agent returns a JSON array."""
     source = """\
 let lister = AgentCommand("lister")
-let items: array[text] = ask("List items.", agent = lister)
+let items: array[text] = lister.ask("List items.")
 items
 """
     ir = evaluate_ir_with_agents(
@@ -529,7 +548,7 @@ enum Status
   | Err(msg: text)
 
 let checker = AgentCommand("checker")
-let status: Status = ask("Check it.", agent = checker)
+let status: Status = checker.ask("Check it.")
 status
 """
     ir = evaluate_ir_with_agents(
@@ -549,7 +568,7 @@ def test_lenient_json_fence_stripping() -> None:
     """Lenient mode: agent wraps JSON in a markdown fence — still parsed."""
     source = """\
 let answerer = AgentCommand("answerer")
-let n: int = ask("Give me a number.", agent = answerer)
+let n: int = answerer.ask("Give me a number.")
 n
 """
     fenced = "```json\n17\n```"
@@ -569,7 +588,7 @@ def test_retry_success_second_attempt() -> None:
     """Retry policy: first response is invalid JSON, second is valid."""
     source = """\
 let parser = AgentCommand("parser")
-let n: int = ask("Parse this.", agent = parser, on_parse_error = Retry(n = 1))
+let n: int = parser.ask("Parse this.", on_parse_error = Retry(n = 1))
 n
 """
     ir = evaluate_ir_with_agents(
@@ -588,7 +607,7 @@ def test_retry_exhausted_raises() -> None:
     """Retry policy: all attempts fail → AgentParseError raised."""
     source = """\
 let parser = AgentCommand("parser")
-let n: int = ask("Parse this.", agent = parser, on_parse_error = Retry(n = 1))
+let n: int = parser.ask("Parse this.", on_parse_error = Retry(n = 1))
 n
 """
     ir_exc = evaluate_ir_raises_with_agents(
@@ -608,7 +627,7 @@ def test_strict_json_mode() -> None:
     """strict_json: true — bare JSON without fences, no repair."""
     source = """\
 let strict_agent = AgentCommand("strict_agent")
-let b: bool = ask("True or false?", agent = strict_agent, strict_json = true)
+let b: bool = strict_agent.ask("True or false?", strict_json = true)
 b
 """
     ir = evaluate_ir_with_agents(
@@ -624,19 +643,34 @@ b
 
 
 def test_unit_typed_ask() -> None:
-    """A bare ask runs once and discards its successful output."""
+    """A bare ask runs once through the default session and discards its output."""
     from agm.agl import PipelineDriver
 
-    calls: list[object] = []
+    class DefaultSessionHost:
+        def __init__(self) -> None:
+            self._snapshot: SessionSnapshot | None = None
 
-    def notify(request: object) -> str:
-        calls.append(request)
-        return "acknowledged"
+        def default(self, agent: EnumValue, transport: str) -> str:
+            self._snapshot = SessionSnapshot(agent, transport)
+            return "default"
 
-    runtime = PipelineDriver(agent_dispatcher=notify)
-    result = run_inline_command(runtime, 'ask("Notify!")\n()')
+        def snapshot(self, handle: str) -> SessionSnapshot:
+            assert handle == "default"
+            assert self._snapshot is not None
+            return self._snapshot
+
+        def ask(self, handle: str, prompt: str) -> str:
+            assert handle == "default"
+            assert prompt == "Notify!"
+            return "acknowledged"
+
+        def close_all(self) -> None:
+            pass
+
+    result = run_inline_command(
+        PipelineDriver(session_host=cast(SessionHost, DefaultSessionHost())), 'ask("Notify!")\n()'
+    )
     assert result.ok
-    assert len(calls) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -648,7 +682,7 @@ def test_ask_inside_function() -> None:
     """A root function uses an agent supplied by an immutable root parameter."""
     source = """\
 param namer: Agent = AgentCommand("namer")
-def get_name(prompt: text) -> text = ask(prompt, agent = namer)
+def get_name(prompt: text) -> text = namer.ask(prompt)
 let name: text = get_name("What is the name?")
 name
 """
@@ -669,8 +703,8 @@ def test_multiple_agents() -> None:
     source = """\
 let first = AgentCommand("first")
 let second = AgentCommand("second")
-let a: text = ask("First.", agent = first)
-let b: text = ask("Second.", agent = second)
+let a: text = first.ask("First.")
+let b: text = second.ask("Second.")
 b
 """
     ir = evaluate_ir_with_agents(
@@ -693,7 +727,7 @@ def test_schema_validation_failure_wrong_type() -> None:
     """Agent returns invalid JSON (fails schema validation) → AgentParseError."""
     source = """\
 let validator = AgentCommand("validator")
-let n: int = ask("Give int.", agent = validator)
+let n: int = validator.ask("Give int.")
 n
 """
     # Agent returns a string, not an integer — schema validation fails.
@@ -714,7 +748,7 @@ def test_strict_json_invalid_raises() -> None:
     """strict_json=true with fenced JSON: strict mode does not strip fences."""
     source = """\
 let strict_agent = AgentCommand("strict_agent")
-let n: int = ask("Give int.", agent = strict_agent, strict_json = true)
+let n: int = strict_agent.ask("Give int.", strict_json = true)
 n
 """
     # Fenced JSON fails in strict mode (strict does not strip fences).
@@ -727,22 +761,40 @@ n
 
 
 # ---------------------------------------------------------------------------
-# default agent (ask without agent: named arg)
+# default agent (free ask)
 # ---------------------------------------------------------------------------
 
 
 def test_default_agent_ask() -> None:
-    """ask() with no agent: named arg uses the default agent."""
-    source = """\
-let result: text = ask("Hello default.")
-result
-"""
-    ir = evaluate_ir_with_agents(
-        source,
-        scripts={},
-        default_responses=["default response"],
+    """Free ask dispatches through the default session."""
+    from agm.agl import PipelineDriver
+
+    class DefaultSessionHost:
+        def __init__(self) -> None:
+            self._snapshot: SessionSnapshot | None = None
+
+        def default(self, agent: EnumValue, transport: str) -> str:
+            self._snapshot = SessionSnapshot(agent, transport)
+            return "default"
+
+        def snapshot(self, handle: str) -> SessionSnapshot:
+            assert handle == "default"
+            assert self._snapshot is not None
+            return self._snapshot
+
+        def ask(self, handle: str, prompt: str) -> str:
+            assert handle == "default"
+            assert prompt == "Hello default."
+            return "default response"
+
+        def close_all(self) -> None:
+            pass
+
+    result = run_inline_command(
+        PipelineDriver(session_host=cast(SessionHost, DefaultSessionHost())),
+        'let result: text = ask("Hello default.")\nresult',
     )
-    assert ir["result"] == TextValue("default response")
+    assert result.ok
 
 
 # ---------------------------------------------------------------------------
@@ -790,7 +842,7 @@ def test_retry_with_schema_validation_error_then_success() -> None:
     """Retry: first response fails schema, second is valid."""
     source = """\
 let fixer = AgentCommand("fixer")
-let n: int = ask("Give int.", agent = fixer, on_parse_error = Retry(n = 1))
+let n: int = fixer.ask("Give int.", on_parse_error = Retry(n = 1))
 n
 """
     # First response: string (wrong type) → schema error; second: valid int.
@@ -887,7 +939,7 @@ enum Status
   | Err(msg: text)
 
 let checker = AgentCommand("checker")
-let s: Status = ask("Status?", agent = checker, on_parse_error = Retry(n = 1))
+let s: Status = checker.ask("Status?", on_parse_error = Retry(n = 1))
 s
 """
     ir = evaluate_ir_with_agents(
@@ -1908,7 +1960,7 @@ def test_lower_on_parse_error_abort_gives_one_attempt() -> None:
     """_extract_max_attempts: Abort policy → 1 attempt."""
     source = """\
 let a = AgentCommand("a")
-let n: int = ask("?", agent = a, on_parse_error = Abort)
+let n: int = a.ask("?", on_parse_error = Abort)
 n
 """
     from tests.agl.ir_harness import evaluate_ir_with_agents
@@ -2057,7 +2109,7 @@ def test_lower_on_parse_error_self_qualified_retry() -> None:
     """Self-qualified Retry parse policy produces the correct attempt count."""
     source = """\
 let a = AgentCommand("a")
-let n: int = ask("?", agent = a, on_parse_error = ::Retry(n = 2))
+let n: int = a.ask("?", on_parse_error = ::Retry(n = 2))
 n
 """
     from tests.agl.ir_harness import evaluate_ir_with_agents
@@ -2510,7 +2562,7 @@ enum Status
   | Err(msg: text)
 
 let checker = AgentCommand("checker")
-let status: Status = ask("Check.", agent = checker)
+let status: Status = checker.ask("Check.")
 status
 """
     ir_exc = evaluate_ir_raises_with_agents(
@@ -2547,7 +2599,7 @@ enum Status
   | Err(msg: text)
 
 let checker = AgentCommand("checker")
-let status: Status = ask("Check.", agent = checker)
+let status: Status = checker.ask("Check.")
 status
 """
     ir_exc = evaluate_ir_raises_with_agents(
@@ -2595,7 +2647,7 @@ enum Status
   | Err(msg: text)
 
 let checker = AgentCommand("checker")
-let status: Status = ask("Check.", agent = checker)
+let status: Status = checker.ask("Check.")
 status
 """
     ir_exc = evaluate_ir_raises_with_agents(

@@ -47,7 +47,6 @@ from agm.agl.ir.nodes import (
     IrAnd,
     IrArith,
     IrAsk,
-    IrAskOrigin,
     IrAskRequest,
     IrAssign,
     IrBind,
@@ -2202,7 +2201,9 @@ class _Lowerer:
                     span,
                     structured_exec=False,
                     agent=agent,
-                    origin=(IrAskOrigin.AGENT_METHOD if agent is not None else IrAskOrigin.FREE),
+                    session=(
+                        None if agent is not None else IrSessionDefault(location=self._loc(span))
+                    ),
                 )
 
             case BuiltinKind.ASK_REQUEST:
@@ -3279,7 +3280,6 @@ class _Lowerer:
         is_request: bool = False,
         agent: IrExpr | None = None,
         session: IrExpr | None = None,
-        origin: IrAskOrigin = IrAskOrigin.FREE,
     ) -> IrExpr:
         """Lower an ask() or ask-request() builtin call to its host-operation node."""
         loc = self._loc(span)
@@ -3288,21 +3288,18 @@ class _Lowerer:
         # 1. Evaluate the prompt (first positional arg).
         prompt_ir = self.lower_expr(call_node.args[0])
 
-        # 2. Evaluate the explicit Agent value or load the ordinary defaulted parameter.
-        if session is None:
-            if agent is not None:
-                agent_ir = agent
-            elif "agent" in named_map:
-                agent_ir = self.lower_expr(named_map["agent"].value)
-            else:
-                agent_ir = IrBuiltinLoad(location=loc, key="default-agent")
-
         # ask-request neither dispatches nor parses output — it builds an
         # AgentRequest whose contract fields are fixed constants — so it needs
         # neither a retry count nor an output contract, and steps 3 and 4 below
         # apply to ``ask`` alone.
         if is_request:
             assert session is None, "compiler bug: Session ask cannot build an agent request"
+            if agent is not None:
+                agent_ir = agent
+            elif "agent" in named_map:
+                agent_ir = self.lower_expr(named_map["agent"].value)
+            else:
+                agent_ir = IrBuiltinLoad(location=loc, key="default-agent")
             return IrAskRequest(location=loc, agent=agent_ir, prompt=prompt_ir)
 
         # 3. Determine max_attempts from the on_parse_error named arg.
@@ -3357,13 +3354,13 @@ class _Lowerer:
                     max_attempts=max_attempts,
                 ),
             )
+        assert agent is not None, "compiler bug: non-session ask requires an Agent receiver"
         return IrAsk(
             location=loc,
-            agent=agent_ir,
+            agent=agent,
             prompt=prompt_ir,
             contract_id=contract_id,
             max_attempts=max_attempts,
-            origin=origin,
         )
 
     # ------------------------------------------------------------------

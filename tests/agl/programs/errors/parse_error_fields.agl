@@ -8,10 +8,10 @@ program def main() -> unit =
   let builder = AgentCommand("builder")
   let critic = AgentCommand("critic")
   try
-    let s: Spec = ask("Build the spec.", agent = builder, on_parse_error = Retry(n = 1))
+    let s: Spec = builder.ask("Build the spec.", on_parse_error = Retry(n = 1))
     print s.name
   catch AgentParseError as e =>
-    let advice = ask("""
+    let advice = critic.ask("""
     Agent %{e.agent} failed for type %{e.target_type} after %{e.attempts} attempts.
 
     Raw:
@@ -22,6 +22,6 @@ program def main() -> unit =
 
     Schema:
     %{e.expected_schema}
-    """, agent = critic)
+    """)
     print "advised"
     raise e

@@ -169,7 +169,6 @@ builtin def resource(path: text) -> text
 builtin def resource-dir() -> text
 builtin def ask[T](
   prompt: text,
-  agent: Agent = std/config::default-agent,
   format: text = "",
   strict_json: bool = false,
   on_parse_error: ParsePolicy = ParsePolicy::Abort,

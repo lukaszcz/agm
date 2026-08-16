@@ -27,8 +27,8 @@ program def main() -> unit =
       print "name"
     try
       let _ = Session::open(AgentCommand("missing"))
-    catch SessionError =>
-      print "placeholder"
+    catch SessionError as error =>
+      print error.message
     try
       let _ = Session::open(command, transport = Some(SessionTransport::Rpc))
     catch SessionError =>

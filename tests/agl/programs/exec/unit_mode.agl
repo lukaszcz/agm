@@ -4,13 +4,13 @@ param fail: bool
 program def main() -> unit =
   # Bare ask and exec calls adapt to unit in statement and loop-body positions.
   let notifier = AgentCommand("notifier")
-  ask("starting", agent = notifier)
+  notifier.ask("starting")
   exec "true"
 
   var rounds: int = 0
   do[3]
     rounds := rounds + 1
-    ask("round %{rounds}", agent = notifier)
+    notifier.ask("round %{rounds}")
   until rounds >= target
 
   do

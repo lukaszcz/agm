@@ -62,7 +62,7 @@ print(apply(scale, 3))
 var notes = "notes"
 let note = fn(entry: text) -> unit => do notes := notes + "/" + entry until true
 try
-  let verdict: Mood = ask("Review %{describe()}.", agent = reviewer)
+  let verdict: Mood = reviewer.ask("Review %{describe()}.")
   case verdict of
     | Calm => note("calm")
     | Tense(level) => note("tense:%{level}")

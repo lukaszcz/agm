@@ -4,9 +4,9 @@ program def main() -> unit =
   # a per-call opt-in to strict parsing.
   let counter = AgentCommand("counter")
   let fetcher = AgentCommand("fetcher")
-  let n: int = ask("Count the items.", agent = counter)
+  let n: int = counter.ask("Count the items.")
   print n
-  let exact: int = ask("Count again.", agent = counter, strict_json = true)
+  let exact: int = counter.ask("Count again.", strict_json = true)
   print exact
-  let data: json = ask("Fetch the data.", agent = fetcher)
+  let data: json = fetcher.ask("Fetch the data.")
   print data

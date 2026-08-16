@@ -466,8 +466,6 @@ def _compute_reexport_additions(
     for item, matched in matched_items[: len(decl.items)]:
         prefix = item_path(item)
         for source in matched:
-            if source in hidden_sources:
-                continue
             source_path = (source,) if isinstance(source, str) else source
             if item.rename is None:
                 exposed = source

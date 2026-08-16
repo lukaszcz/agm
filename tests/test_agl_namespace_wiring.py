@@ -247,6 +247,20 @@ def test_root_use_value_ignores_same_named_imported_type(tmp_path: Path) -> None
     check_program(resolve_program(graph), base_caps())
 
 
+def test_imported_value_ignores_same_named_root_use_type(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import values::*\nuse Types::*\nscope Types\nenum T | member\nend Types\nT()\n"
+            ),
+            "values": "def T() -> int = 7\n",
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
 def test_type_use_lookup_continues_past_inner_value_contribution(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,

@@ -4608,11 +4608,12 @@ class TestImports:
 
     def test_import_tail_rename_canonicalizes_use_replacement(self, tmp_path: Path) -> None:
         (tmp_path / "lib.agl").write_text(
-            "scope Source\ndef old() -> int = 1\ndef new() -> int = 2\nend Source\n",
+            "scope Source\ndef old() -> int = 1\ndef new() -> int = 2\nend Source\n"
+            "scope Other\ndef value() -> int = 3\nend Other\n",
             encoding="utf-8",
         )
         session = self._make_session_with_root(tmp_path)
-        assert session.eval_entry("import lib::{Source as Alias}").ok
+        assert session.eval_entry("import lib::{Source as Alias, Other}").ok
         assert session.eval_entry("use Alias::{old}").ok
 
         replacement = session.eval_entry("use /lib::Source::{new}")
@@ -4620,6 +4621,16 @@ class TestImports:
         assert replacement.ok, replacement.diagnostics
         assert session.eval_entry("new()").value == IntValue(2)
         assert not session.eval_entry("old()").ok
+
+    def test_wildcard_alias_facade_use_is_retained(self, tmp_path: Path) -> None:
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text("def first() -> int = 1\n", encoding="utf-8")
+        (package / "b.agl").write_text("def second() -> int = 2\n", encoding="utf-8")
+        session = self._make_session_with_root(tmp_path)
+
+        assert session.eval_entry("import pkg/* as Facade\nuse Facade::*").ok
+        assert session.eval_entry("first() + second()").value == IntValue(3)
 
     def test_local_and_current_module_use_spellings_replace_each_other(self) -> None:
         session = ReplSession()

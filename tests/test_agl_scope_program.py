@@ -714,6 +714,21 @@ class TestClashDeferred:
         msg = str(exc_info.value)
         assert "libA" in msg or "libB" in msg or "ambiguous" in msg.lower()
 
+    def test_renamed_scope_collision_is_ambiguous_when_used(self, tmp_path: Path) -> None:
+        files = {
+            "entry": "import lib\nuse lib::{One as X, Two as X}\n()",
+            "lib": (
+                "scope One\ndef first() -> int = 1\nend One\n"
+                "scope Two\ndef second() -> int = 2\nend Two"
+            ),
+        }
+
+        resolve_program(_make_graph_from_files(tmp_path, files))
+
+        files["entry"] = "import lib\nuse lib::{One as X, Two as X}\nuse X::*\n()"
+        with pytest.raises(AglScopeError, match="ambiguous"):
+            resolve_program(_make_graph_from_files(tmp_path, files))
+
     def test_use_deduplicates_routes_to_same_reexport_origin(self, tmp_path: Path) -> None:
         graph = _make_graph_from_files(
             tmp_path,

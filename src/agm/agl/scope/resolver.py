@@ -214,7 +214,7 @@ class _ImportedUseContribution:
     """One imported surface exposed by a resolved ``use`` in a lexical region."""
 
     members: Mapping[NameAtom, QName]
-    scope_routes: Mapping[NameAtom, BareRoute]
+    scope_routes: Mapping[NameAtom, frozenset[BareRoute]]
 
 
 # Built-in call names: recognised in call position, not bindable as values.
@@ -1957,7 +1957,9 @@ class _Resolver:
                 relative_members[_bare_atom(path[len(target) :])] = qname
         return relative_members if exists else None
 
-    def _import_scope_routes(self, imported_route: BareRoute) -> dict[NameAtom, BareRoute]:
+    def _import_scope_routes(
+        self, imported_route: BareRoute
+    ) -> dict[NameAtom, frozenset[BareRoute]]:
         """Return all scope identities beneath one exact imported route."""
         contribution = self._import_env.contributions.get(imported_route[0])
         assert contribution is not None
@@ -1969,16 +1971,16 @@ class _Resolver:
     @staticmethod
     def _relative_use_import_scope_routes(
         scope_paths: Collection[NameAtom], imported_route: BareRoute
-    ) -> dict[NameAtom, BareRoute]:
+    ) -> dict[NameAtom, frozenset[BareRoute]]:
         """Return a target's scope identities under target-relative spellings."""
         module, target = imported_route
-        relative_routes: dict[NameAtom, BareRoute] = {(): imported_route}
+        relative_routes: dict[NameAtom, frozenset[BareRoute]] = {(): frozenset({imported_route})}
         for atom in scope_paths:
             path = _bare_path(atom)
             if path[: len(target)] != target:
                 continue
             relative = path[len(target) :]
-            relative_routes[_bare_atom(relative)] = (module, path)
+            relative_routes[_bare_atom(relative)] = frozenset({(module, path)})
         return relative_routes
 
     @staticmethod
@@ -2047,9 +2049,9 @@ class _Resolver:
 
     def _bare_use_import_scope_routes(
         self, target: ScopePath, imported_route: BareRoute
-    ) -> dict[NameAtom, BareRoute]:
+    ) -> dict[NameAtom, frozenset[BareRoute]]:
         """Return scope identities supplied by raw bare import contributions."""
-        result: dict[NameAtom, BareRoute] = {}
+        result: dict[NameAtom, set[BareRoute]] = {}
         provenances = (
             self._import_env.unqualified_scope_routes,
             *self._reachable_decl_bare_scope_routes(
@@ -2065,8 +2067,8 @@ class _Resolver:
                 for module, source in routes:
                     source_root = source[: len(source) - len(relative)] if relative else source
                     if (module, source_root) == imported_route:
-                        result[_bare_atom(relative)] = (module, source)
-        return result
+                        result.setdefault(_bare_atom(relative), set()).add((module, source))
+        return {atom: frozenset(routes) for atom, routes in result.items()}
 
     def _used_import_targets(
         self, target: ScopePath
@@ -2077,8 +2079,8 @@ class _Resolver:
         while layer is not None:
             candidates: list[tuple[BareRoute, Mapping[NameAtom, QName]]] = []
             for contribution in self._imported_use_contributions.get(layer.node_id, ()):
-                imported_route = contribution.scope_routes.get(exposed_target)
-                if imported_route is None:
+                imported_routes = contribution.scope_routes.get(exposed_target)
+                if imported_routes is None:
                     continue
                 members = {
                     _bare_atom(path[len(target) :]): qname
@@ -2086,7 +2088,7 @@ class _Resolver:
                     if (path := _bare_path(atom))[: len(target)] == target
                     and len(path) > len(target)
                 }
-                candidates.append((imported_route, members))
+                candidates.extend((imported_route, members) for imported_route in imported_routes)
             if candidates:
                 return self._merge_use_import_targets(tuple(candidates))
             layer = layer.parent
@@ -2094,7 +2096,7 @@ class _Resolver:
 
     def _used_import_scope_routes(
         self, target: ScopePath, imported_route: BareRoute
-    ) -> dict[NameAtom, BareRoute]:
+    ) -> dict[NameAtom, frozenset[BareRoute]]:
         """Return relative identities from the earlier use that exposed *target*."""
         layer: ScopeNode | None = self._current_scope()
         exposed_target = _bare_atom(target)
@@ -2103,15 +2105,18 @@ class _Resolver:
             matching = [
                 contribution
                 for contribution in contributions
-                if contribution.scope_routes.get(exposed_target) == imported_route
+                if imported_route in contribution.scope_routes.get(exposed_target, frozenset())
             ]
             if matching:
-                return {
-                    _bare_atom(path[len(target) :]): source
-                    for contribution in matching
-                    for atom, source in contribution.scope_routes.items()
-                    if (path := _bare_path(atom))[: len(target)] == target
-                }
+                routes: dict[NameAtom, set[BareRoute]] = {}
+                for contribution in matching:
+                    for atom, sources in contribution.scope_routes.items():
+                        path = _bare_path(atom)
+                        if path[: len(target)] == target:
+                            routes.setdefault(_bare_atom(path[len(target) :]), set()).update(
+                                sources
+                            )
+                return {atom: frozenset(sources) for atom, sources in routes.items()}
             layer = layer.parent
         return {}
 
@@ -2249,13 +2254,16 @@ class _Resolver:
         self,
         decl: UseDecl,
         member_maps: tuple[Mapping[NameAtom, QName], ...],
-        scope_route_maps: tuple[Mapping[NameAtom, BareRoute], ...],
+        scope_route_maps: tuple[Mapping[NameAtom, frozenset[BareRoute]], ...],
     ) -> None:
         """Contribute one shared alias facade while retaining cross-module clashes."""
         combined = {atom: qname for members in member_maps for atom, qname in members.items()}
-        combined_scope_routes = {
-            atom: route for routes in scope_route_maps for atom, route in routes.items()
-        }
+        combined_scope_routes: dict[NameAtom, frozenset[BareRoute]] = {}
+        for routes in scope_route_maps:
+            for atom, candidates in routes.items():
+                combined_scope_routes[atom] = combined_scope_routes.get(atom, frozenset()).union(
+                    candidates
+                )
         self._select_use_members(decl, {**combined_scope_routes, **combined})
         for members, scope_routes in zip(member_maps, scope_route_maps, strict=True):
             self._contribute_use_members(decl, members, scope_routes, validate=False)
@@ -2264,7 +2272,7 @@ class _Resolver:
         self,
         decl: UseDecl,
         members: Mapping[NameAtom, QName],
-        scope_routes: Mapping[NameAtom, BareRoute],
+        scope_routes: Mapping[NameAtom, frozenset[BareRoute]],
         *,
         validate: bool = True,
     ) -> None:
@@ -2272,7 +2280,12 @@ class _Resolver:
         if validate:
             self._select_use_members(decl, {**scope_routes, **members})
         selected = self._select_use_members(decl, members, validate=False)
-        selected_scope_routes = self._select_use_members(decl, scope_routes, validate=False)
+        selected_scope_routes = self._select_use_members(
+            decl,
+            scope_routes,
+            validate=False,
+            merge=lambda left, right: left | right,
+        )
         scope = self._current_scope()
         exposed_scope_routes = {
             atom: route for atom, route in selected_scope_routes.items() if _bare_path(atom)
@@ -2321,6 +2334,7 @@ class _Resolver:
         members: Mapping[NameAtom, _T],
         *,
         validate: bool = True,
+        merge: Callable[[_T, _T], _T] | None = None,
     ) -> dict[NameAtom, _T]:
         """Apply a use tail, hiding clause, or additive route alias to members."""
 
@@ -2340,15 +2354,22 @@ class _Resolver:
                 for atom, source in members.items()
             }
         selected: dict[NameAtom, _T] = {}
+
+        def add(atom: NameAtom, source: _T) -> None:
+            if merge is not None and atom in selected:
+                selected[atom] = merge(selected[atom], source)
+            else:
+                selected[atom] = source
+
         if decl.tail == ():
             selected.update(members)
         else:
             for item in cast(tuple[ImportItem, ...], decl.tail):
                 for atom in matching(item):
-                    selected[atom] = members[atom]
+                    add(atom, members[atom])
                     if item.rename is not None:
                         suffix = _bare_path(atom)[len(_item_path(item)) :]
-                        selected[_bare_atom((item.rename, *suffix))] = members[atom]
+                        add(_bare_atom((item.rename, *suffix)), members[atom])
         for hidden in decl.hidden:
             for atom in matching(hidden):
                 selected.pop(atom, None)

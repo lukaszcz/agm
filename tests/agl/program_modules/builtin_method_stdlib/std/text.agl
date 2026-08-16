@@ -1,0 +1,5 @@
+def text::surround(self, before: text, after: text) -> text = before + self + after
+def text::append(self, suffix: text) -> text = self + suffix
+builtin def text::render(self) -> text
+builtin def text::parse_json(self) -> json
+def unavailable() -> text = "free"

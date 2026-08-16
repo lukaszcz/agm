@@ -1370,11 +1370,17 @@ def _append_checker_warnings(
     warnings.extend(checked.warnings)
 
 
+def _module_id_segments(module_id: "ModuleId") -> tuple[str, ...]:
+    """Return the stable ordering key for a module id."""
+    return module_id.segments
+
+
 def _reachable_modules(module_id: "ModuleId", graph: "ModuleGraph") -> tuple[ModuleId, ...]:
-    """Return *module_id* and its dependency subgraph in deterministic order."""
+    """Return a selected module's dependencies plus ambient builtin-method modules."""
     reachable: list[ModuleId] = []
     seen: set[ModuleId] = set()
-    pending = [module_id]
+    ambient_modules: frozenset[ModuleId] = graph.ambient_modules
+    pending = [module_id, *sorted(ambient_modules, key=_module_id_segments)]
     while pending:
         current = pending.pop()
         if current in seen:

@@ -158,6 +158,16 @@ snapshot — see [Casts and convertibility](#casts-and-convertibility) below —
 and `with` ([Expressions](expressions.md)) builds a shallow copy of a record.
 See [Copying values](#copying-values) below for `copy`/`shallow_copy`.)
 
+#### Builtin-type methods
+
+Methods on `array[T]`, `dict[text, T]`, `text`, `json`, `int`, `decimal`, and
+`bool` are supplied by their owning standard-library modules. They are ambient
+members of their receiver types: use them directly wherever a value has that
+type, without importing the owning module just to call the method. The module's
+free functions remain subject to normal import visibility. See
+[Functions](functions.md#methods) for method declarations, bound values, and
+calls.
+
 #### Cycles
 
 Because an array or dict is a mutable reference value, an indexed assignment

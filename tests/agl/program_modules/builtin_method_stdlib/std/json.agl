@@ -1,0 +1,1 @@
+def json::kind(self) -> text = "null"

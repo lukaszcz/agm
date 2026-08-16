@@ -160,7 +160,7 @@ from agm.agl.matchcompile import (
     RecordConstructor,
 )
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId, spell_scope_path
-from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
+from agm.agl.scope.symbols import BUILTIN_CALL_NAMES, BinderKind, BindingRef, BuiltinKind
 from agm.agl.semantics.type_table import MethodDef, TypeTable
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
@@ -2110,6 +2110,7 @@ class _Lowerer:
         span: "SourceSpan",
         *,
         agent: IrExpr | None = None,
+        receiver: IrExpr | None = None,
     ) -> IrExpr:
         """Lower a builtin call node by dispatching on ``BuiltinKind``.
 
@@ -2125,7 +2126,9 @@ class _Lowerer:
                 # ``_explicit_builtin_target_type``).
                 target = self._explicit_builtin_target_type(call_node)
                 arg_ir = (
-                    self.lower_expr(call_node.args[0])
+                    receiver
+                    if receiver is not None
+                    else self.lower_expr(call_node.args[0])
                     if target is None
                     else self.lower_coerced(call_node.args[0], target)
                 )
@@ -2137,7 +2140,9 @@ class _Lowerer:
                 # present) and any supplied boolean display options.
                 target = self._explicit_builtin_target_type(call_node)
                 arg_ir = (
-                    self.lower_expr(call_node.args[0])
+                    receiver
+                    if receiver is not None
+                    else self.lower_expr(call_node.args[0])
                     if target is None
                     else self.lower_coerced(call_node.args[0], target)
                 )
@@ -2158,7 +2163,7 @@ class _Lowerer:
 
             case BuiltinKind.PARSE_JSON:
                 # parse_json(text) — arg is statically text; lower without coercion.
-                arg_ir = self.lower_expr(call_node.args[0])
+                arg_ir = receiver if receiver is not None else self.lower_expr(call_node.args[0])
                 return IrParseJson(location=loc, value=arg_ir)
 
             case BuiltinKind.RESOURCE | BuiltinKind.RESOURCE_DIR:
@@ -2176,7 +2181,11 @@ class _Lowerer:
                 # explicit scalar-widening override (e.g. copy::[decimal](5)) takes
                 # effect, matching how any other call site coerces its arguments.
                 result_type = self._node_type(call_node.node_id)
-                arg_ir = self.lower_coerced(call_node.args[0], result_type)
+                arg_ir = (
+                    receiver
+                    if receiver is not None
+                    else self.lower_coerced(call_node.args[0], result_type)
+                )
                 copy_kind = CopyKind.SHALLOW if kind is BuiltinKind.SHALLOW_COPY else CopyKind.DEEP
                 return IrCopyValue(location=loc, kind=copy_kind, value=arg_ir)
 
@@ -2216,12 +2225,13 @@ class _Lowerer:
             if isinstance(callee, FieldAccess):
                 method = self._checked.method_selection_for(callee.node_id)
                 if method is not None and method.is_builtin:
-                    return self._lower_builtin_call(
-                        builtin_kind,
-                        call_node,
-                        span,
-                        agent=self.lower_expr(callee.obj),
-                    )
+                    method_kind = BUILTIN_CALL_NAMES[method.name]
+                    receiver = self.lower_expr(callee.obj)
+                    if method_kind in {BuiltinKind.ASK, BuiltinKind.ASK_REQUEST}:
+                        return self._lower_builtin_call(
+                            method_kind, call_node, span, agent=receiver
+                        )
+                    return self._lower_builtin_call(method_kind, call_node, span, receiver=receiver)
             else:
                 return self._lower_builtin_call(builtin_kind, call_node, span)
 

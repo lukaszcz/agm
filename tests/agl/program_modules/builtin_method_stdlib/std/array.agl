@@ -1,0 +1,3 @@
+def array[E]::size(self) -> int = 2
+def array[E]::first(self) = self[0]
+builtin def array[E]::copy(self) -> array[E]

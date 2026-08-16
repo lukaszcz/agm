@@ -41,10 +41,12 @@ Algorithm
    annotations for top-level ``FuncDef`` declarations in every module,
    producing a declaration-node-id-keyed signature table.
 
-3. **Import-SCC candidate inference** — consume the preserved loader import
-   SCCs in reverse topological order. Each candidate function dependency SCC
-   publishes only closed unannotated signatures; one import cycle builds a
-   single cross-module function graph.
+3. **Import-SCC candidate inference** — consume the loader's derived
+   inference SCCs in reverse topological order. Ambient builtin-method modules
+   are ordering-only dependencies, so their closed method signatures publish
+   before consuming program modules without becoming source imports. Each
+   candidate function dependency SCC publishes only closed unannotated
+   signatures; one resulting cycle builds a single cross-module function graph.
 
 4. **Authoritative per-module type-check** — after every signature is concrete,
    recheck each module body with its module-aware
@@ -792,7 +794,7 @@ def _prepare_module_environment(
     - Explicit function signatures from the whole-program pre-pass
       (``program_func_sig_table``), seeded before any body is checked. Their
       globally unique ``node_id`` keys make declared cross-module calls
-      independent of per-module checking order. The import-SCC candidate
+      independent of per-module checking order. The candidate-inference SCC
       coordinator adds unannotated signatures after their dependency SCCs close.
     - ``type_table``: the single ``TypeTable`` instance shared by every module
       in this program (the same one built and dual-written in the type pre-pass),
@@ -927,7 +929,7 @@ def check_program(
 
     # Phase 2: build the program-wide explicit function-signature table.
     # It resolves declared header type expressions without checking bodies;
-    # unannotated functions are inferred import SCC by import SCC in Phase 3.
+    # unannotated functions are inferred inference SCC by inference SCC in Phase 3.
     program_func_sig_table = _build_program_func_sig_table(
         resolved,
         program_type_table,
@@ -947,8 +949,11 @@ def check_program(
 
     # Phase 3: build every module environment before candidate inference. The
     # completed explicit headers are present in every environment, while each
-    # loader-provided import SCC later adds only its closed candidates.
-    ordered_mids = tuple(mid for import_scc in resolved.import_sccs for mid in import_scc)
+    # derived inference SCC later adds only its closed candidates. Ambient
+    # builtin-method modules are ordering-only dependencies, leaving the
+    # loader's source graph and its SCCs unchanged for other consumers.
+    inference_sccs = resolved.graph.inference_sccs
+    ordered_mids = tuple(mid for inference_scc in inference_sccs for mid in inference_scc)
     module_envs: dict[ModuleId, TypeEnvironment] = {}
     for mid in ordered_mids:
         module_envs[mid] = _prepare_module_environment(
@@ -980,13 +985,13 @@ def check_program(
     validate_builtin_declaration_uniqueness(program_modules)
     validate_method_declaration_collisions(program_modules, shared_type_table)
 
-    # Candidate discovery follows the preserved reverse-topological import SCC
-    # sequence. A cycle is one cross-module function graph; a dependency SCC's
-    # concrete records are available before its importers are considered. Each
-    # SCC's closed signatures are published only into itself and the later SCCs
-    # (their potential importers); earlier SCCs are dependencies that cannot
-    # reference it, so registering there would be wasted work.
-    for index, import_scc in enumerate(resolved.import_sccs):
+    # Candidate discovery follows the derived reverse-topological inference
+    # SCC sequence. A cycle is one cross-module function graph; a dependency
+    # SCC's concrete records are available before its importers are considered.
+    # Each SCC's closed signatures are published only into itself and the later
+    # SCCs (their potential importers); earlier SCCs are dependencies that
+    # cannot reference it, so registering there would be wasted work.
+    for index, inference_scc in enumerate(inference_sccs):
         candidates = tuple(
             CandidateModule(
                 resolved.modules[mid].resolved,
@@ -994,10 +999,10 @@ def check_program(
                 capabilities,
                 mid,
             )
-            for mid in import_scc
+            for mid in inference_scc
         )
         publication_envs = tuple(
-            module_envs[mid] for later_scc in resolved.import_sccs[index:] for mid in later_scc
+            module_envs[mid] for later_scc in inference_sccs[index:] for mid in later_scc
         )
         for record in infer_module_component_candidates(
             ModuleCandidateComponent(candidates, publication_envs)

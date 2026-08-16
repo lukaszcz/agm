@@ -32,9 +32,10 @@ from agm.agl.lexer import spaced_qualifier_collector
 from agm.agl.modules.errors import (
     ImportEntryError,
     MissingExternCompanion,
+    ModuleNotFound,
     PackageImportVisibilityError,
 )
-from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_BUILTIN_METHODS_ID, STD_CORE_ID, ModuleId
 from agm.agl.modules.resolver import expand_wildcard, resolve_module
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import AglSyntaxError, build_infix_operator_table, resolve_infix_chains
@@ -148,17 +149,48 @@ class ModuleGraph:
         Direct dependency edges for every loaded module. This includes both
         imports and exports, after wildcard expansion, and is the authoritative
         reachability relation for graph consumers.
+    ambient_modules:
+        Standard-library modules loaded through the optional builtin-method
+        registry. They are linked and initialized for every selected program,
+        but contribute no names to an entry's import environment. They are
+        virtual dependencies only for :attr:`inference_sccs`; :attr:`adjacency`
+        and :attr:`sccs` retain source import/export graph semantics.
     """
 
     modules: dict[ModuleId, LoadedModule]
     entry_id: ModuleId
     sccs: tuple[tuple[ModuleId, ...], ...]
     adjacency: dict[ModuleId, tuple[ModuleId, ...]]
+    ambient_modules: frozenset[ModuleId] = frozenset()
     roots: RootSet = field(default_factory=lambda: RootSet(roots=frozenset()))
     # Unambiguous root-level user fixities visible while assembling the entry.
     # REPL promotion uses this to retain declarations with relative priorities
     # without retaining imported operators as session declarations.
     entry_infix_ambient: dict[str, tuple[int, syntax.InfixAssoc]] = field(default_factory=dict)
+
+    @property
+    def inference_sccs(self) -> tuple[tuple[ModuleId, ...], ...]:
+        """Return dependency-ordered SCCs with ambient methods available first.
+
+        Ambient builtin-method modules do not form source import edges: adding
+        them to :attr:`adjacency` would expose their routes and free functions
+        to user scope and would alter ordinary graph consumers. Candidate
+        inference nevertheless needs their closed method signatures before it
+        processes any consuming module. This derived graph adds those ordering-
+        only edges while retaining every real edge, so any resulting cycle is
+        still inferred as one component.
+        """
+        if not self.ambient_modules:
+            return self.sccs
+        ambient = tuple(sorted(self.ambient_modules, key=_mid_sort_key))
+        inference_adjacency = {
+            mid: [
+                *targets,
+                *(ambient if mid not in self.ambient_modules else ()),
+            ]
+            for mid, targets in self.adjacency.items()
+        }
+        return _tarjan_sccs(inference_adjacency)
 
     def resource_root_for(self, module_id: ModuleId) -> Path | None:
         """Return the filesystem anchor used by a module's resource calls."""
@@ -252,6 +284,29 @@ def _synthetic_stdlib_import(node_id: int) -> ImportDecl:
         items=(),
         span=span,
         node_id=node_id,
+    )
+
+
+def _ambient_builtin_methods_import() -> ImportDecl:
+    """Return the loader-only edge to the optional builtin-method registry."""
+    span = SourceSpan(
+        start_line=0,
+        start_col=0,
+        end_line=0,
+        end_col=0,
+        start_offset=0,
+        end_offset=0,
+        source=SourceId(label="<builtin-method-registry>"),
+    )
+    return ImportDecl(
+        module_path=STD_BUILTIN_METHODS_ID.segments,
+        wildcard=False,
+        is_open=False,
+        alias=None,
+        mode=ImportMode.ALL,
+        items=(),
+        span=span,
+        node_id=-1,
     )
 
 
@@ -839,6 +894,19 @@ def _load_into_graph(
 
     _resolve_dependencies(ENTRY_ID, (*entry_loaded.imports, *entry_loaded.export_decls))
 
+    ambient_roots: set[ModuleId] = set()
+    if default_stdlib:
+        registry_decl = _ambient_builtin_methods_import()
+        try:
+            registry_path = resolve_module(STD_BUILTIN_METHODS_ID, roots, span=registry_decl.span)
+        except ModuleNotFound:
+            # The registry was introduced after existing standard libraries.
+            # Its absence deliberately preserves their current module set.
+            pass
+        else:
+            queue.append((STD_BUILTIN_METHODS_ID, registry_decl, registry_path))
+            ambient_roots.add(STD_BUILTIN_METHODS_ID)
+
     while queue:
         mid, decl, canon_path = queue.popleft()
 
@@ -885,11 +953,20 @@ def _load_into_graph(
             _resolve_dependencies(mid, (*loaded.imports, *loaded.export_decls))
 
     sccs = _tarjan_sccs(adj)
+    ambient_modules: set[ModuleId] = set()
+    pending = list(ambient_roots)
+    while pending:
+        current = pending.pop()
+        if current in ambient_modules:
+            continue
+        ambient_modules.add(current)
+        pending.extend(adj[current])
     graph = ModuleGraph(
         modules=modules,
         entry_id=ENTRY_ID,
         sccs=sccs,
         adjacency={mid: tuple(targets) for mid, targets in adj.items()},
+        ambient_modules=frozenset(ambient_modules),
         roots=roots,
     )
     resolved_graph = _resolve_graph_infix(graph, session_infix)

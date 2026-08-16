@@ -208,6 +208,7 @@ from agm.agl.typecheck.function_inference import (
     CandidateSession,
     FunctionSignatureRecord,
     ModuleCandidateComponent,
+    ResolvedReceiver,
     infer_module_component_candidates,
     register_method_header,
     resolve_function_header,
@@ -252,23 +253,15 @@ _ExternTargets = tuple[_ExternTarget, ...]
 
 @dataclass(frozen=True, slots=True)
 class _SelectedBuiltinMethod:
-    """A call-only host method (``ask``/``ask-request``) selected by member access.
+    """A call-only host method selected by member access.
 
-    Such a method has no first-class function value: only the member-call path
-    can consume the selection, and its own builtin rule owns the call's type
-    arguments and result. Deliberately not a ``Type``, so that member access
-    returns ``Type | _SelectedBuiltinMethod`` and the type checker itself makes
-    every consumer say which of the two it accepts. Non-call positions route
-    through :meth:`_Checker._require_field_access_type`, which rejects the
-    selection; nothing publishes it as a node type.
-
-    ``receiver_type`` is the checked type of the object the method was
-    selected from. The receiver IS the agent a receiver-form ``ask``/
-    ``ask-request`` dispatches to, so the built-in rule needs it to hold the
-    receiver to the same requirement as an explicit ``agent`` argument.
+    Host methods have no linked AgL body. ``ask`` and ``ask-request`` own
+    specialized agent rules; other supported routes bind their declared
+    signature before lowering reuses the underlying builtin with the receiver
+    as its value argument.
     """
 
-    name: str
+    method: MethodDef
     receiver_type: Type
 
 
@@ -718,8 +711,10 @@ class _Checker:
             self._validate_extern_signature(node, sig)
             self._env.register_extern_node_id(node.node_id)
         self._validate_program_signature(node, sig)
-        self._register_funcdef_signature(node, sig, func_type, is_method=is_method)
-        register_method_header(self._env, node, sig, receiver)
+        self._register_funcdef_signature(
+            node, sig, func_type, is_method=is_method, receiver=receiver
+        )
+        register_method_header(self._env, node, sig, receiver, self._module_id)
 
     def _validate_funcdef_header(self, node: FuncDef, *, is_method: bool) -> None:
         """Validate declaration-level properties that do not need a return type.
@@ -827,17 +822,18 @@ class _Checker:
             raise AglTypeError(banned_message, span=span)
 
     def _register_funcdef_signature(
-        self, node: FuncDef, sig: FunctionSignature, func_type: FunctionType, *, is_method: bool
+        self,
+        node: FuncDef,
+        sig: FunctionSignature,
+        func_type: FunctionType,
+        *,
+        is_method: bool,
+        receiver: ResolvedReceiver | None,
     ) -> None:
         """Register a resolved ``def`` signature in every function side table."""
-        if node.is_builtin and not (
-            is_method
-            and (
-                node.receiver_type is not None
-                or tuple(segment.name for segment in node.scope_path)
-                in {(name,) for name in ("text", "json", "int", "decimal", "bool")}
-            )
-        ):
+        if node.is_builtin and receiver is not None and receiver.builtin_constructor is not None:
+            self._validate_builtin_receiver_signature(node, sig, receiver)
+        elif node.is_builtin:
             own_path = tuple(segment.name for segment in node.scope_path)
             # A method's final scope segment names its receiver. Its receiver
             # and sibling types live in the enclosing scope, so remove that
@@ -858,6 +854,51 @@ class _Checker:
             )
         self._env.register_function_signature_by_node_id(node.node_id, sig)
         self._env.set_binding_type(node.node_id, func_type)
+
+    def _validate_builtin_receiver_signature(
+        self, node: FuncDef, sig: FunctionSignature, receiver: ResolvedReceiver
+    ) -> None:
+        """Validate a builtin-receiver declaration against a host call route."""
+        kind = BUILTIN_CALL_NAMES.get(node.name)
+        if kind not in {
+            BuiltinKind.PRINT,
+            BuiltinKind.RENDER,
+            BuiltinKind.COPY,
+            BuiltinKind.SHALLOW_COPY,
+            BuiltinKind.PARSE_JSON,
+        }:
+            raise AglTypeError(
+                f"Builtin receiver method '{node.name}' has no host call route.", span=node.span
+            )
+        if kind is BuiltinKind.PARSE_JSON and not isinstance(receiver.owner, TextType):
+            raise AglTypeError(
+                "Builtin receiver method 'parse_json' requires a text receiver.", span=node.span
+            )
+        result: Type
+        if kind in {BuiltinKind.COPY, BuiltinKind.SHALLOW_COPY}:
+            result = receiver.owner
+        elif kind is BuiltinKind.PRINT:
+            result = UnitType()
+        elif kind is BuiltinKind.RENDER:
+            result = TextType()
+        else:
+            result = JsonType()
+        expected = FunctionSignature(
+            params=(
+                ParamSpec(
+                    name="self",
+                    type=receiver.owner,
+                    kind=ParamKind.POSITIONAL_ONLY,
+                    has_default=False,
+                ),
+            ),
+            result=result,
+            type_params=sig.type_params[: receiver.type_param_arity],
+        )
+        if not _signature_matches(sig, expected):
+            raise AglTypeError(
+                f"Builtin receiver method '{node.name}' has an invalid signature.", span=node.span
+            )
 
     # ------------------------------------------------------------------
     # Program-level check
@@ -3060,18 +3101,23 @@ class _Checker:
             if not isinstance(callee_type, _SelectedBuiltinMethod):
                 self._record_node_type(field_access.node_id, callee_type)
         if isinstance(callee_type, _SelectedBuiltinMethod):
-            # The record is always present: ``_resolve_call`` classifies every
-            # member call whose field spells a built-in name, speculatively,
-            # because scope cannot yet know which method the name selects. And
-            # it is always one of these two kinds, because header validation
-            # (``_register_funcdef_signature``) admits no other builtin method.
-            kind = self._resolved.builtin_calls[node.node_id]
-            if kind == BuiltinKind.ASK:
+            selected_method = callee_type.method
+            kind = BUILTIN_CALL_NAMES[selected_method.name]
+            if kind is BuiltinKind.ASK:
                 return self._builtins.check_ask(
                     node, expected=expected, receiver_type=callee_type.receiver_type
                 )
-            # ASK_REQUEST
-            return self._builtins.check_ask_request(node, receiver_type=callee_type.receiver_type)
+            if kind is BuiltinKind.ASK_REQUEST:
+                return self._builtins.check_ask_request(
+                    node, receiver_type=callee_type.receiver_type
+                )
+            callee_type = self._bound_method_type(
+                selected_method,
+                callee_type.receiver_type,
+                type_args=node.type_args or None,
+                expected=expected,
+                span=field_access.span,
+            )
         method = self._method_selections.get(field_access.node_id)
         if method is None:
             return self._check_value_call(
@@ -4142,7 +4188,7 @@ class _Checker:
     def _bound_method_type(
         self,
         method: MethodDef,
-        receiver: RecordType | EnumType | ExceptionType,
+        receiver: Type,
         *,
         type_args: tuple[TypeExpr, ...] | None,
         expected: Type | None,
@@ -4160,6 +4206,14 @@ class _Checker:
                 )
                 if isinstance(template_arg, TypeVarType)
             }
+        elif isinstance(receiver_template, ArrayType):
+            assert isinstance(receiver, ArrayType)
+            assert isinstance(receiver_template.elem, TypeVarType)
+            substitutions[receiver_template.elem.name] = receiver.elem
+        elif isinstance(receiver_template, DictType):
+            assert isinstance(receiver, DictType)
+            assert isinstance(receiver_template.value, TypeVarType)
+            substitutions[receiver_template.value.name] = receiver.value
         own_type_params = method.type_params[method.receiver_type_param_arity :]
         engine = self._active_inference_engine()
         # Freshen the method's own type parameters in the same substitution pass
@@ -4254,7 +4308,7 @@ class _Checker:
         """
         if isinstance(typ, _SelectedBuiltinMethod):
             raise AglTypeError(
-                f"Built-in function '{typ.name}' cannot be used as a value.", span=node.span
+                f"Built-in function '{typ.method.name}' cannot be used as a value.", span=node.span
             )
         return typ
 
@@ -4301,39 +4355,42 @@ class _Checker:
 
             if isinstance(obj_type, (RecordType, EnumType, ExceptionType)):
                 method = self._env.type_table.lookup_method(obj_type, node.field)
-                if method is not None:
-                    self._record_method_selection(node.node_id, method)
-                    if method.is_builtin:
-                        # Host methods are call-only and their dispatch-specific
-                        # checker owns explicit type arguments and result typing.
-                        # Do not freshen the declared generic result merely to
-                        # discover the selected method; return the selection
-                        # itself rather than a fabricated function type.
-                        return _SelectedBuiltinMethod(name=method.name, receiver_type=obj_type)
-                    bound = self._bound_method_type(
-                        method, obj_type, type_args=type_args, expected=expected, span=node.span
-                    )
-                    if self._env.is_extern_node_id(method.decl_node_id):
-                        self._set_extern_expr_targets(
-                            node.node_id,
-                            (
-                                _ExternTarget(
-                                    name=method.name,
-                                    result_type=bound.result,
-                                    decl_node_id=method.decl_node_id,
-                                    module_id=method.module_id,
-                                ),
+            else:
+                method = self._env.type_table.lookup_builtin_method(obj_type, node.field)
+            if method is not None:
+                self._record_method_selection(node.node_id, method)
+                if method.is_builtin:
+                    # Host methods are call-only and their dispatch-specific
+                    # checker owns explicit type arguments and result typing.
+                    # Do not freshen the declared generic result merely to
+                    # discover the selected method; return the selection
+                    # itself rather than a fabricated function type.
+                    return _SelectedBuiltinMethod(method=method, receiver_type=obj_type)
+                bound = self._bound_method_type(
+                    method, obj_type, type_args=type_args, expected=expected, span=node.span
+                )
+                if self._env.is_extern_node_id(method.decl_node_id):
+                    self._set_extern_expr_targets(
+                        node.node_id,
+                        (
+                            _ExternTarget(
+                                name=method.name,
+                                result_type=bound.result,
+                                decl_node_id=method.decl_node_id,
+                                module_id=method.module_id,
                             ),
-                        )
-                    return bound
+                        ),
+                    )
+                return bound
+            if isinstance(obj_type, (RecordType, EnumType, ExceptionType)):
                 raise AglTypeError(
                     f"{obj_type.kind.capitalize()} '{obj_type.name}' has no field or method "
                     f"'{node.field}'.",
                     span=node.span,
                 )
-
             raise AglTypeError(
-                f"Member access requires a record, enum, or exception value; got '{obj_type!r}'.",
+                f"Member access requires a record, enum, exception, or built-in receiver; "
+                f"got '{obj_type!r}'.",
                 span=node.span,
             )
         except AglTypeError as exc:

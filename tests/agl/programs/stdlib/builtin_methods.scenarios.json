@@ -1,0 +1,22 @@
+{
+  "scenarios": [
+    {
+      "name": "direct_structural_and_scalar_methods_are_ambient",
+      "stdlib_root": "program_modules/builtin_method_stdlib",
+      "params": {"mode": 1},
+      "expect": {
+        "stdout": "2\n3\n1\n<core>\n\"hello\"\n1\ntrue\nnull\n3\n-3\n1.5\n-1.5\ntrue\n8\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "bound_methods_flow_through_generic_functions",
+      "stdlib_root": "program_modules/builtin_method_stdlib",
+      "params": {"mode": 2},
+      "expect": {
+        "stdout": "[bound]\npipe!\n8\n9\n9\ngeneric\n",
+        "calls": {}
+      }
+    }
+  ]
+}

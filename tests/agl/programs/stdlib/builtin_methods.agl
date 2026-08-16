@@ -1,0 +1,37 @@
+# Builtin receiver methods come from the local standard-library graph even
+# though this entry imports none of their owning modules.
+param mode: int
+
+def apply[A, B](value: A, f: A -> B) -> B = f(value)
+def array_first[E](values: array[E]) -> E = values.first()
+def inferred_array_first[E](values: array[E]) = values.first()
+def dict_value[V](values: dict[text, V]) -> V = values.value()
+
+program def main() =
+  if mode == 1 =>
+    let values = [3, 4]
+    let metadata = {"answer": 7}
+    let raw: json = null
+    print(values.size())
+    print(values.copy()[0])
+    print(metadata.size())
+    print("core".surround("<", ">"))
+    print("hello".render())
+    print("1".parse_json())
+    true.print()
+    print(raw.kind())
+    print((-3).abs())
+    print((-3).copy())
+    print((-1.5).abs())
+    print((-1.5).shallow_copy())
+    print(false.negated())
+    print(4.extern_double())
+  else =>
+    let surround = "bound".surround
+    let append = "pipe".append
+    print(surround("[", "]"))
+    print(apply("!", append))
+    print(array_first([8]))
+    print(inferred_array_first([9]))
+    print([9].first())
+    print(dict_value({"value": "generic"}))

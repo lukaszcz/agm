@@ -119,9 +119,9 @@ header-ordering violation it is, since the block it now sits in is not one the
 source wrote.
 
 Program resolution extends this pass across modules and preserves the loader's immutable,
-reverse-topological import-SCC sequence on `ResolvedProgram`. Typecheck consumes that exact sequence
-to publish closed inferred function signatures from dependency SCCs before importers, without
-rebuilding the module graph. See [modules.md](../modules.md).
+reverse-topological import-SCC sequence on `ResolvedProgram`. Typecheck derives its candidate-
+inference ordering from that sequence by adding ambient builtin-method dependencies, while scope
+and every ordinary graph consumer continue to use the original source graph. See [modules.md](../modules.md).
 
 ## Code Entry Points
 

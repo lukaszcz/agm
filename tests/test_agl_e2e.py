@@ -173,7 +173,7 @@ def _run_program(
     )
     entry_path: Path | None = None
     roots: Any | None = None
-    if module_roots:
+    if module_roots or "stdlib_root" in scenario:
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(

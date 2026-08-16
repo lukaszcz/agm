@@ -23,8 +23,9 @@ representation shared by records, enums, and exceptions.
 ``type_args`` into those templates and memoize the result per handle;
 ``TypeTable.exception_fields`` has no ``type_args`` to substitute but instead
 flattens the ``extends`` base chain into one field mapping. The table also
-keeps plain ``MethodDef`` data keyed by nominal owner identity; exception method lookup
-uses the same base-chain flattening and cache discipline as exception fields.
+keeps plain ``MethodDef`` data keyed by nominal owner identity or by a built-in
+receiver constructor; exception method lookup uses the same base-chain
+flattening and cache discipline as exception fields.
 
 ``comparable_types``/``_reaches_non_data`` live here rather than in
 ``semantics.types`` because their record/enum/exception arms consult the
@@ -108,7 +109,7 @@ NominalOwner = RecordType | EnumType | ExceptionType
 
 @dataclass(frozen=True, slots=True)
 class MethodDef:
-    """Plain declaration data for one method owned by a nominal type.
+    """Plain declaration data for one nominal or built-in receiver method.
 
     ``module_id``/``scope_path``/``name`` and ``decl_node_id`` identify the
     declared function, not its owner: a root ``Point`` method ``Point::move``
@@ -282,6 +283,7 @@ class TypeTable:
         # Exception method maps flatten inherited entries and therefore need
         # the same whole-cache invalidation as exception fields.
         self._methods: dict[DeclId, dict[str, MethodDef]] = {}
+        self._builtin_methods: dict[str, dict[str, MethodDef]] = {}
         self._exception_methods_cache: dict[DeclId, Mapping[str, MethodDef]] = {}
         # Whole-table non-data-reachability fixpoint (see
         # :meth:`nominal_reaches_non_data`), computed lazily on first use and
@@ -428,6 +430,42 @@ class TypeTable:
         neither frontend package is imported here.
         """
         self._put_method(owner.decl_id, method)
+
+    def register_builtin_method(self, constructor: str, method: MethodDef) -> None:
+        """Register *method* under a built-in receiver type constructor.
+
+        Unlike nominal owners, built-in types have no declaration identity.
+        Their methods are consequently indexed by their stable language-level
+        constructor spelling (``array``, ``dict``, or one of the scalar names).
+        """
+        methods = self._builtin_methods.setdefault(constructor, {})
+        methods[method.name] = method
+
+    @staticmethod
+    def _builtin_constructor(owner: Type) -> str | None:
+        """Return the method-table key for a structural or scalar built-in type."""
+        if isinstance(owner, ArrayType):
+            return "array"
+        if isinstance(owner, DictType):
+            return "dict"
+        if isinstance(owner, TextType):
+            return "text"
+        if isinstance(owner, JsonType):
+            return "json"
+        if isinstance(owner, IntType):
+            return "int"
+        if isinstance(owner, DecimalType):
+            return "decimal"
+        if isinstance(owner, BoolType):
+            return "bool"
+        return None
+
+    def lookup_builtin_method(self, owner: Type, name: str) -> MethodDef | None:
+        """Return the built-in receiver method selected by *owner* and *name*."""
+        constructor = self._builtin_constructor(owner)
+        if constructor is None:
+            return None
+        return self._builtin_methods.get(constructor, {}).get(name)
 
     def methods_for(self, owner: NominalOwner) -> Mapping[str, MethodDef]:
         """Return methods available on *owner*, including exception bases.
@@ -1119,6 +1157,8 @@ class TypeTable:
         for decl_id, methods in other._methods.items():
             for method in methods.values():
                 self._put_method(decl_id, method)
+        for constructor, methods in other._builtin_methods.items():
+            self._builtin_methods.setdefault(constructor, {}).update(methods)
 
 
 def decl_def_sort_key(typedef: TypeDef) -> tuple[tuple[str, ...], tuple[str, ...], str]:

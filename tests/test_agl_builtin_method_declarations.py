@@ -61,25 +61,25 @@ def _signature_for(checked: CheckedProgram, module_path: str) -> FunctionSignatu
     ("module", "source"),
     (
         ("std/array", "def array[E]::ordinary(self) -> array[E] = self\n"),
-        ("std/array", "builtin def array[E]::host(self) -> array[E]\n"),
+        ("std/array", "builtin def array[E]::copy(self) -> array[E]\n"),
         ("std/array", "extern def array[E]::external(self) -> array[E]\n"),
         ("std/dict", "def dict[text, V]::ordinary(self) -> dict[text, V] = self\n"),
-        ("std/dict", "builtin def dict[text, V]::host(self) -> dict[text, V]\n"),
+        ("std/dict", "builtin def dict[text, V]::copy(self) -> dict[text, V]\n"),
         ("std/dict", "extern def dict[text, V]::external(self) -> dict[text, V]\n"),
         ("std/text", "def text::ordinary(self) -> text = self\n"),
-        ("std/text", "builtin def text::host(self) -> text\n"),
+        ("std/text", "builtin def text::copy(self) -> text\n"),
         ("std/text", "extern def text::external(self) -> text\n"),
         ("std/json", "def json::ordinary(self) -> json = self\n"),
-        ("std/json", "builtin def json::host(self) -> json\n"),
+        ("std/json", "builtin def json::copy(self) -> json\n"),
         ("std/json", "extern def json::external(self) -> json\n"),
         ("std/math", "def int::ordinary(self) -> int = self\n"),
-        ("std/math", "builtin def int::host(self) -> int\n"),
+        ("std/math", "builtin def int::copy(self) -> int\n"),
         ("std/math", "extern def int::external(self) -> int\n"),
         ("std/math", "def decimal::ordinary(self) -> decimal = self\n"),
-        ("std/math", "builtin def decimal::host(self) -> decimal\n"),
+        ("std/math", "builtin def decimal::copy(self) -> decimal\n"),
         ("std/math", "extern def decimal::external(self) -> decimal\n"),
         ("std/math", "def bool::ordinary(self) -> bool = self\n"),
-        ("std/math", "builtin def bool::host(self) -> bool\n"),
+        ("std/math", "builtin def bool::copy(self) -> bool\n"),
         ("std/math", "extern def bool::external(self) -> bool\n"),
     ),
 )
@@ -91,6 +91,37 @@ def test_owning_stdlib_modules_accept_builtin_method_declarations(
     discovery = PipelineDriver().discover_params(prepared)
 
     assert discovery.checked is not None, discovery.diagnostics
+
+
+def test_builtin_receiver_host_declaration_requires_a_supported_route(tmp_path: Path) -> None:
+    prepared = _prepare_stdlib_module(
+        tmp_path,
+        "std/text",
+        "builtin def text::host(self) -> text\n",
+    )
+
+    discovery = PipelineDriver().discover_params(prepared)
+
+    assert discovery.checked is None
+    assert discovery.diagnostics
+
+
+@pytest.mark.parametrize(
+    ("module", "source"),
+    (
+        ("std/math", "builtin def int::parse_json(self) -> json\n"),
+        ("std/math", "builtin def int::copy(self) -> decimal\n"),
+    ),
+)
+def test_builtin_receiver_host_declaration_must_match_its_route(
+    tmp_path: Path, module: str, source: str
+) -> None:
+    prepared = _prepare_stdlib_module(tmp_path, module, source)
+
+    discovery = PipelineDriver().discover_params(prepared)
+
+    assert discovery.checked is None
+    assert discovery.diagnostics
 
 
 def test_builtin_receiver_wildcard_uses_a_private_rigid_type_parameter(tmp_path: Path) -> None:
@@ -158,7 +189,7 @@ def test_scalar_builtin_receiver_has_its_declared_type(tmp_path: Path) -> None:
     prepared = _prepare_stdlib_module(
         tmp_path,
         "std/math",
-        "builtin def int::abs(self) -> int\n",
+        "builtin def int::copy(self) -> int\n",
     )
 
     discovery = PipelineDriver().discover_params(prepared)

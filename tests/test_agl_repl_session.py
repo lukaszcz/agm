@@ -786,6 +786,13 @@ class TestScopedBindingRetention:
         assert result.ok, result.diagnostics
         assert result.value == IntValue(6)
 
+    @pytest.mark.parametrize("binding", ["let", "var"])
+    def test_use_selects_scoped_binding_declared_in_same_entry(self, binding: str) -> None:
+        result = ReplSession().eval_entry(f"use A::{{x}}\n{binding} A::x = 1\nx")
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(1)
+
     def test_retained_use_sees_a_member_promoted_by_a_later_entry(self) -> None:
         """A retained use resolves a member a later entry adds to its target."""
         s = ReplSession()

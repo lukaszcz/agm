@@ -547,7 +547,7 @@ class _Resolver:
             self._resolve_use_context(program.body.items)
         else:
             self._resolve_block_items(program.body.items)
-        self._validate_local_use_contributions()
+            self._validate_local_use_contributions()
 
         self._at_root = False
         self._pop_scope()

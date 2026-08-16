@@ -10,19 +10,24 @@ import pytest
 from agm.agent.spec import AGENT_SPECS
 from agm.agl import PipelineDriver
 from agm.agl.runtime.agents import decode_agent_value, value_driven_agent_factory
-from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS
+from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS, create_seeded_type_table
 from agm.agl.semantics.types import TextType
 from agm.agl.semantics.values import EnumValue
 from tests._agl_helpers import agent_value, run_inline_command
 from tests.conftest import FakeAgentTransport
 
 
+def _agent_member_fields() -> dict[str, dict[str, object]]:
+    table = create_seeded_type_table()
+    return {
+        member.name: dict(table.record_fields(member))
+        for member in BUILTIN_PRELUDE_TYPE_DEFS["Agent"].members
+    }
+
+
 def test_host_specs_match_declared_agent_variants() -> None:
     """The host decoder catalog must track the checked ``Agent`` prelude shape."""
-    declared = {
-        variant: tuple(name for name, _ in payload)
-        for variant, payload in BUILTIN_PRELUDE_TYPE_DEFS["Agent"].variants
-    }
+    declared = {variant: tuple(payload) for variant, payload in _agent_member_fields().items()}
 
     assert set(AGENT_SPECS) == set(declared)
     for variant, spec_cls in AGENT_SPECS.items():
@@ -33,14 +38,14 @@ def test_host_specs_match_declared_agent_variants() -> None:
         assert all(hints[field.name] is str for field in spec_fields)
     assert all(
         isinstance(field_type, TextType)
-        for _, payload in BUILTIN_PRELUDE_TYPE_DEFS["Agent"].variants
-        for _, field_type in payload
+        for payload in _agent_member_fields().values()
+        for field_type in payload.values()
     )
 
 
 def test_decode_accepts_every_declared_agent_variant() -> None:
-    for variant, payload in BUILTIN_PRELUDE_TYPE_DEFS["Agent"].variants:
-        value = agent_value(variant, **{name: name for name, _ in payload})
+    for variant, payload in _agent_member_fields().items():
+        value = agent_value(variant, **{name: name for name in payload})
 
         assert isinstance(decode_agent_value(value), AGENT_SPECS[variant])
 

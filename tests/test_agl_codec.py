@@ -721,7 +721,7 @@ class TestRecursiveSchemaDerivation:
             name="Tree",
             module_id=ENTRY_ID,
             type_params=("T",),
-            variants=(
+            members=(
                 ("Leaf", ()),
                 (
                     "Node",
@@ -836,7 +836,7 @@ class TestRecursiveSchemaDerivation:
             name="Perfect",
             module_id=ENTRY_ID,
             type_params=("T",),
-            variants=(
+            members=(
                 ("Single", (("value", TypeVarType("T")),)),
                 (
                     "Succ",
@@ -1074,7 +1074,7 @@ class TestRecursiveDecodeDerivation:
             name="Tree",
             module_id=ENTRY_ID,
             type_params=("T",),
-            variants=(
+            members=(
                 ("Leaf", ()),
                 (
                     "Node",
@@ -1147,7 +1147,7 @@ class TestRecursiveDecodeDerivation:
             name="Perfect",
             module_id=ENTRY_ID,
             type_params=("T",),
-            variants=(
+            members=(
                 ("Single", (("value", TypeVarType("T")),)),
                 (
                     "Succ",

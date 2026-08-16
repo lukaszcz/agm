@@ -31,7 +31,7 @@ from agm.agl.lower.lowerer import (
 from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
-from agm.agl.semantics.types import ExceptionType, RecordType
+from agm.agl.semantics.types import EnumType, ExceptionType, RecordType
 from agm.agl.syntax.nodes import BuiltinVarDecl, FuncDef, static_items
 from agm.util.text import normalize_newlines
 
@@ -91,6 +91,18 @@ def lower_program(
         )
         module_source_ids[mid] = source_id
 
+    # Member records are semantic implementation details of their enclosing
+    # enum. They receive descriptors only so runtime identity remains complete,
+    # but must not be exposed as companion namespace leaves (where e.g.
+    # ``Step::Continue`` would overwrite ``Step.Continue``).
+    enum_member_ids = {
+        member.decl_id
+        for enum_def in type_table.entries()
+        if enum_def.kind == "enum"
+        for member in enum_def.members
+        if isinstance(member, RecordType)
+    }
+
     # Step 2: Build nominals from the authoritative TypeTable declarations.
     # Aliases do not have a TypeDef, so this also excludes their transparent
     # source spellings without comparing concatenated scope names. ``entries()``
@@ -103,7 +115,9 @@ def lower_program(
     # nominal lookup.
     for typedef in type_table.entries():
         nominal = NominalId(typedef.decl_node_id)
-        bears_name_path = type_table.is_current(typedef)
+        bears_name_path = (
+            type_table.is_current(typedef) and typedef.decl_node_id not in enum_member_ids
+        )
         if typedef.kind == "record":
             link.nominals[nominal] = NominalDescriptor(
                 nominal=nominal,
@@ -116,6 +130,8 @@ def lower_program(
                 bears_name_path=bears_name_path,
             )
         elif typedef.kind == "enum":
+            handle = typedef.handle()
+            assert isinstance(handle, EnumType)
             link.nominals[nominal] = NominalDescriptor(
                 nominal=nominal,
                 module_id=typedef.module_id,
@@ -124,8 +140,8 @@ def lower_program(
                 kind=NominalKind.ENUM,
                 fields=(),
                 variants=tuple(
-                    VariantDescriptor(name, tuple(field for field, _ in fields))
-                    for name, fields in typedef.variants
+                    VariantDescriptor(name, tuple(type_table.record_fields(member)))
+                    for name, member in type_table.enum_member_names(handle).items()
                 ),
                 bears_name_path=bears_name_path,
             )
@@ -180,8 +196,8 @@ def lower_program(
                     declared_name=typ.name,
                     kind=NominalKind.ENUM,
                     variants=tuple(
-                        VariantDescriptor(vname, tuple(fname for fname, _ in vfields))
-                        for vname, vfields in generic_typedef.variants
+                        VariantDescriptor(vname, tuple(type_table.record_fields(member)))
+                        for vname, member in type_table.enum_member_names(typ).items()
                     ),
                     bears_name_path=bears_name_path,
                 )

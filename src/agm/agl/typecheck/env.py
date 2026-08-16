@@ -46,7 +46,6 @@ from agm.agl.scope.symbols import (
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.persistent import PersistentDict
 from agm.agl.semantics.type_table import (
-    BUILTIN_PRELUDE_TYPE_DEFS,
     DeclKey,
     MethodDef,
     TypeTable,
@@ -776,15 +775,16 @@ class TypeEnvironment:
         # themselves carry no shape data.
         for prelude_name, prelude_type in BUILTIN_PRELUDE_TYPES.items():
             self._types[prelude_name] = prelude_type
-            typedef = BUILTIN_PRELUDE_TYPE_DEFS[prelude_name]
-            if typedef.kind == "record":
+            if isinstance(prelude_type, RecordType):
                 self._constructor_field_kinds[((STD_CORE_ID, (), prelude_name), None)] = tuple(
-                    (fname, ParamKind.STANDARD) for fname, _ in typedef.fields
+                    (fname, ParamKind.STANDARD)
+                    for fname in self._type_table.record_fields(prelude_type)
                 )
                 continue
-            for variant, vfields in typedef.variants:
+            assert isinstance(prelude_type, EnumType)
+            for variant, member in self._type_table.enum_member_names(prelude_type).items():
                 self._constructor_field_kinds[((STD_CORE_ID, (), prelude_name), variant)] = tuple(
-                    (fname, ParamKind.STANDARD) for fname, _ in vfields
+                    (fname, ParamKind.STANDARD) for fname in self._type_table.record_fields(member)
                 )
         # Exception constructor field kinds are NOT pre-registered here: each
         # exception's own fields honor their declared @pos/@std/@named marker
@@ -1344,12 +1344,6 @@ class TypeEnvironment:
                 field_type
                 for typedef in self._type_table.entries()
                 for _, field_type in typedef.fields
-            ),
-            *(
-                field_type
-                for typedef in self._type_table.entries()
-                for _, fields in typedef.variants
-                for _, field_type in fields
             ),
         ]
         if any(contains_inference_var(typ) for typ in types):
@@ -2158,7 +2152,7 @@ class TypeEnvironment:
         owner_qualifier = (form.owner_name or "",)
         return frozenset(
             variant
-            for variant in self.type_table.enum_variants(template.template)
+            for variant in self.type_table.enum_member_names(template.template)
             if qualifier_contributes(self._import_env, owner_qualifier, variant)
         )
 

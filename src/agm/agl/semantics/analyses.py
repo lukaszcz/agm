@@ -145,7 +145,14 @@ def compute_uninhabited(table: TypeTable) -> frozenset[DeclId]:
             if _decl_inhabited(typedef, inhabited, defs):
                 inhabited.add(decl_id)
                 changed = True
-    return frozenset(defs) - inhabited
+    member_ids = {
+        member.decl_id
+        for typedef in defs.values()
+        if typedef.kind == "enum"
+        for member in typedef.members
+        if isinstance(member, RecordType)
+    }
+    return frozenset(defs) - inhabited - member_ids
 
 
 def uninhabitable_message(kind: TypeDefKind, name: str) -> str:
@@ -183,8 +190,8 @@ def _body_inhabited(
 ) -> bool:
     if typedef.kind == "enum":
         return any(
-            all(_template_inhabited(t, env, inhabited, defs, stack=stack) for _fname, t in vfields)
-            for _vname, vfields in typedef.variants
+            _template_inhabited(member, env, inhabited, defs, stack=stack)
+            for member in typedef.members
         )
     if typedef.kind == "exception":
         return _exception_decl_inhabited(typedef, env, inhabited, defs, stack=stack)
@@ -379,7 +386,7 @@ def compute_non_data_reachability(table: TypeTable) -> NonDataReachability:
         changed = False
         for decl_id, typedef in defs.items():
             own_params = frozenset(typedef.type_params)
-            templates = tuple(t for _fname, t in field_templates(typedef))
+            templates = tuple(t for _fname, t in field_templates(typedef, defs))
             template_bad = any(
                 _template_reaches_non_data(t, non_data, relevant, defs) for t in templates
             )
@@ -413,7 +420,7 @@ def compute_non_data_reachability(table: TypeTable) -> NonDataReachability:
     )
 
 
-def field_templates(typedef: TypeDef) -> list[tuple[str, Type]]:
+def field_templates(typedef: TypeDef, defs: Mapping[DeclId, TypeDef]) -> list[tuple[str, Type]]:
     """Return every ``(name, type template)`` in *typedef*'s own body, flattened.
 
     Unlike :func:`_decl_inhabited`'s enum handling (which groups fields by
@@ -425,7 +432,12 @@ def field_templates(typedef: TypeDef) -> list[tuple[str, Type]]:
     use-site diagnostic can point at the field responsible.
     """
     if typedef.kind == "enum":
-        return [(fname, ftype) for _vname, vfields in typedef.variants for fname, ftype in vfields]
+        return [
+            field
+            for member in typedef.members
+            if (member_def := defs.get(member.decl_id)) is not None
+            for field in member_def.fields
+        ]
     return list(typedef.fields)
 
 
@@ -708,7 +720,7 @@ def _compute_schema_relevant_params(
         for decl_id, typedef in defs.items():
             own_params = frozenset(typedef.type_params)
             gained: set[str] = set()
-            for _fname, template in field_templates(typedef):
+            for _fname, template in field_templates(typedef, defs):
                 gained |= _template_relevant_params(template, own_params, relevant, defs)
             if not gained <= relevant[decl_id]:
                 relevant[decl_id] |= gained
@@ -725,7 +737,7 @@ def _reference_edges(
     result: dict[DeclId, tuple[_RefEdge, ...]] = {}
     for decl_id, typedef in defs.items():
         found: list[_RefEdge] = []
-        for _fname, template in field_templates(typedef):
+        for _fname, template in field_templates(typedef, defs):
             for ref in nominal_references_for_schema(template, defs, frozen_relevant):
                 arg_templates = ref.type_args if isinstance(ref, (RecordType, EnumType)) else ()
                 found.append(_RefEdge(target=ref.decl_id, arg_templates=arg_templates))

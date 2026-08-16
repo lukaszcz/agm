@@ -969,6 +969,7 @@ class TestStdlib:
 
     def test_all_public_builtin_prelude_constructors_are_available(self) -> None:
         s = ReplSession()
+        table = create_seeded_type_table()
 
         for name, typ in BUILTIN_PRELUDE_TYPES.items():
             if name in COMPATIBILITY_PRELUDE_TYPE_NAMES:
@@ -980,8 +981,9 @@ class TestStdlib:
                 assert result.value_type is not None
                 assert result.value_type.name == name
             elif isinstance(typ, EnumType):
-                for variant, fields in typedef.variants:
-                    args = _constructor_args(dict(fields))
+                for member in typedef.members:
+                    variant = member.name
+                    args = _constructor_args(dict(table.record_fields(member)))
                     call = f"{name}::{variant}({args})" if args else f"{name}::{variant}"
                     result = s.eval_entry(call)
                     assert result.ok, (name, variant, result.diagnostics)

@@ -115,20 +115,23 @@ def resolve_bare_enum_constructors(
 
 def enum_constructor(enum_type: EnumType, variant: str, table: TypeTable) -> EnumConstructor:
     try:
-        variants = table.enum_variants(enum_type)
+        variants = table.enum_member_names(enum_type)
     except (KeyError, AssertionError) as exc:
         raise MatchCompileInvariantError(
             f"cannot resolve enum signature for checked type {enum_type!r}"
         ) from exc
-    fields = variants.get(variant)
-    if fields is None:
+    member = variants.get(variant)
+    if member is None:
         raise MatchCompileInvariantError(
             f"checked enum pattern names unknown variant {enum_type!r}::{variant}"
         )
     return EnumConstructor(
         enum_type=enum_type,
         variant=variant,
-        fields=tuple(ConstructorField(name, field_type) for name, field_type in fields.items()),
+        fields=tuple(
+            ConstructorField(name, field_type)
+            for name, field_type in table.record_fields(member).items()
+        ),
     )
 
 
@@ -231,7 +234,7 @@ _NOMINAL_SIGNATURES: weakref.WeakKeyDictionary[
 
 def _build_enum_signature(enum_type: EnumType, table: TypeTable) -> ClosedSignature:
     try:
-        variant_names = tuple(table.enum_variants(enum_type))
+        variant_names = tuple(table.enum_member_names(enum_type))
     except (KeyError, AssertionError) as exc:
         raise MatchCompileInvariantError(
             f"cannot resolve enum signature for checked type {enum_type!r}"

@@ -1,10 +1,10 @@
 """Compile-time JSON Schema and decode-schema derivation.
 
 :func:`derive_schema` produces a JSON Schema ``dict[str, object]`` from a
-semantic :class:`~agm.agl.semantics.types.Type`.  Every entry point in this
+semantic :class:`~agm.agl.semantics.types.Type`. Every entry point in this
 module takes an explicit :class:`~agm.agl.semantics.type_table.TypeTable` and
-resolves record/enum field and variant shapes through it
-(``table.record_fields``/``table.enum_variants``) rather than through the
+resolves record fields and enum member sets through it
+(``table.record_fields``/``table.enum_members``) rather than through the
 ``RecordType``/``EnumType`` handle's own embedded maps — the handle carries
 only its declaration identity.  The derived schema is used:
 
@@ -268,7 +268,8 @@ def _enum_schema(typ: EnumType, type_table: TypeTable, plan: _SchemaPlan) -> dic
     follow alongside it.
     """
     variant_schemas: list[object] = []
-    for variant_name, variant_fields in type_table.enum_variants(typ).items():
+    for variant_name, member in type_table.enum_member_names(typ).items():
+        variant_fields = type_table.record_fields(member)
         required: list[str] = ["$case"]
         properties: dict[str, object] = {
             "$case": {"const": variant_name},
@@ -391,8 +392,8 @@ def _direct_neighbours(handle: Instantiation, type_table: TypeTable) -> frozense
     elif isinstance(handle, EnumType):
         field_types = [
             ftype
-            for vfields in type_table.enum_variants(handle).values()
-            for ftype in vfields.values()
+            for member in type_table.enum_members(handle)
+            for ftype in type_table.record_fields(member).values()
         ]
     else:
         field_types = list(type_table.exception_fields(handle).values())
@@ -558,7 +559,7 @@ def _emit_decode_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -> 
             ),
         )
     if isinstance(typ, EnumType):
-        variants = type_table.enum_variants(typ)
+        members = type_table.enum_member_names(typ)
         return EnumDecode(
             nominal=NominalId(typ.decl_id),
             display_name="::".join((*typ.scope_path, typ.name)),
@@ -570,7 +571,8 @@ def _emit_decode_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -> 
                         for fname, ftype in vfields.items()
                     ),
                 )
-                for vname, vfields in variants.items()
+                for vname, member in members.items()
+                for vfields in (type_table.record_fields(member),)
             ),
         )
     # Non-data targets (unit/function/exception/bottom/typevar) are not

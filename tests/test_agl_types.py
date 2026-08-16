@@ -341,11 +341,11 @@ class TestTypeEnvironmentPrelude:
         env = TypeEnvironment()
         t = env.get_type("ParsePolicy")
         assert isinstance(t, EnumType)
-        variants = env.type_table.enum_variants(t)
+        members = env.type_table.enum_member_names(t)
         # Abort has no fields.
-        assert variants["Abort"] == {}
+        assert dict(env.type_table.record_fields(members["Abort"])) == {}
         # Retry has n: int.
-        assert variants["Retry"] == {"n": IntType()}
+        assert dict(env.type_table.record_fields(members["Retry"])) == {"n": IntType()}
 
     def test_recursion_error_resolves(self) -> None:
         env = TypeEnvironment()

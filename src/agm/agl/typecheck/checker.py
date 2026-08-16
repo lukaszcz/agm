@@ -557,8 +557,8 @@ def _contains_function_type(
             seen = _seen | {t}
             return any(_contains_function_type(ta, type_table, seen) for ta in t.type_args) or any(
                 _contains_function_type(ft, type_table, seen)
-                for vfields in type_table.enum_variants(t).values()
-                for ft in vfields.values()
+                for member in type_table.enum_members(t)
+                for ft in type_table.record_fields(member).values()
             )
         case ExceptionType():
             if t in _seen:
@@ -1181,8 +1181,8 @@ class _Checker:
             next_seen = seen | {schema_type}
             return all(
                 self._wire_type_is_serializable(field_type, seen=next_seen)
-                for variant_fields in self._env.type_table.enum_variants(schema_type).values()
-                for field_type in variant_fields.values()
+                for member in self._env.type_table.enum_members(schema_type)
+                for field_type in self._env.type_table.record_fields(member).values()
             )
         if isinstance(
             schema_type,
@@ -3982,7 +3982,7 @@ class _Checker:
                     enum_type=expr_type,
                     span=node.span,
                 )
-            if node.variant not in self._env.type_table.enum_variants(expr_type):
+            if node.variant not in self._env.type_table.enum_member_names(expr_type):
                 raise _variant_not_in_enum(node.variant, expr_type, node.span)
             return BoolType()
 
@@ -4819,12 +4819,12 @@ class _Checker:
                 enum_type=subj_type,
                 span=pattern.span,
             )
-            variants = self._env.type_table.enum_variants(subj_type)
-            if pattern.name not in variants:
+            members = self._env.type_table.enum_member_names(subj_type)
+            if pattern.name not in members:
                 raise _variant_not_in_enum(pattern.name, subj_type, pattern.span)
             owner_type = subj_type
             variant_name = pattern.name
-            fields = variants[variant_name]
+            fields = self._env.type_table.record_fields(members[variant_name])
             context_desc = f"variant '{owner_type.name}.{variant_name}'"
         elif isinstance(subj_type, RecordType):
             owner_type = subj_type
@@ -4955,10 +4955,10 @@ class _Checker:
     def _require_nullary_bare_constructor(self, pattern: VarPattern, enum_type: Type) -> None:
         """Require a bare constructor spelling to be a nullary matched enum variant."""
         assert isinstance(enum_type, EnumType)
-        fields = self._env.type_table.enum_variants(enum_type).get(pattern.name)
-        if fields is None:
+        member = self._env.type_table.enum_member_names(enum_type).get(pattern.name)
+        if member is None:
             raise _variant_not_in_enum(pattern.name, enum_type, pattern.span)
-        if fields:
+        if self._env.type_table.record_fields(member):
             raise AglTypeError(
                 f"'{pattern.name}' has fields; write '{pattern.name}(...)' to match it.",
                 span=pattern.span,

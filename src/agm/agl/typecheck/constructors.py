@@ -468,7 +468,9 @@ class ConstructorChecker:
         if isinstance(owner, EnumType):
             assert variant is not None, "variant is required for EnumType"
             return (
-                self._ctx._env.type_table.enum_variants(owner)[variant],
+                self._ctx._env.type_table.record_fields(
+                    self._ctx._env.type_table.enum_member_names(owner)[variant]
+                ),
                 f"variant '{owner.name}.{variant}'",
             )
         if isinstance(owner, RecordType):
@@ -601,7 +603,7 @@ class ConstructorChecker:
             if isinstance(owner, (RecordType, ExceptionType)) and ref.variant == ref.owner_name:
                 return owner
             raise AglTypeError(f"'{ref.owner_name}' is not a known enum type.", span=span)
-        if ref.variant not in self._ctx._env.type_table.enum_variants(owner):
+        if ref.variant not in self._ctx._env.type_table.enum_member_names(owner):
             raise AglTypeError(
                 f"Variant '{ref.variant}' does not exist in enum '{ref.owner_name}'.", span=span
             )
@@ -634,7 +636,9 @@ class ConstructorChecker:
             )
         if isinstance(owner, EnumType):
             assert variant is not None, "variant is required for EnumType"
-            fields = self._ctx._env.type_table.enum_variants(owner)[variant]
+            fields = self._ctx._env.type_table.record_fields(
+                self._ctx._env.type_table.enum_member_names(owner)[variant]
+            )
         else:
             fields = self._ctx._env.type_table.record_fields(owner)
         if fields:

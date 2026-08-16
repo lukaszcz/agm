@@ -97,7 +97,8 @@ def _matches(
             if isinstance(subject_type, EnumType) and isinstance(value, EnumValue):
                 if value.nominal.value != subject_type.decl_id or value.variant != variant:
                     return False
-                fields = checked.type_env.type_table.enum_variants(subject_type)[variant]
+                member = checked.type_env.type_table.enum_member_names(subject_type)[variant]
+                fields = checked.type_env.type_table.record_fields(member)
             elif isinstance(subject_type, RecordType) and isinstance(value, RecordValue):
                 if value.nominal.value != subject_type.decl_id:
                     return False

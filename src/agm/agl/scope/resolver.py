@@ -88,7 +88,10 @@ from agm.agl.scope.symbols import (
 )
 from agm.agl.scope.symbols import to_bare_atom as _bare_atom
 from agm.agl.scope.symbols import to_bare_path as _bare_path
-from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS
+from agm.agl.semantics.type_table import (
+    BUILTIN_PRELUDE_MEMBER_TYPE_DEFS,
+    BUILTIN_PRELUDE_TYPE_DEFS,
+)
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPES,
@@ -991,7 +994,9 @@ class _Resolver:
                 # shared prelude TypeDef literal — the handle itself carries
                 # no shape data.
                 typedef = BUILTIN_PRELUDE_TYPE_DEFS[type_name]
-                for variant_name, _vfields in typedef.variants:
+                for member in typedef.members:
+                    member_def = BUILTIN_PRELUDE_MEMBER_TYPE_DEFS[member.decl_id]
+                    variant_name = member.name
                     if variant_name not in exception_names:
                         cref = ConstructorRef(
                             owner_name=type_name,
@@ -999,7 +1004,7 @@ class _Resolver:
                             owner_decl_node_id=_BUILTIN_CONSTRUCTOR_NODE_ID,
                             type_params=(),
                             owner_module_id=STD_CORE_ID,
-                            can_match_bare_pattern=not _vfields,
+                            can_match_bare_pattern=not member_def.fields,
                         )
                         self._add_constructor_candidate(variant_name, cref)
             else:

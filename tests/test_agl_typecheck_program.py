@@ -1782,7 +1782,8 @@ def test_cross_module_enum_variant_field_type(tmp_path: Path) -> None:
     assert table.record_fields(data_type) == {"n": IntType()}
 
     assert isinstance(envelope_type, EnumType)
-    some_fields = table.enum_variants(envelope_type).get("Some", {})
+    some_member = table.enum_member_names(envelope_type).get("Some")
+    some_fields = {} if some_member is None else dict(table.record_fields(some_member))
     assert some_fields.get("value") == data_type, (
         f"carrier::Envelope.Some.value must equal payload::Data: "
         f"got {some_fields.get('value')!r}, expected {data_type!r}"

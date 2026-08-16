@@ -74,7 +74,7 @@ from agm.agl.matchcompile.normalize import (
 from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID
 from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.type_table import TypeTable
-from agm.agl.semantics.types import EnumType, IntType, Type, TypeTemplate
+from agm.agl.semantics.types import EnumType, IntType, RecordType, Type, TypeTemplate
 from agm.agl.semantics.values import BoolValue, EnumValue, RecordValue, Value
 from agm.agl.syntax.nodes import Case, LetDecl
 from agm.agl.syntax.visitor import walk
@@ -906,14 +906,14 @@ def test_wide_enum_match_does_not_rebuild_its_signature_per_matrix_cell(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = 0
-    original = TypeTable.enum_variants
+    original = TypeTable.enum_member_names
 
-    def count_enum_variants(self: TypeTable, handle: EnumType) -> Mapping[str, Mapping[str, Type]]:
+    def count_enum_member_names(self: TypeTable, handle: EnumType) -> Mapping[str, RecordType]:
         nonlocal calls
         calls += 1
         return original(self, handle)
 
-    monkeypatch.setattr(TypeTable, "enum_variants", count_enum_variants)
+    monkeypatch.setattr(TypeTable, "enum_member_names", count_enum_member_names)
 
     size = 20
     _compile(_wide_enum_source(size))

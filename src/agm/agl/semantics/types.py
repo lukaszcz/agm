@@ -208,7 +208,7 @@ class EnumType:
     whose identity is the declaration it names (``decl_id``), plus
     ``type_args`` for a generic instantiation. Variant shapes are looked up
     by handle in the shared ``TypeTable``
-    (``semantics.type_table.TypeTable.enum_variants``).  ``type_args`` holds
+    (``semantics.type_table.TypeTable.enum_members``). ``type_args`` holds
     the resolved type arguments for a generic instantiation (empty tuple for
     non-generic enums).  ``module_id`` is the owning module (defaults to
     ``ENTRY_ID``).

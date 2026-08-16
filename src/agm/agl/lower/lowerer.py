@@ -307,8 +307,8 @@ def _add_builtin_nominals(
             kind=NominalKind.ENUM,
             fields=(),
             variants=tuple(
-                VariantDescriptor(vname, tuple(vfields.keys()))
-                for vname, vfields in type_table.enum_variants(enum_type).items()
+                VariantDescriptor(vname, tuple(type_table.record_fields(member)))
+                for vname, member in type_table.enum_member_names(enum_type).items()
             ),
         )
 
@@ -2442,7 +2442,8 @@ class _Lowerer:
             return dict(self._type_table.exception_fields(typ))
         if isinstance(typ, EnumType):
             assert variant is not None, "compiler bug: enum constructor must have variant"
-            return dict(self._type_table.enum_variants(typ).get(variant, {}))
+            member = self._type_table.enum_member_names(typ).get(variant)
+            return {} if member is None else dict(self._type_table.record_fields(member))
         raise AssertionError(  # pragma: no cover
             "compiler bug: constructor field types require a constructor type"
         )
@@ -2487,7 +2488,8 @@ class _Lowerer:
         if isinstance(typ, EnumType):
             assert variant is not None, "compiler bug: enum constructor must have variant"
             nominal = NominalId(typ.decl_id)
-            variant_fields = self._type_table.enum_variants(typ).get(variant, {})
+            member = self._type_table.enum_member_names(typ).get(variant)
+            variant_fields = {} if member is None else self._type_table.record_fields(member)
             enum_fields = tuple((fname, arg_slots[fname]) for fname in variant_fields)
             return IrMakeEnum(
                 location=loc,

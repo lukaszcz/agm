@@ -62,6 +62,7 @@ from agm.agl.semantics.types import (
     RecordType,
     Type,
     TypeVarType,
+    free_type_vars,
     reroot_type,
 )
 from agm.agl.syntax.nodes import (
@@ -417,43 +418,98 @@ class _TypeBuilder:
         if stmt.type_params:
             self._build_generic_enum(stmt)
             return
-        variants: dict[str, dict[str, Type]] = {}
+        typedef, member_defs = self._build_enum_members(stmt, type_vars=frozenset())
+        for member_def in member_defs:
+            self._env.type_table.register(member_def)
+        self._validate_builtin_shape(stmt, typedef, _BUILTIN_ENUM_TYPE_DEFS)
+        self._env.type_table.register(typedef)
+        self._register_enum_constructor_field_kinds(stmt)
+
+    def _build_enum_members(
+        self, stmt: EnumDef, *, type_vars: frozenset[str]
+    ) -> tuple[TypeDef, tuple[TypeDef, ...]]:
+        """Build an enum's record members and its member-set declaration."""
+        module_id = self._module_id
+        scope_path = tuple(segment.name for segment in stmt.scope_path)
+        bare_name = _bare_name(stmt.name)
+        member_scope_path = (*scope_path, bare_name)
+        member_defs: list[TypeDef] = []
+        members: list[RecordType] = []
+        enum_decl_id = _decl_identity(module_id, scope_path, bare_name, stmt.node_id)
         for member in stmt.members:
             vd = cast(VariantDef, member)
-            vfields: dict[str, Type] = {}
-            seen_vfields: dict[str, SourceSpan] = {}
+            fields: dict[str, Type] = {}
+            seen_fields: dict[str, SourceSpan] = {}
             for fd in vd.fields:
-                if fd.name in seen_vfields:
+                if fd.name in seen_fields:
                     raise AglTypeError(
                         f"Duplicate field '{fd.name}' in variant '{stmt.name}.{vd.name}'.",
                         span=fd.span,
                     )
-                seen_vfields[fd.name] = fd.span
-                vfields[fd.name] = self._resolve_field_type(fd)
-            variants[vd.name] = vfields
+                seen_fields[fd.name] = fd.span
+                fields[fd.name] = self._resolve_field_type(fd, type_vars=type_vars)
+            captured_params = tuple(
+                param
+                for param in stmt.type_params
+                if any(param in free_type_vars(field_type) for field_type in fields.values())
+            )
+            expected_enum = (
+                _BUILTIN_ENUM_TYPE_DEFS.get(bare_name)
+                if stmt.is_builtin and module_id == STD_CORE_ID and scope_path == ()
+                else None
+            )
+            expected_member = (
+                None
+                if expected_enum is None
+                else next(
+                    (member for member in expected_enum.members if member.name == vd.name), None
+                )
+            )
+            decl_id = vd.node_id if expected_member is None else expected_member.decl_id
+            member_def = TypeDef(
+                kind="record",
+                name=vd.name,
+                module_id=module_id,
+                scope_path=member_scope_path,
+                type_params=captured_params,
+                fields=tuple(fields.items()),
+                decl_node_id=decl_id,
+            )
+            member_defs.append(member_def)
+            members.append(
+                RecordType(
+                    name=vd.name,
+                    type_args=tuple(TypeVarType(param) for param in captured_params),
+                    module_id=module_id,
+                    scope_path=member_scope_path,
+                    decl_id=decl_id,
+                )
+            )
+        return (
+            TypeDef(
+                kind="enum",
+                name=bare_name,
+                module_id=module_id,
+                scope_path=scope_path,
+                type_params=stmt.type_params,
+                members=tuple(members),
+                is_builtin=stmt.is_builtin,
+                decl_node_id=enum_decl_id,
+            ),
+            tuple(member_defs),
+        )
+
+    def _register_enum_constructor_field_kinds(self, stmt: EnumDef) -> None:
+        """Keep the current enum-constructor surface keyed by its member names."""
         module_id = self._module_id
         scope_path = tuple(segment.name for segment in stmt.scope_path)
         bare_name = _bare_name(stmt.name)
-        typedef = TypeDef(
-            kind="enum",
-            name=bare_name,
-            module_id=module_id,
-            scope_path=scope_path,
-            variants=tuple((vname, tuple(vfields.items())) for vname, vfields in variants.items()),
-            is_builtin=stmt.is_builtin,
-            decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
-        )
-        self._validate_builtin_shape(stmt, typedef, _BUILTIN_ENUM_TYPE_DEFS)
-        self._env.type_table.register(typedef)
-        # Register field kinds for each variant constructor, under the same
-        # owning identity as the TypeDef just above.
         for member in stmt.members:
             vd = cast(VariantDef, member)
-            vfield_kinds = tuple((fd.name, fd.kind) for fd in vd.fields)
             self._env.register_constructor_field_kinds(
                 bare_name,
                 vd.name,
-                vfield_kinds,
+                tuple((fd.name, fd.kind) for fd in vd.fields),
                 scope_path=scope_path,
                 module_id=module_id,
             )
@@ -587,11 +643,30 @@ class _TypeBuilder:
             return
         bare_name = _bare_name(stmt.name)
         expected = expected_defs[bare_name]
-        if self._reroot_typedef(typedef, base_type) != expected:
+        matches = self._reroot_typedef(typedef, base_type) == self._reroot_typedef(expected, None)
+        if matches and typedef.kind == "enum":
+            matches = self._enum_member_shapes(typedef) == self._enum_member_shapes(expected)
+        if not matches:
             raise AglTypeError(
                 f"Builtin type '{stmt.name}' has an invalid definition.",
                 span=stmt.span,
             )
+
+    def _enum_member_shapes(
+        self, typedef: TypeDef
+    ) -> tuple[tuple[str, tuple[tuple[str, Type], ...]], ...]:
+        """Return an enum's re-rooted ordered member-record payloads."""
+        remap = (typedef.module_id, STD_CORE_ID)
+        return tuple(
+            (
+                member.name,
+                tuple(
+                    (name, reroot_type(field_type, typedef.scope_path, remap_module=remap))
+                    for name, field_type in self._env.type_table.record_fields(member).items()
+                ),
+            )
+            for member in typedef.members
+        )
 
     @staticmethod
     def _reroot_typedef(typedef: TypeDef, base_type: ExceptionType | None) -> TypeDef:
@@ -636,9 +711,9 @@ class _TypeBuilder:
             return reroot_type(t, prefix, remap_module=remap)
 
         fields = tuple((name, _reroot(t)) for name, t in typedef.fields)
-        variants = tuple(
-            (vname, tuple((fname, _reroot(ft)) for fname, ft in vfields))
-            for vname, vfields in typedef.variants
+        members = tuple(
+            replace(cast(RecordType, _reroot(member)), decl_id=NO_DECL_ID)
+            for member in typedef.members
         )
         base = typedef.base
         if base_type is not None:
@@ -653,7 +728,7 @@ class _TypeBuilder:
             scope_path=(),
             module_id=STD_CORE_ID,
             fields=fields,
-            variants=variants,
+            members=members,
             base=base,
         )
 
@@ -732,74 +807,35 @@ class _TypeBuilder:
         )
 
     def _build_generic_enum(self, stmt: EnumDef) -> None:
-        """Resolve a generic enum's variants and register its TypeDef + constructors.
-
-        See :meth:`_build_generic_record` for why the ``GenericTypeDef``
-        itself is not (re-)registered here.
-        """
+        """Resolve a generic enum's member-record definitions and constructors."""
         type_params = stmt.type_params
-        type_vars = frozenset(type_params)
-        variants: dict[str, dict[str, Type]] = {}
-        for member in stmt.members:
-            vd = cast(VariantDef, member)
-            vfields: dict[str, Type] = {}
-            seen_vfields: dict[str, SourceSpan] = {}
-            for fd in vd.fields:
-                if fd.name in seen_vfields:
-                    raise AglTypeError(
-                        f"Duplicate field '{fd.name}' in variant '{stmt.name}.{vd.name}'.",
-                        span=fd.span,
-                    )
-                seen_vfields[fd.name] = fd.span
-                vfields[fd.name] = self._resolve_field_type(fd, type_vars=type_vars)
-            variants[vd.name] = vfields
         gdef = self._env.get_generic_type(stmt.name)
         assert gdef is not None, f"compiler bug: generic enum {stmt.name!r} not pre-registered"
         template = gdef.template
         assert isinstance(template, EnumType)
-        module_id = self._module_id
-        scope_path = tuple(segment.name for segment in stmt.scope_path)
-        bare_name = _bare_name(stmt.name)
-        typedef = TypeDef(
-            kind="enum",
-            name=bare_name,
-            module_id=module_id,
-            scope_path=scope_path,
-            type_params=type_params,
-            variants=tuple((vname, tuple(vfields.items())) for vname, vfields in variants.items()),
-            is_builtin=stmt.is_builtin,
-            # Same identity as the handle template registered in phase 1
-            # (:meth:`_register_record_or_enum_handle`), so the TypeDef and
-            # every instantiated handle agree on which declaration they name.
-            decl_node_id=template.decl_id,
-        )
+        typedef, member_defs = self._build_enum_members(stmt, type_vars=frozenset(type_params))
+        typedef = replace(typedef, decl_node_id=template.decl_id)
+        for member_def in member_defs:
+            self._env.type_table.register(member_def)
         self._validate_builtin_shape(stmt, typedef, _BUILTIN_ENUM_TYPE_DEFS)
         self._env.type_table.register(typedef)
-        # Register one ConstructorSignature and field kinds per variant, under
-        # the same owning identity as the TypeDef just above.
         for member in stmt.members:
             vd = cast(VariantDef, member)
-            vfields = variants[vd.name]
-            field_names = tuple(vfields.keys())
-            field_templates = tuple(vfields.values())
-            sig = ConstructorSignature(
-                owner_name=stmt.name,
-                variant=vd.name,
-                field_names=field_names,
-                field_templates=field_templates,
-                result_template=template,
-                type_params=type_params,
+            member_type = next(
+                member_type for member_type in typedef.members if member_type.name == vd.name
             )
-            self._env.register_constructor_signature(sig)
-            # Register field kinds for this generic enum variant constructor.
-            vfield_kinds = tuple((fd.name, fd.kind) for fd in vd.fields)
-            self._env.register_constructor_field_kinds(
-                bare_name,
-                vd.name,
-                vfield_kinds,
-                scope_path=scope_path,
-                module_id=module_id,
+            fields = self._env.type_table.record_fields(member_type)
+            self._env.register_constructor_signature(
+                ConstructorSignature(
+                    owner_name=stmt.name,
+                    variant=vd.name,
+                    field_names=tuple(fields),
+                    field_templates=tuple(fields.values()),
+                    result_template=template,
+                    type_params=type_params,
+                )
             )
+        self._register_enum_constructor_field_kinds(stmt)
 
     def _validate_alias(self, stmt: TypeAlias) -> None:
         """Validate that the alias target resolves without cycles.

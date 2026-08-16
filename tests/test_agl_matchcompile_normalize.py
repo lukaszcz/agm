@@ -845,7 +845,7 @@ def test_bare_variant_normalization_rejects_missing_and_wrong_owner_metadata() -
             kind="enum",
             name="Other",
             module_id=ENTRY_ID,
-            variants=(("none", ()),),
+            members=(("none", ()),),
             decl_node_id=next_decl_id(),
         )
     )

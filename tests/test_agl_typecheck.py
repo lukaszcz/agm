@@ -407,7 +407,7 @@ class TestComparableTypes:
             kind="enum",
             name="E",
             module_id=ENTRY_ID,
-            variants=(("A", (("fn", ft),)),),
+            members=(("A", (("fn", ft),)),),
             decl_node_id=1,
         )
         et = typedef.handle()
@@ -7445,7 +7445,7 @@ class TestMisc:
         assert "ParsePolicy" in BUILTIN_PRELUDE_TYPES
         pp = BUILTIN_PRELUDE_TYPES["ParsePolicy"]
         assert isinstance(pp, EnumType)
-        variant_names = dict(BUILTIN_PRELUDE_TYPE_DEFS["ParsePolicy"].variants)
+        variant_names = {member.name for member in BUILTIN_PRELUDE_TYPE_DEFS["ParsePolicy"].members}
         assert "Abort" in variant_names
         assert "Retry" in variant_names
 
@@ -9047,16 +9047,16 @@ class TestGenericTypeDef:
                 name="Option",
                 module_id=template.module_id,
                 type_params=("T",),
-                variants=(("Some", (("value", TypeVarType("T")),)), ("None", ())),
+                members=(("Some", (("value", TypeVarType("T")),)), ("None", ())),
                 decl_node_id=1,
             )
         )
         result = env.instantiate_nominal("Option", (TextType(),))
         assert isinstance(result, EnumType)
         assert result.type_args == (TextType(),)
-        variants = env.type_table.enum_variants(result)
-        assert variants["Some"]["value"] == TextType()
-        assert variants["None"] == {}
+        members = env.type_table.enum_member_names(result)
+        assert dict(env.type_table.record_fields(members["Some"]))["value"] == TextType()
+        assert dict(env.type_table.record_fields(members["None"])) == {}
 
     def test_instantiate_arity_mismatch(self) -> None:
         env = TypeEnvironment()

@@ -24,6 +24,7 @@ import enum
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 from agm.agl.diagnostics import AglError
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
@@ -498,6 +499,51 @@ class ScopeNode:
         }
 
 
+def _local_use_contribution_refs(
+    contribution: LocalUseContribution,
+    name: BareAtom,
+    scope_nodes: Mapping[ScopePath, ScopeNode],
+) -> set[BindingRef]:
+    """Resolve one exposed atom against a live local-use surface."""
+    target = contribution.source.scope_path
+    members: dict[BareAtom, BindingRef] = {}
+    for path, scope in scope_nodes.items():
+        if path[: len(target)] != target:
+            continue
+        relative = path[len(target) :]
+        for member_name, ref in scope.members.items():
+            members[to_bare_atom((*relative, member_name))] = ref
+
+    decl = contribution.declaration
+    selected: dict[BareAtom, BindingRef] = {}
+    if decl.alias is not None:
+        selected.update(
+            {
+                to_bare_atom((decl.alias, *to_bare_path(atom))): ref
+                for atom, ref in members.items()
+            }
+        )
+    elif decl.tail == ():
+        selected.update(members)
+    else:
+        for item in cast(tuple[ImportItem, ...], decl.tail):
+            prefix = import_item_path(item)
+            for atom, ref in members.items():
+                path = to_bare_path(atom)
+                if path[: len(prefix)] != prefix:
+                    continue
+                selected[atom] = ref
+                if item.rename is not None:
+                    selected[to_bare_atom((item.rename, *path[len(prefix) :]))] = ref
+    for hidden in decl.hidden:
+        prefix = import_item_path(hidden)
+        for atom in tuple(selected):
+            if to_bare_path(atom)[: len(prefix)] == prefix:
+                selected.pop(atom)
+    selected_ref = selected.get(name)
+    return set() if selected_ref is None else {selected_ref}
+
+
 def resolve_bare_contribution_layer(
     scope: ScopeNode,
     name: BareAtom,
@@ -506,11 +552,13 @@ def resolve_bare_contribution_layer(
     predicate: Callable[[BindingRef], bool] | None = None,
 ) -> tuple[ScopeNode, set[BindingRef]] | None:
     """Return the nearest region and its bare candidates in one namespace."""
-    del scope_nodes
     layer: ScopeNode | None = scope
     while layer is not None:
-        stored = layer.bare_contributions.get(name, ())
-        selected = set(stored) if predicate is None else {ref for ref in stored if predicate(ref)}
+        selected = set(layer.bare_contributions.get(name, ()))
+        for contribution in layer.local_use_contributions:
+            selected.update(_local_use_contribution_refs(contribution, name, scope_nodes))
+        if predicate is not None:
+            selected = {ref for ref in selected if predicate(ref)}
         if selected:
             return layer, selected
         layer = layer.parent

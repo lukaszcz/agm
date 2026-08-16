@@ -2306,6 +2306,11 @@ class TypeEnvironment:
         gdef = self._generic_types.get(name)
         if gdef is not None:
             return name, gdef
+        key = self._bare_type_key(name, span)
+        if key is not None and self._program_generic_table is not None:
+            gdef = self._program_generic_table.get(key)
+            if gdef is not None:
+                return name, gdef
         matches = self._open_imported_generic_type_matches(name)
         if len(matches) > 1:
             labels = sorted(
@@ -2347,6 +2352,16 @@ class TypeEnvironment:
             and (local_gdef := self._generic_types.get(local_name)) is not None
         ):
             return local_name, local_gdef
+        if qualifier.anchor is None:
+            opened_atom = _type_path_atom(
+                (*tuple(segment.name for segment in qualifier.segments), name)
+            )
+            opened_key = self._opened_type_key(opened_atom, span)
+            if opened_key is not None and self._program_generic_table is not None:
+                opened_gdef = self._program_generic_table.get(opened_key)
+                if opened_gdef is not None:
+                    rendered = qualifier.render()
+                    return f"{rendered}::{name}", opened_gdef
         if self._import_env is None or self._program_generic_table is None:
             return None
         qname = self._resolve_import_qname(qualifier, name, span=span, required=False)

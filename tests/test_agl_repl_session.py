@@ -6106,6 +6106,33 @@ class TestBareTypeEntry:
         assert r.value is None
         assert render_entry_result(r, echo=True) == "<type:\nrecord Box[T]\n  value: T\n>"
 
+    def test_use_exposed_generic_record_name_echoes_definition(self) -> None:
+        from agm.agl.repl.render import render_entry_result
+
+        session = ReplSession()
+        assert session.eval_entry("scope S\nrecord Box[T](value: T)\nend S").ok
+        assert session.eval_entry("use S::*").ok
+
+        result = session.eval_entry("Box")
+
+        assert result.ok, result.diagnostics
+        assert render_entry_result(result, echo=True) == "<type:\nrecord Box[T]\n  value: T\n>"
+
+    def test_use_alias_qualified_generic_record_name_echoes_definition(self) -> None:
+        from agm.agl.repl.render import render_entry_result
+
+        session = ReplSession()
+        assert session.eval_entry("scope S\nrecord Box[T](value: T)\nend S").ok
+        assert session.eval_entry("use S as Alias").ok
+
+        result = session.eval_entry("Alias::Box")
+
+        assert result.ok, result.diagnostics
+        assert (
+            render_entry_result(result, echo=True)
+            == "<type:\nrecord Alias::Box[T]\n  value: T\n>"
+        )
+
     def test_bare_scoped_generic_record_name_echoes_definition(self) -> None:
         """A retained named-scope generic resolves by its qualified local name.
 

@@ -114,7 +114,7 @@ class BuiltinKind(enum.Enum):
 
 
 class BuiltinStaticKind(enum.Enum):
-    """Type-scoped built-ins that have no lowering implementation."""
+    """Type-scoped built-ins classified for checking and lowering."""
 
     SESSION_OPEN = "SESSION_OPEN"
     SESSION_DEFAULT = "SESSION_DEFAULT"
@@ -803,8 +803,8 @@ class ModuleResolution:
         (``print``/``exec``/``ask``/``ask-request``) to its ``BuiltinKind``.  Calls whose
         callee resolves to a user-defined binding have no entry here.
     ``builtin_static_calls``
-        Maps each type-scoped built-in static call to its ``BuiltinKind`` for
-        type checking only. These calls have no lowering path.
+        Maps each type-scoped built-in static call to its ``BuiltinStaticKind``
+        for type checking and lowering.
     ``root_scope``
         The root ``ScopeNode`` (tree root).  Nested scopes are linked via
         ``ScopeNode.parent``.

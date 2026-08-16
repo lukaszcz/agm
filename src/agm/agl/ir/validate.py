@@ -124,6 +124,10 @@ from agm.agl.ir.nodes import (
     IrResource,
     IrReturn,
     IrSequence,
+    IrSessionAsk,
+    IrSessionDefault,
+    IrSessionOp,
+    IrSessionOpen,
     IrTemplateText,
     IrTemplateValue,
     IrTry,
@@ -991,6 +995,47 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                     raise InvalidIrError(
                         f"IrAsk has max_attempts={node.max_attempts!r} (must be >= 1)"
                     )
+
+        case IrSessionOpen(agent=agent_expr, transport=transport_expr, name=name_expr):
+            _validate_location(node.location, ctx)
+            _validate_expr(agent_expr, ctx)
+            if transport_expr is not None:
+                _validate_expr(transport_expr, ctx)
+            _validate_expr(name_expr, ctx)
+
+        case IrSessionDefault():
+            _validate_location(node.location, ctx)
+
+        case IrSessionAsk(session=session_expr, prompt=prompt_expr, contract_id=contract_id):
+            _validate_location(node.location, ctx)
+            if session_expr is None:
+                raise InvalidIrError("IrSessionAsk requires a session operand")
+            _validate_expr(session_expr, ctx)
+            _validate_expr(prompt_expr, ctx)
+            if ctx.deep:
+                if contract_id not in ctx.program.contracts:
+                    raise InvalidIrError(
+                        f"IrSessionAsk references contract_id={contract_id!r}"
+                        " which is not in program.contracts"
+                    )
+                if node.max_attempts < 1:
+                    raise InvalidIrError(
+                        f"IrSessionAsk has max_attempts={node.max_attempts!r} (must be >= 1)"
+                    )
+
+        case IrSessionOp(session=session_expr, op=op, arg=arg_expr):
+            _validate_location(node.location, ctx)
+            if session_expr is None:
+                raise InvalidIrError("IrSessionOp requires a session operand")
+            _validate_expr(session_expr, ctx)
+            if op not in {"compact", "reset", "fork", "stats", "set-name", "close"}:
+                raise InvalidIrError(f"IrSessionOp has unknown operation {op!r}")
+            if op == "set-name" and arg_expr is None:
+                raise InvalidIrError("IrSessionOp set-name requires an argument")
+            if op not in {"compact", "set-name"} and arg_expr is not None:
+                raise InvalidIrError(f"IrSessionOp {op} does not accept an argument")
+            if arg_expr is not None:
+                _validate_expr(arg_expr, ctx)
 
         case IrAskRequest(agent=agent_expr, prompt=prompt_expr):
             _validate_location(node.location, ctx)

@@ -108,6 +108,10 @@ from agm.agl.ir.nodes import (
     IrResource,
     IrReturn,
     IrSequence,
+    IrSessionAsk,
+    IrSessionDefault,
+    IrSessionOp,
+    IrSessionOpen,
     IrTemplateText,
     IrTemplateValue,
     IrTry,
@@ -160,7 +164,7 @@ from agm.agl.matchcompile import (
     RecordConstructor,
 )
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId, spell_scope_path
-from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
+from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind, BuiltinStaticKind
 from agm.agl.semantics.type_table import MethodDef, TypeTable
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
@@ -2205,6 +2209,77 @@ class _Lowerer:
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
 
+    def _lower_session_static_call(
+        self, kind: BuiltinStaticKind, call_node: Call, span: SourceSpan
+    ) -> IrExpr:
+        """Lower a checker-selected ``Session`` type static."""
+        loc = self._loc(span)
+        named_args = {arg.name: arg.value for arg in call_node.named_args}
+        match kind:
+            case BuiltinStaticKind.SESSION_OPEN:
+                agent = call_node.args[0] if call_node.args else named_args["agent"]
+                transport = (
+                    call_node.args[1] if len(call_node.args) > 1 else named_args.get("transport")
+                )
+                name = call_node.args[2] if len(call_node.args) > 2 else named_args.get("name")
+                return cast(
+                    IrExpr,
+                    IrSessionOpen(
+                        location=loc,
+                        agent=self.lower_expr(agent),
+                        transport=None if transport is None else self.lower_expr(transport),
+                        name=IrConstText(location=loc, value="")
+                        if name is None
+                        else self.lower_expr(name),
+                    ),
+                )
+            case BuiltinStaticKind.SESSION_DEFAULT:
+                return cast(IrExpr, IrSessionDefault(location=loc))
+            case _ as unreachable:  # pragma: no cover
+                assert_never(unreachable)
+
+    def _is_session_builtin_method(self, method: MethodDef) -> bool:
+        """Report whether *method* belongs to the canonical ``Session`` receiver."""
+        receiver = method.signature.params[0]
+        session_type = BUILTIN_PRELUDE_TYPES["Session"]
+        return (
+            method.is_builtin
+            and isinstance(receiver, RecordType)
+            and isinstance(session_type, RecordType)
+            and receiver.decl_id == session_type.decl_id
+        )
+
+    def _lower_session_method_call(
+        self, call_node: Call, method: MethodDef, span: SourceSpan
+    ) -> IrExpr:
+        """Lower a checker-selected call-only ``Session`` method."""
+        assert isinstance(call_node.callee, FieldAccess)
+        session = self.lower_expr(call_node.callee.obj)
+        if method.name == "ask":
+            return self._lower_ask_call(
+                call_node,
+                span,
+                structured_exec=False,
+                session=session,
+            )
+
+        named_args = {arg.name: arg.value for arg in call_node.named_args}
+        if method.name == "compact":
+            argument = call_node.args[0] if call_node.args else named_args.get("instructions")
+        elif method.name == "set-name":
+            argument = call_node.args[0] if call_node.args else named_args["name"]
+        else:
+            argument = None
+        return cast(
+            IrExpr,
+            IrSessionOp(
+                location=self._loc(span),
+                session=session,
+                op=method.name,
+                arg=None if argument is None else self.lower_expr(argument),
+            ),
+        )
+
     def _lower_call(self, call_node: "Call", nid: int, span: "SourceSpan") -> IrExpr:
         """Lower a Call node.
 
@@ -2222,6 +2297,14 @@ class _Lowerer:
             return self._lower_partial_call(call_node, partial_spec, span)
 
         # Check for builtin calls first
+        static_kind = self._checked.resolved.builtin_static_calls.get(nid)
+        if static_kind is not None:
+            return self._lower_session_static_call(static_kind, call_node, span)
+        if isinstance(callee, FieldAccess):
+            method = self._checked.method_selection_for(callee.node_id)
+            if method is not None and self._is_session_builtin_method(method):
+                return self._lower_session_method_call(call_node, method, span)
+
         builtin_kind = self._checked.resolved.builtin_calls.get(nid)
         if builtin_kind is not None:
             if isinstance(callee, FieldAccess):
@@ -3188,8 +3271,9 @@ class _Lowerer:
         structured_exec: bool,
         is_request: bool = False,
         agent: IrExpr | None = None,
+        session: IrExpr | None = None,
     ) -> IrExpr:
-        """Lower an ask() or ask-request() builtin call to IrAsk/IrAskRequest."""
+        """Lower an ask() or ask-request() builtin call to its host-operation node."""
         loc = self._loc(span)
         named_map: dict[str, "NamedArg"] = {na.name: na for na in call_node.named_args}
 
@@ -3197,18 +3281,20 @@ class _Lowerer:
         prompt_ir = self.lower_expr(call_node.args[0])
 
         # 2. Evaluate the explicit Agent value or load the ordinary defaulted parameter.
-        if agent is not None:
-            agent_ir = agent
-        elif "agent" in named_map:
-            agent_ir = self.lower_expr(named_map["agent"].value)
-        else:
-            agent_ir = IrBuiltinLoad(location=loc, key="default-agent")
+        if session is None:
+            if agent is not None:
+                agent_ir = agent
+            elif "agent" in named_map:
+                agent_ir = self.lower_expr(named_map["agent"].value)
+            else:
+                agent_ir = IrBuiltinLoad(location=loc, key="default-agent")
 
         # ask-request neither dispatches nor parses output — it builds an
         # AgentRequest whose contract fields are fixed constants — so it needs
         # neither a retry count nor an output contract, and steps 3 and 4 below
         # apply to ``ask`` alone.
         if is_request:
+            assert session is None, "compiler bug: Session ask cannot build an agent request"
             return IrAskRequest(location=loc, agent=agent_ir, prompt=prompt_ir)
 
         # 3. Determine max_attempts from the on_parse_error named arg.
@@ -3252,6 +3338,17 @@ class _Lowerer:
 
         contract_id = self._alloc_contract(contract_req)
 
+        if session is not None:
+            return cast(
+                IrExpr,
+                IrSessionAsk(
+                    location=loc,
+                    session=session,
+                    prompt=prompt_ir,
+                    contract_id=contract_id,
+                    max_attempts=max_attempts,
+                ),
+            )
         return IrAsk(
             location=loc,
             agent=agent_ir,

@@ -3,10 +3,10 @@
 Every node is a frozen dataclass with a ``location: Location`` field.
 Child collections are ``tuple`` (never ``list``).
 
-``IrExpr`` is the closed union of all expression node types defined here.
-The evaluator and lowerer dispatch over it with a structural ``match`` whose
-final arm is ``assert_never(node)``, so mypy exhaustiveness makes a
-missing case a compile-time error.
+``IrExpr`` is the closed union of expression nodes currently supported by
+the evaluator. Session operation nodes remain distinct IR data while their
+host handlers are unavailable, so they are intentionally excluded from that
+execution union.
 
 Invariant: ``IrSequence`` and ``IrBlock``
 must be non-empty (``len(items) >= 1``).  The validator checks this; do not
@@ -49,7 +49,6 @@ __all__ = [
     "IrAsk",
     "IrAskRequest",
     "IrAssign",
-    "IrExec",
     "IrBind",
     "IrBlock",
     "IrBreak",
@@ -67,16 +66,14 @@ __all__ = [
     "IrConstInt",
     "IrConstJsonNull",
     "IrConstText",
-    "IrResource",
     "IrConstUnit",
     "IrContains",
     "IrContinue",
     "IrConvert",
     "IrCopyValue",
-    "IrIterHasNext",
-    "IrIterInit",
-    "IrIterNext",
     "IrDirectCall",
+    "IrEnumCaseKey",
+    "IrExec",
     "IrExpr",
     "IrField",
     "IrFieldMode",
@@ -86,18 +83,20 @@ __all__ = [
     "IrIndex",
     "IrIndexSet",
     "IrIndirectCall",
-    "IrEnumCaseKey",
+    "IrIterHasNext",
+    "IrIterInit",
+    "IrIterNext",
     "IrLiteralCaseKey",
     "IrLiteralKind",
     "IrLiteralScalar",
     "IrLoad",
     "IrLoop",
-    "IrMakeConstructor",
+    "IrMakeArray",
     "IrMakeClosure",
+    "IrMakeConstructor",
     "IrMakeDict",
     "IrMakeEnum",
     "IrMakeException",
-    "IrMakeArray",
     "IrMakeJsonArray",
     "IrMakeJsonObject",
     "IrMakeRecord",
@@ -105,10 +104,15 @@ __all__ = [
     "IrParseJson",
     "IrPrint",
     "IrRaise",
-    "IrReturn",
-    "IrRenderValue",
     "IrRenderTemplate",
+    "IrRenderValue",
+    "IrResource",
+    "IrReturn",
     "IrSequence",
+    "IrSessionAsk",
+    "IrSessionDefault",
+    "IrSessionOp",
+    "IrSessionOpen",
     "IrTemplateSegment",
     "IrTemplateText",
     "IrTemplateValue",
@@ -1069,6 +1073,58 @@ class IrAsk:
     prompt: "IrExpr"
     contract_id: "ContractId"
     max_attempts: int
+
+
+@dataclass(frozen=True, slots=True)
+class IrSessionOpen:
+    """IR host-op: open a named or anonymous session for an agent.
+
+    ``transport`` is absent when the source omits its optional transport
+    argument. ``name`` always holds an expression, including the empty-text
+    default, so the host receives a concrete session name.
+    """
+
+    location: Location
+    agent: "IrExpr"
+    transport: "IrExpr | None"
+    name: "IrExpr"
+
+
+@dataclass(frozen=True, slots=True)
+class IrSessionDefault:
+    """IR host-op: obtain the lazily managed default session."""
+
+    location: Location
+
+
+@dataclass(frozen=True, slots=True)
+class IrSessionAsk:
+    """IR host-op: send a prompt through an existing session.
+
+    The response contract and retry count have the same meaning as on
+    :class:`IrAsk`; the session supplies the agent selection.
+    """
+
+    location: Location
+    session: "IrExpr"
+    prompt: "IrExpr"
+    contract_id: "ContractId"
+    max_attempts: int
+
+
+@dataclass(frozen=True, slots=True)
+class IrSessionOp:
+    """IR host-op for a non-ask session operation.
+
+    ``op`` is one of ``compact``, ``reset``, ``fork``, ``stats``,
+    ``set-name``, or ``close``. ``arg`` is optional only for ``compact`` and
+    required for ``set-name``.
+    """
+
+    location: Location
+    session: "IrExpr"
+    op: str
+    arg: "IrExpr | None" = None
 
 
 @dataclass(frozen=True, slots=True)

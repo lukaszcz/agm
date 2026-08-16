@@ -1126,8 +1126,6 @@ class EntryPipeline:
             return region, ResolvedUseTarget(
                 imported_routes=tuple(sorted(candidates, key=route_key))
             )
-        if decl.anchored:
-            return region, ResolvedUseTarget(local_path=target)
         known_local_paths = {
             known.local_path for known in known_targets if known.local_path is not None
         }

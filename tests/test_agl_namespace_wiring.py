@@ -545,6 +545,7 @@ def test_use_can_target_local_scope_exposed_by_an_earlier_use(tmp_path: Path) ->
                 "use Outer::*\n"
                 "use Inner::*\n"
                 "scope Outer\n"
+                "def unrelated() -> int = 0\n"
                 "scope Inner\n"
                 "def value() -> int = 1\n"
                 "end Inner\n"
@@ -555,6 +556,57 @@ def test_use_can_target_local_scope_exposed_by_an_earlier_use(tmp_path: Path) ->
     )
 
     check_program(resolve_program(graph), base_caps())
+
+
+def test_use_can_target_type_scope_exposed_by_an_earlier_use(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": ("use Outer::*\nuse R::*\nscope Outer\nrecord R(value: int)\nend Outer\n"),
+        },
+    )
+
+    resolve_program(graph)
+
+
+def test_use_rejects_an_ordinary_member_exposed_by_an_earlier_use(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use Outer::*\nuse value::*\nscope Outer\ndef value() -> int = 1\nend Outer\n"
+            ),
+        },
+    )
+
+    with pytest.raises(AglScopeError, match="not nameable"):
+        resolve_program(graph)
+
+
+def test_use_rejects_ambiguous_scopes_exposed_by_earlier_uses(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use First::*\n"
+                "use Second::*\n"
+                "use Shared::*\n"
+                "scope First\n"
+                "scope Shared\n"
+                "def first() -> int = 1\n"
+                "end Shared\n"
+                "end First\n"
+                "scope Second\n"
+                "scope Shared\n"
+                "def second() -> int = 2\n"
+                "end Shared\n"
+                "end Second\n"
+            ),
+        },
+    )
+
+    with pytest.raises(AglScopeError, match="ambiguous across local scopes"):
+        resolve_program(graph)
 
 
 def test_use_imported_nested_scope_selects_its_relative_public_subtree(tmp_path: Path) -> None:

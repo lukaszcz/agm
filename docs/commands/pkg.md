@@ -49,7 +49,7 @@ ZIP64 archives are not supported.
 
 `agm pkg check` validates the `package.toml` manifest, module-tree naming discipline, program
 references used by manifest command registrations, and literal resource targets reached through
-imports, opens, or resolved dependency re-exports (rejecting scoped resource re-export cycles that
+imports, uses, or resolved dependency re-exports (rejecting scoped resource re-export cycles that
 keep expanding their paths). It also checks
 dependencies without modifying packages: a `std` requirement is checked against the running AGM
 version; a matching stored version is used first for other packages, then a declared local `path`;

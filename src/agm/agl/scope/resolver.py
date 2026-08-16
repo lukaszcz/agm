@@ -1864,6 +1864,23 @@ class _Resolver:
                 and base + target not in self._scope_nodes
                 for base in bases
             )
+        if not ordinary and not decl.anchored:
+            local_parent = self._use_contributed_local_target(parent, decl.span)
+            if local_parent is not None:
+                source_path = (*local_parent, member)
+                ordinary = (
+                    source_path not in self._scope_nodes
+                    and (
+                        member in self._scope_nodes[local_parent].members
+                        or source_path in self._ordered_binding_paths
+                    )
+                )
+        if not ordinary and not decl.anchored:
+            ordinary = any(
+                (qname := members.get(member)) is not None
+                and qname not in self._cross_module_type_scopes
+                for _route, members in self._used_import_targets(parent)
+            )
         if not ordinary and not decl.current_module:
             route = tuple(target[0].split("/"))
             source = _bare_atom(target[1:])

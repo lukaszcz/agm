@@ -329,6 +329,36 @@ def test_unbraced_single_member_use_tail_can_be_renamed(tmp_path: Path) -> None:
     check_program(resolve_program(graph), base_caps())
 
 
+def test_single_member_alias_can_follow_local_scope_alias(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use Outer as O\n"
+                "use O::member as Alias\n"
+                "scope Outer\n"
+                "def member() -> int = 1\n"
+                "end Outer\n"
+                "Alias()\n"
+            ),
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_single_member_alias_can_follow_imported_scope_alias(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import lib\nuse lib::Outer as O\nuse O::member as Alias\nAlias()\n",
+            "lib": "scope Outer\ndef member() -> int = 1\nend Outer\n",
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
 def test_unbraced_ordered_binding_use_tail_can_be_renamed(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,

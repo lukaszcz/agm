@@ -63,6 +63,8 @@ from agm.agl.lexer.tokens import (
     SLASH,
     TYPEARG_LSQB,
     USE,
+    USE_TARGET_NAME,
+    USEQUAL,
     WILDCARD,
 )
 from agm.agl.syntax.advisories import SpacedQualifier
@@ -271,9 +273,21 @@ def _merge_modpath(tokens: list[Token]) -> list[Token]:
     n = len(tokens)
     while i < n:
         tok = tokens[i]
-        if tok.type in (IMPORT, USE, EXPORT) and i + 1 < n and tokens[i + 1].type == NAME:
+        has_plain_path = i + 1 < n and tokens[i + 1].type == NAME
+        has_anchored_use_path = (
+            tok.type == USE
+            and i + 2 < n
+            and tokens[i + 1].type == SLASH
+            and tokens[i + 2].type == NAME
+            and tokens[i + 1].end_pos == tokens[i + 2].start_pos
+        )
+        if tok.type in (IMPORT, USE, EXPORT) and (has_plain_path or has_anchored_use_path):
             result.append(tok)
             i += 1
+            anchored = has_anchored_use_path
+            anchor = tokens[i] if anchored else None
+            if anchored:
+                i += 1
             # Absorb NAME (SLASH NAME)*. Module path segments may begin with
             # either lowercase or uppercase letters.
             j = i
@@ -290,8 +304,8 @@ def _merge_modpath(tokens: list[Token]) -> list[Token]:
                 last_seg = tokens[j + 1]
                 seg_parts.append(str(last_seg))
                 j += 2
-            modpath_value = "/".join(seg_parts)
-            first_tok = tokens[i]
+            modpath_value = ("/" if anchored else "") + "/".join(seg_parts)
+            first_tok = anchor if anchor is not None else tokens[i]
             last_tok = tokens[j - 1]
             merged = Token(
                 MODPATH,
@@ -449,10 +463,22 @@ def _merge_modqual(tokens: list[Token], source: str) -> list[Token]:
     """
     result: list[Token] = []
     seen_dcolons: set[int] = set()
+    in_use_target = False
     i = 0
     n = len(tokens)
     while i < n:
         start = tokens[i]
+        if start.type == USE:
+            result.append(start)
+            in_use_target = True
+            i += 1
+            continue
+        if in_use_target and start.type in {"_NEWLINE", "SEMICOLON", "LBRACE", "STAR"}:
+            in_use_target = False
+        if in_use_target and start.type == NAME and i + 1 < n and tokens[i + 1].type == "AS":
+            result.append(_retype(start, USE_TARGET_NAME))
+            i += 1
+            continue
         name_index = i
         if start.type == SLASH:
             name_index += 1
@@ -498,7 +524,7 @@ def _merge_modqual(tokens: list[Token], source: str) -> list[Token]:
             last_tok = tokens[j]
             result.append(
                 Token(
-                    MODQUAL,
+                    USEQUAL if in_use_target else MODQUAL,
                     qualifier_value,
                     start_pos=start.start_pos,
                     line=start.line,

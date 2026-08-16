@@ -44,7 +44,6 @@ from agm.agl.syntax.types import (
     DecimalT,
     DictT,
     FuncT,
-    ImportMode,
     IntT,
     JsonT,
     NameT,
@@ -85,6 +84,48 @@ class _ScopePath:
         return "::".join(name for name, _span in self.segments)
 
 
+@dataclass(frozen=True, slots=True)
+class _SelectedAtom:
+    """A selected member before it is materialized as an AST item."""
+
+    path: _ScopePath
+    rename: str | None
+    span: SourceSpan
+
+
+@dataclass(frozen=True, slots=True)
+class _Braces:
+    """A brace group retained until its enclosing declaration validates it."""
+
+    entries: tuple[_SelectedAtom | _Braces | Token, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _Selection:
+    """A declaration tail before source-form validation."""
+
+    glob: bool
+    braces: _Braces | None
+    atom: _SelectedAtom | None
+
+
+@dataclass(frozen=True, slots=True)
+class _UseEnding:
+    """The final target segment, alias, or tail of a use declaration."""
+
+    prefixes: tuple[Token, ...]
+    target: Token | None
+    alias: str | None
+    tail: _Selection | None
+
+
+@dataclass(frozen=True, slots=True)
+class _AnchoredUse:
+    """A current-module-anchored use target and its ending."""
+
+    ending: _UseEnding
+
+
 _SCOPED_DECLARATIONS = (
     syntax.FuncDef,
     syntax.RecordDef,
@@ -96,6 +137,7 @@ _SCOPED_DECLARATIONS = (
     syntax.ParamDecl,
     syntax.ImportDecl,
     syntax.ExportDecl,
+    syntax.UseDecl,
     syntax.BuiltinVarDecl,
 )
 
@@ -490,44 +532,39 @@ class AstBuilder(Transformer):
     def module_block(self, meta: Meta, args: _Args) -> syntax.Block:
         """Build the module-root block, whose items may include scope regions."""
         block = self._build_block(meta, args)
-        self._validate_open_placement(block.items)
+        self._validate_use_placement(block.items)
         return block
 
-    def _validate_open_placement(self, items: tuple[syntax.Item, ...]) -> None:
-        """Require scope opens to remain in the header portion of a block.
+    def _validate_use_placement(self, items: tuple[syntax.Item, ...]) -> None:
+        """Require use declarations to remain in the header portion of a block.
 
-        ``import``/``open import`` and ``export`` placement is not this
-        check's concern -- the scope pass owns that rule uniformly, for
-        every module root and every region. This check only enforces that
-        ``open`` declarations precede a block's other items, and it treats
-        ``import``/``export`` items as header items for that purpose (they
-        never themselves trip ``seen_non_header``), so an ``open`` may still
-        follow them. Each block is validated by its own call -- built
-        bottom-up, a region's own items are checked by the call the
-        region's own transform makes, independently of the call the module
-        root (or an enclosing region) makes for its own items.
+        Import and export placement is not this check's concern -- the scope
+        pass owns that rule uniformly for every module root and region. This
+        check only enforces that use declarations precede other items, while
+        treating import and export items as header items. Each block is
+        validated independently as its transform is built bottom-up.
         """
         seen_non_header = False
         for item in items:
-            if isinstance(item, syntax.OpenDecl):
+            if isinstance(item, syntax.UseDecl):
                 if seen_non_header:
                     raise AglSyntaxError(
-                        "open declarations must precede non-header items.",
+                        "use declarations must precede non-header items.",
                         span=item.span,
                     )
             elif not isinstance(item, (syntax.ImportDecl, syntax.ExportDecl)):
                 seen_non_header = True
 
     def block(self, meta: Meta, args: _Args) -> syntax.Block:
-        """Build a regular suite block, which cannot contain scope regions or opens."""
+        """Build a regular suite block, which cannot contain scope regions or uses."""
         block = self._build_block(meta, args)
-        misplaced_open = next(
-            (item for item in block.items if isinstance(item, syntax.OpenDecl)), None
+        misplaced_use = next(
+            (item for item in block.items if isinstance(item, syntax.UseDecl)), None
         )
-        if misplaced_open is not None:
+        if misplaced_use is not None:
             raise AglSyntaxError(
-                "open declarations are only allowed at module root or in scope regions.",
-                span=misplaced_open.span,
+                "use declarations are only allowed at module root or in scope regions.",
+                span=misplaced_use.span,
             )
         return block
 
@@ -624,9 +661,9 @@ class AstBuilder(Transformer):
                 span=closer_span,
             )
 
-        allowed_items = (syntax.ScopeRegion, syntax.OpenDecl, *_SCOPED_DECLARATIONS)
+        allowed_items = (syntax.ScopeRegion, syntax.UseDecl, *_SCOPED_DECLARATIONS)
         items = tuple(arg for arg in args if isinstance(arg, allowed_items))
-        self._validate_open_placement(cast(tuple[syntax.Item, ...], items))
+        self._validate_use_placement(cast(tuple[syntax.Item, ...], items))
         disallowed = next(
             (
                 arg
@@ -2507,215 +2544,321 @@ class AstBuilder(Transformer):
         return pat
 
     # ------------------------------------------------------------------
-    # Import declaration
+    # Module declarations
     # ------------------------------------------------------------------
 
-    def _import_decl_from_args(
-        self,
-        meta: Meta,
-        args: _Args,
-        *,
-        wildcard: bool,
-    ) -> syntax.ImportDecl:
-        """Shared builder for import_decl_plain and import_decl_wildcard."""
-        module_path: tuple[str, ...] = ()
-        is_open = False
-        alias: str | None = None
-        mode = ImportMode.ALL
-        items: tuple[syntax.ImportItem, ...] = ()
+    def import_alias(self, meta: Meta, args: _Args) -> str:
+        """Return a module alias name."""
+        return str(next(a for a in args if _is_name_token(a)))
 
-        for a in args:
-            if isinstance(a, Token) and a.type == "OPEN":
-                is_open = True
-            elif isinstance(a, Token) and a.type == "MODPATH":
-                module_path = tuple(str(a).split("/"))
-            elif isinstance(a, Token):
-                # Skip IMPORT, WILDCARD, etc.
-                pass
-            elif type(a) is str:
-                # import_alias result: plain str (not Token, which is also a str subclass)
-                alias = a
-            else:
-                mode, items = cast(tuple[ImportMode, tuple[syntax.ImportItem, ...]], a)
+    def use_alias(self, meta: Meta, args: _Args) -> str:
+        """Return an additive route alias name."""
+        return str(next(a for a in args if _is_name_token(a)))
 
-        if is_open and mode is ImportMode.USING:
-            raise AglSyntaxError(
-                "`open import` cannot use a `using` clause.", span=self._span_from_meta(meta)
-            )
+    def selection_atom(self, meta: Meta, args: _Args) -> _SelectedAtom:
+        """Keep one selected path atom until its declaration chooses its AST type."""
+        path = next(a for a in args if isinstance(a, _ScopePath))
+        rename = next((str(a) for a in args if _is_name_token(a)), None)
+        return _SelectedAtom(path=path, rename=rename, span=self._span_from_meta(meta))
 
-        return syntax.ImportDecl(
-            module_path=module_path,
-            wildcard=wildcard,
-            is_open=is_open,
-            alias=alias,
-            mode=mode,
-            items=items,
-            span=self._span_from_meta(meta),
-            node_id=self._next_id(),
+    def brace_atom(self, meta: Meta, args: _Args) -> _SelectedAtom:
+        """Pass through a brace atom."""
+        return next(a for a in args if isinstance(a, _SelectedAtom))
+
+    def brace_glob(self, meta: Meta, args: _Args) -> Token:
+        """Keep an invalid brace glob for declaration-level validation."""
+        return next(a for a in args if isinstance(a, Token) and a.type == "STAR")
+
+    def brace_nested(self, meta: Meta, args: _Args) -> _Braces:
+        """Keep an invalid nested group for declaration-level validation."""
+        return next(a for a in args if isinstance(a, _Braces))
+
+    def brace_entries(self, meta: Meta, args: _Args) -> tuple[_SelectedAtom | _Braces | Token, ...]:
+        """Collect braces entries without validating their source form yet."""
+        return tuple(
+            a
+            for a in args
+            if isinstance(a, (_SelectedAtom, _Braces)) or isinstance(a, Token) and a.type == "STAR"
         )
 
-    def import_decl_plain(self, meta: Meta, args: _Args) -> syntax.ImportDecl:
-        """import_decl_plain: OPEN? IMPORT MODPATH import_alias? import_clause?"""
-        return self._import_decl_from_args(meta, args, wildcard=False)
+    def braces(self, meta: Meta, args: _Args) -> _Braces:
+        """Build a brace group, including an empty one for a targeted error."""
+        entries = next((a for a in args if isinstance(a, tuple)), ())
+        return _Braces(entries=cast(tuple[_SelectedAtom | _Braces | Token, ...], entries))
 
-    def import_decl_wildcard(self, meta: Meta, args: _Args) -> syntax.ImportDecl:
-        """import_decl_wildcard: OPEN? IMPORT MODPATH WILDCARD import_alias? import_clause?"""
-        return self._import_decl_from_args(meta, args, wildcard=True)
+    def selection_glob(self, meta: Meta, args: _Args) -> _Selection:
+        """Build a glob selection."""
+        return _Selection(glob=True, braces=None, atom=None)
 
-    def import_alias(self, meta: Meta, args: _Args) -> str:
-        """import_alias: "as" name — return the alias name as a plain str."""
-        tok = next(a for a in args if _is_name_token(a))
-        return str(tok)
+    def selection_braces(self, meta: Meta, args: _Args) -> _Selection:
+        """Build a brace selection."""
+        return _Selection(
+            glob=False,
+            braces=next(a for a in args if isinstance(a, _Braces)),
+            atom=None,
+        )
 
-    def _import_item(self, meta: Meta, path: _ScopePath, rename: str | None) -> syntax.ImportItem:
-        name, _span = path.segments[-1]
+    def selection_single(self, meta: Meta, args: _Args) -> _Selection:
+        """Build a single-atom selection."""
+        return _Selection(
+            glob=False,
+            braces=None,
+            atom=next(a for a in args if isinstance(a, _SelectedAtom)),
+        )
+
+    def import_tail_clause(self, meta: Meta, args: _Args) -> _Selection:
+        """Pass through an import tail selection."""
+        return next(a for a in args if isinstance(a, _Selection))
+
+    def export_braces_tail(self, meta: Meta, args: _Args) -> _Braces:
+        """Pass through export braces."""
+        return next(a for a in args if isinstance(a, _Braces))
+
+    def export_glob_tail(self, meta: Meta, args: _Args) -> Token:
+        """Keep an invalid export glob for declaration-level validation."""
+        return next(a for a in args if isinstance(a, Token) and a.type == "STAR")
+
+    def hiding_clause(self, meta: Meta, args: _Args) -> tuple[_ScopePath, ...]:
+        """Collect the paths hidden by one declaration."""
+        return tuple(a for a in args if isinstance(a, _ScopePath))
+
+    def _path_span(self, path: _ScopePath) -> SourceSpan:
+        """Return the span from the first through last segment of a path."""
+        start = path.segments[0][1]
+        end = path.segments[-1][1]
+        return SourceSpan(
+            start_line=start.start_line,
+            start_col=start.start_col,
+            end_line=end.end_line,
+            end_col=end.end_col,
+            start_offset=start.start_offset,
+            end_offset=end.end_offset,
+            source=start.source,
+        )
+
+    def _import_item_from_path(
+        self, path: _ScopePath, rename: str | None, span: SourceSpan
+    ) -> syntax.ImportItem:
+        name, _name_span = path.segments[-1]
         return syntax.ImportItem(
             name=name,
             rename=rename,
             scope_path=self._scope_segments(_ScopePath(path.segments[:-1])),
-            span=self._span_from_meta(meta),
+            span=span,
             node_id=self._next_id(),
         )
 
-    def _hiding_items(self, meta: Meta, args: _Args) -> tuple[syntax.ImportItem, ...]:
-        """Build hiding ImportItem tuples from selection path atoms."""
-        return tuple(
-            self._import_item(meta, path, None) for path in args if isinstance(path, _ScopePath)
-        )
-
-    def import_clause_using(
-        self, meta: Meta, args: _Args
-    ) -> tuple[ImportMode, tuple[syntax.ImportItem, ...]]:
-        """import_clause_using: USING import_item (COMMA import_item)*"""
-        import_items = tuple(a for a in args if isinstance(a, syntax.ImportItem))
-        return (ImportMode.USING, import_items)
-
-    def import_clause_hiding(
-        self, meta: Meta, args: _Args
-    ) -> tuple[ImportMode, tuple[syntax.ImportItem, ...]]:
-        """import_clause_hiding: HIDING path_atom (COMMA path_atom)*"""
-        return (ImportMode.HIDING, self._hiding_items(meta, args))
-
-    def import_item_rename(self, meta: Meta, args: _Args) -> syntax.ImportItem:
-        """import_item_rename: path_atom "as" name"""
-        path = next(a for a in args if isinstance(a, _ScopePath))
-        rename = str(next(a for a in args if _is_name_token(a)))
-        return self._import_item(meta, path, rename)
-
-    def import_item_plain(self, meta: Meta, args: _Args) -> syntax.ImportItem:
-        """import_item_plain: path_atom"""
-        path = next(a for a in args if isinstance(a, _ScopePath))
-        return self._import_item(meta, path, None)
-
-    def scope_ref(self, meta: Meta, args: _Args) -> syntax.ScopeRef:
-        """Build an open target, splitting an unambiguous slash module route."""
-        path = self._path_from_tokens(args, reject_module_routes=False)
-        module_route: tuple[str, ...] = ()
-        scope_segments = path.segments
-        if len(path.segments) > 1 and "/" in path.segments[0][0]:
-            module_route = tuple(part for part in path.segments[0][0].split("/") if part)
-            scope_segments = path.segments[1:]
-        return syntax.ScopeRef(
-            module_route=module_route,
-            scope_path=self._scope_segments(_ScopePath(scope_segments)),
-            span=self._span_from_meta(meta),
-            node_id=self._next_id(),
-        )
-
-    def open_decl(self, meta: Meta, args: _Args) -> syntax.OpenDecl:
-        """Build an ``open`` declaration using the import-clause grammar."""
-        scope_ref = next(a for a in args if isinstance(a, syntax.ScopeRef))
-        clause = next((a for a in args if isinstance(a, tuple)), (ImportMode.ALL, tuple()))
-        mode, items = cast(tuple[ImportMode, tuple[syntax.ImportItem, ...]], clause)
-        return syntax.OpenDecl(
-            scope_ref=scope_ref,
-            mode=mode,
-            items=items,
-            span=self._span_from_meta(meta),
-            node_id=self._next_id(),
-        )
-
-    # ------------------------------------------------------------------
-    # Export declaration
-    # ------------------------------------------------------------------
-
-    def _export_decl_from_args(
-        self,
-        meta: Meta,
-        args: _Args,
-        *,
-        wildcard: bool,
-    ) -> syntax.ExportDecl:
-        """Shared builder for export_decl_plain and export_decl_wildcard."""
-        module_path: tuple[str, ...] = ()
-        mode = ImportMode.ALL
-        items: tuple[syntax.ExportItem, ...] = ()
-
-        for a in args:
-            if isinstance(a, Token) and a.type == "MODPATH":
-                module_path = tuple(str(a).split("/"))
-            elif isinstance(a, Token):
-                # Skip EXPORT, WILDCARD, etc.
-                pass
-            else:
-                mode, items = cast(tuple[ImportMode, tuple[syntax.ExportItem, ...]], a)
-
-        return syntax.ExportDecl(
-            module_path=module_path,
-            wildcard=wildcard,
-            mode=mode,
-            items=items,
-            span=self._span_from_meta(meta),
-            node_id=self._next_id(),
-        )
-
-    def export_decl_plain(self, meta: Meta, args: _Args) -> syntax.ExportDecl:
-        """export_decl_plain: EXPORT MODPATH export_clause?"""
-        return self._export_decl_from_args(meta, args, wildcard=False)
-
-    def export_decl_wildcard(self, meta: Meta, args: _Args) -> syntax.ExportDecl:
-        """export_decl_wildcard: EXPORT MODPATH WILDCARD export_clause?"""
-        return self._export_decl_from_args(meta, args, wildcard=True)
-
-    def _export_item(self, meta: Meta, path: _ScopePath, rename: str | None) -> syntax.ExportItem:
-        name, _span = path.segments[-1]
+    def _export_item_from_path(
+        self, path: _ScopePath, rename: str | None, span: SourceSpan
+    ) -> syntax.ExportItem:
+        name, _name_span = path.segments[-1]
         return syntax.ExportItem(
             name=name,
             rename=rename,
             scope_path=self._scope_segments(_ScopePath(path.segments[:-1])),
-            span=self._span_from_meta(meta),
+            span=span,
             node_id=self._next_id(),
         )
 
-    def _export_hiding_items(self, meta: Meta, args: _Args) -> tuple[syntax.ExportItem, ...]:
-        """Build hiding ExportItem tuples from selection path atoms."""
-        return tuple(
-            self._export_item(meta, path, None) for path in args if isinstance(path, _ScopePath)
+    def _brace_atoms(self, braces: _Braces, span: SourceSpan) -> tuple[_SelectedAtom, ...]:
+        """Validate one brace group and return its direct atom entries."""
+        if not braces.entries:
+            raise AglSyntaxError("Selection braces cannot be empty.", span=span)
+        if any(isinstance(entry, Token) for entry in braces.entries):
+            raise AglSyntaxError("Selection braces cannot contain '*'.", span=span)
+        if any(isinstance(entry, _Braces) for entry in braces.entries):
+            raise AglSyntaxError("Selection braces cannot be nested.", span=span)
+        return cast(tuple[_SelectedAtom, ...], braces.entries)
+
+    def _selection_atoms(
+        self, selection: _Selection, span: SourceSpan
+    ) -> tuple[_SelectedAtom, ...]:
+        """Return normalized tail atoms, using an empty tuple for a glob."""
+        if selection.glob:
+            return ()
+        if selection.braces is not None:
+            return self._brace_atoms(selection.braces, span)
+        assert selection.atom is not None
+        return (selection.atom,)
+
+    def import_decl(self, meta: Meta, args: _Args) -> syntax.ImportDecl:
+        """Build an import declaration and enforce its tail and hiding rules."""
+        span = self._span_from_meta(meta)
+        module_path = tuple(
+            str(next(a for a in args if isinstance(a, Token) and a.type == "MODPATH")).split("/")
+        )
+        wildcard = any(isinstance(a, Token) and a.type == "WILDCARD" for a in args)
+        alias = next((a for a in args if type(a) is str), None)
+        tail = next((a for a in args if isinstance(a, _Selection)), None)
+        hidden_paths = next((a for a in args if isinstance(a, tuple)), ())
+        hidden_paths = cast(tuple[_ScopePath, ...], hidden_paths)
+        if alias is not None and tail is not None:
+            raise AglSyntaxError("An import alias cannot be combined with a tail.", span=span)
+        if hidden_paths and tail is not None and not tail.glob:
+            raise AglSyntaxError("Hiding is only valid with a plain or glob import.", span=span)
+        tail_atoms = () if tail is None else self._selection_atoms(tail, span)
+        return syntax.ImportDecl(
+            module_path=module_path,
+            wildcard=wildcard,
+            alias=alias,
+            tail=None
+            if tail is None
+            else tuple(
+                self._import_item_from_path(atom.path, atom.rename, atom.span)
+                for atom in tail_atoms
+            ),
+            hidden=tuple(
+                self._import_item_from_path(path, None, self._path_span(path))
+                for path in hidden_paths
+            ),
+            span=span,
+            node_id=self._next_id(),
         )
 
-    def export_clause_using(
-        self, meta: Meta, args: _Args
-    ) -> tuple[ImportMode, tuple[syntax.ExportItem, ...]]:
-        """export_clause_using: USING export_item (COMMA export_item)*"""
-        export_items = tuple(a for a in args if isinstance(a, syntax.ExportItem))
-        return (ImportMode.USING, export_items)
+    def use_suffix_alias(self, meta: Meta, args: _Args) -> _UseEnding:
+        """Build a use suffix containing only an alias."""
+        return _UseEnding(
+            prefixes=(), target=None, alias=next(a for a in args if type(a) is str), tail=None
+        )
 
-    def export_clause_hiding(
-        self, meta: Meta, args: _Args
-    ) -> tuple[ImportMode, tuple[syntax.ExportItem, ...]]:
-        """export_clause_hiding: HIDING path_atom (COMMA path_atom)*"""
-        return (ImportMode.HIDING, self._export_hiding_items(meta, args))
+    def use_suffix_target_alias(self, meta: Meta, args: _Args) -> _UseEnding:
+        """Build a use suffix with a final unmerged target segment and alias."""
+        return _UseEnding(
+            prefixes=(),
+            target=next(a for a in args if isinstance(a, Token) and a.type == "USE_TARGET_NAME"),
+            alias=next(a for a in args if type(a) is str),
+            tail=None,
+        )
 
-    def export_item_rename(self, meta: Meta, args: _Args) -> syntax.ExportItem:
-        """export_item_rename: path_atom "as" name"""
-        path = next(a for a in args if isinstance(a, _ScopePath))
-        rename = str(next(a for a in args if _is_name_token(a)))
-        return self._export_item(meta, path, rename)
+    def use_suffix_tail(self, meta: Meta, args: _Args) -> _UseEnding:
+        """Build a use suffix containing a selection tail."""
+        return _UseEnding(
+            prefixes=(),
+            target=None,
+            alias=None,
+            tail=next(a for a in args if isinstance(a, _Selection)),
+        )
 
-    def export_item_plain(self, meta: Meta, args: _Args) -> syntax.ExportItem:
-        """export_item_plain: path_atom"""
-        path = next(a for a in args if isinstance(a, _ScopePath))
-        return self._export_item(meta, path, None)
+    def use_suffix_prefixed(self, meta: Meta, args: _Args) -> _UseEnding:
+        """Prepend one lexer-merged target segment to a use suffix."""
+        suffix = next(a for a in args if isinstance(a, _UseEnding))
+        prefix = next(a for a in args if isinstance(a, Token) and a.type == "USEQUAL")
+        return replace(suffix, prefixes=(prefix, *suffix.prefixes))
+
+    def use_suffix_prefixed_tail(self, meta: Meta, args: _Args) -> _UseEnding:
+        """Build a tail after one or more lexer-merged target segments."""
+        prefixes = tuple(a for a in args if isinstance(a, Token) and a.type == "USEQUAL")
+        return _UseEnding(
+            prefixes=prefixes,
+            target=None,
+            alias=None,
+            tail=next(a for a in args if isinstance(a, _Selection)),
+        )
+
+    def use_anchored_tail(self, meta: Meta, args: _Args) -> _AnchoredUse:
+        """Build a current-module target with a selection tail."""
+        return _AnchoredUse(
+            _UseEnding(
+                prefixes=tuple(a for a in args if isinstance(a, Token) and a.type == "USEQUAL"),
+                target=None,
+                alias=None,
+                tail=next(a for a in args if isinstance(a, _Selection)),
+            )
+        )
+
+    def use_anchored_alias(self, meta: Meta, args: _Args) -> _AnchoredUse:
+        """Build a current-module target with an additive alias."""
+        return _AnchoredUse(
+            _UseEnding(
+                prefixes=tuple(a for a in args if isinstance(a, Token) and a.type == "USEQUAL"),
+                target=next(
+                    a for a in args if isinstance(a, Token) and a.type == "USE_TARGET_NAME"
+                ),
+                alias=next(a for a in args if type(a) is str),
+                tail=None,
+            )
+        )
+
+    def use_decl(self, meta: Meta, args: _Args) -> syntax.UseDecl:
+        """Build a use declaration and enforce its injection and hiding rules."""
+        span = self._span_from_meta(meta)
+        anchored_target = next((a for a in args if isinstance(a, _AnchoredUse)), None)
+        path_token = next((a for a in args if isinstance(a, Token) and a.type == "MODPATH"), None)
+        anchored = anchored_target is not None
+        target_segments: list[tuple[str, SourceSpan]] = []
+        if path_token is not None:
+            spelling = str(path_token)
+            anchored = spelling.startswith("/")
+            target_segments.append((spelling.removeprefix("/"), self._span_from_token(path_token)))
+        ending = (
+            anchored_target.ending
+            if anchored_target is not None
+            else next((a for a in args if isinstance(a, _UseEnding)), None)
+        )
+        if ending is not None:
+            for token in ending.prefixes:
+                target_segments.append(
+                    (str(token).removesuffix("::"), self._span_from_token(token))
+                )
+        if ending is not None and ending.target is not None:
+            target_segments.append((str(ending.target), self._span_from_token(ending.target)))
+        alias = None if ending is None else ending.alias
+        tail = None if ending is None else ending.tail
+        hidden_paths = cast(
+            tuple[_ScopePath, ...], next((a for a in args if isinstance(a, tuple)), ())
+        )
+        if tail is None and alias is None and not anchored and len(target_segments) == 1:
+            raise AglSyntaxError("A bare use target needs a tail or alias.", span=span)
+        if hidden_paths and (tail is None or not tail.glob):
+            raise AglSyntaxError("Hiding is only valid with a glob use tail.", span=span)
+        tail_atoms = () if tail is None else self._selection_atoms(tail, span)
+        return syntax.UseDecl(
+            anchored=anchored,
+            target=self._scope_segments(_ScopePath(tuple(target_segments))),
+            tail=None
+            if tail is None
+            else tuple(
+                self._import_item_from_path(atom.path, atom.rename, atom.span)
+                for atom in tail_atoms
+            ),
+            hidden=tuple(
+                self._import_item_from_path(path, None, self._path_span(path))
+                for path in hidden_paths
+            ),
+            alias=alias,
+            span=span,
+            node_id=self._next_id(),
+        )
+
+    def export_decl(self, meta: Meta, args: _Args) -> syntax.ExportDecl:
+        """Build an export declaration and enforce its braces and hiding rules."""
+        span = self._span_from_meta(meta)
+        module_path = tuple(
+            str(next(a for a in args if isinstance(a, Token) and a.type == "MODPATH")).split("/")
+        )
+        wildcard = any(isinstance(a, Token) and a.type == "WILDCARD" for a in args)
+        if any(isinstance(a, Token) and a.type == "STAR" for a in args):
+            raise AglSyntaxError("Export declarations cannot use a glob tail.", span=span)
+        braces = next((a for a in args if isinstance(a, _Braces)), None)
+        hidden_paths = cast(
+            tuple[_ScopePath, ...], next((a for a in args if isinstance(a, tuple)), ())
+        )
+        if braces is not None and hidden_paths:
+            raise AglSyntaxError("Export braces cannot be combined with hiding.", span=span)
+        atoms = () if braces is None else self._brace_atoms(braces, span)
+        return syntax.ExportDecl(
+            module_path=module_path,
+            wildcard=wildcard,
+            items=tuple(
+                self._export_item_from_path(atom.path, atom.rename, atom.span) for atom in atoms
+            ),
+            hidden=tuple(
+                self._export_item_from_path(path, None, self._path_span(path))
+                for path in hidden_paths
+            ),
+            span=span,
+            node_id=self._next_id(),
+        )
 
     # ------------------------------------------------------------------
     # Builtin declarations

@@ -76,7 +76,7 @@ region.
   spelling is its full scope path; see [Named scopes](scopes.md#parameters).
 - **`import`/`use`/`export` declarations** — module-system declarations;
   root-only or members of a named scope region. A scoped import tail or use
-  contributes bare names only to its own region; an import's qualifier route
+  contributes bare names only to its own region and nested regions; an import's qualifier route
   stays module-wide. A scoped export re-roots its forwarded atoms under the
   region's path. See [Named scopes](scopes.md#import-and-export) and
   [Modules](modules.md#imports-and-use-inside-a-scope-region).

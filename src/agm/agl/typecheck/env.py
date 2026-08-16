@@ -1679,6 +1679,12 @@ class TypeEnvironment:
                     span=eff_span,
                 )
                 if opened is not None:
+                    if self.has_qualified_import_member(qualifier, name):
+                        raise AglTypeError(
+                            f"Qualifier '{qualifier.render()}' is both a use route and a module "
+                            f"route for '{name}'. {qualification_repair_guidance()}",
+                            span=eff_span,
+                        )
                     return opened
             if qualifier is not None and qualifier.route_segments:
                 return self._resolve_qualified_applied_type(
@@ -1935,6 +1941,12 @@ class TypeEnvironment:
                 span,
             )
             if opened is not None:
+                if self.has_qualified_import_member(qualifier, name):
+                    raise AglTypeError(
+                        f"Qualifier '{rendered}' is both a use route and a module route for "
+                        f"'{name}'. {qualification_repair_guidance()}",
+                        span=span,
+                    )
                 return opened
         if self._is_missing_local_scoped_type(qualifier):
             raise AglTypeError(self._unknown_scoped_type_message(qualifier, name), span=span)

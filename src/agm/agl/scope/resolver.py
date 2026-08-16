@@ -54,6 +54,7 @@ from agm.agl.scope.imports import (
     BareRoute,
     NameAtom,
     QName,
+    QualResolutionAmbiguous,
     QualResolutionFound,
     qualification_repair_guidance,
     qualifier_candidates,
@@ -2793,7 +2794,39 @@ class _Resolver:
         if chain.anchor is not None:
             return None
         atom = _bare_atom((*tuple(segment.name for segment in chain.segments), name))
-        return self._lookup_bare_contribution(atom, span)
+        opened = self._lookup_bare_contribution(atom, span)
+        if opened is None:
+            return None
+        imported = resolve_qualified(
+            self._import_env, chain.route_segments, name, anchored=chain.anchored
+        )
+        if isinstance(imported, QualResolutionAmbiguous):
+            raise AglScopeError(
+                f"'{chain.render()}::{name}' is ambiguous across use and import routes. "
+                f"{qualification_repair_guidance()}",
+                span=span,
+            )
+        if isinstance(imported, QualResolutionFound):
+            imported_ref = self._cross_module_member_ref(name, imported.qname, span)[0]
+            opened_identity = (
+                opened.module_id,
+                opened.scope_path,
+                opened.decl_node_id,
+                opened.kind,
+            )
+            imported_identity = (
+                imported_ref.module_id,
+                imported_ref.scope_path,
+                imported_ref.decl_node_id,
+                imported_ref.kind,
+            )
+            if opened_identity != imported_identity:
+                raise AglScopeError(
+                    f"'{chain.render()}::{name}' is ambiguous between a use contribution "
+                    f"and an import route. {qualification_repair_guidance()}",
+                    span=span,
+                )
+        return opened
 
     def _resolve_constructor_chain(
         self,
@@ -2882,6 +2915,24 @@ class _Resolver:
             return None
         relative_path = tuple(segment.name for segment in chain.segments)
         opened = self._regional_constructor_candidates(_bare_atom((*relative_path, variant)))
+        if opened:
+            imported = resolve_qualified(
+                self._import_env, chain.route_segments, variant, anchored=chain.anchored
+            )
+            imported_constructor = (
+                self._cross_module_constructor_refs.get(imported.qname)
+                if isinstance(imported, QualResolutionFound)
+                else None
+            )
+            if isinstance(imported, QualResolutionAmbiguous) or (
+                isinstance(imported, QualResolutionFound) and opened != {imported_constructor}
+            ):
+                rendered = "::".join((*relative_path, variant))
+                raise AglScopeError(
+                    f"'{rendered}' is ambiguous between a use contribution and an import "
+                    f"route. {qualification_repair_guidance()}",
+                    span=chain.span,
+                )
         if opened is not None:
             return opened
         if (

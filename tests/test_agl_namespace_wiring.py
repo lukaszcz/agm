@@ -361,6 +361,63 @@ def test_root_local_use_and_import_tail_collision_is_ambiguous(tmp_path: Path) -
         resolve_program(graph)
 
 
+def test_qualified_use_and_import_route_collision_is_ambiguous(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": ("import lib\nuse S as lib\nscope S\ndef x() -> int = 2\nend S\nlib::x()\n"),
+            "lib": "def x() -> int = 1\n",
+        },
+    )
+
+    with pytest.raises(AglScopeError, match="ambiguous"):
+        resolve_program(graph)
+
+
+def test_qualified_constructor_use_and_import_route_collision_is_ambiguous(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import lib\n"
+                "use S as lib\n"
+                "scope S\n"
+                "record X(value: int)\n"
+                "end S\n"
+                "let item = S::X(value = 1)\n"
+                "case item of\n"
+                "  | lib::X(value) => value\n"
+            ),
+            "lib": "record X(value: int)\n",
+        },
+    )
+
+    with pytest.raises(AglScopeError, match="ambiguous"):
+        resolve_program(graph)
+
+
+def test_qualified_type_use_and_import_route_collision_is_ambiguous(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import lib\n"
+                "use S as lib\n"
+                "scope S\n"
+                "type T = int\n"
+                "end S\n"
+                "def identity(value: lib::T) -> lib::T = value\n"
+            ),
+            "lib": "type T = text\n",
+        },
+    )
+
+    with pytest.raises(AglTypeError, match="both"):
+        check_program(resolve_program(graph), base_caps())
+
+
 def test_inner_use_shadows_root_import_and_use_contributions(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,

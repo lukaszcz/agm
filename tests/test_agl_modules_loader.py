@@ -168,16 +168,16 @@ class TestGraphBuild:
         graph = load_graph("let x = 1", entry_path=None, roots=_roots(root))
         registry_id = ModuleId.from_path("std/builtin-methods")
         array_id = ModuleId.from_path("std/array")
+        text_id = ModuleId.from_path("std/text")
 
         assert ENTRY_ID in graph.modules
         assert STD_CORE_ID in graph.modules
         assert STD_OPTION_ID in graph.modules
         assert ModuleId.from_path("std/config") in graph.modules
         assert graph.modules[STD_CORE_ID].path == (_REPO_STDLIB_ROOT / "std" / "core.agl").resolve()
-        assert {registry_id, array_id}.issubset(graph.ambient_modules)
+        assert {registry_id, array_id, text_id}.issubset(graph.ambient_modules)
         assert graph.adjacency[ENTRY_ID] == (STD_CORE_ID,)
-        assert array_id in graph.adjacency[registry_id]
-        assert ModuleId.from_path("std/text") not in graph.modules
+        assert {array_id, text_id}.issubset(graph.adjacency[registry_id])
 
     def test_imported_module_appears_in_graph(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
@@ -1114,8 +1114,8 @@ class TestBuildReplGraph:
         assert {
             ModuleId.from_path("std/builtin-methods"),
             ModuleId.from_path("std/array"),
+            ModuleId.from_path("std/text"),
         }.issubset(graph.ambient_modules)
-        assert ModuleId.from_path("std/text") not in graph.modules
         assert ENTRY_ID not in new_modules
         assert set(new_modules) == set(graph.modules) - {ENTRY_ID}
         assert all(graph.modules[mid] is module for mid, module in new_modules.items())

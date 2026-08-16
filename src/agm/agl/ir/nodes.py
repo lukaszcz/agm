@@ -469,7 +469,7 @@ class IrUpdateRecord:
 
 @dataclass(frozen=True, slots=True)
 class IrIndex:
-    """IR index access: obj[index] on an array (ARRAY) or dict (DICT)."""
+    """IR index access: obj[index] on an array, dict, or text value."""
 
     location: Location
     kind: IndexKind
@@ -481,7 +481,8 @@ class IrIndex:
 class IrIndexSet:
     """IR indexed assignment: ``container[index] := value``.
 
-    ``container`` evaluates to the array or dict being mutated; under
+    ``container`` evaluates to the array or dict being mutated; text is immutable and
+    cannot produce this node. Under
     reference semantics it needs no root symbol or ``Cell`` — only a
     container reference, which ``container`` supplies directly. Nesting
     (``m["a"]["b"] := v``) falls out for free: ``container`` is itself an

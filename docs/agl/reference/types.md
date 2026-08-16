@@ -92,8 +92,11 @@ of a zero-argument call — the two are syntactically unified.
 
 ### `text`
 
-An immutable Unicode string. Untyped `ask` results default to `text`
-([Agent calls](agent-calls.md)).
+An immutable Unicode string. Text indexing (`s[i]`) returns the Unicode code
+point at an integer index; negative indexes count from the end, and an
+out-of-range index raises `IndexError`. Text cannot be changed through indexed
+assignment. Untyped `ask` results default to `text` ([Agent calls](agent-calls.md)).
+See [`std/text`](#stdtext) for its methods.
 
 ### Numbers: `int` and `decimal`
 
@@ -310,6 +313,30 @@ See [Functions](functions.md) for the declaration and call syntax.
 
 The automatic `std/core` prelude exposes the core types and re-exports
 `std/option`, `std/pair`, `std/either`, and `std/result`.
+
+### `std/text`
+
+`std/text` owns the ambient methods on `text`; importing it is only needed for
+its free `interp(template, vars)` function. Text lengths, indexes, slices,
+padding, and `chars()` use Unicode code points. `lines()` recognizes Unicode
+line boundaries and omits line terminators.
+
+| Method | Result |
+| ------ | ------ |
+| `size()`, `is-empty()` | Code-point length or emptiness |
+| `chars()`, `lines()`, `split(separator)` | `array[text]` of code points, lines, or exact-separator fields |
+| `trim()`, `trim-start()`, `trim-end()` | Whitespace-trimmed text |
+| `upper()`, `lower()` | Unicode case conversion |
+| `starts-with(prefix)`, `ends-with(suffix)`, `contains(substring)` | Predicate result |
+| `index-of(substring)` | First code-point position; raises `IndexError` when absent |
+| `index-of?(substring)` | `Option[int]`, with `None` when absent |
+| `replace(old, new)` | Text with every non-overlapping `old` occurrence replaced |
+| `slice(start, end)` | End-exclusive text slice; negative and out-of-range bounds are clamped |
+| `repeat(count)` | Text repeated `count` times; non-positive counts yield empty text |
+| `pad-start(length, fill)`, `pad-end(length, fill)` | Pad to a code-point length, truncating repeated `fill` as needed; an empty fill leaves the text unchanged |
+
+`interp(template, vars)` keeps runtime name-only interpolation available for a
+`dict[text, text]`; see [Strings and interpolation](strings-and-interpolation.md).
 
 ### `Option[T]`
 

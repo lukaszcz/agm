@@ -2,3 +2,4 @@
 # receiver methods available; their modules' free functions remain explicit.
 import std/array
 import std/dict
+import std/text

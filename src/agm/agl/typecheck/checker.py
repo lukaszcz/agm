@@ -1359,6 +1359,11 @@ class _Checker:
         # same helper a read uses, so a non-container root is framed with the
         # same inferred-return-provenance guidance as `expr[index]`.
         container_type = self._check_boundary_expr(target.obj, expected=None)
+        if isinstance(container_type, TextType):
+            raise AglTypeError(
+                "indexed assignment requires an array or dict; text is immutable.",
+                span=target.span,
+            )
         elem_type = self._check_index_operand(
             container_type, target.index, span=target.span, obj_expr=target.obj
         )
@@ -4393,13 +4398,18 @@ class _Checker:
             self._assert_assignable_from(index_type, IntType(), index.span, index)
             return obj_type.elem
 
+        if isinstance(obj_type, TextType):
+            index_type = self._check_expr(index, expected=IntType())
+            self._assert_assignable_from(index_type, IntType(), index.span, index)
+            return TextType()
+
         if isinstance(obj_type, DictType):
             index_type = self._check_expr(index, expected=TextType())
             self._assert_assignable_from(index_type, TextType(), index.span, index)
             return obj_type.value
 
         error = AglTypeError(
-            f"indexing requires an array or dict; got '{obj_type!r}'.",
+            f"indexing requires an array or dict or text; got '{obj_type!r}'.",
             span=span,
         )
         raise self._frame_inferred_return_error(

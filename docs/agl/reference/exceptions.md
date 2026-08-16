@@ -352,7 +352,8 @@ environment](host-environment.md#engine-settings)).
 
 ### `IndexError`
 
-Raised by out-of-range array indexing or indexed array assignment.
+Raised by out-of-range array or text indexing, indexed array assignment, or
+`text::index-of` when a substring is absent.
 
 ```text
 index: int
@@ -446,7 +447,7 @@ a cycle arises, which operations raise this and which tolerate a cycle instead
 
 | Source | Exception |
 | ------ | --------- |
-| Out-of-range array index access or assignment | `IndexError` |
+| Out-of-range array/text index access, array indexed assignment, or absent `text::index-of` substring | `IndexError` |
 | Missing dictionary key access or assignment | `KeyError` |
 | Agent transport failure | `AgentCallError` |
 | Invalid structured output after all attempts | `AgentParseError` |

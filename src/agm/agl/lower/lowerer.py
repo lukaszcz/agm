@@ -3538,12 +3538,14 @@ class _Lowerer:
         )
 
     def _kind_for_container(self, t: Type) -> IndexKind:
-        """Return IndexKind for a container type (ARRAY or DICT)."""
+        """Return IndexKind for an indexable array, dict, or text value."""
         if isinstance(t, ArrayType):
             return IndexKind.ARRAY
         if isinstance(t, DictType):
             return IndexKind.DICT
-        raise AssertionError(f"compiler bug: non-container type in index path: {t!r}")
+        if isinstance(t, TextType):
+            return IndexKind.TEXT
+        raise AssertionError(f"compiler bug: non-indexable type in index path: {t!r}")
 
     # ------------------------------------------------------------------
     # Top-level entry point

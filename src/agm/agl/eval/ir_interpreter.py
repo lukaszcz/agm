@@ -648,7 +648,7 @@ class IrInterpreter:
                 return AglRaise(
                     _make_exc_value(
                         "IndexError",
-                        f"Array index {err.index} out of range for length {err.length}",
+                        str(err),
                         nominals=self._program.builtin_nominals,
                         index=IntValue(err.index),
                         length=IntValue(err.length),

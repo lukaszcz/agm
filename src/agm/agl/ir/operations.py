@@ -104,10 +104,11 @@ class ContainsKind(enum.Enum):
 
 
 class IndexKind(enum.Enum):
-    """Kind tag for index access: array or dict."""
+    """Kind tag for index access: array, dict, or text."""
 
     ARRAY = "array"
     DICT = "dict"
+    TEXT = "text"
 
 
 class CopyKind(enum.Enum):

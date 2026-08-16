@@ -385,13 +385,14 @@ the value's concrete exception type — see
 
 ## Indexing
 
-`expr[index]` reads from an array or dictionary:
+`expr[index]` reads from an array, dictionary, or text:
 
 <!-- agl-check: fragment -->
 ```agl
 let third = xs[2]
 let last = xs[-1]
 let value = metadata["source"]
+let initial = "Ada"[0]
 ```
 
 Indexing is a postfix operator and may be chained with calls and field access:
@@ -406,9 +407,11 @@ let item = make_items()[0]
 Whitespace matters. `xs[0]` is indexing because the `[` is adjacent to `xs`.
 `f [0]` remains the single-argument call sugar `f([0])`.
 
-Array indexes must be `int`. Negative indexes count from the end, as in
-Python: `xs[-1]` selects the last element. An out-of-range array index raises
-catchable `IndexError` with `index`, `length`, and `message` fields.
+Array and text indexes must be `int`. Negative indexes count from the end, as
+in Python: `xs[-1]` selects the last element. A text index returns one Unicode
+code point. An out-of-range array or text index raises catchable `IndexError`
+with `index`, `length`, and `message` fields. Text is immutable, so it cannot
+be an indexed-assignment target.
 
 Dictionary indexes must be `text`. Missing keys raise catchable `KeyError`
 with `key` and `message` fields.

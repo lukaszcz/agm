@@ -259,8 +259,10 @@ rules.
   [`std/array`](#stdarray).
 - `std/dict` owns dictionary methods and conversion from key/value pairs; see
   [`std/dict`](#stddict).
-- `std/text` exposes `interp(template, vars) -> text` for name-only runtime
-  interpolation; see [Strings and interpolation](strings-and-interpolation.md#runtime-interpolation).
+- `std/text` owns the ambient `text` methods and exposes
+  `interp(template, vars) -> text` for name-only runtime interpolation; import
+  it to call `interp`, and see [Types](types.md#stdtext) and
+  [Strings and interpolation](strings-and-interpolation.md#runtime-interpolation).
 - `std/fs` exposes explicit text filesystem operations: `read`, `write`,
   `append`, `exists`, and `list`; see [`std/fs`](expressions.md#stdfs).
 

@@ -123,7 +123,7 @@ program def main() -> unit =
 
 <!-- agl-check: fragment -->
 ```agl
-open import containers
+import containers::*
 
 def unwrap(box: Box[int]) -> int = box.value
 let open_box: Box[int] = Box(value = 1)

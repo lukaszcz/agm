@@ -61,6 +61,7 @@ from agm.agl.lexer.tokens import (
     RSQB,
     SCOPE,
     SLASH,
+    STAR,
     TYPEARG_LSQB,
     USE,
     USE_TARGET_NAME,
@@ -195,6 +196,60 @@ def _is_scope_closer(tokens: list[Token], index: int) -> bool:
     )
 
 
+def _is_use_declaration(tokens: list[Token], index: int) -> bool:
+    """Whether item-start ``use`` has a declaration suffix rather than expression syntax."""
+    next_index = index + 1
+    if next_index >= len(tokens):
+        return False
+    if tokens[next_index].type == NAME:
+        next_index += 1
+        while (
+            next_index + 1 < len(tokens)
+            and tokens[next_index].type == SLASH
+            and tokens[next_index + 1].type == NAME
+        ):
+            next_index += 2
+        if next_index >= len(tokens):
+            return False
+        return tokens[next_index].type in {"AS", DCOLON}
+    if tokens[next_index].type == SLASH:
+        next_index += 1
+        while (
+            next_index + 1 < len(tokens)
+            and tokens[next_index].type == NAME
+            and tokens[next_index + 1].type == SLASH
+        ):
+            next_index += 2
+        if next_index >= len(tokens) or tokens[next_index].type != NAME:
+            return False
+        next_index += 1
+        while (
+            next_index + 1 < len(tokens)
+            and tokens[next_index].type == SLASH
+            and tokens[next_index + 1].type == NAME
+        ):
+            next_index += 2
+        return next_index < len(tokens) and tokens[next_index].type in {"AS", DCOLON}
+    if tokens[next_index].type != DCOLON:
+        return False
+    # An anchored use needs a target plus either an alias or a tail separator.
+    next_index += 1
+    saw_target = False
+    separators = 1
+    while next_index < len(tokens) and tokens[next_index].type not in _ITEM_START_TYPES:
+        token_type = tokens[next_index].type
+        if token_type == NAME:
+            saw_target = True
+        elif token_type == "AS" and saw_target:
+            return True
+        elif token_type == DCOLON:
+            separators += 1
+        elif token_type in {STAR, LBRACE} and saw_target and separators > 1:
+            return True
+        next_index += 1
+    return saw_target and separators > 1
+
+
 def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
     """Contextually promote soft keywords in the post-layout token stream.
 
@@ -228,7 +283,7 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
             if tv == "import" and at_item_start:
                 tok = _retype(tok, IMPORT)
                 in_module_header = True
-            elif tv == "use" and at_item_start:
+            elif tv == "use" and at_item_start and _is_use_declaration(tokens, index):
                 tok = _retype(tok, USE)
                 in_module_header = True
             elif tv == "export" and at_item_start:

@@ -27,8 +27,11 @@ A scoped `let`/`var` is a member of its scope path, registered into the same
 `ScopeNode` member map and duplicate check as static declarations during the
 body walk. This gives bindings textual precedence like root bindings. Regional
 import-tail contributions are snapshotted onto that region's bare-contribution
-layer. `use` resolves an already-nameable local scope or import route and adds
-its selected bare members to the same layer. Selecting an imported nested scope
+layer. A local `use` keeps a live link to its source scope while resolution
+collects declarations, then validates and materializes its final selection for
+typechecking; lookup merges that link with the region layer and deduplicates
+identical origins. `use` resolves an already-nameable local scope or import
+route and adds its selected bare members to the same layer. Selecting an imported nested scope
 re-roots its public subtree at that scope, so glob, hiding, and aliases never
 expose module-root members. Module and local readings require an explicit anchor
 when both exist.

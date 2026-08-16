@@ -38,11 +38,13 @@ def test_scope_at_item_start_with_a_path_is_promoted() -> None:
 
 
 def test_use_in_a_scope_region_is_promoted_and_keeps_its_header_window() -> None:
-    assert _non_layout_tokens("scope Outer\nuse Shared hiding member\nend Outer") == [
+    assert _non_layout_tokens("scope Outer\nuse Shared::* hiding member\nend Outer") == [
         ("SCOPE", "scope"),
         ("NAME", "Outer"),
         ("USE", "use"),
         ("MODPATH", "Shared"),
+        ("DCOLON", "::"),
+        ("STAR", "*"),
         ("HIDING", "hiding"),
         ("NAME", "member"),
         ("END", "end"),
@@ -59,6 +61,15 @@ def test_use_in_expression_position_remains_an_identifier() -> None:
         ("PLUS", "+"),
         ("INT", "1"),
     ]
+
+
+@pytest.mark.parametrize("source", ("use()", "use + 1", "use(1)"))
+def test_use_at_item_start_remains_an_identifier_without_a_declaration_form(source: str) -> None:
+    assert _non_layout_tokens(source)[0] == ("NAME", "use")
+
+
+def test_use_declaration_form_is_promoted_at_item_start() -> None:
+    assert _non_layout_tokens("use Tools::*")[:2] == [("USE", "use"), ("MODPATH", "Tools")]
 
 
 def test_scope_without_a_complete_path_remains_an_identifier() -> None:

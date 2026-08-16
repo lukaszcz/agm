@@ -513,8 +513,8 @@ def resolve_alias_target(
     For an unqualified *name*, tries *self_module_id*'s own declaration under
     *scope_path* first (when *self_module_id* is given — a caller that
     already checked richer local state passes ``self_module_id=None`` to skip
-    this step), then the unqualified name exposed by *import_env*'s open
-    imports. For a qualified *name*, resolves through the ordinary
+    this step), then the unqualified name exposed by *import_env*'s import
+    tails. For a qualified *name*, resolves through the ordinary
     qualified-member route.
 
     Returns ``None`` for anything it cannot resolve — an ambiguous

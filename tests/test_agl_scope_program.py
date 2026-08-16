@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 
 from agm.agl.modules.ids import ENTRY_ID, STD_CONFIG_ID, ModuleId
+from agm.agl.parser import AglSyntaxError
 from agm.agl.scope.program import ResolvedModule, ResolvedProgram, resolve_program
 from agm.agl.scope.symbols import AglScopeError, BinderKind
 from agm.agl.semantics.values import IntValue
@@ -1151,29 +1152,29 @@ class TestRegionImportExportHeaderPlacement:
     def test_rejected_after_a_region_item_in_a_library_module(
         self, tmp_path: Path, item: str
     ) -> None:
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "import mylib::*\n()",
-                "mylib": f"scope A\ndef local() -> int = 1\n{item}\nend A",
-                "libB": "def bar() -> int = 2",
-            },
-        )
-        with pytest.raises(AglScopeError):
+        with pytest.raises((AglScopeError, AglSyntaxError)):
+            graph = _make_graph_from_files(
+                tmp_path,
+                {
+                    "entry": "import mylib::*\n()",
+                    "mylib": f"scope A\ndef local() -> int = 1\n{item}\nend A",
+                    "libB": "def bar() -> int = 2",
+                },
+            )
             resolve_program(graph)
 
     @pytest.mark.parametrize("item", ("import libB", "import libB::*", "use A::*", "export libB"))
     def test_rejected_after_a_region_item_in_the_entry_module(
         self, tmp_path: Path, item: str
     ) -> None:
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": f"scope A\ndef local() -> int = 1\n{item}\nend A",
-                "libB": "def bar() -> int = 2",
-            },
-        )
-        with pytest.raises(AglScopeError):
+        with pytest.raises((AglScopeError, AglSyntaxError)):
+            graph = _make_graph_from_files(
+                tmp_path,
+                {
+                    "entry": f"scope A\ndef local() -> int = 1\n{item}\nend A",
+                    "libB": "def bar() -> int = 2",
+                },
+            )
             resolve_program(graph)
 
 

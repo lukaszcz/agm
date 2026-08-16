@@ -2652,8 +2652,9 @@ class TestModuleSystemLexer:
         result = tok("import foo/bar")
         assert result[0] == ("IMPORT", "import")
 
-    def test_use_at_item_start_is_use_token(self) -> None:
-        assert tok("use shared")[:2] == [("USE", "use"), ("MODPATH", "shared")]
+    def test_use_at_item_start_requires_a_declaration_suffix(self) -> None:
+        assert tok("use shared")[:2] == [("NAME", "use"), ("NAME", "shared")]
+        assert tok("use shared::*")[:2] == [("USE", "use"), ("MODPATH", "shared")]
 
     def test_open_and_using_remain_identifiers(self) -> None:
         assert tok("open using") == [("NAME", "open"), ("NAME", "using")]
@@ -2755,7 +2756,7 @@ class TestModuleSystemLexer:
         ]
 
     def test_use_in_lark_token_stream(self) -> None:
-        result = lark_tok("use shared")
+        result = lark_tok("use shared::*")
         assert result[0] == ("USE", "use")
 
 

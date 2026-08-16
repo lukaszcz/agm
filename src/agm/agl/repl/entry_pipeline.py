@@ -1199,7 +1199,7 @@ class EntryPipeline:
         """Keep only the newest retained use for each target at each region path."""
         from dataclasses import replace
 
-        from agm.agl.syntax.nodes import UseDecl
+        from agm.agl.syntax.nodes import ScopeRegion, UseDecl
 
         retained: list[UseDecl | ImportDecl | ScopeRegion] = []
         for item in items:

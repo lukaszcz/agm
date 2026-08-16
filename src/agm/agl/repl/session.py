@@ -1065,6 +1065,17 @@ class ReplSession:
                 parent=self._session_scope_nodes[path[:-1]],
                 scope_path=path,
             )
+        promoted_enum_paths = {
+            (*path, name)
+            for path, name in promoted_type_name_paths
+            for item in entry_type_items
+            if isinstance(item, EnumDef) and type_name_path(item) == (path, name)
+        }
+        for path in promoted_enum_paths:
+            type_scope = self._session_scope_nodes.get(path)
+            if type_scope is not None:
+                type_scope.clear_members()
+
         for path, node in checked.resolved.scope_nodes.items():
             session_node = self._session_scope_nodes.get(path)
             if session_node is None:

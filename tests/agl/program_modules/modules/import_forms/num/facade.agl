@@ -1,0 +1,3 @@
+# Forward selected and hidden module surfaces through export declarations.
+export num/arith::{add as plus}
+export num/stats hiding min2

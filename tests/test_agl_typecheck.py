@@ -1075,7 +1075,7 @@ class TestTypeEnvironment:
     def test_renamed_scoped_enum_import_owner_form_resolves(self, tmp_path: object) -> None:
         """Owner-form construction must keep a renamed import's scope path.
 
-        A ``using A::Status as S`` import selects a QName whose declaration
+        An ``import lib::{A::Status as S}`` tail selects a QName whose declaration
         path is ``("A",)``; enum-owner-form construction used to discard that
         path before asking the shared type table for the source template,
         so it asked for a root ``lib::Status`` template instead and hit an
@@ -1092,7 +1092,7 @@ class TestTypeEnvironment:
         lib_source = "scope A\nenum Status\n  | Good\n  | Bad\nend A\n"
 
         unused_modules = {
-            "entry": "import lib using A::Status as S\nprint(3)",
+            "entry": "import lib::{A::Status as S}\nprint(3)",
             "lib": lib_source,
         }
         unused_checked = check_program(
@@ -1108,7 +1108,7 @@ class TestTypeEnvironment:
 
         used_modules = {
             "entry": (
-                "import lib using A::Status as S\n"
+                "import lib::{A::Status as S}\n"
                 "let s: S = S::Good\n"
                 "print(case s of\n"
                 "  | S::Good => 1\n"
@@ -1274,7 +1274,7 @@ class TestScopedBindingTypes:
     """A scoped ``let``/``var``'s type is inferred from its initializer,
     exactly as at the root, and checked against an explicit annotation on
     either spelling. Visibility from inside the region, a nested region, a
-    qualified path outside, and after an ``open`` all resolve to the same
+    qualified path outside, and after a ``use`` all resolve to the same
     binding type via the node-id-keyed binding environment.
     """
 
@@ -1313,7 +1313,7 @@ class TestScopedBindingTypes:
 
     def test_visible_from_nested_region_qualified_path_and_after_open(self) -> None:
         r = accept_type(
-            "open Config\n"
+            "use Config::*\n"
             "scope Config\n"
             "let retries = 3\n"
             "scope Inner\n"
@@ -4466,7 +4466,7 @@ class TestPartialConstructorAndValueCalls:
 
         modules = {
             "entry": (
-                "open import mylib\n"
+                "import mylib::*\n"
                 "program def main() -> unit =\n"
                 "  let make: (int) -> mylib::Point = mylib::Point(x = ?)\n"
                 "  let make_open: (int) -> Point = Point(x = ?)\n"
@@ -11772,7 +11772,7 @@ class TestImportDeclTypecheck:
 
     def test_import_decl_does_not_raise(self) -> None:
         """A bare import declaration type-checks as unit."""
-        r = accept_type("open import std/core\n1")
+        r = accept_type("import std/core::*\n1")
         assert r  # no exception
 
     def test_import_with_alias_does_not_raise(self) -> None:
@@ -11784,7 +11784,7 @@ class TestImportDeclTypecheck:
         assert r
 
     def test_import_using_does_not_raise(self) -> None:
-        r = accept_type("import std/core using ExecResult\n1")
+        r = accept_type("import std/core::{ExecResult}\n1")
         assert r
 
     def test_import_hiding_does_not_raise(self) -> None:

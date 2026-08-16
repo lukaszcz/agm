@@ -10,7 +10,7 @@
         "y": 8
       },
       "expect": {
-        "stdout": "sum=11\ngo!\n8\n3\n9\nalpha\nbeta\n10\n",
+        "stdout": "sum=11\ngo!\n8\n3\n9\nalpha\nbeta\n5\n99\n11\n11\n11\n8\n10\n",
         "calls": {}
       }
     },
@@ -24,7 +24,7 @@
         "y": 2
       },
       "expect": {
-        "stdout": "sum=12\ngo!\n10\n2\n100\nalpha\nbeta\n17\n",
+        "stdout": "sum=12\ngo!\n10\n2\n100\nalpha\nbeta\n-8\n99\n12\n12\n12\n10\n17\n",
         "calls": {}
       }
     }

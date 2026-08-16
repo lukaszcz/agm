@@ -7357,7 +7357,7 @@ class TestPackageInstall:
         env["AGM_HOME"] = str(tmp_path / "agm-home")
         dependency = _write_store_test_package(tmp_path / "helpers", "helpers", "1.0.0")
         (dependency / "helpers" / "assets.agl").write_text(
-            "export std/core using resource as asset\n", encoding="utf-8"
+            "export std/core::{resource as asset}\n", encoding="utf-8"
         )
         package = _write_store_test_package(tmp_path / "source", "alpha", "1.0.0")
         (package / "package.toml").write_text(
@@ -7368,7 +7368,7 @@ class TestPackageInstall:
         (package / "prompts" / "review.md").write_text("prompt", encoding="utf-8")
         (package / ".gitignore").write_text("prompts/review.md\n", encoding="utf-8")
         (package / "alpha" / "main.agl").write_text(
-            "import helpers/assets using asset\n"
+            "import helpers/assets::{asset}\n"
             'let prompt = asset("prompts/review.md")\n'
             "program def main() -> unit = ()\n",
             encoding="utf-8",
@@ -8941,7 +8941,7 @@ class TestReplCommand:
             ["repl", "--no-stdlib"],
             env=env,
             cwd=str(work),
-            input="Some(value = 1)\nopen import std/core\nSome(value = 1)\n:quit\n",
+            input="Some(value = 1)\nimport std/core::*\nSome(value = 1)\n:quit\n",
         )
 
         assert result.returncode == 0
@@ -8966,7 +8966,7 @@ class TestReplCommand:
             ["repl"],
             env=env,
             cwd=str(work),
-            input="open import math\ndouble(21)\n:quit\n",
+            input="import math::*\ndouble(21)\n:quit\n",
         )
         assert result.returncode == 0
         assert any(line.split()[-1:] == ["42"] for line in result.stdout.splitlines())

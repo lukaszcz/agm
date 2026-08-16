@@ -143,7 +143,7 @@ def test_inline_user_main_coexists_with_host_synthetic_entry() -> None:
 
 def test_inline_open_imported_main_resolves_to_helper_without_recursion(tmp_path: Path) -> None:
     result = evaluate_ir_graph(
-        "open import helper\nlet answer = main()",
+        "import helper::*\nlet answer = main()",
         {"helper": "def main() -> int = 42"},
         tmp_path,
     )
@@ -288,10 +288,10 @@ def test_scoped_linked_calls_use_function_handles_and_validate(tmp_path: Path) -
     ).read_text()
     entry = (
         "import scoped_execution/workflow\n"
-        "import scoped_execution/workflow using Workflow::Task\n"
-        "open import scoped_execution/workflow\n"
-        "open scoped_execution/workflow::Workflow\n"
-        "open scoped_execution/workflow::Workflow::Status\n"
+        "import scoped_execution/workflow::{Workflow::Task}\n"
+        "import scoped_execution/workflow::*\n"
+        "use scoped_execution/workflow::Workflow::*\n"
+        "use scoped_execution/workflow::Workflow::Status::*\n"
         'let task = Task(name = "root", children = [Task(name = "ready", children = [])])\n'
         "let status: Status = completed\n"
         "print(score(task))\n"
@@ -368,7 +368,7 @@ enum Color
   | Green
 """
     entry_source = """
-open import shapes
+import shapes::*
 let p = shapes::Point(x = 1, y = 2)
 let c = shapes::Color::Red
 let px = p.x
@@ -435,14 +435,17 @@ let result = mathlib::safe_div(10, 0)
 
 
 def test_open_imported_nullary_enum_as_value(tmp_path: Path) -> None:
-    """Open-imported nullary enum variant used as a value (covers cref non-FunctionType path)."""
+    """Import-tail-exposed nullary enum variant used as a value.
+
+    Covers the cref non-FunctionType path.
+    """
     status_source = """
 enum Status
   | Running
   | Done
 """
     entry_source = """
-open import status
+import status::*
 let s: Status = Running
 let is_running = case s of
     | Running => true

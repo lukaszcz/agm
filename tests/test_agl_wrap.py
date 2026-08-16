@@ -21,12 +21,12 @@ from agm.agl.syntax import (
     ImportDecl,
     InfixDecl,
     LetDecl,
-    OpenDecl,
     ParamDecl,
     RecordDef,
     ScopeRegion,
     TypeAlias,
     UnitT,
+    UseDecl,
     VarDecl,
 )
 from tests._agl_helpers import run_inline_command
@@ -37,7 +37,7 @@ def test_wrap_inline_program_partitions_root_items_and_preserves_statement_order
         """\
 import helpers
 export helpers
-open Shared
+use Shared::*
 builtin var setting: int
 def helper() -> unit = ()
 record Item()
@@ -78,7 +78,7 @@ print value
                 InfixDecl,
                 ScopeRegion,
                 BuiltinVarDecl,
-                OpenDecl,
+                UseDecl,
             ),
         )
         for item in root_items[:-1]

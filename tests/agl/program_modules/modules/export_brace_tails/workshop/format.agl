@@ -1,2 +1,2 @@
 # The implementation remains behind the facade's exported name.
-def render(title: text) -> text = "report: " + title
+def format_text(title: text) -> text = "report: " + title

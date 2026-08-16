@@ -38,6 +38,7 @@ from agm.agl.syntax.nodes import (
     QualifierChain,
     RecordDef,
     TypeAlias,
+    UseDecl,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import AppliedT, NameT
@@ -409,6 +410,14 @@ class BindingRef:
 
 
 @dataclass(slots=True)
+class LocalUseContribution:
+    """A live local-scope use contribution owned by one lexical layer."""
+
+    declaration: UseDecl
+    source: ScopeNode
+
+
+@dataclass(slots=True)
 class ScopeNode:
     """A lexical scope in the scope tree.
 
@@ -436,6 +445,7 @@ class ScopeNode:
     bare_constructor_contributions: dict[BareAtom, set[ConstructorRef]] = field(
         default_factory=dict
     )
+    local_use_contributions: list[LocalUseContribution] = field(default_factory=list)
 
     def lookup(self, name: str) -> BindingRef | None:
         """Search lexical bindings and named-scope members outward."""
@@ -456,6 +466,10 @@ class ScopeNode:
     def contribute_bare_constructor(self, name: BareAtom, ref: ConstructorRef) -> None:
         """Add one constructor candidate contributed bare to this region."""
         self.bare_constructor_contributions.setdefault(name, set()).add(ref)
+
+    def contribute_local_use(self, contribution: LocalUseContribution) -> None:
+        """Add a local scope use whose source members remain live."""
+        self.local_use_contributions.append(contribution)
 
     def define(self, name: str, ref: BindingRef) -> None:
         """Add *name* → *ref* to this scope's binding table."""
@@ -501,19 +515,6 @@ def resolve_bare_contribution(
     """Return the nearest region's bare candidates for *name*."""
     del scope_nodes
     return _nearest_layer_contribution(scope, name, lambda layer: layer.bare_contributions)
-
-
-def resolve_bare_constructor_contribution(
-    scope: ScopeNode,
-    name: BareAtom,
-    scope_nodes: Mapping[ScopePath, ScopeNode],
-    declaring_candidates: Callable[[str, BindingRef], tuple[ConstructorRef, ...]],
-) -> set[ConstructorRef] | None:
-    """Return the nearest region's constructor candidates for *name*."""
-    del scope_nodes, declaring_candidates
-    return _nearest_layer_contribution(
-        scope, name, lambda layer: layer.bare_constructor_contributions
-    )
 
 
 # ---------------------------------------------------------------------------

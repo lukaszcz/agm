@@ -323,6 +323,13 @@ def syntax_error_from_lark(
         col = tok.column if tok.column is not None else 1
         pos = tok.start_pos if tok.start_pos is not None else 0
         span = _span_from_token(line, col, pos, tok.end_line, tok.end_column, tok.end_pos)
+        if (
+            tok.type == "NAME"
+            and str(tok) == "using"
+            and source_text is not None
+            and source_text.lstrip().startswith("open ")
+        ):
+            return AglSyntaxError("Unknown scope in deprecated open declaration.", span=span)
         if _is_missing_arrow_after_else(
             source_text=source_text, token_pos=pos, expected=set(exc.expected)
         ):

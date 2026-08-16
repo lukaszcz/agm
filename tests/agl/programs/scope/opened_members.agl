@@ -1,8 +1,8 @@
-# Opening named scopes contributes their selected members as bare names.
-open Math
-open Text using show as format
-open Hidden hiding secret
-open Flag
+# A `use` of named scopes contributes their selected members as bare names.
+use Math::*
+use Text::{show as format}
+use Hidden::* hiding secret
+use Flag::*
 
 scope Math
 def add(left: int, right: int) -> int = left + right

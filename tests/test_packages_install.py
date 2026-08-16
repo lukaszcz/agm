@@ -1094,7 +1094,7 @@ def test_install_validates_resource_aliases_from_an_installed_satisfying_depende
     home = tmp_path / "home"
     dependency = _package(tmp_path / "bravo", "bravo", "1.0.0")
     (dependency / "bravo" / "assets.agl").write_text(
-        "export std/core using resource as asset\n",
+        "export std/core::{resource as asset}\n",
         encoding="utf-8",
     )
     install_directory(dependency, home=home, env={})
@@ -1105,7 +1105,7 @@ def test_install_validates_resource_aliases_from_an_installed_satisfying_depende
         '\n[dependencies]\nbravo = "1"\n',
     )
     (package / "alpha" / "main.agl").write_text(
-        'import bravo/assets using asset as load\nlet prompt = load("prompts/missing.md")\n',
+        'import bravo/assets::{asset as load}\nlet prompt = load("prompts/missing.md")\n',
         encoding="utf-8",
     )
 
@@ -2390,7 +2390,7 @@ def test_directory_install_rolls_back_new_dependency_after_discipline_failure(
     home = tmp_path / "home"
     dependency = _package(tmp_path / "bravo", "bravo", "1.0.0")
     (dependency / "bravo" / "assets.agl").write_text(
-        "export std/core using resource as asset\n", encoding="utf-8"
+        "export std/core::{resource as asset}\n", encoding="utf-8"
     )
     source = _package(
         tmp_path / "alpha",
@@ -2399,7 +2399,7 @@ def test_directory_install_rolls_back_new_dependency_after_discipline_failure(
         '\n[dependencies]\nbravo = { version = "1", path = "../bravo" }\n',
     )
     (source / "alpha" / "main.agl").write_text(
-        'import bravo/assets using asset as load\nlet prompt = load("prompts/missing.md")\n',
+        'import bravo/assets::{asset as load}\nlet prompt = load("prompts/missing.md")\n',
         encoding="utf-8",
     )
 

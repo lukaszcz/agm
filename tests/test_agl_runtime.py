@@ -2980,7 +2980,7 @@ class TestPrepareProgram:
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = prepare_inline_command(
-            "open import nonexistent/module\nlet x = 1\nx",
+            "import nonexistent/module::*\nlet x = 1\nx",
             entry_path=None,
             roots=roots,
         )
@@ -2997,7 +2997,7 @@ class TestPrepareProgram:
         (lib_dir / "mymod.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
 
         roots = RootSet(roots=frozenset({lib_dir, _STDLIB_ROOT}))
-        entry = "open import mymod\nlet r = add(2, 3)\nr"
+        entry = "import mymod::*\nlet r = add(2, 3)\nr"
         prepared = prepare_inline_command(entry, entry_path=None, roots=roots)
         assert prepared.resolved is not None
         assert prepared.diagnostics == ()
@@ -3035,7 +3035,7 @@ class TestRunPreparedProgram:
         (lib_dir / "mymod.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
 
         roots = RootSet(roots=frozenset({lib_dir.resolve(), _STDLIB_ROOT}))
-        entry = "open import mymod\nlet r = add(2, 3)\nr"
+        entry = "import mymod::*\nlet r = add(2, 3)\nr"
         prepared = prepare_inline_command(entry, entry_path=None, roots=roots)
         rt = PipelineDriver()
         result = rt.run_prepared(prepared)
@@ -3060,7 +3060,7 @@ class TestRunPreparedProgram:
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = prepare_inline_command(
-            "open import missing/module\nlet x = 1\nx", entry_path=None, roots=roots
+            "import missing/module::*\nlet x = 1\nx", entry_path=None, roots=roots
         )
         rt = PipelineDriver()
         result = rt.run_prepared(prepared)
@@ -3093,7 +3093,7 @@ class TestRunPreparedProgram:
         )
 
         roots = RootSet(roots=frozenset({lib_dir.resolve(), _STDLIB_ROOT}))
-        entry = 'open import utils/*\nlet n = add(2, 3)\nlet g = greet("World")\nprint n\nprint g\n'
+        entry = 'import utils/*::*\nlet n = add(2, 3)\nlet g = greet("World")\nprint n\nprint g\n'
         prepared = prepare_inline_command(entry, entry_path=None, roots=roots)
         rt = PipelineDriver()
         result = rt.run_prepared(prepared, check_only=True)

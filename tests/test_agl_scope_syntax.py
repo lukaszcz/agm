@@ -13,7 +13,6 @@ from agm.agl.parser import AglSyntaxError, parse_program
 from agm.agl.scope import AglScopeError
 from agm.agl.scope.imports import SingleTarget, build_import_env
 from agm.agl.scope.resolver import _Resolver
-from agm.agl.scope.symbols import resolve_bare_contribution
 from agm.agl.syntax import (
     AsPattern,
     BuiltinVarDecl,
@@ -301,7 +300,7 @@ def test_tailed_import_is_admitted_at_the_start_of_a_scope_region() -> None:
 
 
 def test_use_after_a_non_header_region_item_is_rejected() -> None:
-    with pytest.raises(AglScopeError):
+    with pytest.raises(AglSyntaxError):
         resolve_inline_entry("scope A\ndef value() -> int = 0\nuse B::*\nend A")
 
 
@@ -457,10 +456,7 @@ def test_use_contributes_local_scope_members() -> None:
         "use Point::*\nscope Point\ndef distance() -> int = 1\nend Point\ndistance()"
     )
 
-    assert (
-        len(resolve_bare_contribution(resolved.root_scope, "distance", resolved.scope_nodes) or ())
-        == 1
-    )
+    assert any(ref.name == "distance" for ref in resolved.resolution.values())
 
 
 def test_used_scope_members_clash_at_their_use_site() -> None:
@@ -476,8 +472,8 @@ def test_used_scope_members_clash_at_their_use_site() -> None:
 
 def test_use_reaches_a_scope_made_nameable_by_an_import_tail() -> None:
     """A use target follows the same bare contribution a qualifier follows."""
-    program = parse_program("import library::{Scope}\nuse Scope::*")
-    import_decl, _use_decl = program.body.items
+    program = parse_program("import library::{Scope}\nuse Scope::*\nvisible")
+    import_decl, _use_decl, _visible = program.body.items
     assert isinstance(import_decl, ImportDecl)
     library = ModuleId.from_path("library")
     scope_member = ("Scope", "visible")
@@ -491,10 +487,10 @@ def test_use_reaches_a_scope_made_nameable_by_an_import_tail() -> None:
         module_id=ENTRY_ID,
         import_env=import_env,
         all_public_types={},
+        allow_root_statements=True,
     ).run(program)
 
-    contribution = resolve_bare_contribution(resolved.root_scope, "visible", resolved.scope_nodes)
-    assert len(contribution or ()) == 1
+    assert any(ref.name == "visible" for ref in resolved.resolution.values())
 
 
 def test_use_keeps_equally_nameable_bare_scope_targets_ambiguous() -> None:

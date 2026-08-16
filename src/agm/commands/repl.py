@@ -15,10 +15,10 @@ Agent calls are gated: a single shared :class:`AgentMode` (``confirm`` by
 default, ``auto``; ``confirm`` under ``--confirm-agents``) is passed to BOTH the confirming
 wrapper and the console, so the ``:agent`` meta-command, an ``always`` answer,
 and the wrapper all stay in sync.  Trace logging (``--log-file`` / ``--no-log``)
-Each REPL entry and its loaded library modules open ``std/core`` by default;
-``--no-stdlib`` disables that automatic opening throughout every loaded REPL
-program. Imports are qualified by default, with ``open import`` and ``using``
-opting into bare names.
+Each REPL entry and its loaded library modules receive ``std/core`` glob imports
+by default; ``--no-stdlib`` disables that automatic import throughout every
+loaded REPL program. Imports are qualified by default; tails and ``use``
+declarations opt into bare names.
 """
 
 from __future__ import annotations

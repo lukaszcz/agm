@@ -1,2 +1,3 @@
-# Library module (slash path lib/a) matched by the entry's `import lib/*` wildcard.
+# First module in the wildcard import family.
 def alpha() -> text = "alpha"
+def shared() -> text = "shared-a"

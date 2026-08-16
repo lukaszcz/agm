@@ -72,6 +72,7 @@ from agm.agl.scope.symbols import (
     BuiltinKind,
     ConstructorRef,
     DeclarationKey,
+    LocalUseContribution,
     ModuleResolution,
     PatternSlot,
     ScopeNode,
@@ -80,8 +81,6 @@ from agm.agl.scope.symbols import (
     alias_denotes_constructible_type,
     duplicate_binder_message,
     immutable_binder_phrase,
-    resolve_bare_constructor_contribution,
-    resolve_bare_contribution,
 )
 from agm.agl.scope.symbols import import_item_path as _item_path
 from agm.agl.scope.symbols import to_bare_atom as _bare_atom
@@ -517,6 +516,7 @@ class _Resolver:
 
         # Main walk: resolve all block items in order.
         self._resolve_block_items(program.body.items)
+        self._validate_local_use_contributions()
 
         self._at_root = False
         self._pop_scope()
@@ -796,7 +796,7 @@ class _Resolver:
             )
             if retained is not None:
                 # A retained member counts as a write like any other: the
-                # local-open memo's correctness depends on every non-empty
+                # scope-use memo's correctness depends on every non-empty
                 # member layer having bumped the shared clock when built.
                 for name, ref in retained.members.items():
                     node.register_member(name, ref)
@@ -1710,7 +1710,9 @@ class _Resolver:
                 span=decl.span,
             )
         if local is not None:
-            self._contribute_use_members(decl, self._local_use_members(local))
+            self._current_scope().contribute_local_use(
+                LocalUseContribution(declaration=decl, source=self._scope_nodes[local])
+            )
             return
         _module, imported_members = imported[0]
         self._contribute_use_members(decl, imported_members)
@@ -1799,13 +1801,29 @@ class _Resolver:
                 members[_bare_atom((*relative, name))] = ref
         return members
 
+    def _validate_local_use_contributions(self) -> None:
+        """Validate local use selections after all target members are collected."""
+        for scope in self._scope_nodes.values():
+            for contribution in scope.local_use_contributions:
+                selected = self._select_use_members(
+                    contribution.declaration,
+                    self._local_use_members(contribution.source.scope_path),
+                    validate=True,
+                )
+                for exposed, source in selected.items():
+                    ref = cast(BindingRef, source)
+                    scope.contribute_bare(exposed, ref)
+                    for constructor in self._declaring_constructor_candidates(ref.name, ref):
+                        scope.contribute_bare_constructor(exposed, constructor)
+
     def _contribute_use_members(
         self, decl: UseDecl, members: Mapping[NameAtom, BindingRef | QName]
     ) -> None:
         """Select, rename, and add one use declaration's bare contribution."""
         selected = self._select_use_members(decl, members)
         scope = self._current_scope()
-        for exposed, source in selected.items():
+
+        def contribute(exposed: NameAtom, source: BindingRef | QName) -> None:
             if isinstance(source, tuple):
                 ref, constructor = self._cross_module_member_ref(exposed, source, decl.span)
                 scope.contribute_bare(exposed, ref)
@@ -1817,15 +1835,31 @@ class _Resolver:
                 for constructor in self._declaring_constructor_candidates(source.name, source):
                     scope.contribute_bare_constructor(exposed, constructor)
 
+        for exposed, source in selected.items():
+            contribute(exposed, source)
+        if decl.tail is not None:
+            for item in decl.tail:
+                if item.rename is None:
+                    continue
+                prefix = _item_path(item)
+                for atom, source in members.items():
+                    path = _bare_path(atom)
+                    if path[: len(prefix)] == prefix:
+                        contribute(_bare_atom((item.rename, *path[len(prefix) :])), source)
+
     def _select_use_members(
-        self, decl: UseDecl, members: Mapping[NameAtom, BindingRef | QName]
+        self,
+        decl: UseDecl,
+        members: Mapping[NameAtom, BindingRef | QName],
+        *,
+        validate: bool = True,
     ) -> dict[NameAtom, BindingRef | QName]:
         """Apply a use tail, hiding clause, or additive route alias to members."""
 
         def matching(item: ImportItem) -> tuple[NameAtom, ...]:
             prefix = _item_path(item)
             matches = tuple(atom for atom in members if _bare_path(atom)[: len(prefix)] == prefix)
-            if not matches:
+            if not matches and validate:
                 raise AglScopeError(
                     f"name {'::'.join(prefix)!r} is not declared by this use target.",
                     span=decl.span,
@@ -2364,7 +2398,16 @@ class _Resolver:
         identity; only a module-root binding uses the root-only candidate map.
         """
         if ref.scope_path and ref.module_id == self._module_id:
-            return tuple(self._scoped_constructor_candidates.get((ref.scope_path, name), ()))
+            scoped = tuple(self._scoped_constructor_candidates.get((ref.scope_path, name), ()))
+            if scoped:
+                return scoped
+            return tuple(
+                candidate
+                for candidate in self._constructor_candidates.get(name, ())
+                if candidate.owner_module_id == ref.module_id
+                and candidate.owner_path == ref.scope_path[:-1]
+                and candidate.owner_name == ref.scope_path[-1]
+            )
         return tuple(self._constructor_candidates.get(name, ()))
 
     def _validate_qualifier_chains(self, program: object) -> None:
@@ -2702,7 +2745,7 @@ class _Resolver:
 
         The final chain segment is selected as a normal imported member; any
         preceding segments are its route.  A one-segment chain may instead
-        name an open-imported type.  This is the same chain walk used for
+        name a type exposed by an import tail. This is the same chain walk used for
         ordinary qualified values, with only the resulting member kind
         determining whether it owns a constructor.
         """
@@ -2711,7 +2754,7 @@ class _Resolver:
         if len(chain.segments) == 1 and not chain.anchored:
             bare_atom = _bare_atom((chain.segments[0].name, variant))
             bare_candidates = self._regional_constructor_candidates(bare_atom)
-            # Several opened scopes contributing the same owner fall through to
+            # Several scope uses contributing the same owner fall through to
             # the shared lookup below, which owns the ambiguity diagnostic.
             if bare_candidates is not None and len(bare_candidates) == 1:
                 return next(iter(bare_candidates))
@@ -2764,15 +2807,39 @@ class _Resolver:
             )
         return replace(candidate, variant=variant)
 
+    def _nearest_bare_contribution_layer(
+        self, name: NameAtom
+    ) -> tuple[set[BindingRef], set[ConstructorRef]] | None:
+        """Return the nearest static and live-use candidates for one bare atom."""
+        layer: ScopeNode | None = self._current_scope()
+        while layer is not None:
+            bindings = set(layer.bare_contributions.get(name, ()))
+            constructors = set(layer.bare_constructor_contributions.get(name, ()))
+            for contribution in layer.local_use_contributions:
+                members = self._select_use_members(
+                    contribution.declaration,
+                    self._local_use_members(contribution.source.scope_path),
+                    validate=False,
+                )
+                source = members.get(name)
+                if not isinstance(source, BindingRef):
+                    continue
+                bindings.add(source)
+                constructors.update(self._declaring_constructor_candidates(source.name, source))
+            if bindings or constructors:
+                return bindings, constructors
+            layer = layer.parent
+        return None
+
     def _bare_contribution_candidates(self, name: NameAtom) -> set[BindingRef] | None:
-        """Return the nearest region's bare contributions for *name*, live where needed."""
-        return resolve_bare_contribution(self._current_scope(), name, self._scope_nodes)
+        """Return the nearest region's bare contributions, including live local uses."""
+        nearest = self._nearest_bare_contribution_layer(name)
+        return None if nearest is None else nearest[0]
 
     def _regional_constructor_candidates(self, name: NameAtom) -> set[ConstructorRef] | None:
-        """Return the nearest region's constructor candidates for *name*, live where needed."""
-        return resolve_bare_constructor_contribution(
-            self._current_scope(), name, self._scope_nodes, self._declaring_constructor_candidates
-        )
+        """Return the nearest region's constructor candidates, including live local uses."""
+        nearest = self._nearest_bare_contribution_layer(name)
+        return None if nearest is None else nearest[1]
 
     def _lookup_bare_contribution(self, name: NameAtom, span: SourceSpan) -> BindingRef | None:
         """Resolve one region's bare contributions, deferring clashes to use sites."""
@@ -2789,19 +2856,22 @@ class _Resolver:
                     for existing in resolved
                 ):
                     resolved.add(ref)
-        if len(resolved) == 1:
-            return next(iter(resolved))
+        distinct = {
+            (ref.module_id, ref.scope_path, ref.decl_node_id, ref.kind): ref for ref in resolved
+        }
+        if len(distinct) == 1:
+            return next(iter(distinct.values()))
         qualifiers = ", ".join(
             sorted(
                 spell_declaration(
                     ref.module_id, (*ref.scope_path, ref.name), local_to=self._module_id
                 )
-                for ref in resolved
+                for ref in distinct.values()
             )
         )
         rendered = "::".join(_bare_path(name))
         raise AglScopeError(
-            f"'{rendered}' is ambiguous: contributed by multiple opened scopes. "
+            f"'{rendered}' is ambiguous: contributed by multiple use declarations. "
             f"Use a qualified reference to disambiguate: {qualifiers}",
             span=span,
         )
@@ -3223,7 +3293,7 @@ class _Resolver:
     ) -> tuple[ConstructorRef, ...]:
         """Select the constructors a qualified pattern spelling can match.
 
-        Ordering mirrors qualified value resolution: an opened contribution or
+        Ordering mirrors qualified value resolution: a scope-use contribution or
         a local scope member is considered before an import route owning the
         complete atom, and only then is the chain read as a type owner with the
         pattern name as its variant. A spelling that resolves to nothing yields
@@ -3292,9 +3362,9 @@ class _Resolver:
     def _bare_constructor_candidates(self, name: str) -> tuple[ConstructorRef, ...]:
         """Return the constructor candidates an unqualified *name* can select.
 
-        A region's opened contributions take precedence over the module-wide
+        A region's scope-use contributions take precedence over the module-wide
         candidate table, so a bare spelling inside a scope selects the same
-        constructor a qualified reference would. Absent an opened
+        constructor a qualified reference would. Absent a scope-use
         contribution, the enclosing named scopes are searched outward -- a
         nominal declared in the same scope (or an ancestor scope) as the bare
         spelling is reachable exactly as a bare value reference already finds

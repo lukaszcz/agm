@@ -580,7 +580,7 @@ let package_root = resource-dir()
 ## `std/fs`
 
 `std/fs` provides explicit UTF-8 filesystem effects. Import it and call its
-functions through the module route or an `open import`:
+functions through the module route or an import tail:
 
 <!-- agl-check: fragment -->
 ```agl

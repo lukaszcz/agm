@@ -227,9 +227,9 @@ invokes the sole one after initialization, or selects one of several with
 `-p`/`--program PATH` (for example, `review::main`). Inline `-c` source is wrapped
 in a synthetic entry when needed. Programs can span multiple `.agl` files via the
 module system (`import utils/math`). Every loaded entry and library module,
-except `std/core` itself, opens `std/core` by default; `--no-stdlib` disables
-that automatic opening throughout the loaded program.
-Other imports are qualified by default and use `open import` or `using` to make names
+except `std/core` itself, receives `import std/core::*` by default; `--no-stdlib`
+disables that automatic prelude throughout the loaded program.
+Other imports are qualified by default; an import tail or `use` declaration makes selected names
 bare. `agm exec` searches the entry file's directory, the selected standard library
 (the active `<AGM-home>/packages/std/<AGM_VERSION>/` package, then the wheel-bundled or
 source-checkout fallback),

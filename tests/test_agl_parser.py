@@ -100,6 +100,7 @@ from agm.agl.syntax import (
     UnaryNeg,
     UnaryNot,
     UnitLit,
+    UseDecl,
     VarDecl,
     VarPattern,
     VarRef,
@@ -959,7 +960,7 @@ class TestScopeRegions:
 
         assert isinstance(region, ScopeRegion)
         (member,) = region.items
-        assert isinstance(member, (ImportDecl, ExportDecl))
+        assert isinstance(member, (ImportDecl, UseDecl, ExportDecl))
         assert [segment.name for segment in member.scope_path] == ["Point"]
 
     @pytest.mark.parametrize("item", ("let value = 1", "var value = 1"))
@@ -3775,7 +3776,6 @@ class TestImportDecl:
     @pytest.mark.parametrize(
         "source",
         (
-            "use Scope",
             "use Scope::{a} hiding x",
             "use Scope::a hiding x",
             "use Scope::{}",
@@ -3852,11 +3852,9 @@ class TestImportDecl:
             "import foo.bar",
             "import /foo",
             "import foo qualified",
-            "open import foo",
-            "import foo using member",
         ),
     )
-    def test_legacy_import_spellings_are_syntax_errors(self, source: str) -> None:
+    def test_invalid_import_spellings_are_syntax_errors(self, source: str) -> None:
         with pytest.raises(AglSyntaxError):
             parse(source)
 

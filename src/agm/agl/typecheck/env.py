@@ -623,7 +623,8 @@ class TypeEnvironment:
       ``program_alias_resolver`` let transparent cross-module aliases resolve
       lazily before their sorted body-resolution turn.
     - ``import_env`` is the per-module :class:`~agm.agl.scope.imports.ImportEnv`
-      produced by program scope resolution. Used to resolve qualified and open-imported type names.
+      produced by program scope resolution. Used to resolve qualified and
+      import-tail-exposed type names.
     - ``module_id`` is the owning module of the current env.  ``::Name``
       (empty-segment qualifier) resolves against this module's own types.
 
@@ -1087,8 +1088,8 @@ class TypeEnvironment:
         Used for alias-transparent qualifier resolution in qualified
         constructors and ``is`` tests.
 
-        In program context, also searches open-imported types when the name is not
-        found locally.
+        In program context, also searches types exposed by import tails when the name
+        is not found locally.
         """
         local_name = self._lexical_type_name(name)
         if local_name in self._generic_types:
@@ -1100,14 +1101,14 @@ class TypeEnvironment:
                 )
             except AglTypeError:
                 return None
-        # Opened-scope contributions: a bare name opened into the current
-        # region (``open A``) resolves here too, before falling through to
-        # module-level open imports.  An arity complaint about an opened
+        # Scope-use contributions: a bare name made available in the current
+        # region (``use A::*``) resolves here too, before falling through to
+        # module-level import tails. An arity complaint about a selected
         # generic propagates: it names the problem better than "unknown type".
         opened = self._resolve_opened_type(name, None)
         if opened is not None:
             return opened
-        # Program context: look up via open imports. A bare ``TypeEnvironment``
+        # Program context: look up via import tails. A bare ``TypeEnvironment``
         # (no import environment / program type table -- e.g. one constructed
         # directly by a unit test, independent of any module graph) has
         # nothing further to search here.
@@ -1393,7 +1394,7 @@ class TypeEnvironment:
             )
         )
         raise AglTypeError(
-            f"Ambiguous type '{_render_type_atom(name)}': contributed by multiple opened scopes "
+            f"Ambiguous type '{_render_type_atom(name)}': contributed by multiple use declarations "
             f"({labels}). Use a qualified reference to disambiguate.",
             span=span,
         )
@@ -1415,7 +1416,7 @@ class TypeEnvironment:
         )
 
     def _resolve_opened_type(self, name: NameAtom, span: SourceSpan | None) -> Type | None:
-        """Resolve an opened relative type path through shared contributions.
+        """Resolve a relative type path through scope-use contributions.
 
         Only ever called against a fully-seeded program environment (never
         the transient shell-collection env the type pre-pass uses), so the
@@ -1440,9 +1441,9 @@ class TypeEnvironment:
     def _resolve_opened_applied_type(
         self, name: NameAtom, args: tuple[Type, ...], span: SourceSpan | None
     ) -> Type | None:
-        """Resolve an opened relative generic path through shared contributions.
+        """Resolve a relative generic path through scope-use contributions.
 
-        A same-module opened generic is always reachable through
+        A same-module scope-use generic is always reachable through
         ``program_generic_table`` (the whole-program type pre-pass registers
         every module's own generics there before any module's body is
         checked), so no separate local-table fallback is needed.
@@ -1747,7 +1748,7 @@ class TypeEnvironment:
         *,
         span: SourceSpan | None,
     ) -> Type | None:
-        """Resolve an unqualified generic application through open imports."""
+        """Resolve an unqualified generic application through import tails."""
         if self._import_env is None or self._program_generic_table is None:
             return None
         candidates = self._import_env.unqualified.get(name, frozenset())
@@ -1875,7 +1876,7 @@ class TypeEnvironment:
         opened = self._resolve_opened_type(name, span)
         if opened is not None:
             return opened
-        # Program context: unqualified lookup through open-imported names.
+        # Program context: unqualified lookup through import-tail-exposed names.
         if self._import_env is not None and self._program_type_table is not None:
             candidates = self._import_env.unqualified.get(name, frozenset())
             # Filter to candidates that are type names in the program type namespace.
@@ -2136,7 +2137,7 @@ class TypeEnvironment:
         )
 
     def resolve_unqualified_enum_owner_form(self, owner_name: str) -> EnumOwnerForm | None:
-        """Resolve ``Owner::variant`` with local-before-open precedence."""
+        """Resolve ``Owner::variant`` with local-before-scope-use precedence."""
         local = self.resolve_enum_owner_form(EnumOwnerFormKind.LOCAL, owner_name)
         return local or self.resolve_enum_owner_form(EnumOwnerFormKind.OPEN_IMPORT, owner_name)
 
@@ -2269,7 +2270,7 @@ class TypeEnvironment:
     def get_open_imported_generic_type(
         self, exposed_name: str
     ) -> tuple[ModuleId, str, GenericTypeDef] | None:
-        """Return the unique generic type exposed by an open-imported name."""
+        """Return the unique generic type exposed by an import tail."""
         matches = self._open_imported_generic_type_matches(exposed_name)
         if len(matches) == 1:
             return matches[0]

@@ -339,7 +339,7 @@ class TestWildcardImport:
         )
 
         source = (
-            'open import utils/*\nlet n = add(3, 4)\nlet msg = greet("World")\nprint n\nprint msg\n'
+            'import utils/*::*\nlet n = add(3, 4)\nlet msg = greet("World")\nprint n\nprint msg\n'
         )
         result = _run_program(source, roots_dirs=[lib_dir])
 
@@ -376,7 +376,7 @@ class TestQualifiedImport:
         lib_dir.mkdir()
         (lib_dir / "calc.agl").write_text("def square(n: int) -> int = n * n\n")
 
-        source = "open import calc\nlet r = calc::square(5)\nprint r\n"
+        source = "import calc::*\nlet r = calc::square(5)\nprint r\n"
         result = _run_program(source, roots_dirs=[lib_dir])
 
         assert result.ok is True
@@ -490,7 +490,7 @@ class TestImportedModuleErrors:
         # passes a text where int is expected
         bad_mod.write_text('def bad(n: int) -> int = "not an int"\n')
 
-        source = "open import broken\nlet r = bad(1)\nprint r\n"
+        source = "import broken::*\nlet r = bad(1)\nprint r\n"
         result = _run_program(source, roots_dirs=[lib_dir])
         assert result.ok is False
         # At least one diagnostic should mention the broken.agl file
@@ -505,7 +505,7 @@ class TestImportedModuleErrors:
         bad_mod = lib_dir / "badscope.agl"
         bad_mod.write_text("def f() -> int = undefined_name\n")
 
-        source = "open import badscope\nlet r = f()\nr\n"
+        source = "import badscope::*\nlet r = f()\nr\n"
         result = _run_program(source, roots_dirs=[lib_dir])
         assert result.ok is False
         assert any("badscope.agl" in (d.source_label or "") for d in result.diagnostics), (
@@ -533,7 +533,7 @@ class TestLibRootModule:
         work_dir.mkdir()
         entry = work_dir / "prog.agl"
         entry.write_text(
-            "open import shared\nprogram def main() -> unit =\n  let r = double(21)\n  print r\n"
+            "import shared::*\nprogram def main() -> unit =\n  let r = double(21)\n  print r\n"
         )
 
         # Use lib_dir as the lib-root, work_dir as the invocation root.
@@ -545,7 +545,7 @@ class TestLibRootModule:
 
     def test_module_not_found_fails(self, tmp_path: Path) -> None:
         """A missing module causes a ModuleNotFound diagnostic."""
-        source = "open import missing_module\nlet x = 1\nx\n"
+        source = "import missing_module::*\nlet x = 1\nx\n"
         result = _run_program(source, roots_dirs=[tmp_path])
         assert result.ok is False
         assert any("missing_module" in d.message for d in result.diagnostics)
@@ -559,7 +559,7 @@ class TestLibRootModule:
         (root_a / "shared.agl").write_text("def f() -> int = 1\n")
         (root_b / "shared.agl").write_text("def f() -> int = 2\n")
 
-        source = "open import shared\nlet r = f()\nr\n"
+        source = "import shared::*\nlet r = f()\nr\n"
         result = _run_program(source, roots_dirs=[root_a, root_b])
         assert result.ok is False
         assert any("shared" in d.message for d in result.diagnostics)
@@ -584,7 +584,7 @@ class TestAgentValueCrossModule:
         )
 
         source = (
-            "open import helper\n"
+            "import helper::*\n"
             'let mybot = AgentCommand("mybot")\n'
             'let result = ask_with_agent("test question", mybot)\n'
             "print result\n"
@@ -611,7 +611,7 @@ class TestAgentValueCrossModule:
         lib_dir = MULTI_FILE_DIR
 
         source = (
-            "open import utils/agent_helper\n"
+            "import utils/agent_helper::*\n"
             'let mybot = AgentCommand("mybot")\n'
             'let r = ask_with_agent("ping", mybot)\n'
             "print r\n"
@@ -646,7 +646,7 @@ class TestMultiFileParams:
         lib_dir.mkdir()
         (lib_dir / "math.agl").write_text("def square(n: int) -> int = n * n\n")
 
-        source = "open import math\nparam n: int\nlet r = square(n)\nprint r\n"
+        source = "import math::*\nparam n: int\nlet r = square(n)\nprint r\n"
 
         result = _run_program(source, roots_dirs=[lib_dir], param_values={"n": 7})
         assert result.ok is True
@@ -659,7 +659,7 @@ class TestMultiFileParams:
         lib_dir.mkdir()
         (lib_dir / "calc.agl").write_text("def sq(n: int) -> int = n * n\n")
 
-        source = "open import calc\nparam n: int\nlet r = sq(n)\nprint r\n"
+        source = "import calc::*\nparam n: int\nlet r = sq(n)\nprint r\n"
 
         result = _run_program(source, roots_dirs=[lib_dir], param_values={})
         assert result.ok is False
@@ -667,12 +667,12 @@ class TestMultiFileParams:
 
 
 # ---------------------------------------------------------------------------
-# Scenario 7: wildcard import with using / hiding
+# Scenario 7: wildcard import tails and hiding
 # ---------------------------------------------------------------------------
 
 
-class TestWildcardImportUsingHiding:
-    """import pkg.* using … / hiding … works end-to-end through real source."""
+class TestWildcardImportTailsAndHiding:
+    """Wildcard import tails and hiding work end-to-end through real source."""
 
     def _make_pkg(self, tmp_path: Path) -> Path:
         """Create a small package with two modules, each exporting two names."""
@@ -690,22 +690,22 @@ class TestWildcardImportUsingHiding:
         )
         return lib_dir
 
-    def test_wildcard_using_restricts_names(
+    def test_wildcard_selected_tail_restricts_names(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """import pkg.* using add brings only 'add' into scope; 'mul' is inaccessible."""
+        """A wildcard brace tail validates every matched module's selected atoms."""
         lib_dir = self._make_pkg(tmp_path)
-        # A wildcard `using` list must be public in every matched module.
-        source = "import pkg/* using add\nlet r = add(3, 4)\nprint r\n"
+        # A wildcard import's selected tail must be public in every matched module.
+        source = "import pkg/*::{add}\nlet r = add(3, 4)\nprint r\n"
         result = _run_program(source, roots_dirs=[lib_dir])
         assert result.ok is False
         assert result.diagnostics
 
-    def test_wildcard_using_hidden_name_inaccessible(self, tmp_path: Path) -> None:
-        """Names not listed in 'using' are inaccessible even though exported."""
+    def test_wildcard_selected_tail_hidden_name_is_inaccessible(self, tmp_path: Path) -> None:
+        """A wildcard brace tail rejects atoms absent from a matched module."""
         lib_dir = self._make_pkg(tmp_path)
         # Validation occurs at the wildcard import before body resolution.
-        source = "import pkg/* using add\nlet r = mul(3, 4)\nprint r\n"
+        source = "import pkg/*::{add}\nlet r = mul(3, 4)\nprint r\n"
         result = _run_program(source, roots_dirs=[lib_dir])
         assert result.ok is False
         assert result.diagnostics
@@ -716,7 +716,7 @@ class TestWildcardImportUsingHiding:
         """import pkg.* hiding mul brings all names except 'mul' into scope."""
         lib_dir = self._make_pkg(tmp_path)
         # A wildcard `hiding` list is likewise checked per expanded module.
-        source = "open import pkg/* hiding mul\nlet r = add(10, 5)\nprint r\n"
+        source = "import pkg/*::* hiding mul\nlet r = add(10, 5)\nprint r\n"
         result = _run_program(source, roots_dirs=[lib_dir])
         assert result.ok is False
         assert result.diagnostics
@@ -724,19 +724,19 @@ class TestWildcardImportUsingHiding:
     def test_wildcard_hiding_name_inaccessible(self, tmp_path: Path) -> None:
         """The hidden name is inaccessible after hiding."""
         lib_dir = self._make_pkg(tmp_path)
-        source = "open import pkg/* hiding mul\nlet r = mul(3, 4)\nprint r\n"
+        source = "import pkg/*::* hiding mul\nlet r = mul(3, 4)\nprint r\n"
         result = _run_program(source, roots_dirs=[lib_dir])
         assert result.ok is False
         assert any("mul" in d.message for d in result.diagnostics)
 
-    def test_wildcard_using_multi_module_union(
+    def test_wildcard_selected_tail_multi_module_union(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """using selects a name from every matched module that exports it."""
+        """A selected import tail exposes a name from every matched module that exports it."""
         lib_dir = self._make_pkg(tmp_path)
         # A list that is not shared by every module is rejected at the import.
         source = (
-            "import pkg/* using add, greet\n"
+            "import pkg/*::{add, greet}\n"
             "let n = add(2, 3)\n"
             'let s = greet("World")\n'
             "print n\n"
@@ -765,7 +765,7 @@ class TestScopedModuleSelections:
         self._write_geo(tmp_path)
 
         result = _run_program(
-            "import geo using Point::distance\nlet value = geo::Point::distance()\nprint value\n",
+            "import geo::{Point::distance}\nlet value = geo::Point::distance()\nprint value\n",
             roots_dirs=[tmp_path],
         )
 
@@ -778,7 +778,7 @@ class TestScopedModuleSelections:
         self._write_geo(tmp_path)
 
         result = _run_program(
-            "import geo using Point\nprint geo::Point::distance()\nprint geo::Point::bearing()\n",
+            "import geo::{Point}\nprint geo::Point::distance()\nprint geo::Point::bearing()\n",
             roots_dirs=[tmp_path],
         )
 
@@ -791,7 +791,7 @@ class TestScopedModuleSelections:
         self._write_geo(tmp_path)
 
         result = _run_program(
-            "import geo using Point::Color::red\nprint geo::Point::Color::red\n",
+            "import geo::{Point::Color::red}\nprint geo::Point::Color::red\n",
             roots_dirs=[tmp_path],
         )
 
@@ -826,7 +826,7 @@ class TestScopedModuleSelections:
             ("Point as P", "P::distance()"),
         ),
     )
-    def test_scoped_using_contributes_full_paths(
+    def test_scoped_selection_contributes_full_paths(
         self,
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
@@ -836,7 +836,7 @@ class TestScopedModuleSelections:
         self._write_geo(tmp_path)
 
         result = _run_program(
-            f"import geo using {selection}\nprint {reference}\n",
+            f"import geo::{{{selection}}}\nprint {reference}\n",
             roots_dirs=[tmp_path],
         )
 
@@ -849,7 +849,7 @@ class TestScopedModuleSelections:
         (tmp_path / "library.agl").write_text("type Point::Values[T] = array[T]\n")
 
         result = _run_program(
-            "import library using Point\n"
+            "import library::{Point}\n"
             "record Holder\n"
             "  values: library::Point::Values[int]\n"
             "let holder = Holder(values = [7])\n"
@@ -867,7 +867,7 @@ class TestScopedModuleSelections:
             "def Point::distance() -> int = 1\ndef Other::distance() -> int = 2\n"
         )
         (tmp_path / "facade.agl").write_text(
-            "export library using Point as Location, Other as Location\n"
+            "export library::{Point as Location, Other as Location}\n"
         )
 
         result = _run_program("import facade\n()\n", roots_dirs=[tmp_path])
@@ -878,14 +878,14 @@ class TestScopedModuleSelections:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         (tmp_path / "origin.agl").write_text("def Point::distance() -> int = 7\n")
-        (tmp_path / "left.agl").write_text("export origin using Point\n")
-        (tmp_path / "right.agl").write_text("export origin using Point\n")
+        (tmp_path / "left.agl").write_text("export origin::{Point}\n")
+        (tmp_path / "right.agl").write_text("export origin::{Point}\n")
         (tmp_path / "facade.agl").write_text(
-            "export left using Point as Location\nexport right using Point as Location\n"
+            "export left::{Point as Location}\nexport right::{Point as Location}\n"
         )
 
         result = _run_program(
-            "import facade using Location\nprint facade::Location::distance()\n",
+            "import facade::{Location}\nprint facade::Location::distance()\n",
             roots_dirs=[tmp_path],
         )
 
@@ -896,10 +896,10 @@ class TestScopedModuleSelections:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         self._write_geo(tmp_path)
-        (tmp_path / "facade.agl").write_text("export geo using Point as Location\n")
+        (tmp_path / "facade.agl").write_text("export geo::{Point as Location}\n")
 
         result = _run_program(
-            "import facade using Location\nprint facade::Location::distance()\n",
+            "import facade::{Location}\nprint facade::Location::distance()\n",
             roots_dirs=[tmp_path],
         )
 
@@ -909,8 +909,8 @@ class TestScopedModuleSelections:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import facade using Location\n()",
-                "facade": "export geo using Point as Location",
+                "entry": "import facade::{Location}\n()",
+                "facade": "export geo::{Point as Location}",
                 "geo": (tmp_path / "geo.agl").read_text(),
             },
         )
@@ -926,7 +926,7 @@ class TestScopedModuleSelections:
         self._write_geo(tmp_path)
 
         result = _run_program(
-            "import geo/* using Point::distance\nprint geo::Point::distance()\n",
+            "import geo/*::{Point::distance}\nprint geo::Point::distance()\n",
             roots_dirs=[tmp_path],
         )
 
@@ -939,7 +939,7 @@ class TestScopedModuleSelections:
         self._write_geo(tmp_path)
 
         result = _run_program(
-            "import geo using Point, Shapes::Point\n"
+            "import geo::{Point, Shapes::Point}\n"
             "let point = geo::Point(x = 4)\n"
             "let nested = geo::Shapes::Point(x = 5)\n"
             "print geo::Point::distance()\n"
@@ -954,11 +954,11 @@ class TestScopedModuleSelections:
     def test_renamed_scoped_record_constructs_via_its_bare_alias(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """A scoped record selected and renamed by 'using … as' builds under its alias."""
+        """A scoped record selected and renamed by an import tail builds under its alias."""
         self._write_geo(tmp_path)
 
         result = _run_program(
-            "import geo using Point as P\nlet p = P(x = 9)\nprint p.x\n",
+            "import geo::{Point as P}\nlet p = P(x = 9)\nprint p.x\n",
             roots_dirs=[tmp_path],
         )
 
@@ -972,7 +972,7 @@ class TestScopedModuleSelections:
         (tmp_path / "flags.agl").write_text("enum Status\n  | Good\n  | Bad\n")
 
         result = _run_program(
-            "import flags using Status::Good as X\nlet s = X\nprint s\n",
+            "import flags::{Status::Good as X}\nlet s = X\nprint s\n",
             roots_dirs=[tmp_path],
         )
 
@@ -986,22 +986,22 @@ class TestScopedModuleSelections:
         self._write_geo(tmp_path)
 
         result = _run_program(
-            "import geo using Point::Color as C\nprint C::red\nprint red\n",
+            "import geo::{Point::Color as C}\nprint C::red\nprint red\n",
             roots_dirs=[tmp_path],
         )
 
         assert result.ok is True
         assert capsys.readouterr().out == "Point::Color::red\nPoint::Color::red\n"
 
-    def test_opening_a_bare_imported_scope_contributed_twice_is_rejected(
+    def test_scope_use_of_a_bare_imported_scope_contributed_twice_is_rejected(
         self, tmp_path: Path
     ) -> None:
-        """Two bare-imported modules contributing the same scope leave `open` ambiguous."""
+        """Two import tails contributing the same scope make ``use A::*`` ambiguous."""
         (tmp_path / "lib1.agl").write_text("scope A\ndef one() -> int = 1\nend A\n")
         (tmp_path / "lib2.agl").write_text("scope A\ndef two() -> int = 2\nend A\n")
 
         result = _run_program(
-            "open import lib1\nopen import lib2\nopen A\nprint one()\n",
+            "import lib1::*\nimport lib2::*\nuse A::*\nprint one()\n",
             roots_dirs=[tmp_path],
         )
 
@@ -1028,7 +1028,7 @@ class TestScopedModuleSelections:
         self._write_geo(tmp_path)
 
         result = _run_program(
-            "import geo using Point::public_secret\nprint geo::Point::public_secret()\n",
+            "import geo::{Point::public_secret}\nprint geo::Point::public_secret()\n",
             roots_dirs=[tmp_path],
         )
 
@@ -1040,7 +1040,7 @@ class TestScopedModuleSelections:
         (tmp_path / "geo.agl").write_text(source.read_text())
 
         result = _run_program(
-            "import geo using Empty\n()\n",
+            "import geo::{Empty}\n()\n",
             roots_dirs=[tmp_path],
         )
 
@@ -1057,8 +1057,8 @@ class TestCrossModuleScopedPaths:
         (tmp_path / "south.agl").write_text("def Point::distance() -> int = 9\n")
 
         result = _run_program(
-            "open import north\n"
-            "open import south\n"
+            "import north::*\n"
+            "import south::*\n"
             "print /north::Point::distance()\n"
             "print /south::Point::distance()\n",
             roots_dirs=[tmp_path],
@@ -1068,19 +1068,19 @@ class TestCrossModuleScopedPaths:
         assert capsys.readouterr().out == "7\n9\n"
 
         ambiguous = _run_program(
-            "open import north\nopen import south\nPoint::distance()\n", roots_dirs=[tmp_path]
+            "import north::*\nimport south::*\nPoint::distance()\n", roots_dirs=[tmp_path]
         )
         assert ambiguous.ok is False
         assert any(
             "ambiguous" in diagnostic.message.lower() for diagnostic in ambiguous.diagnostics
         )
 
-    def test_module_route_and_open_scoped_path_clash_at_use(self, tmp_path: Path) -> None:
+    def test_module_route_and_import_tail_scoped_path_clash_at_use(self, tmp_path: Path) -> None:
         (tmp_path / "Point.agl").write_text("def distance() -> int = 9\n")
         (tmp_path / "geometry.agl").write_text("def Point::distance() -> int = 7\n")
 
         ambiguous = _run_program(
-            "import Point\nopen import geometry\nPoint::distance()\n", roots_dirs=[tmp_path]
+            "import Point\nimport geometry::*\nPoint::distance()\n", roots_dirs=[tmp_path]
         )
         assert ambiguous.ok is False
         assert any(
@@ -1088,7 +1088,7 @@ class TestCrossModuleScopedPaths:
         )
 
         repaired = _run_program(
-            "import Point\nopen import geometry\nprint /Point::distance()\n",
+            "import Point\nimport geometry::*\nprint /Point::distance()\n",
             roots_dirs=[tmp_path],
         )
         assert repaired.ok is True
@@ -1120,7 +1120,7 @@ class TestCrossModuleScopedPaths:
         assert repaired.ok is True
         assert capsys.readouterr().out == "9\n7\n"
 
-    def test_open_import_exposes_scoped_paths_without_a_module_route(
+    def test_import_tail_exposes_scoped_paths_without_a_module_route(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         (tmp_path / "geo.agl").write_text(
@@ -1131,7 +1131,7 @@ class TestCrossModuleScopedPaths:
         )
 
         result = _run_program(
-            "open import geo hiding Point::bearing\n"
+            "import geo::* hiding Point::bearing\n"
             "print Point::distance()\n"
             "print Point::public_secret()\n",
             roots_dirs=[tmp_path],
@@ -1139,7 +1139,7 @@ class TestCrossModuleScopedPaths:
         assert result.ok is True
         assert capsys.readouterr().out == "7\n99\n"
 
-        full = _run_program("open import geo\nprint Point::bearing()\n", roots_dirs=[tmp_path])
+        full = _run_program("import geo::*\nprint Point::bearing()\n", roots_dirs=[tmp_path])
         assert full.ok is True
         assert capsys.readouterr().out == "3\n"
 
@@ -1156,7 +1156,7 @@ class TestCrossModuleScopedPaths:
         )
 
         result = _run_program(
-            "import shapes/* using Point::measure\n"
+            "import shapes/*::{Point::measure}\n"
             "print circle::Point::measure()\n"
             "print square::Point::measure()\n",
             roots_dirs=[tmp_path],
@@ -1164,15 +1164,15 @@ class TestCrossModuleScopedPaths:
         assert result.ok is True
         assert capsys.readouterr().out == "3\n4\n"
 
-        unselected = _run_program(
-            "import shapes/* using Point::measure\ncircle::Point::secret()\n", roots_dirs=[tmp_path]
+        full_surface = _run_program(
+            "import shapes/*::{Point::measure}\ncircle::Point::secret()\n", roots_dirs=[tmp_path]
         )
-        assert unselected.ok is False
+        assert full_surface.ok is True
 
 
 # ---------------------------------------------------------------------------
 # extern def (Python FFI): a library module's extern reachable across
-# qualified/open imports and re-export.
+# qualified/use imports::* and re-export.
 #
 # Companion loading, boundary crossing, and the full conversion matrix are
 # covered end to end elsewhere (test_agl_extern_runtime.py); this class only
@@ -1182,10 +1182,10 @@ class TestCrossModuleScopedPaths:
 # ---------------------------------------------------------------------------
 
 
-class TestOpenedScopes:
-    """Opening local and imported named scopes exposes only selected members."""
+class TestScopeUses:
+    """Local and imported ``use`` declarations expose only selected members."""
 
-    def test_imported_scope_opens_members_and_type_variants(
+    def test_imported_scope_use_exposes_members_and_type_variants(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         (tmp_path / "geo.agl").write_text(
@@ -1197,8 +1197,8 @@ class TestOpenedScopes:
 
         result = _run_program(
             "import geo\n"
-            "open geo::Point\n"
-            "open geo::Flag\n"
+            "use geo::Point::*\n"
+            "use geo::Flag::*\n"
             "print distance()\n"
             "print Ready\n"
             "print label()\n",
@@ -1208,13 +1208,13 @@ class TestOpenedScopes:
         assert result.ok is True
         assert capsys.readouterr().out == "7\nFlag::Ready\nready\n"
 
-    def test_nearer_opened_enum_variant_keeps_its_scoped_owner(
+    def test_nearer_used_enum_variant_keeps_its_scoped_owner(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         result = _run_program(
-            "open A::Flag\n"
+            "use A::Flag::*\n"
             "scope B\n"
-            "open Flag\n"
+            "use Flag::*\n"
             "def value() -> B::Flag = Ready\n"
             "enum Flag | Ready\n"
             "end B\n"
@@ -1237,17 +1237,17 @@ class TestOpenedScopes:
             (module_dir / "geo.agl").write_text("def Point::distance() -> int = 1\n")
 
         result = _run_program(
-            "import one/geo\nimport two/geo\nopen geo::Point\n()\n", roots_dirs=[tmp_path]
+            "import one/geo\nimport two/geo\nuse geo::Point::*\n()\n", roots_dirs=[tmp_path]
         )
 
         assert result.ok is False
         assert "ambiguous" in result.diagnostics[0].message
 
-    def test_opened_variant_merges_with_the_same_selected_import(self, tmp_path: Path) -> None:
+    def test_used_variant_merges_with_the_same_selected_import(self, tmp_path: Path) -> None:
         (tmp_path / "geo.agl").write_text("enum Flag | Ready\n")
 
         result = _run_program(
-            "import geo\nimport geo using Flag::Ready as Ready\nopen geo::Flag\nReady\n",
+            "import geo\nimport geo::{Flag::Ready as Ready}\nuse geo::Flag::*\nReady\n",
             roots_dirs=[tmp_path],
         )
 
@@ -1256,13 +1256,13 @@ class TestOpenedScopes:
     @pytest.mark.parametrize(
         "source",
         (
-            "import geo\nopen geo::Point using missing\n()",
-            "import geo\nopen geo::Missing\n()",
-            "scope Point\ndef distance() -> int = 1\nend Point\nopen Point using missing\n()",
-            "scope Point\ndef secret() -> int = 1\nend Point\nopen Point hiding secret\nsecret()",
+            "import geo\nuse geo::Point::{missing}\n()",
+            "import geo\nuse geo::Missing::*\n()",
+            "scope Point\ndef distance() -> int = 1\nend Point\nuse Point::{missing}\n()",
+            "scope Point\ndef secret() -> int = 1\nend Point\nuse Point::* hiding secret\nsecret()",
         ),
     )
-    def test_open_rejects_unknown_scopes_and_unselected_members(
+    def test_scope_use_rejects_unknown_scopes_and_unselected_members(
         self, tmp_path: Path, source: str
     ) -> None:
         (tmp_path / "geo.agl").write_text(
@@ -1271,44 +1271,46 @@ class TestOpenedScopes:
 
         assert _run_program(source, roots_dirs=[tmp_path]).ok is False
 
-    def test_scope_open_composes_with_open_import_without_transitive_reexport(
+    def test_scope_use_composes_with_import_tail_without_transitive_reexport(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         (tmp_path / "geo.agl").write_text(
             "def root() -> int = 1\ndef Point::distance() -> int = 7\n"
         )
         (tmp_path / "facade.agl").write_text(
-            "import geo\nopen geo::Point\ndef value() -> int = 2\n"
+            "import geo\nuse geo::Point::*\ndef value() -> int = 2\n"
         )
 
         result = _run_program(
-            "open import geo\nopen geo::Point\nprint root()\nprint distance()\n",
+            "import geo::*\nuse geo::Point::*\nprint root()\nprint distance()\n",
             roots_dirs=[tmp_path],
         )
         assert result.ok is True
         assert capsys.readouterr().out == "1\n7\n"
 
-        assert _run_program("open import facade\ndistance()\n", roots_dirs=[tmp_path]).ok is False
+        assert _run_program("import facade::*\ndistance()\n", roots_dirs=[tmp_path]).ok is False
 
-    def test_open_scope_and_open_import_clash_when_the_name_is_used(self, tmp_path: Path) -> None:
+    def test_scope_use_and_import_tail_clash_when_the_name_is_used(self, tmp_path: Path) -> None:
         (tmp_path / "geo.agl").write_text(
             "def distance() -> int = 1\ndef Point::distance() -> int = 7\n"
         )
 
         result = _run_program(
-            "open import geo\nopen geo::Point\ndistance()\n", roots_dirs=[tmp_path]
+            "import geo::*\nuse geo::Point::*\ndistance()\n", roots_dirs=[tmp_path]
         )
 
         assert result.ok is False
         assert "ambiguous" in result.diagnostics[0].message
 
-    def test_open_rename_collision_reports_each_contributing_member(self, tmp_path: Path) -> None:
+    def test_scope_use_rename_collision_reports_each_contributing_member(
+        self, tmp_path: Path
+    ) -> None:
         (tmp_path / "geo.agl").write_text(
             "def Point::distance() -> int = 1\ndef Point::length() -> int = 2\n"
         )
 
         result = _run_program(
-            "import geo\nopen geo::Point using distance as measure, length as measure\nmeasure()\n",
+            "import geo\nuse geo::Point::{distance as measure, length as measure}\nmeasure()\n",
             roots_dirs=[tmp_path],
         )
 
@@ -1317,7 +1319,7 @@ class TestOpenedScopes:
         assert "Point::distance" in result.diagnostics[0].message
         assert "Point::length" in result.diagnostics[0].message
 
-    def test_opened_local_scope_type_is_available_only_in_its_region(
+    def test_used_local_scope_type_is_available_only_in_its_region(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         source = (
@@ -1326,7 +1328,7 @@ class TestOpenedScopes:
             "  value: int\n"
             "end Shapes\n"
             "scope Measurements\n"
-            "open Shapes\n"
+            "use Shapes::*\n"
             "def value(point: Point) -> int = point.value\n"
             "end Measurements\n"
             "print Measurements::value(Shapes::Point(value = 3))\n"
@@ -1337,14 +1339,14 @@ class TestOpenedScopes:
         assert result.ok is True
         assert capsys.readouterr().out == "3\n"
 
-    def test_opened_scope_type_does_not_leak_from_its_region(self, tmp_path: Path) -> None:
+    def test_used_scope_type_does_not_leak_from_its_region(self, tmp_path: Path) -> None:
         source = (
             "scope Shapes\n"
             "record Point\n"
             "  value: int\n"
             "end Shapes\n"
             "scope Measurements\n"
-            "open Shapes\n"
+            "use Shapes::*\n"
             "def value(point: Point) -> int = point.value\n"
             "end Measurements\n"
             "def leaked(point: Point) -> int = point.value\n"
@@ -1353,7 +1355,7 @@ class TestOpenedScopes:
 
         assert _run_program(source, roots_dirs=[tmp_path]).ok is False
 
-    def test_opened_imported_scope_type_honors_selection_and_rename(
+    def test_used_imported_scope_type_honors_selection_and_rename(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         (tmp_path / "geo.agl").write_text("scope Shapes\nrecord Point\n  value: int\nend Shapes\n")
@@ -1361,7 +1363,7 @@ class TestOpenedScopes:
         result = _run_program(
             "import geo\n"
             "scope Measurements\n"
-            "open geo::Shapes using Point as Coordinate\n"
+            "use geo::Shapes::{Point as Coordinate}\n"
             "def value(point: Coordinate) -> int = point.value\n"
             "end Measurements\n"
             "print Measurements::value(geo::Shapes::Point(value = 5))\n",
@@ -1371,11 +1373,11 @@ class TestOpenedScopes:
         assert result.ok is True
         assert capsys.readouterr().out == "5\n"
 
-    def test_opened_generic_type_is_resolved_by_its_bare_rename(
+    def test_used_generic_type_is_resolved_by_its_bare_rename(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         source = (
-            "open Shapes using Box as Container\n"
+            "use Shapes::{Box as Container}\n"
             "scope Shapes\n"
             "record Box[T]\n"
             "  value: T\n"
@@ -1389,16 +1391,16 @@ class TestOpenedScopes:
         assert result.ok is True
         assert capsys.readouterr().out == "7\n"
 
-    def test_opened_scope_function_does_not_resolve_as_a_type(self, tmp_path: Path) -> None:
+    def test_used_scope_function_does_not_resolve_as_a_type(self, tmp_path: Path) -> None:
         (tmp_path / "geo.agl").write_text("scope Shapes\ndef Point() -> int = 1\nend Shapes\n")
 
-        source = "import geo\nopen geo::Shapes\ndef value(point: Point) -> int = point\n()\n"
+        source = "import geo\nuse geo::Shapes::*\ndef value(point: Point) -> int = point\n()\n"
 
         assert _run_program(source, roots_dirs=[tmp_path]).ok is False
 
-    def test_opened_generic_type_requires_arguments(self, tmp_path: Path) -> None:
+    def test_used_generic_type_requires_arguments(self, tmp_path: Path) -> None:
         source = (
-            "open Shapes using Box as Container\n"
+            "use Shapes::{Box as Container}\n"
             "scope Shapes\n"
             "record Box[T]\n"
             "  value: T\n"
@@ -1409,9 +1411,9 @@ class TestOpenedScopes:
 
         assert _run_program(source, roots_dirs=[tmp_path]).ok is False
 
-    def test_opened_non_generic_type_rejects_arguments(self, tmp_path: Path) -> None:
+    def test_used_non_generic_type_rejects_arguments(self, tmp_path: Path) -> None:
         source = (
-            "open Shapes using Point as Coordinate\n"
+            "use Shapes::{Point as Coordinate}\n"
             "scope Shapes\n"
             "record Point\n"
             "  value: int\n"
@@ -1422,10 +1424,10 @@ class TestOpenedScopes:
 
         assert _run_program(source, roots_dirs=[tmp_path]).ok is False
 
-    def test_opened_type_rename_collision_is_ambiguous_at_its_use(self, tmp_path: Path) -> None:
+    def test_used_type_rename_collision_is_ambiguous_at_its_use(self, tmp_path: Path) -> None:
         source = (
-            "open First using Point as Coordinate\n"
-            "open Second using Point as Coordinate\n"
+            "use First::{Point as Coordinate}\n"
+            "use Second::{Point as Coordinate}\n"
             "scope First\nrecord Point\n  value: int\nend First\n"
             "scope Second\nrecord Point\n  value: int\nend Second\n"
             "def value(point: Coordinate) -> int = point.value\n"
@@ -1434,11 +1436,11 @@ class TestOpenedScopes:
 
         assert _run_program(source, roots_dirs=[tmp_path]).ok is False
 
-    def test_opened_generic_alias_is_resolved_by_its_bare_rename(
+    def test_used_generic_alias_is_resolved_by_its_bare_rename(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         source = (
-            "open Shapes using Wrapper as Container\n"
+            "use Shapes::{Wrapper as Container}\n"
             "scope Shapes\n"
             "record Box[T]\n"
             "  value: T\n"
@@ -1455,18 +1457,18 @@ class TestOpenedScopes:
 
 
 class TestExternMultiFile:
-    """A library module's ``extern def`` through qualified/open imports and re-export."""
+    """A library module's ``extern def`` through qualified/use imports::* and re-export."""
 
     def test_qualified_import_calls_the_extern(self, capsys: pytest.CaptureFixture[str]) -> None:
-        source = "open import utils/ext_math\nlet r = utils/ext_math::double(21)\nprint r\n"
+        source = "import utils/ext_math::*\nlet r = utils/ext_math::double(21)\nprint r\n"
         result = _run_program(source, roots_dirs=[MULTI_FILE_DIR])
         assert result.ok is True
         assert "42" in capsys.readouterr().out
 
-    def test_open_import_calls_the_extern_unqualified(
+    def test_import_tail_calls_the_extern_unqualified(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        source = "open import utils/ext_math\nlet r = double(21)\nprint r\n"
+        source = "import utils/ext_math::*\nlet r = double(21)\nprint r\n"
         result = _run_program(source, roots_dirs=[MULTI_FILE_DIR])
         assert result.ok is True
         assert "42" in capsys.readouterr().out
@@ -1476,7 +1478,7 @@ class TestExternMultiFile:
     ) -> None:
         # `use_secret` calls the extern `secret` internally, so the importer
         # reaches the extern through an ordinary AgL wrapper.
-        source = "open import utils/ext_math\nlet r = use_secret(21)\nprint r\n"
+        source = "import utils/ext_math::*\nlet r = use_secret(21)\nprint r\n"
         result = _run_program(source, roots_dirs=[MULTI_FILE_DIR])
         assert result.ok is True
         assert "122" in capsys.readouterr().out
@@ -1486,7 +1488,7 @@ class TestExternMultiFile:
     ) -> None:
         # utils.ext_facade re-exports utils.ext_math via `export utils.ext_math`
         # (no extern def of its own, so it needs no companion file).
-        source = "open import utils/ext_facade\nlet r = double(21)\nprint r\n"
+        source = "import utils/ext_facade::*\nlet r = double(21)\nprint r\n"
         result = _run_program(source, roots_dirs=[MULTI_FILE_DIR])
         assert result.ok is True
         assert "42" in capsys.readouterr().out
@@ -1494,14 +1496,14 @@ class TestExternMultiFile:
     def test_reexported_extern_callable_through_the_facade_qualifier(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        source = "open import utils/ext_facade\nlet r = utils/ext_facade::double(21)\nprint r\n"
+        source = "import utils/ext_facade::*\nlet r = utils/ext_facade::double(21)\nprint r\n"
         result = _run_program(source, roots_dirs=[MULTI_FILE_DIR])
         assert result.ok is True
         assert "42" in capsys.readouterr().out
 
 
 class TestScopedExecutionFixtures:
-    """Scoped imports, opened members, and agents execute across modules."""
+    """Scoped imports, scope-use members, and agents execute across modules."""
 
     @pytest.mark.parametrize(
         ("responses", "expected"),
@@ -1523,7 +1525,7 @@ class TestScopedExecutionFixtures:
         ),
         ids=("completed_task", "waiting_task"),
     )
-    def test_path_selected_and_opened_scoped_workflow_executes(
+    def test_path_selected_and_used_scoped_workflow_executes(
         self,
         responses: tuple[str, str],
         expected: str,

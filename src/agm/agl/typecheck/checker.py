@@ -148,7 +148,6 @@ from agm.agl.syntax.nodes import (
     Loop,
     NameTarget,
     NullLit,
-    OpenDecl,
     ParamDecl,
     ParamKind,
     Pattern,
@@ -169,6 +168,7 @@ from agm.agl.syntax.nodes import (
     UnaryNeg,
     UnaryNot,
     UnitLit,
+    UseDecl,
     VarDecl,
     VarPattern,
     VarRef,
@@ -941,7 +941,7 @@ class _Checker:
             with self._own_type_scope(item):
                 self._check_param(item)
             return UnitType()
-        if isinstance(item, (ImportDecl, ExportDecl, OpenDecl, InfixDecl)):
+        if isinstance(item, (ImportDecl, ExportDecl, UseDecl, InfixDecl)):
             return UnitType()  # The program module-system pass processes imports/exports.
         # --- Binders ---
         if isinstance(item, (LetDecl, VarDecl)):
@@ -3477,8 +3477,8 @@ class _Checker:
 
             exc_type: ExceptionType = EXCEPTION_BASE
         else:
-            # resolve_named_type is used instead of get_type so that open-imported
-            # exception types (cross-module program context) are found as well.
+            # resolve_named_type is used instead of get_type so exception types exposed
+            # by import tails (in cross-module program context) are found as well.
             resolved = self._env.resolve_named_type(clause.exc_type)
             if resolved is None or not isinstance(resolved, ExceptionType):
                 raise AglTypeError(

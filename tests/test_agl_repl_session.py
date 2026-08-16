@@ -927,7 +927,7 @@ class TestStdlib:
 
         assert s.eval_entry("import std/core").ok
         assert not s.eval_entry("Some(value = 1)").ok
-        assert s.eval_entry("std/core::Some(value = 1)").ok
+        assert s.eval_entry("std/core::Option::Some(value = 1)").ok
 
     def test_no_stdlib_requires_explicit_core_import_after_reset(self) -> None:
         s = ReplSession(
@@ -4535,19 +4535,19 @@ class TestImports:
         assert r2.ok, r2.diagnostics
         assert _int(r2.value) == 10
 
-    def test_same_target_use_replaces_prior_selection_and_failed_entries_preserve_it(self) -> None:
+    def test_same_target_use_is_additive_and_failed_entries_preserve_it(self) -> None:
         s = ReplSession()
         assert s.eval_entry("def First::value() -> int = 1").ok
         assert s.eval_entry("use First::*").ok
         assert s.eval_entry("value()").value == IntValue(1)
 
         assert s.eval_entry("use First::{value as first_value}").ok
-        assert not s.eval_entry("value()").ok
+        assert s.eval_entry("value()").value == IntValue(1)
         assert s.eval_entry("first_value()").value == IntValue(1)
 
         failed = s.eval_entry('use First::*\nlet bad: int = "not an int"')
         assert not failed.ok
-        assert not s.eval_entry("value()").ok
+        assert s.eval_entry("value()").value == IntValue(1)
         assert s.eval_entry("first_value()").value == IntValue(1)
 
     def test_distinct_use_targets_with_clashing_bare_names_remain_ambiguous(self) -> None:

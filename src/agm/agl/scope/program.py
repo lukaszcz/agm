@@ -156,9 +156,9 @@ def _build_cross_module_constructor_candidates(
     cross_module_constructor_refs: Mapping[QName, ConstructorRef],
     import_envs: Mapping[ModuleId, ImportEnv],
 ) -> tuple[dict[str, tuple[ConstructorRef, ...]], frozenset[str]]:
-    """Build constructor candidates from open-imported types for a module.
+    """Build constructor candidates from types exposed by import tails for a module.
 
-    For each type exposed via unqualified (open) import:
+    For each type exposed unqualified by an import tail:
     - RecordDef: add the record name as a candidate (e.g. ``Foo(x:1)``).
     - EnumDef: add each variant name as a candidate (e.g. ``Red``).
     - TypeAlias: add the alias name only when its chain provably ends at a
@@ -173,7 +173,7 @@ def _build_cross_module_constructor_candidates(
     carries a per-variant :class:`ConstructorRef`.
 
     Returns ``(candidates, type_names)`` where ``type_names`` is the set of
-    open-imported type names (for qualified constructor access like ``Color::Red``).
+    import-tail-exposed type names (for qualified constructor access like ``Color::Red``).
     """
     candidates: dict[str, list[ConstructorRef]] = {}
     type_names: set[str] = set()
@@ -408,7 +408,7 @@ def _compute_reexport_additions(
     Returns a dict of ``exposed_name → origin_qname``.  This is called once
     per (module, export-decl, target-module) triple during the fixed-point.
     A region-scoped ``decl`` re-roots every forwarded atom under its own
-    scope path, exactly as a ``using … as`` rename re-roots a selected atom.
+    scope path, exactly as an ``import …::{… as …}`` tail re-roots a selected atom.
     """
     result: dict[NameAtom, QName] = {}
     region_prefix = tuple(segment.name for segment in decl.scope_path)
@@ -515,7 +515,7 @@ def resolve_program(
         A loaded module graph from :func:`~agm.agl.modules.loader.load_graph`.
     entry_ambient_constructor_candidates:
         Constructor candidates from prior REPL entries.  These are merged with
-        open-imported constructor candidates for the entry module.
+        import-tail-exposed constructor candidates for the entry module.
     entry_ambient_type_names:
         Type names from prior REPL entries, used for qualified constructor
         access in the entry module.
@@ -636,7 +636,7 @@ def resolve_program(
 
     for mid, loaded in graph.modules.items():
         is_entry = mid.is_entry
-        # Build cross-module constructor candidates from open imports.
+        # Build cross-module constructor candidates from unqualified import tails.
         cross_module_candidates, cross_module_type_names = (
             _build_cross_module_constructor_candidates(
                 import_envs[mid], all_public_types, cross_module_constructor_refs, import_envs

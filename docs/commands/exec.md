@@ -245,7 +245,7 @@ program def main() -> unit =
 ```
 
 A qualified target (`std/config::KEY := …`) always writes a setting. After an
-`open import std/config`, its names are also in scope, so a bare `KEY := …` write
+`import std/config::*`, its names are also in scope, so a bare `KEY := …` write
 is valid. The `Option[text]` settings (`log-file`, `timeout`) take a `Some("…")`
 or `None` value.
 

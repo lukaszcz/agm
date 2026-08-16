@@ -180,6 +180,28 @@ def test_regional_tail_bare_contributions_narrow_at_the_scope_seam() -> None:
     } == {right_module}
 
 
+def test_import_tail_and_use_route_of_the_same_origin_are_not_ambiguous() -> None:
+    decl = _decl("lib/api", tail=(_item("selected"),))
+    module = _module("lib/api")
+    root = ScopeNode(node_id=0)
+    root.contribute_bare(
+        "selected",
+        BindingRef(
+            "selected",
+            False,
+            _span(),
+            decl.node_id,
+            BinderKind.function_binding,
+            module,
+        ),
+    )
+
+    candidates = resolve_bare_contribution(root, "selected", {})
+
+    assert candidates is not None
+    assert len(candidates) == 1
+
+
 def test_wildcard_tails_apply_bare_contributions_per_module() -> None:
     decl = _decl("pkg", wildcard=True, tail=(_item("shared", "api"),))
     left = _module("pkg/left")

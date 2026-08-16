@@ -577,9 +577,9 @@ class TestScopedParam:
         assert _ref(resolved, "region").scope_path == ("Deploy",)
         assert _ref(resolved, "region").kind is BinderKind.param_binding
 
-    def test_visible_after_open(self) -> None:
+    def test_visible_after_use(self) -> None:
         resolved = parse_and_resolve(
-            "open Deploy\nscope Deploy\nparam region: text\nend Deploy\nregion"
+            "use Deploy::*\nscope Deploy\nparam region: text\nend Deploy\nregion"
         )
         assert _ref(resolved, "region").scope_path == ("Deploy",)
 
@@ -608,126 +608,124 @@ class TestScopedParam:
             parse_and_resolve("def f() =\n  param x\n  0\nf()")
 
 
-class TestScopedBindingOpenPrecedence:
-    """A local ``open`` -- plain, ``using``, or ``hiding`` -- resolves live.
+class TestScopedBindingUsePrecedence:
+    """A local ``use`` — glob, selected-tail, or ``hiding`` — resolves live.
 
-    A local ``open`` records its target scope path together with its full
+    A local ``use`` records its target scope path together with its full
     selection (mode, items, renames) and resolves it against the scope tree
     at every later bare reference, never through a snapshot taken when the
-    ``open`` itself is walked. A declaration (``def``/type) is
-    fully collected in the pre-pass, so every ``open`` sees it regardless of
-    order; a scoped binder is registered only when the walk reaches it, so a
-    reference textually walked *after* the binder's own registration still
-    reaches it even though the ``open`` came first -- textual precedence
-    still governs a reference walked *before* the binder, with no dedicated
-    check, for every selection form alike.
+    ``use`` itself is walked. A declaration (``def``/type) is fully collected
+    in the pre-pass, so every ``use`` sees it regardless of order; a scoped
+    binder is registered only when the walk reaches it, so a reference
+    textually walked *after* the binder's own registration still reaches it
+    even though the ``use`` came first -- textual precedence still governs a
+    reference walked *before* the binder, with no dedicated check, for every
+    selection form alike.
     """
 
-    def test_open_before_the_binding_does_not_see_it(self) -> None:
-        """The reference itself is walked before the binder registers, inside
-        the earlier ``scope B`` block, so even the live re-check finds nothing."""
+    def test_use_before_the_binding_does_not_see_it(self) -> None:
+        """The reference is walked before the binder registers inside the earlier
+        ``scope B`` block, so even the live scope-use re-check finds nothing."""
         with pytest.raises(AglScopeError):
             parse_and_resolve(
-                "scope B\nopen A\ndef get() -> int = x\nend B\nscope A\nlet x = 1\nend A\nB::get()"
+                "scope B\nuse A::*\ndef get() -> int = x\nend B\n"
+                "scope A\nlet x = 1\nend A\nB::get()"
             )
 
-    def test_open_after_the_binding_sees_it(self) -> None:
+    def test_use_after_the_binding_sees_it(self) -> None:
         resolved = parse_and_resolve(
-            "scope A\nlet x = 1\nend A\nscope B\nopen A\ndef get() -> int = x\nend B\nB::get()"
+            "scope A\nlet x = 1\nend A\nscope B\nuse A::*\ndef get() -> int = x\nend B\nB::get()"
         )
         assert _ref(resolved, "x").scope_path == ("A",)
 
-    def test_open_before_a_declaration_still_sees_it(self) -> None:
-        """Declarations stay order-independent even when opened before their block."""
+    def test_use_before_a_declaration_still_sees_it(self) -> None:
+        """Declarations stay order-independent even when a scope use precedes their block."""
         resolved = parse_and_resolve(
-            "scope B\nopen A\ndef get() -> int = f()\nend B\n"
+            "scope B\nuse A::*\ndef get() -> int = f()\nend B\n"
             "scope A\ndef f() -> int = 0\nend A\n"
             "B::get()"
         )
         assert _ref(resolved, "f").scope_path == ("A",)
 
-    def test_open_before_the_binding_sees_a_later_reference(self) -> None:
-        """Header placement forces ``open A`` before ``scope A`` at the module
+    def test_use_before_the_binding_sees_a_later_reference(self) -> None:
+        """Header placement forces ``use A::*`` before ``scope A`` at the module
         root, so its own member snapshot cannot yet hold ``x``; the bare
         reference below is walked after ``scope A`` registers it, so the live
         re-check reaches it instead of falling through to an error."""
-        resolved = parse_and_resolve("open A\nscope A\nvar x = 1\nend A\nx := x + 1\nx")
+        resolved = parse_and_resolve("use A::*\nscope A\nvar x = 1\nend A\nx := x + 1\nx")
         assert _ref(resolved, "x").scope_path == ("A",)
         assert _ref(resolved, "x").kind is BinderKind.var_binding
 
-    def test_open_using_before_the_binding_sees_a_later_reference(self) -> None:
-        """A filtered ``using`` open reaches a binder declared after it too.
+    def test_selected_use_before_the_binding_sees_a_later_reference(self) -> None:
+        """A selected ``use A::{x}`` reaches a binder declared after it too.
 
-        Before the uniform mechanism, only the plain, unfiltered form was
-        recorded for live lookup, so ``using`` hard-errored at the ``open``
-        site for a member this same program's plain form already reaches.
+        Before the uniform mechanism, only the glob form was recorded for
+        live lookup, so a selected tail failed at the ``use`` site for a
+        member its equivalent glob form already reaches.
         """
-        resolved = parse_and_resolve("open A using x\nscope A\nvar x = 1\nend A\nx := x + 1\nx")
+        resolved = parse_and_resolve("use A::{x}\nscope A\nvar x = 1\nend A\nx := x + 1\nx")
         assert _ref(resolved, "x").scope_path == ("A",)
         assert _ref(resolved, "x").kind is BinderKind.var_binding
 
-    def test_open_hiding_before_the_binding_sees_the_non_hidden_later_reference(self) -> None:
-        """A filtered ``hiding`` open reaches its non-hidden member too, live."""
+    def test_hiding_use_before_the_binding_sees_the_non_hidden_later_reference(self) -> None:
+        """A filtered ``hiding`` use reaches::* its non-hidden member too, live."""
         resolved = parse_and_resolve(
-            "open A hiding y\nscope A\nvar x = 1\nvar y = 2\nend A\nx := x + 1\nx"
+            "use A::* hiding y\nscope A\nvar x = 1\nvar y = 2\nend A\nx := x + 1\nx"
         )
         assert _ref(resolved, "x").scope_path == ("A",)
         assert _ref(resolved, "x").kind is BinderKind.var_binding
 
-    def test_open_hiding_still_hides_a_member_declared_after_it(self) -> None:
+    def test_hiding_use_still_hides_a_member_declared_after_it(self) -> None:
         """The hidden member stays unreachable bare even though it is
-        registered after the ``open``, live, exactly as the exposed sibling
+        registered after the ``use``, live, exactly as the exposed sibling
         member is reached live."""
         with pytest.raises(AglScopeError):
-            parse_and_resolve("open A hiding y\nscope A\nvar x = 1\nvar y = 2\nend A\ny")
+            parse_and_resolve("use A::* hiding y\nscope A\nvar x = 1\nvar y = 2\nend A\ny")
 
-    @pytest.mark.parametrize("mode", ["using", "hiding"])
-    def test_filtered_open_rejects_a_member_missing_after_the_scope_is_complete(
-        self, mode: str
-    ) -> None:
+    def test_hiding_rejects_a_member_missing_after_the_scope_is_complete(self) -> None:
         with pytest.raises(AglScopeError):
-            parse_and_resolve(f"open A {mode} missing\nscope A\nlet x = 1\nend A\n()")
+            parse_and_resolve("use A::* hiding missing\nscope A\nlet x = 1\nend A\n()")
 
-    def test_open_using_before_the_binding_does_not_see_a_reference_before_it(self) -> None:
-        """Textual precedence holds for ``using`` too: a reference walked
-        before the binder registers still fails, even though the ``open``
+    def test_selected_use_before_the_binding_does_not_see_a_reference_before_it(self) -> None:
+        """Textual precedence holds for selected tails too: a reference walked
+        before the binder registers still fails, even though the ``use``
         textually precedes both."""
         with pytest.raises(AglScopeError):
             parse_and_resolve(
-                "scope B\nopen A using x\ndef get() -> int = x\nend B\n"
+                "scope B\nuse A::{x}\ndef get() -> int = x\nend B\n"
                 "scope A\nlet x = 1\nend A\nB::get()"
             )
 
-    def test_open_hiding_before_the_binding_does_not_see_a_reference_before_it(self) -> None:
+    def test_hiding_use_before_the_binding_does_not_see_a_reference_before_it(self) -> None:
         """Textual precedence holds for ``hiding`` too."""
         with pytest.raises(AglScopeError):
             parse_and_resolve(
-                "scope B\nopen A hiding y\ndef get() -> int = x\nend B\n"
+                "scope B\nuse A::* hiding y\ndef get() -> int = x\nend B\n"
                 "scope A\nlet x = 1\nlet y = 2\nend A\nB::get()"
             )
 
-    def test_open_of_sibling_region_sees_a_member_added_in_a_later_reopening(self) -> None:
-        """``open A`` is recorded while region A is still empty (region B's
+    def test_scope_use_sees_a_member_added_in_a_later_reopening(self) -> None:
+        """``use A::*`` is recorded while region A is still empty (region B's
         first block); region A only gains ``x`` afterward, and a reference
-        reaches it only once region B is reopened later still. The live
+        reaches it only once region B is reopened later still. The live scope-use
         re-check must answer correctly at that later point, not from
-        whatever region A looked like when the ``open`` itself was walked."""
+        whatever region A looked like when the ``use`` itself was walked."""
         resolved = parse_and_resolve(
-            "scope B\nopen A\nend B\n"
+            "scope B\nuse A::*\nend B\n"
             "scope A\nvar x = 1\nend A\n"
             "scope B\ndef get() -> int = x\nend B\n"
             "B::get()"
         )
         assert _ref(resolved, "x").scope_path == ("A",)
 
-    def test_open_sees_a_member_registered_after_an_earlier_reference_resolved(self) -> None:
-        """The opened region gains a second member *between* two bare
-        references that both go through the same ``open``: the first
+    def test_scope_use_sees_a_member_registered_after_an_earlier_reference_resolved(self) -> None:
+        """The target region gains a second member *between* two bare
+        references that both go through the same ``use``: the first
         reference resolves against the region as it stands then, and the
         second must still reach the member registered after it."""
         resolved = parse_and_resolve(
             "scope A\nvar x = 1\nend A\n"
-            "scope B\nopen A\ndef first() -> int = x\nend B\n"
+            "scope B\nuse A::*\ndef first() -> int = x\nend B\n"
             "scope A\nvar y = 2\nend A\n"
             "scope B\ndef second() -> int = y\nend B\n"
             "B::first() + B::second()"
@@ -735,42 +733,40 @@ class TestScopedBindingOpenPrecedence:
         assert _ref(resolved, "x").scope_path == ("A",)
         assert _ref(resolved, "y").scope_path == ("A",)
 
-    def test_using_and_hiding_of_the_same_items_are_exact_complements(self) -> None:
-        """``using x, y`` and ``hiding x, y`` against the same three-member
-        scope select exactly complementary members: ``using`` reaches
+    def test_selected_tail_and_hiding_of_the_same_items_are_exact_complements(self) -> None:
+        """``use A::{x, y}`` and ``use A::* hiding x, y`` select complementary
+        members of the same three-member scope: the selected tail reaches
         ``x``/``y`` bare and leaves ``z`` unreachable, while ``hiding``
         reaches ``z`` bare and leaves ``x``/``y`` unreachable. Both selection
-        forms share one implementation (``apply_open_selection``), so this
-        pins the two branches against each other for an identical item set."""
+        forms share one implementation, so this pins the two branches against
+        each other for an identical item set."""
         resolved_using = parse_and_resolve(
-            "open A using x, y\nscope A\nvar x = 1\nvar y = 2\nvar z = 3\nend A\n"
+            "use A::{x, y}\nscope A\nvar x = 1\nvar y = 2\nvar z = 3\nend A\n"
             "x := x + 1\ny := y + 1\nx + y"
         )
         assert _ref(resolved_using, "x").scope_path == ("A",)
         assert _ref(resolved_using, "y").scope_path == ("A",)
         with pytest.raises(AglScopeError):
-            parse_and_resolve(
-                "open A using x, y\nscope A\nvar x = 1\nvar y = 2\nvar z = 3\nend A\nz"
-            )
+            parse_and_resolve("use A::{x, y}\nscope A\nvar x = 1\nvar y = 2\nvar z = 3\nend A\nz")
 
         resolved_hiding = parse_and_resolve(
-            "open A hiding x, y\nscope A\nvar x = 1\nvar y = 2\nvar z = 3\nend A\nz"
+            "use A::* hiding x, y\nscope A\nvar x = 1\nvar y = 2\nvar z = 3\nend A\nz"
         )
         assert _ref(resolved_hiding, "z").scope_path == ("A",)
         with pytest.raises(AglScopeError):
             parse_and_resolve(
-                "open A hiding x, y\nscope A\nvar x = 1\nvar y = 2\nvar z = 3\nend A\nx"
+                "use A::* hiding x, y\nscope A\nvar x = 1\nvar y = 2\nvar z = 3\nend A\nx"
             )
 
-    def test_open_hiding_reaches_the_non_hidden_member_before_the_hidden_one_is_registered(
+    def test_hiding_use_reaches_the_non_hidden_member_before_the_hidden_one_is_registered(
         self,
     ) -> None:
-        """A ``hiding`` open's exclusion set does not depend on whether the
+        """A ``use … hiding`` exclusion set does not depend on whether the
         excluded item currently matches anything in the target: the
         non-hidden member resolves correctly through a live reference walked
         while the hidden member has not yet been registered."""
         resolved = parse_and_resolve(
-            "scope B\nopen A hiding y\nend B\n"
+            "scope B\nuse A::* hiding y\nend B\n"
             "scope A\nvar x = 1\nend A\n"
             "scope B\ndef mid() -> int = x\nend B\n"
             "scope A\nvar y = 2\nend A\n"
@@ -917,12 +913,12 @@ class TestScopedAssignment:
         assert "A" in msg
 
 
-class TestOpenedScopeEnumOwners:
-    """Opening a local scope must expose its enum type to `is` tests and `case`."""
+class TestScopeUseEnumOwners:
+    """A local ``use`` must expose its enum type to `is` tests and `case`."""
 
-    def test_is_test_resolves_enum_owner_contributed_by_an_open(self) -> None:
+    def test_is_test_resolves_enum_owner_contributed_by_a_scope_use(self) -> None:
         r = parse_and_resolve(
-            "open A\n"
+            "use A::*\n"
             "scope A\n"
             "enum Status\n"
             "  | Good\n"
@@ -940,9 +936,9 @@ class TestOpenedScopeEnumOwners:
         cref = r.constructor_refs[found[0].node_id]
         assert (cref.owner_path, cref.owner_name, cref.variant) == (("A",), "Status", "Good")
 
-    def test_case_pattern_resolves_enum_owner_contributed_by_an_open(self) -> None:
+    def test_case_pattern_resolves_enum_owner_contributed_by_a_scope_use(self) -> None:
         r = parse_and_resolve(
-            "open A\n"
+            "use A::*\n"
             "scope A\n"
             "enum Status\n"
             "  | Good\n"
@@ -1476,9 +1472,9 @@ class TestScopedBuiltinDeclarations:
         ]
         assert ref.scope_path == ("Host",)
 
-    def test_builtin_def_visible_after_open(self) -> None:
+    def test_builtin_def_visible_after_use(self) -> None:
         resolved = parse_and_resolve(
-            "open Host\nscope Host\nbuiltin def native() -> int\nend Host\nnative()"
+            "use Host::*\nscope Host\nbuiltin def native() -> int\nend Host\nnative()"
         )
         call = resolved.program.body.items[2]
         assert isinstance(call, Call)
@@ -3715,7 +3711,7 @@ class TestImportDeclScope:
 
     def test_import_decl_does_not_raise(self) -> None:
         """A bare import declaration resolves without a scope error."""
-        r = parse_and_resolve("open import std/core\n1")
+        r = parse_and_resolve("import std/core::*\n1")
         assert r  # no exception
 
     def test_import_with_alias_does_not_raise(self) -> None:
@@ -3726,8 +3722,8 @@ class TestImportDeclScope:
         r = parse_and_resolve("import std/*\n1")
         assert r
 
-    def test_import_using_does_not_raise(self) -> None:
-        r = parse_and_resolve("import std/core using print\n1")
+    def test_import_selected_tail_does_not_raise(self) -> None:
+        r = parse_and_resolve("import std/core::{print}\n1")
         assert r
 
     def test_import_hiding_does_not_raise(self) -> None:

@@ -295,17 +295,17 @@ static errors regardless of scoping. `std/config` uses it to expose the
 program's engine settings:
 
 ```agl
-open import std/config
+import std/config::*
 
 program def main() -> unit =
   std/config::max-iters := 10           # write a setting (qualified target)
-  default-agent := AgentClaude("sonnet", "medium") # open import allows a bare target
+  default-agent := AgentClaude("sonnet", "medium") # import tail allows a bare target
   let cap = std/config::max-iters       # read a setting
 ```
 
 An engine setting is an ordinary mutable binding in another module, so an
 assignment target names it exactly as a read does: a qualifier always works, and
-a bare name works whenever the import is open, so the name is in scope
+a bare name works whenever an import tail or use contributes it, so the name is in scope
 unqualified. When the host supplies no initial value, the declared default is
 used; a host seed wins over it. A write takes effect from its program point
 onward, exactly like any `var` mutation. The `Option[text]` settings

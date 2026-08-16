@@ -70,7 +70,7 @@ A scope region has a mandatory matching closer: `scope A::B` closes with
 `end A::B`. Regions may appear only as module-root items or as items of another
 scope region. They may nest, and a multi-segment header is equivalent to
 nested single-segment regions. Scope
-regions contain nested regions, header `open` and `import` declarations,
+regions contain nested regions, header `use` and `import` declarations,
 `export` declarations, static declarations (including every `builtin` form),
 `param` declarations, `program def` declarations, and `let`/`var` bindings;
 bare expressions, `:=` assignments, and infix declarations are not permitted. `scope` is contextual at item start before a scope path, and `end`
@@ -90,27 +90,24 @@ the line directly above it.
 ## Import and export declarations
 
 ```ebnf
-import_decl ::= ["open"] "import" module_path ["/*"]
-                ["as" ref_name]
-                [using_clause | hiding_clause]
+import_decl ::= "import" module_path ["/*"]
+                ("as" ref_name | "::" tail)? [hiding_clause]
+use_decl    ::= "use" use_target ("::" tail | "as" ref_name)? [hiding_clause]
+export_decl ::= "export" module_path ["/*"] ["::" braces] [hiding_clause]
 
-export_decl ::= "export" module_path ["/*"]
-                [using_clause | hiding_clause]
-
-module_path ::= NAME ("/" NAME)*    (* byte-adjacent, as is a trailing "/*" *)
-ref_name    ::= name
-
-open_decl   ::= "open" scope_ref [using_clause | hiding_clause]
-scope_ref    ::= [module_path "::"] scope_path
-scope_path   ::= NAME ("::" NAME)*
-using_clause ::= "using" path_atom ("as" ref_name)? ("," path_atom ("as" ref_name)?)*
+tail          ::= "*" | braces | path_atom ["as" ref_name]
+braces        ::= "{" brace_item ("," brace_item)* "}"
+brace_item    ::= path_atom ["as" ref_name]
+use_target    ::= ["/"] qualifier_path
+module_path   ::= NAME ("/" NAME)*    (* byte-adjacent, as is a trailing "/*" *)
+qualifier_path ::= NAME ("/" NAME)* ("::" NAME)*
+ref_name      ::= name
 hiding_clause ::= "hiding" path_atom ("," path_atom)*
-path_atom    ::= [scope_path "::"] name
+path_atom     ::= NAME ("::" NAME)*
 ```
 
-`"open"` is a contextual soft keyword at item start before an import or scope
-reference. `"import"` and `"export"` are contextual at item-start; `"using"`
-and `"hiding"` are contextual within import, export, and `open` declarations.
+`"import"`, `"use"`, and `"export"` are contextual at item start when they
+begin their declaration form. `"hiding"` is contextual within those headers.
 They remain valid identifiers elsewhere.
 
 Examples:
@@ -118,15 +115,15 @@ Examples:
 <!-- agl-check: fragment -->
 ```agl
 import foo/bar
-open import foo/bar as A
-import foo/bar using x, y
-import foo/bar hiding x, y
-import foo/bar using x as X, y
-import foo/*
+import foo/bar as A
+import foo/bar::{x, y}
+import foo/bar::x as X
+import foo/bar::* hiding internal
+import foo/*::*
 import foo/bar/* as A
-export foo/bar using x as X, y
+export foo/bar::{x as X, y}
 export foo/bar/* hiding internal
-open Point using distance as d
+use Point::{distance as d}
 ```
 
 ### Suites (indented blocks)
@@ -375,8 +372,8 @@ for the full disambiguation.
 Assignment has type `unit` and returns `void`. `assign_target`'s qualifier
 accepts any number of segments: a local scope path (`A::B::count`) reaches a
 scoped `var` exactly as a qualified read does, while a bare (non-indexed)
-cross-module target — written with a qualifier, or bare when an open import
-puts the name in scope — is valid only when it resolves to a `builtin var`;
+cross-module target — written with a qualifier, or bare when an import tail or
+`use` puts the name in scope — is valid only when it resolves to a `builtin var`;
 type-qualified constructor forms are not assignment targets. An indexed
 assignment target's object expression is evaluated like any other read, so
 `assign_target` accepts any array- or dict-typed expression there — see

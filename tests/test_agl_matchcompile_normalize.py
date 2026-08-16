@@ -609,7 +609,7 @@ def test_imported_generic_enum_normalizes_from_checked_metadata(tmp_path: Path) 
         {
             "lib": "enum Choice[T]\n  | absent\n  | present(value: T, note: text)",
             "entry": (
-                "open import lib\n"
+                "import lib::*\n"
                 'let value: Choice[int] = present(value = 1, note = "x")\n'
                 "case value of\n"
                 "  | present(value = _ as captured) => captured\n"

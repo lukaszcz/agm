@@ -674,6 +674,12 @@ class AstBuilder(Transformer):
         )
         if disallowed is not None:
             form, span = _rejected_scope_item(cast(_RejectedScopeItem, disallowed))
+            if (
+                isinstance(disallowed, syntax.Call)
+                and isinstance(disallowed.callee, syntax.VarRef)
+                and disallowed.callee.name == "open"
+            ):
+                raise AglSyntaxError("'open' is not defined.", span=span)
             raise AglSyntaxError(
                 f"scope regions cannot contain {form}.",
                 span=span,
@@ -2825,8 +2831,6 @@ class AstBuilder(Transformer):
         hidden_paths = cast(
             tuple[_ScopePath, ...], next((a for a in args if isinstance(a, tuple)), ())
         )
-        if tail is None and alias is None and not anchored and len(target_segments) == 1:
-            raise AglSyntaxError("A bare use target needs a tail or alias.", span=span)
         if hidden_paths and (tail is None or not tail.glob):
             raise AglSyntaxError("Hiding is only valid with a glob use tail.", span=span)
         tail_atoms = () if tail is None else self._selection_atoms(tail, span)

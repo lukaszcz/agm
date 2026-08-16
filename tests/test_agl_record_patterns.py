@@ -153,7 +153,7 @@ def test_record_patterns_support_imported_and_qualified_alias_spellings(tmp_path
             "entry": (
                 "import lib\n"
                 "import lib as L\n"
-                "open import lib\n"
+                "import lib::*\n"
                 "record Local\n  value: int\n"
                 "let local = Local(value = 1)\n"
                 "let ::Local(value) = local\n"
@@ -189,7 +189,7 @@ def test_local_record_owner_qualifier_selects_only_the_local_same_named_record(
     modules = {
         "lib": "record R\n  value: int\n",
         "entry": (
-            "open import lib\n"
+            "import lib::*\n"
             "record R\n  value: int\n"
             "type Alias = R\n"
             "enum Signal\n  | yes(value: int)\n"
@@ -206,7 +206,7 @@ def test_local_record_owner_qualifier_selects_only_the_local_same_named_record(
         {
             "lib": modules["lib"],
             "entry": (
-                "open import lib\n"
+                "import lib::*\n"
                 "record R\n  value: int\n"
                 "def select_imported(r: lib::R) -> int = "
                 "case r of | R::R(value) => value\n"
@@ -237,7 +237,7 @@ def test_self_qualified_record_pattern_rejects_an_absent_current_owner(tmp_path:
         tmp_path,
         {
             "lib": "record Point\n  x: int\n",
-            "entry": ("open import lib\nlet point = Point(x = 1)\nlet ::Point(x) = point\nx\n"),
+            "entry": ("import lib::*\nlet point = Point(x = 1)\nlet ::Point(x) = point\nx\n"),
         },
     )
 

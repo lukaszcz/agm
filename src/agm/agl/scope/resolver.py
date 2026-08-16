@@ -682,12 +682,13 @@ class _Resolver:
             for member in item.members:
                 variant = cast(VariantDef, member)
                 variant_key = (self._module_id, type_scope, variant.name)
-                if self._scope_entity_kinds.get(variant_key) is not None:
+                existing_variant = self._scope_entity_kinds.get(variant_key)
+                if existing_variant in {"ordinary", "type"}:
                     raise AglScopeError(
                         f"Name '{variant.name}' is already declared in this scope.",
                         span=variant.span,
                     )
-                self._scope_entity_kinds[variant_key] = "ordinary"
+                self._scope_entity_kinds[variant_key] = "type"
                 self._declarations[variant_key] = BindingRef(
                     name=variant.name,
                     mutable=False,
@@ -697,6 +698,10 @@ class _Resolver:
                     module_id=self._module_id,
                     scope_path=type_scope,
                 )
+                member_scope = type_scope + (variant.name,)
+                self._scope_paths.add(member_scope)
+                self._scope_node_ids.setdefault(member_scope, variant.node_id)
+                self._type_paths.add(member_scope)
 
     def _classify_method_declarations(self) -> None:
         """Classify receiver parameters after every declaration path is complete.

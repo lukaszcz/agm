@@ -78,6 +78,7 @@ from agm.agl.syntax.nodes import (
     static_type_items,
 )
 from agm.agl.syntax.spans import SourceSpan
+from agm.agl.syntax.types import AppliedT, ArrayT, DictT, FuncT, NameT, TypeExpr
 from agm.agl.typecheck.env import (
     AglTypeError,
     ConstructorSignature,
@@ -139,6 +140,49 @@ def _bare_name(name: str) -> str:
     carried separately. This is the one place that separator is undone.
     """
     return name.rsplit("::", maxsplit=1)[-1]
+
+
+def _member_identity(enum: EnumDef, member: VariantDef, module_id: ModuleId) -> int:
+    """Return a member's declaration identity, canonical for std/core builtins."""
+    if not (enum.is_builtin and module_id == STD_CORE_ID and not enum.scope_path):
+        return member.node_id
+    expected_enum = _BUILTIN_ENUM_TYPE_DEFS[_bare_name(enum.name)]
+    expected_member = next(
+        (expected for expected in expected_enum.members if expected.name == member.name), None
+    )
+    return member.node_id if expected_member is None else expected_member.decl_id
+
+
+def _member_type_params(member: VariantDef, enum_params: tuple[str, ...]) -> tuple[str, ...]:
+    """Return the enum parameters used by an inline member's field syntax."""
+    used: set[str] = set()
+
+    def visit(expr: TypeExpr) -> None:
+        if isinstance(expr, NameT):
+            if expr.qualifier is None:
+                used.add(expr.name)
+        elif isinstance(expr, AppliedT):
+            if expr.qualifier is None:
+                used.add(expr.name)
+            for arg in expr.args:
+                visit(arg)
+        elif isinstance(expr, ArrayT):
+            visit(expr.elem)
+        elif isinstance(expr, DictT):
+            visit(expr.value)
+        elif isinstance(expr, FuncT):
+            for param in expr.params:
+                visit(param)
+            visit(expr.result)
+        qualifier = expr.qualifier if isinstance(expr, (NameT, AppliedT)) else None
+        if qualifier is not None:
+            for segment in qualifier.segments:
+                for arg in segment.type_args or ():
+                    visit(arg)
+
+    for field in member.fields:
+        visit(cast(TypeExpr, field.type_expr))
+    return tuple(param for param in enum_params if param in used)
 
 
 # ---------------------------------------------------------------------------
@@ -247,7 +291,10 @@ class _TypeBuilder:
                     expected_defs=_BUILTIN_ENUM_TYPE_DEFS,
                 )
                 self._env.unregister_name(item.name)
+                self._clear_inline_member_names(item)
                 self._register_record_or_enum_handle(item, is_enum=True)
+                for member in item.members:
+                    self._register_inline_member_handle(item, cast(VariantDef, member))
                 self._enum_defs[item.name] = item
             elif isinstance(item, ExceptionDef):
                 self._register_name(
@@ -274,6 +321,41 @@ class _TypeBuilder:
                 self._register_name(item.name, item.span)
                 self._env.unregister_name(item.name)
                 self._env.register_alias(item.name, item.type_expr, type_params=item.type_params)
+
+    def _clear_inline_member_names(self, enum: EnumDef) -> None:
+        """Release member record names from a superseded enum declaration."""
+        scope_path = (*tuple(segment.name for segment in enum.scope_path), _bare_name(enum.name))
+        for typedef in self._env.type_table.entries():
+            if (
+                typedef.kind == "record"
+                and typedef.module_id == self._module_id
+                and typedef.scope_path == scope_path
+            ):
+                self._env.unregister_name(f"{enum.name}::{typedef.name}")
+
+    def _register_inline_member_handle(self, enum: EnumDef, member: VariantDef) -> None:
+        """Register an inline enum member as its scoped record type."""
+        enum_name = _bare_name(enum.name)
+        scope_path = (*tuple(segment.name for segment in enum.scope_path), enum_name)
+        member_name = f"{enum.name}::{member.name}"
+        type_params = _member_type_params(member, enum.type_params)
+        self._register_name(member_name, member.span)
+        self._env.unregister_name(member_name)
+        decl_id = _member_identity(enum, member, self._module_id)
+        template = RecordType(
+            name=member.name,
+            type_args=tuple(TypeVarType(param) for param in type_params),
+            module_id=self._module_id,
+            scope_path=scope_path,
+            decl_id=decl_id,
+        )
+        if type_params:
+            self._env.register_generic_type(
+                member_name,
+                GenericTypeDef(kind="record", type_params=type_params, template=template),
+            )
+        else:
+            self._env.register_type(member_name, template)
 
     def _register_record_or_enum_handle(self, item: RecordDef | EnumDef, *, is_enum: bool) -> None:
         module_id = self._module_id
@@ -453,19 +535,7 @@ class _TypeBuilder:
                 for param in stmt.type_params
                 if any(param in free_type_vars(field_type) for field_type in fields.values())
             )
-            expected_enum = (
-                _BUILTIN_ENUM_TYPE_DEFS.get(bare_name)
-                if stmt.is_builtin and module_id == STD_CORE_ID and scope_path == ()
-                else None
-            )
-            expected_member = (
-                None
-                if expected_enum is None
-                else next(
-                    (member for member in expected_enum.members if member.name == vd.name), None
-                )
-            )
-            decl_id = vd.node_id if expected_member is None else expected_member.decl_id
+            decl_id = _member_identity(stmt, vd, module_id)
             member_def = TypeDef(
                 kind="record",
                 name=vd.name,

@@ -2,8 +2,8 @@
 
 This module owns solver-local flexible variables, fresh scheme instantiation,
 exact equality constraints, contextual completion, final zonking, solve
-requirements, and constraint provenance.  It deliberately has no assignability,
-coercion, lowering, runtime, or checker-side-table dependencies.
+requirements, and constraint provenance. It depends only on semantic types and
+an optional nominal table for the directed member-to-enum check.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from agm.agl.diagnostics import AglError
+from agm.agl.semantics.type_table import TypeTable, is_assignable_in
 from agm.agl.semantics.types import (
     ArrayType,
     BottomType,
@@ -103,14 +104,17 @@ class _SolveRequirement:
 class InferenceEngine:
     """A provenance-aware, first-order unifier for one inference region.
 
-    Flexible variables form a deterministic union-find forest.  A root may
-    additionally have one structural solution.  Rigid source variables are
+    Flexible variables form a deterministic union-find forest. A root may
+    additionally have one structural solution. Rigid source variables are
     ordinary leaves: they can only equal themselves, while a flexible variable
-    may solve to one.  The engine intentionally knows nothing about AgL's
-    assignability rules; callers apply those after :meth:`zonk`.
+    may solve to one. When given a type table, the engine additionally permits
+    the limited table-aware record-member-to-rigid-enum conversion at the
+    top-level unification boundary; callers apply all other assignability
+    rules after :meth:`zonk`.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, type_table: TypeTable | None = None) -> None:
+        self._type_table = type_table
         self._parent: dict[InferenceVarType, InferenceVarType] = {}
         self._solution: dict[InferenceVarType, Type] = {}
         self._evidence: dict[InferenceVarType, tuple[ConstraintOrigin, ...]] = {}
@@ -153,7 +157,14 @@ class InferenceEngine:
         )
 
     def unify(self, left: Type, right: Type, origin: ConstraintOrigin) -> None:
-        """Require exact structural equality, retaining ``origin`` as evidence."""
+        """Unify exactly, except for the limited record-member-to-rigid-enum conversion."""
+        if (
+            self._type_table is not None
+            and isinstance(right, EnumType)
+            and not contains_inference_var(right)
+            and is_assignable_in(self._type_table, self.zonk(left), right)
+        ):
+            return
         self._unify(left, right, origin, ())
 
     def complete_from_context(

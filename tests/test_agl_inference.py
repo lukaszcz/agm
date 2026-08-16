@@ -8,6 +8,7 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ModuleId
+from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
     ArrayType,
     BottomType,
@@ -202,6 +203,28 @@ class TestUnification:
                 RecordType("Box", (TextType(),)),
                 _origin(engine, 2),
             )
+
+    def test_member_record_unifies_only_with_a_rigid_enum_target(self) -> None:
+        member = RecordType("Leaf", scope_path=("Tree",), decl_id=1)
+        tree = EnumType("Tree", (IntType(),), decl_id=2)
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="enum",
+                name="Tree",
+                module_id=tree.module_id,
+                type_params=("T",),
+                members=(member,),
+                decl_node_id=tree.decl_id,
+            )
+        )
+        engine = InferenceEngine(table)
+
+        engine.unify(member, tree, _origin(engine, 1))
+        with pytest.raises(InferenceError):
+            engine.unify(tree, member, _origin(engine, 2))
+        with pytest.raises(InferenceError):
+            engine.unify(ArrayType(member), ArrayType(tree), _origin(engine, 3))
 
     @pytest.mark.parametrize(
         "wrap",

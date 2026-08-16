@@ -389,6 +389,13 @@ class TestScopeRegions:
     def test_scoped_enum_variant_yields_to_an_enclosing_scope_member(self) -> None:
         parse_and_resolve("enum A::Choice = picked\ndef A::picked() -> int = 0\n()")
 
+    def test_inline_members_establish_nested_type_scopes(self) -> None:
+        resolved = parse_and_resolve("enum Tree = Leaf | Node(value: int)\n()")
+
+        assert ("Tree", "Leaf") in resolved.declared_type_paths
+        assert ("Tree", "Node") in resolved.declared_type_paths
+        assert resolved.scope_nodes[("Tree", "Node")].parent is resolved.scope_nodes[("Tree",)]
+
     def test_scoped_members_resolve_from_their_exact_path(self) -> None:
         resolved = parse_and_resolve("def A::f() -> int = 0\nA::f()")
         assert resolved.resolution
@@ -405,7 +412,6 @@ class TestScopeRegions:
             "scope Point\nend Point\ndef Point() -> int = 0",
             "record Point()\ndef Point() -> int = 0",
             "enum Point = one | one",
-            "enum Point = one\nscope Point::one\nend Point::one",
         ),
     )
     def test_same_path_declaration_collisions_are_rejected(self, source: str) -> None:
@@ -1918,6 +1924,15 @@ class TestMethodReceiverClassification:
 
         assert resolved.method_declarations == {
             (ENTRY_ID, (owner,), "identity"): (owner,),
+        }
+
+    def test_inline_member_type_scope_allows_methods(self) -> None:
+        resolved = parse_and_resolve(
+            "enum Tree = Leaf | Node(value: int)\ndef Tree::Node::identity(self) -> int = 1\n()"
+        )
+
+        assert resolved.method_declarations == {
+            (ENTRY_ID, ("Tree", "Node"), "identity"): ("Tree", "Node"),
         }
 
     def test_method_named_after_a_builtin_call_is_exempt_from_the_reserved_name_rule(

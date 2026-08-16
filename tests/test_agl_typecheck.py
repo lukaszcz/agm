@@ -5094,6 +5094,28 @@ class TestBinaryOps:
         node = r.resolved.program.body.items[1]
         assert r.node_types[node.node_id] == BoolType()
 
+    def test_in_array_uses_member_record_assignability_without_widening_containers(self) -> None:
+        accept_type(
+            "enum Tree\n"
+            "  | Leaf\n"
+            "def contains(member: Tree::Leaf, members: array[Tree]) -> bool = member in members\n"
+            "contains"
+        )
+        reject_type(
+            "enum Tree\n"
+            "  | Leaf\n"
+            "record Other()\n"
+            "def contains(member: Other, members: array[Tree]) -> bool = member in members\n"
+            "contains"
+        )
+        reject_type(
+            "enum Tree\n"
+            "  | Leaf\n"
+            "def contains(member: array[Tree::Leaf], members: array[array[Tree]]) -> bool = "
+            "member in members\n"
+            "contains"
+        )
+
     def test_in_dict(self) -> None:
         r = accept_type('let d: dict[text, int] = {"a": 1}\n"a" in d')
         node = r.resolved.program.body.items[1]

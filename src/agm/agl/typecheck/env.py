@@ -1959,11 +1959,14 @@ class TypeEnvironment:
         """Return the full declared type-name set for type-namespace enumeration.
 
         Combines registered nominal types (records, enums, exceptions, and
-        built-ins) with registered alias names.  Retained for generic type
-        resolution in future work, where the complete type-namespace must
-        be enumerable to validate applied-type names (e.g. ``Pair[int, text]``).
+        built-ins) with registered alias names and generic templates. Retained
+        for generic type resolution in future work, where the complete
+        type-namespace must be enumerable to validate applied-type names (e.g.
+        ``Pair[int, text]``), and for REPL rollback of a type-owned subtree.
         """
-        return frozenset(self._types) | frozenset(self._alias_targets)
+        return (
+            frozenset(self._types) | frozenset(self._alias_targets) | frozenset(self._generic_types)
+        )
 
     def resolve_constructible_type_by_module_id(
         self, module_id: ModuleId, name: str, *, scope_path: ScopePath = ()
@@ -2545,15 +2548,17 @@ class TypeEnvironment:
         checked-entry metadata and restore the previous session definition when
         one existed.
 
-        *names* comes from this entry's OWN declarations (see the REPL's
-        promotion bookkeeping), so a reserved built-in exception/prelude name
-        can appear in it only when this entry itself wrote a ``builtin``
-        declaration of that name — the reserved names are non-shadowable
-        other than by one. That declaration is rolled back exactly like any
-        other unpromoted one below: no special-casing is needed, and none is
-        applied, unlike :meth:`seed_from`, which instead has to tell a
-        program's own carried-forward declaration apart from the canonical
-        default it must not clobber.
+        *names* normally comes from this entry's OWN declarations (see the
+        REPL's promotion bookkeeping). A failed enum redeclaration also adds
+        previously retained inline-member names whose namespace metadata the
+        new enum cleared, so those survivors are restored in the same staged
+        pass. A reserved built-in exception/prelude name can appear only when
+        this entry itself wrote a ``builtin`` declaration of that name — the
+        reserved names are non-shadowable other than by one. That declaration
+        is rolled back exactly like any other unpromoted one below: no
+        special-casing is needed, and none is applied, unlike :meth:`seed_from`,
+        which instead has to tell a program's own carried-forward declaration
+        apart from the canonical default it must not clobber.
 
         The shared ``type_table`` is keyed by declaration identity, not name,
         so the unpromoted declaration stays registered under its own identity
@@ -2580,7 +2585,13 @@ class TypeEnvironment:
             typedef = other._type_table.get(other._module_id, declared_name, scope_path)
             if typedef is not None:
                 self._type_table.register(typedef)
-            if unpromoted is not None:
+            # A failed enum redeclaration can clear a prior inline member's
+            # namespace metadata without registering a replacement member.
+            # In that case both lookups name the same survivor, which must be
+            # restored rather than orphaned.
+            if unpromoted is not None and (
+                typedef is None or unpromoted.decl_node_id != typedef.decl_node_id
+            ):
                 self._type_table.orphan(unpromoted.decl_node_id)
             if name in other._types:
                 self._types[name] = other._types[name]

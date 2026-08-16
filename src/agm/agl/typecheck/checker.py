@@ -76,6 +76,7 @@ from agm.agl.semantics.type_table import (
     TypeTable,
     cast_classification,
     comparable_types,
+    is_assignable_in,
     json_cast_hint,
 )
 from agm.agl.semantics.types import (
@@ -1440,7 +1441,7 @@ class _Checker:
         region = _InferenceRegion(
             self._candidate_session.engine
             if self._candidate_session is not None
-            else InferenceEngine(),
+            else InferenceEngine(self._env.type_table),
             {},
             {},
             [],
@@ -3916,7 +3917,7 @@ class _Checker:
         ):
             return BoolType()
         if isinstance(right_type, ArrayType):
-            if not is_assignable(left_type, right_type.elem):
+            if not is_assignable_in(self._env.type_table, left_type, right_type.elem):
                 raise AglTypeError(
                     f"'in' element type mismatch: '{left_type!r}' in 'array[{right_type.elem!r}]'."
                     f"{json_cast_hint(left_type, right_type.elem, self._env.type_table)}",
@@ -5163,7 +5164,7 @@ class _Checker:
             # ``decimal`` and make later evidence conflict, so defer to the
             # authoritative pass, which validates once the result is concrete.
             return
-        if is_assignable(value_type, target_type):
+        if is_assignable_in(self._env.type_table, value_type, target_type):
             return
         raise AglTypeError(
             f"Type mismatch: expected '{target_type!r}', got '{value_type!r}'."

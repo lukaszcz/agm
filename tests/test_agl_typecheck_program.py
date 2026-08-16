@@ -930,6 +930,61 @@ def test_later_module_alias_available_to_entry_type_body_via_open_import(
     )
 
 
+def test_std_core_generic_member_type_resolves_to_an_inhabited_record() -> None:
+    checked = _check("record Holder\n  value: Option::Some[int]\n()")
+
+    holder = next(typ for typ in checked.type_env.type_table.entries() if typ.name == "Holder")
+    fields = dict(checked.type_env.type_table.record_fields(holder.handle()))
+    assert strip_decl_ids(fields["value"]) == RecordType(
+        "Some", (IntType(),), module_id=ModuleId.from_path("std/core"), scope_path=("Option",)
+    )
+
+
+def test_inline_member_records_resolve_in_local_type_positions() -> None:
+    checked = _check(
+        "scope Forest\n"
+        "record Box[T](value: T)\n"
+        "enum Outer[T] | Member\n"
+        "enum Tree[T]\n"
+        "  | Leaf\n"
+        "  | Node(value: T, transform: (T) -> T, boxed: Forest::Box[T], parent: Outer[T]::Member)\n"
+        "record Holder\n"
+        "  leaf: Tree::Leaf\n"
+        "  node: Tree::Node[int]\n"
+        "def identity(node: Tree::Node[int]) -> Tree::Node[int] = node\n"
+        "end Forest\n"
+        "()"
+    )
+
+    holder = next(
+        typ
+        for typ in checked.type_env.type_table.entries()
+        if typ.name == "Holder" and typ.scope_path == ("Forest",)
+    )
+    fields = dict(checked.type_env.type_table.record_fields(holder.handle()))
+    assert strip_decl_ids(fields["leaf"]) == RecordType("Leaf", scope_path=("Forest", "Tree"))
+    assert strip_decl_ids(fields["node"]) == RecordType(
+        "Node", (IntType(),), scope_path=("Forest", "Tree")
+    )
+
+
+def test_importing_an_enum_scope_subtree_exposes_member_record_types(tmp_path: Path) -> None:
+    checked = _check_program(
+        tmp_path,
+        {
+            "entry": "import lib using Tree\nrecord Holder(node: Tree::Node[int])\n()",
+            "lib": "enum Tree[T]\n  | Leaf\n  | Node(value: T)",
+        },
+    )
+
+    entry = checked.modules[ENTRY_ID]
+    holder = next(typ for typ in entry.type_env.type_table.entries() if typ.name == "Holder")
+    fields = dict(entry.type_env.type_table.record_fields(holder.handle()))
+    assert strip_decl_ids(fields["node"]) == RecordType(
+        "Node", (IntType(),), module_id=ModuleId.from_path("lib"), scope_path=("Tree",)
+    )
+
+
 def test_imported_generic_alias_to_enum_constructs_variant(tmp_path: Path) -> None:
     """A generic alias retains its enum variant constructor signature."""
     checked = _check_program(

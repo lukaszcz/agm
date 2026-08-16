@@ -919,6 +919,7 @@ class ReplSession:
             RecordDef,
             TypeAlias,
             VarDecl,
+            VariantDef,
             pattern_binder_candidates,
             resolved_public_name,
             scoped_public_name,
@@ -1002,9 +1003,35 @@ class ReplSession:
             if item.node_id in promoted_declaration_ids
         )
         unpromoted_type_name_paths = entry_type_name_paths - promoted_type_name_paths
+        unpromoted_type_scope_paths = frozenset(
+            (*path, name) for path, name in unpromoted_type_name_paths
+        )
+
+        def is_unpromoted_type_scope(path: tuple[str, ...]) -> bool:
+            return any(
+                path[: len(type_path)] == type_path for type_path in unpromoted_type_scope_paths
+            )
+
         unpromoted_type_names = {
             "::".join((*path, name)) for path, name in unpromoted_type_name_paths
         }
+        unpromoted_type_names.update(
+            "::".join((*tuple(segment.name for segment in item.scope_path), item.name, member.name))
+            for item in entry_type_items
+            if isinstance(item, EnumDef) and item.node_id not in promoted_declaration_ids
+            for member in item.members
+            if isinstance(member, VariantDef)
+        )
+        # Redeclaring an enum clears every prior inline member from the fresh
+        # environment before it registers the new members. Roll back the full
+        # type-owned subtree, not only names the failed declaration introduced,
+        # so an earlier ``Tree::Leaf`` remains a resolvable type after a failed
+        # ``Tree`` redeclaration that declares only ``Tree::Node``.
+        unpromoted_type_names.update(
+            name
+            for name in self._type_env.all_declared_type_names()
+            if is_unpromoted_type_scope(tuple(name.split("::")))
+        )
         if promoted_type_name_paths:
             # A promoted type declaration supersedes any earlier ambient
             # constructor candidate sharing its name path: retained bindings
@@ -1053,12 +1080,13 @@ class ReplSession:
         )
 
         # Named scope paths are namespaces: a region's path is retained whenever
-        # it is not a demoted type's own path, and its members are promoted
-        # individually below.
+        # it is not part of an unpromoted type's scope subtree, and its members
+        # are promoted individually below. Inline enum members establish nested
+        # type scopes, so skipping only the enum's own path would both try to
+        # install a child below a missing parent and rewrite a prior enum's
+        # members after a failed redeclaration.
         for path, node in checked.resolved.scope_nodes.items():
-            if not path or path in self._session_scope_nodes:
-                continue
-            if path in {(*scope_path, name) for scope_path, name in unpromoted_type_name_paths}:
+            if not path or path in self._session_scope_nodes or is_unpromoted_type_scope(path):
                 continue
             self._session_scope_nodes[path] = ScopeNode(
                 node_id=node.node_id,
@@ -1070,9 +1098,7 @@ class ReplSession:
             if session_node is None:
                 continue
             for name, ref in node.members.items():
-                if (ref.scope_path, ref.name) not in unpromoted_type_name_paths and _is_promoted(
-                    ref.decl_node_id
-                ):
+                if not is_unpromoted_type_scope(ref.scope_path) and _is_promoted(ref.decl_node_id):
                     if ref.decl_node_id in entry_declaration_node_ids:
                         displaced_param_keys.add(resolved_public_name(path, name))
                     session_node.register_member(name, ref)

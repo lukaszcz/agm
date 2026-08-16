@@ -1357,6 +1357,24 @@ def is_json_convertible(t: Type, table: TypeTable) -> bool:
             assert_never(unreachable)
 
 
+def is_assignable_in(table: TypeTable, value_type: Type, target_type: Type) -> bool:
+    """Return whether a value is assignable to a target in *table*'s nominal context.
+
+    The pure :func:`semantics.types.is_assignable` rules apply unchanged.  In
+    addition, a member record is assignable to an enum when it occurs in that
+    enum instantiation's declared member set.  This is deliberately a
+    top-level, directed relation: containers remain invariant and enums and
+    exceptions do not gain membership-based conversions.
+    """
+    if is_assignable(value_type, target_type):
+        return True
+    return (
+        isinstance(value_type, RecordType)
+        and isinstance(target_type, EnumType)
+        and (value_type in table.enum_members(target_type))
+    )
+
+
 def json_cast_hint(value_type: Type, target_type: Type, table: TypeTable) -> str:
     """Return a diagnostic clause naming an explicit ``as json`` cast, or ``""``.
 

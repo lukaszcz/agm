@@ -5246,6 +5246,34 @@ class TestUnpromotedNominalDeclarationEffects:
         assert match.value == IntValue(1)
         assert not stale_variant.ok
 
+    def test_failed_enum_with_inline_members_leaves_no_scope_or_member_behind(self) -> None:
+        s = ReplSession()
+
+        failed = s.eval_entry("let z: decimal = 1 / 0\nenum Tree\n  | Node(value: int)")
+        assert not failed.ok
+
+        member = s.eval_entry("Tree::Node(value = 1)")
+        later = s.eval_entry("42")
+
+        assert not member.ok
+        assert later.ok, later.diagnostics
+        assert later.value == IntValue(42)
+
+    def test_failed_enum_with_inline_members_preserves_same_named_prior_state(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("enum Tree\n  | Leaf(value: int)").ok
+
+        failed = s.eval_entry("let z: decimal = 1 / 0\nenum Tree\n  | Node(value: int)")
+        assert not failed.ok
+
+        retained_type = s.eval_entry("def leaf_value(value: Tree::Leaf) -> int = value.value")
+        retained = s.eval_entry("Tree::Leaf(value = 1)")
+        unpromoted = s.eval_entry("Tree::Node(value = 1)")
+
+        assert retained_type.ok, retained_type.diagnostics
+        assert retained.ok, retained.diagnostics
+        assert not unpromoted.ok
+
     def test_runtime_failure_leaves_the_previous_exception_declaration_in_effect(self) -> None:
         s = ReplSession()
         assert s.eval_entry("exception E extends Exception\n  code: int").ok

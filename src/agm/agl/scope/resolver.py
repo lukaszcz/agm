@@ -1779,9 +1779,8 @@ class _Resolver:
         )
         return replace(decl, target=decl.target[:-1], tail=(selected,), alias=None)
 
-    @staticmethod
     def _relative_use_import_members(
-        members: Mapping[NameAtom, QName], target: ScopePath
+        self, members: Mapping[NameAtom, QName], target: ScopePath
     ) -> dict[NameAtom, QName] | None:
         """Return an existing target's public subtree under target-relative paths."""
         relative_members: dict[NameAtom, QName] = {}
@@ -1789,7 +1788,7 @@ class _Resolver:
         for atom, qname in members.items():
             path = _bare_path(atom)
             if path == target:
-                exists = True
+                exists = exists or qname in self._cross_module_type_scopes
             elif path[: len(target)] == target:
                 exists = True
                 relative_members[_bare_atom(path[len(target) :])] = qname
@@ -1823,14 +1822,19 @@ class _Resolver:
                     continue
                 relative = path[len(target) :]
                 for module, source in routes:
+                    qnames = contributions.get(atom, frozenset())
+                    matching = tuple(qname for qname in qnames if qname[0] == module)
+                    selected = matching or tuple(qnames) if len(routes) == 1 else ()
+                    if not relative and not any(
+                        qname in self._cross_module_type_scopes for qname in selected
+                    ):
+                        continue
                     source_root = source[: len(source) - len(relative)] if relative else source
                     members = members_by_route.setdefault((module, source_root), {})
                     if not relative:
                         continue
                     exposed = _bare_atom(relative)
-                    qnames = contributions.get(atom, frozenset())
-                    matching = tuple(qname for qname in qnames if qname[0] == module)
-                    for qname in matching or tuple(qnames) if len(routes) == 1 else ():
+                    for qname in selected:
                         members.setdefault(exposed, qname)
         return tuple(
             (imported_route, members_by_route[imported_route])

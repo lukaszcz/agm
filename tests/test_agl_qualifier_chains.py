@@ -500,6 +500,24 @@ def test_import_hiding_does_not_reintroduce_bare_enum_variant(tmp_path: Path) ->
         )
 
 
+@pytest.mark.parametrize(
+    "entry",
+    (
+        "import lib\nuse lib::f::*",
+        "import lib::{f}\nuse f::*",
+    ),
+)
+def test_use_rejects_ordinary_function_targets(tmp_path: Path, entry: str) -> None:
+    with pytest.raises(AglScopeError):
+        _entry_resolution(
+            tmp_path,
+            {
+                "entry": entry,
+                "lib": "def f() -> int = 1",
+            },
+        )
+
+
 def test_use_accepts_one_facade_scope_with_multiple_defining_modules(tmp_path: Path) -> None:
     _entry_resolution(
         tmp_path,

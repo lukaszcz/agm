@@ -183,6 +183,7 @@ class ImportEnv:
     decl_bare_routes: Mapping[int, Mapping[NameAtom, frozenset[BareRoute]]] = field(
         default_factory=dict
     )
+    facade_aliases: Mapping[str, frozenset[ModuleId]] = field(default_factory=dict)
     suffix_routes: Mapping[tuple[str, ...], tuple[ModuleId, ...]] = field(
         init=False, repr=False, compare=False
     )
@@ -220,6 +221,10 @@ class ImportEnv:
         object.__setattr__(self, "decl_bare", decl_bare)
         object.__setattr__(self, "unqualified_routes", unqualified_routes)
         object.__setattr__(self, "decl_bare_routes", decl_bare_routes)
+        facade_aliases: Mapping[str, frozenset[ModuleId]] = MappingProxyType(
+            {alias: self.facade_aliases[alias] for alias in sorted(self.facade_aliases)}
+        )
+        object.__setattr__(self, "facade_aliases", facade_aliases)
         suffix: dict[tuple[str, ...], set[ModuleId]] = {}
         anchored: dict[tuple[str, ...], set[ModuleId]] = {}
         for module, contribution in contributions.items():
@@ -358,8 +363,15 @@ def build_import_env(
     decl_bare: dict[int, dict[NameAtom, set[QName]]] = {}
     root_bare_routes: dict[NameAtom, set[BareRoute]] = {}
     decl_bare_routes: dict[int, dict[NameAtom, set[BareRoute]]] = {}
+    facade_aliases: dict[str, set[ModuleId]] = {}
     for decl in decls:
-        for module in _targets(targets[decl.node_id]):
+        target = targets[decl.node_id]
+        modules = _targets(target)
+        if decl.alias is not None and (
+            decl.wildcard_origin or isinstance(target, WildcardTarget)
+        ):
+            facade_aliases.setdefault(decl.alias, set()).update(modules)
+        for module in modules:
             module_exports = exports.get(module, {})
             hidden = set(_selected_atoms(decl.hidden, module, module_exports, decl.span))
             acc = accumulators.setdefault(
@@ -413,6 +425,7 @@ def build_import_env(
             node_id: {atom: frozenset(routes) for atom, routes in members.items()}
             for node_id, members in decl_bare_routes.items()
         },
+        {alias: frozenset(modules) for alias, modules in facade_aliases.items()},
     )
 
 

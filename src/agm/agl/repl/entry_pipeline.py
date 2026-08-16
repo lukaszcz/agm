@@ -1163,6 +1163,7 @@ class EntryPipeline:
                         decl,
                         module_path=module.segments,
                         wildcard=False,
+                        wildcard_origin=True,
                         node_id=next_start_id,
                     )
                 )

@@ -1708,20 +1708,19 @@ class _Resolver:
             )
             is not None
         )
+        bare_imports = () if decl.anchored else self._bare_use_import_targets(target)
+        imported = self._merge_use_import_targets(direct_imports, bare_imports)
+        direct_routes = {imported_route for imported_route, _members in direct_imports}
         shared_alias_facade = (
             not decl.anchored
             and len(route) == 1
             and len(direct_candidates) > 1
-            and all(
-                route[0] in self._import_env.contributions[module].alias_members
-                for module, _members in direct_candidates
-            )
+            and frozenset(module for module, _members in direct_candidates)
+            == self._import_env.facade_aliases.get(route[0], frozenset())
+            and {imported_route for imported_route, _members in imported} == direct_routes
         )
-        bare_imports = () if decl.anchored else self._bare_use_import_targets(target)
-        imported = self._merge_use_import_targets(direct_imports, bare_imports)
         if local is not None and imported:
             candidates = ", ".join(module.display() for (module, _root), _members in imported)
-            direct_routes = {imported_route for imported_route, _members in direct_imports}
             module_targets = ", ".join(
                 self._render_use_module_target(
                     imported_route[0],

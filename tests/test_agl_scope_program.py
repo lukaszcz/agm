@@ -1505,6 +1505,33 @@ class TestWildcardImports:
         ref = result.modules[ENTRY_ID].resolved.resolution[alpha_var.node_id]
         assert ref.module_id == ModuleId.from_path("foo/alpha")
 
+    def test_unrelated_import_aliases_do_not_form_a_use_facade(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import alpha as F\nimport beta as F\nuse F::*",
+                "alpha": "def first() -> int = 1",
+                "beta": "def second() -> int = 2",
+            },
+        )
+
+        with pytest.raises(AglScopeError, match="ambiguous across imported modules"):
+            resolve_program(graph)
+
+    def test_nonfacade_route_keeps_wildcard_alias_use_ambiguous(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import pkg/* as F\nimport other::{F}\nuse F::*",
+                "pkg/alpha": "def first() -> int = 1",
+                "pkg/beta": "def second() -> int = 2",
+                "other": "scope F\ndef third() -> int = 3\nend F",
+            },
+        )
+
+        with pytest.raises(AglScopeError, match="ambiguous across imported modules"):
+            resolve_program(graph)
+
     def test_type_name_import_handle_ambiguity_errors(self, tmp_path: Path) -> None:
         graph = _make_graph_from_files(
             tmp_path,

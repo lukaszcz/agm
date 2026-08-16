@@ -22,8 +22,10 @@ Program resolution tracks named-scope existence separately from declaration expo
 scope remains a nameable `use` target without becoming a value. An import contributes its full public
 qualified surface, except paths hidden by that declaration. A positive
 import tail or `use` declaration contributes selected bare names without
-narrowing qualified access. `use` selects from an already nameable local scope
-or imported route; it does not create a module-loading edge. Region-scoped
+narrowing qualified access. A wildcard import alias retains its declaration
+identity as a shared facade; unrelated imports that reuse an alias remain
+ambiguous. `use` selects from an already nameable local scope or imported route;
+it does not create a module-loading edge. Region-scoped
 bare contributions apply within that region, while imports still make their
 qualified routes available to the module.
 

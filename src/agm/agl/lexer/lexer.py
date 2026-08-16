@@ -774,6 +774,15 @@ def _merge_use_alias_paths(tokens: list[Token]) -> list[Token]:
         while end < len(tokens) and tokens[end].type == USEQUAL:
             end += 1
         if (
+            end > index
+            and index >= 2
+            and tokens[index - 2].type == USE
+            and tokens[index - 1].type == DCOLON
+        ):
+            result.extend(tokens[index:end])
+            index = end
+            continue
+        if (
             end - index >= 2
             and end + 1 < len(tokens)
             and tokens[end].type == USE_TARGET_NAME

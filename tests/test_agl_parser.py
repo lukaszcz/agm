@@ -3836,17 +3836,21 @@ class TestImportDecl:
             parse(source)
 
     @pytest.mark.parametrize(
-        ("source", "alias", "tail"),
+        ("source", "target", "alias", "tail"),
         (
-            ("use ::Scope::*", None, ()),
-            ("use ::Scope as S", "S", None),
+            ("use ::Scope::*", ("Scope",), None, ()),
+            ("use ::Scope as S", ("Scope",), "S", None),
+            ("use ::A::B::C as Alias", ("A", "B", "C"), "Alias", None),
+            ("use ::A::B::C::D as Alias", ("A", "B", "C", "D"), "Alias", None),
         ),
     )
-    def test_use_current_module_anchor(self, source: str, alias: str | None, tail: object) -> None:
+    def test_use_current_module_anchor(
+        self, source: str, target: tuple[str, ...], alias: str | None, tail: object
+    ) -> None:
         (decl,) = items(parse(source))
         assert isinstance(decl, syntax.UseDecl)
         assert decl.anchored is True
-        assert tuple(segment.name for segment in decl.target) == ("Scope",)
+        assert tuple(segment.name for segment in decl.target) == target
         assert decl.alias == alias
         assert decl.tail == tail
 

@@ -157,10 +157,11 @@ also a pre-loop failure: session initialization loads the standard library and s
 literal into `std/config` before the console starts, so it is resolved, type-checked,
 and constant-checked (and any rejection reported, naming the flag or config key) before
 the banner appears, with nothing printed and no entry accepted. An `AgentCommand(...)`
-whose command text does not shell-split is the one case still deferred to the first
-entry that actually dispatches it, since that check runs only when the interpreter
-evaluates the winning value, not during session initialization; it is reported inline like
-any other per-entry error, without exiting the process.
+whose command text does not shell-split is deferred until the first entry reaches
+interpreter construction, because session initialization does not construct an
+interpreter. Construction validates the winning value before any statement executes, so
+even an entry that performs no agent dispatch reports the error inline without exiting
+the REPL.
 
 | Code | Meaning |
 |------|---------|

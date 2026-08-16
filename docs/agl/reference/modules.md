@@ -257,6 +257,8 @@ rules.
 - `std/config` exposes the host engine settings as `builtin var` bindings.
 - `std/array` owns array methods and array utility functions; see
   [`std/array`](#stdarray).
+- `std/dict` owns dictionary methods and conversion from key/value pairs; see
+  [`std/dict`](#stddict).
 - `std/text` exposes `interp(template, vars) -> text` for name-only runtime
   interpolation; see [Strings and interpolation](strings-and-interpolation.md#runtime-interpolation).
 - `std/fs` exposes explicit text filesystem operations: `read`, `write`,
@@ -311,6 +313,35 @@ callback may capture local bindings and may raise normally.
 | `unzip(xs)` | `Pair(first = array[A], second = array[B])`. |
 | `repeat(x, n)` | `n` copies of `x` (empty when `n` is negative). |
 | `range(a, b)` | Inclusive integer sequence from `a` to `b`. |
+
+## `std/dict`
+
+`std/dict` owns methods on `dict[text, V]`. The `std/builtin-methods` registry
+makes these methods available on every dictionary without an import. Import
+`std/dict` to call `dict::from-entries`; a plain import keeps it qualified,
+while `open import std/dict` also makes it bare.
+
+Operations with a `?` suffix return `Option`; `get` and `remove` raise
+`KeyError` for a missing key. A `!` suffix marks the in-place counterpart of a
+pure operation. `clear` and `remove` are inherently mutating. Dictionary order
+is preserved by `keys`, `values`, `entries`, and callback traversal.
+
+| Method | Result |
+| --- | --- |
+| `size()` / `is-empty()` | Entry count / whether it is zero. |
+| `get(k)` / `get?(k)` | Value for `k`, raising or as `Option`. |
+| `remove(k)` / `remove?(k)` | Remove and return the value for `k`, raising or as `Option`. |
+| `contains(k)` | Whether `k` is present. |
+| `clear()` | Remove every entry and return `unit`. |
+| `keys()` / `values()` / `entries()` | Ordered `array[text]`, `array[V]`, or `array[Pair[text, V]]`. |
+| `merge(other)` / `merge!(other)` | New overlaid dictionary / overlay this dictionary with `other`; the right-hand value wins. |
+| `map-values(f)` | New dictionary whose values are transformed by `f`. |
+| `filter(p)` / `filter!(p)` | New filtered dictionary / filter this dictionary; `p` receives `(key, value)`. |
+| `each(f)` | Call `f(key, value)` for each entry in order and return `unit`. |
+
+| Free function | Result |
+| --- | --- |
+| `from-entries(xs)` | `dict[text, V]` built from `array[Pair[text, V]]`; later duplicate keys win. |
 
 ## Library modules and cycles
 

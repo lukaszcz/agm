@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "methods_are_available_without_importing_the_owner",
+      "params": {"values": {"one": 1, "two": 2}},
+      "expect": {"stdout": "2\ntrue\n", "calls": {}}
+    },
+    {
+      "name": "ambient_methods_preserve_empty_dict_behavior",
+      "params": {"values": {}},
+      "expect": {"stdout": "0\nfalse\n", "calls": {}}
+    }
+  ]
+}

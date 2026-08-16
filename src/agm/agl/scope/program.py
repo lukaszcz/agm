@@ -177,20 +177,24 @@ def _build_cross_module_constructor_candidates(
     """
     candidates: dict[str, list[ConstructorRef]] = {}
     type_names: set[str] = set()
-    seen: set[QName] = set()
+    seen_candidates: set[tuple[str, ConstructorRef]] = set()
+
+    def add_candidate(name: str, ref: ConstructorRef) -> None:
+        candidate = (name, ref)
+        if candidate not in seen_candidates:
+            seen_candidates.add(candidate)
+            candidates.setdefault(name, []).append(ref)
+
     for exposed_name, qnames in import_env.unqualified.items():
         if not isinstance(exposed_name, str):
             continue
         for mid, src_name in qnames:
             key = (mid, src_name)
-            if key in seen:
-                continue
-            seen.add(key)
             decl = all_public_types.get(key)
             if decl is None:
                 variant_ref = cross_module_constructor_refs.get(key)
                 if variant_ref is not None:
-                    candidates.setdefault(exposed_name, []).append(variant_ref)
+                    add_candidate(exposed_name, variant_ref)
                 continue
             type_names.add(exposed_name)
             src_path = (src_name,) if isinstance(src_name, str) else src_name
@@ -225,7 +229,7 @@ def _build_cross_module_constructor_candidates(
                     owner_module_id=mid,
                     owner_path=owner_path,
                 )
-                candidates.setdefault(exposed_name, []).append(cref)
+                add_candidate(exposed_name, cref)
             elif isinstance(decl, EnumDef):
                 for variant in decl.variants:
                     if (mid, variant.name) in all_public_types and isinstance(
@@ -241,7 +245,7 @@ def _build_cross_module_constructor_candidates(
                         owner_path=owner_path,
                         can_match_bare_pattern=not variant.fields,
                     )
-                    candidates.setdefault(variant.name, []).append(cref)
+                    add_candidate(variant.name, cref)
     return (
         {name: tuple(refs) for name, refs in candidates.items()},
         frozenset(type_names),

@@ -46,6 +46,24 @@ def reject_graph(tmp_path: Path, modules: dict[str, str]) -> None:
         accept_graph(tmp_path, modules)
 
 
+def test_additive_import_rename_preserves_both_constructor_pattern_spellings(
+    tmp_path: Path,
+) -> None:
+    accept_graph(
+        tmp_path,
+        {
+            "entry": (
+                "import library::{Token as T}\n"
+                "let item = T(value = 1)\n"
+                "let Token(value = _ as original) = item\n"
+                "let T(value = _ as renamed) = item\n"
+                "original + renamed"
+            ),
+            "library": "record Token\n  value: int",
+        },
+    )
+
+
 def test_record_patterns_bind_positional_named_named_only_nested_and_as_in_case_and_let() -> None:
     checked = accept(
         "record Inner\n"

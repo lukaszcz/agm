@@ -607,6 +607,34 @@ def test_region_tailed_import_keeps_routes_global_and_bare_names_regional() -> N
         )
 
 
+@pytest.mark.parametrize(
+    "modules",
+    (
+        {
+            "entry": "import empty\nuse empty::*",
+            "empty": "import dependency",
+            "dependency": "def value() -> int = 1",
+        },
+        {
+            "entry": "import lib\nuse lib::Empty::*",
+            "lib": "record Empty\n  value: int",
+        },
+        {
+            "entry": "import lib::{Empty}\nuse Empty::*",
+            "lib": "record Empty\n  value: int",
+        },
+        {
+            "entry": "import lib hiding only\nuse lib::*",
+            "lib": "def only() -> int = 1",
+        },
+    ),
+)
+def test_use_accepts_nameable_targets_with_no_visible_members(
+    tmp_path: Path, modules: dict[str, str]
+) -> None:
+    _entry_resolution(tmp_path, modules)
+
+
 def test_unnameable_use_target_suggests_importing_its_module() -> None:
     with pytest.raises(AglScopeError, match="Import"):
         _resolve_without_loader({"entry": "use Missing::*\n"})

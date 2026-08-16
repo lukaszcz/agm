@@ -2148,6 +2148,16 @@ class TestBinaryOperators:
         with pytest.raises(AglSyntaxError):
             resolve_infix_chains(raw_infix_program("|>"), {})
 
+    def test_resolution_pass_rejects_mixed_associativity_at_one_priority(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            resolve_infix_chains(
+                raw_infix_program("|>", "<|"),
+                {
+                    "|>": (5, InfixAssoc.LEFT, None),
+                    "<|": (5, InfixAssoc.RIGHT, None),
+                },
+            )
+
     def test_user_infix_left_associative(self) -> None:
         e = items(parse("infixl |>\n1 |> 2 |> 3"))[1]
         assert isinstance(e, Call)

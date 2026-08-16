@@ -1,0 +1,9 @@
+{
+  "scenarios": [
+    {
+      "name": "scoped_import_and_reexport_operators",
+      "module_roots": ["program_modules/modules/infix_scoped_visibility"],
+      "expect": {"stdout": "5\n9\n", "calls": {}}
+    }
+  ]
+}

@@ -427,10 +427,15 @@ infixr << at prio > + 1
 ```
 
 Priorities are integers where lower numbers bind looser and higher numbers bind
-tighter. A priority can be a literal integer or relative to an existing operator
-with `prio <op> + N` / `prio <op> - N`; omitted priority uses the `+`/`-` level.
-User infix use lowers to a normal two-argument function call, so the operator
-must also be declared as a function with the same name.
+tighter. A priority can be a literal integer or relative to an existing builtin,
+local operator, operator made bare-visible by `open import` or `import … using`,
+or an operator member made bare by `open` (with the `std/core` prelude included);
+omitted priority uses the `+`/`-` level. A plain qualified import does not make
+an operator's fixity available. User infix
+use lowers to a normal two-argument function call, so the operator must also be
+declared as a function with the same name. Two visible declarations for one
+operator must agree on fixity, and operators at one priority cannot mix left and
+right associativity in a chain.
 
 **Cast operators (level 7)** — `as` and `as?` — sit between unary `-` and
 `* /`. They are left-associative: `x as json as text` = `(x as json) as text`.

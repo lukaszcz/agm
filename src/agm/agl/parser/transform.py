@@ -168,6 +168,30 @@ _RawArgLists: TypeAlias = tuple[list[_RawPosArg], list[_RawNamed]]
 _ArgLists: TypeAlias = tuple[list[syntax.Expr], list[syntax.NamedArg]]
 _JuxtCall: TypeAlias = tuple[tuple[TypeExpr, ...], _ArgLists]
 _RawItem: TypeAlias = syntax.Item | _RawInfixChain
+_InfixOperatorSpec: TypeAlias = tuple[int, syntax.InfixAssoc, syntax.BinOp | None]
+
+
+class _OperatorTables(dict[str, _InfixOperatorSpec]):
+    """Default and raw-chain-specific operator tables for one program."""
+
+    def __init__(
+        self,
+        default: Mapping[str, _InfixOperatorSpec],
+        by_chain: Mapping[int, Mapping[str, _InfixOperatorSpec]],
+    ) -> None:
+        super().__init__(default)
+        self._by_chain = by_chain
+
+    def for_chain(self, chain: _RawInfixChain) -> Mapping[str, _InfixOperatorSpec]:
+        """Return the table selected for *chain*'s lexical use site."""
+        return self._by_chain.get(chain.node_id, self)
+
+
+def _chain_table(
+    table: Mapping[str, _InfixOperatorSpec], chain: _RawInfixChain
+) -> Mapping[str, _InfixOperatorSpec]:
+    """Select a raw chain's table while preserving ordinary parser callers."""
+    return table.for_chain(chain) if isinstance(table, _OperatorTables) else table
 
 
 @dataclass(frozen=True, slots=True)
@@ -3399,10 +3423,11 @@ def _resolve_infix_priority(
     return _DEFAULT_USER_INFIX_PRIORITY
 
 
-def _operator_table_from_decls(
-    items: tuple[syntax.Item, ...],
+def build_infix_operator_table(
+    decls: Iterable[syntax.InfixDecl],
     ambient: "Mapping[str, tuple[int, syntax.InfixAssoc]] | None" = None,
 ) -> dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]]:
+    """Build the complete built-in and user fixity table for a use site."""
     table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]] = {
         name: (
             priority,
@@ -3411,8 +3436,7 @@ def _operator_table_from_decls(
         )
         for name, priority in _BUILTIN_INFIX_PRIORITIES.items()
     }
-    user_decls = [item for item in items if isinstance(item, syntax.InfixDecl)]
-    for name, (priority, assoc) in resolve_infix_fixity(user_decls, ambient).items():
+    for name, (priority, assoc) in resolve_infix_fixity(decls, ambient).items():
         table[name] = (priority, assoc, None)
     return table
 
@@ -3424,23 +3448,71 @@ def resolve_program_infix(
     """Resolve a parsed program using its declarations and ambient fixities."""
     return resolve_infix_chains(
         program,
-        _operator_table_from_decls(program.body.items, ambient),
+        build_infix_operator_table(
+            (item for item in program.body.items if isinstance(item, syntax.InfixDecl)), ambient
+        ),
     )
 
 
 def resolve_infix_chains(
     program: syntax.Program,
-    operator_table: Mapping[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]],
+    operator_table: Mapping[str, _InfixOperatorSpec],
+    *,
+    conflicting_operators: frozenset[str] = frozenset(),
+    operator_tables: Mapping[int, Mapping[str, _InfixOperatorSpec]] | None = None,
+    conflicting_operators_by_chain: Mapping[int, frozenset[str]] | None = None,
 ) -> syntax.Program:
     """Rewrite every raw infix chain in *program* using *operator_table*.
 
     This parser-layer AST-to-AST pass is the only stage that may consume raw
     infix nodes. Callers must resolve a program before scope resolution.
     """
-    return replace(
+    table = _OperatorTables(operator_table, operator_tables or {})
+    _validate_infix_chains(
         program,
-        body=_rewrite_block_infix(program.body, dict(operator_table), AstBuilder()),
+        table,
+        conflicting_operators,
+        conflicting_operators_by_chain or {},
     )
+    return replace(program, body=_rewrite_block_infix(program.body, table, AstBuilder()))
+
+
+def _validate_infix_chains(
+    program: syntax.Program,
+    table: Mapping[str, _InfixOperatorSpec],
+    conflicting_operators: frozenset[str],
+    conflicting_operators_by_chain: Mapping[int, frozenset[str]],
+) -> None:
+    """Reject invalid raw chains before grouping them into ordinary AST nodes."""
+
+    def validate(node: object) -> None:
+        if not isinstance(node, syntax.RawInfixChain):
+            return
+        associativity_by_priority: dict[int, syntax.InfixAssoc] = {}
+        chain_table = _chain_table(table, node)
+        chain_conflicts = conflicting_operators_by_chain.get(node.node_id, conflicting_operators)
+        for operator in node.operators:
+            if operator.name in chain_conflicts:
+                raise AglSyntaxError(
+                    f"Visible declarations disagree on fixity for operator '{operator.name}'.",
+                    span=operator.span,
+                )
+            spec = chain_table.get(operator.name)
+            if spec is None:
+                raise AglSyntaxError(
+                    f"Operator '{operator.name}' must be declared with infixl or infixr "
+                    "before use.",
+                    span=operator.span,
+                )
+            priority, assoc, _builtin = spec
+            existing = associativity_by_priority.setdefault(priority, assoc)
+            if existing is not assoc:
+                raise AglSyntaxError(
+                    "Operators at the same priority cannot mix left and right associativity.",
+                    span=operator.span,
+                )
+
+    syntax.walk(program, validate)
 
 
 def _rewrite_block_infix(
@@ -3711,6 +3783,7 @@ def _resolve_infix_chain(
     builder: AstBuilder,
 ) -> syntax.Expr:
     operands = [_rewrite_expr(operand.expr, table, builder) for operand in chain.operands]
+    chain_table = _chain_table(table, chain)
     prefix_nots = [list(operand.prefix_nots) for operand in chain.operands]
     operators = list(chain.operators)
 
@@ -3733,13 +3806,7 @@ def _resolve_infix_chain(
         op_index = next_operand_index - 1
         while op_index < len(operators):
             op = operators[op_index]
-            spec = table.get(op.name)
-            if spec is None:
-                raise AglSyntaxError(
-                    f"Operator '{op.name}' must be declared with infixl or infixr before use.",
-                    span=op.span,
-                )
-            priority, assoc, builtin = spec
+            priority, assoc, builtin = chain_table[op.name]
             if priority < min_priority:
                 break
             next_min = priority + 1 if assoc is syntax.InfixAssoc.LEFT else priority

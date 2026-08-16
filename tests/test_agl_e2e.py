@@ -166,6 +166,11 @@ def _run_program(
     runtime = PipelineDriver(**runtime_options)
     module_roots = scenario.get("module_roots", [])
     default_stdlib = not scenario.get("no_stdlib", False)
+    stdlib_root = (
+        (AGL_DIR / str(scenario["stdlib_root"])).resolve()
+        if "stdlib_root" in scenario
+        else REPO_STDLIB_ROOT
+    )
     entry_path: Path | None = None
     roots: Any | None = None
     if module_roots:
@@ -175,7 +180,7 @@ def _run_program(
             roots=frozenset(
                 {
                     *((AGL_DIR / str(root)).resolve() for root in module_roots),
-                    REPO_STDLIB_ROOT,
+                    stdlib_root,
                 }
             )
         )
@@ -185,7 +190,7 @@ def _run_program(
         from agm.agl.modules.roots import RootSet
 
         entry_path = program
-        roots = RootSet(roots=frozenset({program.parent.resolve(), REPO_STDLIB_ROOT}))
+        roots = RootSet(roots=frozenset({program.parent.resolve(), stdlib_root}))
     # `inline_entry` sources carry no `program def`: they run through the same
     # synthetic-entry transform as `agm exec -c`.
     prepare = (
@@ -375,8 +380,22 @@ def test_program_scenario(
 def test_static_rejection(program: Path) -> None:
     from agm.agl import PipelineDriver
 
-    expect = _load_json(program.with_name(program.stem + ".expect.json"))["diagnostic"]
-    result = PipelineDriver().run(program.read_text(encoding="utf-8"), param_values={})
+    spec = _load_json(program.with_name(program.stem + ".expect.json"))
+    expect = spec["diagnostic"]
+    module_roots = spec.get("module_roots", [])
+    roots = None
+    if module_roots:
+        from agm.agl.modules.roots import RootSet
+
+        roots = RootSet(
+            roots=frozenset(
+                {
+                    *((AGL_DIR / str(root)).resolve() for root in module_roots),
+                    REPO_STDLIB_ROOT,
+                }
+            )
+        )
+    result = _run_source_entry(PipelineDriver(), program.read_text(encoding="utf-8"), roots=roots)
     assert not result.ok, "expected the program to be rejected statically"
     assert result.error is None, "static rejection must happen before execution"
     diagnostics = list(result.diagnostics)

@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from agm.agl.semantics.values import Frame, Value
     from agm.agl.setting_overrides import SettingOverride
     from agm.agl.syntax.advisories import SpacedQualifier
-    from agm.agl.syntax.nodes import ImportDecl, Item, OpenDecl, Program, ScopeRegion
+    from agm.agl.syntax.nodes import ImportDecl, InfixAssoc, Item, OpenDecl, Program, ScopeRegion
     from agm.agl.typecheck.env import CheckedModule, TypeEnvironment
     from agm.agl.typecheck.program import CheckedProgram
 
@@ -54,6 +54,7 @@ class EntryPipelineCtx(Protocol):
     _active_imported_params: dict[SymbolId, IrParam]
     _accumulated_imports: list[tuple[ImportDecl, ...]]
     _accumulated_opens: list[tuple[OpenDecl | ImportDecl | ScopeRegion, ...]]
+    _accumulated_infix: dict[str, tuple[int, InfixAssoc]]
     _link_image: LinkImage
     _ir_base_frame: Frame
     _setting_overrides: dict[str, SettingOverride]
@@ -109,6 +110,7 @@ class EntryPipelineCtx(Protocol):
         next_start_id: int,
         partial: bool,
         promoted_declaration_ids: frozenset[int],
+        infix_ambient: Mapping[str, tuple[int, InfixAssoc]],
     ) -> tuple[str, ...]: ...
 
     def _classify(self, program: Program) -> tuple[EntryKind, str | None]: ...
@@ -148,6 +150,7 @@ class LoadedCheckedProgram:
     new_next_id: int
     entry_imports: "tuple[ImportDecl, ...]"
     entry_opens: "tuple[OpenDecl | ImportDecl | ScopeRegion, ...]"
+    entry_infix_ambient: "dict[str, tuple[int, InfixAssoc]]"
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +224,7 @@ class EntryPipeline:
             roots=roots,
             default_stdlib=self._ctx._default_stdlib,
             spaced_qualifiers=spaced_qualifiers,
+            session_infix=self._ctx._accumulated_infix,
         )
 
         graph, new_next_id, override_diagnostics, new_modules = apply_setting_overrides(
@@ -252,6 +256,7 @@ class EntryPipeline:
             new_next_id=new_next_id,
             entry_imports=entry_imports,
             entry_opens=entry_opens,
+            entry_infix_ambient=graph.entry_infix_ambient,
         )
 
     def eval_entry(
@@ -319,6 +324,7 @@ class EntryPipeline:
         new_next_id = loaded.new_next_id
         entry_imports = loaded.entry_imports
         entry_opens = loaded.entry_opens
+        entry_infix_ambient = loaded.entry_infix_ambient
         entry_cm = checked_program.modules[ENTRY_ID]
 
         # Collect warnings from all passes.
@@ -363,6 +369,7 @@ class EntryPipeline:
             module_adjacency=module_adjacency,
             entry_imports=entry_imports,
             entry_opens=entry_opens,
+            entry_infix_ambient=entry_infix_ambient,
             contract_payloads=contract_payloads,
         )
 
@@ -399,6 +406,7 @@ class EntryPipeline:
             roots=roots,
             default_stdlib=self._ctx._default_stdlib,
             spaced_qualifiers=spaced_qualifiers,
+            session_infix=self._ctx._accumulated_infix,
         )
         resolved_program = resolve_program(
             graph,
@@ -597,6 +605,7 @@ class EntryPipeline:
         module_adjacency: dict[ModuleId, tuple[ModuleId, ...]],
         entry_imports: tuple[ImportDecl, ...],
         entry_opens: tuple[OpenDecl | ImportDecl | ScopeRegion, ...],
+        entry_infix_ambient: Mapping[str, tuple[int, InfixAssoc]],
         contract_payloads: Mapping[int, "ContractPayload"],
     ) -> EntryResult:
         """Lower and execute one program entry in the persistent IR image."""
@@ -833,6 +842,7 @@ class EntryPipeline:
                 next_start_id=new_next_id,
                 partial=partial,
                 promoted_declaration_ids=promoted_declaration_ids,
+                infix_ambient=entry_infix_ambient,
             )
 
         def partial_failure(

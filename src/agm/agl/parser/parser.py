@@ -214,6 +214,7 @@ def _parse_to_program(
     start_id: int,
     source: SourceId | None = None,
     ambient_infix: "Mapping[str, tuple[int, syntax.InfixAssoc]] | None" = None,
+    resolve_infix: bool = True,
 ) -> tuple[syntax.Program, int]:
     """Parse and resolve *text*, reporting the next unused node id.
 
@@ -230,7 +231,7 @@ def _parse_to_program(
     result, next_id = _parse_to_unresolved_program(
         text, filename=filename, start_id=start_id, source=source
     )
-    return resolve_program_infix(result, ambient_infix), next_id
+    return (resolve_program_infix(result, ambient_infix) if resolve_infix else result), next_id
 
 
 # Single-entry memo for is_incomplete_source: (last_text, last_result).
@@ -384,6 +385,7 @@ def parse_program_seeded(
     filename: str = "<agl>",
     source: SourceId | None = None,
     ambient_infix: "Mapping[str, tuple[int, syntax.InfixAssoc]] | None" = None,
+    resolve_infix: bool = True,
 ) -> tuple[syntax.Program, int]:
     """Parse *text* with node ids starting at *start_id* for incremental use.
 
@@ -425,6 +427,7 @@ def parse_program_seeded(
         start_id=start_id,
         source=source,
         ambient_infix=ambient_infix,
+        resolve_infix=resolve_infix,
     )
 
 

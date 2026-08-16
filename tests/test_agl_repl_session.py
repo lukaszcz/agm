@@ -4450,6 +4450,83 @@ class TestInfixDecl:
         assert r.value is not None
         assert _int(r.value) == 7
 
+    def test_opened_scoped_facade_export_makes_operator_fixity_available(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.modules.roots import assemble_roots
+
+        root = tmp_path / "modules"
+        root.mkdir()
+        (root / "operators.agl").write_text(
+            "infixl %% at 5\ndef %%(x: int, y: int) -> int = x + y\n"
+        )
+        (root / "facade.agl").write_text("scope Public\nexport operators using %%\nend Public\n")
+        s = ReplSession()
+        s._roots = assemble_roots(
+            invocation_root=root,
+            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+            lib_root=None,
+            configured=[],
+            cli=[],
+            cwd=root,
+        )
+
+        result = s.eval_entry("open import facade\nopen Public\n1 %% 2")
+
+        assert result.ok, result.diagnostics
+        assert result.value is not None
+        assert _int(result.value) == 3
+
+    def test_relative_infix_priority_to_bare_visible_import_persists(self, tmp_path: Path) -> None:
+        root = tmp_path / "modules"
+        root.mkdir()
+        (root / "operators.agl").write_text(
+            "infixl %% at 5\ndef %%(x: int, y: int) -> int = x * 10 + y\n"
+        )
+        from agm.agl.modules.roots import assemble_roots
+
+        s = ReplSession()
+        s._roots = assemble_roots(
+            invocation_root=root,
+            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+            lib_root=None,
+            configured=[],
+            cli=[],
+            cwd=root,
+        )
+
+        declared = s.eval_entry("open import operators\ninfixl +++ at prio %% + 1")
+        assert declared.ok, declared.diagnostics
+        assert s.eval_entry("def +++(x: int, y: int) -> int = x * 100 + y").ok
+
+        result = s.eval_entry("1 %% 2 +++ 3")
+
+        assert result.ok, result.diagnostics
+        assert result.value is not None
+        assert _int(result.value) == 213
+
+    def test_session_fixity_conflicts_with_a_bare_visible_import(self, tmp_path: Path) -> None:
+        from agm.agl.modules.roots import assemble_roots
+
+        root = tmp_path / "modules"
+        root.mkdir()
+        (root / "operators.agl").write_text("infixr %% at 5\n")
+        s = ReplSession()
+        s._roots = assemble_roots(
+            invocation_root=root,
+            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+            lib_root=None,
+            configured=[],
+            cli=[],
+            cwd=root,
+        )
+
+        assert s.eval_entry("infixl %% at 5").ok
+        assert s.eval_entry("def %%(x: int, y: int) -> int = x + y").ok
+        result = s.eval_entry("open import operators\n1 %% 2")
+
+        assert not result.ok
+
     def test_infix_decl_survives_reset(self) -> None:
         # ``:reset`` clears ALL session state, including accumulated fixity.
         s = ReplSession()

@@ -25,7 +25,11 @@ from agm.agl.parser.parser import (
     parse_program_unresolved,
     parse_type_expr,
 )
-from agm.agl.parser.transform import resolve_infix_chains, resolve_infix_fixity
+from agm.agl.parser.transform import (
+    build_infix_operator_table,
+    resolve_infix_chains,
+    resolve_infix_fixity,
+)
 from agm.agl.parser.wrap import wrap_inline_program
 
 __all__ = [
@@ -37,6 +41,7 @@ __all__ = [
     "parse_program_seeded",
     "parse_program_unresolved",
     "parse_type_expr",
+    "build_infix_operator_table",
     "resolve_infix_chains",
     "resolve_infix_fixity",
     "wrap_inline_program",

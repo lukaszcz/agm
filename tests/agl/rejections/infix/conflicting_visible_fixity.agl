@@ -1,0 +1,4 @@
+open import first
+open import second
+program def main() -> unit =
+  1 %% 2

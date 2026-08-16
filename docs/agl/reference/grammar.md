@@ -341,8 +341,12 @@ infix_op        ::= "or" | "and" | "in"
 
 `infixl` and `infixr` declare a symbolic operator's associativity and optional
 integer priority. Larger priorities bind tighter; omitted priority defaults to
-the `+`/`-` level. `prio <op> +/- <int>` is resolved from an existing builtin or
-previously declared user operator.
+the `+`/`-` level. `prio <op> +/- <int>` is resolved from a builtin, a local
+operator declaration, an operator made bare-visible by `open import` or
+`import … using`, or a member made bare by an `open` declaration; a plain
+qualified import does not make its fixity available.
+A chain cannot mix `infixl` and `infixr` operators at the same priority:
+parenthesize one side or assign distinct priorities.
 
 ## Bindings and mutation
 

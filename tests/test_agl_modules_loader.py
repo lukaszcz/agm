@@ -25,6 +25,7 @@ from agm.agl.syntax.nodes import ImportDecl
 from agm.agl.syntax.spans import SourceId
 from agm.packages.manifest import load_manifest
 from agm.packages.model import PackageInfo
+from tests._timeouts import fail_if_slow
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -234,6 +235,232 @@ class TestGraphBuild:
             isinstance(item, ImportDecl) and item.module_path == ("libx",)
             for item in entry_mod.imports
         )
+
+    def test_open_import_resolves_an_exported_operator_fixity(self, tmp_path: Path) -> None:
+        from agm.agl.syntax.nodes import Call, VarRef
+
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(
+            root,
+            "operators",
+            "infixl %% at 5\ndef %%(x: int, y: int) -> int = x + y\n",
+        )
+
+        graph = load_graph(
+            "open import operators\n1 %% 2",
+            entry_path=None,
+            roots=_roots(root),
+            default_stdlib=False,
+        )
+
+        expression = graph.modules[ENTRY_ID].program.body.items[-1]
+        assert isinstance(expression, Call)
+        assert isinstance(expression.callee, VarRef)
+        assert expression.callee.name == "%%"
+
+    def test_reexported_operator_fixity_can_be_renamed(self, tmp_path: Path) -> None:
+        from agm.agl.syntax.nodes import Call, VarRef
+
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(root, "operators", "infixl %% at 5\n")
+        _write_module(root, "facade", "export operators using %% as ~~\n")
+
+        graph = load_graph(
+            "open import facade\n1 ~~ 2",
+            entry_path=None,
+            roots=_roots(root),
+            default_stdlib=False,
+        )
+
+        expression = graph.modules[ENTRY_ID].program.body.items[-1]
+        assert isinstance(expression, Call)
+        assert isinstance(expression.callee, VarRef)
+        assert expression.callee.name == "~~"
+
+    def test_scoped_open_import_makes_operator_visible_only_inside_its_region(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.syntax.nodes import Call, FuncDef, ScopeRegion, VarRef
+
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(root, "operators", "infixl %% at 5\n")
+
+        graph = load_graph(
+            "scope Local\nopen import operators\ndef apply(x: int, y: int) -> int = x %% y\n"
+            "end Local\n",
+            entry_path=None,
+            roots=_roots(root),
+            default_stdlib=False,
+        )
+
+        region = graph.modules[ENTRY_ID].program.body.items[0]
+        assert isinstance(region, ScopeRegion)
+        function = region.items[-1]
+        assert isinstance(function, FuncDef)
+        assert isinstance(function.body, Call)
+        assert isinstance(function.body.callee, VarRef)
+        assert function.body.callee.name == "%%"
+
+    def test_opened_scoped_facade_export_makes_operator_fixity_bare_visible(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.syntax.nodes import Call, VarRef
+
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(root, "operators", "infixl %% at 5\n")
+        _write_module(root, "facade", "scope Public\nexport operators using %%\nend Public\n")
+
+        graph = load_graph(
+            "open import facade\nopen Public\n1 %% 2",
+            entry_path=None,
+            roots=_roots(root),
+            default_stdlib=False,
+        )
+
+        expression = graph.modules[ENTRY_ID].program.body.items[-1]
+        assert isinstance(expression, Call)
+        assert isinstance(expression.callee, VarRef)
+        assert expression.callee.name == "%%"
+
+    def test_opened_scoped_facade_operator_selection_honors_alias_and_rename(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.syntax.nodes import Call, VarRef
+
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(root, "operators", "infixl %% at 5\n")
+        _write_module(root, "alternate", "infixl ^^ at 6\n")
+        _write_module(
+            root,
+            "facade",
+            "infixl ^^ at 4\nscope Public\nexport operators\nexport alternate\nend Public\n",
+        )
+
+        graph = load_graph(
+            "import facade as API\nopen API::Public using %% as ~~\n1 ~~ 2",
+            entry_path=None,
+            roots=_roots(root),
+            default_stdlib=False,
+        )
+
+        expression = graph.modules[ENTRY_ID].program.body.items[-1]
+        assert isinstance(expression, Call)
+        assert isinstance(expression.callee, VarRef)
+        assert expression.callee.name == "~~"
+
+    def test_opened_scoped_facade_exports_with_conflicting_fixities_are_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.parser import AglSyntaxError
+
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(root, "left", "infixl %% at 5\n")
+        _write_module(root, "right", "infixr %% at 5\n")
+        _write_module(root, "left_facade", "scope Public\nexport left using %%\nend Public\n")
+        _write_module(root, "right_facade", "scope Public\nexport right using %%\nend Public\n")
+
+        with pytest.raises(AglSyntaxError):
+            load_graph(
+                "import left_facade\nimport right_facade\n"
+                "open left_facade::Public\nopen right_facade::Public\n1 %% 2",
+                entry_path=None,
+                roots=_roots(root),
+                default_stdlib=False,
+            )
+
+    def test_cyclic_scoped_operator_reexports_are_rejected_without_hanging(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.parser import AglSyntaxError
+
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(root, "operators", "infixl %% at 5\n")
+        _write_module(
+            root,
+            "a",
+            "export operators\nscope Loop\nexport b\nend Loop\n",
+        )
+        _write_module(root, "b", "scope Loop\nexport a\nend Loop\n")
+
+        with (
+            fail_if_slow("operator re-export resolution did not terminate"),
+            pytest.raises(AglSyntaxError),
+        ):
+            load_graph(
+                "import a\n()",
+                entry_path=None,
+                roots=_roots(root),
+                default_stdlib=False,
+            )
+
+    def test_scoped_reexport_operator_can_be_selected_and_renamed_for_a_region(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.syntax.nodes import Call, FuncDef, ScopeRegion, VarRef
+
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(root, "operators", "infixl %% at 5\n")
+        _write_module(root, "facade", "scope Public\nexport operators using %%\nend Public\n")
+
+        graph = load_graph(
+            "scope Local\nimport facade using Public::%% as %%\n"
+            "def apply(x: int, y: int) -> int = x %% y\nend Local\n",
+            entry_path=None,
+            roots=_roots(root),
+            default_stdlib=False,
+        )
+
+        region = graph.modules[ENTRY_ID].program.body.items[0]
+        assert isinstance(region, ScopeRegion)
+        function = region.items[-1]
+        assert isinstance(function, FuncDef)
+        assert isinstance(function.body, Call)
+        assert isinstance(function.body.callee, VarRef)
+        assert function.body.callee.name == "%%"
+
+    def test_package_reexported_operator_is_bare_visible_through_open_import(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.syntax.nodes import Call, VarRef
+
+        operators = _package(tmp_path, "operators")
+        _write_module(operators.root, "operators/ops", "infixl %% at 5\n")
+        _write_module(operators.root, "operators/public", "export operators/ops\n")
+
+        graph = load_graph(
+            "open import operators/public\n1 %% 2",
+            entry_path=None,
+            roots=_package_roots(tmp_path, operators),
+            default_stdlib=False,
+        )
+
+        expression = graph.modules[ENTRY_ID].program.body.items[-1]
+        assert isinstance(expression, Call)
+        assert isinstance(expression.callee, VarRef)
+        assert expression.callee.name == "%%"
+
+    def test_unresolved_relative_operator_priority_is_rejected(self, tmp_path: Path) -> None:
+        from agm.agl.parser import AglSyntaxError
+
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(root, "operators", "infixl %% at prio ?? + 1\n")
+
+        with pytest.raises(AglSyntaxError):
+            load_graph(
+                "import operators\n()",
+                entry_path=None,
+                roots=_roots(root),
+                default_stdlib=False,
+            )
 
     def test_imports_extracted_from_a_scope_region_are_graph_edges(self, tmp_path: Path) -> None:
         """A scoped `import` is discovered exactly like a root one."""

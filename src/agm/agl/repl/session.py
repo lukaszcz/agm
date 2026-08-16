@@ -293,9 +293,8 @@ class ReplSession:
         self._accumulated_imports: list[tuple["ImportDecl", ...]] = []
         self._accumulated_opens: list[tuple["OpenDecl | ImportDecl | ScopeRegion", ...]] = []
         # Resolved user infix fixity declared in prior promoted entries
-        # (operator name → ``(priority, associativity)``). Passed to the parser
-        # as ambient fixity so an ``infixl``/``infixr`` declaration made in one
-        # entry makes the operator usable in later entries.
+        # (operator name → ``(priority, associativity)``). The module-graph
+        # assembler merges it with each entry's import-visible fixities.
         self._accumulated_infix: dict[str, tuple[int, "InfixAssoc"]] = {}
         self._entry_pipeline = EntryPipeline(self)
 
@@ -559,9 +558,7 @@ class ReplSession:
         host_env = self._runtime.host_environment()
         try:
             program, next_start_id = parse_program_seeded(
-                "()",
-                start_id=self._next_node_id,
-                ambient_infix=self._accumulated_infix,
+                "()", start_id=self._next_node_id, resolve_infix=False
             )
             checked_program = self._entry_pipeline.resolve_and_check_program(
                 program, next_start_id, host_env
@@ -597,7 +594,7 @@ class ReplSession:
         with tab_warning_collector() as tab_sink, spaced_qualifier_collector() as spaced_sink:
             try:
                 program, next_start_id = parse_program_seeded(
-                    text, start_id=self._next_node_id, ambient_infix=self._accumulated_infix
+                    text, start_id=self._next_node_id, resolve_infix=False
                 )
             except AglSyntaxError as exc:
                 return self._fail([exc.to_diagnostic()], list(tab_sink))
@@ -905,6 +902,7 @@ class ReplSession:
         next_start_id: int,
         partial: bool,
         promoted_declaration_ids: frozenset[int],
+        infix_ambient: Mapping[str, tuple[int, "InfixAssoc"]],
     ) -> tuple[str, ...]:
         """Promote declarations whose IR initialization completed in this entry."""
         from agm.agl.parser import resolve_infix_fixity
@@ -1149,7 +1147,10 @@ class ReplSession:
             if isinstance(item, InfixDecl) and item.node_id in promoted_declaration_ids
         ]
         if promoted_infix:
-            self._accumulated_infix = resolve_infix_fixity(promoted_infix, self._accumulated_infix)
+            resolved_infix = resolve_infix_fixity(promoted_infix, infix_ambient)
+            self._accumulated_infix.update(
+                (item.name, resolved_infix[item.name]) for item in promoted_infix
+            )
         self._next_node_id = next_start_id
         return tuple(installed)
 
@@ -1332,10 +1333,14 @@ class ReplSession:
         # A parsed program always has at least one item (empty/comment-only
         # source fails parsing earlier).
         last = program.body.items[-1]
-        # Bare expression → node type from checked side table
+        # Bare expression → node type from checked side table. Infix chains are
+        # resolved after graph assembly, so use their rewritten entry item.
         if not isinstance(last, (Binder, Declaration)):
-            # After narrowing: last is an Expr (not a Binder or Declaration).
-            return checked.node_types.get(last.node_id)
+            return checked.node_types.get(
+                checked.resolved.program.body.items[-1].node_id
+                if checked.node_types.get(last.node_id) is None
+                else last.node_id
+            )
         if isinstance(last, (LetDecl, VarDecl)):
             from agm.agl.semantics.types import BottomType
 
@@ -1375,7 +1380,7 @@ class ReplSession:
         # strictly below it, making this parse's ids disjoint from the session's.
         with spaced_qualifier_collector() as spaced_sink:
             program, next_node_id = parse_program_seeded(
-                text, start_id=self._next_node_id, ambient_infix=self._accumulated_infix
+                text, start_id=self._next_node_id, resolve_infix=False
             )
         items = program.body.items
         if len(items) != 1 or isinstance(items[0], (Binder, Declaration)):
@@ -1394,6 +1399,9 @@ class ReplSession:
             diagnostic = diagnostics_from_match_issues(match_result.issues)[0]
             raise AglError(diagnostic.message, span=match_result.issues[0].span)
         typ = checked.node_types.get(expr_item.node_id)
+        if typ is None:
+            resolved_expr = checked.resolved.program.body.items[-1]
+            typ = checked.node_types.get(resolved_expr.node_id)
         assert typ is not None
         from agm.agl.repl.type_display import format_type_for_repl
 

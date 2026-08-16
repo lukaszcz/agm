@@ -339,6 +339,41 @@ def test_pi_forks_immediately_after_open_then_child_is_live_without_repeating_fo
     )
 
 
+@pytest.mark.parametrize(
+    ("backend", "agent", "name_flag"),
+    [
+        (ClaudeCliSessionBackend, AgentClaude("m", "t"), "-n"),
+        (PiCliSessionBackend, AgentPi("p", "m", "t"), "--name"),
+    ],
+)
+def test_session_id_cli_backends_reuse_ids_and_names_after_reset(
+    monkeypatch: pytest.MonkeyPatch,
+    backend: Callable[[], ClaudeCliSessionBackend | PiCliSessionBackend],
+    agent: AgentClaude | AgentPi,
+    name_flag: str,
+) -> None:
+    transport = CaptureTransport(
+        [CaptureOutcome("first"), CaptureOutcome("second"), CaptureOutcome("reset")]
+    )
+    transport.install(monkeypatch)
+    session = backend()
+    _open(session, agent, name="named")
+
+    session.ask(SessionAskRequest("first"))
+    session.ask(SessionAskRequest("second"))
+    session.reset()
+    session.ask(SessionAskRequest("after reset"))
+
+    first_argv, second_argv, reset_argv = (argv for argv, _ in transport.calls)
+    first_id = first_argv[first_argv.index("--session-id") + 1]
+    reset_id = reset_argv[reset_argv.index("--session-id") + 1]
+    assert first_id in second_argv
+    assert reset_id != first_id
+    assert first_argv[first_argv.index(name_flag) + 1] == "named"
+    assert name_flag not in second_argv
+    assert reset_argv[reset_argv.index(name_flag) + 1] == "named"
+
+
 def test_codex_one_shot_session_uses_the_standard_command(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = CaptureTransport([CaptureOutcome("answer")])
     transport.install(monkeypatch)

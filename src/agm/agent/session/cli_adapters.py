@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from abc import ABC, abstractmethod
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import NoReturn, cast
+from typing import Generic, NoReturn, TypeVar, cast
 from uuid import uuid4
 
 from agm.agent import runner
@@ -44,11 +45,14 @@ class _CommandSession:
     one_shot: bool
 
 
-@dataclass(slots=True)
-class _ClaudeSession:
-    """The state needed to create or resume a Claude CLI transcript."""
+_SessionAgentT = TypeVar("_SessionAgentT", AgentClaude, AgentPi)
 
-    agent: AgentClaude
+
+@dataclass(slots=True)
+class _SessionIdCliState(Generic[_SessionAgentT]):
+    """The common local lifecycle state for a CLI session with a generated id."""
+
+    agent: _SessionAgentT
     session_id: str
     name: str
     one_shot: bool
@@ -62,17 +66,6 @@ class _CodexSession:
     agent: AgentCodex
     one_shot: bool
     session_id: str | None = None
-    started: bool = False
-
-
-@dataclass(slots=True)
-class _PiSession:
-    """The state needed to create, resume, or fork a Pi CLI transcript."""
-
-    agent: AgentPi
-    session_id: str
-    name: str
-    one_shot: bool
     started: bool = False
 
 
@@ -243,7 +236,78 @@ class AgentCommandSessionBackend(_CliPromptBackend):
         return session
 
 
-class ClaudeCliSessionBackend(_CliPromptBackend):
+def _require_claude_agent(agent: object) -> AgentClaude:
+    """Validate the agent accepted by the Claude CLI backend."""
+    if not isinstance(agent, AgentClaude):
+        raise SessionHostError("Claude CLI session requires an AgentClaude", "open")
+    return agent
+
+
+def _require_pi_agent(agent: object) -> AgentPi:
+    """Validate the agent accepted by the Pi CLI backend."""
+    if not isinstance(agent, AgentPi):
+        raise SessionHostError("Pi CLI session requires an AgentPi", "open")
+    return agent
+
+
+class _SessionIdCliBackend(_CliPromptBackend, Generic[_SessionAgentT], ABC):
+    """Common lifecycle for CLI backends that generate and retain a session id."""
+
+    def __init__(
+        self,
+        *,
+        idle_timeout: float | None,
+        agent_for: Callable[[object], _SessionAgentT],
+        backend_name: str,
+    ) -> None:
+        super().__init__(idle_timeout=idle_timeout)
+        self._agent_for: Callable[[object], _SessionAgentT] = agent_for
+        self._backend_name = backend_name
+        self._session: _SessionIdCliState[_SessionAgentT] | None = None
+
+    def open(self, request: SessionOpenRequest) -> None:
+        """Allocate the id used by the backend's first prompt."""
+        self._session = _SessionIdCliState(
+            self._agent_for(request.agent), str(uuid4()), request.name, request.one_shot
+        )
+
+    def ask(self, request: SessionAskRequest) -> SessionAskResponse:
+        """Start or resume this backend's transcript for one prompt."""
+        session = self._session_for(SessionOperation.ASK.value)
+        command = self._prompt_command(session)
+        # A first attempt consumes creation state even when its transport fails.
+        session.started = True
+        return self._run_prompt(request.prompt, command, delivery=PromptDelivery.FILE)
+
+    def reset(self) -> None:
+        """Discard the transcript while retaining this backend instance."""
+        session = self._session_for("reset")
+        session.session_id = str(uuid4())
+        session.started = False
+
+    def close(self) -> None:
+        """Drop the locally held transcript state."""
+        self._session = None
+
+    @abstractmethod
+    def _prompt_command(self, session: _SessionIdCliState[_SessionAgentT]) -> list[str]:
+        """Build the backend-specific command for the current session state."""
+
+    def _session_for(self, operation: str) -> _SessionIdCliState[_SessionAgentT]:
+        session = self._session
+        if session is None:
+            raise SessionHostError(f"{self._backend_name} CLI session is not open", operation)
+        return session
+
+    def _initialize_fork(
+        self, child: _SessionIdCliBackend[_SessionAgentT], session_id: str
+    ) -> None:
+        """Give a freshly created child the live state from a native fork."""
+        session = self._session_for(SessionOperation.FORK.value)
+        child._session = _SessionIdCliState(session.agent, session_id, "", False, started=True)
+
+
+class ClaudeCliSessionBackend(_SessionIdCliBackend[AgentClaude]):
     """Continue Claude conversations through its CLI session flags."""
 
     capabilities = SessionCapabilities(
@@ -251,19 +315,12 @@ class ClaudeCliSessionBackend(_CliPromptBackend):
     )
 
     def __init__(self, *, idle_timeout: float | None = None) -> None:
-        super().__init__(idle_timeout=idle_timeout)
-        self._session: _ClaudeSession | None = None
+        super().__init__(
+            idle_timeout=idle_timeout, agent_for=_require_claude_agent, backend_name="Claude"
+        )
 
-    def open(self, request: SessionOpenRequest) -> None:
-        """Allocate the id used when Claude receives its first prompt."""
-        if not isinstance(request.agent, AgentClaude):
-            raise SessionHostError("Claude CLI session requires an AgentClaude", "open")
-        self._session = _ClaudeSession(request.agent, str(uuid4()), request.name, request.one_shot)
-
-    def ask(self, request: SessionAskRequest) -> SessionAskResponse:
-        """Start or resume the Claude transcript for this prompt."""
-        session = self._session_for("ask")
-        command = (
+    def _prompt_command(self, session: _SessionIdCliState[AgentClaude]) -> list[str]:
+        return (
             session.agent.argv()
             if session.one_shot
             else session.agent.session_argv(
@@ -272,8 +329,6 @@ class ClaudeCliSessionBackend(_CliPromptBackend):
                 name=session.name if not session.started else "",
             )
         )
-        session.started = True
-        return self._run_prompt(request.prompt, command, delivery=PromptDelivery.FILE)
 
     def compact(self, instructions: str) -> None:
         """Ask Claude to compact the current transcript and confirm the result."""
@@ -286,12 +341,6 @@ class ClaudeCliSessionBackend(_CliPromptBackend):
         )
         _require_claude_compaction_confirmation(response.content)
         session.started = True
-
-    def reset(self) -> None:
-        """Discard the transcript by assigning a fresh Claude session id."""
-        session = self._session_for("reset")
-        session.session_id = str(uuid4())
-        session.started = False
 
     def fork(self) -> ClaudeCliSessionBackend:
         """Fork the current Claude transcript and return its child backend."""
@@ -313,22 +362,11 @@ class ClaudeCliSessionBackend(_CliPromptBackend):
         """Reject unsupported Claude CLI usage reporting."""
         self._unsupported(SessionOperation.STATS)
 
-    def close(self) -> None:
-        """Drop the locally held Claude transcript state."""
-        self._session = None
-
     def _forked(self, session_id: str) -> ClaudeCliSessionBackend:
         """Return a backend for an already-created forked Claude transcript."""
-        session = self._session_for(SessionOperation.FORK.value)
         child = ClaudeCliSessionBackend(idle_timeout=self._idle_timeout)
-        child._session = _ClaudeSession(session.agent, session_id, "", False, started=True)
+        self._initialize_fork(child, session_id)
         return child
-
-    def _session_for(self, operation: str) -> _ClaudeSession:
-        session = self._session
-        if session is None:
-            raise SessionHostError("Claude CLI session is not open", operation)
-        return session
 
 
 class CodexCliSessionBackend(_CliPromptBackend):
@@ -407,25 +445,16 @@ class CodexCliSessionBackend(_CliPromptBackend):
         return session
 
 
-class PiCliSessionBackend(_CliPromptBackend):
+class PiCliSessionBackend(_SessionIdCliBackend[AgentPi]):
     """Continue Pi conversations through its CLI session flags."""
 
     capabilities = SessionCapabilities(frozenset({SessionOperation.ASK, SessionOperation.FORK}))
 
     def __init__(self, *, idle_timeout: float | None = None) -> None:
-        super().__init__(idle_timeout=idle_timeout)
-        self._session: _PiSession | None = None
+        super().__init__(idle_timeout=idle_timeout, agent_for=_require_pi_agent, backend_name="Pi")
 
-    def open(self, request: SessionOpenRequest) -> None:
-        """Allocate the id Pi will use for every prompt in this transcript."""
-        if not isinstance(request.agent, AgentPi):
-            raise SessionHostError("Pi CLI session requires an AgentPi", "open")
-        self._session = _PiSession(request.agent, str(uuid4()), request.name, request.one_shot)
-
-    def ask(self, request: SessionAskRequest) -> SessionAskResponse:
-        """Send a prompt through Pi's stable session id."""
-        session = self._session_for("ask")
-        command = (
+    def _prompt_command(self, session: _SessionIdCliState[AgentPi]) -> list[str]:
+        return (
             session.agent.argv()
             if session.one_shot
             else session.agent.session_argv(
@@ -433,18 +462,10 @@ class PiCliSessionBackend(_CliPromptBackend):
                 name=session.name if not session.started else "",
             )
         )
-        session.started = True
-        return self._run_prompt(request.prompt, command, delivery=PromptDelivery.FILE)
 
     def compact(self, instructions: str) -> None:
         """Reject unsupported Pi CLI compaction."""
         self._unsupported(SessionOperation.COMPACT)
-
-    def reset(self) -> None:
-        """Discard the transcript by assigning a fresh Pi session id."""
-        session = self._session_for("reset")
-        session.session_id = str(uuid4())
-        session.started = False
 
     def fork(self) -> PiCliSessionBackend:
         """Snapshot this transcript natively and return the live child backend."""
@@ -456,7 +477,7 @@ class PiCliSessionBackend(_CliPromptBackend):
             delivery=PromptDelivery.NONE,
         )
         child = PiCliSessionBackend(idle_timeout=self._idle_timeout)
-        child._session = _PiSession(session.agent, child_id, "", False, started=True)
+        self._initialize_fork(child, child_id)
         return child
 
     def set_name(self, name: str) -> None:
@@ -466,16 +487,6 @@ class PiCliSessionBackend(_CliPromptBackend):
     def stats(self) -> SessionStats:
         """Reject unsupported Pi CLI usage reporting."""
         self._unsupported(SessionOperation.STATS)
-
-    def close(self) -> None:
-        """Drop the locally held Pi transcript state."""
-        self._session = None
-
-    def _session_for(self, operation: str) -> _PiSession:
-        session = self._session
-        if session is None:
-            raise SessionHostError("Pi CLI session is not open", operation)
-        return session
 
 
 #: CLI session backend per checked ``Agent`` variant.

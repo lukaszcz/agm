@@ -62,20 +62,21 @@ def _program_outcome(tmp_path: Path, modules: dict[str, str]) -> Outcome:
     [
         (
             "enum Color\n  | Red\n::Color::Red",
-            "enum Color\n  | Red\nlet value = Color::Red\ncase value of | ::Color::Red => 1",
+            "enum Color\n  | Red\nlet value: Color = Color::Red\ncase value of | ::Color::Red => 1",
             "accepted",
             "accepted",
         ),
         (
             "enum Color\n  | Red\nNope::Red",
-            "enum Color\n  | Red\nlet value = Color::Red\ncase value of | Nope::Red => 1 | _ => 2",
+            "enum Color\n  | Red\nlet value: Color = Color::Red\n"
+            "case value of | Nope::Red => 1 | _ => 2",
             "scope",
             "typecheck",
         ),
         (
             "enum Color\n  | Red\n::Missing::Red",
             (
-                "enum Color\n  | Red\nlet value = Color::Red\n"
+                "enum Color\n  | Red\nlet value: Color = Color::Red\n"
                 "case value of | ::Missing::Red => 1 | _ => 2"
             ),
             "scope",
@@ -84,10 +85,10 @@ def _program_outcome(tmp_path: Path, modules: dict[str, str]) -> Outcome:
         (
             "enum Color\n  | Red\nColor::Gone",
             (
-                "enum Color\n  | Red\nlet value = Color::Red\n"
+                "enum Color\n  | Red\nlet value: Color = Color::Red\n"
                 "case value of | Color::Gone => 1 | _ => 2"
             ),
-            "typecheck",
+            "scope",
             "typecheck",
         ),
     ],
@@ -114,7 +115,7 @@ def test_type_name_and_module_route_clash_stays_rejected_in_both_positions(
             "import pkg/Foo\n"
             "enum Foo\n"
             "  | local\n"
-            "let value = local\n"
+            "let value: Foo = local\n"
             "case value of | Foo::local => 1"
         ),
         "pkg/Foo": "def local() -> int = 1",
@@ -153,7 +154,8 @@ def test_explicit_owner_matching_the_route_segment_is_rejected(tmp_path: Path) -
     """
     modules = {
         "entry": (
-            "import pal\nlet value = pal::Color::Red\ncase value of | pal::pal::Red => 1 | _ => 2"
+            "import pal\nlet value: pal::Color = pal::Color::Red\n"
+            "case value of | pal::pal::Red => 1 | _ => 2"
         ),
         "pal": "enum Color\n  | Red",
     }
@@ -165,7 +167,8 @@ def test_correctly_spelled_module_and_owner_route_still_resolves(tmp_path: Path)
     """The correct spelling ``pal::Color::Red`` keeps resolving after the fix."""
     modules = {
         "entry": (
-            "import pal\nlet value = pal::Color::Red\ncase value of | pal::Color::Red => 1 | _ => 2"
+            "import pal\nlet value: pal::Color = pal::Color::Red\n"
+            "case value of | pal::Color::Red => 1 | _ => 2"
         ),
         "pal": "enum Color\n  | Red",
     }
@@ -212,7 +215,7 @@ def test_unselected_qualified_owner_is_rejected_by_typecheck_in_an_is_test(
             "import Pal using public\n"
             "enum Local\n"
             "  | ok\n"
-            "let value = Local::ok\n"
+            "let value: Local = Local::ok\n"
             "value is Pal::Secret::hidden"
         ),
         "Pal": "def public() -> int = 1\nenum Secret\n  | hidden",
@@ -230,7 +233,7 @@ def test_ambiguous_qualified_owner_is_rejected_by_typecheck_in_an_is_test(
             "import two/types\n"
             "enum Local\n"
             "  | ok\n"
-            "let value = Local::ok\n"
+            "let value: Local = Local::ok\n"
             "value is types::Color::Red"
         ),
         "one/types": "enum Color\n  | Red",

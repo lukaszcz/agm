@@ -224,7 +224,29 @@ class TestUnification:
         with pytest.raises(InferenceError):
             engine.unify(tree, member, _origin(engine, 2))
         with pytest.raises(InferenceError):
-            engine.unify(ArrayType(member), ArrayType(tree), _origin(engine, 3))
+            engine.unify(
+                RecordType("Other", scope_path=("Tree",), decl_id=3), tree, _origin(engine, 3)
+            )
+        with pytest.raises(InferenceError):
+            engine.unify(ArrayType(member), ArrayType(tree), _origin(engine, 4))
+
+    def test_member_record_unification_solves_captured_enum_arguments(self) -> None:
+        table = TypeTable()
+        tree = TypeDef(
+            kind="enum",
+            name="Tree",
+            module_id=ModuleId.from_path("trees"),
+            type_params=("T",),
+            members=(RecordType("Leaf", (TypeVarType("T"),), scope_path=("Tree",), decl_id=1),),
+            decl_node_id=2,
+        )
+        table.register(tree)
+        engine = InferenceEngine(table)
+        value_type = RecordType("Leaf", (engine.fresh("T"),), scope_path=("Tree",), decl_id=1)
+
+        engine.unify(value_type, tree.handle((IntType(),)), _origin(engine, 1))
+
+        assert engine.zonk(value_type.type_args[0]) == IntType()
 
     @pytest.mark.parametrize(
         "wrap",
@@ -291,6 +313,29 @@ class TestContextCompletion:
 
         assert engine.zonk(first) == IntType()
         assert engine.zonk(second) == TextType()
+
+    def test_member_record_context_completes_captured_enum_arguments(self) -> None:
+        table = TypeTable()
+        tree = TypeDef(
+            kind="enum",
+            name="Tree",
+            module_id=ModuleId.from_path("trees"),
+            type_params=("T",),
+            members=(RecordType("Leaf", (TypeVarType("T"),), scope_path=("Tree",), decl_id=1),),
+            decl_node_id=2,
+        )
+        table.register(tree)
+        engine = InferenceEngine(table)
+        value_type = RecordType("Leaf", (engine.fresh("T"),), scope_path=("Tree",), decl_id=1)
+
+        engine.complete_from_context(value_type, tree.handle((IntType(),)), _origin(engine, 1))
+
+        assert engine.zonk(value_type.type_args[0]) == IntType()
+        engine.complete_from_context(
+            RecordType("Other", scope_path=("Tree",), decl_id=3),
+            tree.handle((IntType(),)),
+            _origin(engine, 2),
+        )
 
     def test_context_never_overrides_actual_equality_evidence(self) -> None:
         engine = InferenceEngine()
@@ -376,6 +421,14 @@ class TestContextCompletion:
 
         assert engine.is_solved(variable) is False
         assert engine.parent_of(variable) == engine.parent_of(other)
+
+
+def test_mixed_provisional_literal_elements_report_a_type_error() -> None:
+    with pytest.raises(AglTypeError, match="Array literal elements"):
+        resolve_and_check_inline_entry(
+            "def id[T](value: T) -> T = value\nlet values = [id(?), id(1)]\nvalues",
+            HostCapabilities(),
+        )
 
 
 def test_destructuring_let_binder_preserves_candidate_validation_provenance() -> None:

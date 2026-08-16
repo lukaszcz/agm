@@ -77,7 +77,7 @@ class TestOperatorProgramsRunEndToEnd:
             PipelineDriver(),
             "enum Left\n  | Same\n"
             "enum Right\n  | Same\n"
-            "let value = Left::Same()\n"
+            "let value: Left = Left::Same()\n"
             "print(value is Same)\n",
         )
 

@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 def test_agent_ask_method_accepts_type_args_and_named_defaults() -> None:
     """Agent::ask is a normal selected builtin method with the receiver as agent."""
     source = """\
-let worker = AgentCommand("worker")
+let worker: Agent = AgentCommand("worker")
 let answer: int = worker.ask::[int]("How many?", strict_json = true)
 answer
 """
@@ -51,7 +51,7 @@ answer
 def test_agent_ask_request_method_uses_its_receiver() -> None:
     """Agent::ask-request constructs a request without dispatching."""
     source = """\
-let worker = AgentCommand("worker")
+let worker: Agent = AgentCommand("worker")
 let request = worker.ask-request("Draft it.")
 request
 """

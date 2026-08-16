@@ -1,11 +1,11 @@
 scope Block
 def hidden() -> int = 0
-let helper = AgentCommand("helper")
+let helper: Agent = AgentCommand("helper")
 end Block
 
 def Shorthand::hidden() -> int = 0
 scope Shorthand
-let helper = AgentCommand("helper")
+let helper: Agent = AgentCommand("helper")
 end Shorthand
 
 program def main() -> unit =

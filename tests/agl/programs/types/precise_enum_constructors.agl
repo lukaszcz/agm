@@ -1,0 +1,27 @@
+# Enum members construct their precise record type and widen only in known enum slots.
+enum Tree[T]
+  | Leaf
+  | Node(value: T)
+
+def identity(tree: Tree[int]) -> Tree[int] = tree
+
+record Box(tree: Tree[int])
+
+enum Option[T]
+  | none
+  | some(value: T)
+
+program def main() -> unit =
+  let leaf = Leaf
+  let tree: Tree[int] = leaf
+  let matched = case leaf of | Leaf => leaf
+  let boxed = Box(tree = leaf)
+  let returned = identity(leaf)
+  let nodes: array[Tree[int]] = [Leaf, Node(value = 1)]
+  let optional: Option[int] = Option[int]::none
+  print tree
+  print matched
+  print boxed
+  print returned
+  print nodes
+  print optional

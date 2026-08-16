@@ -291,29 +291,33 @@ value.
 ### Pinning a generic constructor value with `::[…]`
 
 Instead of relying on an expected-type annotation, you can instantiate a
-bare generic constructor value explicitly with the same `::[…]` suffix used
-for generic functions. A payload variant becomes a function value; a nullary
-variant constructs its value directly, with no parentheses:
+bare generic member constructor explicitly with the same `::[…]` suffix used
+for generic functions. A payload member becomes a function value:
 
 ```agl
 enum Option[T]
   | none
   | some(value: T)
 program def main() -> unit =
-  let mk: int -> Option[int] = some::[int]
+  let mk = some::[int]
   let v = mk(7)
-  let z: Option[int] = none::[int]
+  let z = Option[int]::none
 ```
 
-The qualified forms `Option[int]::some` and `Option[int]::none` work the
-same way. In this explicit applied-type-qualified constructor form, the
-applied type name must be immediately followed by `[` (`NAME[`):
+A direct member application supplies only the type parameters that member
+captures, so `none::[int]` is invalid: `none` captures none of `Option`'s
+parameters. Applying an enum owner instead supplies its full parameter list,
+then substitutes the captured parameters into the selected member. Thus both
+`Option[int]::some` and `Option[int]::none` are valid, as is
+`Outcome[int, text]::ok` when `ok` captures only `T`. In this explicit
+applied-type-qualified constructor form, the applied type name must be
+immediately followed by `[` (`NAME[`):
 `Option[int]::some` is valid, but `Option [int]::some` is invalid. This rule
 applies only to this constructor form; ordinary applied type expressions may
 have whitespace, so both `Option[int]` and `Option [int]` are valid type
 expressions. Both `Option` and the constructor (`some`/`none`) must be `NAME`,
-not `OP_NAME`. The result is an ordinary function value (payload) or nominal
-value (nullary) and can be passed and called like any other.
+not `OP_NAME`. The result is an ordinary function value (payload) or member
+record value (nullary) and can be passed and called like any other.
 
 ## Strict parametricity
 

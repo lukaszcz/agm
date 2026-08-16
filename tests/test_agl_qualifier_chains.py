@@ -241,8 +241,8 @@ def test_current_module_anchored_type_constructor_uses_the_chain_constructor_ref
     expr = program.body.items[-1]
     assert isinstance(expr, VarRef)
 
-    assert resolution.constructor_refs[expr.node_id].owner_name == "Option"
-    assert resolution.constructor_refs[expr.node_id].variant == "some"
+    constructor = resolution.constructor_refs[expr.node_id]
+    assert (constructor.owner_path, constructor.owner_name) == (("Option",), "some")
 
 
 @pytest.mark.parametrize("source", ("::Unknown::On", "::Unknown[int]::On"))
@@ -271,7 +271,7 @@ def test_scoped_enum_members_and_nested_type_members_run_through_the_full_pipeli
         "scope A\n"
         "enum T[U] | value\n"
         "end A\n"
-        "let option = Option[int]::some(value = 1)\n"
+        "let option: Option[int] = Option[int]::some(value = 1)\n"
         "case option of\n"
         "  | Option[int]::some(value) => print value\n"
         "  | Option[int]::none => print 0\n"
@@ -344,7 +344,7 @@ def test_imported_scoped_enum_owner_retains_its_scope_path_for_is_and_case(
         {
             "entry": (
                 "import lib\n"
-                "let s = lib::A::Status::Good\n"
+                "let s: lib::A::Status = lib::A::Status::Good\n"
                 "print(s is lib::A::Status::Good)\n"
                 "print(case s of\n"
                 '  | lib::A::Status::Good => "good"\n'
@@ -356,17 +356,13 @@ def test_imported_scoped_enum_owner_retains_its_scope_path_for_is_and_case(
 
     (is_test,) = _find_nodes(resolution.program, IsTest)
     is_cref = resolution.constructor_refs[is_test.node_id]
-    assert (is_cref.owner_path, is_cref.owner_name, is_cref.variant) == (("A",), "Status", "Good")
+    assert (is_cref.owner_path, is_cref.owner_name) == (("A", "Status"), "Good")
 
     (case_node,) = _find_nodes(resolution.program, Case)
     good_pattern = case_node.branches[0].pattern
     assert isinstance(good_pattern, ConstructorPattern)
     case_cref = resolution.constructor_refs[good_pattern.node_id]
-    assert (case_cref.owner_path, case_cref.owner_name, case_cref.variant) == (
-        ("A",),
-        "Status",
-        "Good",
-    )
+    assert (case_cref.owner_path, case_cref.owner_name) == (("A", "Status"), "Good")
 
 
 def test_explicit_module_route_open_is_not_masked_by_a_same_named_local_scope(
@@ -471,4 +467,4 @@ def test_open_imported_enum_owner_qualifies_its_variant(tmp_path: Path) -> None:
         if node.qualifier is not None and node.name == "Red"
     )
     cref = resolution.constructor_refs[variant_ref.node_id]
-    assert (cref.owner_name, cref.variant) == ("Color", "Red")
+    assert (cref.owner_path, cref.owner_name) == (("Color",), "Red")

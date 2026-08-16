@@ -830,7 +830,7 @@ class TestNominalRenderingEcho:
 
         assert r.ok
         assert render_mod.render_entry_result(r, echo=True) == (
-            "o : Outcome = Outcome::Partial(\n  left = 7\n)"
+            "o : Outcome::Partial = Outcome::Partial(\n  left = 7\n)"
         )
         outcome = meta_mod.dispatch_meta(":bindings", _session_ctx(s))
         assert outcome.text is not None

@@ -52,6 +52,7 @@ from agm.agl.scope.symbols import (
     ScopeNode,
     ScopePath,
     alias_denotes_constructible_type,
+    dedupe_constructor_candidates,
 )
 from agm.agl.scope.symbols import to_bare_atom as _atom
 from agm.agl.syntax.nodes import (
@@ -71,7 +72,7 @@ from agm.agl.syntax.nodes import (
     static_items,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import AppliedT, ImportMode, NameT
+from agm.agl.syntax.types import AppliedT, ImportMode, NameT, TypeExpr, member_type_params
 
 
 def _mid_sort_key(m: ModuleId) -> tuple[str, ...]:
@@ -223,20 +224,23 @@ def _build_cross_module_constructor_candidates(
                     scope_path=declaring_path,
                 )
 
-            if isinstance(decl, (RecordDef, ExceptionDef)) or (
+            if isinstance(decl, (RecordDef, ExceptionDef)):
+                cref = cross_module_constructor_refs[key]
+                candidates.setdefault(exposed_name, []).append(cref)
+            elif (
                 isinstance(decl, TypeAlias)
                 and isinstance(decl.type_expr, (NameT, AppliedT))
                 and alias_denotes_constructible_type(decl, declaring_module_lookup)
             ):
-                cref = ConstructorRef(
-                    owner_name=decl.name,
-                    variant=None,
-                    owner_decl_node_id=decl.node_id,
-                    type_params=decl.type_params,
-                    owner_module_id=mid,
-                    owner_path=owner_path,
+                candidates.setdefault(exposed_name, []).append(
+                    ConstructorRef(
+                        owner_name=decl.name,
+                        owner_decl_node_id=decl.node_id,
+                        type_params=decl.type_params,
+                        owner_module_id=mid,
+                        owner_path=owner_path,
+                    )
                 )
-                candidates.setdefault(exposed_name, []).append(cref)
             elif isinstance(decl, EnumDef):
                 for member in decl.members:
                     variant = cast(VariantDef, member)
@@ -244,18 +248,12 @@ def _build_cross_module_constructor_candidates(
                         all_public_types[(mid, variant.name)], ExceptionDef
                     ):
                         continue
-                    cref = ConstructorRef(
-                        owner_name=decl.name,
-                        variant=variant.name,
-                        owner_decl_node_id=decl.node_id,
-                        type_params=decl.type_params,
-                        owner_module_id=mid,
-                        owner_path=owner_path,
-                        can_match_bare_pattern=not variant.fields,
+                    member_atom = _atom((*owner_path, decl.name, variant.name))
+                    candidates.setdefault(variant.name, []).append(
+                        cross_module_constructor_refs[(mid, member_atom)]
                     )
-                    candidates.setdefault(variant.name, []).append(cref)
     return (
-        {name: tuple(refs) for name, refs in candidates.items()},
+        {name: dedupe_constructor_candidates(refs) for name, refs in candidates.items()},
         frozenset(type_names),
     )
 
@@ -292,21 +290,27 @@ def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[NameAtom
     return result
 
 
-def _cross_module_constructor_refs(
+def _member_record_constructor_refs(
     all_public_types: Mapping[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias],
 ) -> dict[QName, ConstructorRef]:
-    """Build constructor results for publicly selected declaration paths."""
+    """Build the one constructor metadata record for every member record.
+
+    A record, exception, and inline enum member each declares the nominal
+    record a constructor produces.  Local resolution, import injection, and
+    later REPL retention all reuse these objects rather than recreating a
+    variant-shaped view of the source declaration.
+    """
     result: dict[QName, ConstructorRef] = {}
     for (module_id, atom), declaration in all_public_types.items():
         path = (atom,) if isinstance(atom, str) else atom
-        if isinstance(declaration, (RecordDef, ExceptionDef)) and path[:-1]:
+        if isinstance(declaration, (RecordDef, ExceptionDef)):
             result[(module_id, atom)] = ConstructorRef(
                 owner_name=declaration.name,
-                variant=None,
                 owner_decl_node_id=declaration.node_id,
                 type_params=declaration.type_params,
                 owner_module_id=module_id,
                 owner_path=path[:-1],
+                is_builtin=declaration.is_builtin,
             )
         elif isinstance(declaration, EnumDef):
             for member in declaration.members:
@@ -314,13 +318,16 @@ def _cross_module_constructor_refs(
                 variant_path = (*path, variant.name)
                 variant_atom = _atom(variant_path)
                 result[(module_id, variant_atom)] = ConstructorRef(
-                    owner_name=declaration.name,
-                    variant=variant.name,
-                    owner_decl_node_id=declaration.node_id,
-                    type_params=declaration.type_params,
+                    owner_name=variant.name,
+                    owner_decl_node_id=variant.node_id,
+                    type_params=member_type_params(
+                        (cast(TypeExpr, field.type_expr) for field in variant.fields),
+                        declaration.type_params,
+                    ),
                     owner_module_id=module_id,
-                    owner_path=path[:-1],
+                    owner_path=path,
                     can_match_bare_pattern=not variant.fields,
+                    is_builtin=declaration.is_builtin,
                 )
     return result
 
@@ -640,7 +647,7 @@ def resolve_program(
                     False,
                 )
 
-    cross_module_constructor_refs = _cross_module_constructor_refs(all_public_types)
+    cross_module_constructor_refs = _member_record_constructor_refs(all_public_types)
     cross_module_constructible_types = frozenset(
         qname
         for qname, declaration in all_public_types.items()
@@ -664,7 +671,9 @@ def resolve_program(
         if is_entry:
             constructor_candidates = dict(entry_ambient_constructor_candidates or {})
             for name, refs in cross_module_candidates.items():
-                constructor_candidates[name] = (*constructor_candidates.get(name, ()), *refs)
+                constructor_candidates[name] = dedupe_constructor_candidates(
+                    (*constructor_candidates.get(name, ()), *refs)
+                )
             type_names = entry_ambient_type_names | cross_module_type_names
         resolver = _Resolver(
             module_id=mid,

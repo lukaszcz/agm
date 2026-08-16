@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.ir.contracts import ConversionFailureMode, ConversionStrategy
+from agm.agl.ir.contracts import ConversionFailureMode, ConversionStrategy, RecordEncode
 from agm.agl.ir.ids import NominalId, SymbolId
 from agm.agl.ir.nodes import (
     IrArith,
@@ -2034,7 +2034,7 @@ class TestBuiltinMethodLowering:
 
     def test_agent_method_call_lowers_to_ask_with_receiver_operand(self) -> None:
         source = """\
-let agents = [AgentCommand("worker")]
+let agents: array[Agent] = [AgentCommand("worker")]
 let result: text = agents[0].ask("Summarize")
 ()\
 """
@@ -2747,7 +2747,8 @@ class TestHostOpLowering:
         from agm.agl.ir.nodes import IrAskRequest
 
         source = (
-            'let worker = AgentCommand("worker")\nlet req = worker.ask-request("my prompt")\n()'
+            'let worker: Agent = AgentCommand("worker")\n'
+            'let req = worker.ask-request("my prompt")\n()'
         )
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
@@ -3021,7 +3022,7 @@ class TestOneLevelCaseLowering:
             "  | Active\n"
             "  | Inactive\n"
             "\n"
-            "let s = Status::Active\n"
+            "let s: Status = Status::Active\n"
             "let r = case s of\n"
             "  | Active => 1\n"
             "  | _ => 0\n"
@@ -3050,7 +3051,7 @@ class TestOneLevelCaseLowering:
             "  | Active\n"
             "  | Inactive\n"
             "\n"
-            "let s = Status::Active\n"
+            "let s: Status = Status::Active\n"
             "let r = case s of\n"
             "  | Active => 1\n"
             "  | _ as x => 0\n"
@@ -3073,7 +3074,7 @@ class TestOneLevelCaseLowering:
             "  | Active\n"
             "  | Inactive\n"
             "\n"
-            "let s = Status::Inactive\n"
+            "let s: Status = Status::Inactive\n"
             "let r = case s of\n"
             "  | Active => 1\n"
             "  | _ as x => 2\n"
@@ -3168,6 +3169,14 @@ class TestIrConvertLowering:
         )
         assert conv.failure_mode is ConversionFailureMode.RETURN_BOOL
         assert conv.recipe.strategy is ConversionStrategy.RENDER_TO_TEXT
+
+    def test_member_record_json_cast_uses_its_exact_record_encode_plan(self) -> None:
+        """A member-record value serializes as its record, not its enum owner."""
+        prog = _lower("enum Color | Red | Blue\nlet r = Red() as json\n()")
+        bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
+        conv = bind.value
+        assert isinstance(conv, IrConvert)
+        assert isinstance(conv.recipe.encode, RecordEncode)
 
     def test_json_as_test_lowers_to_ir_convert_return_bool_not_sequence(self) -> None:
         """'as? json' (TOTAL_JSON) emits IrConvert(RETURN_BOOL), NOT IrSequence.

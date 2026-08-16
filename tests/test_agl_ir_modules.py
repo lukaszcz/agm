@@ -370,7 +370,7 @@ enum Color
     entry_source = """
 open import shapes
 let p = shapes::Point(x = 1, y = 2)
-let c = shapes::Color::Red
+let c: shapes::Color = shapes::Color::Red
 let px = p.x
 let is_red = case c of
     | Red => true

@@ -38,6 +38,7 @@ from agm.agl.matchcompile.model import (
 from agm.agl.matchcompile.normalize import (
     MatchCompileInvariantError,
     constructor_inhabits_type,
+    enum_constructor,
     normalize_case,
     normalize_let,
     normalize_pattern,
@@ -433,7 +434,7 @@ def test_normalize_case_preserves_priority_actions_and_binder_provenance() -> No
 
 def test_as_patterns_preserve_all_current_occurrence_binders() -> None:
     checked = _check(
-        "enum E\n  | A(value: int)\n  | B\nlet value = A(1)\n"
+        "enum E\n  | A(value: int)\n  | B\nlet value: E = A(1)\n"
         "case value of | A(value = _ as inner) as whole as same => inner | B => 0"
     )
     normalized = normalize_case(_only_case(checked.resolved.program), checked)
@@ -770,11 +771,27 @@ def test_signature_and_pattern_dispatch_reject_unknown_future_members() -> None:
 
 
 def test_missing_enum_and_subject_metadata_raise_compiler_invariants() -> None:
-    checked = _check("let value = 1\ncase value of | _ => 0")
+    checked = _check(
+        "enum E\n  | A(value: int)\nlet value: E = A(value = 1)\ncase value of | A(_) => 0"
+    )
     case = _only_case(checked.resolved.program)
 
     with pytest.raises(MatchCompileInvariantError, match="cannot resolve enum signature"):
+        enum_constructor(EnumType("Missing"), "missing", checked.type_env.type_table)
+    with pytest.raises(MatchCompileInvariantError, match="cannot resolve enum signature"):
         signature_for_type(EnumType("Missing"), checked.type_env.type_table)
+    checked.type_env.type_table.register(
+        TypeDef(kind="record", name="E", module_id=ENTRY_ID, decl_node_id=999)
+    )
+    wrong_kind = replace(
+        checked,
+        node_types={
+            **checked.node_types,
+            case.subject.node_id: EnumType("E", decl_id=999),
+        },
+    )
+    with pytest.raises(MatchCompileInvariantError, match="cannot resolve enum signature"):
+        normalize_case(case, wrong_kind)
     with pytest.raises(MatchCompileInvariantError, match="cannot resolve record signature"):
         signature_for_type(RecordType("Missing"), checked.type_env.type_table)
     without_subject = replace(
@@ -815,7 +832,7 @@ def test_malformed_checked_literal_and_bare_variant_metadata_raise_invariants() 
     bare_some = replace(bare_none, name="some")
     bare_none_ref = enum_checked.pattern_classifications[bare_none.node_id]
     assert bare_none_ref is not None
-    some_ref = replace(bare_none_ref, variant="some")
+    some_ref = replace(bare_none_ref, owner_name="some", owner_decl_node_id=-1)
     malformed_checked = replace(enum_checked, pattern_classifications={bare_none.node_id: some_ref})
     with pytest.raises(MatchCompileInvariantError, match="invalid final"):
         normalize_case(_replace_case_pattern(enum_case, bare_some), malformed_checked)
@@ -879,19 +896,24 @@ def test_malformed_checked_constructor_metadata_raise_invariants() -> None:
     unknown_variant = replace(pattern, name="missing")
     with pytest.raises(MatchCompileInvariantError, match="unknown variant"):
         normalize_case(_replace_case_pattern(case, unknown_variant), checked)
+    choice_type = checked.node_types[case.subject.node_id]
+    assert isinstance(choice_type, EnumType)
+    with pytest.raises(MatchCompileInvariantError, match="unknown variant"):
+        enum_constructor(choice_type, "missing", checked.type_env.type_table)
 
     choice_type = checked.node_types[case.subject.node_id]
     assert isinstance(choice_type, EnumType)
     constructor_ref = checked.pattern_constructor_ref_for(pattern.node_id)
     assert constructor_ref is not None
-    assert checked.pattern_constructor_owner_for(pattern.node_id) == NominalId(choice_type.decl_id)
+    member = checked.type_env.type_table.enum_member_names(choice_type)[pattern.name]
+    assert checked.pattern_constructor_owner_for(pattern.node_id) == NominalId(member.decl_id)
     with pytest.raises(MatchCompileInvariantError, match="invalid final constructor"):
         normalize_case(
             case,
             replace(
                 checked,
                 pattern_constructor_refs={
-                    pattern.node_id: replace(constructor_ref, variant="not-the-pattern-variant")
+                    pattern.node_id: replace(constructor_ref, owner_name="not-the-pattern-member")
                 },
             ),
         )

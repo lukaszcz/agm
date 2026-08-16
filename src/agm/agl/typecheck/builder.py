@@ -78,7 +78,7 @@ from agm.agl.syntax.nodes import (
     static_type_items,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import AppliedT, ArrayT, DictT, FuncT, NameT, TypeExpr
+from agm.agl.syntax.types import TypeExpr, member_type_params
 from agm.agl.typecheck.env import (
     AglTypeError,
     ConstructorSignature,
@@ -151,38 +151,6 @@ def _member_identity(enum: EnumDef, member: VariantDef, module_id: ModuleId) -> 
         (expected for expected in expected_enum.members if expected.name == member.name), None
     )
     return member.node_id if expected_member is None else expected_member.decl_id
-
-
-def _member_type_params(member: VariantDef, enum_params: tuple[str, ...]) -> tuple[str, ...]:
-    """Return the enum parameters used by an inline member's field syntax."""
-    used: set[str] = set()
-
-    def visit(expr: TypeExpr) -> None:
-        if isinstance(expr, NameT):
-            if expr.qualifier is None:
-                used.add(expr.name)
-        elif isinstance(expr, AppliedT):
-            if expr.qualifier is None:
-                used.add(expr.name)
-            for arg in expr.args:
-                visit(arg)
-        elif isinstance(expr, ArrayT):
-            visit(expr.elem)
-        elif isinstance(expr, DictT):
-            visit(expr.value)
-        elif isinstance(expr, FuncT):
-            for param in expr.params:
-                visit(param)
-            visit(expr.result)
-        qualifier = expr.qualifier if isinstance(expr, (NameT, AppliedT)) else None
-        if qualifier is not None:
-            for segment in qualifier.segments:
-                for arg in segment.type_args or ():
-                    visit(arg)
-
-    for field in member.fields:
-        visit(cast(TypeExpr, field.type_expr))
-    return tuple(param for param in enum_params if param in used)
 
 
 # ---------------------------------------------------------------------------
@@ -338,7 +306,9 @@ class _TypeBuilder:
         enum_name = _bare_name(enum.name)
         scope_path = (*tuple(segment.name for segment in enum.scope_path), enum_name)
         member_name = f"{enum.name}::{member.name}"
-        type_params = _member_type_params(member, enum.type_params)
+        type_params = member_type_params(
+            (cast(TypeExpr, field.type_expr) for field in member.fields), enum.type_params
+        )
         self._register_name(member_name, member.span)
         self._env.unregister_name(member_name)
         decl_id = _member_identity(enum, member, self._module_id)
@@ -493,7 +463,7 @@ class _TypeBuilder:
         # like every other declaration — including a builtin one).
         field_kinds = tuple((fd.name, fd.kind) for fd in stmt.fields)
         self._env.register_constructor_field_kinds(
-            bare_name, None, field_kinds, scope_path=scope_path, module_id=module_id
+            bare_name, field_kinds, scope_path=scope_path, module_id=module_id
         )
 
     def _build_enum(self, stmt: EnumDef) -> None:
@@ -577,10 +547,9 @@ class _TypeBuilder:
         for member in stmt.members:
             vd = cast(VariantDef, member)
             self._env.register_constructor_field_kinds(
-                bare_name,
                 vd.name,
                 tuple((fd.name, fd.kind) for fd in vd.fields),
-                scope_path=scope_path,
+                scope_path=(*scope_path, bare_name),
                 module_id=module_id,
             )
 
@@ -858,7 +827,6 @@ class _TypeBuilder:
         field_templates = tuple(fields.values())
         sig = ConstructorSignature(
             owner_name=stmt.name,
-            variant=None,
             field_names=field_names,
             field_templates=field_templates,
             result_template=template,
@@ -870,7 +838,6 @@ class _TypeBuilder:
         generic_record_field_kinds = tuple((fd.name, fd.kind) for fd in stmt.fields)
         self._env.register_constructor_field_kinds(
             bare_name,
-            None,
             generic_record_field_kinds,
             scope_path=scope_path,
             module_id=module_id,
@@ -897,12 +864,13 @@ class _TypeBuilder:
             fields = self._env.type_table.record_fields(member_type)
             self._env.register_constructor_signature(
                 ConstructorSignature(
-                    owner_name=stmt.name,
-                    variant=vd.name,
+                    owner_name=member_type.name,
                     field_names=tuple(fields),
                     field_templates=tuple(fields.values()),
-                    result_template=template,
-                    type_params=type_params,
+                    result_template=member_type,
+                    type_params=tuple(
+                        arg.name for arg in member_type.type_args if isinstance(arg, TypeVarType)
+                    ),
                 )
             )
         self._register_enum_constructor_field_kinds(stmt)

@@ -91,6 +91,26 @@ def _check(src: str) -> CheckedModule:
     return resolve_and_check_inline_entry(src, _CAPS)
 
 
+def test_enum_owner_for_member_recovers_only_captured_type_arguments() -> None:
+    table = TypeTable()
+    outcome = TypeDef(
+        kind="enum",
+        name="Outcome",
+        module_id=ENTRY_ID,
+        type_params=("T", "E"),
+        members=(
+            RecordType("ok", (TypeVarType("T"),), scope_path=("Outcome",), decl_id=1),
+            RecordType("fixed", (IntType(),), scope_path=("Outcome",), decl_id=2),
+        ),
+        decl_node_id=2,
+    )
+    table.register(outcome)
+    members = table.enum_members(outcome.handle((IntType(), TextType())))
+
+    assert table.enum_owner_for_member(members[0]) is None
+    assert table.enum_owner_for_member(members[1]) is None
+
+
 def test_scoped_generic_enum_does_not_claim_the_root_type_or_constructor_namespace() -> None:
     checked = _check(
         "enum A::Choice[T]\n"
@@ -1852,12 +1872,14 @@ class TestEnvTypeHasMatchingTableDefSingleModule:
 
     def test_generic_enum(self) -> None:
         checked = _check("enum Maybe[T]\n  | none\n  | just(value: T)\nlet m = just(value = 1)\nm")
-        maybe = _binding_value_type(checked, "m")
-        assert isinstance(maybe, EnumType)
+        member = _binding_value_type(checked, "m")
+        assert isinstance(member, RecordType)
         table = checked.type_env.type_table
-        typedef = table.get(maybe.module_id, "Maybe")
+        typedef = table.get(ENTRY_ID, "Maybe")
         assert typedef is not None
         assert typedef.type_params == ("T",)
+        maybe = checked.type_env.instantiate_nominal("Maybe", (IntType(),))
+        assert isinstance(maybe, EnumType)
         result = _enum_fields(table, maybe)
         assert {v: dict(f) for v, f in result.items()} == {
             "none": {},

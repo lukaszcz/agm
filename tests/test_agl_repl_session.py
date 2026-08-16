@@ -125,7 +125,7 @@ class TestPersistence:
     def test_builtin_agent_method_is_callable_across_entries(self) -> None:
         agent = CountingAgent("42")
         session = ReplSession(agent_dispatcher=agent)
-        assert session.eval_entry('let worker = AgentCommand("worker")').ok
+        assert session.eval_entry('let worker: Agent = AgentCommand("worker")').ok
 
         result = session.eval_entry('worker.ask::[int]("How many?")')
 
@@ -922,7 +922,7 @@ class TestStdlib:
     def test_type_of_uses_opened_core_stdlib(self) -> None:
         s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
 
-        assert "Option[int]" in s.type_of("Some(value = 1)")
+        assert "Option::Some[int]" in s.type_of("Some(value = 1)")
 
     def test_no_stdlib_requires_explicit_core_import_after_reset(self) -> None:
         s = ReplSession(
@@ -988,7 +988,7 @@ class TestStdlib:
                     result = s.eval_entry(call)
                     assert result.ok, (name, variant, result.diagnostics)
                     assert result.value_type is not None
-                    assert result.value_type.name == name
+                    assert result.value_type.name == variant
 
     def test_all_concrete_builtin_exceptions_are_available(self) -> None:
         s = ReplSession()
@@ -1725,7 +1725,7 @@ class TestAgentArgumentBuiltinIdentity:
         )
         assert declare.ok, declare.diagnostics
 
-        g = s.eval_entry('let g = A::Agent::AgentCommand("echo")')
+        g = s.eval_entry('let g: A::Agent = A::Agent::AgentCommand("echo")')
         assert g.ok, g.diagnostics
 
         result = s.eval_entry('let q = g.ask-request("hi")')
@@ -1736,7 +1736,9 @@ class TestAgentArgumentBuiltinIdentity:
         """Regression: the ordinary receiver form still works and still mints
         a request whose ``agent`` field is readable."""
         s = ReplSession()
-        result = s.eval_entry('let q = AgentCommand("echo").ask-request("hi")')
+        result = s.eval_entry(
+            'let agent: Agent = AgentCommand("echo")\nlet q = agent.ask-request("hi")'
+        )
         assert result.ok, result.diagnostics
         field = s.eval_entry("q.prompt")
         assert field.ok, field.diagnostics
@@ -2009,11 +2011,11 @@ enum Agent
         fresh = session.eval_entry('AgentCommand(command = "echo hello")')
 
         assert stale.ok, stale.diagnostics
-        assert isinstance(stale.value_type, EnumType)
-        assert stale.value_type.name == "Agent"
+        assert isinstance(stale.value_type, RecordType)
+        assert stale.value_type.name == "AgentClaude"
         assert fresh.ok, fresh.diagnostics
-        assert isinstance(fresh.value_type, EnumType)
-        assert fresh.value_type.name == "Agent"
+        assert isinstance(fresh.value_type, RecordType)
+        assert fresh.value_type.name == "AgentCommand"
 
     def test_record_redefinition_clears_generic_metadata(self) -> None:
         s = ReplSession()
@@ -2203,7 +2205,7 @@ class TestRecursiveTypesAcrossEntries:
         assert declare.ok
 
         build = s.eval_entry(
-            "let t = Node(value = 1, left = Leaf(), right = Node(value = 2, left = Leaf(), "
+            "let t: Tree = Node(value = 1, left = Leaf(), right = Node(value = 2, left = Leaf(), "
             "right = Leaf()))"
         )
         assert build.ok
@@ -2316,7 +2318,7 @@ class TestRecursiveTypesAcrossEntries:
     def test_enum_variant_on_an_old_typed_value_survives_redeclaration(self) -> None:
         s = ReplSession()
         assert s.eval_entry("enum Color\n  | Red(shade: int)\n  | Green").ok
-        assert s.eval_entry("let old = Color::Red(shade = 1)").ok
+        assert s.eval_entry("let old: Color = Color::Red(shade = 1)").ok
         assert s.eval_entry("enum Color\n  | Blue").ok
 
         old_match = s.eval_entry("case old of\n  | Red(shade) => shade\n  | Green() => 0")
@@ -2328,6 +2330,30 @@ class TestRecursiveTypesAcrossEntries:
         assert fresh.ok, fresh.diagnostics
         assert not cross_match.ok
 
+    def test_superseded_enum_members_do_not_suggest_the_reused_enum_annotation(self) -> None:
+        """An old enum's members cannot be joined through its reused name."""
+        s = ReplSession()
+        assert s.eval_entry("enum Choice\n  | Yes\n  | No").ok
+
+        current = s.eval_entry("[Choice::Yes, Choice::No]", check_only=True)
+
+        assert not current.ok
+        assert any(
+            "annotate the literal with its enum type" in diagnostic.message.lower()
+            for diagnostic in current.diagnostics
+        )
+
+        assert s.eval_entry("let yes = Choice::Yes\nlet no = Choice::No").ok
+        assert s.eval_entry("enum Choice\n  | Maybe").ok
+
+        mismatch = s.eval_entry("[yes, no]", check_only=True)
+
+        assert not mismatch.ok
+        assert all(
+            "annotate the literal with its enum type" not in diagnostic.message.lower()
+            for diagnostic in mismatch.diagnostics
+        )
+
     def test_type_qualified_variant_pattern_names_the_newest_enum_declaration(self) -> None:
         """A qualifier is a type name, so it names the newest declaration.
 
@@ -2338,12 +2364,12 @@ class TestRecursiveTypesAcrossEntries:
         """
         s = ReplSession()
         assert s.eval_entry("enum E\n  | A(x: int)").ok
-        assert s.eval_entry("let old = E::A(x = 1)").ok
+        assert s.eval_entry("let old: E = E::A(x = 1)").ok
         assert s.eval_entry("enum E\n  | A(x: int)").ok
 
         bare = s.eval_entry("case old of\n  | A(x) => x")
         qualified = s.eval_entry("case old of\n  | E::A(x) => x")
-        fresh = s.eval_entry("case E::A(x = 2) of\n  | E::A(x) => x")
+        fresh = s.eval_entry("let fresh: E = E::A(x = 2)\ncase fresh of\n  | E::A(x) => x")
 
         assert bare.ok, bare.diagnostics
         assert bare.value == IntValue(1)
@@ -2584,15 +2610,13 @@ class TestTypeOf:
         s.eval_entry("enum Result\n  | Ok(value: int)\n  | Err(message: text)\n  | Unknown")
         s.eval_entry("let r = Ok(value = 1)")
 
-        assert (
-            s.type_of("r") == "enum Result\n  | Ok(value: int)\n  | Err(message: text)\n  | Unknown"
-        )
+        assert s.type_of("r") == "record Result::Ok\n  value: int"
 
     def test_type_of_resolves_prior_entry_constructor(self) -> None:
         s = ReplSession()
         assert s.eval_entry("enum Result\n  | Ok(value: int)\n  | Err(message: text)").ok
 
-        expected = "enum Result\n  | Ok(value: int)\n  | Err(message: text)"
+        expected = "record Result::Ok\n  value: int"
         assert s.type_of("Ok(value = 1)") == expected
         assert s.type_of("Result::Ok(value = 1)") == expected
 
@@ -5238,7 +5262,9 @@ class TestUnpromotedNominalDeclarationEffects:
         assert not failed.ok
 
         construct = s.eval_entry("Color::Red")
-        match = s.eval_entry("case Color::Green of\n  | Red => 0\n  | Green => 1")
+        match = s.eval_entry(
+            "let green: Color = Color::Green\ncase green of\n  | Red => 0\n  | Green => 1"
+        )
         stale_variant = s.eval_entry("Color::Blue")
 
         assert construct.ok, construct.diagnostics

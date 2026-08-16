@@ -196,11 +196,9 @@ class GenericAliasDef:
 
 @dataclass(frozen=True, slots=True)
 class ConstructorSignature:
-    """Signature for a record constructor or enum variant constructor.
+    """Signature for one record constructor.
 
-    ``owner_name``      — name of the owning record or enum type.
-    ``variant``         — variant name for enum constructors; ``None`` for
-                          record constructors.
+    ``owner_name``      — name of the record declaration.
     ``field_names``     — ordered field names accepted by the constructor.
     ``field_templates`` — field types (may contain ``TypeVarType`` nodes for
                           generic types).
@@ -209,7 +207,6 @@ class ConstructorSignature:
     """
 
     owner_name: str
-    variant: str | None
     field_names: tuple[str, ...]
     field_templates: tuple[Type, ...]
     result_template: Type
@@ -642,11 +639,8 @@ class TypeEnvironment:
         program_alias_table: Mapping[DeclKey, GenericAliasDef] | None = None,
         program_alias_keys: frozenset[DeclKey] | None = None,
         program_alias_resolver: Callable[[DeclKey, SourceSpan | None], Type | None] | None = None,
-        program_ctor_sig_table: Mapping[tuple[DeclKey, str | None], ConstructorSignature]
-        | None = None,
-        program_ctor_field_kinds_table: Mapping[
-            tuple[DeclKey, str | None], tuple[tuple[str, ParamKind], ...]
-        ]
+        program_ctor_sig_table: Mapping[DeclKey, ConstructorSignature] | None = None,
+        program_ctor_field_kinds_table: Mapping[DeclKey, tuple[tuple[str, ParamKind], ...]]
         | None = None,
         import_env: ImportEnv | None = None,
         local_scope_paths: frozenset[ScopePath] = frozenset(),
@@ -674,7 +668,7 @@ class TypeEnvironment:
         # Generic type definitions — name → GenericTypeDef.
         self._generic_types: dict[str, GenericTypeDef] = {}
         # Constructor signatures — ((module, scope path, owner), variant) → signature.
-        self._constructor_sigs: dict[tuple[DeclKey, str | None], ConstructorSignature] = {}
+        self._constructor_sigs: dict[DeclKey, ConstructorSignature] = {}
         # Alias type-params — name → tuple of type-param names.
         self._alias_type_params: dict[str, tuple[str, ...]] = {}
         # Node-id-keyed function signatures — decl_node_id → FunctionSignature.
@@ -694,12 +688,10 @@ class TypeEnvironment:
         # Constructor field-kinds registry — ((module, scope path, owner), variant)
         # → ordered (field_name, ParamKind) pairs. Populated by _TypeBuilder
         # and consumed without encoding declaration paths into strings.
-        self._constructor_field_kinds: dict[
-            tuple[DeclKey, str | None], tuple[tuple[str, ParamKind], ...]
-        ] = {}
+        self._constructor_field_kinds: dict[DeclKey, tuple[tuple[str, ParamKind], ...]] = {}
         # Cross-module constructor field-kinds table keyed by declaration identity.
         self._program_ctor_field_kinds_table: (
-            Mapping[tuple[DeclKey, str | None], tuple[tuple[str, ParamKind], ...]] | None
+            Mapping[DeclKey, tuple[tuple[str, ParamKind], ...]] | None
         ) = program_ctor_field_kinds_table
         # Program context: None in module path.
         self._program_type_table: Mapping[DeclKey, Type] | None = program_type_table
@@ -737,9 +729,9 @@ class TypeEnvironment:
             program_alias_resolver
         )
         # Cross-module constructor signatures keyed by declaration identity.
-        self._program_ctor_sig_table: (
-            Mapping[tuple[DeclKey, str | None], ConstructorSignature] | None
-        ) = program_ctor_sig_table
+        self._program_ctor_sig_table: Mapping[DeclKey, ConstructorSignature] | None = (
+            program_ctor_sig_table
+        )
         self._import_env: ImportEnv | None = import_env
         self._module_id: ModuleId = module_id
         # Scope resolution supplies every local path, including regions with no
@@ -776,14 +768,14 @@ class TypeEnvironment:
         for prelude_name, prelude_type in BUILTIN_PRELUDE_TYPES.items():
             self._types[prelude_name] = prelude_type
             if isinstance(prelude_type, RecordType):
-                self._constructor_field_kinds[((STD_CORE_ID, (), prelude_name), None)] = tuple(
+                self._constructor_field_kinds[(STD_CORE_ID, (), prelude_name)] = tuple(
                     (fname, ParamKind.STANDARD)
                     for fname in self._type_table.record_fields(prelude_type)
                 )
                 continue
             assert isinstance(prelude_type, EnumType)
-            for variant, member in self._type_table.enum_member_names(prelude_type).items():
-                self._constructor_field_kinds[((STD_CORE_ID, (), prelude_name), variant)] = tuple(
+            for member in self._type_table.enum_members(prelude_type):
+                self._constructor_field_kinds[(STD_CORE_ID, (prelude_name,), member.name)] = tuple(
                     (fname, ParamKind.STANDARD) for fname in self._type_table.record_fields(member)
                 )
         # Exception constructor field kinds are NOT pre-registered here: each
@@ -1035,30 +1027,28 @@ class TypeEnvironment:
     # --- Constructor signature registry ---
 
     @staticmethod
-    def _constructor_key(
-        module_id: ModuleId, owner_name: str, scope_path: ScopePath, variant: str | None
-    ) -> tuple[DeclKey, str | None]:
+    def _constructor_key(module_id: ModuleId, owner_name: str, scope_path: ScopePath) -> DeclKey:
         """Build a constructor key from structured owner identity.
 
         Every caller supplies the owner's bare name and its scope path
         separately, so no display spelling is ever parsed back into identity.
         """
-        return ((module_id, scope_path, owner_name), variant)
+        return (module_id, scope_path, owner_name)
 
     def register_constructor_signature(self, sig: ConstructorSignature) -> None:
         """Register a constructor signature under its result type's identity."""
         self._assert_mutable()
         result = sig.result_template
         assert isinstance(result, (RecordType, EnumType))
-        key = self._constructor_key(result.module_id, result.name, result.scope_path, sig.variant)
+        key = self._constructor_key(result.module_id, result.name, result.scope_path)
         self._constructor_sigs[key] = sig
 
     def get_constructor_signature(
-        self, owner_name: str, variant: str | None, *, scope_path: ScopePath = ()
+        self, owner_name: str, *, scope_path: ScopePath = ()
     ) -> ConstructorSignature | None:
         """Return a local constructor signature by structured owner identity."""
         return self._constructor_sigs.get(
-            self._constructor_key(self._module_id, owner_name, scope_path, variant)
+            self._constructor_key(self._module_id, owner_name, scope_path)
         )
 
     def resolve_constructor_owner_name(self, name: str) -> str | None:
@@ -2357,7 +2347,6 @@ class TypeEnvironment:
         self,
         module_id: ModuleId,
         owner_name: str,
-        variant: str | None,
         *,
         scope_path: ScopePath = (),
     ) -> ConstructorSignature | None:
@@ -2365,13 +2354,12 @@ class TypeEnvironment:
         if self._program_ctor_sig_table is None:
             return None
         return self._program_ctor_sig_table.get(
-            self._constructor_key(module_id, owner_name, scope_path, variant)
+            self._constructor_key(module_id, owner_name, scope_path)
         )
 
     def register_constructor_field_kinds(
         self,
         owner_name: str,
-        variant: str | None,
         fields: tuple[tuple[str, ParamKind], ...],
         *,
         scope_path: ScopePath = (),
@@ -2388,13 +2376,12 @@ class TypeEnvironment:
         """
         self._assert_mutable()
         owner_module_id = self._module_id if module_id is None else module_id
-        key = self._constructor_key(owner_module_id, owner_name, scope_path, variant)
+        key = self._constructor_key(owner_module_id, owner_name, scope_path)
         self._constructor_field_kinds[key] = fields
 
     def get_constructor_field_kinds(
         self,
         owner_name: str,
-        variant: str | None,
         *,
         module_id: ModuleId | None = None,
         scope_path: ScopePath = (),
@@ -2407,7 +2394,7 @@ class TypeEnvironment:
         scope is supplied structurally, exactly as for constructor signatures.
         """
         owner_module_id = self._module_id if module_id is None else module_id
-        key = self._constructor_key(owner_module_id, owner_name, scope_path, variant)
+        key = self._constructor_key(owner_module_id, owner_name, scope_path)
         result = self._constructor_field_kinds.get(key)
         if result is not None:
             return result
@@ -2416,10 +2403,7 @@ class TypeEnvironment:
         return None
 
     def get_constructor_field_kinds_for_type(
-        self,
-        typ: Type | None,
-        owner_name: str,
-        variant: str | None,
+        self, typ: Type | None, owner_name: str
     ) -> tuple[tuple[str, ParamKind], ...] | None:
         """Return field-kinds for a constructor identified by its resolved owner *typ*.
 
@@ -2435,25 +2419,21 @@ class TypeEnvironment:
         __init__``).  ``exception_field_kinds`` returns ``ParamKind.value``
         strings rather than the enum (``semantics`` may not import
         ``syntax.nodes``), so each is converted back with ``ParamKind(...)``
-        here, in the ``typecheck`` layer.  Enum variants are keyed by
-        *variant*; records are keyed under ``variant=None``.
+        here, in the ``typecheck`` layer.
         """
         if isinstance(typ, ExceptionType):
             return tuple(
                 (fname, ParamKind(kind_value))
                 for fname, kind_value in self._type_table.exception_field_kinds(typ)
             )
-        assert isinstance(typ, (RecordType, EnumType)), f"unexpected constructor owner type {typ!r}"
+        assert isinstance(typ, RecordType), f"unexpected constructor owner type {typ!r}"
         return self.get_constructor_field_kinds(
-            typ.name,
-            variant if isinstance(typ, EnumType) else None,
-            module_id=typ.module_id,
-            scope_path=typ.scope_path,
+            typ.name, module_id=typ.module_id, scope_path=typ.scope_path
         )
 
     def all_constructor_field_kinds(
         self,
-    ) -> list[tuple[tuple[DeclKey, str | None], tuple[tuple[str, ParamKind], ...]]]:
+    ) -> list[tuple[DeclKey, tuple[tuple[str, ParamKind], ...]]]:
         """Return all own-module constructor field-kind entries as (key, kinds) pairs."""
         return list(self._constructor_field_kinds.items())
 
@@ -2461,7 +2441,7 @@ class TypeEnvironment:
         """Return the own-module generic type map (name → GenericTypeDef)."""
         return self._generic_types
 
-    def all_constructor_sigs(self) -> list[tuple[tuple[DeclKey, str | None], ConstructorSignature]]:
+    def all_constructor_sigs(self) -> list[tuple[DeclKey, ConstructorSignature]]:
         """Return all own-module constructor signatures as (key, sig) pairs."""
         return list(self._constructor_sigs.items())
 
@@ -2513,12 +2493,12 @@ class TypeEnvironment:
         )
         incoming_type_names |= {
             "::".join((*scope_path, owner_name))
-            for ((module_id, scope_path, owner_name), _variant) in other._constructor_sigs
+            for (module_id, scope_path, owner_name) in other._constructor_sigs
             if module_id == self._module_id
         }
         incoming_type_names |= {
             "::".join((*scope_path, owner_name))
-            for ((module_id, scope_path, owner_name), _variant) in other._constructor_field_kinds
+            for (module_id, scope_path, owner_name) in other._constructor_field_kinds
             if module_id == self._module_id
         }
         for name in incoming_type_names:
@@ -2602,8 +2582,8 @@ class TypeEnvironment:
             if name in other._alias_type_params:
                 self._alias_type_params[name] = other._alias_type_params[name]
             for key, sig in other._constructor_sigs.items():
-                if key[0] == (other._module_id, scope_path, declared_name):
+                if key == (other._module_id, scope_path, declared_name):
                     self._constructor_sigs[key] = sig
             for key, kinds in other._constructor_field_kinds.items():
-                if key[0] == (other._module_id, scope_path, declared_name):
+                if key == (other._module_id, scope_path, declared_name):
                     self._constructor_field_kinds[key] = kinds

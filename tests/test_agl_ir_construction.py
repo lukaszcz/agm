@@ -35,6 +35,7 @@ from agm.agl.semantics.values import (
     RecordValue,
     TextValue,
 )
+from agm.agl.typecheck.env import AglTypeError
 from tests._agl_helpers import let_root_capture
 from tests.agl.ir_harness import evaluate_ir, inline_main_items, lower_inline_ir, nominal_id_for
 
@@ -211,8 +212,8 @@ def test_enum_inequality_different_variants() -> None:
     """Two enum values with different variants compare not-equal."""
     source = """\
 enum Color | Red | Blue
-let c1 = Color::Red()
-let c2 = Color::Blue()
+let c1: Color = Color::Red()
+let c2: Color = Color::Blue()
 let ne = c1 != c2
 ()
 """
@@ -422,23 +423,20 @@ let v = mk(7)
     assert v.display_name == "Option::some" and v.fields["value"] == IntValue(7)
 
 
-def test_bare_nullary_constructor_type_apply_constructs_directly() -> None:
-    """``none::[int]`` constructs the nullary value without parentheses."""
+def test_direct_nullary_constructor_type_apply_is_rejected() -> None:
+    """A member that captures no generic arguments cannot be directly applied."""
     source = """\
 enum Option[T]
   | none
   | some(value: T)
-let z = none::[int]
-()
+none::[int]
 """
-    ir = evaluate_ir(source)
-    z = ir["z"]
-    assert isinstance(z, RecordValue)
-    assert z.display_name == "Option::none" and z.fields == {}
+    with pytest.raises(AglTypeError, match="not a generic constructor"):
+        evaluate_ir(source)
 
 
-def test_qualified_constructor_type_apply_is_callable_value() -> None:
-    """``Option[int]::some`` and ``Option[int]::none`` work as values."""
+def test_owner_applied_constructor_value_is_callable_or_constructed() -> None:
+    """``Option[int]`` supplies owner arguments rather than member arguments."""
     source = """\
 enum Option[T]
   | none
@@ -454,6 +452,22 @@ let z = Option[int]::none
     assert mk.display_name == "Option::some"
     assert isinstance(ir["v"], RecordValue) and ir["v"].display_name == "Option::some"
     assert isinstance(ir["z"], RecordValue) and ir["z"].display_name == "Option::none"
+
+
+def test_owner_applied_partial_constructor_substitutes_captured_member_arguments() -> None:
+    """An enum owner can supply arguments its selected member does not capture."""
+    source = """\
+enum Outcome[T, E]
+  | ok(value: T)
+  | err(error: E)
+let make_ok = Outcome[int, text]::ok(value = ?)
+let value = make_ok(7)
+()
+"""
+    ir = evaluate_ir(source)
+    value = ir["value"]
+    assert isinstance(value, RecordValue)
+    assert value.display_name == "Outcome::ok" and value.fields["value"] == IntValue(7)
 
 
 # ---------------------------------------------------------------------------

@@ -20,7 +20,7 @@ param a
 param b
 
 program def main() -> unit =
-  let planner = AgentCommand("planner")
+  let planner: Agent = AgentCommand("planner")
   # A helper that converts a text to int, returning 0 on failure
   print(parse_int_or_zero(a))
   print(double_text_int(b))

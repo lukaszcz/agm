@@ -45,7 +45,7 @@ def test_is_matching_variant() -> None:
     """`c is Red` is True when the value is that variant."""
     source = """\
 enum Color | Red | Blue
-let c = Color::Red()
+let c: Color = Color::Red()
 let r = c is Red
 ()
 """
@@ -57,7 +57,7 @@ def test_is_non_matching_variant() -> None:
     """`c is Blue` is False when the value is a different variant."""
     source = """\
 enum Color | Red | Blue
-let c = Color::Red()
+let c: Color = Color::Red()
 let r = c is Blue
 ()
 """
@@ -69,7 +69,7 @@ def test_is_not_matching_variant() -> None:
     """`c is not Red` negates the membership test."""
     source = """\
 enum Color | Red | Blue
-let c = Color::Red()
+let c: Color = Color::Red()
 let r = c is not Red
 let s = c is not Blue
 ()
@@ -83,7 +83,7 @@ def test_is_field_carrying_variant() -> None:
     """`is` works on a value of a variant that carries fields."""
     source = """\
 enum Shape | Circle(radius: decimal) | Rectangle(w: decimal, h: decimal)
-let s = Shape::Circle(radius = 2.5)
+let s: Shape = Shape::Circle(radius = 2.5)
 let is_circle = s is Circle
 let is_rect = s is Rectangle
 ()
@@ -97,7 +97,7 @@ def test_is_qualified_variant() -> None:
     """`is` accepts a qualified variant name (Color::Red)."""
     source = """\
 enum Color | Red | Blue
-let c = Color::Blue()
+let c: Color = Color::Blue()
 let r = c is Color::Blue
 ()
 """
@@ -114,7 +114,7 @@ def test_golden_is_test_lowers_to_ir_nominal_member() -> None:
     """An `is` test lowers to a nominal member identity and negation flag."""
     source = """\
 enum Color | Red | Blue
-let c = Color::Red()
+let c: Color = Color::Red()
 let r = c is not Blue
 ()
 """

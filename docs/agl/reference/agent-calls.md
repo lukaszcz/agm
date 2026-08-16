@@ -101,7 +101,7 @@ position.
 ```agl
 program def main() -> unit =
   let command = AgentCommand("claude -p")
-  let reviewer = AgentClaude("sonnet", "medium")
+  let reviewer: Agent = AgentClaude("sonnet", "medium")
   let local = AgentCodex("o3", "high")
   let pi = AgentPi("openai", "gpt", "low")
   let review: text = ask("Review this artifact", agent = reviewer)

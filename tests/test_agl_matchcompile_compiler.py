@@ -357,7 +357,7 @@ def _diagonal_source(size: int, *, exhaustive: bool) -> str:
         "enum Subject\n"
         "  | covered(value: Vector)\n"
         "  | missing\n"
-        f"let value = missing\ncase value of\n{'\n'.join(rows)}"
+        f"let value: Subject = missing\ncase value of\n{'\n'.join(rows)}"
     )
 
 
@@ -598,7 +598,7 @@ def test_nested_missing_witness_is_structured_from_the_first_failure_path() -> N
         "enum Box\n"
         "  | box(flag: bool)\n"
         "  | empty\n"
-        "let value = box(flag = false)\n"
+        "let value: Box = box(flag = false)\n"
         "case value of | box(flag = false) => 1 | empty => 0"
     )
 
@@ -619,7 +619,7 @@ def test_nested_enum_and_boolean_signatures_can_be_exhaustive_without_default() 
         "enum Box\n"
         "  | box(flag: bool)\n"
         "  | empty\n"
-        "let value = empty\n"
+        "let value: Box = empty\n"
         "case value of\n"
         "  | box(flag = false) => 0\n"
         "  | box(flag = true) => 1\n"
@@ -801,7 +801,7 @@ def test_generated_finite_matrices_match_reference_reachability_and_failure() ->
         patterns = [row_patterns[index] for index in indices]
         source = (
             "enum Pair\n  | pair(left: bool, right: bool)\n"
-            "let value = pair(left = false, right = false)\ncase value of\n"
+            "let value: Pair = pair(left = false, right = false)\ncase value of\n"
             + "\n".join(f"  | {pattern} => {action}" for action, pattern in enumerate(patterns))
         )
         checked, case, compiled = _compile(source)
@@ -1026,7 +1026,7 @@ def test_enum_witness_uses_wildcards_for_unconstrained_fields() -> None:
         "enum Pair\n"
         "  | pair(left: bool, right: bool)\n"
         "  | empty\n"
-        "let value = empty\n"
+        "let value: Pair = empty\n"
         "case value of | empty => 0"
     )
     issue = cast(NonExhaustiveIssue, compiled.issues[0])
@@ -1548,7 +1548,7 @@ def test_module_route_blocks_only_the_variant_it_shadows(tmp_path: Path) -> None
             "entry": (
                 "import helpers/Owner\n"
                 f"{declarations}"
-                "let value = Owner::free\n"
+                "let value: Owner = Owner::free\n"
                 "case value of | Owner::free => 0\n"
             ),
         },
@@ -1574,7 +1574,7 @@ def test_module_route_blocks_only_the_variant_it_shadows(tmp_path: Path) -> None
             "entry": (
                 "import helpers/Owner\n"
                 f"{declarations}"
-                "let value = ::Owner::block\n"
+                "let value: Owner = ::Owner::block\n"
                 "case value of | ::Owner::block => 0\n"
             ),
         },
@@ -2121,7 +2121,7 @@ def test_strong_compiled_case_validator_rejects_internal_corruption() -> None:
         "enum Box\n"
         "  | box(value: int)\n"
         "  | empty\n"
-        "let value = box(value = 1)\n"
+        "let value: Box = box(value = 1)\n"
         "case value of | box(value = _ as captured) => captured"
     )
     nested_root = cast(DecisionSwitch, nested_binder_compiled.root)

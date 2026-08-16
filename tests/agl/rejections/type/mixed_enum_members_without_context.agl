@@ -1,0 +1,6 @@
+enum Tree
+  | Leaf
+  | Node(value: int)
+
+program def main() -> unit =
+  let nodes = [Leaf, Node(value = 1)]

@@ -270,7 +270,7 @@ def test_boolean_and_enum_decompositions_partition_complete_finite_domains() -> 
         "  | red\n"
         "  | green\n"
         "  | blue\n"
-        "let value = red()\n"
+        "let value: Color = red()\n"
         "case value of | red() => 1 | blue() => 2 | _ as remaining => 3"
     )
     enum_type = cast(EnumType, enum_matrix.occurrences[0].type)
@@ -403,7 +403,7 @@ def test_nested_enum_and_literal_decomposition_preserves_first_match_actions() -
         "enum Envelope\n"
         "  | wrapped(payload: Payload)\n"
         "  | empty\n"
-        "let value = wrapped(payload = number(value = 1))\n"
+        "let value: Envelope = wrapped(payload = number(value = 1))\n"
         "case value of\n"
         "  | wrapped(payload = number(value = 1)) => 1\n"
         "  | wrapped(payload = number(value = 2.5)) => 2\n"

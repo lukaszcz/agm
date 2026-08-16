@@ -2,12 +2,13 @@ program def main() -> unit =
   # Agent is ordinary enum data: constructors use both standard argument forms,
   # variants pattern-match, and JSON casts round-trip through the enum codec.
   let command: Agent = AgentCommand("echo hello")
-  let claude = AgentClaude(model = "sonnet", thinking = "medium")
-  let codex = AgentCodex("o3", "high")
-  let pi = AgentPi(provider = "openai", model = "gpt", thinking = "low")
+  let claude: Agent = AgentClaude(model = "sonnet", thinking = "medium")
+  let codex: Agent = AgentCodex("o3", "high")
+  let pi: Agent = AgentPi(provider = "openai", model = "gpt", thinking = "low")
 
   print command
-  print (claude == AgentClaude("sonnet", "medium"))
+  let same_claude: Agent = AgentClaude("sonnet", "medium")
+  print (claude == same_claude)
   print(render(codex))
   case pi of
     | AgentPi(provider, model, thinking) => print "%{provider}/%{model}/%{thinking}"

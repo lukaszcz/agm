@@ -619,6 +619,67 @@ class TypeTable:
         self._enum_members_cache.setdefault(decl_id, {})[handle] = result
         return result
 
+    def records_share_enum_membership(self, records: tuple[RecordType, ...]) -> bool:
+        """Return whether *records* belong to one currently nameable enum instantiation.
+
+        A member record captures only the enum parameters its fields use. The
+        records therefore share an enum instantiation when they belong to the
+        same current enum and their captured arguments give every shared
+        parameter the same value; parameters none of them captures may take
+        any value. Superseded enums remain available by identity for retained
+        values, but their reused name cannot annotate a new expression.
+        """
+        for enum_def in self._defs.values():
+            if enum_def.kind != "enum" or not self.is_current(enum_def):
+                continue
+            bindings: dict[str, Type] = {}
+            for record in records:
+                member = next(
+                    (
+                        candidate
+                        for candidate in enum_def.members
+                        if candidate.decl_id == record.decl_id
+                    ),
+                    None,
+                )
+                if member is None:
+                    break
+                for parameter, argument in zip(member.type_args, record.type_args, strict=True):
+                    assert isinstance(parameter, TypeVarType)
+                    previous = bindings.setdefault(parameter.name, argument)
+                    if previous != argument:
+                        break
+                else:
+                    continue
+                break
+            else:
+                return True
+        return False
+
+    def enum_owner_for_member(self, handle: RecordType) -> EnumType | None:
+        """Return the concrete enum containing *handle*, when its arguments are known."""
+        for typedef in self._defs.values():
+            if typedef.kind != "enum":
+                continue
+            member = next(
+                (item for item in typedef.members if item.decl_id == handle.decl_id), None
+            )
+            if member is None:
+                continue
+            bindings: dict[str, Type | None] = dict(
+                zip(typedef.type_params, (None,) * len(typedef.type_params))
+            )
+            for template_arg, value_arg in zip(member.type_args, handle.type_args, strict=True):
+                if isinstance(template_arg, TypeVarType):
+                    bindings[template_arg.name] = value_arg
+            args = tuple(bindings[param] for param in typedef.type_params)
+            if any(arg is None for arg in args):
+                return None
+            result = typedef.handle(tuple(arg for arg in args if arg is not None))
+            assert isinstance(result, EnumType)
+            return result
+        return None
+
     def enum_member_names(self, handle: EnumType) -> Mapping[str, RecordType]:
         """Return the terminal member-name index for one enum instantiation."""
         decl_id = handle.decl_id
@@ -1368,10 +1429,17 @@ def is_assignable_in(table: TypeTable, value_type: Type, target_type: Type) -> b
     """
     if is_assignable(value_type, target_type):
         return True
-    return (
+    if (
         isinstance(value_type, RecordType)
         and isinstance(target_type, EnumType)
-        and (value_type in table.enum_members(target_type))
+        and value_type in table.enum_members(target_type)
+    ):
+        return True
+    return (
+        isinstance(value_type, FunctionType)
+        and isinstance(target_type, FunctionType)
+        and value_type.params == target_type.params
+        and is_assignable_in(table, value_type.result, target_type.result)
     )
 
 

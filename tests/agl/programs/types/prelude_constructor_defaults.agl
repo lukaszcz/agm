@@ -4,7 +4,7 @@ param retries: int
 
 program def main() -> unit =
   let result = ExecResult("out", exit_code, "err", false)
-  let policy = ParsePolicy::Retry(retries)
+  let policy: ParsePolicy = ParsePolicy::Retry(retries)
 
   print result.stdout
   print result.exit_code

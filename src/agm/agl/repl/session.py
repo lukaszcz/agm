@@ -25,6 +25,7 @@ from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.repl.entry import EntryKind, EntryResult
 from agm.agl.repl.entry_pipeline import EntryPipeline
 from agm.agl.runtime.types import public_param_spelling
+from agm.agl.scope.symbols import dedupe_constructor_candidates
 from agm.agl.self_validation import self_validation_enabled
 from agm.config.engine_keys import HOST_CONSUMED_ENGINE_KEYS
 
@@ -1002,6 +1003,7 @@ class ReplSession:
             for item in entry_type_items
             if item.node_id in promoted_declaration_ids
         )
+        replaced_type_name_paths = promoted_type_name_paths if partial else entry_type_name_paths
         unpromoted_type_name_paths = entry_type_name_paths - promoted_type_name_paths
         unpromoted_type_scope_paths = frozenset(
             (*path, name) for path, name in unpromoted_type_name_paths
@@ -1032,8 +1034,30 @@ class ReplSession:
             for name in self._type_env.all_declared_type_names()
             if is_unpromoted_type_scope(tuple(name.split("::")))
         )
-        if promoted_type_name_paths:
-            # A promoted type declaration supersedes any earlier ambient
+        replaced_enum_type_scopes = frozenset(
+            (*tuple(segment.name for segment in item.scope_path), item.name)
+            for item in entry_type_items
+            if isinstance(item, EnumDef) and type_name_path(item) in replaced_type_name_paths
+        )
+        if replaced_enum_type_scopes:
+            # An enum replacement owns fresh member scopes. Remove its old
+            # subtree so retained local opens cannot inject a superseded
+            # member by its bare name.
+            for scope_path in tuple(self._session_scope_nodes):
+                if any(
+                    scope_path[: len(type_scope)] == type_scope
+                    for type_scope in replaced_enum_type_scopes
+                ):
+                    del self._session_scope_nodes[scope_path]
+            for type_path in tuple(self._session_type_paths):
+                if any(
+                    type_path[: len(type_scope)] == type_scope
+                    for type_scope in replaced_enum_type_scopes
+                ):
+                    del self._session_type_paths[type_path]
+
+        if replaced_type_name_paths:
+            # A replacement type declaration supersedes any earlier ambient
             # constructor candidate sharing its name path: retained bindings
             # and scope members keep resolving through their own (possibly
             # superseded) declaration identity, so only the ambient bare-name
@@ -1043,7 +1067,11 @@ class ReplSession:
                 cname: tuple(
                     ref
                     for ref in crefs
-                    if (ref.owner_path, ref.owner_name) not in promoted_type_name_paths
+                    if (ref.owner_path, ref.owner_name) not in replaced_type_name_paths
+                    and not any(
+                        ref.owner_path[: len(type_scope)] == type_scope
+                        for type_scope in replaced_enum_type_scopes
+                    )
                 )
                 for cname, crefs in self._ambient_constructor_candidates.items()
             }
@@ -1139,20 +1167,20 @@ class ReplSession:
             new_type_env.seal()
             self._type_env = new_type_env
 
-        if promoted_type_name_paths:
+        if replaced_type_name_paths:
             promoted_candidates: dict[str, tuple[ConstructorRef, ...]] = {}
             for (_path, cname), crefs in checked.resolved.constructor_candidates_by_path.items():
                 selected = tuple(
                     ref
                     for ref in crefs
-                    if (ref.owner_path, ref.owner_name) in promoted_type_name_paths
+                    if (ref.owner_path, ref.owner_name) in replaced_type_name_paths
+                    or ref.owner_path in replaced_enum_type_scopes
                 )
                 if selected:
                     promoted_candidates[cname] = (*promoted_candidates.get(cname, ()), *selected)
             for cname, crefs in promoted_candidates.items():
-                self._ambient_constructor_candidates[cname] = (
-                    *self._ambient_constructor_candidates.get(cname, ()),
-                    *crefs,
+                self._ambient_constructor_candidates[cname] = dedupe_constructor_candidates(
+                    (*self._ambient_constructor_candidates.get(cname, ()), *crefs)
                 )
             self._ambient_type_names |= frozenset(
                 name for path, name in promoted_type_name_paths if not path

@@ -1,7 +1,7 @@
 # Bare constructors as function values with explicit type arguments.
-# `some::[int]` is a function value equivalent to `fn (x: int) => some(x)`;
-# `none::[int]` constructs the nullary value directly, with no parentheses.
-# The qualified `Option[int]::some` / `Option[int]::none` forms behave the same.
+# `some::[int]` is a function value equivalent to `fn (x: int) => some(x)`.
+# A nullary member captures no type arguments, so it is applied through its owner.
+# The qualified `Option[int]::some` / `Option[int]::none` forms supply owner arguments.
 enum Option[T]
   | none
   | some(value: T)
@@ -12,8 +12,8 @@ program def main() -> unit =
   let mk: int -> Option[int] = some::[int]
   let v = mk(7)
 
-  # A nullary constructor pinned with `::[int]` constructs directly.
-  let z: Option[int] = none::[int]
+  # Applying the enum owner constructs a nullary member directly.
+  let z: Option[int] = Option[int]::none
 
   # The qualified forms work the same way.
   let qmk: int -> Option[int] = Option[int]::some

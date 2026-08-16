@@ -393,7 +393,7 @@ class TestOpenImport:
         variant's, so the candidate must be recovered from the cross-module
         constructor-ref table instead.  It is exposed at the importing
         module's root under its alias, and must still carry the owning enum's
-        name, the selected variant, and the enum's named scope.
+        selected member record's name and enum-qualified scope.
         """
         graph = _make_graph_from_files(
             tmp_path,
@@ -405,9 +405,8 @@ class TestOpenImport:
         result = resolve_program(graph)
         entry_resolved = result.modules[ENTRY_ID].resolved
         (candidate,) = entry_resolved.constructor_candidates_by_path[((), "X")]
-        assert candidate.owner_name == "Status"
-        assert candidate.variant == "Good"
-        assert candidate.owner_path == ("A",)
+        assert candidate.owner_name == "Good"
+        assert candidate.owner_path == ("A", "Status")
 
     def test_qualified_import_prevents_bare_access(self, tmp_path: Path) -> None:
         """'import mylib qualified' — bare 'foo' should error."""
@@ -1510,9 +1509,7 @@ class TestWildcardImports:
         with pytest.raises(AglScopeError, match="both a type name and a module route"):
             resolve_program(graph)
 
-    def test_type_owner_constructor_compatibility_paths_remain_available(
-        self, tmp_path: Path
-    ) -> None:
+    def test_type_owner_constructor_compatibility_paths_are_rejected(self, tmp_path: Path) -> None:
         self_qualified = _make_graph_from_files(
             tmp_path,
             {
@@ -1520,9 +1517,8 @@ class TestWildcardImports:
                 "lib": "def ignored() -> int = 1",
             },
         )
-        resolved = resolve_program(self_qualified)
-        entry = resolved.modules[ENTRY_ID].resolved
-        assert entry.constructor_refs
+        with pytest.raises(AglScopeError, match="does not exist"):
+            resolve_program(self_qualified)
 
         clashing_route = _make_graph_from_files(
             tmp_path,
@@ -1551,6 +1547,22 @@ class TestWildcardImports:
         assert alpha_var is not None
         ref = result.modules[ENTRY_ID].resolved.resolution[alpha_var.node_id]
         assert ref.module_id == ModuleId.from_path("foo/alpha")
+
+    def test_overlapping_open_imports_dedupe_member_constructor_candidates(
+        self, tmp_path: Path
+    ) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "open import foo/*\nopen import foo/alpha\nlet x = Ready()",
+                "foo/alpha": "enum State\n  | Ready",
+            },
+        )
+        result = resolve_program(graph)
+        entry = result.modules[ENTRY_ID].resolved
+        (candidate,) = entry.constructor_candidates["Ready"]
+        assert candidate.owner_path == ("State",)
+        assert candidate.owner_name == "Ready"
 
     def test_wildcard_conflicting_overlap_clashes_on_use(self, tmp_path: Path) -> None:
         """Two wildcards expose same bare name from different modules → clash on use."""
@@ -2155,13 +2167,12 @@ class TestExceptionDefInGraph:
         result = resolve_program(graph)
         entry_resolved = result.modules[ENTRY_ID].resolved
         # "Conflict" must exist in constructor_candidates and must refer to the
-        # ExceptionDef (variant=None), NOT to the enum variant (variant="Conflict").
+        # ExceptionDef, NOT to the enum member record named "Conflict".
         assert "Conflict" in entry_resolved.constructor_candidates
         candidates = entry_resolved.constructor_candidates["Conflict"]
-        # The exception's constructor ref has variant=None (record-like).
-        assert all(c.variant is None for c in candidates), (
-            "Enum variant 'Conflict' should have been skipped; only the ExceptionDef "
-            f"candidate (variant=None) should remain. Got: {candidates}"
+        assert all(c.owner_name == "Conflict" and c.owner_path == () for c in candidates), (
+            "Enum member 'Conflict' should have been skipped; only the ExceptionDef "
+            f"candidate should remain. Got: {candidates}"
         )
 
 
@@ -2630,6 +2641,7 @@ def test_bare_pattern_constructor_shared_spelling_defers_to_scrutinee(tmp_path: 
     assert isinstance(case, Case)
     pattern = case.branches[0].pattern
     candidate_owners = {
-        ref.owner_name for ref in entry.resolved.pattern_constructor_candidates[pattern.node_id]
+        (ref.owner_path, ref.owner_name)
+        for ref in entry.resolved.pattern_constructor_candidates[pattern.node_id]
     }
-    assert candidate_owners == {"Local", "Foreign"}
+    assert candidate_owners == {(("Local",), "same"), (("Foreign",), "same")}

@@ -395,7 +395,8 @@ def test_encode_bytes_are_preserved_across_mocked_agent_and_ffi_boundaries(
 def test_lowered_json_cast_preserves_legacy_bytes_for_a_recursive_enum() -> None:
     result = evaluate_ir(
         "enum Tree | Leaf | Node(children: array[Tree])\n"
-        "let encoded = Tree::Node(children = [Tree::Leaf, Tree::Node(children = [])]) as json\n"
+        "let tree: Tree = Tree::Node(children = [Tree::Leaf, Tree::Node(children = [])])\n"
+        "let encoded = tree as json\n"
         "()\n"
     )
 

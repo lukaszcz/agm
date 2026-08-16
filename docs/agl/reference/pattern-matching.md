@@ -323,7 +323,7 @@ enum Response
   | Complete
   | Rejected
 program def main() -> unit =
-  let response = Complete
+  let response: Response = Complete
   let _ = case response of
     | Complete => response
     | _ =>

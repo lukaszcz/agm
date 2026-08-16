@@ -227,47 +227,49 @@ def duplicate_binder_message(name: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class ConstructorRef:
-    """A resolved constructor reference's owner metadata.
+    """A resolved constructor reference's canonical record metadata.
 
-    ``owner_name``
-        The record or enum TYPE name.
-    ``variant``
-        The enum variant name; ``None`` for a record constructor.
-    ``owner_decl_node_id``
-        The ``node_id`` of the ``RecordDef`` / ``EnumDef`` that declares this
-        constructor.
-    ``type_params``
-        The owner's declared type parameters (empty tuple if non-generic).
-    ``owner_module_id``
-        Semantic owner module, retained so same-named constructors from
-        different modules remain distinguishable in resolver side tables.
-    ``can_match_bare_pattern``
-        Whether a bare pattern name can directly match this candidate. This is
-        true precisely for a known nullary enum variant, and is retained for
-        scope's field-directed duplicate-binder decision.
+    ``owner_name`` and ``owner_path`` identify the record declaration that
+    construction produces. Inline enum members use their true scoped record
+    path (``Enum::Member``), while standalone records use their declaration
+    path. ``owner_decl_node_id`` is that record's nominal identity, including
+    the canonical identity of a seeded builtin member.
     """
 
     owner_name: str
-    variant: str | None
     owner_decl_node_id: int
     type_params: tuple[str, ...]
     owner_module_id: ModuleId = ENTRY_ID
     can_match_bare_pattern: bool = False
     owner_path: ScopePath = ()
+    is_builtin: bool = False
 
-    def matches(self, enum_type: EnumType, variant: str) -> bool:
-        """Whether this reference denotes *variant* of *enum_type*.
-
-        Constructor identity is structured: same-named constructors from
-        different modules or scope paths are distinct, so module, owner path,
-        enum name, and variant spelling must all agree.
-        """
+    def matches(self, enum_type: EnumType, member_name: str) -> bool:
+        """Whether this reference denotes *member_name* of *enum_type*."""
         return (
             self.owner_module_id == enum_type.module_id
-            and self.owner_path == enum_type.scope_path
-            and self.owner_name == enum_type.name
-            and self.variant == variant
+            and self.owner_path == (*enum_type.scope_path, enum_type.name)
+            and self.owner_name == member_name
         )
+
+
+def dedupe_constructor_candidates(
+    candidates: Iterable[ConstructorRef],
+) -> tuple[ConstructorRef, ...]:
+    """Keep the first injected candidate for each member declaration id.
+
+    Parser node ids are session-unique in production. Test REPL entries may
+    restart their parser's counter, so an id collision only denotes the same
+    declaration when its canonical metadata agrees as well.
+    """
+    seen: dict[int, ConstructorRef] = {}
+    unique: list[ConstructorRef] = []
+    for candidate in candidates:
+        previous = seen.get(candidate.owner_decl_node_id)
+        if previous != candidate:
+            seen[candidate.owner_decl_node_id] = candidate
+            unique.append(candidate)
+    return tuple(unique)
 
 
 def alias_denotes_constructible_type(

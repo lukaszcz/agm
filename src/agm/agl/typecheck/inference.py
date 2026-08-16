@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from agm.agl.diagnostics import AglError
-from agm.agl.semantics.type_table import TypeTable, is_assignable_in
+from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import (
     ArrayType,
     BottomType,
@@ -158,13 +158,24 @@ class InferenceEngine:
 
     def unify(self, left: Type, right: Type, origin: ConstraintOrigin) -> None:
         """Unify exactly, except for the limited record-member-to-rigid-enum conversion."""
-        if (
-            self._type_table is not None
-            and isinstance(right, EnumType)
-            and not contains_inference_var(right)
-            and is_assignable_in(self._type_table, self.zonk(left), right)
-        ):
-            return
+        if self._type_table is not None:
+            zonked_left = self.zonk(left)
+            zonked_right = self.zonk(right)
+            if isinstance(zonked_left, RecordType) and isinstance(zonked_right, EnumType):
+                member = next(
+                    (
+                        candidate
+                        for candidate in self._type_table.enum_members(zonked_right)
+                        if candidate.decl_id == zonked_left.decl_id
+                    ),
+                    None,
+                )
+                if member is not None:
+                    for value_arg, member_arg in zip(
+                        zonked_left.type_args, member.type_args, strict=True
+                    ):
+                        self.unify(value_arg, member_arg, origin)
+                    return
         self._unify(left, right, origin, ())
 
     def complete_from_context(
@@ -354,6 +365,21 @@ class InferenceEngine:
             if _same_nominal_declaration(inferred, context):
                 self._complete_nominal_args(inferred.type_args, context.type_args, origin)
             return
+        if self._type_table is not None:
+            for value, target in ((inferred, context), (context, inferred)):
+                if not (isinstance(value, RecordType) and isinstance(target, EnumType)):
+                    continue
+                member = next(
+                    (
+                        candidate
+                        for candidate in self._type_table.enum_members(target)
+                        if candidate.decl_id == value.decl_id
+                    ),
+                    None,
+                )
+                if member is not None:
+                    self._complete_nominal_args(value.type_args, member.type_args, origin)
+                return
 
     def _complete_nominal_args(
         self,

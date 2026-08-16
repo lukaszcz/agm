@@ -36,9 +36,9 @@ program def main() -> unit =
   print n2.y
 
   # Unmarked enum payload: positional construction
-  let ok1 = Ok(base)
-  let ok2 = Ok(value = base + 10)
-  let err = Err(reason = "bad", fatal = false)
+  let ok1: Result = Ok(base)
+  let ok2: Result = Ok(value = base + 10)
+  let err: Result = Err(reason = "bad", fatal = false)
   case ok1 of
     | Ok(value) => print value
     | Err(reason, fatal) => print "err"

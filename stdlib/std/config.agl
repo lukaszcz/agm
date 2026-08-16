@@ -2,7 +2,7 @@ import std/core using Option, Agent
 
 builtin var default-agent: Agent = AgentClaude("sonnet", "medium")
 builtin var log: bool = false
-builtin var log-file: Option[text] = Option[text]::None
+builtin var log-file: Option[text] = None
 builtin var strict-json: bool = false
 builtin var max-iters: int = 0
-builtin var timeout: Option[text] = Option[text]::None
+builtin var timeout: Option[text] = None

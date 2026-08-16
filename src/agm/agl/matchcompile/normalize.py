@@ -105,10 +105,10 @@ def resolve_bare_enum_constructors(
     pattern rule. Ordinary value bindings do not hide these pattern forms.
     """
     return frozenset(
-        (candidate.owner_module_id, candidate.owner_name, candidate.variant)
+        (candidate.owner_module_id, candidate.owner_path[-1], candidate.owner_name)
         for candidates in checked.resolved.constructor_candidates.values()
         for candidate in candidates
-        if candidate.variant is not None
+        if candidate.owner_path
     )
 
 
@@ -376,31 +376,31 @@ def normalize_pattern(
                 raise MatchCompileInvariantError(
                     "missing final constructor classification for bare pattern"
                 )
-            if not isinstance(subject_type, EnumType):
-                raise MatchCompileInvariantError(
-                    "final bare constructor has a non-enum checked type"
+            if isinstance(subject_type, EnumType):
+                if (
+                    constructor_ref.owner_name != name
+                    or constructor_ref.owner_module_id != subject_type.module_id
+                    or constructor_ref.owner_path != (*subject_type.scope_path, subject_type.name)
+                ):
+                    raise MatchCompileInvariantError("invalid final constructor classification")
+                constructor = enum_constructor(
+                    subject_type,
+                    name,
+                    checked.type_env.type_table,
                 )
-            if (
-                constructor_ref.variant != name
-                or constructor_ref.owner_name != subject_type.name
-                or constructor_ref.owner_module_id != subject_type.module_id
-                or constructor_ref.owner_path != subject_type.scope_path
-            ):
-                raise MatchCompileInvariantError("invalid final constructor classification")
-            constructor = enum_constructor(
-                EnumType(
-                    constructor_ref.owner_name,
-                    subject_type.type_args,
-                    constructor_ref.owner_module_id,
-                    constructor_ref.owner_path,
-                    decl_id=subject_type.decl_id,
-                ),
-                name,
-                checked.type_env.type_table,
-            )
-            members = checked.type_env.type_table.enum_members(subject_type)
-            if constructor.record_type not in members or constructor.arity != 0:
-                raise MatchCompileInvariantError("invalid final bare constructor classification")
+                members = checked.type_env.type_table.enum_members(subject_type)
+                if constructor.record_type not in members or constructor.arity != 0:
+                    raise MatchCompileInvariantError(
+                        "invalid final bare constructor classification"
+                    )
+                return ConstructorCell(constructor, (), provenance)
+            if not isinstance(subject_type, RecordType):
+                raise MatchCompileInvariantError(
+                    "final bare constructor has a non-enum or record checked type"
+                )
+            assert constructor_ref.owner_decl_node_id == subject_type.decl_id
+            constructor = record_constructor(subject_type, checked.type_env.type_table)
+            assert constructor.arity == 0
             return ConstructorCell(constructor, (), provenance)
         case LiteralPattern():
             return ConstructorCell(
@@ -421,7 +421,22 @@ def normalize_pattern(
             # Compare checker-published nominal identity; normalization does not
             # re-select the constructor from scope candidates.
             selected_owner = checked.pattern_constructor_owner_for(pattern.node_id)
-            if selected_owner is None or selected_owner.value != subject_type.decl_id:
+            try:
+                expected_owner = (
+                    checked.type_env.type_table.enum_member_names(subject_type)[variant].decl_id
+                    if isinstance(subject_type, EnumType)
+                    else subject_type.decl_id
+                )
+            except AssertionError as exc:
+                raise MatchCompileInvariantError("cannot resolve enum signature") from exc
+            except KeyError as exc:
+                message = (
+                    "cannot resolve enum signature"
+                    if "no TypeDef registered" in str(exc)
+                    else "unknown variant in checked constructor metadata"
+                )
+                raise MatchCompileInvariantError(message) from exc
+            if selected_owner is None or selected_owner.value != expected_owner:
                 raise MatchCompileInvariantError(
                     "invalid final constructor classification: published nominal owner disagrees "
                     "with the checked occurrence type"
@@ -430,7 +445,7 @@ def normalize_pattern(
                 nominal_constructor: FieldBearingNominalConstructor = enum_constructor(
                     subject_type, variant, checked.type_env.type_table
                 )
-                if constructor_ref.variant != variant:
+                if constructor_ref.owner_name != variant:
                     raise MatchCompileInvariantError("invalid final constructor classification")
             else:
                 nominal_constructor = record_constructor(subject_type, checked.type_env.type_table)

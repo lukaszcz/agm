@@ -325,7 +325,8 @@ def test_golden_finite_scalar_json_cast_uses_a_static_plan() -> None:
 
 def test_golden_finite_recursive_json_cast_uses_a_static_plan() -> None:
     value = _bound_value(
-        "enum Tree | Leaf | Node(children: array[Tree])\nlet x = Tree::Leaf as json\n()\n",
+        "enum Tree | Leaf | Node(children: array[Tree])\n"
+        "let tree: Tree = Tree::Leaf\nlet x = tree as json\n()\n",
         "x",
     )
     assert isinstance(value, IrConvert)

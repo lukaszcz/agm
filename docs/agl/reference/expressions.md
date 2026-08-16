@@ -165,8 +165,13 @@ Qualified or unqualified:
 Review::Pass
 Review::Fail(issues = ["missing tests"])
 
-let review: Review = Pass           # resolved by expected type
+let review: Review = Pass           # checked in an enum-typed slot
 ```
+
+A member constructor produces its own scoped record type. Assign it to an enum
+slot to widen it: `let pass = Pass` has type `Review::Pass`, while the annotated
+binding above has type `Review`. This is a directed check, not common-type
+inference: annotate a mixed member literal such as `array[Review]` explicitly.
 
 An unqualified variant name resolves when the expected type is an enum
 containing it, or when exactly one declared enum has a variant of that name.

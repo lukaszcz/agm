@@ -259,7 +259,7 @@ def test_record_and_enum_constructor_spelling_collision_is_scrutinee_directed() 
     assert isinstance(pattern, ConstructorPattern)
     selected = checked.pattern_constructor_ref_for(pattern.node_id)
     assert selected is not None
-    assert selected.variant is None
+    assert selected.owner_name == "Token"
 
 
 @pytest.mark.parametrize(
@@ -389,7 +389,7 @@ def test_self_qualified_pattern_reaches_a_prelude_constructor() -> None:
     assert isinstance(pattern, ConstructorPattern)
     selected = checked.pattern_constructor_ref_for(pattern.node_id)
     assert selected is not None
-    assert selected.variant == "Retry"
+    assert selected.owner_name == "Retry"
 
 
 def test_route_qualified_pattern_naming_a_non_constructor_is_rejected(tmp_path: Path) -> None:

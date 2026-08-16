@@ -735,6 +735,99 @@ def test_use_rejects_ambiguous_scopes_exposed_by_earlier_uses(tmp_path: Path) ->
         resolve_program(graph)
 
 
+def test_use_can_target_imported_scope_exposed_by_an_earlier_use(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": ("import library\nuse library::Outer::*\nuse Inner::*\nmember()\n"),
+            "library": (
+                "scope Outer\nscope Inner\ndef member() -> int = 1\nend Inner\nend Outer\n"
+            ),
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_use_can_target_renamed_nested_imported_scope_exposed_by_an_earlier_use(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import library\n"
+                "use library::Outer::{Inner::Nested as Selected}\n"
+                "use Selected::*\n"
+                "member()\n"
+            ),
+            "library": (
+                "scope Outer\n"
+                "scope Inner\n"
+                "scope Nested\n"
+                "def member() -> int = 1\n"
+                "end Nested\n"
+                "end Inner\n"
+                "end Outer\n"
+            ),
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_use_cannot_target_imported_scope_hidden_by_an_earlier_use(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": ("import library\nuse library::Outer::* hiding Inner\nuse Inner::*\n"),
+            "library": (
+                "scope Outer\nscope Inner\ndef member() -> int = 1\nend Inner\nend Outer\n"
+            ),
+        },
+    )
+
+    with pytest.raises(AglScopeError, match="not nameable"):
+        resolve_program(graph)
+
+
+def test_use_rejects_ambiguous_imported_scopes_exposed_by_earlier_uses(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import left\n"
+                "import right\n"
+                "use left::Outer::*\n"
+                "use right::Outer::*\n"
+                "use Shared::*\n"
+            ),
+            "left": ("scope Outer\nscope Shared\ndef left() -> int = 1\nend Shared\nend Outer\n"),
+            "right": ("scope Outer\nscope Shared\ndef right() -> int = 2\nend Shared\nend Outer\n"),
+        },
+    )
+
+    with pytest.raises(AglScopeError, match="ambiguous across imported modules"):
+        resolve_program(graph)
+
+
+def test_use_rejects_ordinary_imported_member_exposed_by_an_earlier_use(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": ("import library\nuse library::Outer::*\nuse member::*\n"),
+            "library": "scope Outer\ndef member() -> int = 1\nend Outer\n",
+        },
+    )
+
+    with pytest.raises(AglScopeError, match="not nameable"):
+        resolve_program(graph)
+
+
 def test_use_imported_nested_scope_selects_its_relative_public_subtree(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,

@@ -122,13 +122,19 @@ program def main() -> unit =
 
 An explicit `/` anchors a module route, and a leading `::` anchors a local
 scope path. Without an anchor, a target can be resolved through a local scope
-or an already-bare imported scope; ambiguity is a static error.
+or an already-bare imported scope; ambiguity is a static error. A named scope exposed by one
+`use` is already bare and can therefore be the target of a later `use`. Selection, renaming, and
+hiding determine which nested scope paths the later declaration can target.
 
 <!-- agl-check: fragment -->
 ```agl
 import geo/shapes
 use geo/shapes::Point::{distance as point-distance}
 use /geo/shapes::Point::* hiding internal-distance
+
+import library
+use library::Outer::{Inner as Selected}
+use Selected::*
 ```
 
 ## Imports and `use` inside a scope region

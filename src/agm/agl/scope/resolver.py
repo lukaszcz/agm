@@ -200,6 +200,15 @@ _LET_PATTERN_POLICY = _PatternResolutionPolicy(
     root_bare_binds=True, binder_kind=BinderKind.let_binding
 )
 
+
+@dataclass(frozen=True, slots=True)
+class _ImportedUseContribution:
+    """One imported surface exposed by a resolved ``use`` in a lexical region."""
+
+    members: Mapping[NameAtom, QName]
+    scope_routes: Mapping[NameAtom, BareRoute]
+
+
 # Built-in call names: recognised in call position, not bindable as values.
 # Sourced from ``symbols.BUILTIN_CALL_NAMES`` (the single source of truth).
 _BUILTIN_CALL_NAMES = BUILTIN_CALL_NAMES
@@ -349,6 +358,7 @@ class _Resolver:
         self._resolution: dict[int, BindingRef] = {}
         self._builtin_calls: dict[int, BuiltinKind] = {}
         self._use_targets: dict[int, ResolvedUseTarget] = {}
+        self._imported_use_contributions: dict[int, list[_ImportedUseContribution]] = {}
         # Scope stack — top is the current scope.
         self._scope: ScopeNode | None = None
         # The module's root ScopeNode (set in run()); used by _lookup_own_root
@@ -1733,8 +1743,15 @@ class _Resolver:
             )
             is not None
         )
+        direct_import_scope_routes = {
+            imported_route: self._relative_use_import_scope_routes(
+                direct_scope_paths[imported_route[0]], imported_route
+            )
+            for imported_route, _members in direct_imports
+        }
         bare_imports = () if decl.anchored else self._bare_use_import_targets(target)
-        imported = self._merge_use_import_targets(direct_imports, bare_imports)
+        used_imports = () if decl.anchored else self._used_import_targets(target)
+        imported = self._merge_use_import_targets(direct_imports, bare_imports, used_imports)
         direct_routes = {imported_route for imported_route, _members in direct_imports}
         shared_alias_facade = (
             not decl.anchored
@@ -1793,12 +1810,21 @@ class _Resolver:
                 imported_routes=tuple(route for route, _members in direct_imports)
             )
             self._contribute_use_facade_members(
-                decl, tuple(members for _route, members in direct_imports)
+                decl,
+                tuple(members for _route, members in direct_imports),
+                tuple(direct_import_scope_routes[route] for route, _members in direct_imports),
             )
             return
         imported_route, imported_members = imported[0]
+        if imported_route in direct_import_scope_routes:
+            imported_scope_routes = direct_import_scope_routes[imported_route]
+        else:
+            imported_scope_routes = {
+                **self._bare_use_import_scope_routes(target, imported_route),
+                **self._used_import_scope_routes(target, imported_route),
+            }
         self._use_targets[decl.node_id] = ResolvedUseTarget(imported_routes=(imported_route,))
-        self._contribute_use_members(decl, imported_members)
+        self._contribute_use_members(decl, imported_members, imported_scope_routes)
 
     def _reinterpret_single_member_use_alias(self, decl: UseDecl) -> UseDecl:
         """Disambiguate ``use Scope::member as Alias`` from a whole-target alias."""
@@ -1863,6 +1889,21 @@ class _Resolver:
         return relative_members if exists else None
 
     @staticmethod
+    def _relative_use_import_scope_routes(
+        scope_paths: Collection[NameAtom], imported_route: BareRoute
+    ) -> dict[NameAtom, BareRoute]:
+        """Return a target's scope identities under target-relative spellings."""
+        module, target = imported_route
+        relative_routes: dict[NameAtom, BareRoute] = {(): imported_route}
+        for atom in scope_paths:
+            path = _bare_path(atom)
+            if path[: len(target)] != target:
+                continue
+            relative = path[len(target) :]
+            relative_routes[_bare_atom(relative)] = (module, path)
+        return relative_routes
+
+    @staticmethod
     def _render_use_module_target(module: ModuleId, target: ScopePath) -> str:
         """Render an anchored, reachable module reading of a use target."""
         suffix = "" if not target else f"::{'::'.join(target)}"
@@ -1925,6 +1966,76 @@ class _Resolver:
             (imported_route, members_by_route[imported_route])
             for imported_route in sorted(members_by_route, key=_bare_route_sort_key)
         )
+
+    def _bare_use_import_scope_routes(
+        self, target: ScopePath, imported_route: BareRoute
+    ) -> dict[NameAtom, BareRoute]:
+        """Return scope identities supplied by raw bare import contributions."""
+        result: dict[NameAtom, BareRoute] = {}
+        provenances = (
+            self._import_env.unqualified_scope_routes,
+            *self._reachable_decl_bare_scope_routes(
+                self._import_env, self._current_scope().scope_path
+            ),
+        )
+        for routes_by_atom in provenances:
+            for atom, routes in routes_by_atom.items():
+                path = _bare_path(atom)
+                if path[: len(target)] != target:
+                    continue
+                relative = path[len(target) :]
+                for module, source in routes:
+                    source_root = source[: len(source) - len(relative)] if relative else source
+                    if (module, source_root) == imported_route:
+                        result[_bare_atom(relative)] = (module, source)
+        return result
+
+    def _used_import_targets(
+        self, target: ScopePath
+    ) -> tuple[tuple[BareRoute, Mapping[NameAtom, QName]], ...]:
+        """Find imported scopes exposed by an earlier ``use`` in the nearest region."""
+        layer: ScopeNode | None = self._current_scope()
+        exposed_target = _bare_atom(target)
+        while layer is not None:
+            candidates: list[tuple[BareRoute, Mapping[NameAtom, QName]]] = []
+            for contribution in self._imported_use_contributions.get(layer.node_id, ()):
+                imported_route = contribution.scope_routes.get(exposed_target)
+                if imported_route is None:
+                    continue
+                members = {
+                    _bare_atom(path[len(target) :]): qname
+                    for atom, qname in contribution.members.items()
+                    if (path := _bare_path(atom))[: len(target)] == target
+                    and len(path) > len(target)
+                }
+                candidates.append((imported_route, members))
+            if candidates:
+                return self._merge_use_import_targets(tuple(candidates))
+            layer = layer.parent
+        return ()
+
+    def _used_import_scope_routes(
+        self, target: ScopePath, imported_route: BareRoute
+    ) -> dict[NameAtom, BareRoute]:
+        """Return relative identities from the earlier use that exposed *target*."""
+        layer: ScopeNode | None = self._current_scope()
+        exposed_target = _bare_atom(target)
+        while layer is not None:
+            contributions = self._imported_use_contributions.get(layer.node_id, ())
+            matching = [
+                contribution
+                for contribution in contributions
+                if contribution.scope_routes.get(exposed_target) == imported_route
+            ]
+            if matching:
+                return {
+                    _bare_atom(path[len(target) :]): source
+                    for contribution in matching
+                    for atom, source in contribution.scope_routes.items()
+                    if (path := _bare_path(atom))[: len(target)] == target
+                }
+            layer = layer.parent
+        return {}
 
     @staticmethod
     def _merge_use_import_targets(
@@ -2043,24 +2154,46 @@ class _Resolver:
                     contribute(exposed, source)
 
     def _contribute_use_facade_members(
-        self, decl: UseDecl, member_maps: tuple[Mapping[NameAtom, QName], ...]
+        self,
+        decl: UseDecl,
+        member_maps: tuple[Mapping[NameAtom, QName], ...],
+        scope_route_maps: tuple[Mapping[NameAtom, BareRoute], ...],
     ) -> None:
         """Contribute one shared alias facade while retaining cross-module clashes."""
         combined = {atom: qname for members in member_maps for atom, qname in members.items()}
-        self._select_use_members(decl, combined)
-        for members in member_maps:
-            self._contribute_use_members(decl, members, validate=False)
+        combined_scope_routes = {
+            atom: route for routes in scope_route_maps for atom, route in routes.items()
+        }
+        self._select_use_members(decl, {**combined_scope_routes, **combined})
+        for members, scope_routes in zip(member_maps, scope_route_maps, strict=True):
+            self._contribute_use_members(decl, members, scope_routes, validate=False)
 
     def _contribute_use_members(
         self,
         decl: UseDecl,
         members: Mapping[NameAtom, QName],
+        scope_routes: Mapping[NameAtom, BareRoute],
         *,
         validate: bool = True,
     ) -> None:
         """Select, rename, and add one use declaration's bare contribution."""
-        selected = self._select_use_members(decl, members, validate=validate)
+        if validate:
+            self._select_use_members(decl, {**scope_routes, **members})
+        selected = self._select_use_members(decl, members, validate=False)
+        selected_scope_routes = self._select_use_members(decl, scope_routes, validate=False)
         scope = self._current_scope()
+        exposed_scope_routes = {
+            atom: cast(BareRoute, route)
+            for atom, route in selected_scope_routes.items()
+            if _bare_path(atom)
+        }
+        if exposed_scope_routes:
+            self._imported_use_contributions.setdefault(scope.node_id, []).append(
+                _ImportedUseContribution(
+                    members={atom: cast(QName, qname) for atom, qname in selected.items()},
+                    scope_routes=exposed_scope_routes,
+                )
+            )
 
         def contribute(exposed: NameAtom, source: QName) -> None:
             ref, constructor = self._cross_module_member_ref(exposed, source, decl.span)

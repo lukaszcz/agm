@@ -31,7 +31,8 @@ narrowing qualified access. A wildcard import alias retains its declaration
 identity as a shared facade; routes through that facade may converge on the same
 origin, while unrelated imports that reuse an alias remain ambiguous. `use` selects
 from an already nameable local scope or imported route,
-including a scope route exposed by an earlier `use`; it does not create a
+including a scope route exposed by an earlier `use`; imported `use` surfaces retain their filtered
+member and scope-route provenance on the owning lexical region. It does not create a
 module-loading edge. Bare import-tail and `use` routes at the same region are
 resolved together: routes to one declaration deduplicate, while distinct origins
 are ambiguous. A nearer regional contribution shadows outer bare routes.

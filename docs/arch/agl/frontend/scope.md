@@ -24,54 +24,33 @@ site, never a binder. A `var` binder has no pattern and is identified by its
 declaration node.
 
 A scoped `let`/`var` is a member of its scope path, registered into the same
-`ScopeNode` member map and duplicate check as static declarations — but during
-the body walk, not the collection pre-pass, which only creates the path's
-layer. That is what gives a binding textual precedence like a root-level
-`let`, and makes a local `open`'s contribution of a binder, unlike a
-declaration's, potentially precede the member it names: header placement puts
-an `open` before the scope block it targets. A local `open` -- plain,
-`using`, or `hiding` alike -- is therefore never snapshotted: the region
-records the target path together with its selection (`LocalOpenSelection`),
-and `resolve_bare_contribution`/`resolve_bare_constructor_contribution`
-reapply that selection against the current `ScopeNode` tree at every bare
-lookup, so a reference reached after the binder's own registration finds it
-regardless of selection form, even though the `open` came first. After the
-walk, filtered local selections are validated against the completed tree, so
-an unknown `using` or `hiding` path is rejected even when no reference forced
-a lookup. A cross-module `open`'s contribution is snapshotted eagerly: an
-imported module's public members are complete before the walk starts, so
-there is nothing to defer.
+`ScopeNode` member map and duplicate check as static declarations during the
+body walk. This gives bindings textual precedence like root bindings. Regional
+import-tail contributions are snapshotted onto that region's bare-contribution
+layer; `use` target resolution remains a separate follow-up concern.
 
-`ScopeNode.members` is written only through `register_member`/`clear_members`, each
-bumping a shared, process-wide member-write counter; `ScopeNode.local_open_target`
-memoizes a local `open`'s live selection keyed by that counter, so repeated bare
-lookups skip re-walking the scope tree until some write, anywhere, moves it.
+`ScopeNode.members` is written only through `register_member`/`clear_members`.
 
 ## Import Environments
 
-`scope/imports.py` is the pure import-policy seam. Its contribution environment
-merges every declaration for a module into its selected path atoms, bare injection, aliases,
-and plain-path routes. Scoped paths retain their structure through selection and re-exporting; policy expands scope-prefix selections and re-roots renamed subtrees. The selected set bounds both routes and bare injection: plain
-imports are qualified-only, while `using` and `open import` inject bare names. A cross-module
-`open` declaration uses the same eager structured bare-contribution layers on its enclosing
-`ScopeNode`, with its constructor contributions retaining their owner path in a parallel
-region-local candidate layer, so a nearer opened enum variant wins without changing global
-bare-constructor candidates. A local `open`'s selection (`apply_open_selection`, shared with the
-eager path) is applied live instead, against the scope tree; its constructor identity comes from
-the resolved binding's own structured `(scope path, name)` lookup, the same one an ordinary
-reference already uses, not a separate contribution layer. Local or directly imported scope
-subtrees are selected there either way, and collisions remain deferred
-to the use site. Value and type lookup both consume those layers, so selected and renamed
-type members follow the same region boundaries and provenance; they never alter export maps
-or import contributions. One shared suffix/anchored resolver serves value reads and writes,
-constructors, and type qualification, retaining ambiguity and route identity until the use
-site; bare candidates remain limited to open imports. Its diagnostics distinguish an
-unknown route from a name outside a contribution.
+`scope/imports.py` is the pure import-policy seam. Each import declaration
+contributes its own routes: a plain path and its suffixes, or an alias route,
+expose every public atom except that declaration's hidden paths. Repeated
+imports union only where they share a route, so hiding remains effective on a
+separate alias route. Positive tails never narrow qualified access.
+
+A tailed import also contributes bare atoms. `::*` contributes every non-hidden
+public atom; explicit tail atoms contribute selected subtrees, and a rename adds
+a spelling without removing the original. Root contributions populate
+`ImportEnv.unqualified`; regional contributions remain in `ImportEnv.decl_bare`
+and are snapshotted onto the importing `ScopeNode`. Bare collisions remain
+use-site errors. The shared suffix/anchored resolver filters each candidate
+route by its public-minus-hidden atoms before reporting ambiguity.
 One shared translator walks those verdicts and raises an error the caller constructs, so
 the scope and typecheck passes share the walk while keeping their own exception types and
 wording.
 Constructor *owner* selection runs through the same ordered chain resolver: a chain ending at
-a local type path, an opened contribution, or an imported route yields one `ConstructorRef`,
+a local type path, a bare tail contribution, or an imported route yields one `ConstructorRef`,
 including the type-name versus module-route clash. Expression positions
 raise that verdict as a scope error; pattern positions defer every failure to an empty candidate
 set, because a pattern's owner cannot be settled before its subject type is known, leaving
@@ -82,20 +61,12 @@ an advisory covers, the pass offers the tight spelling — but only when re-reso
 route actually contributes the intended member, preserving valid division and
 juxtaposition expressions.
 
-`import` and `export` are also legal region items (`import` header-only, like `open`).
-A region-scoped import still merges its selected members into the module-wide contribution
-for qualifier routing, but `build_import_env` keeps its bare selection out of the shared
-`unqualified` table and records it per declaration (`ImportEnv.decl_bare`) instead; the scope
-pass snapshots that per-declaration set onto the importing region's own `ScopeNode`, the same
-eager `contribute_bare` path a cross-module `open` already uses, so the narrowing rides existing
-machinery rather than a new one. A region-scoped export re-roots the atoms it forwards under the
-region's own scope path before they enter the module's export map (`scope/program.py`), mirroring
-how a `using … as` rename already re-roots a selected atom. Re-export propagation is bounded by
-simple module paths: ordinary cycles converge, while a cycle that keeps expanding a scoped path
-is a static error instead of an unbounded fixed point. The header-only ordering check for
-imports and exports applies uniformly to every module root and region, local to each
-block-resolution call, so a region is one item for its enclosing block's ordering while its own
-items get an independent check.
+`import` and `export` are legal region header items. A region-scoped import
+keeps its qualified routes module-wide while `build_import_env` records its tail
+bare atoms per declaration for the importing region. A region-scoped export
+re-roots forwarded atoms under the region path. Re-export propagation is bounded
+by simple module paths, and header ordering is checked independently for every
+module root and region.
 
 ## Static Guarantees
 

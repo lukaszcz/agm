@@ -27,9 +27,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from agm.agl.modules.ids import ModuleId
-from agm.agl.modules.loader import ModuleGraph
+
+if TYPE_CHECKING:
+    from agm.agl.modules.loader import ModuleGraph
 from agm.agl.scope.imports import (
     EMPTY_IMPORT_ENV,
     ImportEnv,
@@ -68,7 +71,7 @@ from agm.agl.syntax.nodes import (
     static_items,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import AppliedT, ImportMode, NameT
+from agm.agl.syntax.types import AppliedT, NameT
 
 
 def _mid_sort_key(m: ModuleId) -> tuple[str, ...]:
@@ -420,35 +423,35 @@ def _compute_reexport_additions(
             if ((atom,) if isinstance(atom, str) else atom)[: len(prefix)] == prefix
         )
 
-    selected: dict[NameAtom, None] = {}
-    if decl.mode is ImportMode.ALL:
-        selected = dict.fromkeys(target_exports)
-    else:
-        for item in decl.items:
-            matched = matches(item_path(item))
-            if not matched:
-                if allow_missing:
-                    continue
-                raise AglScopeError(
-                    f"name {'::'.join(item_path(item))!r} is not exported by module "
-                    f"{'/'.join(decl.module_path)!r}",
-                    span=decl.span,
-                )
+    selected: dict[NameAtom, None] = (
+        {atom: None for atom in target_exports} if not decl.items else {}
+    )
+    for item in (*decl.items, *decl.hidden):
+        matched = matches(item_path(item))
+        if not matched:
+            if allow_missing:
+                continue
+            raise AglScopeError(
+                f"name {'::'.join(item_path(item))!r} is not exported by module "
+                f"{'/'.join(decl.module_path)!r}",
+                span=decl.span,
+            )
+        if item in decl.items:
             for atom in matched:
                 selected[atom] = None
-        if decl.mode is ImportMode.HIDING:
-            selected = {atom: None for atom in target_exports if atom not in selected}
+        else:
+            for atom in matched:
+                selected.pop(atom, None)
 
     for source in selected:
         source_path = (source,) if isinstance(source, str) else source
         exposed: NameAtom = source
-        if decl.mode is ImportMode.USING:
-            for item in decl.items:
-                prefix = item_path(item)
-                if item.rename is not None and source_path[: len(prefix)] == prefix:
-                    routed = (item.rename, *source_path[len(prefix) :])
-                    exposed = routed[0] if len(routed) == 1 else routed
-                    break
+        for item in decl.items:
+            prefix = item_path(item)
+            if item.rename is not None and source_path[: len(prefix)] == prefix:
+                routed = (item.rename, *source_path[len(prefix) :])
+                exposed = routed[0] if len(routed) == 1 else routed
+                break
         exposed_path = (exposed,) if isinstance(exposed, str) else exposed
         rooted = _atom(region_prefix + exposed_path) if region_prefix else exposed
         origin = target_exports[source]

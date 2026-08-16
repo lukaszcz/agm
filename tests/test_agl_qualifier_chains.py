@@ -7,9 +7,15 @@ from typing import TypeVar
 
 import pytest
 
-from agm.agl.modules.ids import ENTRY_ID
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.parser import parse_program
 from agm.agl.scope import AglScopeError, ModuleResolution
+from agm.agl.scope.imports import (
+    QualResolutionFound,
+    SingleTarget,
+    build_import_env,
+    resolve_qualified,
+)
 from agm.agl.scope.program import resolve_program
 from agm.agl.syntax import (
     AssignStmt,
@@ -25,10 +31,9 @@ from agm.agl.syntax import (
     ScopeRegion,
     VarRef,
 )
-from agm.agl.syntax.nodes import ConstructorPattern
+from agm.agl.syntax.nodes import ConstructorPattern, ImportDecl
+from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
 from agm.agl.syntax.visitor import walk
-from tests.agl.ir_harness import make_graph_from_files
-from tests.agl.module_graph import resolve_inline_entry
 
 
 def _ref(source: str) -> VarRef:
@@ -49,8 +54,17 @@ def _find_nodes(program: object, node_type: type[_NodeT]) -> list[_NodeT]:
     return found
 
 
+def resolve_inline_entry(source: str) -> ModuleResolution:
+    """Resolve inline source through the program-level test helper lazily."""
+    from tests.agl.module_graph import resolve_inline_entry as resolve
+
+    return resolve(source)
+
+
 def _entry_resolution(tmp_path: Path, modules: dict[str, str]) -> ModuleResolution:
     """Resolve a multi-module program and return the entry module's resolution."""
+    from tests.agl.ir_harness import make_graph_from_files
+
     resolved = resolve_program(make_graph_from_files(tmp_path, modules))
     return resolved.modules[resolved.entry_id].resolved
 
@@ -369,16 +383,16 @@ def test_imported_scoped_enum_owner_retains_its_scope_path_for_is_and_case(
     )
 
 
-def test_explicit_module_route_open_is_not_masked_by_a_same_named_local_scope(
+def test_explicit_module_route_use_is_not_masked_by_a_same_named_local_scope(
     tmp_path: Path,
 ) -> None:
-    """``open geo/shapes::Point`` reaches the routed scope over a same-named local one."""
+    """``use /geo/shapes::Point::*`` reaches the routed scope over a same-named local one."""
     resolution = _entry_resolution(
         tmp_path,
         {
             "entry": (
                 "import geo/shapes\n"
-                "open geo/shapes::Point\n"
+                "use /geo/shapes::Point::*\n"
                 "scope Point\n"
                 "def area() -> int = 1\n"
                 "end Point\n"
@@ -429,6 +443,8 @@ def test_unrelated_nested_scope_does_not_mask_a_root_import_route(tmp_path: Path
 def test_type_arguments_are_rejected_on_imported_route_and_scope_segments(
     tmp_path: Path, entry_source: str
 ) -> None:
+    from tests.agl.ir_harness import make_graph_from_files
+
     with pytest.raises(AglScopeError, match="Type arguments cannot be applied"):
         resolve_program(
             make_graph_from_files(
@@ -455,20 +471,26 @@ def test_type_arguments_on_an_imported_generic_type_scope_still_resolve(tmp_path
     assert resolution.resolution[describe_call.callee.node_id].module_id != ENTRY_ID
 
 
-def test_open_imported_enum_owner_qualifies_its_variant(tmp_path: Path) -> None:
-    """``Color::Red`` reaches an open-imported enum owner in expression position."""
-    resolution = _entry_resolution(
-        tmp_path,
-        {
-            "entry": "open import lib\nlet c = Color::Red\nprint(c is Color::Red)\n",
-            "lib": "enum Color\n  | Red\n  | Blue\n",
-        },
+def test_wildcard_import_tail_keeps_the_qualified_enum_owner_reachable() -> None:
+    """``import lib::*`` contributes bare owners without narrowing routes."""
+    span = SourceSpan(1, 1, 1, 1, 0, 0, UNKNOWN_SOURCE)
+    module = ModuleId.from_path("lib")
+    declaration = ImportDecl(
+        module_path=module.segments,
+        wildcard=False,
+        alias=None,
+        tail=(),
+        hidden=(),
+        span=span,
+        node_id=1,
+    )
+    env = build_import_env(
+        (declaration,),
+        {declaration.node_id: SingleTarget(module)},
+        {module: {"Color": (module, "Color"), ("Color", "Red"): (module, ("Color", "Red"))}},
     )
 
-    (variant_ref,) = (
-        node
-        for node in _find_nodes(resolution.program, VarRef)
-        if node.qualifier is not None and node.name == "Red"
+    assert env.unqualified["Color"] == frozenset({(module, "Color")})
+    assert resolve_qualified(env, ("lib",), ("Color", "Red")) == QualResolutionFound(
+        module, (module, ("Color", "Red"))
     )
-    cref = resolution.constructor_refs[variant_ref.node_id]
-    assert (cref.owner_name, cref.variant) == ("Color", "Red")

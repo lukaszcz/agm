@@ -42,7 +42,7 @@ built-ins are not first-class values in AgL.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from functools import partial
@@ -71,18 +71,14 @@ from agm.agl.scope.symbols import (
     BuiltinKind,
     ConstructorRef,
     DeclarationKey,
-    LocalOpenSelection,
     ModuleResolution,
     PatternSlot,
     ScopeNode,
     ScopePath,
     SlotCandidate,
     alias_denotes_constructible_type,
-    apply_open_selection,
     duplicate_binder_message,
     immutable_binder_phrase,
-    import_item_path,
-    local_scope_bindings,
     resolve_bare_constructor_contribution,
     resolve_bare_contribution,
 )
@@ -126,7 +122,6 @@ from agm.agl.syntax.nodes import (
     FuncDef,
     If,
     ImportDecl,
-    ImportItem,
     IndexAccess,
     IndexTarget,
     InfixDecl,
@@ -139,7 +134,6 @@ from agm.agl.syntax.nodes import (
     Loop,
     NameTarget,
     NullLit,
-    OpenDecl,
     ParamDecl,
     Pattern,
     Placeholder,
@@ -159,6 +153,7 @@ from agm.agl.syntax.nodes import (
     UnaryNeg,
     UnaryNot,
     UnitLit,
+    UseDecl,
     VarDecl,
     VarPattern,
     VarRef,
@@ -167,13 +162,7 @@ from agm.agl.syntax.nodes import (
     pattern_binder_candidates,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import (
-    TYPE_PARAMETER_WILDCARD,
-    AppliedT,
-    ImportMode,
-    NameT,
-    render_type_expr,
-)
+from agm.agl.syntax.types import TYPE_PARAMETER_WILDCARD, AppliedT, NameT, render_type_expr
 from agm.agl.syntax.visitor import walk
 
 # ---------------------------------------------------------------------------
@@ -424,10 +413,6 @@ class _Resolver:
         self._active_match_site_node_id: int | None = None
         self._active_match_site_binder_kind: BinderKind | None = None
         self._next_pattern_slot_id: int = 0
-        # Filtered local opens are resolved live while binders are registered.
-        # Validate their selections once more against the completed scope tree
-        # so an item that was never referenced cannot silently remain unknown.
-        self._deferred_local_open_selections: list[LocalOpenSelection] = []
         # Loop-context flag: True when resolving inside a loop body (while_cond,
         # body, or until_cond). Reset to False across fn/def boundaries so that
         # `break`/`continue` cannot cross a function boundary into an outer loop.
@@ -529,7 +514,6 @@ class _Resolver:
 
         # Main walk: resolve all block items in order.
         self._resolve_block_items(program.body.items)
-        self._validate_deferred_local_open_selections()
 
         self._at_root = False
         self._pop_scope()
@@ -773,7 +757,7 @@ class _Resolver:
         """Return whether *owner_path* names a type imported from another module.
 
         Consults the import environment's bare contributions — the same
-        names that make an opened or ``using``-imported type name callable
+        names that make a tailed-imported type name callable
         without qualification — together with the whole-program type table,
         so a receiver on a type this module can see but does not declare
         reports the "no orphans" rule instead of the generic "no enclosing
@@ -1091,7 +1075,7 @@ class _Resolver:
         reference can never name a local declaration) — then falls back to the
         shared import-environment resolution
         (:func:`~agm.agl.scope.imports.resolve_alias_target`), which covers a
-        target reached through an open import or a module qualifier.
+        target reached through a bare tail contribution or a module qualifier.
         """
         if qualifier is None or not qualifier.segments:
             local_paths: tuple[ScopePath, ...] = (scope_path, ()) if scope_path else ((),)
@@ -1494,8 +1478,8 @@ class _Resolver:
         seen_non_import_item = False
 
         for item in items:
-            if isinstance(item, OpenDecl):
-                self._resolve_open_decl(item)
+            if isinstance(item, UseDecl):
+                self._resolve_use_decl(item)
                 continue
             if isinstance(item, (ImportDecl, ExportDecl)):
                 # A header the entry transform moved into the synthetic body is
@@ -1584,59 +1568,6 @@ class _Resolver:
     # Declaration handlers
     # ------------------------------------------------------------------
 
-    def _resolve_open_decl(self, decl: OpenDecl) -> None:
-        """Contribute a selected scope subtree to the current region.
-
-        A local open's target scope may still be gaining members -- header
-        placement forces the ``open`` to precede its own scope's binders --
-        so it is recorded on the current region, with its full using/hiding
-        /rename selection, and resolved live against ``_scope_nodes`` at
-        every later bare reference (``resolve_bare_contribution`` and
-        ``resolve_bare_constructor_contribution``). A cross-module open's
-        target is complete before the walk starts, so it is resolved once,
-        eagerly, exactly as before.
-        """
-        requested_path = tuple(segment.name for segment in decl.scope_ref.scope_path)
-        # An explicit module route (``open geo/shapes::Point``) names its target
-        # unambiguously; a same-named local scope must not intercept it.
-        local_path = (
-            None if decl.scope_ref.module_route else self._open_local_scope_path(requested_path)
-        )
-        if local_path is not None:
-            selection = LocalOpenSelection(scope_path=local_path, mode=decl.mode, items=decl.items)
-            self._current_scope().opened_local_scopes.add(selection)
-            if decl.mode is not ImportMode.ALL:
-                self._deferred_local_open_selections.append(selection)
-            return
-
-        target = self._open_target_members(decl)
-        if decl.mode is not ImportMode.ALL:
-            self._validate_open_selection_items(decl.items, target)
-        for atom, values in apply_open_selection(decl.mode, decl.items, target).items():
-            for ref, constructor in values:
-                self._current_scope().contribute_bare(atom, ref)
-                if constructor is not None:
-                    self._current_scope().contribute_bare_constructor(atom, constructor)
-
-    @staticmethod
-    def _validate_open_selection_items(
-        items: tuple[ImportItem, ...], target: Mapping[NameAtom, object]
-    ) -> None:
-        """Reject filtered-open paths absent from a completed target subtree."""
-        for item in items:
-            prefix = import_item_path(item)
-            if not any(_bare_path(atom)[: len(prefix)] == prefix for atom in target):
-                raise AglScopeError(
-                    f"'{'::'.join(prefix)}' is not a public member of the opened scope.",
-                    span=item.span,
-                )
-
-    def _validate_deferred_local_open_selections(self) -> None:
-        """Validate every filtered local open against the final member tree."""
-        for selection in self._deferred_local_open_selections:
-            target = local_scope_bindings(self._scope_nodes, selection.scope_path)
-            self._validate_open_selection_items(selection.items, target)
-
     def _cross_module_member_ref(
         self, atom: NameAtom, qname: QName, span: SourceSpan
     ) -> tuple[BindingRef, ConstructorRef | None]:
@@ -1661,16 +1592,13 @@ class _Resolver:
         return ref, constructor
 
     def _contribute_regional_import_bare(self, decl: ImportDecl) -> None:
-        """Contribute a region-scoped ``import``'s bare names to its own region only.
+        """Contribute a region-scoped import tail to its own region only.
 
-        Mirrors the cross-module branch of ``_resolve_open_decl``: the
-        decl's own bare selection was computed once, module-wide, by
-        ``build_import_env`` and kept per declaration (``ImportEnv.decl_bare``)
-        instead of merged into the shared ``unqualified`` table, so it is
-        snapshotted here onto the current region's ``ScopeNode`` and narrows
-        to this region exactly like a cross-module ``open``'s selection does.
-        The qualifier route this import also establishes stays module-wide,
-        via ``self._import_env.contributions``, and needs no contribution here.
+        ``build_import_env`` keeps a tail's bare atoms per declaration in
+        ``ImportEnv.decl_bare`` rather than merging them into the root
+        ``unqualified`` table. This snapshots them onto the current
+        ``ScopeNode`` while the declaration's qualified routes remain
+        module-wide through ``self._import_env.contributions``.
 
         A wildcard candidate may draw one atom from several modules (e.g.
         two sibling modules both exporting ``alpha``); every origin is
@@ -1717,132 +1645,9 @@ class _Resolver:
             assert constructor is not None
             scope.contribute_bare_constructor(variant.name, constructor)
 
-    def _open_target_members(
-        self, decl: OpenDecl
-    ) -> dict[NameAtom, tuple[BindingRef, ConstructorRef | None]]:
-        """Return the relative public subtree of an opened imported scope.
-
-        Only ever called once a local scope target has been ruled out
-        (``_resolve_open_decl`` resolves and records a local target itself).
-        """
-        requested_path = tuple(segment.name for segment in decl.scope_ref.scope_path)
-        route = decl.scope_ref.module_route
-        scope_path = requested_path
-        if not route and len(requested_path) > 1:
-            route, scope_path = (requested_path[0],), requested_path[1:]
-        if not route:
-            # A prior ``open import`` / ``using`` already contributed this
-            # scope's members bare; reach the source scope they came from
-            # before giving up on an explicit route.
-            bare_members = self._open_bare_imported_scope_members(
-                requested_path, decl.scope_ref.span
-            )
-            if bare_members is not None:
-                return bare_members
-        if not route or not scope_path:
-            raise AglScopeError(
-                f"Unknown scope path '{'::'.join(requested_path)}'.", span=decl.scope_ref.span
-            )
-
-        matching: list[dict[NameAtom, tuple[BindingRef, ConstructorRef | None]]] = []
-        for module in qualifier_candidates(self._import_env, route, anchored=False):
-            contribution = self._import_env.contributions[module]
-            imported_members, is_public_type_scope = self._scope_subtree_members(
-                contribution.members.items(), scope_path, decl.span
-            )
-            if imported_members or is_public_type_scope:
-                matching.append(imported_members)
-        if not matching:
-            rendered = "::".join(scope_path)
-            raise AglScopeError(
-                f"Unknown or non-public scope '{rendered}'.", span=decl.scope_ref.span
-            )
-        if len(matching) > 1:
-            raise AglScopeError(
-                f"Opened scope '{'::'.join(scope_path)}' is ambiguous across imported modules.",
-                span=decl.scope_ref.span,
-            )
-        return matching[0]
-
-    def _scope_subtree_members(
-        self,
-        entries: Iterable[tuple[NameAtom, QName]],
-        scope_path: ScopePath,
-        span: SourceSpan,
-    ) -> tuple[dict[NameAtom, tuple[BindingRef, ConstructorRef | None]], bool]:
-        """Materialize one contribution's members below *scope_path*, relative to it.
-
-        Returns the relative-atom member dict and whether *scope_path* itself
-        names a public type scope with no separately public child members
-        (still a valid, if empty, selection).
-        """
-        members: dict[NameAtom, tuple[BindingRef, ConstructorRef | None]] = {}
-        is_public_type_scope = False
-        for exposed, qname in entries:
-            path = _bare_path(exposed)
-            if path == scope_path and qname in self._cross_module_type_scopes:
-                is_public_type_scope = True
-                continue
-            if path[: len(scope_path)] != scope_path or len(path) == len(scope_path):
-                continue
-            atom = _bare_atom(path[len(scope_path) :])
-            ref, constructor = self._cross_module_member_ref(atom, qname, span)
-            members[atom] = (ref, constructor)
-        return members, is_public_type_scope
-
-    def _open_bare_imported_scope_members(
-        self, requested_path: ScopePath, span: SourceSpan
-    ) -> dict[NameAtom, tuple[BindingRef, ConstructorRef | None]] | None:
-        """Resolve an unrouted ``open`` target against already-bare imports.
-
-        ``open import lib`` and ``import lib using A`` both inject a module's
-        selected members bare (see ``ImportEnv``/``build_import_env``); a
-        later ``open A`` names the source scope those bare members came from,
-        not an individual member, so it is resolved against every
-        contribution's bare-exposed names rather than a module route.
-
-        A region-scoped import's own bare selection lives in ``decl_bare``
-        instead (narrowed away from the module-wide ``bare_names`` snapshot
-        above), so every such declaration reachable from the current region
-        -- its own region and every descendant, exactly the reach
-        ``resolve_bare_contribution`` already grants an ordinary bare
-        reference -- is searched the same way.
-        """
-        matching: list[dict[NameAtom, tuple[BindingRef, ConstructorRef | None]]] = []
-        for contribution in self._import_env.contributions.values():
-            entries = (
-                (exposed, contribution.members[exposed]) for exposed in contribution.bare_names
-            )
-            members, _is_public_type_scope = self._scope_subtree_members(
-                entries, requested_path, span
-            )
-            if members:
-                matching.append(members)
-        for bare in self._reachable_decl_bare(self._import_env, self._current_scope().scope_path):
-            entries = ((atom, qname) for atom, qnames in bare.items() for qname in qnames)
-            members, _is_public_type_scope = self._scope_subtree_members(
-                entries, requested_path, span
-            )
-            if members:
-                matching.append(members)
-        if not matching:
-            return None
-        if len(matching) > 1:
-            raise AglScopeError(
-                f"Opened scope '{'::'.join(requested_path)}' is ambiguous across imported modules.",
-                span=span,
-            )
-        return matching[0]
-
-    def _open_local_scope_path(self, requested_path: ScopePath) -> ScopePath | None:
-        """Find an exact lexical scope target for an ``open`` declaration."""
-        scope: ScopeNode | None = self._current_scope()
-        while scope is not None:
-            candidate = scope.scope_path + requested_path
-            if candidate in self._scope_nodes:
-                return candidate
-            scope = scope.parent
-        return None
+    def _resolve_use_decl(self, decl: UseDecl) -> None:
+        """Reserve ``use`` declarations for the dedicated scope-resolution pass."""
+        del decl
 
     def _resolve_scope_region(self, region: ScopeRegion) -> None:
         """Resolve a named region in its member layer."""
@@ -2018,7 +1823,7 @@ class _Resolver:
         ref = self._current_scope().lookup(name)
         if ref is None:
             ref = self._lookup_bare_contribution(name, node.span)
-            # Try structured open imports as a fallback, so a bare target
+            # Try structured bare import contributions as a fallback, so a bare target
             # reaches an imported mutable binding just like a read.
             if ref is None:
                 ref = self._lookup_import_env_unqualified(name, node.span)
@@ -2213,7 +2018,7 @@ class _Resolver:
         - Exactly 1 candidate → record in constructor_refs.
         - ≥ 2 candidates → ambiguity error.
 
-        A bare reference uses lexical scope then open imports; a
+        A bare reference uses lexical scope then tailed imports; a
         current-module chain uses the own root scope; and a module-route
         chain uses qualified cross-module access.
 
@@ -2272,7 +2077,7 @@ class _Resolver:
             if contributed is not None:
                 ref = contributed
         if ref is None:
-            # Try structured open imports as a fallback.
+            # Try structured bare import contributions as a fallback.
             ref = self._lookup_import_env_unqualified(node.name, node.span)
             if ref is None:
                 raise self._spaced_qualifier_repair(
@@ -2553,13 +2358,7 @@ class _Resolver:
                     owner = try_resolve_qualified_member(
                         self._import_env, route, owner_atom, anchored=chain.anchored
                     )
-                    route_is_complete = all(
-                        self._import_env.contributions[module].complete_public_set
-                        for module in qualifier_candidates(
-                            self._import_env, route, anchored=chain.anchored
-                        )
-                    )
-                    if owner in self._cross_module_constructible_types and not route_is_complete:
+                    if owner in self._cross_module_constructible_types:
                         raise
         if self._resolve_constructor_chain(node.node_id, chain, node.name):
             return
@@ -2805,13 +2604,12 @@ class _Resolver:
         )
 
     def _lookup_import_env_unqualified(self, name: str, span: SourceSpan) -> BindingRef | None:
-        """Look up a bare name in the open-import environment.
+        """Look up a bare name in the tailed-import environment.
 
         Returns a ``BindingRef`` if exactly one ``QName`` matches, or raises
-        ``AglScopeError`` on ambiguity (clash-on-use).  Returns ``None`` if the
-        name is not found in any open import.  Shared by bare value references
-        and bare assignment targets, so an open import exposes a binding the
-        same way for reads and writes.
+        ``AglScopeError`` on ambiguity (clash-on-use). Returns ``None`` if the
+        name is not contributed by a tailed import. Shared by bare value
+        references and bare assignment targets.
         """
         qnames = self._import_env.unqualified.get(name)
         if qnames is None:
@@ -2886,7 +2684,8 @@ class _Resolver:
                 f"No module imported under qualifier '{rendered}'.", span=span
             ),
             missing_member=lambda rendered: AglScopeError(
-                f"'{name}' is not in the imported set of '{rendered}'.", span=span
+                f"'{name}' is not a public member of imported module '{rendered}' or is hidden.",
+                span=span,
             ),
             ambiguous=lambda message: AglScopeError(message, span=span),
         )

@@ -686,6 +686,10 @@ def test_region_tailed_import_keeps_routes_global_and_bare_names_regional() -> N
             "lib": "record Empty\n  value: int",
         },
         {
+            "entry": "import lib\nuse /lib::Empty::*",
+            "lib": "scope Empty\nend Empty",
+        },
+        {
             "entry": "import lib::{Empty}\nuse Empty::*",
             "lib": "record Empty\n  value: int",
         },

@@ -271,6 +271,7 @@ class _Resolver:
         | None = None,
         cross_module_constructible_types: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
         cross_module_type_scopes: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
+        cross_module_named_scopes: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
         allow_root_statements: bool = False,
         repl_session_scope: ScopeNode | None = None,
         repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
@@ -297,6 +298,8 @@ class _Resolver:
         # Public type declarations establish scope paths even when they have
         # no separately public child members.
         self._cross_module_type_scopes = cross_module_type_scopes
+        # Ordinary named scopes remain nameable across modules even when empty.
+        self._cross_module_named_scopes = cross_module_named_scopes
         # Whole-program public-type table, used to follow a type alias's
         # target across an import when deciding whether the alias has a
         # variant-less constructor.
@@ -1691,7 +1694,14 @@ class _Resolver:
         direct_imports: tuple[tuple[BareRoute, Mapping[NameAtom, QName]], ...] = tuple(
             ((module, route_target), relative_members)
             for module, members in direct_candidates
-            if (relative_members := self._relative_use_import_members(members, route_target))
+            if (
+                relative_members := self._relative_use_import_members(
+                    members,
+                    route_target,
+                    target_exists=bool(route_target)
+                    and (module, _bare_atom(route_target)) in self._cross_module_named_scopes,
+                )
+            )
             is not None
         )
         shared_alias_facade = (
@@ -1801,11 +1811,15 @@ class _Resolver:
         return replace(decl, target=decl.target[:-1], tail=(selected,), alias=None)
 
     def _relative_use_import_members(
-        self, members: Mapping[NameAtom, QName], target: ScopePath
+        self,
+        members: Mapping[NameAtom, QName],
+        target: ScopePath,
+        *,
+        target_exists: bool = False,
     ) -> dict[NameAtom, QName] | None:
         """Return an existing target's public subtree under target-relative paths."""
         relative_members: dict[NameAtom, QName] = {}
-        exists = not target
+        exists = not target or target_exists
         for atom, qname in members.items():
             path = _bare_path(atom)
             if path == target:

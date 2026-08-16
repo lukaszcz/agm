@@ -25,7 +25,7 @@ Design
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -67,6 +67,7 @@ from agm.agl.syntax.nodes import (
     Program,
     QualifierChain,
     RecordDef,
+    ScopeRegion,
     TypeAlias,
     static_items,
 )
@@ -271,6 +272,23 @@ def _item_atom(
     item: FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias | BuiltinVarDecl,
 ) -> NameAtom:
     return _atom((*tuple(segment.name for segment in item.scope_path), item.name))
+
+
+def _compute_local_scope_paths(self_id: ModuleId, program: Program) -> frozenset[QName]:
+    """Collect ordinary named scopes independently of their declarations."""
+    result: set[QName] = set()
+
+    def collect(items: Iterable[object], parent: PathAtom) -> None:
+        for item in items:
+            if not isinstance(item, ScopeRegion):
+                continue
+            path = (*parent, item.segment.name)
+            atom = _atom(path)
+            result.add((self_id, atom))
+            collect(item.items, path)
+
+    collect(program.body.items, ())
+    return frozenset(result)
 
 
 def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[NameAtom, QName]:
@@ -569,8 +587,10 @@ def resolve_program(
     # Step 1: Build local export maps (own declarations only).
     # ------------------------------------------------------------------
     export_maps: dict[ModuleId, dict[NameAtom, QName]] = {}
+    cross_module_named_scopes: set[QName] = set()
     for mid, loaded in graph.modules.items():
         export_maps[mid] = _compute_local_exports(mid, loaded.program)
+        cross_module_named_scopes.update(_compute_local_scope_paths(mid, loaded.program))
 
     # ------------------------------------------------------------------
     # Step 2: Map ImportDecl and ExportDecl → ImportTarget for every module.
@@ -676,6 +696,7 @@ def resolve_program(
             cross_module_constructor_refs=cross_module_constructor_refs,
             cross_module_constructible_types=cross_module_constructible_types,
             cross_module_type_scopes=frozenset(all_public_types),
+            cross_module_named_scopes=frozenset(cross_module_named_scopes),
             all_public_types=all_public_types,
             allow_root_statements=is_entry and entry_parent_scope is not None,
             repl_session_scope=entry_repl_session_scope if is_entry else None,

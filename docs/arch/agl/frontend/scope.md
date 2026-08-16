@@ -18,7 +18,9 @@ qualified routes are static errors.
 ## Imports and `use`
 
 `scope/imports.py` builds contribution environments for import declarations.
-An import contributes its full public qualified surface, except paths hidden by that declaration. A positive
+Program resolution tracks named-scope existence separately from declaration exports, so an imported empty
+scope remains a nameable `use` target without becoming a value. An import contributes its full public
+qualified surface, except paths hidden by that declaration. A positive
 import tail or `use` declaration contributes selected bare names without
 narrowing qualified access. `use` selects from an already nameable local scope
 or imported route; it does not create a module-loading edge. Region-scoped

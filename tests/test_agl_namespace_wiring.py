@@ -307,6 +307,26 @@ def test_unbraced_imported_member_use_tail_can_be_renamed(tmp_path: Path, use_de
     check_program(resolve_program(graph), base_caps())
 
 
+def test_root_local_use_and_import_tail_collision_is_ambiguous(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import lib::{x}\n"
+                "use S::*\n"
+                "scope S\n"
+                "def x() -> int = 2\n"
+                "end S\n"
+                "x()\n"
+            ),
+            "lib": "def x() -> int = 1\n",
+        },
+    )
+
+    with pytest.raises(AglScopeError, match="ambiguous"):
+        resolve_program(graph)
+
+
 def test_inner_use_shadows_root_import_and_use_contributions(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,

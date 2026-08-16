@@ -3017,6 +3017,7 @@ class _Resolver:
         nearest = self._nearest_bare_contribution_layer(
             name, binding_predicate=self._is_value_contribution
         )
+        value_layer_found = nearest is not None
         if nearest is None:
             # Keep a lone type-only spelling available for the checker's
             # dedicated "type name, not a value" diagnostic.
@@ -3025,18 +3026,18 @@ class _Resolver:
                 return None
         selected_layer, resolved, _constructors = nearest
         assert self._root_scope is not None
-        if selected_layer is self._root_scope and name in self._root_scope.bare_contributions:
-            imported_refs = (
-                self._cross_module_member_ref(name, qname, span)[0]
+        if selected_layer is self._root_scope:
+            imported_refs = {
+                ref
                 for qname in self._import_env.unqualified.get(name, frozenset())
-            )
-            for ref in filter(self._is_value_contribution, imported_refs):
-                if not any(
-                    (existing.module_id, existing.scope_path, existing.decl_node_id, existing.kind)
-                    == (ref.module_id, ref.scope_path, ref.decl_node_id, ref.kind)
-                    for existing in resolved
-                ):
-                    resolved.add(ref)
+                if self._is_value_contribution(
+                    ref := self._cross_module_member_ref(name, qname, span)[0]
+                )
+            }
+            if imported_refs and not value_layer_found:
+                resolved = imported_refs
+            else:
+                resolved.update(imported_refs)
         distinct = {
             (ref.module_id, ref.scope_path, ref.decl_node_id, ref.kind): ref for ref in resolved
         }

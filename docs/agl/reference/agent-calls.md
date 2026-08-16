@@ -342,8 +342,12 @@ The `prompt` argument is a template rendered using the uniform interpolation
 rules ([Strings and interpolation](strings-and-interpolation.md)). The
 rendered prompt is delivered to the agent verbatim, together with the
 contract's format instructions; the host must not perform further template
-or environment-variable expansion over it. Retries resend the same rendered
-prompt with corrective feedback appended.
+or environment-variable expansion over it. One-shot retries resend the same
+rendered prompt with corrective feedback appended. Corrective feedback includes
+a category-based validation summary, never validation paths, keys, or other
+response-derived details. A `Session::ask` retry stays in its existing
+conversation and sends only that summary plus a JSON-format reminder; it never
+resends the original prompt or invalid response.
 
 ## The JSON wire format
 
@@ -466,9 +470,11 @@ For a call with `on_parse_error = Retry(n = N)`:
 1. The agent is called with the rendered prompt and the output contract.
 2. The raw output is parsed and validated.
 3. On success, the typed value is the call's result.
-4. On failure, a **corrective retry** is dispatched with the same prompt and
-   contract plus the previous invalid output and the structured validation
-   errors.
+4. On failure, a one-shot **corrective retry** is dispatched with the same
+   prompt and contract plus the previous invalid output and a category-based
+   validation summary. The summary never includes validation paths, keys, or
+   other response-derived details. A `Session::ask` corrective retry instead
+   sends only that summary and a JSON-format reminder in the open conversation.
 5. At most `N` retries are made (`N + 1` total attempts).
 6. If every attempt fails, **`AgentParseError`** is raised.
 
@@ -494,8 +500,10 @@ Each dispatch delivers to the host agent:
 - the fully rendered prompt;
 - the output contract: target type, format instructions, and derived JSON
   Schema;
-- the 0-based attempt number, and on retries the previous invalid output and
-  its validation errors.
+- the 0-based attempt number; one-shot retries also include the previous
+  invalid output and a category-based validation summary, while session retries
+  include only that summary and a format reminder. The summary excludes
+  response-derived validation paths, keys, and values.
 
 See [Host environment](host-environment.md).
 

@@ -1,0 +1,35 @@
+{
+  "scenarios": [
+    {
+      "name": "default_abort_and_exhaustion_match_one_shot_parse_policies",
+      "agents": {
+        "writer": {"responses": ["bad", "bad", "bad", "bad", "bad", "context"]}
+      },
+      "expect": {
+        "stdout": "default\nabort\nexhausted\ncontext\n",
+        "calls": {"writer": 0},
+        "sessions": [
+          {"agent": "writer", "tag": "session-1", "opened": true, "closed": true}
+        ],
+        "session_prompts": [
+          {"agent": "writer", "session": "session-1", "call": 0, "starts_with": "default policy"},
+          {"agent": "writer", "session": "session-1", "call": 1, "starts_with": "abort policy"},
+          {"agent": "writer", "session": "session-1", "call": 2, "starts_with": "retry policy"},
+          {
+            "agent": "writer",
+            "session": "session-1",
+            "call": 3,
+            "follow_up": {"not_contains": ["retry policy"]}
+          },
+          {
+            "agent": "writer",
+            "session": "session-1",
+            "call": 4,
+            "follow_up": {"not_contains": ["retry policy"]}
+          },
+          {"agent": "writer", "session": "session-1", "call": 5, "equals": "conversation continues"}
+        ]
+      }
+    }
+  ]
+}

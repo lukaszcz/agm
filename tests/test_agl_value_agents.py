@@ -198,7 +198,7 @@ def test_composed_prompt_omits_format_instructions_when_the_contract_has_none(
 def test_composed_prompt_includes_retry_feedback_on_a_retry_attempt(
     fake_agent_transport: FakeAgentTransport,
 ) -> None:
-    """A retry (attempt >= 1) appends the previous output and validation errors."""
+    """A retry appends its output and a sanitized validation summary."""
     from agm.agl.runtime.request import AgentRequest, ValidationError, compose_agent_prompt
 
     dispatch = value_driven_agent_factory(idle_timeout=None)
@@ -219,8 +219,10 @@ def test_composed_prompt_includes_retry_feedback_on_a_retry_attempt(
 
     prompt = fake_agent_transport.calls[0][0]
     assert "Your previous response did not match the required output format" in prompt
-    assert "- missing field 'name'" in prompt
-    assert "- type mismatch: expected int" in prompt
+    assert "- The response is missing required data." in prompt
+    assert "- The response contains a value with an incorrect type." in prompt
+    assert "missing field 'name'" not in prompt
+    assert "type mismatch: expected int" not in prompt
     assert "the-bad-output-xyz" in prompt
     assert "Return only valid JSON matching the schema." in prompt
 

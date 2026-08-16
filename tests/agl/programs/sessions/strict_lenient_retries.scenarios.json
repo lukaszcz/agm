@@ -1,0 +1,38 @@
+{
+  "scenarios": [
+    {
+      "name": "strict_session_parsing_retries_while_lenient_parsing_accepts_recoverable_output",
+      "agents": {"writer": {"responses": ["Answer: 7", "8", "Answer: 9"]}},
+      "expect": {
+        "stdout": "8\n9\n",
+        "calls": {"writer": 0},
+        "sessions": [
+          {"agent": "writer", "tag": "session-1", "opened": true, "closed": true}
+        ],
+        "session_prompts": [
+          {
+            "agent": "writer",
+            "session": "session-1",
+            "call": 0,
+            "starts_with": "strict parser"
+          },
+          {
+            "agent": "writer",
+            "session": "session-1",
+            "call": 1,
+            "follow_up": {
+              "contains": ["Validation errors:", "Return only valid JSON matching the schema."],
+              "not_contains": ["strict parser", "Answer: 7"]
+            }
+          },
+          {
+            "agent": "writer",
+            "session": "session-1",
+            "call": 2,
+            "starts_with": "lenient parser"
+          }
+        ]
+      }
+    }
+  ]
+}

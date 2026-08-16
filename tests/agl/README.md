@@ -113,8 +113,10 @@ Field notes:
   `compact`, `fork`, `set-name`, `stats`); when omitted, all are supported.
   Omit an operation to script the service's capability rejection. Separately,
   `session.operations` maps native operation names (`compact`, `reset`, `fork`,
-  `stats`, `set-name`) to ordered backend outcomes. Each supplied outcome must
-  be consumed; `success` is normal and a `stats` object may provide
+  `stats`, `set-name`) to ordered backend outcomes. `session.ask` can similarly
+  script each session prompt as `success` or a transport-failure object with a
+  `cause` (and optional `exit_code`, `stderr_tail`, and `elapsed`). Each supplied
+  outcome must be consumed; `success` is normal and a `stats` object may provide
   `input_tokens`, `output_tokens`, `cost`, and `context_percent`. `reset` is
   always dispatched by the service and cannot have an `unsupported` outcome.
   Legacy `unsupported` outcomes remain accepted for optional operations, but

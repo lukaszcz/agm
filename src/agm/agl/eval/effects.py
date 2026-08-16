@@ -37,6 +37,8 @@ from agm.agl.runtime.request import (
     AgentRequest,
     AgentResponse,
     compose_agent_prompt,
+    compose_initial_agent_prompt,
+    compose_session_corrective_follow_up,
 )
 from agm.agl.runtime.request import (
     ValidationError as ReqValidationError,
@@ -487,30 +489,27 @@ class EffectHandlers:
             self._session_error(error)
         return self._session_value(handle, snapshot.agent, snapshot.transport)
 
-    def eval_ir_session_ask(self, node: IrSessionAsk) -> Value:
-        """Send one composed request through an existing session and parse its response."""
-        handle, agent, _transport = self._session_parts(self._ctx._eval(node.session), "ask")
-        prompt = self._text_of(self._ctx._eval(node.prompt))
-        contract = self._ctx._program.contracts[node.contract_id]
-        effective_strict = (
-            contract.strict_json if contract.strict_json is not None else self._ctx._strict_json
-        )
-        output_contract: OutputContract | None = (
-            None if contract.is_unit else self._ctx._host_contracts[node.contract_id]
-        )
-        request = AgentRequest(agent=agent, prompt=prompt, output_contract=output_contract)
-        request.prompt = compose_agent_prompt(request)
-        json_schema = (
-            None if contract.json_schema is None else cast(object, json.loads(contract.json_schema))
-        )
+    def _dispatch_session_agent(
+        self,
+        handle: str,
+        request: AgentRequest,
+        node: IrSessionAsk,
+        *,
+        max_attempts: int,
+        target_type: str,
+        codec: str,
+        strict_json: bool | None,
+        json_schema: object | None,
+    ) -> str:
+        """Trace, dispatch, and map one request sent through a session."""
         self._ctx._trace.agent_request(
-            agent=self._agent_trace_value(agent),
-            attempt=0,
-            max_attempts=1,
+            agent=self._agent_trace_value(request.agent),
+            attempt=request.attempt,
+            max_attempts=max_attempts,
             prompt=request.prompt,
-            target_type=contract.target_type_label,
-            codec=contract.codec_name,
-            strict_json=contract.strict_json,
+            target_type=target_type,
+            codec=codec,
+            strict_json=strict_json,
             json_schema=json_schema,
             span=node.location,
         )
@@ -522,13 +521,10 @@ class EffectHandlers:
                 call_info = {"exit_code": error.exit_code, "elapsed": error.elapsed}
             call_info["stderr_tail"] = error.stderr_tail
             self._ctx._trace.agent_response(
-                ok=False,
-                cause=error.cause,
-                call_info=call_info,
-                span=node.location,
+                ok=False, cause=error.cause, call_info=call_info, span=node.location
             )
             self._raise_agent_call_error(
-                agent,
+                request.agent,
                 AgentCallHostError(
                     cause=error.cause,
                     exit_code=error.exit_code,
@@ -546,7 +542,9 @@ class EffectHandlers:
             error.span = node.location
             raise
         except KeyboardInterrupt as error:
-            cancelled = AgentCancelled(render_value(agent), "interrupted", span=node.location)
+            cancelled = AgentCancelled(
+                render_value(request.agent), "interrupted", span=node.location
+            )
             self._ctx._trace.agent_response(
                 ok=False, cancelled=True, reason=cancelled.reason, span=node.location
             )
@@ -554,30 +552,79 @@ class EffectHandlers:
         self._ctx._trace.agent_response(
             ok=True, content=raw, metadata={}, call_info=None, span=node.location
         )
-        if contract.is_unit:
-            return VOID_VALUE
-        result = self._ctx._parse_host_output(
-            raw, node.contract_id, effective_strict=effective_strict
+        return raw
+
+    def eval_ir_session_ask(self, node: IrSessionAsk) -> Value:
+        """Send a prompt through a session and retry invalid typed responses in place."""
+        handle, agent, _transport = self._session_parts(self._ctx._eval(node.session), "ask")
+        prompt = self._text_of(self._ctx._eval(node.prompt))
+        contract = self._ctx._program.contracts[node.contract_id]
+        effective_strict = (
+            contract.strict_json if contract.strict_json is not None else self._ctx._strict_json
         )
-        self._ctx._trace.parse_result(
-            ok=result.ok,
-            raw=raw,
-            normalized_raw=result.normalized_raw or raw,
-            error_summary=result.error_msg or "; ".join(error.message for error in result.errors),
-            span=node.location,
+        output_contract: OutputContract | None = (
+            None if contract.is_unit else self._ctx._host_contracts[node.contract_id]
         )
-        if result.ok and result.value is not None:
-            return result.value
+        json_schema = (
+            None if contract.json_schema is None else cast(object, json.loads(contract.json_schema))
+        )
+        last_raw: str | None = None
+        last_normalized: str | None = None
+        last_errors: tuple[ReqValidationError, ...] = ()
+
+        for attempt in range(node.max_attempts):
+            request = AgentRequest(
+                agent=agent,
+                prompt=prompt,
+                attempt=attempt,
+                validation_errors=list(last_errors),
+                output_contract=output_contract,
+            )
+            request.prompt = (
+                compose_initial_agent_prompt(request)
+                if attempt == 0
+                else compose_session_corrective_follow_up(request)
+            )
+            raw = self._dispatch_session_agent(
+                handle,
+                request,
+                node,
+                max_attempts=node.max_attempts,
+                target_type=contract.target_type_label,
+                codec=contract.codec_name,
+                strict_json=contract.strict_json,
+                json_schema=json_schema,
+            )
+            if contract.is_unit:
+                return VOID_VALUE
+            result = self._ctx._parse_host_output(
+                raw, node.contract_id, effective_strict=effective_strict
+            )
+            self._ctx._trace.parse_result(
+                ok=result.ok,
+                raw=raw,
+                normalized_raw=result.normalized_raw or raw,
+                error_summary=result.error_msg
+                or "; ".join(error.message for error in result.errors),
+                span=node.location,
+            )
+            if result.ok and result.value is not None:
+                return result.value
+            last_raw = raw
+            last_normalized = result.normalized_raw
+            last_errors = self._classify_parse_errors(result)
+
         self._raise_agent_parse_error(
             message=(
                 f"Agent {render_value(agent)!r} failed to produce a valid "
-                f"{contract.target_type_label} after 1 attempt(s). Last output: {raw!r}"
+                f"{contract.target_type_label} after {node.max_attempts} attempt(s). "
+                f"Last output: {last_raw!r}"
             ),
             agent=agent,
-            last_raw=raw,
-            last_normalized=result.normalized_raw,
-            last_errors=self._classify_parse_errors(result),
-            max_attempts=1,
+            last_raw=last_raw,
+            last_normalized=last_normalized,
+            last_errors=last_errors,
+            max_attempts=node.max_attempts,
             target_type_label=contract.target_type_label,
             json_schema=contract.json_schema,
         )

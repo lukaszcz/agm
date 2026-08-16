@@ -26,14 +26,18 @@ or attach a `trace_id` to records or exception values.
 
 `eval/effects.py` is the agent logging seam: it composes the prompt, records the
 request before dispatch, and records every response path, including unit calls,
-transport failures, and cancellation. `runtime/agents.py` remains the
-value-driven transport boundary and sends that composed prompt verbatim.
+transport failures, and cancellation. Initial requests include format instructions;
+corrective retries use a category-based validation summary that excludes
+response-derived validation paths, keys, and values. Session retries send only
+that summary and a format reminder in the existing conversation; they do not
+replay the original prompt or invalid output. `runtime/agents.py` remains the
+value-driven transport boundary and sends each one-shot composed prompt verbatim.
 
 The trace destination is the sole live host service configured by an AgL `builtin var` write. The engine-key catalog names its `log`/`log-file` register pair explicitly; either write repoints the same trace store, while other host-consumed settings remain registers read on demand. `runtime/host_settings.py` applies the command-supplied trace-path policy without importing the command layer.
 
 ## Sessions
 
-`runtime/sessions.py` defines the AgL-neutral `SessionHost` firewall protocol, opaque host errors, and normalized session statistics. The AGM adapter in `agent/session/service.py` owns the session table and selects CLI backends by default, with Pi using RPC by default; it is the only layer that converts AgL agent values into host specs. `exec` creates one host per run and closes it on exit. The REPL keeps one host for its lifetime and routes session asks through the same confirmation mode as ordinary agent asks.
+`runtime/sessions.py` defines the AgL-neutral `SessionHost` firewall protocol, opaque host errors, and normalized session statistics. The AGM adapter in `agent/session/service.py` owns the session table and selects CLI backends by default, with Pi using RPC by default; it is the only layer that converts AgL agent values into host specs. Session retries remain on the same opaque handle so corrective feedback and later asks share a conversation. `exec` creates one host per run and closes it on exit. The REPL keeps one host for its lifetime and routes session asks through the same confirmation mode as ordinary agent asks.
 
 ## Pipeline Orchestrator
 

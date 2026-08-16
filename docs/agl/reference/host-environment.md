@@ -37,11 +37,13 @@ the selected value and does not contribute agent names or reconcile a registry.
 
 Per dispatch, an agent receives the rendered prompt, the output contract
 (format instructions plus derived JSON Schema, so schema-capable backends
-can use native structured output), the attempt number, and — on corrective
-retries — the previous invalid output with its validation errors
-([Agent calls](agent-calls.md)). The agent returns raw text. Hosts must pass
-the rendered prompt through verbatim, with no second template or
-environment-variable expansion.
+can use native structured output), and the attempt number. One-shot corrective
+retries include the previous invalid output with a category-based validation
+summary; `Session::ask` corrective retries instead include only that summary and
+a format reminder ([Agent calls](agent-calls.md)). The summary excludes
+response-derived validation paths, keys, and values. The agent returns raw text.
+Hosts must pass the rendered prompt through verbatim, with no second template
+or environment-variable expansion.
 
 Transport failures (spawn failure, nonzero exit, timeout) surface as the
 catchable `AgentCallError` with an enumerated `cause`; exit 0 with empty

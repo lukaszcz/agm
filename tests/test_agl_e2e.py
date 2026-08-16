@@ -111,11 +111,13 @@ class ScriptedAgent:
     repeat_last: bool = False
     session_capabilities: frozenset[str] = field(default_factory=lambda: _SESSION_CAPABILITY_NAMES)
     session_operations: dict[str, list[Any]] = field(default_factory=dict)
+    session_ask_outcomes: list[Any] | None = None
     prompts: list[str] = field(default_factory=list)
     schemas: list[Any] = field(default_factory=list)
     sessions: list[_ScriptedSession] = field(default_factory=list)
     overflowed: bool = False
     session_operations_overflowed: bool = False
+    session_ask_outcomes_overflowed: bool = False
     _response_count: int = 0
 
     def __post_init__(self) -> None:
@@ -213,6 +215,14 @@ class ScriptedAgent:
             return self.responses[-1]
         self.overflowed = True
         return ""
+
+    def _next_session_ask_outcome(self) -> Any:
+        if self.session_ask_outcomes is None:
+            return "success"
+        if not self.session_ask_outcomes:
+            self.session_ask_outcomes_overflowed = True
+            return "success"
+        return self.session_ask_outcomes.pop(0)
 
     def _next_operation(self, operation: str) -> Any:
         script = self.session_operations.get(operation)
@@ -497,9 +507,27 @@ class _ScriptedSessionBackend:
         self._session.opened = True
 
     def ask(self, request: Any) -> Any:
-        from agm.agent.session import SessionAskResponse
+        from agm.agent.session import SessionAskError, SessionAskResponse
+        from agm.agent.transport import AgentCallInfo
 
         self._session.prompts.append(request.prompt)
+        outcome = self._agent._next_session_ask_outcome()
+        if isinstance(outcome, dict):
+            elapsed = float(outcome.get("elapsed", 0.0))
+            exit_code = outcome.get("exit_code")
+            if not isinstance(exit_code, int | None):
+                raise ValueError("session ask outcome exit_code must be an integer or null")
+            raise SessionAskError(
+                cause=outcome.get("cause", "timeout"),
+                exit_code=exit_code,
+                stderr_tail=str(outcome.get("stderr_tail", "")),
+                elapsed=elapsed,
+                call_info=AgentCallInfo(
+                    argv=[], prompt_via_stdin=False, elapsed=elapsed, exit_code=exit_code
+                ),
+            )
+        if outcome != "success":
+            raise ValueError("session ask outcome must be 'success' or a transport failure")
         return SessionAskResponse(content=self._agent._next_response())
 
     def compact(self, instructions: str) -> None:
@@ -577,6 +605,9 @@ def _agent_from_spec(name: str, spec: Any) -> ScriptedAgent:
         str(operation): list(outcomes)
         for operation, outcomes in session.get("operations", {}).items()
     }
+    ask_outcomes = session.get("ask")
+    if ask_outcomes is not None and not isinstance(ask_outcomes, list):
+        raise ValueError("session ask outcomes must be a list")
     if capability_spec is not None:
         for operation, outcomes in operations.items():
             if any(_outcome_name(outcome) == "unsupported" for outcome in outcomes):
@@ -589,6 +620,7 @@ def _agent_from_spec(name: str, spec: Any) -> ScriptedAgent:
         repeat_last=bool(spec.get("repeat_last", False)),
         session_capabilities=capabilities,
         session_operations=operations,
+        session_ask_outcomes=None if ask_outcomes is None else list(ask_outcomes),
     )
 
 
@@ -834,6 +866,12 @@ def _assert_sessions(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -
     for name, agent in agents.items():
         assert not agent.session_operations_overflowed, (
             f"session operation script for agent {name!r} was used more times than scripted"
+        )
+        assert not agent.session_ask_outcomes_overflowed, (
+            f"session ask script for agent {name!r} was used more times than scripted"
+        )
+        assert not agent.session_ask_outcomes, (
+            f"session ask script for agent {name!r} was not fully consumed"
         )
         unconsumed = {
             operation: len(outcomes)

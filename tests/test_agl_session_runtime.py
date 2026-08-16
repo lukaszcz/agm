@@ -147,22 +147,30 @@ def test_default_session_snapshots_agent_and_closed_use_is_catchable() -> None:
     assert host.prompts["s1"] == ["one"]
 
 
-def test_session_ask_does_not_retry_parse_failures_and_maps_transport_errors() -> None:
-    host = _Host()
+def test_session_ask_retries_with_corrective_follow_ups_and_maps_transport_errors() -> None:
+    class RetryingHost(_Host):
+        def ask(self, handle: str, prompt: str) -> str:
+            super().ask(handle, prompt)
+            return ["not a number", "7", "conversation retained"][len(self.prompts[handle]) - 1]
+
+    host = RetryingHost()
     result = _run(
         "program def main() -> unit =\n"
         '  let session = Session::open(AgentCommand("worker"))\n'
-        "  try\n"
-        '    let number: int = session.ask("one chance", on_parse_error = Retry(n = 3))\n'
-        "    ()\n"
-        "  catch AgentParseError =>\n"
-        "    session.close()\n",
+        '  let number: int = session.ask("one chance", on_parse_error = Retry(n = 3))\n'
+        '  let later: text = session.ask("what did I ask?")\n'
+        "  session.close()\n",
         host,
     )
 
     assert result.ok
-    assert len(host.prompts["s1"]) == 1
+    assert len(host.prompts["s1"]) == 3
     assert host.prompts["s1"][0].startswith("one chance")
+    assert "one chance" not in host.prompts["s1"][1]
+    assert "not a number" not in host.prompts["s1"][1]
+    assert "Validation errors:" in host.prompts["s1"][1]
+    assert "Return only valid JSON matching the schema." in host.prompts["s1"][1]
+    assert host.prompts["s1"][2] == "what did I ask?"
 
     class AskingFailure(_Host):
         def ask(self, handle: str, prompt: str) -> str:
@@ -248,6 +256,79 @@ def test_session_ask_does_not_retry_parse_failures_and_maps_transport_errors() -
             InterruptedHost(),
         )
     assert interrupted.value.reason == "interrupted"
+
+
+def test_session_retry_redacts_schema_invalid_output_from_corrective_feedback() -> None:
+    class InvalidTypeRetryHost(_Host):
+        def ask(self, handle: str, prompt: str) -> str:
+            super().ask(handle, prompt)
+            return ['"wrong"', "7"][len(self.prompts[handle]) - 1]
+
+    host = InvalidTypeRetryHost()
+    result = _run(
+        "program def main() -> unit =\n"
+        '  let session = Session::open(AgentCommand("worker"))\n'
+        '  let number: int = session.ask("parse me", on_parse_error = Retry(n = 1))\n',
+        host,
+    )
+
+    assert result.ok
+    assert "wrong" not in host.prompts["s1"][1]
+    assert (
+        "Validation errors:\n- The response contains a value with an incorrect type."
+        in host.prompts["s1"][1]
+    )
+
+
+def test_session_parse_policies_exhaustion_and_transport_failures_stop_retrying() -> None:
+    class AlwaysInvalidHost(_Host):
+        def ask(self, handle: str, prompt: str) -> str:
+            super().ask(handle, prompt)
+            return "invalid"
+
+    for options, expected_attempts in [
+        ("", 1),
+        (", on_parse_error = Abort", 1),
+        (", on_parse_error = Retry(n = 2)", 3),
+    ]:
+        host = AlwaysInvalidHost()
+        result = _run(
+            "program def main() -> unit =\n"
+            '  let session = Session::open(AgentCommand("worker"))\n'
+            "  try\n"
+            f'    let number: int = session.ask("parse me"{options})\n'
+            "    ()\n"
+            "  catch AgentParseError =>\n"
+            "    session.close()\n",
+            host,
+        )
+
+        assert result.ok
+        assert len(host.prompts["s1"]) == expected_attempts
+
+    class FailingRetryHost(_Host):
+        def ask(self, handle: str, prompt: str) -> str:
+            super().ask(handle, prompt)
+            if len(self.prompts[handle]) == 1:
+                return "invalid"
+            raise SessionAskError(
+                cause="failed", exit_code=2, stderr_tail="tail", elapsed=1.0, call_info=None
+            )
+
+    transport_host = FailingRetryHost()
+    transport_result = _run(
+        "program def main() -> unit =\n"
+        '  let session = Session::open(AgentCommand("worker"))\n'
+        "  try\n"
+        '    let number: int = session.ask("parse me", on_parse_error = Retry(n = 3))\n'
+        "    ()\n"
+        "  catch AgentCallError =>\n"
+        "    session.close()\n",
+        transport_host,
+    )
+
+    assert transport_result.ok
+    assert len(transport_host.prompts["s1"]) == 2
 
 
 def test_dead_rpc_sessions_map_ask_failures_and_later_operations_to_distinct_errors(

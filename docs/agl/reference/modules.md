@@ -266,8 +266,8 @@ declarations across an import cycle.
 REPL imports and `use` declarations persist after a successful entry, retained
 as written: a retained wildcard expands again on every later entry, so it picks
 up modules added since. A later successful entry replaces the earlier import
-declaration for every module it names and the earlier `use` declaration for the
-same target in the same enclosing module or scope region. A failed entry
+declaration for every module it names at the same scope path and the earlier
+`use` declaration for the same resolved target at that path. A failed entry
 changes neither imports nor uses, and `:reset` clears both with the session
 bindings. An
 explicit `import std/core` retained from a successful entry

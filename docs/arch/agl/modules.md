@@ -17,9 +17,11 @@ declared module tree.
 surface. Import tails and `use` declarations add bare names without narrowing
 that qualified surface; `hiding` removes paths from the declaration that uses
 it. `use` resolves a local or already imported route and never loads a module.
-Imports, uses, and exports may occur in named scope regions, where their bare
-contributions apply to that region. Re-exports form part of the same program
-graph.
+Imports, uses, and exports may occur in named scope regions. An import's
+qualified routes remain module-wide, while import-tail and `use` bare
+contributions apply only to that region and its descendants. A scoped export
+instead re-roots forwarded paths beneath the region and contributes no regional
+bare names. Re-exports form part of the same program graph.
 
 Every loaded module except `std/core` receives the `std/core` prelude unless
 the host disables it. An explicit `import std/core` supplies that module's

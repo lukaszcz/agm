@@ -13,10 +13,10 @@ Static failures do not promote their entry; completed runtime effects retain
 their ordinary REPL behavior.
 
 Imports and `use` declarations also persist after a successful entry. A later
-import replaces retained declarations for the modules it names. A later `use`
-replaces a retained use with the same resolved import target in the same enclosing module or
-scope region, even when an import alias changes, while uses for other targets or regions remain. `:reset` clears
-retained declarations, imports, uses, and session runtime state. Retained
+import replaces retained declarations for the modules it names at the same
+scope path. A later `use` replaces a retained use with the same resolved target
+at that path, even when an import alias changes; uses and imports at other paths
+remain. `:reset` clears retained declarations, imports, uses, and session runtime state. Retained
 explicit `std/core` imports suppress the normal per-entry prelude; `--no-stdlib`
 disables that prelude for the whole session.
 

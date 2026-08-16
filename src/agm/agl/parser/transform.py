@@ -2737,7 +2737,7 @@ class AstBuilder(Transformer):
     def use_suffix_target_alias(self, meta: Meta, args: _Args) -> _UseEnding:
         """Build a use suffix with a final unmerged target segment and alias."""
         return _UseEnding(
-            prefixes=(),
+            prefixes=tuple(a for a in args if isinstance(a, Token) and a.type == "USEQUAL"),
             target=next(a for a in args if isinstance(a, Token) and a.type == "USE_TARGET_NAME"),
             alias=next(a for a in args if type(a) is str),
             tail=None,
@@ -2750,6 +2750,37 @@ class AstBuilder(Transformer):
             target=None,
             alias=None,
             tail=next(a for a in args if isinstance(a, _Selection)),
+        )
+
+    def use_suffix_alias_path(self, meta: Meta, args: _Args) -> _UseEnding:
+        """Build a whole-target alias with two or more prefixed segments."""
+        path = next(a for a in args if isinstance(a, Token) and a.type == "USE_ALIAS_PATH")
+        start_pos = path.start_pos
+        line = path.line
+        column = path.column
+        assert start_pos is not None and line is not None and column is not None
+        prefixes: list[Token] = []
+        relative = 0
+        for name in str(path).removesuffix("::").split("::"):
+            value = f"{name}::"
+            prefixes.append(
+                Token(
+                    "USEQUAL",
+                    value,
+                    start_pos=start_pos + relative,
+                    line=line,
+                    column=column + relative,
+                    end_line=line,
+                    end_column=column + relative + len(value),
+                    end_pos=start_pos + relative + len(value),
+                )
+            )
+            relative += len(value)
+        return _UseEnding(
+            prefixes=tuple(prefixes),
+            target=next(a for a in args if isinstance(a, Token) and a.type == "USE_TARGET_NAME"),
+            alias=next(a for a in args if type(a) is str),
+            tail=None,
         )
 
     def use_suffix_prefixed(self, meta: Meta, args: _Args) -> _UseEnding:

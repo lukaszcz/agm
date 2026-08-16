@@ -76,7 +76,7 @@
 // ---------------------------------------------------------------------------
 
 %declare NAME OP_NAME
-%declare IMPORT USE HIDING EXPORT SCOPE END MODQUAL USEQUAL USE_TARGET_NAME MODPATH WILDCARD
+%declare IMPORT USE HIDING EXPORT SCOPE END MODQUAL USEQUAL USE_ALIAS_PATH USE_TARGET_NAME MODPATH WILDCARD
 %declare PLACEHOLDER PLACEHOLDER_NUM
 %declare AS_QUESTION
 // TO, DOWNTO, BY: declared so they can appear in `field_name` (a keyword
@@ -854,8 +854,8 @@ use_decl : USE MODPATH use_suffix? hiding_clause?
 use_suffix : use_alias                    -> use_suffix_alias
            | DCOLON selection             -> use_suffix_tail
            | DCOLON USEQUAL use_suffix    -> use_suffix_prefixed
-           | USEQUAL use_suffix           -> use_suffix_prefixed
            | DCOLON USEQUAL+ selection     -> use_suffix_prefixed_tail
+           | DCOLON USE_ALIAS_PATH USE_TARGET_NAME use_alias -> use_suffix_alias_path
            | DCOLON USE_TARGET_NAME use_alias -> use_suffix_target_alias
            | USE_TARGET_NAME use_alias    -> use_suffix_target_alias
 use_anchored_suffix : USEQUAL+ selection                  -> use_anchored_tail

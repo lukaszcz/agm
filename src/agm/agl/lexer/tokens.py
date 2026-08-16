@@ -130,6 +130,7 @@ DO_LSQB = "DO_LSQB"  # [ opening a do-loop bound
 IMPORT = "IMPORT"  # contextual: 'import' at item-start
 USE = "USE"  # contextual: 'use' at item-start
 USEQUAL = "USEQUAL"  # synthetic: lexer-merged use-target qualifier prefix
+USE_ALIAS_PATH = "USE_ALIAS_PATH"  # synthetic: multi-segment whole-target alias path
 USE_TARGET_NAME = "USE_TARGET_NAME"  # synthetic: final use-target segment before an alias
 HIDING = "HIDING"  # contextual: 'hiding' in a module header
 EXPORT = "EXPORT"  # contextual: 'export' at item-start

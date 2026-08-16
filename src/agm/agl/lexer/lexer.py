@@ -64,6 +64,7 @@ from agm.agl.lexer.tokens import (
     STAR,
     TYPEARG_LSQB,
     USE,
+    USE_ALIAS_PATH,
     USE_TARGET_NAME,
     USEQUAL,
     WILDCARD,
@@ -768,10 +769,46 @@ def _reject_clinging_slash(tokens: list[Token]) -> list[Token]:
     return tokens
 
 
+def _merge_use_alias_paths(tokens: list[Token]) -> list[Token]:
+    """Merge multi-segment whole-target alias prefixes into one deterministic token."""
+    result: list[Token] = []
+    index = 0
+    while index < len(tokens):
+        end = index
+        while end < len(tokens) and tokens[end].type == USEQUAL:
+            end += 1
+        if (
+            end - index >= 2
+            and end + 1 < len(tokens)
+            and tokens[end].type == USE_TARGET_NAME
+            and _is_as(tokens[end + 1])
+        ):
+            first = tokens[index]
+            last = tokens[end - 1]
+            result.append(
+                Token(
+                    USE_ALIAS_PATH,
+                    "".join(f"{str(token).removesuffix('::')}::" for token in tokens[index:end]),
+                    start_pos=first.start_pos,
+                    line=first.line,
+                    column=first.column,
+                    end_line=last.end_line,
+                    end_column=last.end_column,
+                    end_pos=last.end_pos,
+                )
+            )
+            index = end
+            continue
+        result.append(tokens[index])
+        index += 1
+    return result
+
+
 def apply_module_passes(tokens: list[Token], source: str) -> list[Token]:
     """Apply soft-keyword promotion, import path merging, and module-qualifier merging."""
     promoted = _promote_soft_keywords(tokens)
-    return _reject_clinging_slash(_merge_modqual(_promote_hiding(_merge_modpath(promoted)), source))
+    merged = _merge_modqual(_promote_hiding(_merge_modpath(promoted)), source)
+    return _reject_clinging_slash(_merge_use_alias_paths(merged))
 
 
 def unclosed_scope_path(source: str) -> str | None:

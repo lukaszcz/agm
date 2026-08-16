@@ -436,13 +436,16 @@ def build_import_env(
     root_scope_routes: dict[NameAtom, set[BareRoute]] = {}
     decl_scope_routes: dict[int, dict[NameAtom, set[BareRoute]]] = {}
     facade_aliases: dict[str, dict[int, set[ModuleId]]] = {}
+    canonical_wildcard_node_ids: dict[ImportDecl, int] = {}
     scope_origins_by_route: dict[BareRoute, ScopeOrigins] = {}
     public_scopes = scope_exports or {}
     for decl in decls:
         target = targets[decl.node_id]
         modules = _targets(target)
         wildcard_origin_node_id = (
-            decl.node_id if isinstance(target, WildcardTarget) else decl.wildcard_origin_node_id
+            canonical_wildcard_node_ids.setdefault(decl, decl.node_id)
+            if isinstance(target, WildcardTarget)
+            else decl.wildcard_origin_node_id
         )
         if decl.alias is not None and wildcard_origin_node_id is not None:
             facade_aliases.setdefault(decl.alias, {}).setdefault(

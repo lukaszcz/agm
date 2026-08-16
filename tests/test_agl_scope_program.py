@@ -1531,6 +1531,18 @@ class TestWildcardImports:
         ref = result.modules[ENTRY_ID].resolved.resolution[alpha_var.node_id]
         assert ref.module_id == ModuleId.from_path("foo/alpha")
 
+    def test_repeated_identical_wildcard_alias_preserves_facade(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": ("import pkg/* as F\nimport pkg/* as F\nuse F::*\nfirst() + second()"),
+                "pkg/a": "def first() -> int = 1",
+                "pkg/b": "def second() -> int = 2",
+            },
+        )
+
+        resolve_program(graph)
+
     def test_wildcard_facade_accepts_duplicate_routes_to_the_same_origin(
         self, tmp_path: Path
     ) -> None:

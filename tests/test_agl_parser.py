@@ -3854,6 +3854,10 @@ class TestImportDecl:
         assert decl.alias == alias
         assert decl.tail == tail
 
+    def test_use_current_module_anchor_rejects_module_route(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse("use ::foo/bar::*")
+
     @pytest.mark.parametrize(
         ("source", "target"),
         (

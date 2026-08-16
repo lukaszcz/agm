@@ -2845,6 +2845,8 @@ class AstBuilder(Transformer):
             else next(a for a in args if isinstance(a, _UseEnding))
         )
         for token in ending.prefixes:
+            if anchored_target is not None and "/" in str(token):
+                raise AglSyntaxError(_MODULE_ROUTE_MESSAGE, span=self._span_from_token(token))
             target_segments.append(
                 (str(token).removesuffix("::"), self._trim_token_span(token, end=2))
             )

@@ -682,6 +682,31 @@ def test_enum_owner_forms_exclude_ambiguous_suffix_routes(tmp_path: Path) -> Non
     } >= {("one", "config"), ("two", "config")}
 
 
+def test_enum_owner_forms_do_not_cross_repeated_import_routes(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import alpha as X hiding E\n"
+                "import alpha\n"
+                "import beta as X\n"
+                "let value = alpha::E::One\n"
+                "case value of | alpha::E::One => 1 | _ => 0\n"
+            ),
+            "alpha": "enum E | One | Two\n",
+            "beta": "enum E | Other\n",
+        },
+    )
+
+    checked = check_program(resolve_program(graph), base_caps())
+    forms = checked.modules[graph.entry_id].type_env.enum_owner_forms()
+    alias_forms = [
+        form for form in forms if form.owner_name == "E" and form.module_qualifier == ("X",)
+    ]
+
+    assert {form.source_module_id for form in alias_forms} == {ModuleId.from_path("beta")}
+
+
 def test_anchored_constructor_route_never_falls_back_to_a_local_type(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,

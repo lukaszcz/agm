@@ -2204,7 +2204,7 @@ class TypeEnvironment:
                         resolved = resolve_qualified(
                             self._import_env, qualifier, exposed_name, anchored=anchored
                         )
-                        if not isinstance(resolved, QualResolutionFound):
+                        if not isinstance(resolved, QualResolutionFound) or resolved.qname != qname:
                             continue
                         forms.add(
                             EnumOwnerForm(

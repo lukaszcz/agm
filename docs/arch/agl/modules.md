@@ -2,16 +2,17 @@
 
 AgL programs are file-based module graphs. A module is addressed by a slash
 path such as `tools/format`, and its public declarations are available to
-importers through qualified routes. The loader resolves the entry module and
-its transitive imports before the program-level scope, typecheck, match
-compilation, and lowering passes run.
+importers through qualified routes. The loader resolves the entry module and its transitive import and re-export
+dependencies before the program-level scope, typecheck, match compilation, and
+lowering passes run.
 
 ## Loading and Visibility
 
-Module roots come from the invocation, standard library, configured roots, and
-mounted packages. A path must resolve to exactly one eligible `.agl` file;
-ambiguous paths are errors. Package roots limit visibility to the package's
-declared module tree.
+Module roots come from the invocation, selected standard library, global library,
+configuration, CLI module paths, and mounted packages. A path must resolve to
+exactly one eligible `.agl` file; ambiguous paths are errors. Package-owned
+modules can depend only on their own module tree, the standard library, and
+mounted dependencies declared by their package; loose modules remain unrestricted.
 
 `import` adds a module-graph edge and qualified access to a module's public
 surface. Import tails and `use` declarations add bare names without narrowing

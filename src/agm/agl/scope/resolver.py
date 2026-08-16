@@ -1792,15 +1792,14 @@ class _Resolver:
                 if members is None:
                     module, source = imported_route
                     contribution = self._import_env.contributions.get(module)
-                    if contribution is None:
-                        continue
+                    assert contribution is not None
                     members = self._relative_use_import_members(
                         contribution.members,
                         source,
                         target_exists=(imported_route in self._import_env.scope_origins_by_route),
                     )
-                if members is not None:
-                    replayed.append((imported_route, members))
+                assert members is not None
+                replayed.append((imported_route, members))
             imported = tuple(replayed)
         direct_routes = {imported_route for imported_route, _members in direct_imports}
         facade_declarations = (
@@ -1961,8 +1960,7 @@ class _Resolver:
     def _import_scope_routes(self, imported_route: BareRoute) -> dict[NameAtom, BareRoute]:
         """Return all scope identities beneath one exact imported route."""
         contribution = self._import_env.contributions.get(imported_route[0])
-        if contribution is None:
-            return {}
+        assert contribution is not None
         scope_paths = set(contribution.path_scope_paths)
         for alias_paths in contribution.alias_scope_paths.values():
             scope_paths.update(alias_paths)

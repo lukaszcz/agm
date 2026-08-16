@@ -2323,23 +2323,10 @@ class TypeEnvironment:
         key = self._bare_type_key(name, span)
         if key is None:
             key = self._live_use_generic_key(name, span)
-        if key is not None and self._program_generic_table is not None:
-            gdef = self._program_generic_table.get(key)
-            if gdef is not None:
-                return name, gdef
-        matches = self._open_imported_generic_type_matches(name)
-        if len(matches) > 1:
-            labels = sorted(
-                f"{module_id.display()}::{source_name}" for module_id, source_name, _ in matches
-            )
-            raise AglTypeError(
-                f"Ambiguous generic type '{name}': it is exported by multiple modules "
-                f"({', '.join(labels)}). Use a qualified reference to disambiguate.",
-                span=span,
-            )
-        if len(matches) == 1:
-            return name, matches[0][2]
-        return None
+        if key is None or self._program_generic_table is None:
+            return None
+        gdef = self._program_generic_table.get(key)
+        return None if gdef is None else (name, gdef)
 
     def resolve_qualified_unapplied_generic_type(
         self,

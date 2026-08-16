@@ -504,39 +504,26 @@ def local_use_contribution_refs(
     scope_nodes: Mapping[ScopePath, ScopeNode],
 ) -> set[BindingRef]:
     """Resolve one exposed atom against a live local-use surface."""
-    target = contribution.source.scope_path
-    members: dict[BareAtom, BindingRef] = {}
-    for path, scope in scope_nodes.items():
-        if path[: len(target)] != target:
-            continue
-        relative = path[len(target) :]
-        for member_name, ref in scope.members.items():
-            members[to_bare_atom((*relative, member_name))] = ref
-
+    del scope_nodes
     decl = contribution.declaration
-    selected: dict[BareAtom, BindingRef] = {}
     if decl.alias is not None:
-        selected.update(
-            {to_bare_atom((decl.alias, *to_bare_path(atom))): ref for atom, ref in members.items()}
-        )
+        exposed_path = to_bare_path(name)
+        if not exposed_path or exposed_path[0] != decl.alias:
+            return set()
+        source_path = exposed_path[1:]
     elif decl.tail == ():
-        selected.update(members)
+        source_path = to_bare_path(name)
     else:
-        for item in decl.tail or ():
-            prefix = import_item_path(item)
-            for atom, ref in members.items():
-                path = to_bare_path(atom)
-                if path[: len(prefix)] != prefix:
-                    continue
-                selected[atom] = ref
-                if item.rename is not None:
-                    selected[to_bare_atom((item.rename, *path[len(prefix) :]))] = ref
-    for hidden in decl.hidden:
-        prefix = import_item_path(hidden)
-        for atom in tuple(selected):
-            if to_bare_path(atom)[: len(prefix)] == prefix:
-                selected.pop(atom)
-    selected_ref = selected.get(name)
+        return set()
+    if any(
+        source_path[: len(prefix)] == prefix
+        for hidden in decl.hidden
+        if (prefix := import_item_path(hidden))
+    ):
+        return set()
+    if len(source_path) != 1:
+        return set()
+    selected_ref = contribution.source.members.get(source_path[0])
     return set() if selected_ref is None else {selected_ref}
 
 

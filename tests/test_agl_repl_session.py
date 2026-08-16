@@ -4800,6 +4800,22 @@ class TestImports:
         assert session.eval_entry("import pkg/* as Facade\nuse Facade::*").ok
         assert session.eval_entry("first() + second()").value == IntValue(3)
 
+    def test_retained_separate_wildcard_aliases_do_not_form_one_facade(
+        self, tmp_path: Path
+    ) -> None:
+        alpha = tmp_path / "alpha"
+        beta = tmp_path / "beta"
+        alpha.mkdir()
+        beta.mkdir()
+        (alpha / "one.agl").write_text("def first() -> int = 1\n", encoding="utf-8")
+        (beta / "two.agl").write_text("def second() -> int = 2\n", encoding="utf-8")
+        session = self._make_session_with_root(tmp_path)
+
+        assert session.eval_entry("import alpha/* as Facade").ok
+        assert session.eval_entry("import beta/* as Facade").ok
+
+        assert not session.eval_entry("use Facade::*").ok
+
     def test_local_and_current_module_use_spellings_replace_each_other(self) -> None:
         session = ReplSession()
         assert session.eval_entry("def Source::old() -> int = 1").ok

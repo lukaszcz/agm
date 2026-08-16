@@ -1770,12 +1770,14 @@ class _Resolver:
         used_imports = () if decl.anchored else self._used_import_targets(target)
         imported = self._merge_use_import_targets(direct_imports, bare_imports, used_imports)
         direct_routes = {imported_route for imported_route, _members in direct_imports}
+        facade_declarations = (
+            self._import_env.facade_aliases.get(route[0], {}) if len(route) == 1 else {}
+        )
         shared_alias_facade = (
             not decl.anchored
-            and len(route) == 1
             and len(direct_candidates) > 1
-            and frozenset(module for module, _members in direct_candidates)
-            == self._import_env.facade_aliases.get(route[0], frozenset())
+            and tuple(facade_declarations.values())
+            == (frozenset(module for module, _members in direct_candidates),)
             and {imported_route for imported_route, _members in imported} == direct_routes
         )
         if local is not None and imported:

@@ -107,8 +107,9 @@ class ImportDecl:
 
     ``tail`` is ``None`` for no tail, empty for ``::*``, or contains the
     selected atoms. ``scope_path`` is non-empty when the declaration is a
-    region item. ``wildcard_origin`` preserves facade identity when an
-    incremental host expands the wildcard into exact module declarations.
+    region item. ``wildcard_origin_node_id`` preserves the source wildcard's
+    declaration identity when an incremental host expands it into exact
+    module declarations.
     """
 
     module_path: tuple[str, ...]
@@ -119,7 +120,7 @@ class ImportDecl:
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     scope_path: tuple[ScopeSegment, ...] = ()
-    wildcard_origin: bool = False
+    wildcard_origin_node_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

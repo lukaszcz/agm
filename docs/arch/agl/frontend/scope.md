@@ -27,9 +27,10 @@ An imported or re-exported empty scope remains nameable without becoming a value
 its full public qualified surface, except paths hidden by that
 declaration. A positive
 import tail or `use` declaration contributes selected bare names without
-narrowing qualified access. A wildcard import alias retains its declaration
-identity as a shared facade; routes through that facade may converge on the same
-origin, while unrelated imports that reuse an alias remain ambiguous. `use` selects
+narrowing qualified access. A wildcard import alias retains its source declaration
+identity as a shared facade, including through an incremental host's exact-module
+expansion; routes through that facade may converge on the same origin, while unrelated
+imports that reuse an alias remain ambiguous. `use` selects
 from an already nameable local scope or imported route,
 including a scope route exposed by an earlier `use`; imported `use` surfaces retain their filtered
 member and scope-route provenance on the owning lexical region. It does not create a

@@ -1538,6 +1538,19 @@ class TestWildcardImports:
         with pytest.raises(AglScopeError, match="ambiguous across imported modules"):
             resolve_program(graph)
 
+    def test_separate_wildcard_aliases_do_not_form_one_use_facade(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import alpha/* as F\nimport beta/* as F\nuse F::*",
+                "alpha/one": "def first() -> int = 1",
+                "beta/two": "def second() -> int = 2",
+            },
+        )
+
+        with pytest.raises(AglScopeError, match="ambiguous across imported modules"):
+            resolve_program(graph)
+
     def test_nonfacade_route_keeps_wildcard_alias_use_ambiguous(self, tmp_path: Path) -> None:
         graph = _make_graph_from_files(
             tmp_path,

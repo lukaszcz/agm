@@ -56,6 +56,79 @@ def test_scope_resolves_suffix_anchor_and_tail_contributions(tmp_path: Path) -> 
     assert secondary in resolved_modules
 
 
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "case value of | X::E::A(_ as item) => item | _ => 0",
+        "value is X::E::A",
+    ],
+)
+def test_constructor_consumers_resolve_whole_use_aliases(tmp_path: Path, expression: str) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use S as X\n"
+                "scope S\n"
+                "enum E\n  | A(value: int)\n  | B\n"
+                "end S\n"
+                "let value = X::E::A(1)\n"
+                f"{expression}\n"
+            ),
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_constructor_consumers_honor_use_tail_renames(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use S::{E::A as X}\n"
+                "scope S\n"
+                "enum E\n  | A(value: int)\n  | B\n"
+                "end S\n"
+                "let value = X(1)\n"
+                "let selected = case value of | X(_ as item) => item | _ => 0\n"
+                "let matches = value is X\n"
+                "selected\n"
+            ),
+        },
+    )
+
+    checked = check_program(resolve_program(graph), base_caps())
+    constructors = tuple(checked.modules[graph.entry_id].resolved.constructor_refs.values())
+    assert any(constructor.variant == "A" for constructor in constructors)
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "case value of | E::A(_ as item) => item | _ => 0",
+        "value is E::A",
+    ],
+)
+def test_constructor_consumers_honor_use_hiding(tmp_path: Path, expression: str) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use S::* hiding E::A\n"
+                "scope S\n"
+                "enum E\n  | A(value: int)\n  | B\n"
+                "end S\n"
+                "let value = S::E::A(1)\n"
+                f"{expression}\n"
+            ),
+        },
+    )
+
+    with pytest.raises((AglScopeError, AglTypeError)):
+        check_program(resolve_program(graph), base_caps())
+
+
 def test_use_imported_nested_scope_selects_its_relative_public_subtree(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,

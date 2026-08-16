@@ -2276,9 +2276,22 @@ class _Resolver:
         elif isinstance(expr, UnaryNeg):
             self._resolve_expr(expr.operand)
         elif isinstance(expr, IsTest):
-            self._resolve_constructor_chain(
-                expr.node_id, expr.qualifier, expr.variant, defer_route_diagnostics=True
-            )
+            if expr.qualifier is None:
+                candidates = self._regional_constructor_candidates(expr.variant)
+                if candidates is not None:
+                    if len(candidates) == 1:
+                        self._constructor_refs[expr.node_id] = next(iter(candidates))
+                else:
+                    self._resolve_constructor_chain(
+                        expr.node_id,
+                        expr.qualifier,
+                        expr.variant,
+                        defer_route_diagnostics=True,
+                    )
+            else:
+                self._resolve_constructor_chain(
+                    expr.node_id, expr.qualifier, expr.variant, defer_route_diagnostics=True
+                )
             self._resolve_expr(expr.expr)
         elif isinstance(expr, Cast):
             self._resolve_expr(expr.expr)
@@ -2692,6 +2705,18 @@ class _Resolver:
         """
         if chain is None:
             return False
+        opened = self._use_constructor_candidates(chain, variant)
+        if opened is not None:
+            if len(opened) == 1:
+                self._constructor_refs[node_id] = next(iter(opened))
+                return True
+            if not opened:
+                rendered = "::".join((*tuple(segment.name for segment in chain.segments), variant))
+                raise AglScopeError(
+                    f"Constructor '{rendered}' is not visible through this use route.",
+                    span=chain.span,
+                )
+            return False
         local_path = self._validate_local_scope_chain(chain)
         if local_path in self._type_paths:
             if chain.anchor is None and qualifier_contributes(
@@ -2743,6 +2768,23 @@ class _Resolver:
                 self._constructor_refs[node_id] = replace(candidate, variant=variant)
                 return True
         return False
+
+    def _use_constructor_candidates(
+        self, chain: QualifierChain, variant: str
+    ) -> set[ConstructorRef] | None:
+        """Return a use route's exact constructor selection, including hidden verdicts."""
+        if chain.anchor is not None:
+            return None
+        relative_path = tuple(segment.name for segment in chain.segments)
+        opened = self._regional_constructor_candidates(_bare_atom((*relative_path, variant)))
+        if opened is not None:
+            return opened
+        if (
+            relative_path
+            and self._bare_contribution_candidates(_bare_atom(relative_path)) is not None
+        ):
+            return set()
+        return None
 
     def _constructor_for_type_path(
         self, path: ScopePath, variant: str, span: SourceSpan
@@ -3368,10 +3410,15 @@ class _Resolver:
                 for candidate in self._constructor_candidates.get(node.name, ())
                 if candidate.owner_module_id == self._module_id and not candidate.owner_path
             )
-        if chain.anchor is None:
-            opened = self._regional_constructor_candidates(_bare_atom((*relative_path, node.name)))
-            if opened:
-                return tuple(opened)
+        opened = self._use_constructor_candidates(chain, node.name)
+        if opened is not None:
+            if not opened:
+                rendered = "::".join((*relative_path, node.name))
+                raise AglScopeError(
+                    f"Constructor '{rendered}' is not visible through this use route.",
+                    span=chain.span,
+                )
+            return tuple(opened)
         local_path = self._validate_local_scope_chain(chain)
         if local_path is not None:
             if local_path in self._type_paths:

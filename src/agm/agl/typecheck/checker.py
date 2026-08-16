@@ -3975,15 +3975,20 @@ class _Checker:
                     span=node.span,
                 )
             constructor = self._constructor_ref_for(node.node_id)
-            if constructor is None or not constructor.matches(expr_type, node.variant):
+            variant = (
+                constructor.variant
+                if constructor is not None and constructor.variant is not None
+                else node.variant
+            )
+            if constructor is None or not constructor.matches(expr_type, variant):
                 self._check_variant_qualification(
                     qualifier=node.qualifier,
                     variant=node.variant,
                     enum_type=expr_type,
                     span=node.span,
                 )
-            if node.variant not in self._env.type_table.enum_variants(expr_type):
-                raise _variant_not_in_enum(node.variant, expr_type, node.span)
+            if variant not in self._env.type_table.enum_variants(expr_type):
+                raise _variant_not_in_enum(variant, expr_type, node.span)
             return BoolType()
 
     def _qualified_constructor_typed_call_error(self, span: SourceSpan) -> AglTypeError:
@@ -4812,32 +4817,36 @@ class _Checker:
         variant_name: str | None
         fields: Mapping[str, Type]
         context_desc: str
-        if isinstance(subj_type, EnumType):
-            self._check_variant_qualification(
-                qualifier=pattern.qualifier,
-                variant=pattern.name,
-                enum_type=subj_type,
-                span=pattern.span,
-            )
-            variants = self._env.type_table.enum_variants(subj_type)
-            if pattern.name not in variants:
-                raise _variant_not_in_enum(pattern.name, subj_type, pattern.span)
-            owner_type = subj_type
-            variant_name = pattern.name
-            fields = variants[variant_name]
-            context_desc = f"variant '{owner_type.name}.{variant_name}'"
-        elif isinstance(subj_type, RecordType):
-            owner_type = subj_type
-            variant_name = None
-            fields = self._env.type_table.record_fields(owner_type)
-            context_desc = f"constructor '{owner_type.name}'"
-        else:
+        if not isinstance(subj_type, (RecordType, EnumType)):
             raise AglTypeError(
                 f"Cannot match constructor pattern '{pattern.name}' against non-record or non-enum "
                 f"type '{subj_type!r}'.",
                 span=pattern.span,
             )
+        owner_type = subj_type
         constructor_ref = self._constructor_pattern_ref(pattern, owner_type)
+        if isinstance(owner_type, EnumType):
+            variant_name = (
+                constructor_ref.variant
+                if constructor_ref is not None and constructor_ref.variant is not None
+                else pattern.name
+            )
+            if constructor_ref is None:
+                self._check_variant_qualification(
+                    qualifier=pattern.qualifier,
+                    variant=pattern.name,
+                    enum_type=owner_type,
+                    span=pattern.span,
+                )
+            variants = self._env.type_table.enum_variants(owner_type)
+            if variant_name not in variants:
+                raise _variant_not_in_enum(variant_name, owner_type, pattern.span)
+            fields = variants[variant_name]
+            context_desc = f"variant '{owner_type.name}.{variant_name}'"
+        else:
+            variant_name = None
+            fields = self._env.type_table.record_fields(owner_type)
+            context_desc = f"constructor '{owner_type.name}'"
         if constructor_ref is None and isinstance(owner_type, EnumType) and pattern.qualifier:
             typedef = self._env.type_table.get(
                 owner_type.module_id, owner_type.name, owner_type.scope_path
@@ -4897,7 +4906,8 @@ class _Checker:
         if not isinstance(field_type, EnumType):
             return None
         for candidate in self._resolved.pattern_constructor_candidates.get(pattern.node_id, ()):
-            if candidate.matches(field_type, pattern.name):
+            variant = candidate.variant if candidate.variant is not None else pattern.name
+            if candidate.matches(field_type, variant):
                 return candidate
         return None
 
@@ -4910,7 +4920,7 @@ class _Checker:
             # enum; the bare name then names no constructor of this enum, even
             # when this enum happens to declare a same-named variant.
             raise _variant_not_in_enum(pattern.name, enum_type, pattern.span)
-        self._require_nullary_bare_constructor(pattern, enum_type)
+        self._require_nullary_bare_constructor(pattern, enum_type, candidate)
         self._record_pattern_classification(pattern.node_id, candidate)
 
     def _check_field_bare_pattern(
@@ -4938,7 +4948,7 @@ class _Checker:
             self._record_pattern_classification(pattern.node_id, None)
             return
         if candidate is not None:
-            self._require_nullary_bare_constructor(pattern, field_type)
+            self._require_nullary_bare_constructor(pattern, field_type, candidate)
             self._record_pattern_classification(pattern.node_id, candidate)
             return
         if pattern.name in field_names:
@@ -4952,12 +4962,15 @@ class _Checker:
             span=pattern.span,
         )
 
-    def _require_nullary_bare_constructor(self, pattern: VarPattern, enum_type: Type) -> None:
+    def _require_nullary_bare_constructor(
+        self, pattern: VarPattern, enum_type: Type, candidate: ConstructorRef
+    ) -> None:
         """Require a bare constructor spelling to be a nullary matched enum variant."""
         assert isinstance(enum_type, EnumType)
-        fields = self._env.type_table.enum_variants(enum_type).get(pattern.name)
+        variant = candidate.variant if candidate.variant is not None else pattern.name
+        fields = self._env.type_table.enum_variants(enum_type).get(variant)
         if fields is None:
-            raise _variant_not_in_enum(pattern.name, enum_type, pattern.span)
+            raise _variant_not_in_enum(variant, enum_type, pattern.span)
         if fields:
             raise AglTypeError(
                 f"'{pattern.name}' has fields; write '{pattern.name}(...)' to match it.",

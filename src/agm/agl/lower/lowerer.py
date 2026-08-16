@@ -1369,17 +1369,23 @@ class _Lowerer:
                     failure_mode=ConversionFailureMode.RETURN_BOOL,
                 )
 
-            case IsTest(expr=operand, variant=variant, negated=negated, span=span):
+            case IsTest(expr=operand, variant=variant, negated=negated, span=span, node_id=nid):
                 # The checker guarantees the operand is enum-typed (see
                 # _check_is_test); build the nominal from its checked EnumType.
                 operand_type = self._node_type(operand.node_id)
                 assert isinstance(operand_type, EnumType), (
                     "is-test operand must be enum-typed (checker guarantees this)"
                 )
+                constructor = self._checked.constructor_ref_for(nid)
+                selected_variant = (
+                    constructor.variant
+                    if constructor is not None and constructor.variant is not None
+                    else variant
+                )
                 return IrVariantIs(
                     location=self._loc(span),
                     nominal=NominalId(operand_type.decl_id),
-                    variant=variant,
+                    variant=selected_variant,
                     value=self.lower_expr(operand),
                     negated=negated,
                 )

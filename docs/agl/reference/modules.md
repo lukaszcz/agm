@@ -216,7 +216,9 @@ export math/*
 
 Re-exports preserve the original defining-module identity. Conflicting exposed
 names with different origins are static errors; duplicate paths to the same
-origin are allowed.
+origin are allowed. A public name cannot be both an ordinary declaration and a
+named scope, including when either side is re-exported. Type declarations keep
+their legal same-named, type-owned namespaces.
 
 ## Prelude
 

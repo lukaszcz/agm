@@ -2704,6 +2704,73 @@ class TestExportDecl:
         with pytest.raises(AglScopeError):
             resolve_program(graph)
 
+    def test_reexported_ordinary_name_cannot_replace_a_local_scope_identity(
+        self, tmp_path: Path
+    ) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import facade\n()",
+                "facade": "export lib::{member as Public}\nscope Public\nend Public",
+                "lib": "def member() -> int = 1",
+            },
+            default_stdlib=False,
+        )
+
+        with pytest.raises(AglScopeError):
+            resolve_program(graph)
+
+    def test_reexported_scope_identity_cannot_replace_a_local_ordinary_name(
+        self, tmp_path: Path
+    ) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import facade\n()",
+                "facade": "export lib::{Source as Public}\ndef Public() -> int = 1",
+                "lib": "scope Source\nend Source",
+            },
+            default_stdlib=False,
+        )
+
+        with pytest.raises(AglScopeError):
+            resolve_program(graph)
+
+    def test_reexported_type_can_own_a_local_scope_namespace(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "import facade\nlet value = facade::Public(value = 1)\nfacade::Public::read()"
+                ),
+                "facade": (
+                    "export lib::{Source as Public}\n"
+                    "scope Public\n"
+                    "def read() -> int = 1\n"
+                    "end Public"
+                ),
+                "lib": "record Source(value: int)",
+            },
+            default_stdlib=False,
+        )
+
+        resolve_program(graph)
+
+    def test_local_type_can_own_a_reexported_scope_namespace(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "import facade\nlet value = facade::Public(value = 1)\nfacade::Public::read()"
+                ),
+                "facade": "export lib::{Source as Public}\nrecord Public(value: int)",
+                "lib": "scope Source\ndef read() -> int = 1\nend Source",
+            },
+            default_stdlib=False,
+        )
+
+        resolve_program(graph)
+
     def test_export_brace_tail_selects_reexports_through_chain(self, tmp_path: Path) -> None:
         """A brace-tail export resolves after its target's re-exports populate."""
         graph = _make_graph_from_files(

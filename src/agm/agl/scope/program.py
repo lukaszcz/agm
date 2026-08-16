@@ -375,9 +375,17 @@ def _raise_reexport_conflict(
     )
 
 
+def _raise_reexport_scope_conflict(exposed: NameAtom, decl: ExportDecl) -> None:
+    raise AglScopeError(
+        f"Name {exposed!r} cannot be both an ordinary declaration and a scope.",
+        span=decl.span,
+    )
+
+
 def _resolve_reexports(
     export_maps: dict[ModuleId, dict[NameAtom, QName]],
     scope_export_maps: dict[ModuleId, dict[NameAtom, ScopeOrigins]],
+    type_origins: frozenset[QName],
     all_targets: dict[int, ImportTarget],
     graph: ModuleGraph,
 ) -> None:
@@ -415,6 +423,8 @@ def _resolve_reexports(
                         allow_missing=True,
                     )
                     for exposed, qname in additions.items():
+                        if exposed in scope_export_maps[mid] and qname not in type_origins:
+                            _raise_reexport_scope_conflict(exposed, decl)
                         existing = export_maps[mid].get(exposed)
                         if existing is None:
                             export_maps[mid][exposed] = qname
@@ -423,6 +433,9 @@ def _resolve_reexports(
                         elif existing != qname:
                             _raise_reexport_conflict(exposed, existing, qname, decl)
                     for exposed, origins in scope_additions.items():
+                        existing = export_maps[mid].get(exposed)
+                        if existing is not None and existing not in type_origins:
+                            _raise_reexport_scope_conflict(exposed, decl)
                         existing_origins = scope_export_maps[mid].get(exposed, frozenset())
                         merged_origins = existing_origins | origins
                         if merged_origins != existing_origins:
@@ -637,9 +650,15 @@ def resolve_program(
     # ------------------------------------------------------------------
     export_maps: dict[ModuleId, dict[NameAtom, QName]] = {}
     scope_export_maps: dict[ModuleId, dict[NameAtom, ScopeOrigins]] = {}
+    type_origins: set[QName] = set()
     for mid, loaded in graph.modules.items():
         export_maps[mid] = _compute_local_exports(mid, loaded.program)
         scope_export_maps[mid] = _compute_local_scope_exports(mid, loaded.program)
+        type_origins.update(
+            (mid, _item_atom(item))
+            for item in static_items(loaded.program.body.items)
+            if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
+        )
 
     # ------------------------------------------------------------------
     # Step 2: Map ImportDecl and ExportDecl → ImportTarget for every module.
@@ -656,7 +675,7 @@ def resolve_program(
     # ------------------------------------------------------------------
     # Step 3: Resolve re-exports (fixed-point propagation).
     # ------------------------------------------------------------------
-    _resolve_reexports(export_maps, scope_export_maps, all_targets, graph)
+    _resolve_reexports(export_maps, scope_export_maps, frozenset(type_origins), all_targets, graph)
 
     # ------------------------------------------------------------------
     # Step 4: Build ImportEnv per module.

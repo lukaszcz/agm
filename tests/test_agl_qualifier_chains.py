@@ -451,6 +451,28 @@ def test_use_resolves_aliases_suffixes_anchored_routes_and_nested_scopes(tmp_pat
     )
 
 
+def test_use_wildcard_alias_facade_combines_module_members(tmp_path: Path) -> None:
+    _entry_resolution(
+        tmp_path,
+        {
+            "entry": "import pkg/* as Facade\nuse Facade::*\nfirst() + second()\n",
+            "pkg/a": "def first() -> int = 1\n",
+            "pkg/b": "def second() -> int = 2\n",
+        },
+    )
+
+
+def test_use_wildcard_alias_facade_preserves_member_ambiguity(tmp_path: Path) -> None:
+    modules = {
+        "entry": "import pkg/* as Facade\nuse Facade::*\ncommon()\n",
+        "pkg/a": "def common() -> int = 1\n",
+        "pkg/b": "def common() -> int = 2\n",
+    }
+
+    with pytest.raises(AglScopeError, match="ambiguous"):
+        _entry_resolution(tmp_path, modules)
+
+
 def test_use_target_local_module_ambiguity_requires_an_anchor(tmp_path: Path) -> None:
     modules = {
         "Point": "def remote() -> int = 1\n",

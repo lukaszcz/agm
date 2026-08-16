@@ -1694,6 +1694,15 @@ class _Resolver:
             if (relative_members := self._relative_use_import_members(members, route_target))
             is not None
         )
+        shared_alias_facade = (
+            not decl.anchored
+            and len(route) == 1
+            and len(direct_candidates) > 1
+            and all(
+                route[0] in self._import_env.contributions[module].alias_members
+                for module, _members in direct_candidates
+            )
+        )
         bare_imports = () if decl.anchored else self._bare_use_import_targets(target)
         imported = self._merge_use_import_targets(direct_imports, bare_imports)
         if local is not None and imported:
@@ -1713,7 +1722,7 @@ class _Resolver:
                 f"module route or ::{rendered} to select the local scope.",
                 span=decl.span,
             )
-        if len(imported) > 1:
+        if len(imported) > 1 and not shared_alias_facade:
             rendered = "/".join(route)
             candidates = ", ".join(
                 f"{module.display()}::{'::'.join(root)}" if root else module.display()
@@ -1733,6 +1742,11 @@ class _Resolver:
         if local is not None:
             self._current_scope().contribute_local_use(
                 LocalUseContribution(declaration=decl, source=self._scope_nodes[local])
+            )
+            return
+        if shared_alias_facade:
+            self._contribute_use_facade_members(
+                decl, tuple(members for _route, members in direct_imports)
             )
             return
         _imported_route, imported_members = imported[0]
@@ -1910,9 +1924,24 @@ class _Resolver:
                 ):
                     contribute(exposed, source)
 
-    def _contribute_use_members(self, decl: UseDecl, members: Mapping[NameAtom, QName]) -> None:
+    def _contribute_use_facade_members(
+        self, decl: UseDecl, member_maps: tuple[Mapping[NameAtom, QName], ...]
+    ) -> None:
+        """Contribute one shared alias facade while retaining cross-module clashes."""
+        combined = {atom: qname for members in member_maps for atom, qname in members.items()}
+        self._select_use_members(decl, combined)
+        for members in member_maps:
+            self._contribute_use_members(decl, members, validate=False)
+
+    def _contribute_use_members(
+        self,
+        decl: UseDecl,
+        members: Mapping[NameAtom, QName],
+        *,
+        validate: bool = True,
+    ) -> None:
         """Select, rename, and add one use declaration's bare contribution."""
-        selected = self._select_use_members(decl, members)
+        selected = self._select_use_members(decl, members, validate=validate)
         scope = self._current_scope()
 
         def contribute(exposed: NameAtom, source: QName) -> None:

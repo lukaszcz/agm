@@ -1,0 +1,2 @@
+# The facade selects and renames the formatter it publishes.
+export workshop/format::{render as format}

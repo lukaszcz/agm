@@ -202,53 +202,121 @@ def _is_as(token: Token) -> bool:
 
 
 def _is_use_declaration(tokens: list[Token], index: int) -> bool:
-    """Whether item-start ``use`` has a declaration suffix rather than expression syntax."""
-    next_index = index + 1
-    if next_index >= len(tokens):
-        return False
-    if tokens[next_index].type == NAME:
-        next_index += 1
-        while (
-            next_index + 1 < len(tokens)
-            and tokens[next_index].type == SLASH
-            and tokens[next_index + 1].type == NAME
-        ):
-            next_index += 2
-        if next_index >= len(tokens):
-            return False
-        return _is_as(tokens[next_index]) or tokens[next_index].type == DCOLON
-    if tokens[next_index].type == SLASH:
-        next_index += 1
-        while (
-            next_index + 1 < len(tokens)
-            and tokens[next_index].type == NAME
-            and tokens[next_index + 1].type == SLASH
-        ):
-            next_index += 2
-        if next_index >= len(tokens) or tokens[next_index].type != NAME:
-            return False
-        next_index += 1
-        return next_index < len(tokens) and (
-            _is_as(tokens[next_index]) or tokens[next_index].type == DCOLON
-        )
-    if tokens[next_index].type != DCOLON:
-        return False
-    # An anchored use needs a target plus either an alias or a tail separator.
-    next_index += 1
-    saw_target = False
-    separators = 1
-    while next_index < len(tokens) and tokens[next_index].type not in _ITEM_START_TYPES:
-        token_type = tokens[next_index].type
-        if token_type == NAME:
-            saw_target = True
-        elif _is_as(tokens[next_index]) and saw_target:
+    """Whether item-start ``use`` is followed by one complete declaration header."""
+    end = index + 1
+    while end < len(tokens) and tokens[end].type not in _ITEM_START_TYPES:
+        end += 1
+
+    def path_atom(position: int) -> int | None:
+        if position >= end or tokens[position].type not in {NAME, OP_NAME}:
+            return None
+        position += 1
+        while position + 1 < end and tokens[position].type == DCOLON:
+            if tokens[position + 1].type not in {NAME, OP_NAME}:
+                break
+            position += 2
+        return position
+
+    def hiding_clause(position: int) -> bool:
+        if position == end:
             return True
-        elif token_type == DCOLON:
-            separators += 1
-        elif token_type in {STAR, LBRACE} and saw_target and separators > 1:
+        if tokens[position].type != NAME or str(tokens[position]) != "hiding":
+            return False
+        parsed = path_atom(position + 1)
+        if parsed is None:
+            return False
+        position = parsed
+        while position < end and tokens[position].type == "COMMA":
+            parsed = path_atom(position + 1)
+            if parsed is None:
+                return False
+            position = parsed
+        return position == end
+
+    def tail(position: int) -> bool:
+        if position >= end:
+            return False
+        if tokens[position].type == STAR:
+            return hiding_clause(position + 1)
+        if tokens[position].type == LBRACE:
+            position += 1
+            parsed = path_atom(position)
+            if parsed is None:
+                return False
+            position = parsed
+            if position < end and _is_as(tokens[position]):
+                position += 1
+                if position >= end or tokens[position].type not in {NAME, OP_NAME}:
+                    return False
+                position += 1
+            while position < end and tokens[position].type == "COMMA":
+                position += 1
+                if position < end and tokens[position].type == "RBRACE":
+                    break
+                parsed = path_atom(position)
+                if parsed is None:
+                    return False
+                position = parsed
+                if position < end and _is_as(tokens[position]):
+                    position += 1
+                    if position >= end or tokens[position].type not in {NAME, OP_NAME}:
+                        return False
+                    position += 1
+            return position < end and tokens[position].type == "RBRACE" and position + 1 == end
+        parsed = path_atom(position)
+        if parsed is None:
+            return False
+        position = parsed
+        if position < end and _is_as(tokens[position]):
+            position += 1
+            if position >= end or tokens[position].type not in {NAME, OP_NAME}:
+                return False
+            position += 1
+        return position == end
+
+    position = index + 1
+    if position < end and tokens[position].type in {SLASH, DCOLON}:
+        anchor = tokens[position]
+        position += 1
+        if anchor.type == SLASH and (
+            position >= end or anchor.end_pos != tokens[position].start_pos
+        ):
+            return False
+    if position >= end or tokens[position].type != NAME:
+        return False
+    position += 1
+    while position + 1 < end and tokens[position].type == SLASH:
+        if (
+            tokens[position + 1].type != NAME
+            or tokens[position - 1].end_pos != tokens[position].start_pos
+            or tokens[position].end_pos != tokens[position + 1].start_pos
+        ):
+            return False
+        position += 2
+
+    # A whole-target alias consumes every nested target segment.
+    alias_position = position
+    while (
+        alias_position + 1 < end
+        and tokens[alias_position].type == DCOLON
+        and tokens[alias_position + 1].type == NAME
+    ):
+        alias_position += 2
+    if (
+        alias_position + 1 < end
+        and _is_as(tokens[alias_position])
+        and tokens[alias_position + 1].type in {NAME, OP_NAME}
+    ):
+        return hiding_clause(alias_position + 2)
+
+    # Otherwise any remaining ``::`` may separate the target from its tail.
+    while position < end:
+        if tokens[position].type == DCOLON and tail(position + 1):
             return True
-        next_index += 1
-    return saw_target and separators > 1
+        if position + 1 >= end or tokens[position].type != DCOLON:
+            return False
+        position += 2
+    return False
 
 
 def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:

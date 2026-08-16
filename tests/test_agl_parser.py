@@ -3756,6 +3756,20 @@ class TestImportDecl:
             assert isinstance(decl, syntax.ImportDecl)
             assert tuple(item.name for item in decl.hidden) == ("x",)
 
+    @pytest.mark.parametrize(
+        "expression",
+        (
+            "use a::[T](x)",
+            "use / x::member",
+            "use a::member(x)",
+        ),
+    )
+    def test_use_remains_an_identifier_when_the_item_is_not_a_complete_header(
+        self, expression: str
+    ) -> None:
+        parse(expression)
+        parse(f"({expression})")
+
     def test_use_forms(self) -> None:
         for source, target, alias, tail in (
             ("use Scope::*", ("Scope",), None, ()),

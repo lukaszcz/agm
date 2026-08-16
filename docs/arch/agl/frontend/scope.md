@@ -27,7 +27,11 @@ A scoped `let`/`var` is a member of its scope path, registered into the same
 `ScopeNode` member map and duplicate check as static declarations during the
 body walk. This gives bindings textual precedence like root bindings. Regional
 import-tail contributions are snapshotted onto that region's bare-contribution
-layer; `use` target resolution remains a separate follow-up concern.
+layer. `use` resolves an already-nameable local scope or import route and adds
+its selected bare members to the same layer. Selecting an imported nested scope
+re-roots its public subtree at that scope, so glob, hiding, and aliases never
+expose module-root members. Module and local readings require an explicit anchor
+when both exist.
 
 `ScopeNode.members` is written only through `register_member`/`clear_members`.
 
@@ -43,7 +47,9 @@ A tailed import also contributes bare atoms. `::*` contributes every non-hidden
 public atom; explicit tail atoms contribute selected subtrees, and a rename adds
 a spelling without removing the original. Root contributions populate
 `ImportEnv.unqualified`; regional contributions remain in `ImportEnv.decl_bare`
-and are snapshotted onto the importing `ScopeNode`. Bare collisions remain
+and are snapshotted onto the importing `ScopeNode`. A `use` can select any
+of those route members or a local scope subtree, with glob hiding and additive
+renames applying only to its own bare contribution. Bare collisions remain
 use-site errors. The shared suffix/anchored resolver filters each candidate
 route by its public-minus-hidden atoms before reporting ambiguity.
 One shared translator walks those verdicts and raises an error the caller constructs, so

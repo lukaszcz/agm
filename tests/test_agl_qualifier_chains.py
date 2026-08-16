@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TypeVar
 
 import pytest
@@ -31,7 +32,7 @@ from agm.agl.syntax import (
     ScopeRegion,
     VarRef,
 )
-from agm.agl.syntax.nodes import ConstructorPattern, ImportDecl
+from agm.agl.syntax.nodes import ConstructorPattern, ImportDecl, static_items
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
 from agm.agl.syntax.visitor import walk
 
@@ -67,6 +68,26 @@ def _entry_resolution(tmp_path: Path, modules: dict[str, str]) -> ModuleResoluti
 
     resolved = resolve_program(make_graph_from_files(tmp_path, modules))
     return resolved.modules[resolved.entry_id].resolved
+
+
+def _resolve_without_loader(modules: dict[str, str]) -> ModuleResolution:
+    """Resolve a parsed graph without exercising module loading behavior."""
+    loaded: dict[ModuleId, object] = {}
+    for path, source in modules.items():
+        module_id = ENTRY_ID if path == "entry" else ModuleId.from_path(path)
+        program = parse_program(source)
+        loaded[module_id] = SimpleNamespace(
+            program=program,
+            imports=tuple(
+                item for item in static_items(program.body.items) if isinstance(item, ImportDecl)
+            ),
+            export_decls=(),
+            path=None,
+            spaced_qualifiers=(),
+            source_text=source,
+        )
+    graph = SimpleNamespace(modules=loaded, entry_id=ENTRY_ID, sccs=())
+    return resolve_program(graph).modules[ENTRY_ID].resolved
 
 
 def test_qualified_expression_keeps_segment_spans_and_type_arguments() -> None:
@@ -383,12 +404,9 @@ def test_imported_scoped_enum_owner_retains_its_scope_path_for_is_and_case(
     )
 
 
-def test_explicit_module_route_use_is_not_masked_by_a_same_named_local_scope(
-    tmp_path: Path,
-) -> None:
+def test_explicit_module_route_use_is_not_masked_by_a_same_named_local_scope() -> None:
     """``use /geo/shapes::Point::*`` reaches the routed scope over a same-named local one."""
-    resolution = _entry_resolution(
-        tmp_path,
+    resolution = _resolve_without_loader(
         {
             "entry": (
                 "import geo/shapes\n"
@@ -396,11 +414,11 @@ def test_explicit_module_route_use_is_not_masked_by_a_same_named_local_scope(
                 "scope Point\n"
                 "def area() -> int = 1\n"
                 "end Point\n"
-                "print(describe())\n"
-                "print(Point::area())\n"
+                "def foreign() -> text = describe()\n"
+                "def local() -> int = Point::area()\n"
             ),
             "geo/shapes": 'scope Point\ndef describe() -> text = "point"\nend Point\n',
-        },
+        }
     )
 
     var_refs = _find_nodes(resolution.program, VarRef)
@@ -409,6 +427,144 @@ def test_explicit_module_route_use_is_not_masked_by_a_same_named_local_scope(
 
     (area_ref,) = [node for node in var_refs if node.name == "area"]
     assert resolution.resolution[area_ref.node_id].module_id == ENTRY_ID
+
+
+def test_use_resolves_aliases_suffixes_anchored_routes_and_nested_scopes(tmp_path: Path) -> None:
+    del tmp_path
+    _resolve_without_loader(
+        {
+            "entry": (
+                "import pkg/tools\n"
+                "import pkg/tools as Alias\n"
+                "use tools::{ping as probe, Nested}\n"
+                "use Alias::Nested::*\n"
+                "use /pkg/tools as P\n"
+                "def selected() -> int = probe()\n"
+                "def retained_path() -> int = Nested::child()\n"
+                "def nested() -> int = child()\n"
+                "def renamed_route() -> int = P::ping()\n"
+            ),
+            "pkg/tools": (
+                "def ping() -> int = 1\nscope Nested\ndef child() -> int = 2\nend Nested\n"
+            ),
+        },
+    )
+
+
+def test_use_target_local_module_ambiguity_requires_an_anchor(tmp_path: Path) -> None:
+    modules = {
+        "Point": "def remote() -> int = 1\n",
+        "entry": ("import Point\nuse Point::*\nscope Point\ndef local() -> int = 2\nend Point\n"),
+    }
+
+    del tmp_path
+    with pytest.raises(AglScopeError, match="ambiguous") as raised:
+        _resolve_without_loader(modules)
+
+    diagnostic = str(raised.value)
+    assert "Point" in diagnostic
+    assert "/Point" in diagnostic
+    assert "::Point" in diagnostic
+
+    _resolve_without_loader(
+        {**modules, "entry": modules["entry"].replace("use Point::*", "use /Point::*")}
+    )
+    _resolve_without_loader(
+        {**modules, "entry": modules["entry"].replace("use Point::*", "use ::Point::*")}
+    )
+
+
+def test_use_target_suffix_ambiguity_has_no_preferred_module_route() -> None:
+    modules = {
+        "entry": "import one/Target\nimport two/Target\nuse Target::*\n",
+        "one/Target": "def first() -> int = 1\n",
+        "two/Target": "def second() -> int = 2\n",
+    }
+
+    with pytest.raises(AglScopeError, match="ambiguous"):
+        _resolve_without_loader(modules)
+
+    _resolve_without_loader(
+        {**modules, "entry": modules["entry"].replace("use Target::*", "use /one/Target::*")}
+    )
+
+
+def test_use_bare_contributions_narrow_to_their_scope_region(tmp_path: Path) -> None:
+    modules = {
+        "lib": "def value() -> int = 1\n",
+        "entry": ("import lib\nscope A\nuse lib::*\ndef available() -> int = value()\nend A\n"),
+    }
+    del tmp_path
+    _resolve_without_loader(modules)
+
+    with pytest.raises(AglScopeError):
+        _resolve_without_loader(
+            {**modules, "entry": modules["entry"] + "def unavailable() -> int = value()\n"}
+        )
+
+
+def test_use_selection_hiding_and_renames_are_additive() -> None:
+    _resolve_without_loader(
+        {
+            "entry": (
+                "use Local::* hiding hidden\n"
+                "use Local::{Nested::member as renamed}\n"
+                "use Local::shown\n"
+                "use Local as L\n"
+                "scope Local\n"
+                "def shown() -> int = 1\n"
+                "def hidden() -> int = 2\n"
+                "scope Nested\n"
+                "def member() -> int = 3\n"
+                "end Nested\n"
+                "end Local\n"
+                "def all_members() -> int = Nested::member()\n"
+                "def selected_member() -> int = renamed()\n"
+                "def single_member() -> int = shown()\n"
+                "def aliased_scope() -> int = L::shown()\n"
+            )
+        }
+    )
+
+    with pytest.raises(AglScopeError, match="not declared"):
+        _resolve_without_loader(
+            {
+                "entry": (
+                    "use Local::* hiding missing\nscope Local\ndef shown() -> int = 1\nend Local\n"
+                )
+            }
+        )
+
+
+def test_region_tailed_import_keeps_routes_global_and_bare_names_regional() -> None:
+    modules = {
+        "lib": "def value() -> int = 1\n",
+        "entry": (
+            "scope A\n"
+            "import lib::*\n"
+            "def bare() -> int = value()\n"
+            "end A\n"
+            "scope B\n"
+            "def routed() -> int = lib::value()\n"
+            "end B\n"
+        ),
+    }
+    _resolve_without_loader(modules)
+
+    with pytest.raises(AglScopeError):
+        _resolve_without_loader(
+            {
+                **modules,
+                "entry": modules["entry"].replace(
+                    "def routed() -> int = lib::value()", "def routed() -> int = value()"
+                ),
+            }
+        )
+
+
+def test_unnameable_use_target_suggests_importing_its_module() -> None:
+    with pytest.raises(AglScopeError, match="Import"):
+        _resolve_without_loader({"entry": "use Missing::*\n"})
 
 
 def test_unrelated_nested_scope_does_not_mask_a_root_import_route(tmp_path: Path) -> None:

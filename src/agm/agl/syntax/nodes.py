@@ -169,6 +169,7 @@ class UseDecl:
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     scope_path: tuple[ScopeSegment, ...] = ()
+    current_module: bool = False
 
 
 # ---------------------------------------------------------------------------

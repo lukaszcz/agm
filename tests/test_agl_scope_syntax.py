@@ -7,9 +7,12 @@ from pathlib import Path
 import pytest
 
 from agm.agl import PipelineDriver
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import AglSyntaxError, parse_program
 from agm.agl.scope import AglScopeError
+from agm.agl.scope.imports import SingleTarget, build_import_env
+from agm.agl.scope.resolver import _Resolver
 from agm.agl.scope.symbols import resolve_bare_contribution
 from agm.agl.syntax import (
     AsPattern,
@@ -20,12 +23,13 @@ from agm.agl.syntax import (
     ExportDecl,
     FuncDef,
     ImportDecl,
+    Item,
     LetDecl,
-    OpenDecl,
     ParamDecl,
     RecordDef,
     ScopeRegion,
     ScopeSegment,
+    UseDecl,
     VarDecl,
     VarPattern,
 )
@@ -34,7 +38,7 @@ from tests.agl.ir_harness import write_module_file
 from tests.agl.module_graph import resolve_entry, resolve_inline_entry
 
 
-def _declaration(source: str) -> object:
+def _declaration(source: str) -> Item:
     (declaration,) = parse_program(source).body.items
     return declaration
 
@@ -45,7 +49,9 @@ def test_region_and_shorthand_declarations_have_the_same_scope_path() -> None:
 
     (region,) = block_form.body.items
     assert isinstance(region, ScopeRegion)
-    (block_declaration,) = region.items[0].items
+    (inner_region,) = region.items
+    assert isinstance(inner_region, ScopeRegion)
+    (block_declaration,) = inner_region.items
     assert isinstance(block_declaration, FuncDef)
     (shorthand_declaration,) = shorthand.body.items
     assert isinstance(shorthand_declaration, FuncDef)
@@ -85,6 +91,7 @@ def test_let_and_var_accept_root_scope_path_shorthand(
     declaration = _declaration(source)
 
     assert isinstance(declaration, kind)
+    assert isinstance(declaration, (LetDecl, VarDecl))
     assert [segment.name for segment in declaration.scope_path] == path
     if isinstance(declaration, LetDecl):
         assert isinstance(declaration.pattern, VarPattern)
@@ -107,6 +114,7 @@ def test_let_and_var_are_admitted_inside_a_scope_region(source: str, kind: type[
     assert isinstance(region, ScopeRegion)
     (member,) = region.items
     assert isinstance(member, kind)
+    assert isinstance(member, (LetDecl, VarDecl))
     assert [segment.name for segment in member.scope_path] == ["Config"]
 
 
@@ -252,7 +260,7 @@ def test_param_still_rejected_inside_a_function_body() -> None:
     ("source", "kind"),
     (
         ("import lib", ImportDecl),
-        ("open import lib", ImportDecl),
+        ("import lib::*", ImportDecl),
         ("export lib", ExportDecl),
     ),
 )
@@ -265,6 +273,7 @@ def test_import_and_export_are_admitted_inside_a_scope_region(
     assert isinstance(region, ScopeRegion)
     (member,) = region.items
     assert isinstance(member, kind)
+    assert isinstance(member, (ImportDecl, ExportDecl))
     assert member.module_path == ("lib",)
     assert [segment.name for segment in member.scope_path] == ["Config"]
 
@@ -283,18 +292,17 @@ def test_import_and_export_accumulate_scope_path_across_nested_regions() -> None
     assert [segment.name for segment in export_member.scope_path] == ["A", "B"]
 
 
-def test_open_import_is_admitted_at_the_start_of_a_scope_region() -> None:
-    program = parse_program("scope A\nopen import lib\ndef value() -> int = 0\nend A")
+def test_tailed_import_is_admitted_at_the_start_of_a_scope_region() -> None:
+    program = parse_program("scope A\nimport lib::*\ndef value() -> int = 0\nend A")
 
     (region,) = program.body.items
     assert isinstance(region, ScopeRegion)
     assert isinstance(region.items[0], ImportDecl)
 
 
-def test_open_after_a_non_header_region_item_is_rejected() -> None:
-    """The parser still owns placement of a bare ``open`` inside a region."""
-    with pytest.raises(AglSyntaxError):
-        parse_program("scope A\ndef value() -> int = 0\nopen B\nend A")
+def test_use_after_a_non_header_region_item_is_rejected() -> None:
+    with pytest.raises(AglScopeError):
+        resolve_inline_entry("scope A\ndef value() -> int = 0\nuse B::*\nend A")
 
 
 @pytest.mark.parametrize(
@@ -306,7 +314,7 @@ def test_open_after_a_non_header_region_item_is_rejected() -> None:
         # import; content doesn't matter here since placement is checked
         # before any import content is consulted.
         "scope A\ndef value() -> int = 0\nimport std/config\nend A",
-        "scope A\ndef value() -> int = 0\nopen import std/config\nend A",
+        "scope A\ndef value() -> int = 0\nimport std/config::*\nend A",
         "scope A\ndef value() -> int = 0\nexport std/config\nend A",
     ),
 )
@@ -317,7 +325,7 @@ def test_import_after_a_non_header_region_item_is_rejected_by_the_scope_pass(sou
 
 
 def test_export_before_other_region_items_is_admitted() -> None:
-    """Like `import`/`open`, `export` is confined to a region's header."""
+    """Like `import` and `use`, `export` is confined to a region's header."""
     program = parse_program("scope A\nexport lib\ndef value() -> int = 0\nend A")
 
     (region,) = program.body.items
@@ -326,7 +334,7 @@ def test_export_before_other_region_items_is_admitted() -> None:
 
 
 def test_the_parser_does_not_own_import_placement_at_the_module_root() -> None:
-    """The parser's ``open``-only rule leaves root import placement to the scope pass."""
+    """The parser leaves root import placement to the scope pass."""
     parse_program("def value() -> int = 0\nimport lib")
 
 
@@ -351,60 +359,56 @@ def test_import_and_export_still_rejected_inside_a_function_body(source: str) ->
 
 
 @pytest.mark.parametrize(
-    ("source", "module_route", "scope_path", "mode", "items"),
+    ("source", "target", "tail", "hidden"),
     (
-        ("open Point", (), ("Point",), "all", ()),
-        ("open Point using distance", (), ("Point",), "using", (("distance", None),)),
+        ("use Point::*", ("Point",), (), ()),
+        ("use Point::{distance}", ("Point",), (("distance", None),), ()),
         (
-            "open Point using distance as d, length as l",
-            (),
+            "use Point::{distance as d, length as l}",
             ("Point",),
-            "using",
             (("distance", "d"), ("length", "l")),
+            (),
         ),
-        ("open Point hiding internal", (), ("Point",), "hiding", (("internal", None),)),
+        ("use Point::* hiding internal", ("Point",), (), (("internal", None),)),
         (
-            "open geo/shapes::Point::Metrics using distance as d",
-            ("geo", "shapes"),
-            ("Point", "Metrics"),
-            "using",
+            "use geo/shapes::Point::Metrics::{distance as d}",
+            ("geo/shapes", "Point", "Metrics"),
             (("distance", "d"),),
+            (),
         ),
     ),
 )
-def test_open_declarations_accept_scope_references_and_clauses(
+def test_use_declarations_accept_scope_references_and_clauses(
     source: str,
-    module_route: tuple[str, ...],
-    scope_path: tuple[str, ...],
-    mode: str,
-    items: tuple[tuple[str, str | None], ...],
+    target: tuple[str, ...],
+    tail: tuple[tuple[str, str | None], ...],
+    hidden: tuple[tuple[str, str | None], ...],
 ) -> None:
     declaration = _declaration(source)
 
-    assert isinstance(declaration, OpenDecl)
-    assert declaration.scope_ref.module_route == module_route
-    assert tuple(segment.name for segment in declaration.scope_ref.scope_path) == scope_path
-    assert declaration.mode.name.lower() == mode
-    assert tuple((item.name, item.rename) for item in declaration.items) == items
+    assert isinstance(declaration, UseDecl)
+    assert tuple(segment.name for segment in declaration.target) == target
+    assert tuple((item.name, item.rename) for item in declaration.tail or ()) == tail
+    assert tuple((item.name, item.rename) for item in declaration.hidden) == hidden
 
 
-def test_open_declarations_are_allowed_at_the_start_of_scope_regions() -> None:
-    program = parse_program("scope A\nopen B using value as b\ndef value() -> int = 0\nend A")
+def test_use_declarations_are_allowed_at_the_start_of_scope_regions() -> None:
+    program = parse_program("scope A\nuse B::{value as b}\ndef value() -> int = 0\nend A")
 
     (region,) = program.body.items
     assert isinstance(region, ScopeRegion)
-    assert isinstance(region.items[0], OpenDecl)
+    assert isinstance(region.items[0], UseDecl)
 
 
 @pytest.mark.parametrize(
     "source",
     (
-        "def value() -> int =\n    open Point\n    0",
-        "if true =>\n    open Point\n    ()",
-        "do\n    open Point\n    ()\ndone",
+        "def value() -> int =\n    use Point::*\n    0",
+        "if true =>\n    use Point::*\n    ()",
+        "do\n    use Point::*\n    ()\ndone",
     ),
 )
-def test_open_declarations_are_rejected_outside_module_and_scope_regions(source: str) -> None:
+def test_use_declarations_are_rejected_outside_module_and_scope_regions(source: str) -> None:
     with pytest.raises(AglSyntaxError, match="only allowed at module root or in scope regions"):
         parse_program(source)
 
@@ -412,12 +416,11 @@ def test_open_declarations_are_rejected_outside_module_and_scope_regions(source:
 @pytest.mark.parametrize(
     "source",
     (
-        "open Point using value hiding hidden",
-        "def value() -> int = 0\nopen Point",
-        "scope A\ndef value() -> int = 0\nopen B\nend A",
+        "use Point::{value} hiding hidden",
+        "use Point::* as Alias",
     ),
 )
-def test_open_clause_shapes_and_placement_are_rejected(source: str) -> None:
+def test_use_clause_shapes_are_rejected(source: str) -> None:
     with pytest.raises(AglSyntaxError):
         parse_program(source)
 
@@ -425,9 +428,9 @@ def test_open_clause_shapes_and_placement_are_rejected(source: str) -> None:
 @pytest.mark.parametrize(
     ("source", "kind"),
     (
-        ("import library using Point::distance as d, Point", ImportDecl),
+        ("import library::{Point::distance as d, Point}", ImportDecl),
         ("import library hiding Point::internal", ImportDecl),
-        ("export library using Point::distance as d, Point", ExportDecl),
+        ("export library::{Point::distance as d, Point}", ExportDecl),
         ("export library hiding Point::internal", ExportDecl),
     ),
 )
@@ -435,21 +438,23 @@ def test_import_and_export_clauses_accept_path_atoms(source: str, kind: type[obj
     declaration = _declaration(source)
 
     assert isinstance(declaration, kind)
+    assert isinstance(declaration, (ImportDecl, ExportDecl))
+    selected = declaration.tail if isinstance(declaration, ImportDecl) else declaration.items
     atoms = tuple(
         (item.name, item.rename, tuple(segment.name for segment in item.scope_path))
-        for item in declaration.items
+        for item in (declaration.hidden if "hiding" in source else selected or ())
     )
     expected = (
         (("distance", "d", ("Point",)), ("Point", None, ()))
-        if "using" in source
+        if "{" in source
         else (("internal", None, ("Point",)),)
     )
     assert atoms == expected
 
 
-def test_scope_pass_opens_local_scope_members() -> None:
+def test_use_contributes_local_scope_members() -> None:
     resolved = resolve_inline_entry(
-        "open Point\nscope Point\ndef distance() -> int = 1\nend Point\ndistance()"
+        "use Point::*\nscope Point\ndef distance() -> int = 1\nend Point\ndistance()"
     )
 
     assert (
@@ -458,9 +463,9 @@ def test_scope_pass_opens_local_scope_members() -> None:
     )
 
 
-def test_opened_scope_members_clash_at_their_use_site() -> None:
+def test_used_scope_members_clash_at_their_use_site() -> None:
     source = (
-        "open Point\nopen Vector\n"
+        "use Point::*\nuse Vector::*\n"
         "scope Point\ndef distance() -> int = 1\nend Point\n"
         "scope Vector\ndef distance() -> int = 2\nend Vector\ndistance()"
     )
@@ -469,17 +474,85 @@ def test_opened_scope_members_clash_at_their_use_site() -> None:
         resolve_inline_entry(source)
 
 
-def test_ast_walk_visits_open_and_export_selection_paths() -> None:
+def test_use_reaches_a_scope_made_nameable_by_an_import_tail() -> None:
+    """A use target follows the same bare contribution a qualifier follows."""
+    program = parse_program("import library::{Scope}\nuse Scope::*")
+    import_decl, _use_decl = program.body.items
+    assert isinstance(import_decl, ImportDecl)
+    library = ModuleId.from_path("library")
+    scope_member = ("Scope", "visible")
+    import_env = build_import_env(
+        (import_decl,),
+        {import_decl.node_id: SingleTarget(library)},
+        {library: {scope_member: (library, scope_member)}},
+    )
+
+    resolved = _Resolver(
+        module_id=ENTRY_ID,
+        import_env=import_env,
+        all_public_types={},
+    ).run(program)
+
+    contribution = resolve_bare_contribution(resolved.root_scope, "visible", resolved.scope_nodes)
+    assert len(contribution or ()) == 1
+
+
+def test_use_keeps_equally_nameable_bare_scope_targets_ambiguous() -> None:
+    program = parse_program("import one::{Scope}\nimport two::{Scope}\nuse Scope::*")
+    first_import, second_import, _use_decl = program.body.items
+    assert isinstance(first_import, ImportDecl)
+    assert isinstance(second_import, ImportDecl)
+    one = ModuleId.from_path("one")
+    two = ModuleId.from_path("two")
+    scope_member = ("Scope", "visible")
+    import_env = build_import_env(
+        (first_import, second_import),
+        {
+            first_import.node_id: SingleTarget(one),
+            second_import.node_id: SingleTarget(two),
+        },
+        {
+            one: {scope_member: (one, scope_member)},
+            two: {scope_member: (two, scope_member)},
+        },
+    )
+
+    with pytest.raises(AglScopeError, match="ambiguous"):
+        _Resolver(module_id=ENTRY_ID, import_env=import_env, all_public_types={}).run(program)
+
+
+@pytest.mark.parametrize(
+    ("source", "segments"),
+    (
+        ("use m/n::Scope::Nested::*", ("m/n", "Scope", "Nested")),
+        ("use /m/n::Scope::*", ("m/n", "Scope")),
+        ("use ::Scope::Nested::*", ("Scope", "Nested")),
+    ),
+)
+def test_use_target_segment_spans_exclude_qualifier_delimiters_and_anchors(
+    source: str, segments: tuple[str, ...]
+) -> None:
+    declaration = _declaration(source)
+
+    assert isinstance(declaration, UseDecl)
+    assert tuple(segment.name for segment in declaration.target) == segments
+    for segment in declaration.target:
+        start = source.index(segment.name, source.index("use") + len("use"))
+        assert (segment.span.start_offset, segment.span.end_offset) == (
+            start,
+            start + len(segment.name),
+        )
+
+
+def test_ast_walk_visits_use_and_export_selection_paths() -> None:
     from agm.agl.syntax.visitor import walk
 
-    program = parse_program(
-        "open Point using Nested::member as m\nexport library using Point::distance"
-    )
+    program = parse_program("use Point::{Nested::member as m}\nexport library::{Point::distance}")
     visited: list[object] = []
 
     walk(program, visited.append)
 
-    assert sum(isinstance(node, OpenDecl) for node in visited) == 1
+    assert sum(isinstance(node, UseDecl) for node in visited) == 1
     assert sum(isinstance(node, ExportDecl) for node in visited) == 1
     assert sum(isinstance(node, ScopeSegment) for node in visited) == 3
 
@@ -522,9 +595,9 @@ def test_library_scope_regions_apply_entry_only_declaration_restrictions(tmp_pat
 @pytest.mark.parametrize(
     ("entry", "library"),
     (
-        ("import library using Point::distance\n()", "record Point()"),
+        ("import library::Point::distance\n()", "record Point()"),
         ("export library hiding Point::distance\n()", "record Point()"),
-        ("import library\n()", "import dependency using Point::distance\ndef value() -> int = 0"),
+        ("import library\n()", "import dependency::Point::distance\ndef value() -> int = 0"),
     ),
 )
 def test_production_pipeline_validates_path_atoms_against_public_content(
@@ -571,6 +644,7 @@ def test_builtin_forms_are_admitted_inside_a_scope_region(source: str, kind: typ
     assert isinstance(region, ScopeRegion)
     (member,) = region.items
     assert isinstance(member, kind)
+    assert isinstance(member, (FuncDef, RecordDef, EnumDef, ExceptionDef, BuiltinVarDecl))
     assert [segment.name for segment in member.scope_path] == ["Host"]
 
 

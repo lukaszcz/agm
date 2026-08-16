@@ -64,11 +64,11 @@ from agm.agl.syntax import (
     ImportDecl,
     InfixDecl,
     LetDecl,
-    OpenDecl,
     ParamDecl,
     RecordDef,
     ScopeRegion,
     TypeAlias,
+    UseDecl,
     VarDecl,
 )
 from agm.agl.syntax.nodes import Program
@@ -107,7 +107,7 @@ def file_program(source: str) -> str:
         InfixDecl,
         ImportDecl,
         ExportDecl,
-        OpenDecl,
+        UseDecl,
         ScopeRegion,
     )
     root_items = [item for item in program.body.items if isinstance(item, static)]

@@ -44,6 +44,7 @@ __all__ = [
     "qualification_repair_guidance",
     "qualifier_candidates",
     "qualifier_contributes",
+    "qualifier_members",
     "render_qualifier",
     "resolve_alias_target",
     "resolve_qualified",
@@ -445,6 +446,34 @@ def _member_qname(
         if _path(exposed) == member_path
     }
     return next(iter(qnames)) if len(qnames) == 1 else None
+
+
+def qualifier_members(
+    env: ImportEnv, qualifier: tuple[str, ...], *, anchored: bool = False
+) -> tuple[tuple[ModuleId, Mapping[NameAtom, QName]], ...]:
+    """Return each imported route's public members without choosing a route."""
+    members: list[tuple[ModuleId, Mapping[NameAtom, QName]]] = []
+    for module in qualifier_candidates(env, qualifier, anchored=anchored):
+        contribution = env.contributions[module]
+        maps: list[Mapping[NameAtom, QName]] = []
+        if not anchored and len(qualifier) == 1:
+            alias_members = contribution.alias_members.get(qualifier[0])
+            if alias_members is not None:
+                maps.append(alias_members)
+        path_matches = (
+            qualifier == contribution.module.segments
+            if anchored
+            else any(
+                contribution.module.segments[index:] == qualifier
+                for index in range(len(contribution.module.segments))
+            )
+        )
+        if contribution.path_enabled and path_matches:
+            maps.append(contribution.path_members)
+        merged = {atom: qname for member_map in maps for atom, qname in member_map.items()}
+        if maps:
+            members.append((module, MappingProxyType(merged)))
+    return tuple(members)
 
 
 def qualifier_contributes(

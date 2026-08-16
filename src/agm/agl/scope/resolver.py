@@ -57,6 +57,7 @@ from agm.agl.scope.imports import (
     qualification_repair_guidance,
     qualifier_candidates,
     qualifier_contributes,
+    qualifier_members,
     render_qualifier,
     resolve_alias_target,
     resolve_qualified,
@@ -82,6 +83,7 @@ from agm.agl.scope.symbols import (
     resolve_bare_constructor_contribution,
     resolve_bare_contribution,
 )
+from agm.agl.scope.symbols import import_item_path as _item_path
 from agm.agl.scope.symbols import to_bare_atom as _bare_atom
 from agm.agl.scope.symbols import to_bare_path as _bare_path
 from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS
@@ -122,6 +124,7 @@ from agm.agl.syntax.nodes import (
     FuncDef,
     If,
     ImportDecl,
+    ImportItem,
     IndexAccess,
     IndexTarget,
     InfixDecl,
@@ -1464,8 +1467,8 @@ class _Resolver:
 
         - Every static module root rejects assignments and bare expressions.
           The REPL is the sole incremental-host exception.
-        - Every module root and every region's own item sequence: ``ImportDecl``
-          and ``ExportDecl`` must precede all other items *in that same items
+        - Every module root and every region's own item sequence: ``ImportDecl``,
+          ``UseDecl``, and ``ExportDecl`` must precede all other items *in that same items
           sequence* (header-only; ``seen_non_import_item`` tracks this locally
           to this call, regardless of module kind). A region is one item of its
           enclosing sequence for this purpose, so the enclosing sequence's
@@ -1479,6 +1482,19 @@ class _Resolver:
 
         for item in items:
             if isinstance(item, UseDecl):
+                in_entry_body = items is self._synthetic_entry_items
+                if not self._at_root and not in_entry_body:
+                    raise AglScopeError(
+                        "'use' declarations are only allowed at the program root, "
+                        "not inside a nested block.",
+                        span=item.span,
+                    )
+                if seen_non_import_item or in_entry_body:
+                    raise AglScopeError(
+                        "Import, use, and export declarations must appear before "
+                        "any other declarations in a module or scope region.",
+                        span=item.span,
+                    )
                 self._resolve_use_decl(item)
                 continue
             if isinstance(item, (ImportDecl, ExportDecl)):
@@ -1646,8 +1662,195 @@ class _Resolver:
             scope.contribute_bare_constructor(variant.name, constructor)
 
     def _resolve_use_decl(self, decl: UseDecl) -> None:
-        """Reserve ``use`` declarations for the dedicated scope-resolution pass."""
-        del decl
+        """Inject the selected members of one already-nameable route bare."""
+        target = tuple(segment.name for segment in decl.target)
+        local = self._use_local_target(decl, target)
+        route = () if decl.current_module else tuple(target[0].split("/"))
+        route_target = () if decl.current_module else target[1:]
+        direct_imports: tuple[tuple[ModuleId, Mapping[NameAtom, QName]], ...] = (
+            ()
+            if decl.current_module
+            else qualifier_members(self._import_env, route, anchored=decl.anchored)
+        )
+        direct_imports = tuple(
+            (module, relative_members)
+            for module, members in direct_imports
+            if (relative_members := self._relative_use_import_members(members, route_target))
+        )
+        bare_imports = () if decl.anchored else self._bare_use_import_targets(target)
+        imported = self._merge_use_import_targets(direct_imports, bare_imports)
+        if local is not None and imported:
+            candidates = ", ".join(module.display() for module, _members in imported)
+            direct_modules = {module for module, _members in direct_imports}
+            module_targets = ", ".join(
+                self._render_use_module_target(
+                    module, route_target if module in direct_modules else target
+                )
+                for module, _members in imported
+            )
+            rendered = "::".join(target)
+            raise AglScopeError(
+                f"use target '{rendered}' is ambiguous between local scope '{'::'.join(local)}' "
+                f"and imported module route(s): {candidates}. Use {module_targets} to select the "
+                f"module route or ::{rendered} to select the local scope.",
+                span=decl.span,
+            )
+        if len(imported) > 1:
+            rendered = "/".join(route)
+            candidates = ", ".join(module.display() for module, _members in imported)
+            raise AglScopeError(
+                f"use target '{rendered}' is ambiguous across imported modules: {candidates}. "
+                f"Use a longer suffix, a /-anchored path, or as to name one import distinctly.",
+                span=decl.span,
+            )
+        if local is None and not imported:
+            rendered = "/".join(route) if route else "::".join(target)
+            raise AglScopeError(
+                f"use target '{rendered}' is not nameable. Import its module before using it.",
+                span=decl.span,
+            )
+        if local is not None:
+            self._contribute_use_members(decl, self._local_use_members(local))
+            return
+        _module, imported_members = imported[0]
+        self._contribute_use_members(decl, imported_members)
+
+    @staticmethod
+    def _relative_use_import_members(
+        members: Mapping[NameAtom, QName], target: ScopePath
+    ) -> dict[NameAtom, QName]:
+        """Return a target scope's public subtree under target-relative paths."""
+        relative_members: dict[NameAtom, QName] = {}
+        for atom, qname in members.items():
+            path = _bare_path(atom)
+            if path[: len(target)] == target and len(path) > len(target):
+                relative_members[_bare_atom(path[len(target) :])] = qname
+        return relative_members
+
+    @staticmethod
+    def _render_use_module_target(module: ModuleId, target: ScopePath) -> str:
+        """Render an anchored, reachable module reading of a use target."""
+        suffix = "" if not target else f"::{'::'.join(target)}"
+        return f"/{module.path_str()}{suffix}"
+
+    def _bare_use_import_targets(
+        self, target: ScopePath
+    ) -> tuple[tuple[ModuleId, Mapping[NameAtom, QName]], ...]:
+        """Find scope subtrees exposed by an already-bare import tail."""
+        members_by_module: dict[ModuleId, dict[NameAtom, QName]] = {}
+        bare_contributions = (
+            self._import_env.unqualified,
+            *self._reachable_decl_bare(self._import_env, self._current_scope().scope_path),
+        )
+        for contributions in bare_contributions:
+            for atom, qnames in contributions.items():
+                path = _bare_path(atom)
+                if path[: len(target)] != target or len(path) == len(target):
+                    continue
+                exposed = _bare_atom(path[len(target) :])
+                for module, qname in qnames:
+                    members_by_module.setdefault(module, {}).setdefault(exposed, (module, qname))
+        return tuple(
+            (module, members_by_module[module])
+            for module in sorted(members_by_module, key=ModuleId.path_str)
+        )
+
+    @staticmethod
+    def _merge_use_import_targets(
+        *targets: tuple[tuple[ModuleId, Mapping[NameAtom, QName]], ...],
+    ) -> tuple[tuple[ModuleId, Mapping[NameAtom, QName]], ...]:
+        """Combine equivalent import routes without choosing between modules."""
+        members_by_module: dict[ModuleId, dict[NameAtom, QName]] = {}
+        for routes in targets:
+            for module, members in routes:
+                merged = members_by_module.setdefault(module, {})
+                for atom, qname in members.items():
+                    merged.setdefault(atom, qname)
+        return tuple(
+            (module, members_by_module[module])
+            for module in sorted(members_by_module, key=ModuleId.path_str)
+        )
+
+    def _use_local_target(self, decl: UseDecl, target: ScopePath) -> ScopePath | None:
+        """Resolve a use target through exact lexical scope paths."""
+        if decl.anchored and not decl.current_module:
+            return None
+        bases = [()] if decl.current_module else self._scope_bases_for_use()
+        return next((base + target for base in bases if base + target in self._scope_nodes), None)
+
+    def _scope_bases_for_use(self) -> list[ScopePath]:
+        """Return lexical scope bases while resolving a header declaration."""
+        bases: list[ScopePath] = []
+        scope: ScopeNode | None = self._current_scope()
+        while scope is not None:
+            if scope.scope_path not in bases:
+                bases.append(scope.scope_path)
+            scope = scope.parent
+        return bases
+
+    def _local_use_members(self, target: ScopePath) -> dict[NameAtom, BindingRef]:
+        """Expose one local scope subtree relative to its selected root."""
+        members: dict[NameAtom, BindingRef] = {}
+        for path, scope in self._scope_nodes.items():
+            if path[: len(target)] != target:
+                continue
+            relative = path[len(target) :]
+            for name, ref in scope.members.items():
+                members[_bare_atom((*relative, name))] = ref
+        return members
+
+    def _contribute_use_members(
+        self, decl: UseDecl, members: Mapping[NameAtom, BindingRef | QName]
+    ) -> None:
+        """Select, rename, and add one use declaration's bare contribution."""
+        selected = self._select_use_members(decl, members)
+        scope = self._current_scope()
+        for exposed, source in selected.items():
+            if isinstance(source, tuple):
+                ref, constructor = self._cross_module_member_ref(exposed, source, decl.span)
+                scope.contribute_bare(exposed, ref)
+                if constructor is not None:
+                    scope.contribute_bare_constructor(exposed, constructor)
+                self._contribute_regional_enum_variants(source, decl.span)
+            else:
+                scope.contribute_bare(exposed, source)
+                for constructor in self._declaring_constructor_candidates(source.name, source):
+                    scope.contribute_bare_constructor(exposed, constructor)
+
+    def _select_use_members(
+        self, decl: UseDecl, members: Mapping[NameAtom, BindingRef | QName]
+    ) -> dict[NameAtom, BindingRef | QName]:
+        """Apply a use tail, hiding clause, or additive route alias to members."""
+
+        def matching(item: ImportItem) -> tuple[NameAtom, ...]:
+            prefix = _item_path(item)
+            matches = tuple(atom for atom in members if _bare_path(atom)[: len(prefix)] == prefix)
+            if not matches:
+                raise AglScopeError(
+                    f"name {'::'.join(prefix)!r} is not declared by this use target.",
+                    span=decl.span,
+                )
+            return matches
+
+        if decl.alias is not None:
+            return {
+                _bare_atom((decl.alias, *_bare_path(atom))): source
+                for atom, source in members.items()
+            }
+        selected: dict[NameAtom, BindingRef | QName] = {}
+        if decl.tail == ():
+            selected.update(members)
+        elif decl.tail is not None:
+            for item in decl.tail:
+                for atom in matching(item):
+                    selected[atom] = members[atom]
+                    if item.rename is not None:
+                        suffix = _bare_path(atom)[len(_item_path(item)) :]
+                        selected[_bare_atom((item.rename, *suffix))] = members[atom]
+        for hidden in decl.hidden:
+            for atom in matching(hidden):
+                selected.pop(atom, None)
+        return selected
 
     def _resolve_scope_region(self, region: ScopeRegion) -> None:
         """Resolve a named region in its member layer."""

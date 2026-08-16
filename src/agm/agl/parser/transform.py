@@ -2622,6 +2622,19 @@ class AstBuilder(Transformer):
         """Collect the paths hidden by one declaration."""
         return tuple(a for a in args if isinstance(a, _ScopePath))
 
+    def _trim_token_span(self, token: Token, *, start: int = 0, end: int = 0) -> SourceSpan:
+        """Return a token span without synthetic use-target delimiters."""
+        span = self._span_from_token(token)
+        return SourceSpan(
+            start_line=span.start_line,
+            start_col=span.start_col + start,
+            end_line=span.end_line,
+            end_col=span.end_col - end,
+            start_offset=span.start_offset + start,
+            end_offset=span.end_offset - end,
+            source=span.source,
+        )
+
     def _path_span(self, path: _ScopePath) -> SourceSpan:
         """Return the span from the first through last segment of a path."""
         start = path.segments[0][1]
@@ -2789,7 +2802,12 @@ class AstBuilder(Transformer):
         if path_token is not None:
             spelling = str(path_token)
             anchored = spelling.startswith("/")
-            target_segments.append((spelling.removeprefix("/"), self._span_from_token(path_token)))
+            target_segments.append(
+                (
+                    spelling.removeprefix("/"),
+                    self._trim_token_span(path_token, start=int(anchored)),
+                )
+            )
         ending = (
             anchored_target.ending
             if anchored_target is not None
@@ -2798,7 +2816,7 @@ class AstBuilder(Transformer):
         if ending is not None:
             for token in ending.prefixes:
                 target_segments.append(
-                    (str(token).removesuffix("::"), self._span_from_token(token))
+                    (str(token).removesuffix("::"), self._trim_token_span(token, end=2))
                 )
         if ending is not None and ending.target is not None:
             target_segments.append((str(ending.target), self._span_from_token(ending.target)))
@@ -2828,6 +2846,7 @@ class AstBuilder(Transformer):
             alias=alias,
             span=span,
             node_id=self._next_id(),
+            current_module=anchored_target is not None,
         )
 
     def export_decl(self, meta: Meta, args: _Args) -> syntax.ExportDecl:

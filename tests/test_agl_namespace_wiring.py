@@ -8,6 +8,7 @@ import pytest
 
 from agm.agl.matchcompile.diagnostics import qualified_owner_name
 from agm.agl.modules.ids import ModuleId
+from agm.agl.modules.loader import ModuleGraph
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import AglScopeError
 from agm.agl.semantics.types import EnumOwnerFormKind
@@ -22,18 +23,18 @@ from tests.agl.ir_harness import (
 )
 
 
-def _make_graph_without_prelude(tmp_path: Path, modules: dict[str, str]) -> object:
+def _make_graph_without_prelude(tmp_path: Path, modules: dict[str, str]) -> ModuleGraph:
     return make_inline_graph_from_files(tmp_path, modules, default_stdlib=False)
 
 
-def test_scope_resolves_suffix_anchor_and_using_contributions(tmp_path: Path) -> None:
+def test_scope_resolves_suffix_anchor_and_tail_contributions(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,
         {
             "entry": (
                 "import services/primary/config\n"
                 "import services/secondary/config\n"
-                "import services/primary/config using primary\n"
+                "import services/primary/config::primary\n"
                 "let first = /services/primary/config::primary()\n"
                 "let second = config::secondary()\n"
                 "let third = primary()\n"
@@ -53,6 +54,47 @@ def test_scope_resolves_suffix_anchor_and_using_contributions(tmp_path: Path) ->
     resolved_modules = {ref.module_id for ref in entry.resolved.resolution.values()}
     assert primary in resolved_modules
     assert secondary in resolved_modules
+
+
+def test_use_imported_nested_scope_selects_its_relative_public_subtree(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import library\n"
+                "use library::Scope::* hiding hidden\n"
+                "use library::Scope::{Nested::member as chosen}\n"
+                "use library::Scope as Selected\n"
+                "def selected() -> int = visible() + Nested::member() + chosen()\n"
+                "Selected::Nested::member()"
+            ),
+            "library": (
+                "def leaked() -> int = 0\n"
+                "scope Scope\n"
+                "def visible() -> int = 1\n"
+                "def hidden() -> int = 2\n"
+                "scope Nested\n"
+                "def member() -> int = 3\n"
+                "end Nested\n"
+                "end Scope\n"
+            ),
+        },
+    )
+
+    assert resolve_program(graph).entry_id == graph.entry_id
+
+    for blocked in ("hidden", "leaked"):
+        blocked_graph = make_graph_from_files(
+            tmp_path,
+            {
+                "entry": f"import library\nuse library::Scope::* hiding hidden\n{blocked}()",
+                "library": (
+                    "def leaked() -> int = 0\nscope Scope\ndef hidden() -> int = 2\nend Scope"
+                ),
+            },
+        )
+        with pytest.raises(AglScopeError):
+            resolve_program(blocked_graph)
 
 
 def test_scope_rejects_an_ambiguous_suffix_at_the_use_site(tmp_path: Path) -> None:
@@ -249,10 +291,10 @@ def test_is_test_type_and_module_constructor_member_collision_is_ambiguous(
         assert repair in diagnostic
 
 
-def test_nonconstructible_open_import_is_not_a_constructor_owner(tmp_path: Path) -> None:
+def test_nonconstructible_tailed_import_is_not_a_constructor_owner(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,
-        {"entry": "import lib using Alias\nAlias::value", "lib": "type Alias = int"},
+        {"entry": "import lib::Alias\nAlias::value", "lib": "type Alias = int"},
     )
 
     with pytest.raises(AglScopeError):
@@ -264,7 +306,7 @@ def test_current_module_anchor_does_not_resolve_an_imported_constructor_owner(
 ) -> None:
     graph = make_graph_from_files(
         tmp_path,
-        {"entry": "open import library\n::Unknown::On", "library": "enum Unknown | On"},
+        {"entry": "import library::*\n::Unknown::On", "library": "enum Unknown | On"},
     )
 
     with pytest.raises(AglScopeError) as exc_info:
@@ -343,38 +385,33 @@ def test_qualified_enum_patterns_and_is_tests_keep_resolution_verdicts(
     assert expected in str(exc_info.value)
 
 
-def test_qualified_unselected_type_keeps_its_inaccessible_diagnostic(tmp_path: Path) -> None:
+def test_qualified_import_tail_keeps_the_full_type_surface(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,
         {
             "entry": (
-                "import remote/config using read\nlet value: /remote/config::Flag = 1\nvalue"
+                "import remote/config::read\n"
+                "let value: remote/config::Flag = remote/config::Flag::On\n"
+                "value"
             ),
             "remote/config": "def read() -> int = 1\nenum Flag | On",
         },
     )
 
-    with pytest.raises(AglTypeError) as exc_info:
-        check_program(resolve_program(graph), base_caps())
-
-    assert "accessible" in str(exc_info.value)
+    assert check_program(resolve_program(graph), base_caps()).entry_id == graph.entry_id
 
 
 @pytest.mark.parametrize(
     "entry",
     [
-        ("import remote/config using read\nrecord Wrapper\n  flag: /remote/config::Flag\nWrapper"),
-        (
-            "import remote/config using read\n"
-            "def inspect(flag: /remote/config::Flag) -> int = 1\n"
-            "inspect"
-        ),
+        ("import remote/config::read\nrecord Wrapper\n  flag: remote/config::Flag\nWrapper"),
+        ("import remote/config::read\ndef inspect(flag: remote/config::Flag) -> int = 1\ninspect"),
     ],
 )
-def test_qualified_unselected_type_keeps_its_diagnostic_during_prepasses(
+def test_qualified_import_tail_keeps_the_full_type_surface_during_prepasses(
     tmp_path: Path, entry: str
 ) -> None:
-    """Type-body and signature pre-passes retain the import's selected set."""
+    """Type-body and signature pre-passes retain the full qualified surface."""
     graph = make_graph_from_files(
         tmp_path,
         {
@@ -383,8 +420,7 @@ def test_qualified_unselected_type_keeps_its_diagnostic_during_prepasses(
         },
     )
 
-    with pytest.raises(AglTypeError, match="accessible"):
-        check_program(resolve_program(graph), base_caps())
+    assert check_program(resolve_program(graph), base_caps()).entry_id == graph.entry_id
 
 
 def test_anchored_enum_owner_form_preserves_its_route(tmp_path: Path) -> None:
@@ -516,7 +552,7 @@ def test_spec_suffixes_anchor_and_two_line_bare_full_idiom(tmp_path: Path) -> No
                 "import std/list/config\n"
                 "import extra/config hiding retries\n"
                 "import utils/api\n"
-                "import utils/api using bare\n"
+                "import utils/api::bare\n"
                 "let a = config::retries()\n"
                 "let b = list/config::opt()\n"
                 "let c = /std/config::opt()\n"

@@ -2083,27 +2083,30 @@ class _Resolver:
             layer = layer.parent
         return {}
 
-    @staticmethod
     def _merge_use_import_targets(
-        *targets: tuple[tuple[BareRoute, Mapping[NameAtom, QName]], ...],
+        self, *targets: tuple[tuple[BareRoute, Mapping[NameAtom, QName]], ...]
     ) -> tuple[tuple[BareRoute, Mapping[NameAtom, QName]], ...]:
-        """Combine genuinely equivalent import routes without choosing between targets."""
-        members_by_route: dict[BareRoute, dict[NameAtom, QName]] = {}
+        """Merge scope routes that retain the same defining origins."""
+        grouped: dict[
+            frozenset[QName], tuple[BareRoute, dict[NameAtom, QName]]
+        ] = {}
         for routes in targets:
             for imported_route, members in routes:
-                merged = members_by_route.setdefault(imported_route, {})
+                module, path = imported_route
+                origins = self._import_env.scope_origins_by_route.get(
+                    imported_route, frozenset({(module, _bare_atom(path))})
+                )
+                representative, merged = grouped.setdefault(origins, (imported_route, {}))
+                if _bare_route_sort_key(imported_route) < _bare_route_sort_key(representative):
+                    grouped[origins] = (imported_route, merged)
                 for atom, qname in members.items():
                     merged.setdefault(atom, qname)
-        result: list[tuple[BareRoute, Mapping[NameAtom, QName]]] = []
-        seen_surfaces: set[frozenset[tuple[NameAtom, QName]]] = set()
-        for imported_route in sorted(members_by_route, key=_bare_route_sort_key):
-            members = members_by_route[imported_route]
-            surface = frozenset(members.items())
-            if surface and surface in seen_surfaces:
-                continue
-            seen_surfaces.add(surface)
-            result.append((imported_route, members))
-        return tuple(result)
+        def route_key(
+            item: tuple[BareRoute, dict[NameAtom, QName]],
+        ) -> tuple[str, ScopePath]:
+            return _bare_route_sort_key(item[0])
+
+        return tuple(sorted(grouped.values(), key=route_key))
 
     def _use_local_target(self, decl: UseDecl, target: ScopePath) -> ScopePath | None:
         """Resolve a use target through exact lexical scope paths."""

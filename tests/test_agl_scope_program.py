@@ -726,6 +726,36 @@ class TestClashDeferred:
 
         assert ENTRY_ID in result.modules
 
+    def test_use_deduplicates_empty_scope_routes_to_same_reexport_origin(
+        self, tmp_path: Path
+    ) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import core::{S}\nimport facade::{S}\nuse S::*\n()",
+                "core": "scope S\nend S",
+                "facade": "export core::{S}",
+            },
+        )
+
+        assert ENTRY_ID in resolve_program(graph).modules
+
+    def test_use_unions_filtered_routes_to_same_reexport_origin(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "import core::{S}\nimport facade::{S}\nuse S::*\nalpha() + beta()"
+                ),
+                "core": (
+                    "scope S\ndef alpha() -> int = 1\ndef beta() -> int = 2\nend S"
+                ),
+                "facade": "export core hiding S::beta",
+            },
+        )
+
+        assert ENTRY_ID in resolve_program(graph).modules
+
     def test_no_clash_same_qname(self, tmp_path: Path) -> None:
         """Two imports of the same module's same function don't clash (idempotent)."""
         graph = _make_graph_from_files(

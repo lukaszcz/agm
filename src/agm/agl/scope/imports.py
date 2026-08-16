@@ -202,6 +202,7 @@ class ImportEnv:
         default_factory=dict
     )
     facade_aliases: Mapping[str, Mapping[int, frozenset[ModuleId]]] = field(default_factory=dict)
+    scope_origins_by_route: Mapping[BareRoute, ScopeOrigins] = field(default_factory=dict)
     suffix_routes: Mapping[tuple[str, ...], tuple[ModuleId, ...]] = field(
         init=False, repr=False, compare=False
     )
@@ -252,6 +253,10 @@ class ImportEnv:
         object.__setattr__(self, "decl_bare_routes", decl_bare_routes)
         object.__setattr__(self, "unqualified_scope_routes", unqualified_scope_routes)
         object.__setattr__(self, "decl_bare_scope_routes", decl_bare_scope_routes)
+        scope_origins_by_route: Mapping[BareRoute, ScopeOrigins] = MappingProxyType(
+            dict(self.scope_origins_by_route)
+        )
+        object.__setattr__(self, "scope_origins_by_route", scope_origins_by_route)
         facade_aliases: Mapping[str, Mapping[int, frozenset[ModuleId]]] = MappingProxyType(
             {
                 alias: MappingProxyType(dict(sorted(self.facade_aliases[alias].items())))
@@ -431,6 +436,7 @@ def build_import_env(
     root_scope_routes: dict[NameAtom, set[BareRoute]] = {}
     decl_scope_routes: dict[int, dict[NameAtom, set[BareRoute]]] = {}
     facade_aliases: dict[str, dict[int, set[ModuleId]]] = {}
+    scope_origins_by_route: dict[BareRoute, ScopeOrigins] = {}
     public_scopes = scope_exports or {}
     for decl in decls:
         target = targets[decl.node_id]
@@ -476,9 +482,12 @@ def build_import_env(
                 if source not in hidden:
                     _merge_member(acc.members, source, qname)
                     _merge_member(route_members, source, qname)
-            route_scope_paths.update(
+            visible_scope_paths = tuple(
                 source for source in module_scopes if source not in hidden_scope_paths
             )
+            route_scope_paths.update(visible_scope_paths)
+            for source in visible_scope_paths:
+                scope_origins_by_route[(module, _path(source))] = module_scopes[source]
             for exposed, qname, source in _tail_exposures(
                 decl, module_exports, hidden, selected_exports
             ):
@@ -540,6 +549,7 @@ def build_import_env(
             }
             for alias, declarations in facade_aliases.items()
         },
+        scope_origins_by_route=scope_origins_by_route,
     )
 
 

@@ -975,6 +975,7 @@ class EntryPipeline:
         latest_generation: dict[tuple[tuple[str, ...], tuple[str, ...]], int] = {}
         latest_use_generation: dict[_UseGenerationKey, int] = {}
         generation_use_keys: dict[int, _UseGenerationKey] = {}
+        effective_imports: dict[tuple[tuple[str, ...], tuple[str, ...]], list[ImportDecl]] = {}
         for retained_root_decls, scoped_items in zip(
             self._ctx._accumulated_imports, self._ctx._accumulated_uses, strict=True
         ):
@@ -986,16 +987,23 @@ class EntryPipeline:
             )
             index = len(generations)
             generations.append((expanded_root_decls, expanded_scoped))
-            for decl in (*expanded_root_decls, *self._scoped_import_decls(expanded_scoped)):
-                latest_generation[self._generation_key(decl)] = index
             generation_imports = (
                 *expanded_root_decls,
                 *self._scoped_import_decls(expanded_scoped),
             )
+            grouped_imports: dict[tuple[tuple[str, ...], tuple[str, ...]], list[ImportDecl]] = {}
+            for decl in generation_imports:
+                import_key = self._generation_key(decl)
+                latest_generation[import_key] = index
+                grouped_imports.setdefault(import_key, []).append(decl)
+            effective_imports.update(grouped_imports)
+            visible_imports = tuple(
+                decl for declarations in effective_imports.values() for decl in declarations
+            )
             for use_decl in self._use_decls(expanded_scoped):
-                key = self._use_generation_key(use_decl, generation_imports)
-                generation_use_keys[use_decl.node_id] = key
-                latest_use_generation[key] = index
+                use_key = self._use_generation_key(use_decl, visible_imports)
+                generation_use_keys[use_decl.node_id] = use_key
+                latest_use_generation[use_key] = index
 
         # *entry_imports* arrives already expanded; only the scoped ones still
         # need their module identities resolved. Wildcard expansion has one
@@ -1006,13 +1014,19 @@ class EntryPipeline:
             (*entry_imports, *self._scoped_import_decls(entry_uses)), roots, 0
         )
         current_index = len(generations)
-        latest_generation.update(
-            (self._generation_key(decl), current_index) for decl in current_decls
+        current_imports: dict[tuple[tuple[str, ...], tuple[str, ...]], list[ImportDecl]] = {}
+        for decl in current_decls:
+            import_key = self._generation_key(decl)
+            latest_generation[import_key] = current_index
+            current_imports.setdefault(import_key, []).append(decl)
+        effective_imports.update(current_imports)
+        visible_imports = tuple(
+            decl for declarations in effective_imports.values() for decl in declarations
         )
         for use_decl in self._use_decls(entry_uses):
-            key = self._use_generation_key(use_decl, tuple(current_decls))
-            generation_use_keys[use_decl.node_id] = key
-            latest_use_generation[key] = current_index
+            use_key = self._use_generation_key(use_decl, visible_imports)
+            generation_use_keys[use_decl.node_id] = use_key
+            latest_use_generation[use_key] = current_index
 
         retained_root: list[ImportDecl] = []
         retained_scoped: list[UseDecl | ImportDecl | ScopeRegion] = []
@@ -1064,24 +1078,31 @@ class EntryPipeline:
             )
         else:
             assert target
-            aliases = {
-                import_decl.alias: tuple(import_decl.module_path)
-                for import_decl in imports
-                if import_decl.alias is not None
-            }
-            module_path = aliases.get(target[0])
-            if module_path is None:
-                route = tuple(part for part in target[0].split("/") if part)
-                candidates = {
-                    tuple(import_decl.module_path)
-                    for import_decl in imports
-                    if import_decl.alias is None
-                    and tuple(import_decl.module_path)[-len(route) :] == route
-                }
-                if len(candidates) == 1:
-                    module_path = next(iter(candidates))
-            if module_path is not None:
-                canonical = ("\0module", *module_path, "\0scope", *target[1:])
+            candidates: set[tuple[str, ...]] = set()
+            route = tuple(part for part in target[0].split("/") if part)
+            for import_decl in imports:
+                module_path = tuple(import_decl.module_path)
+                if import_decl.alias == target[0]:
+                    candidates.add(("\0module", *module_path, "\0scope", *target[1:]))
+                elif import_decl.alias is None and module_path[-len(route) :] == route:
+                    candidates.add(("\0module", *module_path, "\0scope", *target[1:]))
+                for item in import_decl.tail or ():
+                    source = (*tuple(segment.name for segment in item.scope_path), item.name)
+                    exposed = (item.rename,) if item.rename is not None else source
+                    if target[: len(exposed)] == exposed:
+                        candidates.add(
+                            (
+                                "\0module",
+                                *module_path,
+                                "\0scope",
+                                *source,
+                                *target[len(exposed) :],
+                            )
+                        )
+            if len(candidates) == 1:
+                canonical = next(iter(candidates))
+            elif not candidates:
+                canonical = ("\0current", "\0scope", *target)
         if canonical is not None:
             return (
                 tuple(segment.name for segment in decl.scope_path),

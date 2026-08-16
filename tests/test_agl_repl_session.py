@@ -4592,6 +4592,47 @@ class TestImports:
         assert s.eval_entry("new()").value == IntValue(2)
         assert not s.eval_entry("old()").ok
 
+    def test_retained_import_canonicalizes_a_later_use_replacement(self, tmp_path: Path) -> None:
+        (tmp_path / "lib.agl").write_text(
+            "def old() -> int = 1\ndef new() -> int = 2\n", encoding="utf-8"
+        )
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("import lib").ok
+        assert session.eval_entry("use lib::{old}").ok
+
+        replacement = session.eval_entry("use /lib::{new}")
+
+        assert replacement.ok, replacement.diagnostics
+        assert session.eval_entry("new()").value == IntValue(2)
+        assert not session.eval_entry("old()").ok
+
+    def test_import_tail_rename_canonicalizes_use_replacement(self, tmp_path: Path) -> None:
+        (tmp_path / "lib.agl").write_text(
+            "scope Source\ndef old() -> int = 1\ndef new() -> int = 2\nend Source\n",
+            encoding="utf-8",
+        )
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("import lib::{Source as Alias}").ok
+        assert session.eval_entry("use Alias::{old}").ok
+
+        replacement = session.eval_entry("use /lib::Source::{new}")
+
+        assert replacement.ok, replacement.diagnostics
+        assert session.eval_entry("new()").value == IntValue(2)
+        assert not session.eval_entry("old()").ok
+
+    def test_local_and_current_module_use_spellings_replace_each_other(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("def Source::old() -> int = 1").ok
+        assert session.eval_entry("def Source::new() -> int = 2").ok
+        assert session.eval_entry("use Source::{old}").ok
+
+        replacement = session.eval_entry("use ::Source::{new}")
+
+        assert replacement.ok, replacement.diagnostics
+        assert session.eval_entry("new()").value == IntValue(2)
+        assert not session.eval_entry("old()").ok
+
     def test_import_alias_replacement_replaces_use_of_same_module(self, tmp_path: Path) -> None:
         (tmp_path / "lib.agl").write_text(
             "def old() -> int = 1\ndef new() -> int = 2\n", encoding="utf-8"

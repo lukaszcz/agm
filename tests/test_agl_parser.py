@@ -3717,6 +3717,10 @@ class TestImportDecl:
         assert decl.alias == alias
         assert decl.tail is None
 
+    def test_import_alias_must_be_an_identifier(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse("import foo/bar as >>")
+
     @pytest.mark.parametrize(
         ("source", "tail"),
         (

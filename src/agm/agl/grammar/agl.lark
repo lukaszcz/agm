@@ -862,7 +862,7 @@ use_anchored_suffix : USEQUAL+ selection                  -> use_anchored_tail
                     | USEQUAL* USE_TARGET_NAME use_alias -> use_anchored_alias
 export_decl : EXPORT MODPATH WILDCARD? export_tail_clause? hiding_clause?
 
-import_alias : "as" name
+import_alias : "as" NAME
 use_alias : "as" name
 import_tail_clause : DCOLON selection
 export_tail_clause : DCOLON braces -> export_braces_tail

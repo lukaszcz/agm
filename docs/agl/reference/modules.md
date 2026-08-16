@@ -27,7 +27,7 @@ from the same global module set.
 
 ```ebnf
 import_decl ::= "import" module_path ["/*"]
-                ("as" ref_name | "::" tail)? [hiding_clause]
+                ("as" NAME | "::" tail)? [hiding_clause]
 
 tail             ::= "*" | import_item | "{" import_item ("," import_item)* ","? "}"
 import_item      ::= path_atom ["as" ref_name]
@@ -36,6 +36,7 @@ path_atom        ::= (NAME "::")* name
 name             ::= NAME | OP_NAME
 ```
 
+An import alias must be an identifier because it becomes a qualifier segment.
 An import always contributes the target module's full public qualified surface,
 except for paths named by `hiding`. A positive `::` tail controls only its bare
 contribution:

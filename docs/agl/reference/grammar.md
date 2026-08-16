@@ -91,7 +91,7 @@ the line directly above it.
 
 ```ebnf
 import_decl ::= "import" module_path ["/*"]
-                ("as" ref_name | "::" tail)? [hiding_clause]
+                ("as" NAME | "::" tail)? [hiding_clause]
 use_decl    ::= "use" use_target ("::" tail | "as" ref_name) [hiding_clause]
 export_decl ::= "export" module_path ["/*"] ["::" braces] [hiding_clause]
 
@@ -108,7 +108,8 @@ path_atom     ::= (NAME "::")* name
 
 `"import"`, `"use"`, and `"export"` are contextual at item start when they
 begin their declaration form. `"hiding"` is contextual within those headers.
-They remain valid identifiers elsewhere. An import alias and a tail are
+They remain valid identifiers elsewhere. An import alias is an identifier
+because it becomes a qualifier segment. An import alias and a tail are
 exclusive. Braces cannot be empty or nested, cannot contain `*`, and cannot
 be combined with `hiding`. `hiding` is valid on a plain import, an import glob,
 a module wildcard import, or a use glob. An export accepts brace tails but not

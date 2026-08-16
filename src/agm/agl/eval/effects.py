@@ -9,12 +9,13 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import NoReturn, Protocol, cast
 
 from agm.agl.ir.ids import ContractId, Location
 from agm.agl.ir.nodes import (
     IrAsk,
+    IrAskOrigin,
     IrAskRequest,
     IrExec,
     IrExpr,
@@ -25,9 +26,9 @@ from agm.agl.ir.nodes import (
 )
 from agm.agl.ir.program import ExecutableProgram, ExternFunctionBody
 from agm.agl.modules.ids import ModuleId
-from agm.agl.runtime.agents import AgentFn, dispatch_agent_value
+from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.codec import ParseResult
-from agm.agl.runtime.contract import OutputContract
+from agm.agl.runtime.contract import OutputContract, TypelessOutputContract
 from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.runtime.option import none_value, some_value
 from agm.agl.runtime.render import render_value
@@ -35,7 +36,6 @@ from agm.agl.runtime.request import (
     AgentCallHostError,
     AgentCancelled,
     AgentRequest,
-    AgentResponse,
     compose_agent_prompt,
     compose_initial_agent_prompt,
     compose_session_corrective_follow_up,
@@ -44,10 +44,13 @@ from agm.agl.runtime.request import (
     ValidationError as ReqValidationError,
 )
 from agm.agl.runtime.sessions import (
+    SessionAgentError,
     SessionAskError,
     SessionHost,
     SessionHostError,
+    SessionRequestHost,
     SessionTransport,
+    with_ephemeral_session,
 )
 from agm.agl.runtime.trace import TraceStore
 from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise
@@ -77,7 +80,7 @@ class EffectCtx(Protocol):
     _program: ExecutableProgram
     _trace: TraceStore
     _agent_dispatcher: AgentFn | None
-    _session_host: SessionHost | None
+    _session_host: SessionHost
     _strict_json: bool
     _shell_exec_timeout: float | None
     _host_contracts: Mapping[ContractId, OutputContract]
@@ -157,67 +160,6 @@ class EffectHandlers:
                 for name, value in agent.fields.items()
             },
         }
-
-    def _dispatch_agent(
-        self,
-        request: AgentRequest,
-        node: IrAsk,
-        *,
-        max_attempts: int,
-        target_type: str,
-        codec: str,
-        strict_json: bool | None,
-        json_schema: object | None,
-    ) -> AgentResponse:
-        """Trace, dispatch, and map every agent outcome at one boundary."""
-        self._ctx._trace.agent_request(
-            agent=self._agent_trace_value(request.agent),
-            attempt=request.attempt,
-            max_attempts=max_attempts,
-            prompt=request.prompt,
-            target_type=target_type,
-            codec=codec,
-            strict_json=strict_json,
-            json_schema=json_schema,
-            span=node.location,
-        )
-        try:
-            if self._ctx._agent_dispatcher is None:
-                raise AgentCallHostError(
-                    cause="no_dispatcher", exit_code=None, stderr_tail="", elapsed=0.0
-                )
-            response = dispatch_agent_value(request, self._ctx._agent_dispatcher)
-        except AgentCallHostError as exc:
-            call_info = exc.call_info.to_trace() if exc.call_info is not None else None
-            if call_info is None:
-                call_info = {"exit_code": exc.exit_code, "elapsed": exc.elapsed}
-            call_info["stderr_tail"] = exc.stderr_tail
-            self._ctx._trace.agent_response(
-                ok=False, cause=exc.cause, call_info=call_info, span=node.location
-            )
-            self._raise_agent_call_error(request.agent, exc)
-        except AgentCancelled as exc:
-            self._ctx._trace.agent_response(
-                ok=False, cancelled=True, reason=exc.reason, span=node.location
-            )
-            exc.span = node.location
-            raise
-        except KeyboardInterrupt as exc:
-            cancelled = AgentCancelled(
-                render_value(request.agent), "interrupted", span=node.location
-            )
-            self._ctx._trace.agent_response(
-                ok=False, cancelled=True, reason=cancelled.reason, span=node.location
-            )
-            raise cancelled from exc
-        self._ctx._trace.agent_response(
-            ok=True,
-            content=response.content,
-            metadata=response.metadata,
-            call_info=response.call_info.to_trace() if response.call_info is not None else None,
-            span=node.location,
-        )
-        return response
 
     def _raise_agent_call_error(self, agent: EnumValue, error: AgentCallHostError) -> NoReturn:
         """Convert a transport failure after it was recorded in the trace."""
@@ -301,6 +243,7 @@ class EffectHandlers:
         prompt_expr: IrExpr,
         contract_id: ContractId,
         max_attempts: int,
+        origin: IrAskOrigin,
     ) -> Value:
         """Handle IrAsk: dispatch an Agent enum value and parse output."""
         agent_val = self._ctx._eval(agent_expr)
@@ -308,108 +251,62 @@ class EffectHandlers:
             raise TypeError(
                 f"IrAsk agent must evaluate to an Agent enum value, got {type(agent_val).__name__}"
             )
-        agent_name = render_value(agent_val)
-
         prompt_text = self._text_of(self._ctx._eval(prompt_expr))
 
         contract = self._ctx._program.contracts[contract_id]
 
-        # Unit-typed asks still produce a complete request/response trace pair.
-        if contract.is_unit:
-            request = AgentRequest(agent=agent_val, prompt=prompt_text, output_contract=None)
-            request.prompt = compose_agent_prompt(request)
-            self._dispatch_agent(
-                request,
-                _node,
-                max_attempts=1,
+        output_contract: OutputContract | TypelessOutputContract | None = (
+            None
+            if contract.is_unit
+            else self._ctx._host_contracts.get(contract_id)
+            or TypelessOutputContract(
                 target_type=contract.target_type_label,
-                codec=contract.codec_name,
+                codec_name=contract.codec_name,
                 strict_json=contract.strict_json,
-                json_schema=None,
+                format_instructions=contract.format_instructions,
+                json_schema=(
+                    None
+                    if contract.json_schema is None
+                    else cast(object, json.loads(contract.json_schema))
+                ),
+                structured_exec=contract.structured_exec,
             )
-            return VOID_VALUE
-
-        effective_strict = (
-            contract.strict_json if contract.strict_json is not None else self._ctx._strict_json
         )
-
-        from agm.agl.runtime.contract import TypelessOutputContract
-
-        output_contract: OutputContract | TypelessOutputContract = self._ctx._host_contracts.get(
-            contract_id
-        ) or TypelessOutputContract(
-            target_type=contract.target_type_label,
-            codec_name=contract.codec_name,
-            strict_json=contract.strict_json,
-            format_instructions=contract.format_instructions,
-            json_schema=(
-                None
-                if contract.json_schema is None
-                else cast(object, json.loads(contract.json_schema))
-            ),
-            structured_exec=contract.structured_exec,
-        )
-
-        last_raw: str | None = None
-        last_normalized: str | None = None
-        last_errors: tuple[ReqValidationError, ...] = ()
 
         json_schema = (
             None if contract.json_schema is None else cast(object, json.loads(contract.json_schema))
         )
-        for attempt in range(max_attempts):
-            request = AgentRequest(
+        if origin is IrAskOrigin.FREE:
+            return self._eval_session_ask_attempts(
                 agent=agent_val,
                 prompt=prompt_text,
-                attempt=attempt,
-                previous_invalid_output=last_raw,
-                validation_errors=list(last_errors),
-                output_contract=output_contract,
-            )
-            request.prompt = compose_agent_prompt(request)
-            response = self._dispatch_agent(
-                request,
-                _node,
+                contract_id=contract_id,
                 max_attempts=max_attempts,
-                target_type=contract.target_type_label,
-                codec=contract.codec_name,
-                strict_json=contract.strict_json,
-                json_schema=json_schema,
+                node=_node,
+                output_contract=output_contract,
+                compose_prompt=compose_agent_prompt,
+                dispatch=lambda request: self._dispatch_ephemeral_session_agent(
+                    agent_val,
+                    request,
+                    _node,
+                    max_attempts=max_attempts,
+                    target_type=contract.target_type_label,
+                    codec=contract.codec_name,
+                    strict_json=contract.strict_json,
+                    json_schema=json_schema,
+                ),
             )
-            raw = response.content
-
-            result = self._ctx._parse_host_output(
-                raw, contract_id, effective_strict=effective_strict
-            )
-            self._ctx._trace.parse_result(
-                ok=result.ok,
-                raw=raw,
-                normalized_raw=result.normalized_raw or raw,
-                error_summary=result.error_msg
-                or "; ".join(error.message for error in result.errors),
-                span=_node.location,
-            )
-
-            if result.ok and result.value is not None:
-                return result.value
-
-            last_raw = raw
-            last_normalized = result.normalized_raw
-            last_errors = self._classify_parse_errors(result)
-
-        self._raise_agent_parse_error(
-            message=(
-                f"Agent {agent_name!r} failed to produce a valid "
-                f"{contract.target_type_label} after {max_attempts} attempt(s). "
-                f"Last output: {last_raw!r}"
-            ),
+        return self._eval_agent_method_ask(
             agent=agent_val,
-            last_raw=last_raw,
-            last_normalized=last_normalized,
-            last_errors=last_errors,
+            prompt=prompt_text,
+            contract_id=contract_id,
             max_attempts=max_attempts,
-            target_type_label=contract.target_type_label,
-            json_schema=contract.json_schema,
+            node=_node,
+            output_contract=output_contract,
+            target_type=contract.target_type_label,
+            codec=contract.codec_name,
+            strict_json=contract.strict_json,
+            json_schema=json_schema,
         )
 
     def _session_error(self, error: SessionHostError) -> NoReturn:
@@ -423,11 +320,20 @@ class EffectHandlers:
             )
         ) from error
 
+    def _invalid_agent_error(self, agent: EnumValue, error: SessionAgentError) -> NoReturn:
+        """Preserve agent-value failures across the session-opening boundary."""
+        self._raise_agent_call_error(
+            agent,
+            AgentCallHostError(
+                cause="invalid_agent",
+                exit_code=None,
+                stderr_tail=error.message,
+                elapsed=0.0,
+            ),
+        )
+
     def _require_session_host(self, operation: str) -> SessionHost:
-        host = self._ctx._session_host
-        if host is None:
-            self._session_error(SessionHostError("session host is unavailable", operation))
-        return host
+        return self._ctx._session_host
 
     def _session_value(self, handle: str, agent: EnumValue, transport: str) -> RecordValue:
         declared = self._ctx._program.builtin_nominals.resolve("Session")
@@ -493,7 +399,7 @@ class EffectHandlers:
         self,
         handle: str,
         request: AgentRequest,
-        node: IrSessionAsk,
+        node: IrAsk | IrSessionAsk,
         *,
         max_attempts: int,
         target_type: str,
@@ -513,8 +419,19 @@ class EffectHandlers:
             json_schema=json_schema,
             span=node.location,
         )
+        metadata: dict[str, object] = {}
+        call_info: dict[str, object] | None = None
         try:
-            raw = self._require_session_host("ask").ask(handle, request.prompt)
+            host = self._require_session_host("ask")
+            if isinstance(host, SessionRequestHost):
+                response = host.ask_request(handle, request)
+                raw = response.content
+                metadata = response.metadata
+                call_info = (
+                    response.call_info.to_trace() if response.call_info is not None else None
+                )
+            else:
+                raw = host.ask(handle, request.prompt)
         except SessionAskError as error:
             call_info = error.call_info.to_trace() if error.call_info is not None else None
             if call_info is None:
@@ -550,42 +467,133 @@ class EffectHandlers:
             )
             raise cancelled from error
         self._ctx._trace.agent_response(
-            ok=True, content=raw, metadata={}, call_info=None, span=node.location
+            ok=True, content=raw, metadata=metadata, call_info=call_info, span=node.location
         )
         return raw
 
+    def _eval_agent_method_ask(
+        self,
+        *,
+        agent: EnumValue,
+        prompt: str,
+        contract_id: ContractId,
+        max_attempts: int,
+        node: IrAsk,
+        output_contract: OutputContract | TypelessOutputContract | None,
+        target_type: str,
+        codec: str,
+        strict_json: bool | None,
+        json_schema: object | None,
+    ) -> Value:
+        """Run one ``Agent::ask`` call in a short-lived conversation.
+
+        The handle lives for the complete retry loop, so a corrective retry is
+        a follow-up rather than a fresh one-shot prompt. It is always released
+        once the call completes or fails.
+        """
+        transport = self._resolve_session_transport(agent, None)
+
+        def ask_in_session(handle: str) -> Value:
+            return self._eval_session_ask_attempts(
+                agent=agent,
+                prompt=prompt,
+                contract_id=contract_id,
+                max_attempts=max_attempts,
+                node=node,
+                output_contract=output_contract,
+                compose_prompt=lambda request: (
+                    compose_initial_agent_prompt(request)
+                    if request.attempt == 0
+                    else compose_session_corrective_follow_up(request)
+                ),
+                dispatch=lambda request: self._dispatch_session_agent(
+                    handle,
+                    request,
+                    node,
+                    max_attempts=max_attempts,
+                    target_type=target_type,
+                    codec=codec,
+                    strict_json=strict_json,
+                    json_schema=json_schema,
+                ),
+            )
+
+        try:
+            return with_ephemeral_session(
+                self._require_session_host("open"), agent, transport, ask_in_session
+            )
+        except SessionAgentError as error:
+            self._invalid_agent_error(agent, error)
+        except SessionHostError as error:
+            self._session_error(error)
+
+    def _dispatch_ephemeral_session_agent(
+        self,
+        agent: EnumValue,
+        request: AgentRequest,
+        node: IrAsk,
+        *,
+        max_attempts: int,
+        target_type: str,
+        codec: str,
+        strict_json: bool | None,
+        json_schema: object | None,
+    ) -> str:
+        """Dispatch one free-ask attempt through a fresh host session.
+
+        Free asks deliberately retain their complete-prompt retry policy, so
+        retries do not share a conversation. Each attempt still uses the same
+        host lifecycle as an explicit session: open, ask, then close.
+        """
+        # Free asks use the CLI backend even for Pi so their single attempt
+        # retains the agent value's ordinary one-shot command shape.
+        transport = SessionTransport.CLI
+        try:
+            return with_ephemeral_session(
+                self._require_session_host("open"),
+                agent,
+                transport,
+                lambda handle: self._dispatch_session_agent(
+                    handle,
+                    request,
+                    node,
+                    max_attempts=max_attempts,
+                    target_type=target_type,
+                    codec=codec,
+                    strict_json=strict_json,
+                    json_schema=json_schema,
+                ),
+                one_shot=True,
+            )
+        except SessionAgentError as error:
+            self._invalid_agent_error(agent, error)
+        except SessionHostError as error:
+            self._session_error(error)
+
     def eval_ir_session_ask(self, node: IrSessionAsk) -> Value:
-        """Send a prompt through a session and retry invalid typed responses in place."""
+        """Send a prompt through a session and run its shared retry engine."""
         handle, agent, _transport = self._session_parts(self._ctx._eval(node.session), "ask")
         prompt = self._text_of(self._ctx._eval(node.prompt))
         contract = self._ctx._program.contracts[node.contract_id]
-        effective_strict = (
-            contract.strict_json if contract.strict_json is not None else self._ctx._strict_json
-        )
         output_contract: OutputContract | None = (
             None if contract.is_unit else self._ctx._host_contracts[node.contract_id]
         )
         json_schema = (
             None if contract.json_schema is None else cast(object, json.loads(contract.json_schema))
         )
-        last_raw: str | None = None
-        last_normalized: str | None = None
-        last_errors: tuple[ReqValidationError, ...] = ()
-
-        for attempt in range(node.max_attempts):
-            request = AgentRequest(
-                agent=agent,
-                prompt=prompt,
-                attempt=attempt,
-                validation_errors=list(last_errors),
-                output_contract=output_contract,
-            )
-            request.prompt = (
+        return self._eval_session_ask_attempts(
+            agent=agent,
+            prompt=prompt,
+            contract_id=node.contract_id,
+            max_attempts=node.max_attempts,
+            node=node,
+            output_contract=output_contract,
+            compose_prompt=lambda request: (
                 compose_initial_agent_prompt(request)
-                if attempt == 0
+                if request.attempt == 0
                 else compose_session_corrective_follow_up(request)
-            )
-            raw = self._dispatch_session_agent(
+            ),
+            dispatch=lambda request: self._dispatch_session_agent(
                 handle,
                 request,
                 node,
@@ -594,11 +602,45 @@ class EffectHandlers:
                 codec=contract.codec_name,
                 strict_json=contract.strict_json,
                 json_schema=json_schema,
+            ),
+        )
+
+    def _eval_session_ask_attempts(
+        self,
+        *,
+        agent: EnumValue,
+        prompt: str,
+        contract_id: ContractId,
+        max_attempts: int,
+        node: IrAsk | IrSessionAsk,
+        output_contract: OutputContract | TypelessOutputContract | None,
+        compose_prompt: Callable[[AgentRequest], str],
+        dispatch: Callable[[AgentRequest], str],
+    ) -> Value:
+        """Run the session ask retry loop; free asks delegate their one-shot transport here."""
+        contract = self._ctx._program.contracts[contract_id]
+        effective_strict = (
+            contract.strict_json if contract.strict_json is not None else self._ctx._strict_json
+        )
+        last_raw: str | None = None
+        last_normalized: str | None = None
+        last_errors: tuple[ReqValidationError, ...] = ()
+
+        for attempt in range(max_attempts):
+            request = AgentRequest(
+                agent=agent,
+                prompt=prompt,
+                attempt=attempt,
+                previous_invalid_output=last_raw,
+                validation_errors=list(last_errors),
+                output_contract=output_contract,
             )
+            request.prompt = compose_prompt(request)
+            raw = dispatch(request)
             if contract.is_unit:
                 return VOID_VALUE
             result = self._ctx._parse_host_output(
-                raw, node.contract_id, effective_strict=effective_strict
+                raw, contract_id, effective_strict=effective_strict
             )
             self._ctx._trace.parse_result(
                 ok=result.ok,
@@ -617,14 +659,14 @@ class EffectHandlers:
         self._raise_agent_parse_error(
             message=(
                 f"Agent {render_value(agent)!r} failed to produce a valid "
-                f"{contract.target_type_label} after {node.max_attempts} attempt(s). "
+                f"{contract.target_type_label} after {max_attempts} attempt(s). "
                 f"Last output: {last_raw!r}"
             ),
             agent=agent,
             last_raw=last_raw,
             last_normalized=last_normalized,
             last_errors=last_errors,
-            max_attempts=node.max_attempts,
+            max_attempts=max_attempts,
             target_type_label=contract.target_type_label,
             json_schema=contract.json_schema,
         )

@@ -7,10 +7,20 @@ and asserts the produced values and stdout.
 from __future__ import annotations
 
 import json as _json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from agm.agl import PipelineDriver
+from agm.agl.eval.ir_interpreter import IrInterpreter
+from agm.agl.runtime.sessions import (
+    AgentDispatcherSessionHost,
+    SessionAgentError,
+    SessionAskError,
+    SessionHost,
+    SessionHostError,
+)
+from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import (
     ArrayValue,
     BoolValue,
@@ -25,6 +35,7 @@ from tests.agl.ir_harness import (
     evaluate_ir,
     evaluate_ir_raises_with_agents,
     evaluate_ir_with_agents,
+    lower_inline_ir,
 )
 
 if TYPE_CHECKING:
@@ -47,6 +58,309 @@ answer
     ir = evaluate_ir_with_agents(source, scripts={"worker": ["42"]})
 
     assert ir["answer"] == IntValue(42)
+
+
+def test_agent_ask_without_a_configured_host_uses_and_releases_default_ephemeral_session() -> None:
+    """Agent::ask remains session-backed when a host supplies only a dispatcher."""
+    executable = lower_inline_ir('AgentCommand("worker").ask("How many?")')
+    interpreter = IrInterpreter(
+        executable,
+        agent_dispatcher=lambda _request: "7",
+    )
+
+    result = interpreter.run(program_symbol=executable.synthetic_main_symbol)
+
+    assert result == {}
+    assert isinstance(interpreter._session_host, AgentDispatcherSessionHost)
+    assert interpreter._session_host.active_session_count == 0
+
+
+def test_agent_ask_without_a_configured_host_closes_after_dispatch_failure() -> None:
+    """The default ephemeral session is released when dispatch raises."""
+    executable = lower_inline_ir('AgentCommand("worker").ask("How many?")')
+    interpreter = IrInterpreter(executable)
+
+    with pytest.raises(AglRaise):
+        interpreter.run(program_symbol=executable.synthetic_main_symbol)
+
+    assert isinstance(interpreter._session_host, AgentDispatcherSessionHost)
+    assert interpreter._session_host.active_session_count == 0
+
+
+def test_free_ask_opens_uses_and_closes_ephemeral_sessions_per_retry() -> None:
+    """Free asks retain their one-shot lifecycle and complete-prompt retries."""
+
+    class EphemeralSessionHost:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, str]] = []
+            self.transports: list[str] = []
+            self.one_shot_flags: list[bool] = []
+            self.prompts: list[str] = []
+            self._responses = iter(["not a number", "7"])
+
+        def open_ephemeral(
+            self, _agent: EnumValue, transport: str, *, one_shot: bool = False
+        ) -> str:
+            self.transports.append(transport)
+            self.one_shot_flags.append(one_shot)
+            handle = f"session-{len(self.prompts) + 1}"
+            self.events.append(("open", handle))
+            return handle
+
+        def ask(self, handle: str, prompt: str) -> str:
+            self.events.append(("ask", handle))
+            self.prompts.append(prompt)
+            return next(self._responses)
+
+        def close(self, handle: str) -> None:
+            self.events.append(("close", handle))
+
+        def close_all(self) -> None:
+            self.events.append(("close_all", ""))
+
+    host = EphemeralSessionHost()
+    result = run_inline_command(
+        PipelineDriver(session_host=cast(SessionHost, host)),
+        'let worker = AgentPi("provider", "model", "high")\n'
+        'let answer: int = ask("How many?", agent = worker, on_parse_error = Retry(n = 1))\n'
+        "answer",
+    )
+
+    assert result.ok
+    assert host.events == [
+        ("open", "session-1"),
+        ("ask", "session-1"),
+        ("close", "session-1"),
+        ("open", "session-2"),
+        ("ask", "session-2"),
+        ("close", "session-2"),
+        ("close_all", ""),
+    ]
+    assert host.transports == ["Cli", "Cli"]
+    assert host.one_shot_flags == [True, True]
+    assert host.prompts[0].startswith("How many?")
+    assert "How many?" in host.prompts[1]
+    assert "not a number" in host.prompts[1]
+
+
+def test_agent_ask_keeps_retries_in_one_ephemeral_session_and_closes_once() -> None:
+    """Agent methods retain a conversation for corrective retries within one call."""
+
+    class EphemeralSessionHost:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, str]] = []
+            self.prompts: list[str] = []
+            self._responses = iter(["not a number", "7"])
+
+        def open_ephemeral(self, _agent: EnumValue, transport: str) -> str:
+            self.events.append(("open", transport))
+            return "session"
+
+        def ask(self, handle: str, prompt: str) -> str:
+            self.events.append(("ask", handle))
+            self.prompts.append(prompt)
+            return next(self._responses)
+
+        def close(self, handle: str) -> None:
+            self.events.append(("close", handle))
+
+        def close_all(self) -> None:
+            self.events.append(("close_all", ""))
+
+    host = EphemeralSessionHost()
+    result = run_inline_command(
+        PipelineDriver(session_host=cast(SessionHost, host)),
+        'let worker = AgentPi("provider", "model", "high")\n'
+        'let answer: int = worker.ask("How many?", on_parse_error = Retry(n = 1))\n'
+        "answer",
+    )
+
+    assert result.ok
+    assert host.events == [
+        ("open", "Rpc"),
+        ("ask", "session"),
+        ("ask", "session"),
+        ("close", "session"),
+        ("close_all", ""),
+    ]
+    assert host.prompts[0].startswith("How many?")
+    assert "How many?" not in host.prompts[1]
+    assert "not a number" not in host.prompts[1]
+    assert "Validation errors:" in host.prompts[1]
+
+
+def test_agent_ask_maps_ephemeral_open_failure_to_session_error() -> None:
+    """Agent-method session lifecycle failures are not agent-decoding failures."""
+
+    class FailingOpenSessionHost:
+        def open_ephemeral(self, _agent: EnumValue, _transport: str) -> str:
+            raise SessionHostError("host unavailable", "open")
+
+        def close_all(self) -> None:
+            pass
+
+    result = run_inline_command(
+        PipelineDriver(session_host=cast(SessionHost, FailingOpenSessionHost())),
+        'try\n  AgentCommand("worker").ask("question")\n  ()\ncatch SessionError =>\n  ()',
+    )
+
+    assert result.ok
+
+
+def test_free_ask_maps_ephemeral_open_failure_to_session_error() -> None:
+    """Free asks keep lifecycle failures distinct from invalid agent values."""
+
+    class FailingOpenSessionHost:
+        def open_ephemeral(
+            self, _agent: EnumValue, _transport: str, *, one_shot: bool = False
+        ) -> str:
+            del one_shot
+            raise SessionHostError("host unavailable", "open")
+
+        def close_all(self) -> None:
+            pass
+
+    result = run_inline_command(
+        PipelineDriver(session_host=cast(SessionHost, FailingOpenSessionHost())),
+        "try\n"
+        '  let answer: text = ask("question", agent = AgentCommand("worker"))\n'
+        "  ()\n"
+        "catch SessionError =>\n"
+        "  ()",
+    )
+
+    assert result.ok
+
+
+def test_agent_ask_maps_invalid_agent_open_failure_to_agent_call_error() -> None:
+    """Agent decoding failures remain AgentCallError rather than SessionError."""
+
+    class InvalidAgentSessionHost:
+        def open_ephemeral(self, _agent: EnumValue, _transport: str) -> str:
+            raise SessionAgentError("invalid agent", "open")
+
+        def close_all(self) -> None:
+            pass
+
+    result = run_inline_command(
+        PipelineDriver(session_host=cast(SessionHost, InvalidAgentSessionHost())),
+        "try\n"
+        '  let answer: text = AgentCommand("worker").ask("question")\n'
+        "  ()\n"
+        "catch AgentCallError =>\n"
+        "  ()",
+    )
+
+    assert result.ok
+
+
+def test_agent_ask_closes_its_one_session_after_parse_exhaustion() -> None:
+    """A parse failure exhausts retries without leaking the ephemeral handle."""
+
+    class ExhaustingSessionHost:
+        def __init__(self) -> None:
+            self.events: list[str] = []
+
+        def open_ephemeral(self, _agent: EnumValue, _transport: str) -> str:
+            self.events.append("open")
+            return "session"
+
+        def ask(self, _handle: str, _prompt: str) -> str:
+            self.events.append("ask")
+            return "invalid"
+
+        def close(self, _handle: str) -> None:
+            self.events.append("close")
+
+        def close_all(self) -> None:
+            pass
+
+    host = ExhaustingSessionHost()
+    result = run_inline_command(
+        PipelineDriver(session_host=cast(SessionHost, host)),
+        "try\n"
+        '  let number: int = AgentCommand("worker").ask('
+        '"question", on_parse_error = Retry(n = 1))\n'
+        "  ()\n"
+        "catch AgentParseError =>\n"
+        "  ()",
+    )
+
+    assert result.ok
+    assert host.events == ["open", "ask", "ask", "close"]
+
+
+def test_agent_ask_closes_its_one_session_after_transport_failure() -> None:
+    """A failed retry transport stops dispatch and still closes the handle once."""
+
+    class FailingSessionHost:
+        def __init__(self) -> None:
+            self.events: list[str] = []
+
+        def open_ephemeral(self, _agent: EnumValue, _transport: str) -> str:
+            self.events.append("open")
+            return "session"
+
+        def ask(self, _handle: str, _prompt: str) -> str:
+            self.events.append("ask")
+            raise SessionAskError(
+                cause="timeout", exit_code=None, stderr_tail="", elapsed=0.0, call_info=None
+            )
+
+        def close(self, _handle: str) -> None:
+            self.events.append("close")
+
+        def close_all(self) -> None:
+            pass
+
+    host = FailingSessionHost()
+    result = run_inline_command(
+        PipelineDriver(session_host=cast(SessionHost, host)),
+        "try\n"
+        '  let answer: int = AgentCommand("worker").ask('
+        '"question", on_parse_error = Retry(n = 3))\n'
+        "  ()\n"
+        "catch AgentCallError =>\n"
+        "  ()",
+    )
+
+    assert result.ok
+    assert host.events == ["open", "ask", "close"]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        'ask("question", agent = AgentCommand("worker"))',
+        'AgentCommand("worker").ask("question")',
+    ],
+)
+def test_ask_surfaces_an_ephemeral_session_close_failure(source: str) -> None:
+    """A clean ask reports failure to close its ephemeral session."""
+
+    class FailingCloseSessionHost:
+        def open_ephemeral(
+            self, _agent: EnumValue, _transport: str, *, one_shot: bool = False
+        ) -> str:
+            del one_shot
+            return "session"
+
+        def ask(self, _handle: str, _prompt: str) -> str:
+            return "answer"
+
+        def close(self, _handle: str) -> None:
+            raise SessionHostError("close failed", "close")
+
+        def close_all(self) -> None:
+            pass
+
+    result = run_inline_command(
+        PipelineDriver(session_host=cast(SessionHost, FailingCloseSessionHost())), source
+    )
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.type_name == "SessionError"
 
 
 def test_agent_ask_request_method_uses_its_receiver() -> None:

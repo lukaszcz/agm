@@ -574,7 +574,8 @@ def run(
     # lowered exactly once. Keep result-to-exit handling inside the cleanup
     # boundary: a failed result is a primary program failure, just like an
     # exception, and must not be replaced by a secondary close failure.
-    with preserve_primary_error(session_host.close_all, label="agent session cleanup"):
+    cleanup_sessions = session_host.close_all if session_host is not None else lambda: None
+    with preserve_primary_error(cleanup_sessions, label="agent session cleanup"):
         result = runtime.run_prepared(
             prepared,
             param_values=external_params,

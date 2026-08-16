@@ -145,9 +145,9 @@ Field notes:
   paths in that schema, such as a recursive root and child `$ref` pointing to the
   same `$defs` entry.
 - `expect.sessions` — exact observed set of deterministic per-agent session
-  tags. `opened`, `closed`, and (for a forked session) `parent` are optional
-  exact assertions. Tags are assigned in creation order as `session-1`,
-  `session-2`, and so on.
+  tags. `opened`, `closed`, `transport`, `one_shot`, and (for a forked session)
+  `parent` are optional exact assertions. Tags are assigned in creation order as
+  `session-1`, `session-2`, and so on.
 - `expect.session_prompts` — assertions on a session prompt. `session` selects
   its tag and `call` is its 0-based prompt number. For every created tag, the
   entries must enumerate every received prompt exactly once, so an extra session

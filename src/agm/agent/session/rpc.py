@@ -90,8 +90,20 @@ class PiRpcSessionBackend:
 
     def ask(self, request: SessionAskRequest) -> SessionAskResponse:
         """Send a prompt and collect its text deltas through the settled event."""
+        started = time.monotonic()
         _, text = self._send("prompt", {"message": request.prompt}, wait_for_settled=True)
-        return SessionAskResponse(content="".join(text))
+        elapsed = time.monotonic() - started
+        child = self._live_child("prompt")
+        return SessionAskResponse(
+            content="".join(text),
+            metadata={"elapsed": elapsed},
+            call_info=AgentCallInfo(
+                argv=self._command.copy(),
+                prompt_via_stdin=True,
+                elapsed=elapsed,
+                exit_code=child.process.poll(),
+            ),
+        )
 
     def compact(self, instructions: str) -> None:
         """Request native Pi compaction, optionally with custom instructions."""

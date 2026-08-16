@@ -1,6 +1,7 @@
 """Host-side agent session protocols and lifecycle management."""
 
 from agm.agent.session.protocol import (
+    SessionAgentError,
     SessionAskError,
     SessionAskRequest,
     SessionAskResponse,
@@ -21,6 +22,7 @@ from agm.agent.session.service import (
 
 __all__ = [
     "AglSessionHost",
+    "SessionAgentError",
     "SessionAskError",
     "SessionAskRequest",
     "SessionAskResponse",

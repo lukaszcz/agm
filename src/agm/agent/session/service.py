@@ -8,10 +8,14 @@ from typing import TYPE_CHECKING, NoReturn, Protocol, TypeVar, cast
 from uuid import uuid4
 
 if TYPE_CHECKING:
+    from agm.agl.runtime.request import AgentRequest, AgentResponse
     from agm.agl.runtime.sessions import SessionSnapshot
     from agm.agl.runtime.sessions import SessionStats as AglSessionStats
     from agm.agl.semantics.values import EnumValue
 
+from agm.agent.session.protocol import (
+    SessionAgentError as AgentSessionAgentError,
+)
 from agm.agent.session.protocol import (
     SessionAskError,
     SessionAskRequest,
@@ -22,6 +26,7 @@ from agm.agent.session.protocol import (
     SessionOperation,
     SessionStats,
 )
+from agm.core.cleanup import preserve_primary_error
 
 _T = TypeVar("_T")
 SessionConfirmation = Callable[["EnumValue", str], None]
@@ -42,13 +47,73 @@ class AglSessionHost:
         self._service = service
         self._confirm_session = confirm_session
         self._agents: dict[str, tuple[EnumValue, str]] = {}
+        self._ephemeral_handles: set[str] = set()
 
     def open(self, agent: EnumValue, transport: str, *, name: str = "") -> str:
-        handle = self._call_host(
-            lambda: self._service.open(self._agent_spec(agent), transport.lower(), name=name)
-        )
+        handle = self._open(agent, transport, name=name)
         self._agents[handle] = (agent, transport)
         return handle
+
+    def open_ephemeral(self, agent: EnumValue, transport: str, *, one_shot: bool = False) -> str:
+        """Open one short-lived session for an AgL ask lifecycle."""
+        handle = self._open(agent, transport, ephemeral=True, one_shot=one_shot)
+        self._agents[handle] = (agent, transport)
+        self._ephemeral_handles.add(handle)
+        return handle
+
+    def with_ephemeral(
+        self,
+        agent: EnumValue,
+        transport: str,
+        action: Callable[[str], _T],
+        *,
+        one_shot: bool = False,
+    ) -> _T:
+        """Run *action* in one ephemeral session and release it afterward."""
+        spec = self._agent_spec(agent)
+
+        def register(handle: str) -> _T:
+            self._agents[handle] = (agent, transport)
+            self._ephemeral_handles.add(handle)
+            return action(handle)
+
+        if one_shot:
+            return self._call_host(
+                lambda: self._service.with_ephemeral(
+                    spec,
+                    transport.lower(),
+                    register,
+                    on_closed=self._retire_ephemeral,
+                    one_shot=True,
+                )
+            )
+        return self._call_host(
+            lambda: self._service.with_ephemeral(
+                spec, transport.lower(), register, on_closed=self._retire_ephemeral
+            )
+        )
+
+    def _open(
+        self,
+        agent: EnumValue,
+        transport: str,
+        *,
+        name: str = "",
+        ephemeral: bool = False,
+        one_shot: bool = False,
+    ) -> str:
+        spec = self._agent_spec(agent)
+        if ephemeral:
+            if one_shot:
+                return self._call_host(
+                    lambda: self._service.open(
+                        spec, transport.lower(), name=name, ephemeral=True, one_shot=True
+                    )
+                )
+            return self._call_host(
+                lambda: self._service.open(spec, transport.lower(), name=name, ephemeral=True)
+            )
+        return self._call_host(lambda: self._service.open(spec, transport.lower(), name=name))
 
     def default(self, agent: EnumValue, transport: str, *, name: str = "") -> str:
         handle = self._call_host(
@@ -58,6 +123,31 @@ class AglSessionHost:
         return handle
 
     def ask(self, handle: str, prompt: str) -> str:
+        """Send a plain session prompt for hosts without request envelopes."""
+        return self._ask(handle, prompt).content
+
+    def ask_request(self, handle: str, request: "AgentRequest") -> "AgentResponse":
+        """Preserve a session response's metadata across the AgL firewall."""
+        from agm.agl.runtime.request import AgentCallInfo, AgentResponse
+
+        response = self._ask(handle, request.prompt)
+        call_info = response.call_info
+        return AgentResponse(
+            content=response.content,
+            metadata=dict(response.metadata),
+            call_info=(
+                None
+                if call_info is None
+                else AgentCallInfo(
+                    argv=call_info.argv,
+                    prompt_via_stdin=call_info.prompt_via_stdin,
+                    elapsed=call_info.elapsed,
+                    exit_code=call_info.exit_code,
+                )
+            ),
+        )
+
+    def _ask(self, handle: str, prompt: str) -> SessionAskResponse:
         try:
             if self._confirm_session is not None:
                 try:
@@ -67,7 +157,7 @@ class AglSessionHost:
 
                     raise AglSessionHostError("unknown session", "ask") from None
                 self._confirm_session(agent, prompt)
-            return self._service.ask(handle, SessionAskRequest(prompt)).content
+            return self._service.ask(handle, SessionAskRequest(prompt))
         except SessionAskError as error:
             self._raise_ask_error(error)
         except SessionHostError as error:
@@ -110,9 +200,20 @@ class AglSessionHost:
 
     def close(self, handle: str) -> None:
         self._call_host(lambda: self._service.close(handle))
+        self._retire_ephemeral(handle)
 
     def close_all(self) -> None:
-        self._service.close_all()
+        try:
+            self._service.close_all()
+        finally:
+            for handle in tuple(self._ephemeral_handles):
+                if not self._service.is_known(handle):
+                    self._retire_ephemeral(handle)
+
+    def _retire_ephemeral(self, handle: str) -> None:
+        if handle in self._ephemeral_handles:
+            self._ephemeral_handles.remove(handle)
+            self._agents.pop(handle, None)
 
     @staticmethod
     def _agent_spec(agent: object) -> object:
@@ -124,9 +225,9 @@ class AglSessionHost:
         try:
             return decode_agent_value(agent)
         except ValueError as error:
-            from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
+            from agm.agl.runtime.sessions import SessionAgentError
 
-            raise AglSessionHostError(str(error), "open") from error
+            raise SessionAgentError(str(error), "open") from error
 
     @staticmethod
     def _raise_host_error(error: SessionHostError) -> NoReturn:
@@ -161,6 +262,10 @@ class AglSessionHost:
     def _call_host(action: Callable[[], _T]) -> _T:
         try:
             return action()
+        except AgentSessionAgentError as error:
+            from agm.agl.runtime.sessions import SessionAgentError
+
+            raise SessionAgentError(error.message, error.operation) from error
         except SessionHostError as error:
             AglSessionHost._raise_host_error(error)
 
@@ -193,6 +298,7 @@ class _SessionEntry:
     backend: SessionBackend
     agent: object
     transport: str
+    ephemeral: bool
     closed: bool = False
 
 
@@ -204,15 +310,26 @@ class SessionService:
         self._entries: dict[str, _SessionEntry] = {}
         self._default_handle: str | None = None
 
-    def open(self, agent: object, transport: str, *, name: str = "") -> str:
+    def open(
+        self,
+        agent: object,
+        transport: str,
+        *,
+        name: str = "",
+        ephemeral: bool = False,
+        one_shot: bool = False,
+    ) -> str:
         """Open a backend session and return its host-generated handle id."""
         backend = self._backend_factory(agent, transport)
-        backend.open(SessionOpenRequest(agent=agent, transport=transport, name=name))
+        backend.open(
+            SessionOpenRequest(agent=agent, transport=transport, name=name, one_shot=one_shot)
+        )
         handle = str(uuid4())
         self._entries[handle] = _SessionEntry(
             backend=backend,
             agent=agent,
             transport=transport,
+            ephemeral=ephemeral,
         )
         return handle
 
@@ -249,6 +366,7 @@ class SessionService:
             backend=forked_backend,
             agent=entry.agent,
             transport=entry.transport,
+            ephemeral=False,
         )
         return forked_handle
 
@@ -272,7 +390,14 @@ class SessionService:
         if entry.closed:
             return
         entry.backend.close()
-        entry.closed = True
+        if entry.ephemeral:
+            del self._entries[handle]
+        else:
+            entry.closed = True
+
+    def is_known(self, handle: str) -> bool:
+        """Whether *handle* is still retained by this service."""
+        return handle in self._entries
 
     def close_all(self) -> None:
         """Close every live backend, raising grouped failures after all attempts.
@@ -281,17 +406,36 @@ class SessionService:
         later call can retry failed closes.
         """
         failures: list[Exception] = []
-        for entry in self._entries.values():
+        for handle, entry in tuple(self._entries.items()):
             if entry.closed:
                 continue
             try:
-                entry.backend.close()
+                self.close(handle)
             except Exception as error:
                 failures.append(error)
-            else:
-                entry.closed = True
         if failures:
             raise ExceptionGroup("failed to close one or more agent sessions", failures)
+
+    def with_ephemeral(
+        self,
+        agent: object,
+        transport: str,
+        action: Callable[[str], _T],
+        *,
+        name: str = "",
+        on_closed: Callable[[str], None] | None = None,
+        one_shot: bool = False,
+    ) -> _T:
+        """Run *action* in a short-lived session and release it afterward."""
+        handle = self.open(agent, transport, name=name, ephemeral=True, one_shot=one_shot)
+
+        def close() -> None:
+            self.close(handle)
+            if on_closed is not None:
+                on_closed(handle)
+
+        with preserve_primary_error(close, label="ephemeral session cleanup"):
+            return action(handle)
 
     def ask_ephemeral(
         self,
@@ -302,17 +446,13 @@ class SessionService:
         name: str = "",
     ) -> SessionAskResponse:
         """Ask through a short-lived session and close it even when asking fails."""
-        handle = self.open(agent, transport, name=name)
-        try:
-            response = self.ask(handle, request)
-        except BaseException:
-            try:
-                self.close(handle)
-            except BaseException:
-                pass
-            raise
-        self.close(handle)
-        return response
+        return self.with_ephemeral(
+            agent,
+            transport,
+            lambda handle: self.ask(handle, request),
+            name=name,
+            one_shot=True,
+        )
 
     def _entry_for(self, handle: str, operation: SessionOperation | str) -> _SessionEntry:
         entry = self._entries.get(handle)

@@ -67,6 +67,26 @@ def test_open_requires_a_session_id_placeholder() -> None:
     assert raised.value.operation == "open"
 
 
+def test_one_shot_command_session_does_not_require_a_session_id_placeholder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[list[str]] = []
+
+    def fake_run_capture_result(argv: list[str], **kwargs: object) -> ProcessCaptureResult:
+        captured.append(argv)
+        return _capture_result()
+
+    monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
+    service = SessionService(lambda _agent, _transport: AgentCommandSessionBackend())
+
+    response = service.ask_ephemeral(
+        AgentCommand("runner --quiet"), "cli", SessionAskRequest(prompt="question")
+    )
+
+    assert response.content == "answer"
+    assert _non_prompt_args(captured[0]) == ["runner", "--quiet"]
+
+
 def test_open_converts_malformed_placeholder_to_an_open_error() -> None:
     backend = AgentCommandSessionBackend()
 

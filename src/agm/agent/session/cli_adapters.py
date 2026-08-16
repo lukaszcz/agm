@@ -10,15 +10,15 @@ from types import MappingProxyType
 from typing import NoReturn, cast
 from uuid import uuid4
 
+from agm.agent import runner
 from agm.agent.runner import (
     PromptDelivery,
     cleanup_temp_files,
     command_targets_session_id,
-    prepare_rendered_prompt_run,
     prompt_run_result_error,
-    run_prepared_prompt_result,
 )
 from agm.agent.session.protocol import (
+    SessionAgentError,
     SessionAskError,
     SessionAskRequest,
     SessionAskResponse,
@@ -41,6 +41,7 @@ class _CommandSession:
 
     command: list[str]
     session_id: str
+    one_shot: bool
 
 
 @dataclass(slots=True)
@@ -50,6 +51,7 @@ class _ClaudeSession:
     agent: AgentClaude
     session_id: str
     name: str
+    one_shot: bool
     started: bool = False
 
 
@@ -58,6 +60,7 @@ class _CodexSession:
     """The state needed to start or resume a Codex CLI transcript."""
 
     agent: AgentCodex
+    one_shot: bool
     session_id: str | None = None
     started: bool = False
 
@@ -69,6 +72,7 @@ class _PiSession:
     agent: AgentPi
     session_id: str
     name: str
+    one_shot: bool
     started: bool = False
 
 
@@ -100,7 +104,7 @@ class _CliPromptBackend:
         temp_files: list[Path] = []
         try:
             try:
-                prepared = prepare_rendered_prompt_run(
+                prepared = runner.prepare_rendered_prompt_run(
                     prompt,
                     runner=command,
                     temp_files=temp_files,
@@ -108,7 +112,9 @@ class _CliPromptBackend:
                     delivery=delivery,
                     session_id=session_id,
                 )
-                result = run_prepared_prompt_result(prepared, idle_timeout=self._idle_timeout)
+                result = runner.run_prepared_prompt_result(
+                    prepared, idle_timeout=self._idle_timeout
+                )
             except InterpolationError as exc:
                 raise SessionAskError(
                     cause="interpolation_failure",
@@ -141,7 +147,16 @@ class _CliPromptBackend:
             _cleanup_after_ask(temp_files, primary_error)
             raise
         _cleanup_after_ask(temp_files)
-        return SessionAskResponse(content=result.stdout)
+        return SessionAskResponse(
+            content=result.stdout,
+            metadata={"elapsed": result.elapsed},
+            call_info=AgentCallInfo(
+                argv=(prepared.argv or []).copy(),
+                prompt_via_stdin=prepared.prompt_via_stdin,
+                elapsed=result.elapsed,
+                exit_code=result.returncode,
+            ),
+        )
 
     @staticmethod
     def _unsupported(operation: SessionOperation) -> NoReturn:
@@ -171,17 +186,19 @@ class AgentCommandSessionBackend(_CliPromptBackend):
         try:
             command = request.agent.argv()
         except ValueError as exc:
-            raise SessionHostError(str(exc), "open") from exc
+            raise SessionAgentError(str(exc), "open") from exc
         try:
             targets_session_id = command_targets_session_id(command)
         except InterpolationError as exc:
-            raise SessionHostError(str(exc), "open") from exc
-        if not targets_session_id:
+            raise SessionAgentError(str(exc), "open") from exc
+        if not targets_session_id and not request.one_shot:
             raise SessionHostError(
                 "command session requires a %{SESSION_ID} placeholder",
                 "open",
             )
-        self._session = _CommandSession(command=command, session_id=str(uuid4()))
+        self._session = _CommandSession(
+            command=command, session_id=str(uuid4()), one_shot=request.one_shot
+        )
 
     def ask(self, request: SessionAskRequest) -> SessionAskResponse:
         """Run the command with this session's id and the rendered prompt."""
@@ -190,7 +207,7 @@ class AgentCommandSessionBackend(_CliPromptBackend):
             request.prompt,
             session.command,
             delivery=PromptDelivery.FILE,
-            session_id=session.session_id,
+            session_id=None if session.one_shot else session.session_id,
         )
 
     def compact(self, instructions: str) -> None:
@@ -240,15 +257,19 @@ class ClaudeCliSessionBackend(_CliPromptBackend):
         """Allocate the id used when Claude receives its first prompt."""
         if not isinstance(request.agent, AgentClaude):
             raise SessionHostError("Claude CLI session requires an AgentClaude", "open")
-        self._session = _ClaudeSession(request.agent, str(uuid4()), request.name)
+        self._session = _ClaudeSession(request.agent, str(uuid4()), request.name, request.one_shot)
 
     def ask(self, request: SessionAskRequest) -> SessionAskResponse:
         """Start or resume the Claude transcript for this prompt."""
         session = self._session_for("ask")
-        command = session.agent.session_argv(
-            session.session_id,
-            resume=session.started,
-            name=session.name if not session.started else "",
+        command = (
+            session.agent.argv()
+            if session.one_shot
+            else session.agent.session_argv(
+                session.session_id,
+                resume=session.started,
+                name=session.name if not session.started else "",
+            )
         )
         session.started = True
         return self._run_prompt(request.prompt, command, delivery=PromptDelivery.FILE)
@@ -299,7 +320,7 @@ class ClaudeCliSessionBackend(_CliPromptBackend):
         """Return a backend for an already-created forked Claude transcript."""
         session = self._session_for(SessionOperation.FORK.value)
         child = ClaudeCliSessionBackend(idle_timeout=self._idle_timeout)
-        child._session = _ClaudeSession(session.agent, session_id, "", started=True)
+        child._session = _ClaudeSession(session.agent, session_id, "", False, started=True)
         return child
 
     def _session_for(self, operation: str) -> _ClaudeSession:
@@ -326,11 +347,15 @@ class CodexCliSessionBackend(_CliPromptBackend):
             )
         if not isinstance(request.agent, AgentCodex):
             raise SessionHostError("Codex CLI session requires an AgentCodex", "open")
-        self._session = _CodexSession(request.agent)
+        self._session = _CodexSession(request.agent, request.one_shot)
 
     def ask(self, request: SessionAskRequest) -> SessionAskResponse:
         """Start a Codex thread once, then resume its captured id."""
         session = self._session_for("ask")
+        if session.one_shot:
+            return self._run_prompt(
+                request.prompt, session.agent.argv(), delivery=PromptDelivery.STDIN
+            )
         if session.session_id is None and session.started:
             raise SessionHostError(
                 "Codex session start did not produce a resumable thread", SessionOperation.ASK.value
@@ -394,14 +419,18 @@ class PiCliSessionBackend(_CliPromptBackend):
         """Allocate the id Pi will use for every prompt in this transcript."""
         if not isinstance(request.agent, AgentPi):
             raise SessionHostError("Pi CLI session requires an AgentPi", "open")
-        self._session = _PiSession(request.agent, str(uuid4()), request.name)
+        self._session = _PiSession(request.agent, str(uuid4()), request.name, request.one_shot)
 
     def ask(self, request: SessionAskRequest) -> SessionAskResponse:
         """Send a prompt through Pi's stable session id."""
         session = self._session_for("ask")
-        command = session.agent.session_argv(
-            session.session_id,
-            name=session.name if not session.started else "",
+        command = (
+            session.agent.argv()
+            if session.one_shot
+            else session.agent.session_argv(
+                session.session_id,
+                name=session.name if not session.started else "",
+            )
         )
         session.started = True
         return self._run_prompt(request.prompt, command, delivery=PromptDelivery.FILE)
@@ -426,7 +455,7 @@ class PiCliSessionBackend(_CliPromptBackend):
             delivery=PromptDelivery.NONE,
         )
         child = PiCliSessionBackend(idle_timeout=self._idle_timeout)
-        child._session = _PiSession(session.agent, child_id, "", started=True)
+        child._session = _PiSession(session.agent, child_id, "", False, started=True)
         return child
 
     def set_name(self, name: str) -> None:

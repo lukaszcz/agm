@@ -428,6 +428,7 @@ class TestUncaughtAgentCallErrorSpan:
             )
 
         monkeypatch.setattr(exec_engine, "value_driven_agent_factory", lambda **_: failing_agent)
+        monkeypatch.setattr(exec_engine, "create_agl_session_host", lambda **_: None)
         args = ExecArgs(
             file=str(agl_file),
             param_tokens=[],

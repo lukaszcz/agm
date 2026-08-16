@@ -47,6 +47,7 @@ from agm.agl.ir.nodes import (
     IrAnd,
     IrArith,
     IrAsk,
+    IrAskOrigin,
     IrAskRequest,
     IrAssign,
     IrBind,
@@ -2196,7 +2197,13 @@ class _Lowerer:
                 return IrCopyValue(location=loc, kind=copy_kind, value=arg_ir)
 
             case BuiltinKind.ASK:
-                return self._lower_ask_call(call_node, span, structured_exec=False, agent=agent)
+                return self._lower_ask_call(
+                    call_node,
+                    span,
+                    structured_exec=False,
+                    agent=agent,
+                    origin=(IrAskOrigin.AGENT_METHOD if agent is not None else IrAskOrigin.FREE),
+                )
 
             case BuiltinKind.ASK_REQUEST:
                 return self._lower_ask_call(
@@ -3272,6 +3279,7 @@ class _Lowerer:
         is_request: bool = False,
         agent: IrExpr | None = None,
         session: IrExpr | None = None,
+        origin: IrAskOrigin = IrAskOrigin.FREE,
     ) -> IrExpr:
         """Lower an ask() or ask-request() builtin call to its host-operation node."""
         loc = self._loc(span)
@@ -3355,6 +3363,7 @@ class _Lowerer:
             prompt=prompt_ir,
             contract_id=contract_id,
             max_attempts=max_attempts,
+            origin=origin,
         )
 
     # ------------------------------------------------------------------

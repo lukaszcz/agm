@@ -22,7 +22,9 @@ from agm.agent.session import (
     SessionStats,
     create_agl_session_host,
 )
+from agm.agent.spec import AgentCommand
 from agm.agent.transport import AgentCallInfo
+from agm.agl.runtime.request import AgentRequest
 from agm.agl.runtime.sessions import SessionAskError as AglSessionAskError
 from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
 from tests._agl_helpers import agent_value
@@ -190,6 +192,38 @@ def test_agl_session_host_confirmation_and_invalid_agent_are_handled() -> None:
         host._agent_spec(agent_value("Unknown"))
 
 
+def test_agl_session_host_preserves_success_response_metadata_and_call_info() -> None:
+    capabilities = SessionCapabilities(frozenset({SessionOperation.ASK}))
+    backend = FakeBackend(
+        capabilities,
+        response=SessionAskResponse(
+            content="answer",
+            metadata={"elapsed": 1.5, "provider": "pi"},
+            call_info=AgentCallInfo(
+                argv=["pi", "--rpc"],
+                prompt_via_stdin=True,
+                elapsed=1.5,
+                exit_code=0,
+            ),
+        ),
+    )
+    host = AglSessionHost(SessionService(lambda _agent, _transport: backend))
+    agent = agent_value("AgentPi", provider="provider", model="model", thinking="think")
+    handle = host.open(agent, "Rpc")
+
+    response = host.ask_request(handle, AgentRequest(agent=agent, prompt="hello"))
+
+    assert response.content == "answer"
+    assert response.metadata == {"elapsed": 1.5, "provider": "pi"}
+    assert response.call_info is not None
+    assert response.call_info.to_trace() == {
+        "argv": ["pi", "--rpc"],
+        "prompt_via_stdin": True,
+        "elapsed": 1.5,
+        "exit_code": 0,
+    }
+
+
 def test_agl_session_host_translates_host_and_ask_failures() -> None:
     capabilities = SessionCapabilities(frozenset({SessionOperation.ASK}))
     backend = FakeBackend(capabilities)
@@ -305,12 +339,89 @@ def test_close_all_attempts_every_session_and_leaves_failures_retryable() -> Non
         )
 
 
-def test_ephemeral_ask_returns_its_response_after_closing() -> None:
+def test_ephemeral_lifecycle_retires_its_handle_after_closing() -> None:
     service, factory = _service()
+    agent = object()
 
-    response = service.ask_ephemeral(object(), "cli", SessionAskRequest(prompt="hello"))
+    response = service.with_ephemeral(
+        agent,
+        "cli",
+        lambda handle: service.ask(handle, SessionAskRequest(prompt="hello")),
+    )
 
     assert response == SessionAskResponse(content="answer")
+    assert factory.backends[0].close_calls == 1
+    assert factory.backends[0].open_requests == [SessionOpenRequest(agent=agent, transport="cli")]
+    assert service._entries == {}
+
+
+def test_agl_host_ephemeral_lifecycle_retires_its_agent_mapping() -> None:
+    service, factory = _service()
+    host = AglSessionHost(service)
+    agent = agent_value("AgentCommand", command="worker")
+    handles: list[str] = []
+
+    response = host.with_ephemeral(
+        agent,
+        "Cli",
+        lambda handle: handles.append(handle) or host.ask(handle, "hello"),
+    )
+
+    assert response == "answer"
+    assert factory.backends[0].close_calls == 1
+    assert service._entries == {}
+    assert host._agents == {}
+    assert host._ephemeral_handles == set()
+    with pytest.raises(AglSessionHostError):
+        host.close(handles[0])
+
+
+def test_close_all_retires_closed_ephemeral_host_mappings() -> None:
+    service, factory = _service()
+    host = AglSessionHost(service)
+    agent = agent_value("AgentCommand", command="worker")
+    handle = host.open_ephemeral(agent, "Cli", one_shot=True)
+
+    host.close_all()
+
+    assert factory.backends[0].open_requests == [
+        SessionOpenRequest(agent=AgentCommand("worker"), transport="cli", one_shot=True)
+    ]
+    assert factory.backends[0].close_calls == 1
+    assert service._entries == {}
+    assert host._agents == {}
+    assert host._ephemeral_handles == set()
+    with pytest.raises(AglSessionHostError):
+        host.close(handle)
+
+
+def test_close_all_keeps_an_ephemeral_mapping_when_its_close_can_be_retried() -> None:
+    service, factory = _service()
+    host = AglSessionHost(service)
+    handle = host.open_ephemeral(agent_value("AgentCommand", command="worker"), "Cli")
+    factory.backends[0].close_error = RuntimeError("close failed")
+
+    with pytest.raises(ExceptionGroup):
+        host.close_all()
+
+    assert handle in service._entries
+    assert handle in host._agents
+    assert handle in host._ephemeral_handles
+
+    factory.backends[0].close_error = None
+    host.close(handle)
+
+
+def test_ephemeral_ask_returns_its_response_after_closing() -> None:
+    service, factory = _service()
+    agent = object()
+
+    response = service.ask_ephemeral(agent, "cli", SessionAskRequest(prompt="hello"))
+
+    assert response == SessionAskResponse(content="answer")
+    assert factory.backends[0].open_requests == [
+        SessionOpenRequest(agent=agent, transport="cli", one_shot=True)
+    ]
     assert factory.backends[0].close_calls == 1
 
 

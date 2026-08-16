@@ -81,6 +81,8 @@ class _ScriptedSession:
 
     tag: str
     parent: str | None
+    transport: str = ""
+    one_shot: bool = False
     opened: bool = False
     closed: bool = False
     prompts: list[str] = field(default_factory=list)
@@ -139,10 +141,8 @@ class ScriptedAgent:
 
     def _new_session_backend(self, agent: object, transport: str) -> Any:
         """Build the same transport-specific backend production would select."""
-        from agm.agent.runner import command_targets_session_id
         from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi
         from agm.agl.runtime.agents import decode_agent_value
-        from agm.util.interp import InterpolationError
 
         if transport == "scripted":
             session = _ScriptedSession(tag=f"session-{len(self.sessions) + 1}", parent=None)
@@ -164,14 +164,9 @@ class ScriptedAgent:
             backend_type = _ScriptedSessionBackend
             if isinstance(spec, AgentCommand):
                 try:
-                    command = spec.argv()
-                    targets_session_id = command_targets_session_id(command)
-                except (InterpolationError, ValueError) as error:
+                    spec.argv()
+                except ValueError as error:
                     raise SessionHostError(str(error), "open") from error
-                if not targets_session_id:
-                    raise SessionHostError(
-                        "command session requires a %{SESSION_ID} placeholder", "open"
-                    )
                 capabilities = frozenset({SessionOperation.ASK})
                 supports_name = False
             elif isinstance(spec, AgentClaude):
@@ -258,12 +253,44 @@ class _ScriptedSessionService:
         self._service = SessionService(agent._new_session_backend)
         self._sessions: dict[str, _ScriptedSession] = {}
         self._backends: dict[str, _ScriptedSessionBackend] = {}
+        self._ephemeral_handles: set[str] = set()
 
     def open(self, agent: object, transport: str, *, name: str = "") -> str:
         handle = self._service.open(agent, transport, name=name)
         self._sessions[handle] = self._agent.sessions[-1]
         self._backends[handle] = self._agent.sessions[-1].backend
         return handle
+
+    def open_ephemeral(self, agent: object, transport: str, *, one_shot: bool = False) -> str:
+        handle = self._service.open(agent, transport, ephemeral=True, one_shot=one_shot)
+        self._sessions[handle] = self._agent.sessions[-1]
+        self._backends[handle] = self._agent.sessions[-1].backend
+        self._ephemeral_handles.add(handle)
+        return handle
+
+    def with_ephemeral(
+        self,
+        agent: object,
+        transport: str,
+        action: Callable[[str], Any],
+        *,
+        on_closed: Callable[[str], None] | None = None,
+        one_shot: bool = False,
+    ) -> Any:
+        def register(handle: str) -> Any:
+            self._sessions[handle] = self._agent.sessions[-1]
+            self._backends[handle] = self._agent.sessions[-1].backend
+            self._ephemeral_handles.add(handle)
+            return action(handle)
+
+        def retire(handle: str) -> None:
+            self._retire_ephemeral(handle)
+            if on_closed is not None:
+                on_closed(handle)
+
+        return self._service.with_ephemeral(
+            agent, transport, register, on_closed=retire, one_shot=one_shot
+        )
 
     def default(self, agent: object, transport: str, *, name: str = "") -> str:
         handle = self._service.default(agent, transport, name=name)
@@ -297,9 +324,21 @@ class _ScriptedSessionService:
 
     def close(self, handle: str) -> None:
         self._service.close(handle)
+        self._retire_ephemeral(handle)
 
     def close_all(self) -> None:
-        self._service.close_all()
+        try:
+            self._service.close_all()
+        finally:
+            for handle in tuple(self._ephemeral_handles):
+                if not self._service.is_known(handle):
+                    self._retire_ephemeral(handle)
+
+    def _retire_ephemeral(self, handle: str) -> None:
+        if handle in self._ephemeral_handles:
+            self._ephemeral_handles.remove(handle)
+            del self._sessions[handle]
+            del self._backends[handle]
 
     def ask_ephemeral(self, agent: object, transport: str, request: Any, *, name: str = "") -> Any:
         return self._service.ask_ephemeral(agent, transport, request, name=name)
@@ -347,6 +386,42 @@ class _ScenarioSessionHost:
         self._handles[handle] = service
         self._snapshots[handle] = (agent, transport)
         return handle
+
+    def open_ephemeral(self, agent: Any, transport: str, *, one_shot: bool = False) -> str:
+        service = self._service_for(agent)
+        try:
+            handle = service.open_ephemeral(agent, transport.lower(), one_shot=one_shot)
+        except SessionHostError as error:
+            self._raise_host_error(error)
+        self._handles[handle] = service
+        self._snapshots[handle] = (agent, transport)
+        return handle
+
+    def with_ephemeral(
+        self,
+        agent: Any,
+        transport: str,
+        action: Callable[[str], Any],
+        *,
+        one_shot: bool = False,
+    ) -> Any:
+        service = self._service_for(agent)
+
+        def register(handle: str) -> Any:
+            self._handles[handle] = service
+            self._snapshots[handle] = (agent, transport)
+            return action(handle)
+
+        def retire(handle: str) -> None:
+            del self._handles[handle]
+            del self._snapshots[handle]
+
+        try:
+            return service.with_ephemeral(
+                agent, transport.lower(), register, on_closed=retire, one_shot=one_shot
+            )
+        except SessionHostError as error:
+            self._raise_host_error(error)
 
     def default(self, agent: Any, transport: str, *, name: str = "") -> str:
         if self._default_handle is not None:
@@ -420,10 +495,14 @@ class _ScenarioSessionHost:
         return SessionSnapshot(agent, transport)
 
     def close(self, handle: str) -> None:
+        service = self._service_for_handle(handle, "close")
         try:
-            self._service_for_handle(handle, "close").close(handle)
+            service.close(handle)
         except SessionHostError as error:
             self._raise_host_error(error)
+        if handle not in service._sessions:
+            del self._handles[handle]
+            del self._snapshots[handle]
 
     def close_all(self) -> None:
         failures: list[Exception] = []
@@ -501,9 +580,21 @@ class _ScriptedSessionBackend:
         return self.capabilities.supports(SessionOperation(operation))
 
     def open(self, request: Any) -> None:
+        from agm.agent.runner import command_targets_session_id
+        from agm.agent.spec import AgentCommand
+        from agm.agl.runtime.agents import decode_agent_value
+
+        agent = decode_agent_value(request.agent) if request.transport == "cli" else request.agent
+        if isinstance(agent, AgentCommand) and (
+            not command_targets_session_id(agent.argv()) and not request.one_shot
+        ):
+            self._agent.sessions.remove(self._session)
+            raise SessionHostError("command session requires a %{SESSION_ID} placeholder", "open")
         if request.name and not self._supports_name:
             self._agent.sessions.remove(self._session)
             raise SessionHostError("scripted session does not support names", "set-name")
+        self._session.transport = request.transport
+        self._session.one_shot = request.one_shot
         self._session.opened = True
 
     def ask(self, request: Any) -> Any:
@@ -683,7 +774,7 @@ def _run_program(
 
     if agents:
         runtime_options["agent_dispatcher"] = dispatch_agent
-    if agents:
+    if agents and ("Session::" in source or runtime_config.get("session_host") is True):
         runtime_options["session_host"] = _ScenarioSessionHost(agents)
     runtime = PipelineDriver(**runtime_options)
     module_roots = scenario.get("module_roots", [])
@@ -906,7 +997,7 @@ def _assert_sessions(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -
 
     for spec in expect.get("sessions", []):
         session = session_for(spec)
-        for key in ("opened", "closed", "parent"):
+        for key in ("opened", "closed", "parent", "transport", "one_shot"):
             if key in spec:
                 assert getattr(session, key) == spec[key], (
                     f"session {session.tag!r} {key}: expected {spec[key]!r}, "

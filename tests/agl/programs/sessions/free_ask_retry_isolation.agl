@@ -1,0 +1,8 @@
+# Free ask retries remain isolated one-shot prompts.
+program def main() -> unit =
+  let answer: int = ask(
+    "calculate the total",
+    agent = AgentCommand("writer"),
+    on_parse_error = Retry(n = 1),
+  )
+  print answer

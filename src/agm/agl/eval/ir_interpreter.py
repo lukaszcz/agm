@@ -140,6 +140,7 @@ from agm.agl.runtime.option import none_value, option_text, some_value
 from agm.agl.runtime.params import engine_default_settings
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.serialize import value_to_json_obj
+from agm.agl.runtime.sessions import AgentDispatcherSessionHost
 from agm.agl.runtime.trace import TraceStore, noop_trace
 from agm.agl.semantics.copying import deep_copy_value, shallow_copy_value
 from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise
@@ -500,7 +501,11 @@ class IrInterpreter:
             param_values if param_values is not None else {}
         )
         self._agent_dispatcher = agent_dispatcher
-        self._session_host = session_host
+        self._session_host: SessionHost = (
+            session_host
+            if session_host is not None
+            else AgentDispatcherSessionHost(agent_dispatcher)
+        )
         self._close_sessions = close_sessions
         # Bootstrap the setting fields so declared defaults can be evaluated by
         # the ordinary, typeless evaluator. Constant defaults cannot read a
@@ -1743,10 +1748,11 @@ class IrInterpreter:
                 prompt=prompt_expr,
                 contract_id=contract_id,
                 max_attempts=max_attempts,
+                origin=origin,
             ):
                 try:
                     return self._effects.eval_ir_ask(
-                        node, agent_expr, prompt_expr, contract_id, max_attempts
+                        node, agent_expr, prompt_expr, contract_id, max_attempts, origin
                     )
                 except AglRaise as exc:
                     if exc.span is None:

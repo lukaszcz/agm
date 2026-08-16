@@ -1499,6 +1499,7 @@ class TestExecCommandExitCodes:
             )
 
         monkeypatch.setattr(exec_engine, "value_driven_agent_factory", lambda **_: failing_agent)
+        monkeypatch.setattr(exec_engine, "create_agl_session_host", lambda **_: None)
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(args)
         assert exc_info.value.code == 2
@@ -3244,6 +3245,7 @@ class TestExecModuleRoots:
                 return AgentResponse(content=response)
 
             monkeypatch.setattr(exec_engine, "value_driven_agent_factory", lambda **_: mock_agent)
+            monkeypatch.setattr(exec_engine, "create_agl_session_host", lambda **_: None)
             exec_command.run(_exec_args_no_log(entry))
             out, _ = capsys.readouterr()
             return out

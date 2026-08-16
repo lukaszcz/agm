@@ -8,14 +8,22 @@ from decimal import Decimal
 import pytest
 
 from agm.agl import PipelineDriver
-from agm.agl.runtime.request import AgentCallInfo, AgentCancelled
+from agm.agl.runtime.request import (
+    AgentCallHostError,
+    AgentCallInfo,
+    AgentCancelled,
+    AgentRequest,
+    AgentResponse,
+)
 from agm.agl.runtime.sessions import (
+    AgentDispatcherSessionHost,
     SessionAskError,
     SessionHostError,
     SessionSnapshot,
     SessionStats,
 )
 from agm.agl.semantics.values import EnumValue
+from tests._agl_helpers import agent_value
 
 
 @dataclass
@@ -83,6 +91,56 @@ class _Host:
         if handle in self.closed:
             raise SessionHostError("closed session", operation)
         return self.handles[handle]
+
+
+def test_dispatcher_session_host_is_ephemeral_only_and_preserves_requests() -> None:
+    requests: list[AgentRequest] = []
+    host = AgentDispatcherSessionHost(
+        lambda request: requests.append(request) or AgentResponse("answer", {"source": "test"})
+    )
+    agent = agent_value("AgentCommand", command="worker")
+    handle = host.open_ephemeral(agent, "Cli")
+    request = AgentRequest(agent=agent, prompt="question", attempt=2)
+
+    response = host.ask_request(handle, request)
+
+    assert response == AgentResponse("answer", {"source": "test"})
+    assert requests == [request]
+    assert host.ask(handle, "another question") == "answer"
+    host.close(handle)
+    assert host.active_session_count == 0
+
+    no_dispatcher = AgentDispatcherSessionHost(None)
+    unavailable_handle = no_dispatcher.open_ephemeral(agent, "Cli")
+    with pytest.raises(SessionAskError) as ask_error:
+        no_dispatcher.ask(unavailable_handle, "question")
+    assert ask_error.value.cause == "no_dispatcher"
+    no_dispatcher.close_all()
+
+    failed_dispatcher = AgentDispatcherSessionHost(
+        lambda _request: (_ for _ in ()).throw(
+            AgentCallHostError(cause="timeout", exit_code=1, stderr_tail="late", elapsed=2.0)
+        )
+    )
+    failed_handle = failed_dispatcher.open_ephemeral(agent, "Cli")
+    with pytest.raises(SessionAskError) as dispatch_error:
+        failed_dispatcher.ask(failed_handle, "question")
+    assert dispatch_error.value.cause == "timeout"
+
+    unavailable_operations = (
+        lambda: host.open(agent, "Cli"),
+        lambda: host.default(agent, "Cli"),
+        lambda: host.compact("missing"),
+        lambda: host.reset("missing"),
+        lambda: host.fork("missing"),
+        lambda: host.set_name("missing", "name"),
+        lambda: host.stats("missing"),
+        lambda: host.snapshot("missing"),
+        lambda: host.close("missing"),
+    )
+    for operation in unavailable_operations:
+        with pytest.raises(SessionHostError):
+            operation()
 
 
 def _run(source: str, host: _Host) -> object:

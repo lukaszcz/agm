@@ -46,6 +46,7 @@ __all__ = [
     "IrAnd",
     "IrArith",
     "IrAsk",
+    "IrAskOrigin",
     "IrAskRequest",
     "IrAssign",
     "IrBind",
@@ -1056,13 +1057,20 @@ class IrCopyValue:
     value: "IrExpr"
 
 
+class IrAskOrigin(enum.StrEnum):
+    """Source form that determines an ask's transport lifecycle."""
+
+    FREE = "free"
+    AGENT_METHOD = "agent-method"
+
+
 @dataclass(frozen=True, slots=True)
 class IrAsk:
     """IR host-op: ask(prompt, agent:, on_parse_error:) builtin call.
 
-    Evaluates ``agent`` (an ``Agent`` enum value), ``prompt`` (text), dispatches
-    through the value-driven agent runtime, parses the response via the contract,
-    and returns the typed Value.
+    ``origin`` preserves whether lowering selected free ``ask`` or
+    ``Agent::ask``. Free asks retain complete one-shot retry prompts; agent
+    methods keep corrective retries in one ephemeral continuation session.
 
     ``max_attempts``  — 1 for Abort/absent, 1+n for Retry(n).
     """
@@ -1072,6 +1080,7 @@ class IrAsk:
     prompt: "IrExpr"
     contract_id: "ContractId"
     max_attempts: int
+    origin: IrAskOrigin = IrAskOrigin.FREE
 
 
 @dataclass(frozen=True, slots=True)

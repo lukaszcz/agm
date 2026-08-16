@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import StrEnum
 from typing import Protocol
 
-from agm.agent.transport import AgentTransportError
+from agm.agent.transport import AgentCallInfo, AgentTransportError
 
 
 class SessionOperation(StrEnum):
@@ -42,11 +42,16 @@ class SessionCapabilities:
 
 @dataclass(frozen=True, slots=True)
 class SessionOpenRequest:
-    """The host-owned metadata supplied while opening a backend session."""
+    """The host-owned metadata supplied while opening a backend session.
+
+    ``one_shot`` selects a backend's legacy one-shot invocation. Handle
+    lifetime is owned separately by the session service.
+    """
 
     agent: object
     transport: str
     name: str = ""
+    one_shot: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,9 +63,11 @@ class SessionAskRequest:
 
 @dataclass(frozen=True, slots=True)
 class SessionAskResponse:
-    """The backend response to one session prompt."""
+    """The backend response to one session prompt and its call details."""
 
     content: str
+    metadata: dict[str, object] = field(default_factory=dict)
+    call_info: AgentCallInfo | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +87,10 @@ class SessionHostError(Exception):
         self.message = message
         self.operation = operation
         super().__init__(message)
+
+
+class SessionAgentError(SessionHostError):
+    """An invalid agent configuration rejected while opening a session."""
 
 
 class SessionAskError(AgentTransportError):

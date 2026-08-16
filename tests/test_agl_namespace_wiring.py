@@ -487,6 +487,34 @@ def test_qualified_applied_type_use_and_import_route_collision_is_ambiguous(
         check_program(resolve_program(graph), base_caps())
 
 
+def test_qualified_type_use_and_import_routes_deduplicate_same_origin(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import lib\nuse /lib as lib\ndef identity(value: lib::T) -> lib::T = value\n",
+            "lib": "record T(value: int)\n",
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_qualified_applied_type_routes_deduplicate_same_origin(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import lib\n"
+                "use /lib as lib\n"
+                "def identity(value: lib::T[int]) -> lib::T[int] = value\n"
+            ),
+            "lib": "record T[A](value: A)\n",
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
 def test_inner_use_shadows_root_import_and_use_contributions(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,

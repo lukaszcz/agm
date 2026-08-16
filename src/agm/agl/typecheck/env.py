@@ -837,6 +837,23 @@ class TypeEnvironment:
         atom: NameAtom = atom_path[0] if len(atom_path) == 1 else atom_path
         return qualifier_contributes(self._import_env, route, atom, anchored=qualifier.anchored)
 
+    def _import_route_matches_opened_type(
+        self,
+        qualifier: QualifierChain,
+        name: str,
+        opened_atom: NameAtom,
+        *,
+        span: SourceSpan | None,
+    ) -> bool:
+        """Return whether import and use routes select the same type declaration."""
+        opened_key = self._opened_type_key(opened_atom, span)
+        imported_qname = self._resolve_import_qname(qualifier, name, span=span, required=False)
+        return (
+            opened_key is not None
+            and imported_qname is not None
+            and self._qname_decl_key(imported_qname) == opened_key
+        )
+
     def _resolve_import_qname(
         self,
         qualifier: QualifierChain,
@@ -1671,15 +1688,20 @@ class TypeEnvironment:
                 for a in type_expr.args
             )
             if qualifier is not None and qualifier.anchor is None:
+                opened_atom = _type_path_atom(
+                    (*tuple(segment.name for segment in qualifier.segments), type_expr.name)
+                )
                 opened = self._resolve_opened_applied_type(
-                    _type_path_atom(
-                        (*tuple(segment.name for segment in qualifier.segments), type_expr.name)
-                    ),
+                    opened_atom,
                     resolved_args,
                     span=eff_span,
                 )
                 if opened is not None:
-                    if self.has_qualified_import_member(qualifier, name):
+                    if self.has_qualified_import_member(
+                        qualifier, name
+                    ) and not self._import_route_matches_opened_type(
+                        qualifier, name, opened_atom, span=eff_span
+                    ):
                         raise AglTypeError(
                             f"Qualifier '{qualifier.render()}' is both a use route and a module "
                             f"route for '{name}'. {qualification_repair_guidance()}",
@@ -1936,12 +1958,16 @@ class TypeEnvironment:
             )
 
         if qualifier.anchor is None:
-            opened = self._resolve_opened_type(
-                _type_path_atom((*tuple(segment.name for segment in qualifier.segments), name)),
-                span,
+            opened_atom = _type_path_atom(
+                (*tuple(segment.name for segment in qualifier.segments), name)
             )
+            opened = self._resolve_opened_type(opened_atom, span)
             if opened is not None:
-                if self.has_qualified_import_member(qualifier, name):
+                if self.has_qualified_import_member(
+                    qualifier, name
+                ) and not self._import_route_matches_opened_type(
+                    qualifier, name, opened_atom, span=span
+                ):
                     raise AglTypeError(
                         f"Qualifier '{rendered}' is both a use route and a module route for "
                         f"'{name}'. {qualification_repair_guidance()}",

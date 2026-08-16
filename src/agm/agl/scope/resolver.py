@@ -46,7 +46,7 @@ from collections.abc import Callable, Collection, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from functools import partial
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypeVar, cast
 
 from agm.agl.diagnostics import static_root_message
 from agm.agl.modules.ids import STD_CONFIG_ID, STD_CORE_ID, ModuleId, spell_declaration
@@ -166,6 +166,9 @@ from agm.agl.syntax.nodes import (
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TYPE_PARAMETER_WILDCARD, AppliedT, NameT, render_type_expr
 from agm.agl.syntax.visitor import walk
+
+_T = TypeVar("_T")
+
 
 # ---------------------------------------------------------------------------
 # Built-in names and reserved-name enforcement
@@ -1797,11 +1800,19 @@ class _Resolver:
                     self._local_use_members(contribution.source.scope_path),
                     validate=True,
                 )
-                for exposed, source in selected.items():
-                    ref = cast(BindingRef, source)
-                    scope.contribute_bare(exposed, ref)
-                    for constructor in self._declaring_constructor_candidates(ref.name, ref):
+
+                def contribute(exposed: NameAtom, source: BindingRef) -> None:
+                    scope.contribute_bare(exposed, source)
+                    for constructor in self._declaring_constructor_candidates(source.name, source):
                         scope.contribute_bare_constructor(exposed, constructor)
+
+                for exposed, source in selected.items():
+                    contribute(exposed, cast(BindingRef, source))
+                for exposed, source in self._use_renamed_members(
+                    contribution.declaration,
+                    self._local_use_members(contribution.source.scope_path),
+                ):
+                    contribute(exposed, source)
 
     def _contribute_use_members(self, decl: UseDecl, members: Mapping[NameAtom, QName]) -> None:
         """Select, rename, and add one use declaration's bare contribution."""
@@ -1817,15 +1828,22 @@ class _Resolver:
 
         for exposed, source in selected.items():
             contribute(exposed, cast(QName, source))
-        if decl.tail is not None:
-            for item in decl.tail:
-                if item.rename is None:
-                    continue
-                prefix = _item_path(item)
-                for atom, source in members.items():
-                    path = _bare_path(atom)
-                    if path[: len(prefix)] == prefix:
-                        contribute(_bare_atom((item.rename, *path[len(prefix) :])), source)
+        for exposed, source in self._use_renamed_members(decl, members):
+            contribute(exposed, source)
+
+    @staticmethod
+    def _use_renamed_members(
+        decl: UseDecl, members: Mapping[NameAtom, _T]
+    ) -> Iterator[tuple[NameAtom, _T]]:
+        """Yield every source reached by additive use-tail renames."""
+        for item in decl.tail or ():
+            if item.rename is None:
+                continue
+            prefix = _item_path(item)
+            for atom, source in members.items():
+                path = _bare_path(atom)
+                if path[: len(prefix)] == prefix:
+                    yield _bare_atom((item.rename, *path[len(prefix) :])), source
 
     def _select_use_members(
         self,
@@ -2801,11 +2819,20 @@ class _Resolver:
                     self._local_use_members(contribution.source.scope_path),
                     validate=False,
                 )
-                source = members.get(name)
-                if not isinstance(source, BindingRef):
-                    continue
-                bindings.add(source)
-                constructors.update(self._declaring_constructor_candidates(source.name, source))
+                sources = [members.get(name)]
+                sources.extend(
+                    source
+                    for exposed, source in self._use_renamed_members(
+                        contribution.declaration,
+                        self._local_use_members(contribution.source.scope_path),
+                    )
+                    if exposed == name
+                )
+                for source in sources:
+                    if not isinstance(source, BindingRef):
+                        continue
+                    bindings.add(source)
+                    constructors.update(self._declaring_constructor_candidates(source.name, source))
             if bindings or constructors:
                 return bindings, constructors
             layer = layer.parent

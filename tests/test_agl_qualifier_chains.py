@@ -536,6 +536,22 @@ def test_use_selection_hiding_and_renames_are_additive() -> None:
         )
 
 
+def test_local_use_rename_collision_is_ambiguous_when_used() -> None:
+    with pytest.raises(AglScopeError, match="ambiguous"):
+        _resolve_without_loader(
+            {
+                "entry": (
+                    "use S::{first as chosen, second as chosen}\n"
+                    "scope S\n"
+                    "def first() -> int = 1\n"
+                    "def second() -> int = 2\n"
+                    "end S\n"
+                    "def selected() -> int = chosen()"
+                )
+            }
+        )
+
+
 def test_region_tailed_import_keeps_routes_global_and_bare_names_regional() -> None:
     modules = {
         "lib": "def value() -> int = 1\n",

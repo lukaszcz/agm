@@ -4560,6 +4560,19 @@ class TestImports:
         assert not s.eval_entry("original()").ok
         assert s.eval_entry("replacement()").value == IntValue(2)
 
+    def test_import_alias_replacement_replaces_use_of_same_module(self, tmp_path: Path) -> None:
+        (tmp_path / "lib.agl").write_text(
+            "def old() -> int = 1\ndef new() -> int = 2\n", encoding="utf-8"
+        )
+        s = self._make_session_with_root(tmp_path)
+        assert s.eval_entry("import lib as L\nuse L::{old}").ok
+
+        replacement = s.eval_entry("import lib as X\nuse X::{new}")
+
+        assert replacement.ok, replacement.diagnostics
+        assert s.eval_entry("new()").value == IntValue(2)
+        assert not s.eval_entry("old()").ok
+
     def test_distinct_use_targets_with_clashing_bare_names_remain_ambiguous(self) -> None:
         s = ReplSession()
         assert s.eval_entry("def First::value() -> int = 1").ok

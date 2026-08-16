@@ -42,6 +42,9 @@ if TYPE_CHECKING:
     from agm.agl.typecheck.program import CheckedProgram
 
 
+_UseGenerationKey = tuple[tuple[str, ...], bool, bool, tuple[str, ...]]
+
+
 # ---------------------------------------------------------------------------
 # Narrow context Protocol
 # ---------------------------------------------------------------------------
@@ -970,7 +973,8 @@ class EntryPipeline:
             tuple[list[ImportDecl], tuple[UseDecl | ImportDecl | ScopeRegion, ...]]
         ] = []
         latest_generation: dict[tuple[tuple[str, ...], tuple[str, ...]], int] = {}
-        latest_use_generation: dict[tuple[tuple[str, ...], bool, bool, tuple[str, ...]], int] = {}
+        latest_use_generation: dict[_UseGenerationKey, int] = {}
+        generation_use_keys: dict[int, _UseGenerationKey] = {}
         for retained_root_decls, scoped_items in zip(
             self._ctx._accumulated_imports, self._ctx._accumulated_uses, strict=True
         ):
@@ -984,8 +988,14 @@ class EntryPipeline:
             generations.append((expanded_root_decls, expanded_scoped))
             for decl in (*expanded_root_decls, *self._scoped_import_decls(expanded_scoped)):
                 latest_generation[self._generation_key(decl)] = index
+            generation_imports = (
+                *expanded_root_decls,
+                *self._scoped_import_decls(expanded_scoped),
+            )
             for use_decl in self._use_decls(expanded_scoped):
-                latest_use_generation[self._use_generation_key(use_decl)] = index
+                key = self._use_generation_key(use_decl, generation_imports)
+                generation_use_keys[use_decl.node_id] = key
+                latest_use_generation[key] = index
 
         # *entry_imports* arrives already expanded; only the scoped ones still
         # need their module identities resolved. Wildcard expansion has one
@@ -999,9 +1009,10 @@ class EntryPipeline:
         latest_generation.update(
             (self._generation_key(decl), current_index) for decl in current_decls
         )
-        latest_use_generation.update(
-            (self._use_generation_key(decl), current_index) for decl in self._use_decls(entry_uses)
-        )
+        for use_decl in self._use_decls(entry_uses):
+            key = self._use_generation_key(use_decl, tuple(current_decls))
+            generation_use_keys[use_decl.node_id] = key
+            latest_use_generation[key] = current_index
 
         retained_root: list[ImportDecl] = []
         retained_scoped: list[UseDecl | ImportDecl | ScopeRegion] = []
@@ -1020,6 +1031,7 @@ class EntryPipeline:
                     ),
                     index,
                     latest_use_generation,
+                    generation_use_keys,
                 )
             )
         return retained_root, retained_scoped, next_start_id
@@ -1037,13 +1049,23 @@ class EntryPipeline:
         return (tuple(segment.name for segment in decl.scope_path), tuple(decl.module_path))
 
     @staticmethod
-    def _use_generation_key(decl: UseDecl) -> tuple[tuple[str, ...], bool, bool, tuple[str, ...]]:
-        """Return *decl*'s replacement key: its region and resolved-route spelling."""
+    def _use_generation_key(decl: UseDecl, imports: tuple[ImportDecl, ...]) -> _UseGenerationKey:
+        """Return *decl*'s replacement key, canonicalizing an imported alias."""
+        target = tuple(segment.name for segment in decl.target)
+        if not decl.anchored and not decl.current_module and target:
+            aliases = {
+                import_decl.alias: tuple(import_decl.module_path)
+                for import_decl in imports
+                if import_decl.alias is not None
+            }
+            module_path = aliases.get(target[0])
+            if module_path is not None:
+                target = ("\0module", *module_path, "\0scope", *target[1:])
         return (
             tuple(segment.name for segment in decl.scope_path),
             decl.anchored,
             decl.current_module,
-            tuple(segment.name for segment in decl.target),
+            target,
         )
 
     @staticmethod
@@ -1194,7 +1216,8 @@ class EntryPipeline:
     def _filter_retained_scoped_uses(
         items: tuple[UseDecl | ImportDecl | ScopeRegion, ...],
         generation: int,
-        latest_generation: Mapping[tuple[tuple[str, ...], bool, bool, tuple[str, ...]], int],
+        latest_generation: Mapping[_UseGenerationKey, int],
+        generation_use_keys: Mapping[int, _UseGenerationKey],
     ) -> tuple[UseDecl | ImportDecl | ScopeRegion, ...]:
         """Keep only the newest retained use for each target at each region path."""
         from dataclasses import replace
@@ -1204,13 +1227,14 @@ class EntryPipeline:
         retained: list[UseDecl | ImportDecl | ScopeRegion] = []
         for item in items:
             if isinstance(item, UseDecl):
-                if latest_generation[EntryPipeline._use_generation_key(item)] == generation:
+                if latest_generation[generation_use_keys[item.node_id]] == generation:
                     retained.append(item)
             elif isinstance(item, ScopeRegion):
                 nested = EntryPipeline._filter_retained_scoped_uses(
                     cast("tuple[UseDecl | ImportDecl | ScopeRegion, ...]", item.items),
                     generation,
                     latest_generation,
+                    generation_use_keys,
                 )
                 if nested:
                     retained.append(replace(item, items=nested))

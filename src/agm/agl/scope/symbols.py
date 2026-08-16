@@ -24,7 +24,6 @@ import enum
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import cast
 
 from agm.agl.diagnostics import AglError
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
@@ -499,7 +498,7 @@ class ScopeNode:
         }
 
 
-def _local_use_contribution_refs(
+def local_use_contribution_refs(
     contribution: LocalUseContribution,
     name: BareAtom,
     scope_nodes: Mapping[ScopePath, ScopeNode],
@@ -523,7 +522,7 @@ def _local_use_contribution_refs(
     elif decl.tail == ():
         selected.update(members)
     else:
-        for item in cast(tuple[ImportItem, ...], decl.tail):
+        for item in decl.tail or ():
             prefix = import_item_path(item)
             for atom, ref in members.items():
                 path = to_bare_path(atom)
@@ -549,13 +548,11 @@ def resolve_bare_contribution_layer(
     predicate: Callable[[BindingRef], bool] | None = None,
 ) -> tuple[ScopeNode, set[BindingRef]] | None:
     """Return the nearest region and its bare candidates in one namespace."""
+    del scope_nodes
     layer: ScopeNode | None = scope
     while layer is not None:
-        selected = set(layer.bare_contributions.get(name, ()))
-        for contribution in layer.local_use_contributions:
-            selected.update(_local_use_contribution_refs(contribution, name, scope_nodes))
-        if predicate is not None:
-            selected = {ref for ref in selected if predicate(ref)}
+        stored = layer.bare_contributions.get(name, ())
+        selected = set(stored) if predicate is None else {ref for ref in stored if predicate(ref)}
         if selected:
             return layer, selected
         layer = layer.parent

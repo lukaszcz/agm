@@ -2211,7 +2211,7 @@ class _Resolver:
                 continue
             relative = path[len(target) :]
             if relative:
-                members[_bare_atom(relative)] = _LocalScopeRoute(path)
+                members.setdefault(_bare_atom(relative), _LocalScopeRoute(path))
             for name, ref in scope.members.items():
                 members[_bare_atom((*relative, name))] = ref
         return members

@@ -1033,7 +1033,13 @@ class EntryPipeline:
             decl for declarations in effective_imports.values() for decl in declarations
         )
         for use_decl in self._use_decls(entry_uses):
-            use_key = self._use_generation_key(use_decl, visible_imports)
+            region = tuple(segment.name for segment in use_decl.scope_path)
+            known_targets = tuple(
+                target
+                for (target_region, target) in latest_use_generation
+                if target_region == region
+            )
+            use_key = self._use_generation_key(use_decl, visible_imports, known_targets)
             generation_use_keys[use_decl.node_id] = use_key
             latest_use_generation[use_key] = current_index
 
@@ -1072,7 +1078,11 @@ class EntryPipeline:
         return (tuple(segment.name for segment in decl.scope_path), tuple(decl.module_path))
 
     @staticmethod
-    def _use_generation_key(decl: UseDecl, imports: tuple[ImportDecl, ...]) -> _UseGenerationKey:
+    def _use_generation_key(
+        decl: UseDecl,
+        imports: tuple[ImportDecl, ...],
+        known_targets: tuple[ResolvedUseTarget, ...],
+    ) -> _UseGenerationKey:
         """Return a provisional key; retained uses use scope's semantic identity."""
         region = tuple(segment.name for segment in decl.scope_path)
         target = tuple(segment.name for segment in decl.target)
@@ -1116,7 +1126,19 @@ class EntryPipeline:
             return region, ResolvedUseTarget(
                 imported_routes=tuple(sorted(candidates, key=route_key))
             )
-        local_path = target if decl.anchored else (*region, *target)
+        if decl.anchored:
+            return region, ResolvedUseTarget(local_path=target)
+        known_local_paths = {
+            known.local_path for known in known_targets if known.local_path is not None
+        }
+        local_path = next(
+            (
+                (*region[:base_length], *target)
+                for base_length in range(len(region), -1, -1)
+                if (*region[:base_length], *target) in known_local_paths
+            ),
+            (*region, *target),
+        )
         return region, ResolvedUseTarget(local_path=local_path)
 
     @staticmethod

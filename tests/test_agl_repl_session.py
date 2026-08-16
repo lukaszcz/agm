@@ -4615,6 +4615,22 @@ class TestImports:
             "scope Outer\ndef read() -> int = old()\nend Outer\nOuter::read()"
         ).ok
 
+    def test_replacing_nested_relative_use_hides_old_names_in_replacement_entry(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("def Source::old() -> int = 1").ok
+        assert session.eval_entry("def Source::new() -> int = 2").ok
+        assert session.eval_entry("scope Outer\nuse Source::{old}\nend Outer").ok
+
+        replacement = session.eval_entry(
+            "scope Outer\n"
+            "use Source::{new}\n"
+            "def captured() -> int = old()\n"
+            "end Outer"
+        )
+
+        assert not replacement.ok
+        assert not session.eval_entry("Outer::captured()").ok
+
     def test_regional_import_tail_does_not_canonicalize_an_unrelated_use(
         self, tmp_path: Path
     ) -> None:

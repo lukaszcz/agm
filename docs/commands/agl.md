@@ -82,7 +82,7 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
 |---------|--------|
 | `:help` | List the available meta-commands |
 | `:quit` / `:exit` (or Ctrl-D) | Exit the REPL |
-| `:reset` | Clear the whole session (bindings, types, declarations, params) |
+| `:reset` | Clear the whole session (bindings, types, declarations, params, imports, and uses) |
 | `:type EXPR` | Type-check `EXPR` against the session and print its type (no eval) |
 | `:bindings` / `:env` | List current bindings as `name : Type = value` |
 | `:params` | List declared params and their resolved values |

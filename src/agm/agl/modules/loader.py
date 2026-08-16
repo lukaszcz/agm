@@ -254,7 +254,11 @@ def _with_default_stdlib_import(
     import_node_id: int,
 ) -> syntax.Program:
     imports, _uses = _extract_imports(program)
-    if any(decl.module_path == STD_CORE_ID.segments for decl in imports):
+    if any(
+        decl.module_path == STD_CORE_ID.segments
+        or (decl.wildcard and STD_CORE_ID.segments[: len(decl.module_path)] == decl.module_path)
+        for decl in imports
+    ):
         return program
     std_import = _synthetic_stdlib_import(import_node_id)
     body = syntax.Block(

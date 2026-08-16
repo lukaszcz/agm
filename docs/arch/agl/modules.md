@@ -25,8 +25,8 @@ instead re-roots forwarded paths beneath the region and contributes no regional
 bare names. Re-exports form part of the same program graph.
 
 Every loaded module except `std/core` receives the `std/core` prelude unless
-the host disables it. An explicit `import std/core` supplies that module's
-core contribution instead.
+the host disables it. An explicit import that includes `std/core`, directly or
+through wildcard expansion, supplies that module's core contribution instead.
 
 ## Program Passes
 

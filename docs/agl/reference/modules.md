@@ -220,11 +220,11 @@ origin are allowed.
 ## Prelude
 
 Every loaded entry and library module, except `std/core` itself, receives an
-implicit `import std/core::*`. Any explicit `import std/core` declaration in
-the module, including one inside a named scope region, supplies the core
-contribution instead. Thus `import std/core` makes the core public surface
-qualified-only, while `import std/core::* hiding ask` makes every core member
-except `ask` bare.
+implicit `import std/core::*`. Any explicit import declaration whose expansion
+includes `std/core`, including one inside a named scope region, supplies the
+core contribution instead. Thus `import std/core` and `import std/*` leave core
+names qualified-only, while `import std/core::* hiding ask` makes every core
+member except `ask` bare.
 
 ```agl
 import std/core::* hiding ask

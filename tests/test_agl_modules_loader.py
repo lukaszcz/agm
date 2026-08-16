@@ -1102,6 +1102,20 @@ class TestPreludeSupersession:
         assert "Option" not in resolution.import_env.unqualified
         assert resolution.import_env.contributions[STD_CORE_ID].path_enabled
 
+    def test_wildcard_import_including_core_suppresses_the_default_prelude(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.scope import resolve_program
+
+        graph = load_graph(
+            "import std/*",
+            entry_path=None,
+            roots=_roots(tmp_path),
+        )
+
+        resolution = resolve_program(graph).modules[ENTRY_ID]
+        assert "Option" not in resolution.import_env.unqualified
+
     def test_no_stdlib_does_not_add_a_prelude_but_keeps_explicit_core_import(
         self, tmp_path: Path
     ) -> None:

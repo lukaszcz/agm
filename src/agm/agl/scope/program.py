@@ -150,6 +150,44 @@ class ResolvedProgram:
 # ---------------------------------------------------------------------------
 
 
+def _constructor_ref_for_type(
+    qname: QName,
+    declaration: RecordDef | EnumDef | ExceptionDef | TypeAlias,
+    import_envs: Mapping[ModuleId, ImportEnv],
+    all_public_types: Mapping[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias],
+) -> ConstructorRef | None:
+    """Return the declaration's constructor identity when its type is constructible."""
+    module_id, atom = qname
+    path = (atom,) if isinstance(atom, str) else atom
+
+    def declaring_module_lookup(
+        target: str, qualifier: QualifierChain | None
+    ) -> RecordDef | EnumDef | ExceptionDef | TypeAlias | None:
+        return resolve_alias_target(
+            target,
+            qualifier,
+            self_module_id=module_id,
+            import_env=import_envs.get(module_id, EMPTY_IMPORT_ENV),
+            all_public_types=all_public_types,
+            scope_path=path[:-1],
+        )
+
+    if not isinstance(declaration, (RecordDef, ExceptionDef)) and not (
+        isinstance(declaration, TypeAlias)
+        and isinstance(declaration.type_expr, (NameT, AppliedT))
+        and alias_denotes_constructible_type(declaration, declaring_module_lookup)
+    ):
+        return None
+    return ConstructorRef(
+        owner_name=declaration.name,
+        variant=None,
+        owner_decl_node_id=declaration.node_id,
+        type_params=declaration.type_params,
+        owner_module_id=module_id,
+        owner_path=path[:-1],
+    )
+
+
 def _build_cross_module_constructor_candidates(
     import_env: ImportEnv,
     all_public_types: dict[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias],
@@ -201,38 +239,9 @@ def _build_cross_module_constructor_candidates(
                 continue
             type_names.add(exposed_name)
             src_path = (src_name,) if isinstance(src_name, str) else src_name
-            owner_path = src_path[:-1]
-
-            def declaring_module_lookup(
-                target: str,
-                qualifier: QualifierChain | None,
-                *,
-                declaring_module: ModuleId = mid,
-                declaring_path: PathAtom = owner_path,
-            ) -> RecordDef | EnumDef | ExceptionDef | TypeAlias | None:
-                return resolve_alias_target(
-                    target,
-                    qualifier,
-                    self_module_id=declaring_module,
-                    import_env=import_envs.get(declaring_module, EMPTY_IMPORT_ENV),
-                    all_public_types=all_public_types,
-                    scope_path=declaring_path,
-                )
-
-            if isinstance(decl, (RecordDef, ExceptionDef)) or (
-                isinstance(decl, TypeAlias)
-                and isinstance(decl.type_expr, (NameT, AppliedT))
-                and alias_denotes_constructible_type(decl, declaring_module_lookup)
-            ):
-                cref = ConstructorRef(
-                    owner_name=decl.name,
-                    variant=None,
-                    owner_decl_node_id=decl.node_id,
-                    type_params=decl.type_params,
-                    owner_module_id=mid,
-                    owner_path=owner_path,
-                )
-                add_candidate(exposed_name, cref)
+            constructor = _constructor_ref_for_type(key, decl, import_envs, all_public_types)
+            if constructor is not None:
+                add_candidate(exposed_name, constructor)
             elif isinstance(decl, EnumDef):
                 for variant in decl.variants:
                     if (mid, variant.name) in all_public_types and isinstance(
@@ -248,7 +257,7 @@ def _build_cross_module_constructor_candidates(
                         owner_decl_node_id=decl.node_id,
                         type_params=decl.type_params,
                         owner_module_id=mid,
-                        owner_path=owner_path,
+                        owner_path=src_path[:-1],
                         can_match_bare_pattern=not variant.fields,
                     )
                     add_candidate(variant.name, cref)
@@ -291,20 +300,17 @@ def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[NameAtom
 
 def _cross_module_constructor_refs(
     all_public_types: Mapping[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias],
+    import_envs: Mapping[ModuleId, ImportEnv],
 ) -> dict[QName, ConstructorRef]:
     """Build constructor results for publicly selected declaration paths."""
     result: dict[QName, ConstructorRef] = {}
     for (module_id, atom), declaration in all_public_types.items():
         path = (atom,) if isinstance(atom, str) else atom
-        if isinstance(declaration, (RecordDef, ExceptionDef)):
-            result[(module_id, atom)] = ConstructorRef(
-                owner_name=declaration.name,
-                variant=None,
-                owner_decl_node_id=declaration.node_id,
-                type_params=declaration.type_params,
-                owner_module_id=module_id,
-                owner_path=path[:-1],
-            )
+        constructor = _constructor_ref_for_type(
+            (module_id, atom), declaration, import_envs, all_public_types
+        )
+        if constructor is not None:
+            result[(module_id, atom)] = constructor
         elif isinstance(declaration, EnumDef):
             for variant in declaration.variants:
                 variant_path = (*path, variant.name)
@@ -637,7 +643,7 @@ def resolve_program(
                     False,
                 )
 
-    cross_module_constructor_refs = _cross_module_constructor_refs(all_public_types)
+    cross_module_constructor_refs = _cross_module_constructor_refs(all_public_types, import_envs)
     cross_module_constructible_types = frozenset(
         qname
         for qname, declaration in all_public_types.items()

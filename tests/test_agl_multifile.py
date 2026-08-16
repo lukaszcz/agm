@@ -1208,6 +1208,24 @@ class TestScopeUses:
         assert result.ok is True
         assert capsys.readouterr().out == "7\nFlag::Ready\nready\n"
 
+    def test_imported_constructible_alias_use_supports_constructor_patterns(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "lib.agl").write_text("record R(value: int)\ntype A = R\n")
+
+        result = _run_program(
+            "import lib\n"
+            "use /lib::{A}\n"
+            "let item = A(value = 3)\n"
+            "let result = case item of\n"
+            "  | A(value) => value\n"
+            "print result\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is True
+        assert capsys.readouterr().out == "3\n"
+
     def test_nearer_used_enum_variant_keeps_its_scoped_owner(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:

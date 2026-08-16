@@ -29,7 +29,7 @@ from the same global module set.
 import_decl ::= "import" module_path ["/*"]
                 ("as" ref_name | "::" tail)? [hiding_clause]
 
-tail             ::= "*" | import_item | "{" import_item ("," import_item)* "}"
+tail             ::= "*" | import_item | "{" import_item ("," import_item)* ","? "}"
 import_item      ::= path_atom ["as" ref_name]
 hiding_clause    ::= "hiding" path_atom ("," path_atom)*
 path_atom        ::= (NAME "::")* name

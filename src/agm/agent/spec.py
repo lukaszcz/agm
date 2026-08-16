@@ -143,6 +143,13 @@ class AgentPi:
             command.extend(("--name", name))
         return [*command, *_pi_options(self.provider, self.model, self.thinking)]
 
+    def rpc_argv(self, *, name: str = "") -> list[str]:
+        """Build the argv for a persistent Pi RPC session."""
+        command = ["pi", "--mode", "rpc"]
+        if name:
+            command.extend(("--name", name))
+        return [*command, *_pi_options(self.provider, self.model, self.thinking)]
+
 
 AgentSpec: TypeAlias = AgentCommand | AgentClaude | AgentCodex | AgentPi
 

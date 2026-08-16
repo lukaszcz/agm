@@ -481,14 +481,6 @@ class ScopeNode:
         """
         self.members[name] = ref
 
-    def clear_members(self) -> None:
-        """Discard this scope's entire member layer.
-
-        Used when a redeclared type owns a fresh member layer, so stale
-        members from its prior definition do not survive.
-        """
-        self.members.clear()
-
     def clear_constructor_members(self) -> None:
         """Discard constructors while retaining members valid on prior nominal values."""
         self.members = {

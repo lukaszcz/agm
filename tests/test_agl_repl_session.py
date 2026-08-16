@@ -2113,6 +2113,21 @@ enum Agent
         assert not stale_use.ok
         assert fresh.ok, fresh.diagnostics
 
+    def test_redeclaring_an_enum_preserves_unrelated_retained_static_members(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("enum Color | Red").ok
+        assert session.eval_entry("def Color::code() -> int = 42").ok
+
+        redeclared = session.eval_entry("enum Color | Blue\nColor::code()")
+        retained = session.eval_entry("Color::code()")
+        obsolete = session.eval_entry("Color::Red")
+
+        assert redeclared.ok, redeclared.diagnostics
+        assert redeclared.value == IntValue(42)
+        assert retained.ok, retained.diagnostics
+        assert retained.value == IntValue(42)
+        assert not obsolete.ok
+
     def test_redeclaring_a_used_enum_drops_its_stale_bare_variant(self) -> None:
         """A local use recorded before the enum is redeclared must not
         resurrect a variant the redeclaration's fresh member layer dropped."""

@@ -870,10 +870,10 @@ class _Resolver:
                 for name, ref in retained.members.items():
                     node.register_member(name, ref)
             nodes[path] = node
-        # A replacement type declaration owns a fresh member layer: stale enum
-        # variants from its prior definition must not survive into this entry.
+        # A replacement type declaration owns fresh constructors: stale enum
+        # variants must not survive, while unrelated retained members remain.
         for item, path in self._type_declarations:
-            nodes[path + (item.name,)].clear_members()
+            nodes[path + (item.name,)].clear_constructor_members()
         for (_module_id, path, name), declaration in self._declarations.items():
             nodes[path].register_member(name, declaration)
         return nodes

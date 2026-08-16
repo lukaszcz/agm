@@ -9,7 +9,7 @@ Allowed imports:
 - ``agm.agl.semantics.exceptions`` (AglRaise, make_builtin_exception)
 - ``agm.agl.semantics.copying`` (deep_copy_value, shallow_copy_value)
 - ``agm.agl.eval._decimal`` (shared pinned decimal context)
-- ``agm.agl.runtime.serialize`` (value_to_json_obj for ToJson and direct JSON
+- ``agm.agl.runtime.serialize`` (untyped coercion and static direct JSON
   construction)
 - ``agm.config.engine_keys`` (the canonical engine-key catalog data leaf)
 
@@ -40,7 +40,12 @@ from agm.agl.eval.arith import (
 from agm.agl.eval.conversions import AglCastConversion, run_recipe
 from agm.agl.eval.effects import EffectHandlers
 from agm.agl.eval.indexing import AglIndexOutOfRange, AglMissingKey, index_get, index_set
-from agm.agl.ir.contracts import ContractRequest, ConversionFailureMode
+from agm.agl.ir.contracts import (
+    ContractRequest,
+    ConversionFailureMode,
+    EncodePlan,
+    ScalarEncode,
+)
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SymbolId
 from agm.agl.ir.nodes import (
     IrAnd,
@@ -136,7 +141,7 @@ from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.runtime.option import none_value, option_text, some_value
 from agm.agl.runtime.params import engine_default_settings
 from agm.agl.runtime.render import render_value
-from agm.agl.runtime.serialize import value_to_json_obj
+from agm.agl.runtime.serialize import encode_value
 from agm.agl.runtime.trace import TraceStore, noop_trace
 from agm.agl.semantics.copying import deep_copy_value, shallow_copy_value
 from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise
@@ -182,6 +187,9 @@ __all__ = [
     "_apply_coercion",
     "_make_exc_value",
 ]
+
+
+_SCALAR_ENCODE_PLAN = EncodePlan(ScalarEncode())
 
 
 class ParameterDefaultCycleError(Exception):
@@ -412,7 +420,7 @@ def _apply_coercion(value: Value, coercion: Coercion) -> Value:
             return DecimalValue(decimal.Decimal(value.value))
 
         case ToJson():
-            return JsonValue(value_to_json_obj(value))
+            return JsonValue(encode_value(_SCALAR_ENCODE_PLAN, value))
 
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
@@ -1184,10 +1192,12 @@ class IrInterpreter:
             # scalar or `JsonValue` (never a raw array/dict): the checker requires an
             # explicit `as json` cast to embed a container in a json literal, and that
             # cast's own `IrConvert` handling is what detects a cyclic source. So
-            # `value_to_json_obj` in both arms below is a leaf conversion, never a walk
-            # that could re-enter a container — no cycle guard needed in either.
+            # The scalar encode plan in both arms below is a leaf conversion, never a
+            # walk that could re-enter a container — no cycle guard needed in either.
             case IrMakeJsonArray(items=json_items):
-                return JsonValue([value_to_json_obj(self._eval(item)) for item in json_items])
+                return JsonValue(
+                    [encode_value(_SCALAR_ENCODE_PLAN, self._eval(item)) for item in json_items]
+                )
 
             case IrMakeJsonObject(entries=json_entries):
                 json_result: dict[str, object] = {}
@@ -1198,7 +1208,9 @@ class IrInterpreter:
                             f"IrMakeJsonObject key must evaluate to TextValue,"
                             f" got {type(key_val).__name__}"
                         )
-                    json_result[key_val.value] = value_to_json_obj(self._eval(val_expr))
+                    json_result[key_val.value] = encode_value(
+                        _SCALAR_ENCODE_PLAN, self._eval(val_expr)
+                    )
                 return JsonValue(json_result)
 
             case IrLoad(symbol=sym):

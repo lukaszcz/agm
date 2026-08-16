@@ -1,4 +1,4 @@
-"""Compile-time JSON Schema and decode-schema derivation.
+"""Compile-time JSON Schema, decode-schema, and encode-plan derivation.
 
 :func:`derive_schema` produces a JSON Schema ``dict[str, object]`` from a
 semantic :class:`~agm.agl.semantics.types.Type`. Every entry point in this
@@ -70,16 +70,26 @@ from typing import assert_never
 
 from agm.agl.ir.contracts import (
     ArrayDecode,
+    ArrayEncode,
     DecodePlan,
     DecodeSchema,
     DictDecode,
+    DictEncode,
+    EncodePlan,
+    EncodeSchema,
     EnumDecode,
+    EnumEncode,
+    ExceptionEncode,
     ParamDecoder,
     RecordDecode,
+    RecordEncode,
     RefDecode,
+    RefEncode,
     ScalarDecode,
+    ScalarEncode,
     ScalarKind,
     VariantDecode,
+    VariantEncode,
 )
 from agm.agl.ir.ids import NominalId
 from agm.agl.semantics.type_table import TypeTable
@@ -580,6 +590,78 @@ def _emit_decode_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -> 
     raise AssertionError(  # pragma: no cover
         f"build_decode_schema: undecodable type {typ!r}"
     )
+
+
+def build_encode_plan(typ: Type, type_table: TypeTable) -> EncodePlan:
+    """Compile a checker ``Type`` into a typeless static JSON encode plan.
+
+    The plan follows the same concrete-instantiation recursion graph as decode
+    planning, but is independent of JSON Schema emission. It deliberately
+    accepts exceptions because ``as json`` may serialize their fields even
+    though exceptions are not JSON decode targets.
+    """
+    _require_finite_schema(typ, type_table, "build a JSON encode plan")
+    plan = _plan_schema(typ, type_table)
+    return EncodePlan(
+        root=_emit_encode(typ, type_table, plan),
+        defs=tuple(
+            (plan.keys[handle], _emit_encode_body(handle, type_table, plan))
+            for handle in plan.order
+        ),
+    )
+
+
+def _emit_encode(typ: Type, type_table: TypeTable, plan: _SchemaPlan) -> EncodeSchema:
+    """Emit *typ*'s encoder, referencing recursive bodies through ``defs``."""
+    schema_type = type_table.canonical_schema_type(typ)
+    if (
+        isinstance(schema_type, (RecordType, EnumType, ExceptionType))
+        and schema_type in plan.recursive
+    ):
+        return RefEncode(plan.keys[schema_type])
+    return _emit_encode_body(schema_type, type_table, plan)
+
+
+def _emit_encode_body(typ: Type, type_table: TypeTable, plan: _SchemaPlan) -> EncodeSchema:
+    """Emit a non-reference encoder body for one static type."""
+    if isinstance(typ, (TextType, IntType, DecimalType, BoolType, JsonType)):
+        return ScalarEncode()
+    if isinstance(typ, ArrayType):
+        return ArrayEncode(_emit_encode(typ.elem, type_table, plan))
+    if isinstance(typ, DictType):
+        return DictEncode(_emit_encode(typ.value, type_table, plan))
+    if isinstance(typ, RecordType):
+        return RecordEncode(
+            nominal=NominalId(typ.decl_id),
+            fields=tuple(
+                (name, _emit_encode(field_type, type_table, plan))
+                for name, field_type in type_table.record_fields(typ).items()
+            ),
+        )
+    if isinstance(typ, ExceptionType):
+        return ExceptionEncode(
+            nominal=NominalId(typ.decl_id),
+            fields=tuple(
+                (name, _emit_encode(field_type, type_table, plan))
+                for name, field_type in type_table.exception_fields(typ).items()
+            ),
+        )
+    if isinstance(typ, EnumType):
+        return EnumEncode(
+            nominal=NominalId(typ.decl_id),
+            variants=tuple(
+                VariantEncode(
+                    name=name,
+                    nominal=NominalId(member.decl_id),
+                    fields=tuple(
+                        (field_name, _emit_encode(field_type, type_table, plan))
+                        for field_name, field_type in type_table.record_fields(member).items()
+                    ),
+                )
+                for name, member in type_table.enum_member_names(typ).items()
+            ),
+        )
+    raise AssertionError(f"build_encode_plan: unencodable type {typ!r}")
 
 
 def build_param_decoder(typ: Type, type_table: TypeTable) -> ParamDecoder:

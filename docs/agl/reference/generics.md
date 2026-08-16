@@ -467,9 +467,13 @@ let also_bad = some_json as Perfect[int]
 
 Nothing else about `Perfect[int]` is restricted: it can still be
 constructed, matched, compared, passed to and returned from ordinary
-functions, and rendered — only the schema-needing boundaries reject it.
-A non-generic recursive type, or a generic recursive type whose reachable
-instantiations close, crosses these boundaries normally. The [derived JSON
+functions, rendered, and explicitly converted **to** `json`. That total
+`as json` direction does not derive a schema: finite source types use a
+static encode plan, while a statically JSON-convertible growing source uses a
+separate value-directed conversion strategy for its finite runtime value.
+Only the schema-needing boundaries reject it. A non-generic recursive type,
+or a generic recursive type whose reachable instantiations close, crosses
+these boundaries normally. The [derived JSON
 Schema](agent-calls.md#derived-json-schema) for a recursive type uses
 `$defs`/`$ref`, with one entry per recursive schema-relevant instantiation
 reachable from the target (`Tree[int]` and `Tree[text]` are distinct concrete

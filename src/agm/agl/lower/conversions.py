@@ -9,7 +9,10 @@ without ever sniffing checker types.
 Strategy selection follows the cast matrix and the ``CastKind`` classification
 (``semantics.type_table.cast_classification``):
 total casts (``TOTAL_NOOP`` / ``TOTAL_RENDER`` / ``TOTAL_JSON``) never fail;
-fallible casts (``decimal → int`` narrowing, ``text → T``, ``json → T``) carry
+finite JSON sources carry a static encode plan, while a statically
+JSON-convertible growing polymorphic-recursive source gets the explicit
+planless value-directed strategy because it has no finite plan. Fallible casts
+(``decimal → int`` narrowing, ``text → T``, ``json → T``) carry
 the derived JSON schema and the ``decode_value`` decode walk.
 
 ``derive_schema_and_decode`` lives in :mod:`agm.agl.type_schema` (alongside
@@ -27,8 +30,16 @@ from typing import assert_never
 
 from agm.agl.ir.contracts import ConversionRecipe, ConversionStrategy
 from agm.agl.semantics.type_table import TypeTable
-from agm.agl.semantics.types import CastKind, DecimalType, IntType, JsonType, TextType, Type
-from agm.agl.type_schema import derive_schema_and_decode
+from agm.agl.semantics.types import (
+    BottomType,
+    CastKind,
+    DecimalType,
+    IntType,
+    JsonType,
+    TextType,
+    Type,
+)
+from agm.agl.type_schema import build_encode_plan, derive_schema_and_decode
 
 __all__ = ["compile_recipe"]
 
@@ -43,6 +54,16 @@ def compile_recipe(
     """
     source_label = repr(source)
     target_label = repr(target)
+
+    # Bottom never supplies a runtime value. Its cast may have been classified
+    # against an expected target type, so make the unreachable conversion
+    # explicit before any target-specific planning.
+    if isinstance(source, BottomType):
+        return ConversionRecipe(
+            strategy=ConversionStrategy.NOOP,
+            source_label=source_label,
+            target_label=target_label,
+        )
 
     match kind:
         case CastKind.TOTAL_NOOP:
@@ -62,10 +83,24 @@ def compile_recipe(
                 target_label=target_label,
             )
         case CastKind.TOTAL_JSON:
+            # A growing polymorphic-recursive source is still known to have a
+            # JSON representation, but its concrete-instantiation closure has
+            # no finite static encode plan. Keep the normal plan whenever it
+            # is derivable; only that explicitly identified case uses the
+            # typeless value walk at runtime.
+            if not type_table.has_finite_schema(source):
+                return ConversionRecipe(
+                    strategy=ConversionStrategy.TO_JSON_VALUE_DIRECTED,
+                    source_label=source_label,
+                    target_label=target_label,
+                )
+            encode_plan = build_encode_plan(source, type_table)
             return ConversionRecipe(
                 strategy=ConversionStrategy.TO_JSON,
                 source_label=source_label,
                 target_label=target_label,
+                encode=encode_plan.root,
+                encode_defs=encode_plan.defs,
             )
         case CastKind.FALLIBLE:
             if isinstance(source, DecimalType) and isinstance(target, IntType):

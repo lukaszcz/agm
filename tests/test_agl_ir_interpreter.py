@@ -625,24 +625,24 @@ class TestCoerceToJson:
         )
         assert result == {"j": JsonValue(True)}
 
-    def test_to_json_array(self) -> None:
-        """ToJson converts an ArrayValue to a JsonValue wrapping a list."""
+    def test_to_json_array_rejects_malformed_scalar_coercion(self) -> None:
+        """ToJson is a scalar lowering contract, never a container walk."""
         sym, desc = _let_sym(0, "j")
-        result = _run(
-            (
-                IrBind(
-                    _LOC,
-                    sym,
-                    IrCoerce(
+        with pytest.raises(AssertionError, match="scalar encode"):
+            _run(
+                (
+                    IrBind(
                         _LOC,
-                        IrMakeArray(_LOC, (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2))),
-                        ToJson(),
+                        sym,
+                        IrCoerce(
+                            _LOC,
+                            IrMakeArray(_LOC, (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2))),
+                            ToJson(),
+                        ),
                     ),
                 ),
-            ),
-            {sym: desc},
-        )
-        assert result == {"j": JsonValue([1, 2])}
+                {sym: desc},
+            )
 
     def test_to_json_already_json_is_idempotent(self) -> None:
         """ToJson on a JsonValue returns as-is (idempotent defensively)."""

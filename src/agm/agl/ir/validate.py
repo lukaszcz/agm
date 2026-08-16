@@ -52,14 +52,22 @@ from typing import TypeVar, assert_never
 
 from agm.agl.ir.contracts import (
     ArrayDecode,
+    ArrayEncode,
     ContractRequest,
     ConversionStrategy,
     DecodeSchema,
     DictDecode,
+    DictEncode,
+    EncodeSchema,
     EnumDecode,
+    EnumEncode,
+    ExceptionEncode,
     RecordDecode,
+    RecordEncode,
     RefDecode,
+    RefEncode,
     ScalarDecode,
+    ScalarEncode,
 )
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
@@ -336,8 +344,10 @@ def _check_recipe_consistency(
     json_schema: str | None,
     decode: DecodeSchema | None,
     defs: "tuple[tuple[str, DecodeSchema], ...]",
+    encode: EncodeSchema | None,
+    encode_defs: "tuple[tuple[str, EncodeSchema], ...]",
 ) -> None:
-    """Enforce that decode strategies carry schema+decode and total strategies do not."""
+    """Require only the conversion metadata selected by each strategy."""
     needs_decode = strategy in _DECODE_STRATEGIES
     has_decode = json_schema is not None and decode is not None
     if needs_decode and not has_decode:
@@ -347,6 +357,16 @@ def _check_recipe_consistency(
     if not needs_decode and (json_schema is not None or decode is not None or defs):
         raise InvalidIrError(
             f"ConversionRecipe strategy {strategy.value!r} must not carry json_schema/decode/defs"
+        )
+    # ``TO_JSON_VALUE_DIRECTED`` is deliberately planless: lowering selects it
+    # only for statically JSON-convertible sources with no finite encode plan.
+    # It therefore falls through the no-encode-metadata rule below.
+    needs_encode = strategy is ConversionStrategy.TO_JSON
+    if needs_encode and encode is None:
+        raise InvalidIrError("ConversionRecipe strategy 'to_json' requires encode")
+    if not needs_encode and (encode is not None or encode_defs):
+        raise InvalidIrError(
+            f"ConversionRecipe strategy {strategy.value!r} must not carry encode/encode_defs"
         )
 
 
@@ -371,6 +391,86 @@ def _check_decode_nominals(
     _walk_decode_schema(decode, defs_map, ctx)
     for key, entry in defs:
         _walk_decode_schema(entry, defs_map, ctx)
+
+
+def _check_encode_nominals(
+    encode: EncodeSchema, defs: "tuple[tuple[str, EncodeSchema], ...]", ctx: _Context
+) -> None:
+    """Validate the root and each recursive encode body exactly once."""
+    keys: set[str] = set()
+    for key, _entry in defs:
+        if key in keys:
+            raise InvalidIrError(f"EncodeSchema has duplicate $defs key {key!r}")
+        keys.add(key)
+    defs_map = dict(defs)
+    _walk_encode_schema(encode, defs_map, ctx)
+    for _key, entry in defs:
+        _walk_encode_schema(entry, defs_map, ctx)
+
+
+def _walk_encode_schema(
+    encode: EncodeSchema, defs: "Mapping[str, EncodeSchema]", ctx: _Context
+) -> None:
+    """Walk one encode-schema node without expanding recursive references."""
+    match encode:
+        case ScalarEncode():
+            return
+        case RefEncode(key=key):
+            _check_ref_chain(
+                key,
+                defs,
+                lambda t: t.key if isinstance(t, RefEncode) else None,
+                ref_kind="EncodeSchema RefEncode",
+                key_noun="$defs key",
+            )
+        case ArrayEncode(elem=elem):
+            _walk_encode_schema(elem, defs, ctx)
+        case DictEncode(value=value_schema):
+            _walk_encode_schema(value_schema, defs, ctx)
+        case RecordEncode(nominal=nominal, fields=fields):
+            _check_nominal_in_table(nominal, ctx)
+            desc = ctx.program.nominals[nominal]
+            if desc.kind is not NominalKind.RECORD:
+                raise InvalidIrError(f"RecordEncode references non-record nominal {nominal!r}")
+            _check_encode_fields(fields, desc.fields, "RecordEncode")
+            for _fname, fschema in fields:
+                _walk_encode_schema(fschema, defs, ctx)
+        case ExceptionEncode(nominal=nominal, fields=fields):
+            _check_nominal_in_table(nominal, ctx)
+            desc = ctx.program.nominals[nominal]
+            if desc.kind is not NominalKind.EXCEPTION:
+                raise InvalidIrError(
+                    f"ExceptionEncode references non-exception nominal {nominal!r}"
+                )
+            _check_encode_fields(fields, desc.fields, "ExceptionEncode")
+            for _fname, fschema in fields:
+                _walk_encode_schema(fschema, defs, ctx)
+        case EnumEncode(nominal=nominal, variants=variants):
+            _check_nominal_in_table(nominal, ctx)
+            desc = ctx.program.nominals[nominal]
+            if desc.kind is not NominalKind.ENUM:
+                raise InvalidIrError(f"EnumEncode references non-enum nominal {nominal!r}")
+            if len(variants) != len(desc.variants):
+                raise InvalidIrError(f"EnumEncode variants disagree with enum nominal {nominal!r}")
+            for variant, expected in zip(variants, desc.variants, strict=True):
+                if variant.name != expected.name or variant.nominal != expected.member:
+                    raise InvalidIrError(
+                        f"EnumEncode variant {variant.name!r} disagrees with"
+                        f" enum nominal {nominal!r}"
+                    )
+                _check_encode_fields(variant.fields, expected.fields, "EnumEncode variant")
+                for _fname, fschema in variant.fields:
+                    _walk_encode_schema(fschema, defs, ctx)
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
+
+
+def _check_encode_fields(
+    fields: "tuple[tuple[str, EncodeSchema], ...]", expected: tuple[str, ...], owner: str
+) -> None:
+    """Require an encoder to select exactly its linked declaration's fields."""
+    if tuple(name for name, _schema in fields) != expected:
+        raise InvalidIrError(f"{owner} fields disagree with its nominal descriptor")
 
 
 def _walk_decode_schema(
@@ -846,10 +946,17 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
         case IrConvert(value=val, recipe=recipe):
             _validate_location(node.location, ctx)
             _check_recipe_consistency(
-                recipe.strategy, recipe.json_schema, recipe.decode, recipe.defs
+                recipe.strategy,
+                recipe.json_schema,
+                recipe.decode,
+                recipe.defs,
+                recipe.encode,
+                recipe.encode_defs,
             )
             if ctx.deep and recipe.decode is not None:
                 _check_decode_nominals(recipe.decode, recipe.defs, ctx)
+            if ctx.deep and recipe.encode is not None:
+                _check_encode_nominals(recipe.encode, recipe.encode_defs, ctx)
             _validate_expr(val, ctx)
 
         case IrIf(branches=branches):

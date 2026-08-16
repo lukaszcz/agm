@@ -960,7 +960,12 @@ program def main() -> unit =
 A record (or exception) with a field of type `unit` or a function type cannot
 be converted — see [Convertibility to
 `json`](#convertibility-to-json) above for the static error this produces and
-how it names the offending field.
+how it names the offending field. A finite recursive source is encoded through
+a static plan. A growing polymorphic-recursive source that is nevertheless
+statically JSON-convertible (for example `Perfect[int]`) has no finite plan,
+so its explicit `as json` uses a dedicated value-directed conversion strategy
+for the finite runtime value; this does not make it eligible for a JSON-schema
+boundary.
 
 ### `text as json` — embedding, not parsing
 

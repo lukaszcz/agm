@@ -16,19 +16,27 @@ from agm.agl.eval.conversions import AglCastConversion, run_recipe
 from agm.agl.eval.conversions import decode_value as _decode
 from agm.agl.ir.contracts import (
     ArrayDecode,
+    ArrayEncode,
     ConversionFailureMode,
     ConversionRecipe,
     ConversionStrategy,
     DictDecode,
     EnumDecode,
+    EnumEncode,
+    ExceptionEncode,
     RecordDecode,
+    RecordEncode,
     RefDecode,
+    RefEncode,
     ScalarDecode,
+    ScalarEncode,
     ScalarKind,
     VariantDecode,
+    VariantEncode,
 )
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.nodes import IrBind, IrConvert, IrSequence
+from agm.agl.ir.program import NominalDescriptor, NominalKind, VariantDescriptor
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.semantics.values import (
     ArrayValue,
@@ -308,6 +316,66 @@ def test_golden_widen_and_render_and_tojson_strategies() -> None:
     assert _strategy_of("let x = 42 as json\n()\n", "x") is ConversionStrategy.TO_JSON
 
 
+def test_golden_finite_scalar_json_cast_uses_a_static_plan() -> None:
+    value = _bound_value("let x = 42 as json\n()\n", "x")
+    assert isinstance(value, IrConvert)
+    assert value.recipe.strategy is ConversionStrategy.TO_JSON
+    assert value.recipe.encode == ScalarEncode()
+    assert value.recipe.encode_defs == ()
+
+
+def test_golden_finite_recursive_json_cast_uses_a_static_plan() -> None:
+    value = _bound_value(
+        "enum Tree | Leaf | Node(children: array[Tree])\nlet x = Tree::Leaf as json\n()\n",
+        "x",
+    )
+    assert isinstance(value, IrConvert)
+    assert value.recipe.strategy is ConversionStrategy.TO_JSON
+    assert isinstance(value.recipe.encode, RefEncode)
+    assert value.recipe.encode_defs
+
+
+def test_golden_growing_recursive_json_cast_uses_planless_strategy() -> None:
+    value = _bound_value(
+        "record Pair[A, B]\n"
+        "  first: A\n"
+        "  second: B\n"
+        "enum Perfect[T]\n"
+        "  | Single(value: T)\n"
+        "  | Succ(next: Perfect[Pair[T, T]])\n"
+        "let p: Perfect[int] = Single(value = 1)\n"
+        "let encoded = p as json\n"
+        "()\n",
+        "encoded",
+    )
+    assert isinstance(value, IrConvert)
+    assert value.recipe.strategy is ConversionStrategy.TO_JSON_VALUE_DIRECTED
+    assert value.recipe.encode is None
+    assert value.recipe.encode_defs == ()
+
+
+_BOTTOM_JSON_CAST_SOURCES = (
+    'let result: json = (raise Abort(message = "stop")) as json\n()\n',
+    'let result = (raise Abort(message = "stop")) as? json\n()\n',
+)
+
+
+@pytest.mark.parametrize("source", _BOTTOM_JSON_CAST_SOURCES)
+def test_golden_bottom_json_cast_lowers_to_planless_noop(source: str) -> None:
+    value = _bound_value(source, "result")
+    assert isinstance(value, IrConvert)
+    assert value.recipe.strategy is ConversionStrategy.NOOP
+    assert value.recipe.encode is None
+    assert value.recipe.encode_defs == ()
+
+
+@pytest.mark.parametrize("source", _BOTTOM_JSON_CAST_SOURCES)
+def test_bottom_json_cast_preserves_the_raised_source(source: str) -> None:
+    raised = evaluate_ir_raises(source)
+    assert raised.display_name == "Abort"
+    assert raised.fields["message"] == TextValue("stop")
+
+
 def test_golden_nested_decode_schema_shape() -> None:
     value = _bound_value('let x = "{\\"k\\": [1, 2]}" as dict[text, array[int]]\n()\n', "x")
     assert isinstance(value, IrConvert)
@@ -479,6 +547,187 @@ def test_validate_rejects_decode_strategy_without_schema() -> None:
     )
     with pytest.raises(InvalidIrError, match="requires json_schema and decode"):
         validate_ir(_convert_program(recipe), deep=True)
+
+
+def test_validate_rejects_to_json_without_encode_plan() -> None:
+    from agm.agl.ir.validate import InvalidIrError, validate_ir
+
+    recipe = ConversionRecipe(
+        strategy=ConversionStrategy.TO_JSON,
+        source_label="int",
+        target_label="json",
+    )
+    with pytest.raises(InvalidIrError, match="requires encode"):
+        validate_ir(_convert_program(recipe), deep=True)
+
+
+def test_validate_accepts_planless_value_directed_json_recipe() -> None:
+    from agm.agl.ir.validate import validate_ir
+
+    recipe = ConversionRecipe(
+        strategy=ConversionStrategy.TO_JSON_VALUE_DIRECTED,
+        source_label="Perfect[int]",
+        target_label="json",
+    )
+    validate_ir(_convert_program(recipe), deep=True)
+
+
+def test_validate_rejects_to_json_with_decode_or_malformed_encode_plan() -> None:
+    from agm.agl.ir.validate import InvalidIrError, validate_ir
+
+    bad_recipes = (
+        ConversionRecipe(
+            strategy=ConversionStrategy.TO_JSON,
+            source_label="int",
+            target_label="json",
+            encode=ScalarEncode(),
+            decode=ScalarDecode(ScalarKind.INT),
+        ),
+        ConversionRecipe(
+            strategy=ConversionStrategy.TO_JSON_VALUE_DIRECTED,
+            source_label="Perfect[int]",
+            target_label="json",
+            encode=ScalarEncode(),
+        ),
+        ConversionRecipe(
+            strategy=ConversionStrategy.TO_JSON,
+            source_label="Tree",
+            target_label="json",
+            encode=RefEncode("missing"),
+        ),
+        ConversionRecipe(
+            strategy=ConversionStrategy.TO_JSON,
+            source_label="Tree",
+            target_label="json",
+            encode=RefEncode("loop"),
+            encode_defs=(("loop", RefEncode("loop")),),
+        ),
+        ConversionRecipe(
+            strategy=ConversionStrategy.TO_JSON,
+            source_label="Tree",
+            target_label="json",
+            encode=RefEncode("same"),
+            encode_defs=(
+                ("same", ScalarEncode()),
+                ("same", ScalarEncode()),
+            ),
+        ),
+        ConversionRecipe(
+            strategy=ConversionStrategy.NOOP,
+            source_label="int",
+            target_label="int",
+            encode=ScalarEncode(),
+        ),
+    )
+    for recipe in bad_recipes:
+        with pytest.raises(InvalidIrError):
+            validate_ir(_convert_program(recipe), deep=True)
+
+
+def test_validate_rejects_to_json_encode_with_unregistered_nominal() -> None:
+    from agm.agl.ir.validate import InvalidIrError, validate_ir
+
+    recipe = ConversionRecipe(
+        strategy=ConversionStrategy.TO_JSON,
+        source_label="Ghost",
+        target_label="json",
+        encode=ArrayEncode(RecordEncode(NominalId(4), ())),
+    )
+    with pytest.raises(InvalidIrError, match="not in program.nominals"):
+        validate_ir(_convert_program(recipe), deep=True)
+
+
+def test_validate_rejects_malformed_encode_nominal_shapes() -> None:
+    from agm.agl.ir.validate import InvalidIrError, validate_ir
+
+    record = NominalId(4)
+    exception = NominalId(5)
+    enum = NominalId(6)
+    program_nominals = {
+        record: NominalDescriptor(record, ENTRY_ID, (), "Record", NominalKind.RECORD, ("field",)),
+        exception: NominalDescriptor(
+            exception, ENTRY_ID, (), "Exception", NominalKind.EXCEPTION, ("field",)
+        ),
+        enum: NominalDescriptor(
+            enum,
+            ENTRY_ID,
+            (),
+            "Enum",
+            NominalKind.ENUM,
+            variants=(VariantDescriptor("Good", ("field",), record),),
+        ),
+    }
+    bad_encodes = (
+        RecordEncode(exception, (("field", ScalarEncode()),)),
+        ExceptionEncode(record, (("field", ScalarEncode()),)),
+        EnumEncode(record, ()),
+        EnumEncode(enum, ()),
+        EnumEncode(enum, (VariantEncode("Bad", record, (("field", ScalarEncode()),)),)),
+        RecordEncode(record, ()),
+    )
+    for encode in bad_encodes:
+        recipe = ConversionRecipe(
+            strategy=ConversionStrategy.TO_JSON,
+            source_label="Bad",
+            target_label="json",
+            encode=encode,
+        )
+        program = _convert_program(recipe)
+        program.nominals.update(program_nominals)
+        with pytest.raises(InvalidIrError):
+            validate_ir(program, deep=True)
+
+
+def test_validate_accepts_recursive_to_json_encode_plan() -> None:
+    from agm.agl.ir.validate import validate_ir
+
+    tree = NominalId(4)
+    recipe = ConversionRecipe(
+        strategy=ConversionStrategy.TO_JSON,
+        source_label="Tree",
+        target_label="json",
+        encode=RefEncode("Tree"),
+        encode_defs=(
+            (
+                "Tree",
+                EnumEncode(
+                    tree,
+                    (
+                        VariantEncode("Leaf", NominalId(5), ()),
+                        VariantEncode("Node", NominalId(6), (("child", RefEncode("Tree")),)),
+                    ),
+                ),
+            ),
+        ),
+    )
+    program = _convert_program(recipe)
+    program.nominals.update(
+        {
+            tree: NominalDescriptor(
+                tree,
+                ENTRY_ID,
+                (),
+                "Tree",
+                NominalKind.ENUM,
+                variants=(
+                    VariantDescriptor("Leaf", (), NominalId(5)),
+                    VariantDescriptor("Node", ("child",), NominalId(6)),
+                ),
+            ),
+            NominalId(5): NominalDescriptor(
+                NominalId(5), ENTRY_ID, ("Tree",), "Leaf", NominalKind.RECORD
+            ),
+            NominalId(6): NominalDescriptor(
+                NominalId(6),
+                ENTRY_ID,
+                ("Tree",),
+                "Node",
+                NominalKind.RECORD,
+                ("child",),
+            ),
+        }
+    )
+    validate_ir(program, deep=True)
 
 
 def test_validate_rejects_total_strategy_with_schema() -> None:

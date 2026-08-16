@@ -23,6 +23,7 @@ from typing import assert_never
 from agm.agl.ir.contracts import (
     ConversionRecipe,
     ConversionStrategy,
+    EncodePlan,
 )
 from agm.agl.runtime.convert import (
     StrictJsonParseError,
@@ -33,7 +34,7 @@ from agm.agl.runtime.convert import (
     validator_for_schema,
 )
 from agm.agl.runtime.render import render_value
-from agm.agl.runtime.serialize import value_to_json_obj
+from agm.agl.runtime.serialize import encode_value, value_to_json_obj
 from agm.agl.semantics.values import (
     DecimalValue,
     IntValue,
@@ -74,6 +75,10 @@ def run_recipe(recipe: ConversionRecipe, value: Value) -> Value:
         case ConversionStrategy.RENDER_TO_TEXT:
             return TextValue(render_value(value))
         case ConversionStrategy.TO_JSON:
+            if recipe.encode is None:
+                raise AssertionError("TO_JSON strategy requires an encode plan")
+            return JsonValue(encode_value(EncodePlan(recipe.encode, recipe.encode_defs), value))
+        case ConversionStrategy.TO_JSON_VALUE_DIRECTED:
             return JsonValue(value_to_json_obj(value))
         case ConversionStrategy.NARROW_DECIMAL_TO_INT:
             if not isinstance(value, DecimalValue):

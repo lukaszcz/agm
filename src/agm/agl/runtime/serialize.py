@@ -23,6 +23,18 @@ import json
 from decimal import Decimal
 from typing import assert_never
 
+from agm.agl.ir.contracts import (
+    ArrayEncode,
+    DictEncode,
+    EncodePlan,
+    EncodeSchema,
+    EnumEncode,
+    ExceptionEncode,
+    RecordEncode,
+    RefEncode,
+    ScalarEncode,
+    VariantEncode,
+)
 from agm.agl.semantics.cycles import CYCLIC_VALUE_MARKER, AglCyclicValue, enter_container
 from agm.agl.semantics.values import (
     ArrayValue,
@@ -78,6 +90,119 @@ def degraded_marker(exc: "AglCyclicValue | AglNonDataValue") -> str:
     return CYCLIC_VALUE_MARKER
 
 
+def encode_value(plan: EncodePlan, value: Value) -> object:
+    """Encode *value* through its lowering-derived static JSON plan.
+
+    Static plans select enum ``$case`` tags from the slot type rather than the
+    value-directed fallback. Enum plans retain the current ``EnumValue`` wire
+    representation; member-record values are deliberately not supported until
+    the enum-record runtime migration changes that representation. Lowered
+    casts use this path whenever their statically known source has a finite
+    plan; only a growing polymorphic-recursive source uses
+    :func:`value_to_json_obj` instead.
+    """
+    return _encode(plan.root, value, dict(plan.defs), None)
+
+
+def _encode(
+    schema: EncodeSchema,
+    value: Value,
+    defs: dict[str, EncodeSchema],
+    active: "set[int] | None",
+) -> object:
+    if isinstance(schema, RefEncode):
+        return _encode(_resolve_encode_ref(schema.key, defs), value, defs, active)
+    if isinstance(schema, ScalarEncode):
+        if isinstance(value, TextValue):
+            return value.value
+        if isinstance(value, IntValue):
+            return value.value
+        if isinstance(value, DecimalValue):
+            return value.value
+        if isinstance(value, BoolValue):
+            return value.value
+        if isinstance(value, JsonValue):
+            return value.raw
+        raise AssertionError(f"scalar encode plan received {type(value).__name__}")
+    if isinstance(schema, ArrayEncode):
+        if not isinstance(value, ArrayValue):
+            raise AssertionError(f"array encode plan received {type(value).__name__}")
+        active = enter_container(id(value), active)
+        try:
+            return [_encode(schema.elem, item, defs, active) for item in value.elements]
+        finally:
+            active.discard(id(value))
+    if isinstance(schema, DictEncode):
+        if not isinstance(value, DictValue):
+            raise AssertionError(f"dict encode plan received {type(value).__name__}")
+        active = enter_container(id(value), active)
+        try:
+            return {
+                name: _encode(schema.value, item, defs, active)
+                for name, item in value.entries.items()
+            }
+        finally:
+            active.discard(id(value))
+    if isinstance(schema, RecordEncode):
+        if not isinstance(value, RecordValue):
+            raise AssertionError(f"record encode plan received {type(value).__name__}")
+        if value.nominal != schema.nominal:
+            raise AssertionError(
+                f"record encode plan received {value.nominal!r}, expected {schema.nominal!r}"
+            )
+        return {
+            name: _encode(field, value.fields[name], defs, active) for name, field in schema.fields
+        }
+    if isinstance(schema, ExceptionEncode):
+        if not isinstance(value, ExceptionValue):
+            raise AssertionError(f"exception encode plan received {type(value).__name__}")
+        if value.nominal != schema.nominal:
+            raise AssertionError(
+                f"exception encode plan received {value.nominal!r}, expected {schema.nominal!r}"
+            )
+        return {
+            name: _encode(field, value.fields[name], defs, active) for name, field in schema.fields
+        }
+    if isinstance(schema, EnumEncode):
+        variant, fields = _variant_for_encode(schema, value)
+        result: dict[str, object] = {"$case": variant.name}
+        result.update(
+            {name: _encode(field, fields[name], defs, active) for name, field in variant.fields}
+        )
+        return result
+    raise AssertionError(f"unknown encode schema {schema!r}")  # pragma: no cover
+
+
+def _variant_for_encode(schema: EnumEncode, value: Value) -> tuple[VariantEncode, dict[str, Value]]:
+    """Select the current enum wrapper's member in the static enum slot."""
+    if not isinstance(value, EnumValue):
+        raise AssertionError(f"enum encode plan received {type(value).__name__}")
+    if value.nominal != schema.nominal:
+        raise AssertionError(
+            f"enum encode plan received {value.nominal!r}, expected {schema.nominal!r}"
+        )
+    for variant in schema.variants:
+        if variant.name == value.variant:
+            return variant, value.fields
+    raise AssertionError(f"enum encode plan has no variant {value.variant!r}")
+
+
+def _resolve_encode_ref(key: str, defs: dict[str, EncodeSchema]) -> EncodeSchema:
+    """Resolve a recursive plan reference to its non-reference body."""
+    seen: set[str] = set()
+    current = key
+    while True:
+        if current in seen:
+            raise AssertionError(f"encode plan cycle at $defs key {current!r}")
+        seen.add(current)
+        resolved = defs.get(current)
+        if resolved is None:
+            raise AssertionError(f"unknown encode plan $defs key {current!r}")
+        if not isinstance(resolved, RefEncode):
+            return resolved
+        current = resolved.key
+
+
 def value_to_json_obj(value: Value, active: "set[int] | None" = None) -> object:
     """Convert a ``Value`` to a JSON-shaped Python object.
 
@@ -96,7 +221,10 @@ def value_to_json_obj(value: Value, active: "set[int] | None" = None) -> object:
     :class:`AglNonDataValue` rather than a bare :class:`TypeError`, so a
     caller that can legitimately receive one (e.g. because it carries the
     field of an in-flight exception) can degrade it to a marker instead of
-    crashing.
+    crashing. Lowered casts use this value-directed walk only through their
+    explicit planless strategy for statically JSON-convertible growing
+    polymorphic-recursive source types; ordinary lowered casts use
+    :func:`encode_value` and its static plan.
     """
     if isinstance(value, TextValue):
         return value.value

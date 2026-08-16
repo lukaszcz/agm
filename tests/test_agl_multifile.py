@@ -979,6 +979,22 @@ class TestScopedModuleSelections:
         assert result.ok is True
         assert capsys.readouterr().out == "Status::Good\n"
 
+    def test_import_tail_renamed_enum_variant_is_usable_in_is_test(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """An is test resolves an individually imported variant through its bare alias."""
+        (tmp_path / "flags.agl").write_text("enum Status\n  | Good\n  | Bad\n")
+
+        result = _run_program(
+            "import flags::{Status::Good as X}\n"
+            "let status = flags::Status::Good\n"
+            "print (status is X)\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is True
+        assert capsys.readouterr().out == "true\n"
+
     def test_renamed_scoped_enum_exposes_its_variants_bare(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:

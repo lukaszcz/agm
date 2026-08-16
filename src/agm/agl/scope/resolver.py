@@ -2447,8 +2447,8 @@ class _Resolver:
             self._resolve_expr(expr.operand)
         elif isinstance(expr, IsTest):
             if expr.qualifier is None:
-                candidates = self._regional_constructor_candidates(expr.variant)
-                if candidates is not None and len(candidates) == 1:
+                candidates = self._bare_constructor_candidates(expr.variant)
+                if len(candidates) == 1:
                     self._constructor_refs[expr.node_id] = next(iter(candidates))
             else:
                 self._resolve_constructor_chain(

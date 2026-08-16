@@ -187,6 +187,28 @@ def test_type_use_lookup_continues_past_inner_value_contribution(tmp_path: Path)
     check_program(resolve_program(graph), base_caps())
 
 
+def test_inner_use_shadows_root_import_and_use_contributions(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import a::{x}\n"
+                "use a::*\n"
+                "import b\n"
+                "scope Inner\n"
+                "use b::*\n"
+                "def selected() -> int = x()\n"
+                "end Inner\n"
+                "Inner::selected()\n"
+            ),
+            "a": "def x() -> int = 1\n",
+            "b": "def x() -> int = 2\n",
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
 def test_use_imported_nested_scope_selects_its_relative_public_subtree(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,

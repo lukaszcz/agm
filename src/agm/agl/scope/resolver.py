@@ -2913,7 +2913,7 @@ class _Resolver:
         name: NameAtom,
         *,
         binding_predicate: Callable[[BindingRef], bool] | None = None,
-    ) -> tuple[set[BindingRef], set[ConstructorRef]] | None:
+    ) -> tuple[ScopeNode, set[BindingRef], set[ConstructorRef]] | None:
         """Return the nearest static and live-use candidates in one namespace."""
         layer: ScopeNode | None = self._current_scope()
         while layer is not None:
@@ -2951,7 +2951,7 @@ class _Resolver:
                     )
                 }
             if bindings or constructors:
-                return bindings, constructors
+                return layer, bindings, constructors
             layer = layer.parent
         return None
 
@@ -2972,24 +2972,27 @@ class _Resolver:
             name,
             binding_predicate=self._is_value_contribution if values_only else None,
         )
-        return None if nearest is None else nearest[0]
+        return None if nearest is None else nearest[1]
 
     def _regional_constructor_candidates(self, name: NameAtom) -> set[ConstructorRef] | None:
         """Return the nearest region's constructor candidates, including live local uses."""
         nearest = self._nearest_bare_contribution_layer(name)
-        return None if nearest is None else nearest[1]
+        return None if nearest is None else nearest[2]
 
     def _lookup_bare_contribution(self, name: NameAtom, span: SourceSpan) -> BindingRef | None:
         """Resolve one region's bare contributions, deferring clashes to use sites."""
-        resolved = self._bare_contribution_candidates(name, values_only=True)
-        if resolved is None:
+        nearest = self._nearest_bare_contribution_layer(
+            name, binding_predicate=self._is_value_contribution
+        )
+        if nearest is None:
             # Keep a lone type-only spelling available for the checker's
             # dedicated "type name, not a value" diagnostic.
-            resolved = self._bare_contribution_candidates(name)
-            if resolved is None:
+            nearest = self._nearest_bare_contribution_layer(name)
+            if nearest is None:
                 return None
+        selected_layer, resolved, _constructors = nearest
         assert self._root_scope is not None
-        if name in self._root_scope.bare_contributions:
+        if selected_layer is self._root_scope and name in self._root_scope.bare_contributions:
             for qname in self._import_env.unqualified.get(name, frozenset()):
                 ref, _constructor = self._cross_module_member_ref(name, qname, span)
                 if not self._is_value_contribution(ref):

@@ -1420,17 +1420,14 @@ class TypeEnvironment:
     def _live_use_generic_key(self, name: NameAtom, span: SourceSpan | None) -> DeclKey | None:
         """Resolve a generic identity from retained local-use contributions."""
         layer = self._scope_nodes.get(self._type_scope)
-        while layer is not None:
-            keys = {
-                (ref.module_id, ref.scope_path, ref.name)
-                for contribution in layer.local_use_contributions
-                for ref in local_use_contribution_refs(contribution, name, self._scope_nodes)
-                if (ref.module_id, ref.scope_path, ref.name) in (self._program_generic_table or {})
-            }
-            if keys:
-                return self._unique_bare_type_key(name, keys, span)
-            layer = layer.parent
-        return None
+        assert layer is not None
+        keys = {
+            (ref.module_id, ref.scope_path, ref.name)
+            for contribution in layer.local_use_contributions
+            for ref in local_use_contribution_refs(contribution, name, self._scope_nodes)
+            if (ref.module_id, ref.scope_path, ref.name) in (self._program_generic_table or {})
+        }
+        return self._unique_bare_type_key(name, keys, span)
 
     def _opened_type_key(self, name: NameAtom, span: SourceSpan | None) -> DeclKey | None:
         """Return the unique type declaration contributed to this type region."""

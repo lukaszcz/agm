@@ -2122,17 +2122,23 @@ class _Resolver:
     ) -> tuple[tuple[BareRoute, Mapping[NameAtom, QName]], ...]:
         """Merge scope routes that retain the same defining origins."""
         grouped: dict[frozenset[QName], tuple[BareRoute, dict[NameAtom, QName]]] = {}
-        for routes in targets:
-            for imported_route, members in routes:
-                module, path = imported_route
-                origins = self._import_env.scope_origins_by_route.get(
-                    imported_route, frozenset({(module, _bare_atom(path))})
-                )
-                representative, merged = grouped.setdefault(origins, (imported_route, {}))
-                if _bare_route_sort_key(imported_route) < _bare_route_sort_key(representative):
-                    grouped[origins] = (imported_route, merged)
-                for atom, qname in members.items():
-                    merged.setdefault(atom, qname)
+
+        def candidate_key(
+            item: tuple[BareRoute, Mapping[NameAtom, QName]],
+        ) -> tuple[str, ScopePath]:
+            return _bare_route_sort_key(item[0])
+
+        candidates = sorted(
+            (candidate for routes in targets for candidate in routes), key=candidate_key
+        )
+        for imported_route, members in candidates:
+            module, path = imported_route
+            origins = self._import_env.scope_origins_by_route.get(
+                imported_route, frozenset({(module, _bare_atom(path))})
+            )
+            _representative, merged = grouped.setdefault(origins, (imported_route, {}))
+            for atom, qname in members.items():
+                merged.setdefault(atom, qname)
 
         def route_key(
             item: tuple[BareRoute, dict[NameAtom, QName]],

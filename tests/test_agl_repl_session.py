@@ -4796,6 +4796,19 @@ class TestImports:
         assert session.eval_entry("new()").value == IntValue(2)
         assert not session.eval_entry("old()").ok
 
+    def test_retained_imported_use_survives_import_alias_change(self, tmp_path: Path) -> None:
+        (tmp_path / "lib.agl").write_text("def value() -> int = 1\n", encoding="utf-8")
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("import lib as Old").ok
+        assert session.eval_entry("use Old::*").ok
+
+        changed = session.eval_entry("import lib as New")
+        result = session.eval_entry("value()")
+
+        assert changed.ok, changed.diagnostics
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(1)
+
     def test_import_tail_rename_canonicalizes_use_replacement(self, tmp_path: Path) -> None:
         (tmp_path / "lib.agl").write_text(
             "scope Source\ndef old() -> int = 1\ndef new() -> int = 2\nend Source\n"
@@ -6132,6 +6145,37 @@ class TestBareTypeEntry:
 
         assert result.ok, result.diagnostics
         assert render_entry_result(result, echo=True) == "<type:\nrecord Box[T]\n  value: T\n>"
+
+    @pytest.mark.parametrize(
+        ("use_decl", "query", "display_name"),
+        (
+            ("use S::{Box}", "Box", "Box"),
+            ("use S::{Box as Renamed}", "Renamed", "Renamed"),
+        ),
+    )
+    def test_selective_use_exposed_generic_record_name_echoes_definition(
+        self, use_decl: str, query: str, display_name: str
+    ) -> None:
+        from agm.agl.repl.render import render_entry_result
+
+        session = ReplSession()
+        assert session.eval_entry("scope S\nrecord Box[T](value: T)\nend S").ok
+        assert session.eval_entry(use_decl).ok
+
+        result = session.eval_entry(query)
+
+        assert result.ok, result.diagnostics
+        assert (
+            render_entry_result(result, echo=True)
+            == f"<type:\nrecord {display_name}[T]\n  value: T\n>"
+        )
+
+    def test_hidden_use_generic_record_name_does_not_echo_definition(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("scope S\nrecord Box[T](value: T)\nend S").ok
+        assert session.eval_entry("use S::* hiding Box").ok
+
+        assert not session.eval_entry("Box").ok
 
     def test_use_alias_qualified_generic_record_name_echoes_definition(self) -> None:
         from agm.agl.repl.render import render_entry_result

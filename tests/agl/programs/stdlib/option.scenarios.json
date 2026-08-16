@@ -1,0 +1,37 @@
+{
+  "scenarios": [
+    {
+      "name": "some_chains_and_callbacks",
+      "params": {
+        "input": 2
+      },
+      "expect": {
+        "stdout": "3\ntrue\n2\ntrue\nfalse\neach 2\n2\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "some_filtered_or_chained_away",
+      "params": {
+        "input": 1
+      },
+      "expect": {
+        "stdout": "-1\nfalse\n1\ntrue\nfalse\neach 1\n1\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "none_raises_on_unwrap",
+      "params": {
+        "input": -1
+      },
+      "expect": {
+        "stdout": "-1\nfalse\n99\nfalse\ntrue\n",
+        "raises": {
+          "type": "UnwrapError"
+        },
+        "calls": {}
+      }
+    }
+  ]
+}

@@ -249,7 +249,8 @@ rules.
 
 ## Standard library modules
 
-- `std/core` declares the automatically opened core types, exceptions, and built-ins.
+- `std/core` declares the automatically opened core types, exceptions, and built-ins. It re-exports `std/option`, so `Option` remains available through the prelude and through `import std/core using Option`.
+- `std/option` declares `Option[T]`, its methods, and `UnwrapError`.
 - `std/config` exposes the host engine settings as `builtin var` bindings.
 - `std/text` exposes `interp(template, vars) -> text` for name-only runtime
   interpolation; see [Strings and interpolation](strings-and-interpolation.md#runtime-interpolation).

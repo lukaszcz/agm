@@ -3049,7 +3049,7 @@ def test_open_imported_generic_constructor_payload_type_apply_as_value(tmp_path:
     ``some::[int]`` in the entry resolves via the open-imported generic enum
     fallback and yields a function value ``int -> Choice[int]`` owned by ``lib``.
     The type is renamed away from ``Option`` to avoid clashing with the
-    auto-open-imported ``std/core::Option``.
+    auto-opened ``std/option::Option`` re-export.
     """
     lib_id = ModuleId.from_path("lib")
     modules = {

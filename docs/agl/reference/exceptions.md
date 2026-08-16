@@ -226,6 +226,13 @@ catch Exception as e =>
   raise (e with message = "while deploying: %{e.message}")
 ```
 
+## Standard library exceptions
+
+### `UnwrapError`
+
+`std/option` raises `UnwrapError` when `Option[T].unwrap()` is called on
+`None`. It carries only the inherited `message` field.
+
 ## Built-in exception catalog
 
 Field lists below are in addition to the base `message`.

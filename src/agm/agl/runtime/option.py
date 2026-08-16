@@ -1,4 +1,4 @@
-"""Constructors for ``std/core::Option`` runtime values.
+"""Constructors for ``std/option::Option`` runtime values.
 
 Shared by the config-value decoder (:mod:`agm.agl.runtime.params`) and the
 agent-request effect builder (:mod:`agm.agl.eval.effects`) so the Option enum
@@ -15,7 +15,7 @@ _OPTION_NOMINAL = NominalId(require_reserved_nominal_id("Option"))
 
 
 def some_value(value: Value) -> EnumValue:
-    """Build a ``std/core::Option`` ``Some(value)`` runtime value."""
+    """Build a ``std/option::Option`` ``Some(value)`` runtime value."""
     return EnumValue(
         nominal=_OPTION_NOMINAL,
         display_name="Option",
@@ -25,7 +25,7 @@ def some_value(value: Value) -> EnumValue:
 
 
 def none_value() -> EnumValue:
-    """Build a ``std/core::Option`` ``None`` runtime value."""
+    """Build a ``std/option::Option`` ``None`` runtime value."""
     return EnumValue(
         nominal=_OPTION_NOMINAL,
         display_name="Option",
@@ -35,7 +35,7 @@ def none_value() -> EnumValue:
 
 
 def option_text(value: EnumValue) -> str | None:
-    """Return the text a ``std/core::Option[text]`` *value* carries, or ``None``.
+    """Return the text a ``std/option::Option[text]`` *value* carries, or ``None``.
 
     The decode counterpart of :func:`some_value` / :func:`none_value`: the
     ``None`` variant answers ``None``, and ``Some(t)`` answers with ``t``.

@@ -609,7 +609,11 @@ def test_lower_return_shape() -> None:
     source = "def f() -> int =\n  return 1\n  0\nf()\n"
     prog = _lower(source)
     assert isinstance(prog, ExecutableProgram)
-    desc = next(iter(prog.functions.values()))
+    desc = next(
+        descriptor
+        for descriptor in prog.functions.values()
+        if prog.symbols[descriptor.function_symbol].public_name == "f"
+    )
     assert isinstance(desc.impl, IrFunctionBody)
     assert isinstance(desc.impl.body, IrBlock)
     ir_return = desc.impl.body.items[0]

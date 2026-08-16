@@ -2279,8 +2279,8 @@ class TestLowerGraph:
 
         prog = lower_program(_compiled_checked(cg))
 
-        # Both modules must appear
-        assert len(prog.modules) == 3
+        # The library, entry, and automatic standard-library modules must appear.
+        assert len(prog.modules) == 4
 
         # Entry module is LAST in insertion order
         module_ids = list(prog.modules.keys())
@@ -2288,8 +2288,8 @@ class TestLowerGraph:
             "Entry module must be last in program.modules insertion order"
         )
 
-        # Exactly one SourceFile per module, including the automatic std/core import.
-        assert len(prog.sources) == 3
+        # Exactly one SourceFile per module, including automatic std/core and std/option imports.
+        assert len(prog.sources) == 4
 
         # Both modules' functions appear in program.functions with DISTINCT FunctionIds.
         # lib has make_point; entry has no user functions here, but they share one table.

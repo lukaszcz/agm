@@ -57,9 +57,8 @@ class BuiltinNominals:
         identity and its own declared scoped spelling. A name the program
         declares nothing for answers with the shipped standard library's own
         reserved identity for it (see ``ir.reserved_nominals``) and its bare
-        name — the shipped library's own declaration of a reserved name is
-        always written bare, at ``std/core``'s root. That is the correct
-        answer for such a name, not a placeholder for a missing lookup.
+        name. That is the correct answer for such a name, not a placeholder
+        for a missing lookup.
 
         Identity and spelling are resolved together so a value can never be
         stamped with one declaration's identity and another's spelling.

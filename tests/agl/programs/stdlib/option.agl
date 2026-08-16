@@ -1,0 +1,29 @@
+# Option is available from the std/core prelude and can also be selected through
+# std/core's re-export. The scenarios exercise both variants, chained methods,
+# callbacks, and the raising unwrap path.
+import std/core using Option, UnwrapError
+
+param input: int
+
+def keep_large(value: int) -> Option[int] =
+  if value > 2 => Option::Some(value = value) else => Option::None
+
+def report(value: int) -> unit = print("each %{value}")
+
+program def main() -> unit =
+  let option: Option[int] = (if input > 0 => Option::Some(value = input) else => Option::None)
+  let chained = option.map(fn(value: int) => value + 1).and-then(keep_large)
+  let filtered = option.filter(fn(value: int) => value > 1)
+
+  print(chained.with-default(-1))
+  print(filtered.is-some())
+  print(option.or-else(Option::Some(value = 99)).with-default(0))
+  print(option.is-some())
+  print(option.is-none())
+  option.each(report)
+
+  if input < 0 =>
+    let _ = option.unwrap()
+    ()
+  else =>
+    print(option.unwrap())

@@ -31,6 +31,14 @@ from tests._agl_helpers import agent_value
 _STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 
 
+def _copy_core_and_option(directory: Path) -> None:
+    """Copy the standard-library modules required by a custom ``std/config``."""
+    for name in ("core.agl", "option.agl"):
+        (directory / name).write_text(
+            (_STDLIB_ROOT / "std" / name).read_text(encoding="utf-8"), encoding="utf-8"
+        )
+
+
 class _FencedAgent:
     """A fake ``AgentFn`` returning a fenced-JSON reply (lenient-only)."""
 
@@ -186,9 +194,7 @@ class TestDefaultsAndSeeding:
         config_path = stdlib_root / "std" / "config.agl"
         config_path.parent.mkdir(parents=True)
         config_path.write_text("builtin var strict-json: bool = true\n", encoding="utf-8")
-        (config_path.parent / "core.agl").write_text(
-            (_STDLIB_ROOT / "std" / "core.agl").read_text(encoding="utf-8"), encoding="utf-8"
-        )
+        _copy_core_and_option(config_path.parent)
         unseeded = ReplSession(stdlib_root=stdlib_root, default_stdlib=False)
         _ok(unseeded, "import std/config")
         assert _read(unseeded, "strict-json") == BoolValue(True)
@@ -304,9 +310,7 @@ def _declared_defaults_session(tmp_path: Path) -> ReplSession:
         'builtin var log-file: Option[text] = Option[text]::Some("declared.jsonl")\n',
         encoding="utf-8",
     )
-    (config_path.parent / "core.agl").write_text(
-        (_STDLIB_ROOT / "std" / "core.agl").read_text(encoding="utf-8"), encoding="utf-8"
-    )
+    _copy_core_and_option(config_path.parent)
     return ReplSession(stdlib_root=stdlib_root)
 
 
@@ -547,9 +551,7 @@ class TestExplicitZeroLoopLimit:
         config_path = stdlib_root / "std" / "config.agl"
         config_path.parent.mkdir(parents=True)
         config_path.write_text("builtin var max-iters: int = 3\n", encoding="utf-8")
-        (config_path.parent / "core.agl").write_text(
-            (_STDLIB_ROOT / "std" / "core.agl").read_text(encoding="utf-8"), encoding="utf-8"
-        )
+        _copy_core_and_option(config_path.parent)
         s = ReplSession(stdlib_root=stdlib_root, default_stdlib=False, default_loop_limit=0)
         _ok(s, "import std/config")
         s.reset()
@@ -718,9 +720,7 @@ class TestResetRestoresMixedSeedOrigins:
             'builtin var log-file: Option[text] = Option[text]::Some("declared.jsonl")\n',
             encoding="utf-8",
         )
-        (config_path.parent / "core.agl").write_text(
-            (_STDLIB_ROOT / "std" / "core.agl").read_text(encoding="utf-8"), encoding="utf-8"
-        )
+        _copy_core_and_option(config_path.parent)
         s = ReplSession(
             stdlib_root=stdlib_root,
             engine_base=build_engine_config_seeds({"max-iters": 5}),
@@ -799,9 +799,7 @@ def test_reset_keeps_a_declared_zero_max_iters_disabled(tmp_path: Path) -> None:
     config_path = stdlib_root / "std" / "config.agl"
     config_path.parent.mkdir(parents=True)
     config_path.write_text("builtin var max-iters: int = 0\n", encoding="utf-8")
-    (config_path.parent / "core.agl").write_text(
-        (_STDLIB_ROOT / "std" / "core.agl").read_text(), encoding="utf-8"
-    )
+    _copy_core_and_option(config_path.parent)
     session = ReplSession(stdlib_root=stdlib_root, default_stdlib=False)
 
     _ok(session, "import std/config")
@@ -817,9 +815,7 @@ def test_reset_preserves_an_explicit_host_loop_limit(tmp_path: Path) -> None:
     config_path = stdlib_root / "std" / "config.agl"
     config_path.parent.mkdir(parents=True)
     config_path.write_text("builtin var max-iters: int = 0\n", encoding="utf-8")
-    (config_path.parent / "core.agl").write_text(
-        (_STDLIB_ROOT / "std" / "core.agl").read_text(), encoding="utf-8"
-    )
+    _copy_core_and_option(config_path.parent)
     session = ReplSession(
         stdlib_root=stdlib_root,
         default_stdlib=False,
@@ -846,7 +842,7 @@ def test_reset_uses_declared_live_engine_defaults(tmp_path: Path) -> None:
         "builtin var log: bool = false\n"
         "builtin var log-file: Option[text] = Option[text]::None\n"
     )
-    (config_path.parent / "core.agl").write_text((_STDLIB_ROOT / "std" / "core.agl").read_text())
+    _copy_core_and_option(config_path.parent)
     session = ReplSession(stdlib_root=stdlib_root, default_stdlib=False)
 
     _ok(session, "open import std/core\nimport std/config\nstd/config::strict-json")

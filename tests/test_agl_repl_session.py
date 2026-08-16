@@ -352,15 +352,18 @@ class TestPersistence:
 
     def test_simple_let_uses_one_frame_slot_per_entry(self) -> None:
         session = ReplSession()
+        assert session.eval_entry("()").ok
+
+        initial_frame_size = len(session._ir_base_frame)
 
         first = session.eval_entry("let value = 1")
         assert first.ok, first.diagnostics
-        assert len(session._ir_base_frame) == 1
+        assert len(session._ir_base_frame) == initial_frame_size + 1
         assert session.bindings() == [("value", IntType(), IntValue(1))]
 
         second = session.eval_entry("let value = 2")
         assert second.ok, second.diagnostics
-        assert len(session._ir_base_frame) == 2
+        assert len(session._ir_base_frame) == initial_frame_size + 2
         assert session.bindings() == [("value", IntType(), IntValue(2))]
 
     def test_lambda_binding_initializes_repl_parameter_default(self) -> None:
@@ -4739,10 +4742,9 @@ class TestImports:
 
         std_dir = tmp_path / "std"
         std_dir.mkdir()
-        copyfile(
-            Path(__file__).resolve().parents[1] / "stdlib" / "std" / "core.agl",
-            std_dir / "core.agl",
-        )
+        source_std_dir = Path(__file__).resolve().parents[1] / "stdlib" / "std"
+        for name in ("core.agl", "option.agl"):
+            copyfile(source_std_dir / name, std_dir / name)
         config = std_dir / "config.agl"
         config.write_text(
             "import std/core using Option, Agent\n"
@@ -6382,7 +6384,15 @@ class TestDeferredStdlibResolution:
         std_dir = stdlib_root / "std"
         std_dir.mkdir(parents=True)
         real_stdlib = Path(__file__).resolve().parents[1] / "stdlib" / "std"
-        for name in ("core.agl", "config.agl", "fs.agl", "fs.py", "text.agl", "text.py"):
+        for name in (
+            "core.agl",
+            "option.agl",
+            "config.agl",
+            "fs.agl",
+            "fs.py",
+            "text.agl",
+            "text.py",
+        ):
             source = real_stdlib / name
             (std_dir / name).write_bytes(source.read_bytes())
         (stdlib_root / "package.toml").write_bytes(

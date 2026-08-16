@@ -296,14 +296,14 @@ are capability handles, not data.
 
 See [Functions](functions.md) for the declaration and call syntax.
 
-## Standard core types
+## Standard library types
 
-The following types are defined by `std/core`, which the automatic prelude
-opens in every loaded entry and library module except `std/core` itself.
+The automatic `std/core` prelude exposes the core types and re-exports
+`std/option`.
 
 ### `Option[T]`
 
-A generic enum for optional values:
+`std/option` defines the generic enum for optional values:
 
 ```text
 enum Option[T]
@@ -312,7 +312,16 @@ enum Option[T]
 ```
 
 `null` is only a value of type `json`; ordinary AgL types are not nullable.
-Use `Option[T]` when a value may be absent.
+Use `Option[T]` when a value may be absent. `Option` is available through the
+prelude, directly from `std/option`, or through `import std/core using Option`.
+
+Its methods are `map`, `and-then`, `filter`, `or-else`, `with-default`,
+`unwrap`, `is-some`, `is-none`, and `each`. `map` transforms a present value;
+`and-then` chains an operation that returns an `Option`; `filter` retains a
+present value only when its predicate succeeds; and `or-else` supplies an
+alternative. `with-default` returns the contained value or its argument,
+while `unwrap` returns the contained value or raises `UnwrapError`. `each`
+invokes its callback only for `Some`.
 
 ### `ExecResult`
 
@@ -534,7 +543,7 @@ under that name: an unannotated `exec` returns that program's
 `builtin exception` of that name. Such a value carries that declaration's own
 path, so it renders under that path and a `catch` clause naming the declaration
 matches it. A name the program declares no `builtin` for keeps the standard
-core type described in [Standard core types](#standard-core-types). A `catch`
+core type described in [Standard library types](#standard-library-types). A `catch`
 clause naming the standard declaration of a name the program declares its own
 `builtin` for is rejected, wherever in the program it is written, because the
 host raises the program's own declaration under that name instead.

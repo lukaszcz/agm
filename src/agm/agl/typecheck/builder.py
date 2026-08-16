@@ -45,8 +45,12 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from dataclasses import replace
 
-from agm.agl.ir.reserved_nominals import NO_DECL_ID, reserved_nominal_id
-from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
+from agm.agl.ir.reserved_nominals import (
+    NO_DECL_ID,
+    require_reserved_nominal_id,
+    reserved_nominal_id,
+)
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, STD_OPTION_ID, ModuleId
 from agm.agl.semantics.type_table import (
     BUILTIN_EXCEPTION_TYPE_DEFS,
     BUILTIN_PRELUDE_TYPE_DEFS,
@@ -62,6 +66,7 @@ from agm.agl.semantics.types import (
     Type,
     TypeVarType,
     reroot_type,
+    transform_type,
 )
 from agm.agl.syntax.nodes import (
     EnumDef,
@@ -111,18 +116,21 @@ def _decl_identity(
     """Return the declaration identity for a record/enum/exception declaration.
 
     The shipped standard library's own declaration of a reserved host-known
-    name (``ExecResult``, ``Option``, ``CastError``, ...), written at
-    ``std/core``'s top scope, denotes the same type the host mints directly
-    (see ``ir.reserved_nominals``), so it adopts that reserved identity
-    instead of its own AST node id — that is how the shipped standard
-    library's declaration comes to denote the same type as a program that
-    declares nothing of its own. Every other declaration — including a
-    ``builtin`` declaration anywhere other than ``std/core``'s root, and any
-    non-reserved name declared at ``std/core``'s root — is identified by its
-    own AST node id instead, which the loader keeps disjoint across a
-    program's modules, so declaration identities stay distinct program-wide.
+    name (``ExecResult``, ``Option``, ``CastError``, ...) at its canonical
+    module's top scope denotes the same type the host mints directly (see
+    ``ir.reserved_nominals``), so it adopts that reserved identity instead of
+    its own AST node id. ``Option`` is canonical at ``std/option``; the other
+    reserved names are canonical at ``std/core``. That is how the shipped
+    standard library's declaration comes to denote the same type as a program
+    that declares nothing of its own. Every other declaration — including a
+    ``builtin`` declaration outside its canonical module's root, and a
+    non-reserved name at either canonical root — is identified by its own AST
+    node id instead, which the loader keeps disjoint across a program's
+    modules, so declaration identities stay distinct program-wide.
     """
-    names_canonical_key = module_id == STD_CORE_ID and scope_path == ()
+    names_canonical_key = (module_id == STD_CORE_ID and scope_path == ()) or (
+        module_id == STD_OPTION_ID and scope_path == () and bare_name == "Option"
+    )
     reserved = reserved_nominal_id(bare_name) if names_canonical_key else None
     return node_id if reserved is None else reserved
 
@@ -556,12 +564,13 @@ class _TypeBuilder:
         """Check a ``builtin`` declaration's shape against its canonical definition.
 
         The canonical definitions in *expected_defs* are host-known shapes
-        keyed by bare name and written on the shipped standard library's own
-        module (``STD_CORE_ID``), indifferent to where or in which module the
+        keyed by bare name and written in their owning shipped-standard-library
+        module (``std/core`` for prelude types and exceptions, ``std/option``
+        for ``Option``), indifferent to where or in which module the
         declaration sits: a scoped ``builtin`` declaration in any module names
-        the same host type as ``std/core``'s own root one and must match the
-        same shape, just at a different nominal path and (unless it IS
-        ``std/core``) a different declaring module. The comparison therefore
+        the same host type as its canonical module's root declaration and must
+        match the same shape, just at a different nominal path and (unless it
+        IS at that root) a different declaring module. The comparison therefore
         re-roots *typedef* onto that canonical frame (:meth:`_reroot_typedef`)
         before comparing — not just its own top-level ``scope_path``/
         ``module_id`` (the two fields *expected* to differ), but also every
@@ -583,22 +592,30 @@ class _TypeBuilder:
             return
         bare_name = _bare_name(stmt.name)
         expected = expected_defs[bare_name]
-        if self._reroot_typedef(typedef, base_type) != expected:
+        if (
+            self._reroot_typedef(typedef, base_type, canonical_module=expected.module_id)
+            != expected
+        ):
             raise AglTypeError(
                 f"Builtin type '{stmt.name}' has an invalid definition.",
                 span=stmt.span,
             )
 
     @staticmethod
-    def _reroot_typedef(typedef: TypeDef, base_type: ExceptionType | None) -> TypeDef:
-        """Re-root *typedef* onto the canonical (``std/core``) frame, for comparison.
+    def _reroot_typedef(
+        typedef: TypeDef,
+        base_type: ExceptionType | None,
+        *,
+        canonical_module: ModuleId,
+    ) -> TypeDef:
+        """Re-root *typedef* onto its canonical module frame, for comparison.
 
         *typedef.scope_path* is dropped and *typedef.module_id* is mapped onto
-        ``STD_CORE_ID`` (the two fields a ``builtin`` declaration is always
+        *canonical_module* (the two fields a ``builtin`` declaration is always
         expected to differ in from the canonical shape) — always, even when
         the declared scope path is already empty, since a root-level
-        declaration outside ``std/core`` (e.g. one in the entry module, used
-        when a program loads without the standard library) still needs its
+        declaration outside the canonical module (e.g. one in the entry module,
+        used when a program loads without the standard library) still needs its
         module mapped. The same scope-path stripping and module mapping is
         also applied, via :func:`~agm.agl.semantics.types.reroot_type`, to
         every nominal reference embedded in its fields and variant fields:
@@ -613,8 +630,8 @@ class _TypeBuilder:
         is the ORIGINAL resolved ``ExceptionType`` handle *typedef.base* was
         minted from (``None`` exactly when *typedef.base* is ``None``), which
         carries the module/scope path/name :func:`reroot_type` needs. Every
-        canonical shape spells its base at ``std/core``'s root, so only a
-        handle that re-roots onto that exact frame can name one: its
+        canonical exception shape spells its base at ``std/core``'s root, so
+        only a handle that re-roots onto that exact frame can name one: its
         ``decl_id`` is then read back off (the reserved identity for a
         reserved name), while a handle left at another module or another
         scope path names a different declaration and is normalized to
@@ -626,10 +643,25 @@ class _TypeBuilder:
         """
         prefix = typedef.scope_path
         declaring_module = typedef.module_id
-        remap = (declaring_module, STD_CORE_ID)
+        remap = (declaring_module, canonical_module)
 
         def _reroot(t: Type) -> Type:
-            return reroot_type(t, prefix, remap_module=remap)
+            rerooted = reroot_type(t, prefix, remap_module=remap)
+            if canonical_module != STD_CORE_ID:
+                return rerooted
+
+            def move_option_to_its_module(nested: Type) -> Type:
+                if isinstance(nested, EnumType) and (
+                    nested.name == "Option" and nested.module_id == STD_CORE_ID
+                ):
+                    return replace(
+                        nested,
+                        module_id=STD_OPTION_ID,
+                        decl_id=require_reserved_nominal_id("Option"),
+                    )
+                return nested
+
+            return transform_type(rerooted, move_option_to_its_module)
 
         fields = tuple((name, _reroot(t)) for name, t in typedef.fields)
         variants = tuple(
@@ -641,13 +673,13 @@ class _TypeBuilder:
             rerooted_base = _reroot(base_type)
             assert isinstance(rerooted_base, ExceptionType)
             names_canonical_frame = (
-                rerooted_base.module_id == STD_CORE_ID and rerooted_base.scope_path == ()
+                rerooted_base.module_id == canonical_module and rerooted_base.scope_path == ()
             )
             base = rerooted_base.decl_id if names_canonical_frame else NO_DECL_ID
         return replace(
             typedef,
             scope_path=(),
-            module_id=STD_CORE_ID,
+            module_id=canonical_module,
             fields=fields,
             variants=variants,
             base=base,

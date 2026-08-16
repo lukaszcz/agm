@@ -19,7 +19,7 @@ from agm.agl.ir.reserved_nominals import (
     RESERVED_NOMINAL_NAMES,
     reserved_nominal_id,
 )
-from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, STD_OPTION_ID, ModuleId
 from agm.agl.repl import ReplSession
 from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.analyses import (
@@ -1746,15 +1746,15 @@ class TestBuiltinSeeding:
                     vname: dict(vfields) for vname, vfields in expected.variants
                 }
 
-    def test_generic_option_seeded_under_std_core(self) -> None:
+    def test_generic_option_seeded_under_std_option(self) -> None:
         table = create_seeded_type_table()
-        typedef = table.get(STD_CORE_ID, "Option")
+        typedef = table.get(STD_OPTION_ID, "Option")
         assert typedef is not None
         assert typedef.type_params == ("T",)
         handle = EnumType(
             name="Option",
             type_args=(TextType(),),
-            module_id=STD_CORE_ID,
+            module_id=STD_OPTION_ID,
             decl_id=typedef.decl_node_id,
         )
         result = table.enum_variants(handle)
@@ -3905,18 +3905,17 @@ class TestDeclarationIdentity:
         self, tmp_path: Path
     ) -> None:
         """Every reserved host-known name the shipped standard library declares
-        itself resolves, in ``std/core``'s own namespace, to the fixed reserved
+        itself resolves in its standard-library module to the fixed reserved
         identity — so a handle the host mints without any declaration in hand
         names the same declaration a stdlib-loading program resolves."""
         checked = _check_program(tmp_path, {"entry": "()"})
-        core = checked.modules[STD_CORE_ID]
-        generics = core.type_env.all_generic_types()
         declared_reserved = set(RESERVED_NOMINAL_NAMES) - COMPATIBILITY_PRELUDE_TYPE_NAMES
         assert "Option" in declared_reserved
         for name in sorted(declared_reserved):
-            handle = core.type_env.get_type(name)
+            module = checked.modules[STD_OPTION_ID if name == "Option" else STD_CORE_ID]
+            handle = module.type_env.get_type(name)
             if handle is None:
                 # Generic declarations register a template, not a bare handle.
-                handle = generics[name].template
+                handle = module.type_env.all_generic_types()[name].template
             assert isinstance(handle, (RecordType, EnumType, ExceptionType))
             assert handle.decl_id == reserved_nominal_id(name), name

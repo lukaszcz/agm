@@ -1,9 +1,7 @@
 import std/config
+import std/option using Option
 
-builtin
-enum Option[T] =
-  | None
-  | Some(value: T)
+export std/option
 
 builtin
 record ExecResult

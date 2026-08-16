@@ -25,7 +25,7 @@ nothing from ``agm`` (see ``tests/test_agl_dependencies.py``), matching
 The reserved names are exactly: every built-in exception name
 (``semantics.types.BUILTIN_EXCEPTION_NAMES``), every built-in prelude type
 name (``semantics.types.BUILTIN_PRELUDE_TYPE_NAMES``), plus ``"Option"`` —
-``std/core::Option`` is an ordinary enum declaration, but the host mints
+``std/option::Option`` is an ordinary enum declaration, but the host mints
 ``Option`` values directly (``runtime/option.py``), so it needs a fixed
 identity the same way a built-in does. This module cannot import
 ``semantics`` (see above), so the list is spelled out literally here; a
@@ -83,7 +83,7 @@ RESERVED_NOMINAL_NAMES: tuple[str, ...] = (
     "OutputContract",
     "OutputContractOption",
     "AgentRequest",
-    # Host-minted std/core::Option (see runtime/option.py).
+    # Host-minted std/option::Option (see runtime/option.py).
     "Option",
 )
 

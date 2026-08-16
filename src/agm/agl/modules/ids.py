@@ -137,13 +137,17 @@ def spell_declaration(
 #: via :meth:`ModuleId.from_path`.  Use ``module_id.is_entry`` to test.
 ENTRY_ID: ModuleId = ModuleId(segments=(_ENTRY_SEGMENT,))
 
-#: Logical module id for the shipped core standard library.  Every built-in
-#: type and function (``ExecResult``, every built-in exception, ``exec``,
-#: ``ask``, ...) is declared here (``stdlib/std/core.agl``); a program that
-#: declares nothing of its own for a built-in name is answered with this
-#: module's own identity for it (see
-#: :class:`~agm.agl.ir.builtin_nominals.BuiltinNominals`).
+#: Logical module id for the shipped core standard library. Core built-in
+#: types and functions (``ExecResult``, every built-in exception, ``exec``,
+#: ``ask``, ...) are declared here (``stdlib/std/core.agl``); ``Option`` is
+#: instead declared by :data:`STD_OPTION_ID`. A program that declares nothing
+#: of its own for a built-in name is answered with the owning module's identity
+#: (see :class:`~agm.agl.ir.builtin_nominals.BuiltinNominals`).
 STD_CORE_ID: ModuleId = ModuleId(segments=("std", "core"))
+
+#: Logical module id for the shipped Option standard library
+#: (``stdlib/std/option.agl``).
+STD_OPTION_ID: ModuleId = ModuleId(segments=("std", "option"))
 
 #: Logical module id for the shipped engine-settings standard library
 #: (``std/config``), which declares the engine keys as ``builtin var`` bindings.

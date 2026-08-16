@@ -797,7 +797,8 @@ def _load_into_graph(
     so no module is re-resolved when SCCs are computed.
 
     Returns the assembled :class:`ModuleGraph`, the next free node id, and the
-    dict of modules loaded during this call (those not in *seed_modules*).
+    dict of modules loaded during this call (those not in *seed_modules*), after
+    their source infix chains are resolved to match the returned graph.
     """
     modules: dict[ModuleId, LoadedModule] = dict(seed_modules)
     modules[ENTRY_ID] = entry_loaded
@@ -891,7 +892,9 @@ def _load_into_graph(
         adjacency={mid: tuple(targets) for mid, targets in adj.items()},
         roots=roots,
     )
-    return _resolve_graph_infix(graph, session_infix), next_id, newly_loaded
+    resolved_graph = _resolve_graph_infix(graph, session_infix)
+    resolved_newly_loaded = {mid: resolved_graph.modules[mid] for mid in newly_loaded}
+    return resolved_graph, next_id, resolved_newly_loaded
 
 
 def entry_source_id(

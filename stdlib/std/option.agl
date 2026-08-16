@@ -1,0 +1,48 @@
+builtin
+enum Option[T] =
+  | None
+  | Some(value: T)
+
+exception UnwrapError extends Exception()
+
+def Option::map[T, U](self, f: (T) -> U) -> Option[U] =
+  case self of
+    | Option::None => Option::None
+    | Option::Some(value) => Option::Some(value = f(value))
+
+def Option::and-then[T, U](self, f: (T) -> Option[U]) -> Option[U] =
+  case self of
+    | Option::None => Option::None
+    | Option::Some(value) => f(value)
+
+def Option::filter[T](self, p: (T) -> bool) -> Option[T] =
+  case self of
+    | Option::None => Option::None
+    | Option::Some(value) => (if p(value) => self else => Option::None)
+
+def Option::or-else[T](self, other: Option[T]) -> Option[T] =
+  case self of
+    | Option::None => other
+    | Option::Some(_) => self
+
+def Option::with-default[T](self, x: T) -> T =
+  case self of
+    | Option::None => x
+    | Option::Some(value) => value
+
+def Option::unwrap[T](self) -> T =
+  case self of
+    | Option::None => raise UnwrapError(message = "Option has no value")
+    | Option::Some(value) => value
+
+def Option::is-some[T](self) -> bool =
+  case self of
+    | Option::None => false
+    | Option::Some(_) => true
+
+def Option::is-none[T](self) -> bool = not self.is-some()
+
+def Option::each[T](self, f: (T) -> unit) -> unit =
+  case self of
+    | Option::None => ()
+    | Option::Some(value) => f(value)

@@ -3426,7 +3426,7 @@ class TestConstructorBindings:
         """The enum name itself is NOT a value binding — only its variants are.
 
         default_stdlib=False: this program declares its own ``Option``, which
-        collides with std/core's own ``Option[T]`` under the default import.
+        collides with the default prelude's ``std/option::Option[T]``.
         The point of this test is purely local ("does a bare reference to a
         locally-declared enum's own name resolve as a value"), independent of
         any module graph, so nothing else needs to be in scope.

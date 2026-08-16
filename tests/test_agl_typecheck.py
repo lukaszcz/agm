@@ -6200,7 +6200,7 @@ class TestConstructorRefDispatch:
     def test_single_field_variant_positional(self) -> None:
         # Single-field enum variant with no markers → STANDARD zone → positional works.
         # Named "Item"/"Payload" (not "Option"/"Some") so the bare constructor is
-        # unambiguous against std/core's own Option::Some.
+        # unambiguous against std/option's Option::Some.
         r = accept_type("enum Item\n  | Payload(value: int)\n  | Empty\nPayload(42)")
         assert r.resolved.program is not None
 
@@ -6952,7 +6952,7 @@ class TestHostContractBuiltinIdentity:
     def test_scoped_agent_request_naming_a_scoped_option_rejected(self) -> None:
         """With the standard library loaded, a scoped ``AgentRequest`` whose
         ``target_type``/``format_instructions``/``previous_error`` fields
-        resolve a SIBLING scoped ``Option`` (shadowing ``std/core::Option``
+        resolve a SIBLING scoped ``Option`` (shadowing ``std/option::Option``
         the same way a sibling scoped ``Agent`` shadows the canonical one)
         is rejected the same way, even though its ``agent`` field -- nothing
         shadows ``Agent`` here -- still resolves the canonical identity:

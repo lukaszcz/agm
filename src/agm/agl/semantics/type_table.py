@@ -60,7 +60,7 @@ from typing import TYPE_CHECKING, Literal, assert_never, cast
 
 from agm.agl.ir.reserved_nominals import NO_DECL_ID
 from agm.agl.ir.reserved_nominals import require_reserved_nominal_id as _reserved_id
-from agm.agl.modules.ids import STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import STD_CORE_ID, STD_OPTION_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.types import (
     ArrayType,
@@ -1504,7 +1504,7 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
                 EnumType(
                     name="Option",
                     type_args=(TextType(),),
-                    module_id=STD_CORE_ID,
+                    module_id=STD_OPTION_ID,
                     decl_id=_reserved_id("Option"),
                 ),
             ),
@@ -1513,7 +1513,7 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
                 EnumType(
                     name="Option",
                     type_args=(TextType(),),
-                    module_id=STD_CORE_ID,
+                    module_id=STD_OPTION_ID,
                     decl_id=_reserved_id("Option"),
                 ),
             ),
@@ -1522,7 +1522,7 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
                 EnumType(
                     name="Option",
                     type_args=(JsonType(),),
-                    module_id=STD_CORE_ID,
+                    module_id=STD_OPTION_ID,
                     decl_id=_reserved_id("Option"),
                 ),
             ),
@@ -1532,7 +1532,7 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
                 EnumType(
                     name="Option",
                     type_args=(TextType(),),
-                    module_id=STD_CORE_ID,
+                    module_id=STD_OPTION_ID,
                     decl_id=_reserved_id("Option"),
                 ),
             ),
@@ -1543,7 +1543,7 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
 
 BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = _with_reserved_ids(_PRELUDE_SHAPES)
 
-# Generic ``Option`` template under ``STD_CORE_ID`` (type parameter ``T``,
+# Generic ``Option`` template under ``STD_OPTION_ID`` (type parameter ``T``,
 # variants ``None``/``Some(value: T)``), matching the shape of the concrete
 # ``Option[text]``/``Option[json]`` prelude constants, so a program loaded
 # without the standard library can still resolve ``enum_variants`` on
@@ -1551,7 +1551,7 @@ BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = _with_reserved_ids(_PRELUDE_S
 OPTION_TYPE_DEF = TypeDef(
     kind="enum",
     name="Option",
-    module_id=STD_CORE_ID,
+    module_id=STD_OPTION_ID,
     type_params=("T",),
     variants=(
         ("None", ()),

@@ -37,6 +37,7 @@ from tests.agl.module_graph import resolve_and_check_inline_entry, resolve_inlin
 _ROOTS = RootSet(frozenset({Path(__file__).resolve().parents[1] / "stdlib"}))
 _CAPS = HostCapabilities()
 _STD_CORE = Path(__file__).resolve().parents[1] / "stdlib" / "std" / "core.agl"
+_STD_OPTION = Path(__file__).resolve().parents[1] / "stdlib" / "std" / "option.agl"
 
 
 def _check(source: str, *, default_stdlib: bool = True) -> None:
@@ -201,14 +202,30 @@ def test_std_core_declares_every_public_builtin() -> None:
         item.name for item in program.body.items if isinstance(item, FuncDef) and item.is_builtin
     }
 
-    # ``Option`` is validated against its own canonical generic template
-    # (``semantics.type_table.OPTION_TYPE_DEF``), registered separately from
-    # ``BUILTIN_PRELUDE_TYPES`` (see ``create_seeded_type_table``), so it is
-    # declared ``builtin`` in ``std/core`` without appearing in that table.
-    public_prelude = set(BUILTIN_PRELUDE_TYPES) - set(COMPATIBILITY_PRELUDE_TYPE_NAMES) | {"Option"}
+    public_prelude = set(BUILTIN_PRELUDE_TYPES) - set(COMPATIBILITY_PRELUDE_TYPE_NAMES)
     assert records | enums == public_prelude
     assert exceptions == set(BUILTIN_EXCEPTIONS)
     assert functions == set(BUILTIN_CALL_NAMES)
+
+
+def test_std_option_declares_the_builtin_option_and_keeps_its_host_identity() -> None:
+    from agm.agl.ir.ids import NominalId
+    from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
+    from agm.agl.parser import parse_program
+    from tests.agl.ir_harness import lower_ir
+
+    program = parse_program(_STD_OPTION.read_text())
+    from agm.agl.syntax.nodes import EnumDef
+
+    enums = {
+        item.name for item in program.body.items if isinstance(item, EnumDef) and item.is_builtin
+    }
+    assert enums == {"Option"}
+
+    executable = lower_ir("program def main() -> unit = ()\n", caps=_CAPS)
+    option = executable.builtin_nominals.resolve("Option")
+    assert option.nominal == NominalId(require_reserved_nominal_id("Option"))
+    assert executable.nominals[option.nominal].module_id == ModuleId.from_path("std/option")
 
 
 def test_unknown_builtin_type_is_rejected() -> None:

@@ -434,6 +434,52 @@ def test_pipeline_check_only_rejects_ambiguous_default_program() -> None:
     ]
 
 
+def test_direct_std_option_import_runs_without_the_automatic_prelude(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An explicit ``std/option`` import remains sufficient under ``--no-stdlib``."""
+    from agm.agl import PipelineDriver
+    from agm.agl.modules.roots import RootSet
+
+    roots = RootSet(roots=frozenset({REPO_STDLIB_ROOT}))
+    result = _run_source_entry(
+        PipelineDriver(),
+        "import std/core using print\n"
+        "import std/option using Option\n"
+        "program def main() -> unit = print(Option::Some(value = 2).map(fn(x: int) => x + 1))\n",
+        roots=roots,
+        default_stdlib=False,
+    )
+
+    assert list(result.diagnostics) == []
+    assert result.error is None
+    assert capsys.readouterr().out == "Option::Some(value = 3)\n"
+
+
+def test_std_core_option_reexport_preserves_nominal_identity(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The re-export and direct module name one interoperable ``Option`` type."""
+    from agm.agl import PipelineDriver
+    from agm.agl.modules.roots import RootSet
+
+    roots = RootSet(roots=frozenset({REPO_STDLIB_ROOT}))
+    result = _run_source_entry(
+        PipelineDriver(),
+        "import std/core using Option as CoreOption, print\n"
+        "import std/option using Option\n"
+        "program def main() -> unit =\n"
+        "  let value: CoreOption[int] = Option::Some(value = 3)\n"
+        "  print(value.with-default(0))\n",
+        roots=roots,
+        default_stdlib=False,
+    )
+
+    assert list(result.diagnostics) == []
+    assert result.error is None
+    assert capsys.readouterr().out == "3\n"
+
+
 def test_qualified_std_core_print_still_works(capsys: pytest.CaptureFixture[str]) -> None:
     """A fully qualified ``std/core::print(...)`` call still runs, exactly as
     the bare form does — a built-in call is classified once its callee
@@ -462,14 +508,14 @@ def _scoped_stdlib_root(tmp_path: Path) -> Path:
     core_source = (
         (REPO_STDLIB_ROOT / "std" / "core.agl")
         .read_text(encoding="utf-8")
-        .replace("import std/config\n\n", "")
+        .replace("import std/config\n", "")
         .replace("std/config::default-agent", 'AgentClaude("sonnet", "medium")')
     )
     scoped_stdlib_root = tmp_path / "scoped_stdlib"
-    (scoped_stdlib_root / "std").mkdir(parents=True)
-    (scoped_stdlib_root / "std" / "core.agl").write_text(
-        f"scope Std\n{core_source}end Std\n", encoding="utf-8"
-    )
+    std_dir = scoped_stdlib_root / "std"
+    std_dir.mkdir(parents=True)
+    (std_dir / "core.agl").write_text(f"scope Std\n{core_source}end Std\n", encoding="utf-8")
+    (std_dir / "option.agl").write_bytes((REPO_STDLIB_ROOT / "std" / "option.agl").read_bytes())
     return scoped_stdlib_root
 
 
@@ -506,11 +552,10 @@ def test_scoped_stdlib_arrangement_runs_end_to_end(
         result = _run_source_entry(
             runtime, program, roots=RootSet(roots=frozenset({scoped_stdlib_root}))
         )
-    shell.assert_complete()
-
     assert list(result.diagnostics) == [], (
         f"unexpected static diagnostics: {' | '.join(d.message for d in result.diagnostics)}"
     )
+    shell.assert_complete()
     assert capsys.readouterr().out == "hi\n"
     assert result.error is not None, "expected the uncaught scoped RangeError"
     assert result.error.type_name == "Std::RangeError"

@@ -18,7 +18,7 @@ from agm.agl.modules.errors import (
     ModuleNotFound,
     PackageImportVisibilityError,
 )
-from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, STD_OPTION_ID, ModuleId
 from agm.agl.modules.loader import LoadedModule, ModuleGraph, build_repl_graph, load_graph
 from agm.agl.modules.roots import RootSet, assemble_roots
 from agm.agl.syntax.nodes import ImportDecl
@@ -166,9 +166,10 @@ class TestGraphBuild:
         root = tmp_path / "r"
         root.mkdir()
         graph = load_graph("let x = 1", entry_path=None, roots=_roots(root))
-        assert len(graph.modules) == 3
+        assert len(graph.modules) == 4
         assert ENTRY_ID in graph.modules
         assert STD_CORE_ID in graph.modules
+        assert STD_OPTION_ID in graph.modules
         assert ModuleId.from_path("std/config") in graph.modules
         assert graph.modules[STD_CORE_ID].path == (_REPO_STDLIB_ROOT / "std" / "core.agl").resolve()
 
@@ -513,8 +514,8 @@ class TestCycles:
         graph = load_graph("import a", entry_path=None, roots=_roots(root))
         assert ModuleId.from_path("a") in graph.modules
         assert ModuleId.from_path("b") in graph.modules
-        # Exactly 4 modules: std/core + entry + a + b
-        assert len(graph.modules) == 5
+        # std/core, std/option, std/config, entry, a, and b.
+        assert len(graph.modules) == 6
 
     def test_longer_cycle_terminates(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
@@ -523,7 +524,7 @@ class TestCycles:
         _write_module(root, "y", "import z")
         _write_module(root, "z", "import x")
         graph = load_graph("import x", entry_path=None, roots=_roots(root))
-        assert len(graph.modules) == 6  # std/core + std/config + entry + x + y + z
+        assert len(graph.modules) == 7  # std/core, std/option, std/config, entry, x, y, and z
 
     def test_cycle_nodes_linked_in_sccs(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
@@ -1101,6 +1102,7 @@ class TestBuildReplGraph:
         assert STD_CORE_ID in graph.modules
         assert new_modules == {
             STD_CORE_ID: graph.modules[STD_CORE_ID],
+            STD_OPTION_ID: graph.modules[STD_OPTION_ID],
             ModuleId.from_path("std/config"): graph.modules[ModuleId.from_path("std/config")],
         }
 

@@ -1420,7 +1420,8 @@ class TypeEnvironment:
     def _live_use_generic_key(self, name: NameAtom, span: SourceSpan | None) -> DeclKey | None:
         """Resolve a generic identity from retained local-use contributions."""
         layer = self._scope_nodes.get(self._type_scope)
-        assert layer is not None
+        if layer is None:
+            return None
         keys = {
             (ref.module_id, ref.scope_path, ref.name)
             for contribution in layer.local_use_contributions

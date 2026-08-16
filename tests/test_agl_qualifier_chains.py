@@ -474,6 +474,32 @@ def test_use_target_local_module_ambiguity_requires_an_anchor(tmp_path: Path) ->
     )
 
 
+@pytest.mark.parametrize(
+    "use_decl",
+    ("use lib as L", "use lib::* hiding Flag::Ready"),
+)
+def test_use_aliases_and_hiding_do_not_leak_enum_variants(tmp_path: Path, use_decl: str) -> None:
+    with pytest.raises(AglScopeError):
+        _entry_resolution(
+            tmp_path,
+            {
+                "entry": f"import lib\n{use_decl}\ndef selected() -> Flag = Ready",
+                "lib": "enum Flag\n  | Ready\n  | Waiting",
+            },
+        )
+
+
+def test_import_hiding_does_not_reintroduce_bare_enum_variant(tmp_path: Path) -> None:
+    with pytest.raises(AglScopeError):
+        _entry_resolution(
+            tmp_path,
+            {
+                "entry": "import lib::* hiding Flag::Ready\ndef selected() -> Flag = Ready",
+                "lib": "enum Flag\n  | Ready\n  | Waiting",
+            },
+        )
+
+
 def test_use_accepts_one_facade_scope_with_multiple_defining_modules(tmp_path: Path) -> None:
     _entry_resolution(
         tmp_path,

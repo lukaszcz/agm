@@ -1626,15 +1626,22 @@ class _Resolver:
         the same policy ``unqualified`` already applies at the module root --
         rather than raising here.
         """
-        for atom, qnames in self._import_env.decl_bare.get(decl.node_id, {}).items():
+        bare = self._import_env.decl_bare.get(decl.node_id, {})
+        selected_qnames = frozenset(qname for qnames in bare.values() for qname in qnames)
+        for atom, qnames in bare.items():
             for qname in qnames:
                 ref, constructor = self._cross_module_member_ref(atom, qname, decl.span)
                 self._current_scope().contribute_bare(atom, ref)
                 if constructor is not None:
                     self._current_scope().contribute_bare_constructor(atom, constructor)
-                self._contribute_regional_enum_variants(qname, decl.span)
+                if isinstance(atom, str):
+                    self._contribute_regional_enum_variants(
+                        qname, decl.span, selected_qnames=selected_qnames
+                    )
 
-    def _contribute_regional_enum_variants(self, qname: QName, span: SourceSpan) -> None:
+    def _contribute_regional_enum_variants(
+        self, qname: QName, span: SourceSpan, *, selected_qnames: Collection[QName]
+    ) -> None:
         """Expand a bare-exposed enum type into its own bare variants, region-scoped.
 
         A bare enum *type* name alone does not make its variants callable or
@@ -1656,6 +1663,8 @@ class _Resolver:
             if isinstance(self._all_public_types.get((module, variant.name)), ExceptionDef):
                 continue
             variant_qname = (module, _bare_atom((*owner_path, variant.name)))
+            if variant_qname not in selected_qnames:
+                continue
             ref, constructor = self._cross_module_member_ref(variant.name, variant_qname, span)
             scope.contribute_bare(variant.name, ref)
             # Every enum variant has a constructor: `_cross_module_constructor_refs`
@@ -1861,10 +1870,15 @@ class _Resolver:
             scope.contribute_bare(exposed, ref)
             if constructor is not None:
                 scope.contribute_bare_constructor(exposed, constructor)
-            self._contribute_regional_enum_variants(source, decl.span)
 
+        selected_qnames = frozenset(cast(QName, source) for source in selected.values())
         for exposed, source in selected.items():
-            contribute(exposed, cast(QName, source))
+            qname = cast(QName, source)
+            contribute(exposed, qname)
+            if isinstance(exposed, str):
+                self._contribute_regional_enum_variants(
+                    qname, decl.span, selected_qnames=selected_qnames
+                )
         for exposed, source in self._use_renamed_members(decl, members):
             contribute(exposed, source)
 

@@ -177,6 +177,9 @@ def _build_cross_module_constructor_candidates(
     """
     candidates: dict[str, list[ConstructorRef]] = {}
     type_names: set[str] = set()
+    exposed_qnames = frozenset(
+        qname for qnames in import_env.unqualified.values() for qname in qnames
+    )
     seen_candidates: set[tuple[str, ConstructorRef]] = set()
 
     def add_candidate(name: str, ref: ConstructorRef) -> None:
@@ -235,6 +238,9 @@ def _build_cross_module_constructor_candidates(
                     if (mid, variant.name) in all_public_types and isinstance(
                         all_public_types[(mid, variant.name)], ExceptionDef
                     ):
+                        continue
+                    variant_qname = (mid, _atom((*src_path, variant.name)))
+                    if variant_qname not in exposed_qnames:
                         continue
                     cref = ConstructorRef(
                         owner_name=decl.name,

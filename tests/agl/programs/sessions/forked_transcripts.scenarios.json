@@ -1,0 +1,82 @@
+{
+  "scenarios": [
+    {
+      "name": "claude_forked_session_diverges_after_a_shared_prefix",
+      "params": {"backend": 0, "fork_before_asks": false},
+      "agents": {"ask": {"responses": ["shared", "parent", "child"]}},
+      "expect": {
+        "calls": {"ask": 0},
+        "sessions": [{"agent": "ask", "tag": "session-1", "opened": true, "closed": true, "parent": null}, {"agent": "ask", "tag": "session-2", "opened": true, "closed": true, "parent": "session-1"}],
+        "session_prompts": [
+          {"agent": "ask", "session": "session-1", "call": 0, "equals": "shared prefix"},
+          {"agent": "ask", "session": "session-1", "call": 1, "follow_up": {"equals": "parent continuation"}},
+          {"agent": "ask", "session": "session-2", "call": 0, "equals": "child continuation"}
+        ],
+        "session_operations": [{"agent": "ask", "session": "session-1", "operation": "fork", "outcome": "success"}]
+      }
+    },
+    {
+      "name": "pi_cli_forked_session_diverges_after_a_shared_prefix",
+      "params": {"backend": 1, "fork_before_asks": false},
+      "agents": {"pi": {"responses": ["shared", "parent", "child"]}},
+      "expect": {
+        "calls": {"pi": 0},
+        "sessions": [{"agent": "pi", "tag": "session-1", "opened": true, "closed": true, "parent": null}, {"agent": "pi", "tag": "session-2", "opened": true, "closed": true, "parent": "session-1"}],
+        "session_prompts": [
+          {"agent": "pi", "session": "session-1", "call": 0, "equals": "shared prefix"},
+          {"agent": "pi", "session": "session-1", "call": 1, "follow_up": {"equals": "parent continuation"}},
+          {"agent": "pi", "session": "session-2", "call": 0, "equals": "child continuation"}
+        ],
+        "session_operations": [{"agent": "pi", "session": "session-1", "operation": "fork", "outcome": "success"}]
+      }
+    },
+    {
+      "name": "pi_rpc_forked_session_diverges_after_a_shared_prefix",
+      "params": {"backend": 2, "fork_before_asks": false},
+      "agents": {"pi": {"responses": ["shared", "parent", "child"]}},
+      "expect": {
+        "calls": {"pi": 0},
+        "sessions": [{"agent": "pi", "tag": "session-1", "opened": true, "closed": true, "parent": null}, {"agent": "pi", "tag": "session-2", "opened": true, "closed": true, "parent": "session-1"}],
+        "session_prompts": [
+          {"agent": "pi", "session": "session-1", "call": 0, "equals": "shared prefix"},
+          {"agent": "pi", "session": "session-1", "call": 1, "follow_up": {"equals": "parent continuation"}},
+          {"agent": "pi", "session": "session-2", "call": 0, "equals": "child continuation"}
+        ],
+        "session_operations": [{"agent": "pi", "session": "session-1", "operation": "fork", "outcome": "success"}]
+      }
+    },
+    {
+      "name": "claude_allows_a_native_fork_before_any_prompt",
+      "params": {"backend": 0, "fork_before_asks": true},
+      "agents": {"ask": {"responses": ["child", "parent"]}},
+      "expect": {
+        "calls": {"ask": 0},
+        "sessions": [{"agent": "ask", "tag": "session-1", "opened": true, "closed": true, "parent": null}, {"agent": "ask", "tag": "session-2", "opened": true, "closed": true, "parent": "session-1"}],
+        "session_prompts": [{"agent": "ask", "session": "session-1", "call": 0, "equals": "parent after empty fork"}, {"agent": "ask", "session": "session-2", "call": 0, "equals": "child after empty fork"}],
+        "session_operations": [{"agent": "ask", "session": "session-1", "operation": "fork", "outcome": "success"}]
+      }
+    },
+    {
+      "name": "pi_cli_allows_a_native_fork_before_any_prompt",
+      "params": {"backend": 1, "fork_before_asks": true},
+      "agents": {"pi": {"responses": ["child", "parent"]}},
+      "expect": {
+        "calls": {"pi": 0},
+        "sessions": [{"agent": "pi", "tag": "session-1", "opened": true, "closed": true, "parent": null}, {"agent": "pi", "tag": "session-2", "opened": true, "closed": true, "parent": "session-1"}],
+        "session_prompts": [{"agent": "pi", "session": "session-1", "call": 0, "equals": "parent after empty fork"}, {"agent": "pi", "session": "session-2", "call": 0, "equals": "child after empty fork"}],
+        "session_operations": [{"agent": "pi", "session": "session-1", "operation": "fork", "outcome": "success"}]
+      }
+    },
+    {
+      "name": "pi_rpc_allows_a_native_fork_before_any_prompt",
+      "params": {"backend": 2, "fork_before_asks": true},
+      "agents": {"pi": {"responses": ["child", "parent"]}},
+      "expect": {
+        "calls": {"pi": 0},
+        "sessions": [{"agent": "pi", "tag": "session-1", "opened": true, "closed": true, "parent": null}, {"agent": "pi", "tag": "session-2", "opened": true, "closed": true, "parent": "session-1"}],
+        "session_prompts": [{"agent": "pi", "session": "session-1", "call": 0, "equals": "parent after empty fork"}, {"agent": "pi", "session": "session-2", "call": 0, "equals": "child after empty fork"}],
+        "session_operations": [{"agent": "pi", "session": "session-1", "operation": "fork", "outcome": "success"}]
+      }
+    }
+  ]
+}

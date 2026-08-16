@@ -1,0 +1,50 @@
+# Each selected backend reports its native session operations and capability failures.
+param backend: int
+
+def selected_agent(backend: int) -> Agent =
+  if
+    | backend == 0 => AgentClaude("model", "high")
+    | backend == 1 => AgentCodex("model", "high")
+    | backend == 2 => AgentPi("pi", "model", "high")
+    | backend == 3 => AgentPi("rpc", "model", "high")
+    | else => AgentCommand("command \%{SESSION_ID}")
+
+program def main() -> unit =
+  let agent = selected_agent(backend)
+  let session: Session = if
+    | backend == 2 => Session::open(agent, transport = Some(SessionTransport::Cli), name = "initial")
+    | backend == 0 or backend == 3 => Session::open(agent, name = "initial")
+    | else => Session::open(agent)
+  if backend == 1 or backend == 4 =>
+    try
+      let _ = Session::open(agent, name = "unsupported")
+    catch SessionError as error =>
+      print error.operation
+      if error.message != "" => print "message"
+  session.ask("before reset")
+  session.reset()
+  session.ask("after reset")
+  try
+    session.compact("keep decisions")
+  catch SessionError as error =>
+    print error.operation
+    if error.message != "" => print "message"
+  try
+    let child = session.fork()
+    child.close()
+  catch SessionError as error =>
+    print error.operation
+    if error.message != "" => print "message"
+  try
+    session.set-name("renamed")
+  catch SessionError as error =>
+    print error.operation
+    if error.message != "" => print "message"
+  try
+    let stats = session.stats()
+    print "%{stats.input-tokens}/%{stats.output-tokens}/%{stats.cost}/%{stats.context-percent}"
+  catch SessionError as error =>
+    print error.operation
+    if error.message != "" => print "message"
+  session.close()
+  session.close()

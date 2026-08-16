@@ -222,6 +222,36 @@ def test_spawn_prompt_and_lifecycle_protocol(
     backend.close()
 
 
+def test_clone_immediately_after_open_keeps_parent_and_child_live(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub = RpcStub(tmp_path, monkeypatch)
+    backend = open_backend()
+
+    child = backend.fork()
+
+    starts = stub.wait_for("starts.jsonl", 2)
+    parent_argv, replacement_argv = (record["argv"] for record in starts)
+    assert parent_argv == [
+        "--mode",
+        "rpc",
+        "--name",
+        "named",
+        "--provider",
+        "provider",
+        "--model",
+        "model",
+        "--thinking",
+        "high",
+    ]
+    assert replacement_argv[-2:] == ["--session-id", "root"]
+    assert command_types(stub) == ["get_state", "get_state", "clone", "get_state"]
+    assert child.ask(SessionAskRequest("child")).content == "answer"
+    assert backend.ask(SessionAskRequest("parent")).content == "answer"
+    backend.close()
+    child.close()
+
+
 def test_clone_snapshots_current_branch_and_keeps_both_children_live(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -349,6 +379,26 @@ def test_process_death_retains_stderr_diagnostics(
     assert raised.value.stderr_tail == "useful diagnostic"
     with pytest.raises(SessionHostError):
         backend.ask(SessionAskRequest("again"))
+    backend.close()
+
+
+def test_process_death_between_asks_makes_later_operations_lifecycle_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    RpcStub(tmp_path, monkeypatch)
+    backend = open_backend()
+    assert backend.ask(SessionAskRequest("first")).content == "answer"
+    child = backend._child
+    assert child is not None
+    child.process.terminate()
+    child.process.wait(timeout=5)
+
+    with pytest.raises(SessionHostError) as compact_error:
+        backend.compact("")
+    assert compact_error.value.operation == "compact"
+    with pytest.raises(SessionHostError) as ask_error:
+        backend.ask(SessionAskRequest("second"))
+    assert ask_error.value.operation == "ask"
     backend.close()
 
 

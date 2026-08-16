@@ -203,41 +203,91 @@ def test_claude_delivers_compact_literal_and_fork_promptlessly_through_runner(
     assert isinstance(child, ClaudeCliSessionBackend)
 
 
-def test_pi_forks_at_fork_time_then_child_is_live_without_repeating_fork(
+def test_claude_forks_immediately_after_open_with_independent_child_continuation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     transport = CaptureTransport(
-        [CaptureOutcome("parent"), CaptureOutcome("forked"), CaptureOutcome("child")]
+        [
+            CaptureOutcome('{"session_id": "child"}'),
+            CaptureOutcome("child answer"),
+            CaptureOutcome("parent answer"),
+        ]
+    )
+    transport.install(monkeypatch)
+    parent = ClaudeCliSessionBackend()
+    _open(parent, AgentClaude("m", "t"), name="named")
+
+    child = parent.fork()
+    assert child.ask(SessionAskRequest("child follow-up")).content == "child answer"
+    assert parent.ask(SessionAskRequest("parent follow-up")).content == "parent answer"
+
+    parent_id = transport.calls[0][0][3]
+    assert parent_id != "child"
+    assert transport.calls[0] == (
+        [
+            "claude",
+            "-p",
+            "--resume",
+            parent_id,
+            "--fork-session",
+            "--output-format",
+            "json",
+            "--model",
+            "m",
+            "--effort",
+            "t",
+        ],
+        None,
+    )
+    _file_prompt_argv(
+        transport.calls[1][0],
+        [
+            "claude",
+            "-p",
+            "--resume",
+            "child",
+            "--model",
+            "m",
+            "--effort",
+            "t",
+        ],
+    )
+    _file_prompt_argv(
+        transport.calls[2][0],
+        [
+            "claude",
+            "-p",
+            "--session-id",
+            parent_id,
+            "-n",
+            "named",
+            "--model",
+            "m",
+            "--effort",
+            "t",
+        ],
+    )
+
+
+def test_pi_forks_immediately_after_open_then_child_is_live_without_repeating_fork(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = CaptureTransport(
+        [CaptureOutcome("forked"), CaptureOutcome("child"), CaptureOutcome("parent")]
     )
     transport.install(monkeypatch)
     agent = AgentPi("p", "m", "t")
     parent = PiCliSessionBackend()
     _open(parent, agent, name="named")
 
-    parent.ask(SessionAskRequest("parent"))
     child = parent.fork()
     child.ask(SessionAskRequest("child"))
+    parent.ask(SessionAskRequest("parent"))
 
-    parent_id = transport.calls[0][0][3]
-    _file_prompt_argv(
-        transport.calls[0][0],
-        [
-            "pi",
-            "-p",
-            "--session-id",
-            parent_id,
-            "--name",
-            "named",
-            "--provider",
-            "p",
-            "--model",
-            "m",
-            "--thinking",
-            "t",
-        ],
-    )
-    child_id = transport.calls[1][0][3]
-    assert transport.calls[1] == (
+    child_id = transport.calls[0][0][3]
+    parent_id = transport.calls[0][0][5]
+    assert child_id != parent_id
+    assert transport.calls[0] == (
         [
             "pi",
             "-p",
@@ -255,7 +305,7 @@ def test_pi_forks_at_fork_time_then_child_is_live_without_repeating_fork(
         None,
     )
     _file_prompt_argv(
-        transport.calls[2][0],
+        transport.calls[1][0],
         [
             "pi",
             "-p",
@@ -269,7 +319,78 @@ def test_pi_forks_at_fork_time_then_child_is_live_without_repeating_fork(
             "t",
         ],
     )
-    assert transport.calls[2][1] is None
+    _file_prompt_argv(
+        transport.calls[2][0],
+        [
+            "pi",
+            "-p",
+            "--session-id",
+            parent_id,
+            "--name",
+            "named",
+            "--provider",
+            "p",
+            "--model",
+            "m",
+            "--thinking",
+            "t",
+        ],
+    )
+
+
+def test_codex_reset_after_successful_creation_starts_a_new_jsonl_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = CaptureTransport(
+        [
+            CaptureOutcome(
+                '{"type":"thread.started","thread_id":"first"}\n'
+                '{"type":"item.completed","item":'
+                '{"type":"agent_message","text":"first answer"}}'
+            ),
+            CaptureOutcome(
+                '{"type":"thread.started","thread_id":"second"}\n'
+                '{"type":"item.completed","item":'
+                '{"type":"agent_message","text":"second answer"}}'
+            ),
+        ]
+    )
+    transport.install(monkeypatch)
+    backend = CodexCliSessionBackend()
+    _open(backend, AgentCodex("m", "t"))
+
+    assert backend.ask(SessionAskRequest("first prompt")).content == "first answer"
+    backend.reset()
+    assert backend.ask(SessionAskRequest("second prompt")).content == "second answer"
+
+    assert transport.calls == [
+        (
+            [
+                "codex",
+                "exec",
+                "--json",
+                "--model",
+                "m",
+                "-c",
+                "model_reasoning_effort=t",
+                "-",
+            ],
+            "first prompt",
+        ),
+        (
+            [
+                "codex",
+                "exec",
+                "--json",
+                "--model",
+                "m",
+                "-c",
+                "model_reasoning_effort=t",
+                "-",
+            ],
+            "second prompt",
+        ),
+    ]
 
 
 def test_codex_initial_ask_parses_jsonl_and_resume_returns_plaintext(
@@ -378,6 +499,43 @@ def test_codex_ignores_completed_non_assistant_items(monkeypatch: pytest.MonkeyP
     _open(backend, AgentCodex("", ""))
 
     assert backend.ask(SessionAskRequest("first")).content == "answer"
+
+
+def test_codex_defers_thread_creation_until_the_first_ask(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = CaptureTransport(
+        [
+            CaptureOutcome(
+                "\n".join(
+                    (
+                        '{"type":"thread.started","thread_id":"first"}',
+                        '{"type":"item.completed","item":{"type":"agent_message","text":"answer"}}',
+                    )
+                )
+            )
+        ]
+    )
+    transport.install(monkeypatch)
+    backend = CodexCliSessionBackend()
+    _open(backend, AgentCodex("model", "high"))
+
+    for operation in (lambda: backend.compact(""), backend.fork, backend.stats):
+        with pytest.raises(SessionHostError):
+            operation()
+    with pytest.raises(SessionHostError):
+        backend.set_name("unsupported")
+    backend.reset()
+    assert transport.calls == []
+
+    assert backend.ask(SessionAskRequest("create")).content == "answer"
+    assert len(transport.calls) == 1
+    for operation in (lambda: backend.compact(""), backend.fork, backend.stats):
+        with pytest.raises(SessionHostError):
+            operation()
+    with pytest.raises(SessionHostError):
+        backend.set_name("unsupported")
+    backend.close()
 
 
 def test_first_invocation_transport_failure_consumes_creation_state_until_reset(

@@ -250,6 +250,43 @@ def test_session_ask_does_not_retry_parse_failures_and_maps_transport_errors() -
     assert interrupted.value.reason == "interrupted"
 
 
+def test_dead_rpc_sessions_map_ask_failures_and_later_operations_to_distinct_errors(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class DeadRpcHost(_Host):
+        def ask(self, handle: str, prompt: str) -> str:
+            del handle, prompt
+            raise SessionAskError(
+                cause="timeout",
+                exit_code=None,
+                stderr_tail="idle timeout",
+                elapsed=1.0,
+                call_info=None,
+            )
+
+        def compact(self, handle: str, instructions: str = "") -> None:
+            del handle, instructions
+            raise SessionHostError("RPC process has exited", "compact")
+
+    result = _run(
+        "program def main() -> unit =\n"
+        '  let session = Session::open(AgentPi("provider", "model", "high"))\n'
+        "  try\n"
+        '    session.ask("wait")\n'
+        "  catch AgentCallError =>\n"
+        "    ()\n"
+        "  try\n"
+        "    session.compact()\n"
+        "  catch SessionError as error =>\n"
+        "    print error.operation\n"
+        '    if error.message != "" => print "message"\n',
+        DeadRpcHost(),
+    )
+
+    assert result.ok
+    assert capsys.readouterr().out == "compact\nmessage\n"
+
+
 def test_missing_host_and_lifecycle_errors_become_session_errors() -> None:
     unavailable = PipelineDriver().run(
         "program def main() -> unit =\n"

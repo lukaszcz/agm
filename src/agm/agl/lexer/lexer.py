@@ -196,6 +196,11 @@ def _is_scope_closer(tokens: list[Token], index: int) -> bool:
     )
 
 
+def _is_as(token: Token) -> bool:
+    """Whether *token* is ``as`` before or after parser keyword remapping."""
+    return token.type in {"as", "AS"}
+
+
 def _is_use_declaration(tokens: list[Token], index: int) -> bool:
     """Whether item-start ``use`` has a declaration suffix rather than expression syntax."""
     next_index = index + 1
@@ -211,7 +216,7 @@ def _is_use_declaration(tokens: list[Token], index: int) -> bool:
             next_index += 2
         if next_index >= len(tokens):
             return False
-        return tokens[next_index].type in {"AS", DCOLON}
+        return _is_as(tokens[next_index]) or tokens[next_index].type == DCOLON
     if tokens[next_index].type == SLASH:
         next_index += 1
         while (
@@ -223,7 +228,9 @@ def _is_use_declaration(tokens: list[Token], index: int) -> bool:
         if next_index >= len(tokens) or tokens[next_index].type != NAME:
             return False
         next_index += 1
-        return next_index < len(tokens) and tokens[next_index].type in {"AS", DCOLON}
+        return next_index < len(tokens) and (
+            _is_as(tokens[next_index]) or tokens[next_index].type == DCOLON
+        )
     if tokens[next_index].type != DCOLON:
         return False
     # An anchored use needs a target plus either an alias or a tail separator.
@@ -234,7 +241,7 @@ def _is_use_declaration(tokens: list[Token], index: int) -> bool:
         token_type = tokens[next_index].type
         if token_type == NAME:
             saw_target = True
-        elif token_type == "AS" and saw_target:
+        elif _is_as(tokens[next_index]) and saw_target:
             return True
         elif token_type == DCOLON:
             separators += 1
@@ -524,7 +531,7 @@ def _merge_modqual(tokens: list[Token], source: str) -> list[Token]:
             continue
         if in_use_target and start.type in {"_NEWLINE", "SEMICOLON", "LBRACE", "STAR"}:
             in_use_target = False
-        if in_use_target and start.type == NAME and i + 1 < n and tokens[i + 1].type == "AS":
+        if in_use_target and start.type == NAME and i + 1 < n and _is_as(tokens[i + 1]):
             result.append(_retype(start, USE_TARGET_NAME))
             i += 1
             continue

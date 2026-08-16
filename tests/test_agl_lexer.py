@@ -2656,6 +2656,19 @@ class TestModuleSystemLexer:
         assert tok("use shared")[:2] == [("NAME", "use"), ("NAME", "shared")]
         assert tok("use shared::*")[:2] == [("USE", "use"), ("MODPATH", "shared")]
 
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "use library as L",
+            "use /pkg as P",
+            "use m/n::Scope as S",
+            "use ::Scope as S",
+        ),
+    )
+    def test_public_tokenize_accepts_use_alias_forms(self, source: str) -> None:
+        tokens = tok(source)
+        assert tokens[0] == ("USE", "use")
+
     def test_open_and_using_remain_identifiers(self) -> None:
         assert tok("open using") == [("NAME", "open"), ("NAME", "using")]
 

@@ -2293,6 +2293,38 @@ class TestExportDecl:
         assert facade_exports["plus"] == (lib_id, "foo")
         assert "foo" not in facade_exports
 
+    def test_export_brace_tail_emits_every_alias_of_a_source(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import facade\n()",
+                "facade": "export lib::{foo, foo as first, foo as second}",
+                "lib": "def foo() -> int = 1",
+            },
+        )
+
+        facade_exports = resolve_program(graph).modules[ModuleId.from_path("facade")].exports
+        origin = (ModuleId.from_path("lib"), "foo")
+        assert facade_exports["foo"] == origin
+        assert facade_exports["first"] == origin
+        assert facade_exports["second"] == origin
+
+    def test_overlapping_export_items_emit_each_destination(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import facade\n()",
+                "facade": "export lib::{Api as Public, Api::read as fetch}",
+                "lib": "scope Api\ndef read() -> int = 1\ndef write() -> int = 2\nend Api",
+            },
+        )
+
+        facade_exports = resolve_program(graph).modules[ModuleId.from_path("facade")].exports
+        lib_id = ModuleId.from_path("lib")
+        assert facade_exports[("Public", "read")] == (lib_id, ("Api", "read"))
+        assert facade_exports[("Public", "write")] == (lib_id, ("Api", "write"))
+        assert facade_exports["fetch"] == (lib_id, ("Api", "read"))
+
     def test_export_brace_tail_selects_and_renames_scoped_subtrees(self, tmp_path: Path) -> None:
         """Brace items select paths and re-root renamed paths at the facade."""
         graph = _make_graph_from_files(

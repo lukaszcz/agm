@@ -433,35 +433,22 @@ def _compute_reexport_additions(
             if ((atom,) if isinstance(atom, str) else atom)[: len(prefix)] == prefix
         )
 
-    selected: dict[NameAtom, None] = (
-        {atom: None for atom in target_exports} if not decl.items else {}
-    )
+    matched_items: list[tuple[ExportItem, tuple[NameAtom, ...]]] = []
     for item in (*decl.items, *decl.hidden):
         matched = matches(item_path(item))
-        if not matched:
-            if allow_missing:
-                continue
+        if not matched and not allow_missing:
             raise AglScopeError(
                 f"name {'::'.join(item_path(item))!r} is not exported by module "
                 f"{'/'.join(decl.module_path)!r}",
                 span=decl.span,
             )
-        if item in decl.items:
-            for atom in matched:
-                selected[atom] = None
-        else:
-            for atom in matched:
-                selected.pop(atom, None)
+        matched_items.append((item, matched))
 
-    for source in selected:
-        source_path = (source,) if isinstance(source, str) else source
-        exposed: NameAtom = source
-        for item in decl.items:
-            prefix = item_path(item)
-            if item.rename is not None and source_path[: len(prefix)] == prefix:
-                routed = (item.rename, *source_path[len(prefix) :])
-                exposed = routed[0] if len(routed) == 1 else routed
-                break
+    hidden_sources = {
+        source for _item, matched in matched_items[len(decl.items) :] for source in matched
+    }
+
+    def add(source: NameAtom, exposed: NameAtom) -> None:
         exposed_path = (exposed,) if isinstance(exposed, str) else exposed
         rooted = _atom(region_prefix + exposed_path) if region_prefix else exposed
         origin = target_exports[source]
@@ -469,6 +456,25 @@ def _compute_reexport_additions(
         if existing is not None and existing != origin:
             _raise_reexport_conflict(rooted, existing, origin, decl)
         result[rooted] = origin
+
+    if not decl.items:
+        for source in target_exports:
+            if source not in hidden_sources:
+                add(source, source)
+        return result
+
+    for item, matched in matched_items[: len(decl.items)]:
+        prefix = item_path(item)
+        for source in matched:
+            if source in hidden_sources:
+                continue
+            source_path = (source,) if isinstance(source, str) else source
+            if item.rename is None:
+                exposed = source
+            else:
+                routed = (item.rename, *source_path[len(prefix) :])
+                exposed = _atom(routed)
+            add(source, exposed)
     return result
 
 

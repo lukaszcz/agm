@@ -192,4 +192,17 @@ builtin def Session::open(
   name: text = "",
 ) -> Session
 builtin def Session::default() -> Session
+builtin def Session::ask[T](
+  self,
+  prompt: text,
+  format: text = "",
+  strict_json: bool = false,
+  on_parse_error: ParsePolicy = ParsePolicy::Abort,
+) -> T
+builtin def Session::compact(self, instructions: text = "") -> unit
+builtin def Session::reset(self) -> unit
+builtin def Session::fork(self) -> Session
+builtin def Session::stats(self) -> SessionStats
+builtin def Session::set-name(self, name: text) -> unit
+builtin def Session::close(self) -> unit
 builtin def exec(command: text) -> ExecResult

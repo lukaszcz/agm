@@ -385,7 +385,7 @@ enum SessionTransport
 
 ### `Session`
 
-`Session` identifies a host-created agent conversation:
+`Session` is an opaque host-minted value:
 
 ```text
 record Session
@@ -397,6 +397,35 @@ record Session
 It is not source-constructible and has no JSON wire representation, so it
 cannot be used as an agent output type, a parameter type, or the source of an
 `as json` cast.
+
+### Session calls
+
+The following are call-only **typechecked** members; their signatures do not
+specify runtime session behavior:
+
+```text
+Session::open(agent: Agent,
+              transport: Option[SessionTransport] = Option[SessionTransport]::None,
+              name: text = "") -> Session
+Session::default() -> Session
+
+Session::ask[T](self, prompt: text, format: text = "",
+                strict_json: bool = false,
+                on_parse_error: ParsePolicy = ParsePolicy::Abort) -> T
+Session::compact(self, instructions: text = "") -> unit
+Session::reset(self) -> unit
+Session::fork(self) -> Session
+Session::stats(self) -> SessionStats
+Session::set-name(self, name: text) -> unit
+Session::close(self) -> unit
+```
+
+`Session::ask` has the same target-type and output-contract rules as `ask`,
+but accepts no `agent` argument; see [Agent calls](agent-calls.md#sessionask).
+Only the canonical `std/core::Session` nominal declaration owns these special
+members. Their dispatch, and validation of the `Session::open`/`default`
+builtin headers, require that exact declaration identity — never a matching
+name or shape — so another `Session` type has only its ordinary members.
 
 ### `SessionStats`
 

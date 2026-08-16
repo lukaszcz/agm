@@ -47,6 +47,22 @@ or `param`; it may not be bound as a function value (`let f = ask` is a static e
 not a fully expressible monomorphic type). It remains legal as a
 record/enum **field name**.
 
+### `Session::ask`
+
+`Session` also has the call-only typechecked method form:
+
+```text
+Session::ask[T](self, prompt: text, format: text = "",
+                strict_json: bool = false,
+                on_parse_error: ParsePolicy = ParsePolicy::Abort) -> T
+```
+
+It uses the same contextual or explicit `::[T]` target, concrete-target
+restriction, parse options, and output-contract checking as `ask`; it has no
+`agent` argument. `session.ask!` has the same raw-tail spelling rules as
+`reviewer.ask!`. This is a static API contract only; it does not specify
+session execution behavior.
+
 ### Single-argument sugar
 
 With no named arguments, `ask` may be called with the prompt string written

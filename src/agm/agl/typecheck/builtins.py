@@ -1,5 +1,4 @@
-"""Built-in call (print/render/copy/shallow_copy/parse_json/ask/ask-request/exec)
-type-checking collaborator.
+"""Built-in call type-checking collaborator, including ``Session`` methods.
 
 Driven by ``_Checker`` via the narrow ``BuiltinCheckCtx`` Protocol.  All logic
 lives here; the host checker instantiates ``BuiltinCallChecker(self)`` and
@@ -291,6 +290,58 @@ class BuiltinCallChecker:
             self._builtin_contract_type("Session"),
         )
 
+    # --- Session methods ---
+
+    def check_session_ask(self, node: Call, *, expected: Type | None, receiver_type: Type) -> Type:
+        """Type-check ``Session.ask`` with its receiver-owned agent selection."""
+        return self.check_ask(node, expected=expected, allows_agent=False)
+
+    def check_session_compact(
+        self, node: Call, *, expected: Type | None, receiver_type: Type
+    ) -> Type:
+        return self._check_static_call(
+            node,
+            "Session::compact",
+            (ParamSpec("instructions", TextType(), ParamKind.STANDARD, has_default=True),),
+            UnitType(),
+        )
+
+    def check_session_reset(
+        self, node: Call, *, expected: Type | None, receiver_type: Type
+    ) -> Type:
+        return self._check_session_nullary(node, "Session::reset")
+
+    def check_session_fork(self, node: Call, *, expected: Type | None, receiver_type: Type) -> Type:
+        return self._check_session_nullary(node, "Session::fork", result="Session")
+
+    def check_session_stats(
+        self, node: Call, *, expected: Type | None, receiver_type: Type
+    ) -> Type:
+        return self._check_session_nullary(node, "Session::stats", result="SessionStats")
+
+    def check_session_set_name(
+        self, node: Call, *, expected: Type | None, receiver_type: Type
+    ) -> Type:
+        return self._check_static_call(
+            node,
+            "Session::set-name",
+            (ParamSpec("name", TextType(), ParamKind.STANDARD, has_default=False),),
+            UnitType(),
+        )
+
+    def check_session_close(
+        self, node: Call, *, expected: Type | None, receiver_type: Type
+    ) -> Type:
+        return self._check_session_nullary(node, "Session::close")
+
+    def _check_session_nullary(self, node: Call, name: str, *, result: str | None = None) -> Type:
+        return self._check_static_call(
+            node,
+            name,
+            (),
+            UnitType() if result is None else self._builtin_contract_type(result),
+        )
+
     def _check_static_call(
         self,
         node: Call,
@@ -349,9 +400,14 @@ class BuiltinCallChecker:
     # --- ask ---
 
     def check_ask(
-        self, node: Call, *, expected: Type | None, receiver_type: Type | None = None
+        self,
+        node: Call,
+        *,
+        expected: Type | None,
+        receiver_type: Type | None = None,
+        allows_agent: bool = True,
     ) -> Type:
-        """Type-check ``ask``. *receiver_type* is set only for ``x.ask(...)``."""
+        """Type-check ``ask``. *receiver_type* is set for an ``Agent`` receiver."""
         # Target type: explicit type argument overrides context.
         explicit = self._resolve_explicit_target(node, "ask")
         target_type: Type = (
@@ -364,12 +420,19 @@ class BuiltinCallChecker:
             result_type=target_type,
             kind=BuiltinObligationKind.ASK,
             receiver_type=receiver_type,
+            allows_agent=allows_agent,
         )
         return target_type
 
     # --- ask-request ---
 
-    def check_ask_request(self, node: Call, *, receiver_type: Type | None = None) -> Type:
+    def check_ask_request(
+        self,
+        node: Call,
+        *,
+        expected: Type | None = None,
+        receiver_type: Type | None = None,
+    ) -> Type:
         """Type-check the fixed-text, side-effect-free ``ask-request`` builder."""
         agent_request_type = self._resolve_host_record_contract("AgentRequest", span=node.span)
 
@@ -414,14 +477,14 @@ class BuiltinCallChecker:
         result_type: Type,
         kind: BuiltinObligationKind,
         receiver_type: Type | None,
+        allows_agent: bool,
     ) -> None:
         """Check target-independent syntax, then queue contract materialization."""
         callee = kind.value
         named = self._validate_ask_like_arguments(
             node,
             callee,
-            allowed_named=self._ASK_ALLOWED_NAMED_ARGS
-            - ({"agent"} if receiver_type is not None else set()),
+            allowed_named=self._ASK_ALLOWED_NAMED_ARGS - (set() if allows_agent else {"agent"}),
             receiver_type=receiver_type,
         )
         format_name, strict_json, parse_policy = self._parse_options(named)

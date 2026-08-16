@@ -445,6 +445,44 @@ def test_qualified_constructor_use_and_import_route_collision_is_ambiguous(
         resolve_program(graph)
 
 
+def test_nested_constructor_use_and_import_route_collision_is_ambiguous(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": ("import lib\nuse S as lib\nscope S\nenum E | A\nend S\nlib::E::A\n"),
+            "lib": "enum E | A\n",
+        },
+    )
+
+    with pytest.raises(AglScopeError, match="ambiguous"):
+        resolve_program(graph)
+
+
+def test_qualified_pattern_with_colliding_use_routes_is_ambiguous(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use First as X\n"
+                "use Second as X\n"
+                "scope First\n"
+                "enum E | A\n"
+                "end First\n"
+                "scope Second\n"
+                "enum E | A\n"
+                "end Second\n"
+                "let value = First::E::A\n"
+                "case value of | X::E::A => 1 | _ => 0\n"
+            ),
+        },
+    )
+
+    with pytest.raises(AglScopeError, match="ambiguous"):
+        resolve_program(graph)
+
+
 def test_qualified_type_use_and_import_route_collision_is_ambiguous(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,

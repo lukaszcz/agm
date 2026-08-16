@@ -54,6 +54,7 @@ from agm.agl.scope.imports import (
     BareRoute,
     NameAtom,
     QName,
+    QualResolution,
     QualResolutionAmbiguous,
     QualResolutionFound,
     qualification_repair_guidance,
@@ -2849,6 +2850,12 @@ class _Resolver:
             or missing_error
         )
 
+    def _qualified_import_resolution(self, chain: QualifierChain, name: str) -> QualResolution:
+        """Resolve a chain as one module route followed by an exact path atom."""
+        route = tuple(part for part in chain.segments[0].name.split("/"))
+        atom = _bare_atom((*(segment.name for segment in chain.segments[1:]), name))
+        return resolve_qualified(self._import_env, route, atom, anchored=chain.anchored)
+
     def _lookup_qualified_use_contribution(
         self, chain: QualifierChain, name: str, span: SourceSpan
     ) -> BindingRef | None:
@@ -2859,9 +2866,7 @@ class _Resolver:
         opened = self._lookup_bare_contribution(atom, span)
         if opened is None:
             return None
-        imported = resolve_qualified(
-            self._import_env, chain.route_segments, name, anchored=chain.anchored
-        )
+        imported = self._qualified_import_resolution(chain, name)
         if isinstance(imported, QualResolutionAmbiguous):
             raise AglScopeError(
                 f"'{chain.render()}::{name}' is ambiguous across use and import routes. "
@@ -2910,13 +2915,11 @@ class _Resolver:
             if len(opened) == 1:
                 self._constructor_refs[node_id] = next(iter(opened))
                 return True
-            if not opened:
-                rendered = "::".join((*tuple(segment.name for segment in chain.segments), variant))
-                raise AglScopeError(
-                    f"Constructor '{rendered}' is not visible through this use route.",
-                    span=chain.span,
-                )
-            return False
+            rendered = "::".join((*tuple(segment.name for segment in chain.segments), variant))
+            raise AglScopeError(
+                f"Constructor '{rendered}' is not visible through this use route.",
+                span=chain.span,
+            )
         local_path = self._validate_local_scope_chain(chain)
         if local_path in self._type_paths:
             if chain.anchor is None and qualifier_contributes(
@@ -2978,9 +2981,14 @@ class _Resolver:
         relative_path = tuple(segment.name for segment in chain.segments)
         opened = self._regional_constructor_candidates(_bare_atom((*relative_path, variant)))
         if opened:
-            imported = resolve_qualified(
-                self._import_env, chain.route_segments, variant, anchored=chain.anchored
-            )
+            if len(opened) > 1:
+                rendered = "::".join((*relative_path, variant))
+                raise AglScopeError(
+                    f"'{rendered}' is ambiguous across use routes. "
+                    f"{qualification_repair_guidance()}",
+                    span=chain.span,
+                )
+            imported = self._qualified_import_resolution(chain, variant)
             imported_constructor = (
                 self._cross_module_constructor_refs.get(imported.qname)
                 if isinstance(imported, QualResolutionFound)
@@ -3700,9 +3708,8 @@ class _Resolver:
         self, chain: QualifierChain, name: str
     ) -> tuple[ModuleId, NameAtom] | None:
         """Resolve ``chain::name`` as one imported atom, or ``None`` on any failure."""
-        route = tuple(part for part in chain.segments[0].name.split("/"))
-        atom = _bare_atom((*(segment.name for segment in chain.segments[1:]), name))
-        return try_resolve_qualified_member(self._import_env, route, atom, anchored=chain.anchored)
+        result = self._qualified_import_resolution(chain, name)
+        return result.qname if isinstance(result, QualResolutionFound) else None
 
     def _bare_constructor_candidates(self, name: str) -> tuple[ConstructorRef, ...]:
         """Return the constructor candidates an unqualified *name* can select.

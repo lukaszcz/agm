@@ -658,12 +658,6 @@ def resolve_program(
     # ------------------------------------------------------------------
     _resolve_reexports(export_maps, scope_export_maps, all_targets, graph)
 
-    cross_module_named_scopes = frozenset(
-        (module_id, atom)
-        for module_id, scope_exports in scope_export_maps.items()
-        for atom in scope_exports
-    )
-
     # ------------------------------------------------------------------
     # Step 4: Build ImportEnv per module.
     # ------------------------------------------------------------------
@@ -751,7 +745,6 @@ def resolve_program(
             cross_module_constructor_refs=cross_module_constructor_refs,
             cross_module_constructible_types=cross_module_constructible_types,
             cross_module_type_scopes=frozenset(all_public_types),
-            cross_module_named_scopes=cross_module_named_scopes,
             all_public_types=all_public_types,
             allow_root_statements=is_entry and entry_parent_scope is not None,
             repl_session_scope=entry_repl_session_scope if is_entry else None,

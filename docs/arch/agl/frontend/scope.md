@@ -20,9 +20,10 @@ qualified routes are static errors.
 `scope/imports.py` builds contribution environments for import declarations.
 Program resolution publishes named-scope identities separately from declaration exports on each resolved
 module. Region and declaration-path spellings establish the same identities; re-exports preserve all
-origins when several scopes form one facade. Import selection and hiding validate against both parts of
-that public surface, so an imported or re-exported empty scope remains a nameable `use` target without
-becoming a value. An import contributes its full public qualified surface, except paths hidden by that
+origins when several scopes form one facade. Import environments retain scope identities per qualified
+route, so selection and hiding govern whether a scope is a `use` target without affecting another route.
+An imported or re-exported empty scope remains nameable without becoming a value. An import contributes
+its full public qualified surface, except paths hidden by that
 declaration. A positive
 import tail or `use` declaration contributes selected bare names without
 narrowing qualified access. A wildcard import alias retains its declaration

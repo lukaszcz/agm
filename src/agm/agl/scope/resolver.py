@@ -61,6 +61,7 @@ from agm.agl.scope.imports import (
     qualifier_candidates,
     qualifier_contributes,
     qualifier_members,
+    qualifier_scope_paths,
     render_qualifier,
     resolve_alias_target,
     resolve_qualified,
@@ -275,7 +276,6 @@ class _Resolver:
         | None = None,
         cross_module_constructible_types: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
         cross_module_type_scopes: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
-        cross_module_named_scopes: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
         allow_root_statements: bool = False,
         repl_session_scope: ScopeNode | None = None,
         repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
@@ -302,8 +302,6 @@ class _Resolver:
         # Public type declarations establish scope paths even when they have
         # no separately public child members.
         self._cross_module_type_scopes = cross_module_type_scopes
-        # Ordinary named scopes remain nameable across modules even when empty.
-        self._cross_module_named_scopes = cross_module_named_scopes
         # Whole-program public-type table, used to follow a type alias's
         # target across an import when deciding whether the alias has a
         # variant-less constructor.
@@ -1717,6 +1715,11 @@ class _Resolver:
             if decl.current_module
             else qualifier_members(self._import_env, route, anchored=decl.anchored)
         )
+        direct_scope_paths = dict(
+            ()
+            if decl.current_module
+            else qualifier_scope_paths(self._import_env, route, anchored=decl.anchored)
+        )
         direct_imports: tuple[tuple[BareRoute, Mapping[NameAtom, QName]], ...] = tuple(
             ((module, route_target), relative_members)
             for module, members in direct_candidates
@@ -1725,7 +1728,7 @@ class _Resolver:
                     members,
                     route_target,
                     target_exists=bool(route_target)
-                    and (module, _bare_atom(route_target)) in self._cross_module_named_scopes,
+                    and _bare_atom(route_target) in direct_scope_paths.get(module, frozenset()),
                 )
             )
             is not None

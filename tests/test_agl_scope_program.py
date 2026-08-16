@@ -2372,6 +2372,38 @@ class TestExportDecl:
         lib_id = ModuleId.from_path("lib")
         assert result.modules[lib_id].scope_exports["Public"] == frozenset({(lib_id, "Public")})
 
+    def test_import_hiding_removes_a_nonempty_scope_as_a_use_target(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import lib hiding Public\nuse lib::Public::*\n()",
+                "lib": "scope Public\ndef member() -> int = 1\nend Public",
+            },
+            default_stdlib=False,
+        )
+
+        with pytest.raises(AglScopeError):
+            resolve_program(graph)
+
+    def test_scope_hidden_on_one_import_route_remains_a_use_target_on_another(
+        self, tmp_path: Path
+    ) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "import lib hiding Public\n"
+                    "import lib as visible\n"
+                    "use visible::Public::*\n"
+                    "member()"
+                ),
+                "lib": "scope Public\ndef member() -> int = 1\nend Public",
+            },
+            default_stdlib=False,
+        )
+
+        resolve_program(graph)
+
     def test_reexport_origin_is_preserved_through_chain(self, tmp_path: Path) -> None:
         """Re-export is transparent: B re-exports from A, C uses B — origin is A, not B."""
         graph = _make_graph_from_files(

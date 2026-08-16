@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import NoReturn, Protocol, cast
+from typing import ContextManager, NoReturn, Protocol, cast
 
 from agm.agl.ir.ids import ContractId, Location
 from agm.agl.ir.nodes import IrAsk, IrAskRequest, IrExec, IrExpr
@@ -66,6 +66,10 @@ class EffectCtx(Protocol):
 
     def _eval(self, expr: IrExpr) -> Value: ...
 
+    def _encode_extern_value(self, value: Value) -> object: ...
+
+    def _extern_call_window(self) -> ContextManager[None]: ...
+
     def _parse_host_output(
         self, raw: str, contract_id: ContractId, *, effective_strict: bool
     ) -> ParseResult: ...
@@ -120,9 +124,14 @@ class EffectHandlers:
         ``AglRaise(ExternError)``, mirroring the ``exec`` model.
         """
         fn = self._ctx._extern_registry.resolve(module_id, extern.name)
-        return self._ctx._extern_registry.invoke(
-            extern.name, fn, args, nominals=self._ctx._program.builtin_nominals
-        )
+        with self._ctx._extern_call_window():
+            return self._ctx._extern_registry.invoke(
+                extern.name,
+                fn,
+                args,
+                nominals=self._ctx._program.builtin_nominals,
+                function_encoder=self._ctx._encode_extern_value,
+            )
 
     # ------------------------------------------------------------------
     # Agent call helpers

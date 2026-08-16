@@ -6,8 +6,9 @@ for `extern def`:
   defaults, type params, no body to check).
 - extern-specific header checks: Python-identifier/keyword name rule,
   builtin-name collision guard.
-- the function-type ban anywhere in an extern's signature (type variables
-  permitted), while `Agent` enum values cross the boundary as ordinary data.
+- AgL function parameters in extern signatures are accepted for callback
+  crossing; Python callables returned toward AgL remain runtime boundary
+  errors, while `Agent` enum values cross as ordinary data.
 - calls to externs type exactly like calls to ordinary declared functions.
 - direct extern call sites (own-module and imported) are recorded in
   ``call_sites`` like ``ask``/``exec`` call sites.
@@ -210,50 +211,40 @@ class TestExternCollisionGuard:
 
 
 # ---------------------------------------------------------------------------
-# Function type ban — type variables permitted
+# Callable signatures — type variables permitted
 # ---------------------------------------------------------------------------
 
 
-class TestExternFunctionTypeBan:
-    def test_function_typed_param_rejected(self) -> None:
-        err = reject_extern("extern def f(cb: (int) -> int) -> int\n0")
-        assert "function" in str(err).lower()
+class TestExternCallableSignatures:
+    def test_function_typed_param_accepted(self) -> None:
+        check_extern("extern def f(cb: (int) -> int) -> int\n0")
 
     def test_agent_enum_param_and_return_are_accepted(self) -> None:
         check_extern(_ASK_BUILTIN_SOURCE + "extern def identity(a: Agent) -> Agent\n0")
 
-    def test_function_typed_return_rejected(self) -> None:
-        err = reject_extern("extern def f(x: int) -> (int) -> int\n0")
-        assert "function" in str(err).lower()
+    def test_function_typed_return_is_checked_at_the_runtime_boundary(self) -> None:
+        check_extern("extern def f(x: int) -> (int) -> int\n0")
 
-    def test_function_type_nested_in_array_rejected(self) -> None:
-        err = reject_extern("extern def f(cbs: array[(int) -> int]) -> int\n0")
-        assert "function" in str(err).lower()
+    def test_function_type_nested_in_array_is_accepted(self) -> None:
+        check_extern("extern def f(cbs: array[(int) -> int]) -> int\n0")
 
-    def test_function_type_nested_in_dict_rejected(self) -> None:
-        err = reject_extern("extern def f(cbs: dict[text, (int) -> int]) -> int\n0")
-        assert "function" in str(err).lower()
+    def test_function_type_nested_in_dict_is_accepted(self) -> None:
+        check_extern("extern def f(cbs: dict[text, (int) -> int]) -> int\n0")
 
-    def test_function_type_nested_in_record_field_rejected(self) -> None:
+    def test_function_type_nested_in_record_field_is_accepted(self) -> None:
         source = "record Box\n  cb: (int) -> int\nextern def f(b: Box) -> int\n0"
-        err = reject_extern(source)
-        assert "function" in str(err).lower()
+        check_extern(source)
 
-    def test_function_type_nested_in_generic_record_instantiation_rejected(self) -> None:
-        # `Box`'s own field never mentions `T`; the banned type only rides in
-        # via the instantiation's type_args, so the check must inspect those
-        # too, not just the record's declared field types.
+    def test_function_type_nested_in_generic_record_instantiation_is_accepted(self) -> None:
         source = "record Box[T]\n  value: int\nextern def f(b: Box[(int) -> int]) -> int\n0"
-        err = reject_extern(source)
-        assert "function" in str(err).lower()
+        check_extern(source)
 
-    def test_function_type_nested_in_exception_field_rejected(self) -> None:
+    def test_function_type_nested_in_exception_field_is_accepted(self) -> None:
         source = (
             "exception BadExc extends Exception\n  cb: (int) -> int\n"
             "extern def f(e: BadExc) -> int\n0"
         )
-        err = reject_extern(source)
-        assert "function" in str(err).lower()
+        check_extern(source)
 
     def test_recursive_exception_signature_is_walked_once(self) -> None:
         check_extern(
@@ -789,10 +780,6 @@ class TestExternRejectionFixtures:
     def test_bad_python_name_fixture(self) -> None:
         err = reject_extern(self._read("extern_bad_python_name"))
         assert "identifier" in str(err).lower()
-
-    def test_function_typed_param_fixture(self) -> None:
-        err = reject_extern(self._read("extern_function_param"))
-        assert "function" in str(err).lower()
 
 
 # ---------------------------------------------------------------------------

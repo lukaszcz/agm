@@ -73,7 +73,6 @@ from agm.agl.scope.symbols import (
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import (
     MethodDef,
-    TypeTable,
     cast_classification,
     comparable_types,
     json_cast_hint,
@@ -515,68 +514,6 @@ def _validate_extern_name(name: str, span: SourceSpan) -> None:
         )
 
 
-def _contains_function_type(
-    t: Type, type_table: TypeTable, _seen: frozenset[Type] = frozenset()
-) -> bool:
-    """Return ``True`` if *t* contains a function type anywhere.
-
-    The FFI is a pure data boundary: function values can never cross
-    it, so they are static errors anywhere in an extern's parameter or return
-    types, including nested inside ``array``/``dict``/record/enum
-    instantiations.  Type variables are permitted at any depth — dynamic
-    sealing keeps values at those positions opaque.  Record/enum field and
-    variant shapes are resolved through *type_table*; *_seen* tracks the
-    nominal instantiations already on the current path so a recursive type
-    (e.g. a self-referential record) is examined once rather than forever.
-    """
-    match t:
-        case FunctionType():
-            return True
-        case ArrayType():
-            return _contains_function_type(t.elem, type_table, _seen)
-        case DictType():
-            return _contains_function_type(t.value, type_table, _seen)
-        case RecordType():
-            if t in _seen:
-                return False
-            seen = _seen | {t}
-            return any(_contains_function_type(ta, type_table, seen) for ta in t.type_args) or any(
-                _contains_function_type(ft, type_table, seen)
-                for ft in type_table.record_fields(t).values()
-            )
-        case EnumType():
-            if t in _seen:
-                return False
-            seen = _seen | {t}
-            return any(_contains_function_type(ta, type_table, seen) for ta in t.type_args) or any(
-                _contains_function_type(ft, type_table, seen)
-                for vfields in type_table.enum_variants(t).values()
-                for ft in vfields.values()
-            )
-        case ExceptionType():
-            if t in _seen:
-                return False
-            seen = _seen | {t}
-            return any(
-                _contains_function_type(ft, type_table, seen)
-                for ft in type_table.exception_fields(t).values()
-            )
-        case (
-            TextType()
-            | JsonType()
-            | BoolType()
-            | IntType()
-            | DecimalType()
-            | UnitType()
-            | BottomType()
-            | TypeVarType()
-            | InferenceVarType()
-        ):
-            return False
-        case _ as unreachable:  # pragma: no cover
-            assert_never(unreachable)
-
-
 # ---------------------------------------------------------------------------
 # Main checker
 # ---------------------------------------------------------------------------
@@ -773,53 +710,23 @@ class _Checker:
             raise AglTypeError(f"Program function '{node.name}' must return unit.", span=node.span)
 
     def _validate_extern_signature(self, node: FuncDef, sig: FunctionSignature) -> None:
-        """Reject types that cannot cross the Python boundary in an extern's signature.
+        """Require finite extern data shapes while allowing callback parameters.
 
-        Two kinds are rejected: a function type anywhere (a value that cannot
-        marshal across the FFI), and a type with no finite schema (its
-        recursive instantiations never close, so it cannot be represented by
-        the language's finite type machinery). Finite recursive types cross as
-        ordinary recursive Python object graphs.
+        Function values can cross from AgL into a companion as interpreter
+        callbacks. The reverse conversion remains value-directed at runtime,
+        where a bare Python callable has no AgL representation.
         """
-        for p, spec in zip(node.params, sig.params):
-            self._reject_uncrossable_extern_type(
-                spec.type,
-                span=p.span,
-                use="an extern parameter type",
-                banned_message=(
-                    f"extern function '{node.name}' parameter '{p.name}' has a "
-                    "function type, which cannot cross the Python boundary."
-                ),
+        for param, spec in zip(node.params, sig.params):
+            self._reject_unbounded_extern_type(
+                spec.type, span=param.span, use="an extern parameter type"
             )
-        self._reject_uncrossable_extern_type(
-            sig.result,
-            span=node.span,
-            use="an extern return type",
-            banned_message=(
-                f"extern function '{node.name}' has a return type containing a "
-                "function type, which cannot cross the Python boundary."
-            ),
-        )
+        self._reject_unbounded_extern_type(sig.result, span=node.span, use="an extern return type")
 
-    def _reject_uncrossable_extern_type(
-        self, typ: Type, *, span: SourceSpan, use: str, banned_message: str
-    ) -> None:
-        """Reject one extern parameter/result type that cannot cross the boundary.
-
-        Finite-schema is checked BEFORE the banned-type walk: a type whose
-        instantiations never close (growing polymorphic recursion) has an
-        infinite structure, and ``_contains_function_type`` walks that
-        structure — its cycle guard only catches repeated instantiations, not
-        ever-growing ones. ``no_finite_schema_message`` works at the
-        declaration level and always terminates, so it rejects such a type
-        first, leaving the banned-type walk only finite closures to traverse.
-        """
-        type_table = self._env.type_table
-        message = type_table.no_finite_schema_message(typ, use=use)
+    def _reject_unbounded_extern_type(self, typ: Type, *, span: SourceSpan, use: str) -> None:
+        """Reject an extern type whose recursive declaration shape cannot close."""
+        message = self._env.type_table.no_finite_schema_message(typ, use=use)
         if message is not None:
             raise AglTypeError(message, span=span)
-        if _contains_function_type(typ, type_table):
-            raise AglTypeError(banned_message, span=span)
 
     def _register_funcdef_signature(
         self,

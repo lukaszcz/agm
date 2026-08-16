@@ -22,7 +22,7 @@ import decimal
 import inspect
 import sys
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Protocol, assert_never, cast
+from typing import TYPE_CHECKING, ContextManager, Protocol, assert_never, cast
 
 from agm.agl.eval._decimal import AGL_DECIMAL_CONTEXT
 from agm.agl.eval.arith import (
@@ -129,9 +129,10 @@ from agm.agl.ir.program import (
 from agm.agl.ir.validate import InvalidIrError
 from agm.agl.modules.ids import ModuleId
 from agm.agl.runtime.agents import AgentFn
+from agm.agl.runtime.boundary import encode_boundary_value
 from agm.agl.runtime.codec import ParseResult, _parse_contract_output
 from agm.agl.runtime.convert import StrictJsonParseError, parse_json_strict
-from agm.agl.runtime.externs import ExternRegistry
+from agm.agl.runtime.externs import AglCallableProxy, ExternCallWindow, ExternRegistry
 from agm.agl.runtime.option import none_value, option_text, some_value
 from agm.agl.runtime.params import engine_default_settings
 from agm.agl.runtime.render import render_value
@@ -561,6 +562,7 @@ class IrInterpreter:
         self._extern_registry: ExternRegistry = (
             extern_registry if extern_registry is not None else ExternRegistry()
         )
+        self._extern_call_window_guard = ExternCallWindow()
         self._effects = EffectHandlers(self)
 
     def _parse_host_output(
@@ -828,6 +830,39 @@ class IrInterpreter:
         module scope for its own defaults.
         """
         return self._eval_default_in_frame(param, {})
+
+    def _extern_call_window(self) -> ContextManager[None]:
+        """Open this interpreter's callback window for one extern invocation."""
+        return self._extern_call_window_guard.active()
+
+    def _encode_extern_value(self, value: Value) -> object:
+        """Encode one value for an extern, preserving callable interpreter access."""
+        return encode_boundary_value(value, self._make_extern_callable_proxy)
+
+    def _make_extern_callable_proxy(self, closure: IrClosureValue) -> AglCallableProxy:
+        """Wrap one AgL closure for a companion's synchronous callback."""
+
+        def invoke(args: tuple[Value, ...]) -> Value:
+            return self._invoke_crossed_closure(closure, args)
+
+        return AglCallableProxy(
+            arity=closure.arity,
+            require_active_window=self._extern_call_window_guard.require_active,
+            invoke=invoke,
+            encode=self._encode_extern_value,
+        )
+
+    def _invoke_crossed_closure(self, closure: IrClosureValue, args: tuple[Value, ...]) -> Value:
+        """Re-enter this interpreter to execute an AgL callback from an extern."""
+        desc = self._program.functions[closure.function_id]
+        match desc.impl:
+            case ExternFunctionBody() as extern:
+                return self._effects.eval_extern_call(desc.module_id, extern, args)
+            case IrFunctionBody(body=body):
+                self._check_call_depth()
+                return self._bind_and_invoke(desc, body, closure, list(args))
+            case other:  # pragma: no cover
+                assert_never(other)
 
     def _execute_direct_call(
         self,

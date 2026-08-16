@@ -20,6 +20,7 @@ from agm.agl.semantics.values import (
     EnumValue,
     ExceptionValue,
     IntValue,
+    IrClosureValue,
     JsonValue,
     RecordValue,
     TextValue,
@@ -224,10 +225,16 @@ def synthesize_nominal_classes(
 class AglArrayView(MutableSequence[object]):
     """A mutable, lazy Python view over one AgL array value."""
 
-    __slots__ = ("_value",)
+    __slots__ = ("_value", "_function_encoder")
 
-    def __init__(self, value: ArrayValue) -> None:
+    def __init__(
+        self,
+        value: ArrayValue,
+        *,
+        function_encoder: Callable[[IrClosureValue], object] | None = None,
+    ) -> None:
         self._value = value
+        self._function_encoder = function_encoder
 
     def __len__(self) -> int:
         return len(self._value.elements)
@@ -243,8 +250,13 @@ class AglArrayView(MutableSequence[object]):
     ) -> object | list[object]:
         if not isinstance(index, SupportsIndex):
             slice_index = index
-            return [encode_boundary_value(value) for value in self._value.elements[slice_index]]
-        return encode_boundary_value(self._value.elements[operator.index(index)])
+            return [
+                encode_boundary_value(value, self._function_encoder)
+                for value in self._value.elements[slice_index]
+            ]
+        return encode_boundary_value(
+            self._value.elements[operator.index(index)], self._function_encoder
+        )
 
     @overload
     def __setitem__(self, index: SupportsIndex, value: object) -> None: ...
@@ -314,9 +326,9 @@ class AglArrayView(MutableSequence[object]):
             (
                 cast(
                     "_SortKey",
-                    encode_boundary_value(value)
+                    encode_boundary_value(value, self._function_encoder)
                     if key is None
-                    else key(encode_boundary_value(value)),
+                    else key(encode_boundary_value(value, self._function_encoder)),
                 ),
                 index,
             )
@@ -327,7 +339,7 @@ class AglArrayView(MutableSequence[object]):
 
     def __iter__(self) -> Iterator[object]:
         for value in self._value.elements:
-            yield encode_boundary_value(value)
+            yield encode_boundary_value(value, self._function_encoder)
 
     def __contains__(self, value: object) -> bool:
         try:
@@ -349,13 +361,19 @@ class AglArrayView(MutableSequence[object]):
 class AglDictView(MutableMapping[str, object]):
     """A mutable, lazy Python view over one AgL dict value."""
 
-    __slots__ = ("_value",)
+    __slots__ = ("_value", "_function_encoder")
 
-    def __init__(self, value: DictValue) -> None:
+    def __init__(
+        self,
+        value: DictValue,
+        *,
+        function_encoder: Callable[[IrClosureValue], object] | None = None,
+    ) -> None:
         self._value = value
+        self._function_encoder = function_encoder
 
     def __getitem__(self, key: str) -> object:
-        return encode_boundary_value(self._value.entries[key])
+        return encode_boundary_value(self._value.entries[key], self._function_encoder)
 
     def __setitem__(self, key: str, value: object) -> None:
         if not isinstance(key, str):
@@ -379,7 +397,7 @@ class AglDictView(MutableMapping[str, object]):
 
     def popitem(self) -> tuple[str, object]:
         key, value = self._value.entries.popitem()
-        return key, encode_boundary_value(value)
+        return key, encode_boundary_value(value, self._function_encoder)
 
     def __contains__(self, key: object) -> bool:
         return key in self._value.entries
@@ -394,12 +412,16 @@ class AglDictView(MutableMapping[str, object]):
         return render_value(self._value)
 
 
-def encode_boundary_value(value: Value) -> object:
+def encode_boundary_value(
+    value: Value, function_encoder: Callable[[IrClosureValue], object] | None = None
+) -> object:
     """Encode an AgL value by its runtime subclass.
 
     An ``array``/``dict`` crosses as a live view (mutating it mutates the AgL
-    value).  A ``json`` payload crosses uncopied and unchecked: the companion
-    is trusted to treat what it receives as read-only.
+    value). A caller that owns an interpreter supplies *function_encoder* to
+    turn closures into callable proxies; the runtime boundary itself remains
+    evaluator-independent. A ``json`` payload crosses uncopied and unchecked:
+    the companion is trusted to treat what it receives as read-only.
     """
     if isinstance(value, UnitValue):
         return None
@@ -414,15 +436,22 @@ def encode_boundary_value(value: Value) -> object:
     if isinstance(value, JsonValue):
         return AglJson(value.raw)
     if isinstance(value, ArrayValue):
-        return AglArrayView(value)
+        return AglArrayView(value, function_encoder=function_encoder)
     if isinstance(value, DictValue):
-        return AglDictView(value)
+        return AglDictView(value, function_encoder=function_encoder)
+    if isinstance(value, IrClosureValue):
+        if function_encoder is None:
+            raise BoundaryViolation("cannot encode an AgL function without an interpreter")
+        return function_encoder(value)
     if isinstance(value, (RecordValue, EnumValue, ExceptionValue)):
         try:
             cls = _NOMINAL_CLASSES[value.nominal]
         except KeyError as exc:
             raise BoundaryViolation(f"unknown AgL nominal {value.display_name!r}") from exc
-        fields = {name: encode_boundary_value(field) for name, field in value.fields.items()}
+        fields = {
+            name: encode_boundary_value(field, function_encoder)
+            for name, field in value.fields.items()
+        }
         if isinstance(value, EnumValue):
             cls = getattr(cls, value.variant)
         return cls(**fields)

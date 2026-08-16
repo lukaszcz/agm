@@ -13,7 +13,9 @@ import decimal
 import importlib.machinery
 import importlib.util
 import sys
-from collections.abc import Sequence
+import threading
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType
 from typing import Protocol, cast
@@ -27,6 +29,7 @@ from agm.agl.runtime.boundary import (
     AglArrayView,
     AglDictView,
     AglJson,
+    BoundaryTypeError,
     BoundaryViolation,
     decode_boundary_value,
     encode_boundary_value,
@@ -35,7 +38,7 @@ from agm.agl.runtime.boundary import (
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise
 from agm.agl.semantics.exceptions import AglRaise, make_builtin_exception
-from agm.agl.semantics.values import ArrayValue, DictValue, TextValue, Value
+from agm.agl.semantics.values import ArrayValue, DictValue, IrClosureValue, TextValue, Value
 
 
 class ExternImportError(AglError):
@@ -85,6 +88,96 @@ class _CacheFreeLoader(importlib.machinery.SourceFileLoader):
 # ---------------------------------------------------------------------------
 # ExternRegistry
 # ---------------------------------------------------------------------------
+
+
+class CallableProxyError(RuntimeError):
+    """An AgL callback was invoked outside its active interpreter window."""
+
+
+class ExternCallWindow:
+    """Track one interpreter's active extern calls and their owning thread.
+
+    An interpreter owns this guard rather than its shared
+    :class:`ExternRegistry`: multiple interpreters can safely use one
+    registry, but a callback belongs to the interpreter that encoded it.
+    """
+
+    __slots__ = ("_depth", "_lock", "_thread")
+
+    def __init__(self) -> None:
+        self._depth = 0
+        self._lock = threading.Lock()
+        self._thread: int | None = None
+
+    @contextmanager
+    def active(self) -> Iterator[None]:
+        """Open a nestable callback window on this interpreter's thread."""
+        thread_id = threading.get_ident()
+        with self._lock:
+            if self._thread is None:
+                self._thread = thread_id
+            elif self._thread != thread_id:
+                raise CallableProxyError(
+                    "an interpreter extern call is already active on another thread"
+                )
+            self._depth += 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._depth -= 1
+                if self._depth == 0:
+                    self._thread = None
+
+    def require_active(self) -> None:
+        """Require this interpreter's active extern call on its owning thread."""
+        with self._lock:
+            if self._depth != 0 and self._thread == threading.get_ident():
+                return
+        raise CallableProxyError(
+            "AgL callbacks may run only on the owning interpreter thread during an extern call"
+        )
+
+
+class _ClosureInvoker(Protocol):
+    """The evaluator-owned execution hook for one crossed AgL closure."""
+
+    def __call__(self, args: tuple[Value, ...]) -> Value: ...
+
+
+class AglCallableProxy:
+    """A Python callable backed by an AgL closure during an extern call.
+
+    The evaluator supplies execution while this runtime-side adapter owns
+    Python argument/result conversion and the invocation-window guard.
+    """
+
+    __slots__ = ("_arity", "_require_active_window", "_invoke", "_encode")
+
+    def __init__(
+        self,
+        *,
+        arity: int,
+        require_active_window: Callable[[], None],
+        invoke: _ClosureInvoker,
+        encode: Callable[[Value], object],
+    ) -> None:
+        self._arity = arity
+        self._require_active_window = require_active_window
+        self._invoke = invoke
+        self._encode = encode
+
+    def __call__(self, *args: object) -> object:
+        self._require_active_window()
+        if len(args) != self._arity:
+            raise TypeError(
+                f"AgL callback expected {self._arity} positional arguments, got {len(args)}"
+            )
+        try:
+            values = tuple(decode_boundary_value(arg) for arg in args)
+        except BoundaryViolation as exc:
+            raise BoundaryTypeError(str(exc)) from exc
+        return self._encode(self._invoke(values))
 
 
 class ExternCallable(Protocol):
@@ -286,6 +379,7 @@ class ExternRegistry:
         args: Sequence[Value],
         *,
         nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS,
+        function_encoder: Callable[[IrClosureValue], object] | None = None,
     ) -> Value:
         """Cross the boundary for one extern call: encode, call, and decode.
 
@@ -305,7 +399,7 @@ class ExternRegistry:
         caller (e.g. a direct unit test) that invokes without a program.
         """
         try:
-            encoded_args = [encode_boundary_value(arg) for arg in args]
+            encoded_args = [encode_boundary_value(arg, function_encoder) for arg in args]
         except BoundaryViolation as exc:
             raise _extern_error(
                 function_name,

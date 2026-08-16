@@ -41,7 +41,6 @@ from agm.agl.scope.symbols import (
     ModuleResolution,
     ScopeNode,
     ScopePath,
-    local_use_contribution_refs,
     resolve_bare_contribution_layer,
 )
 from agm.agl.self_validation import self_validation_enabled
@@ -1417,19 +1416,6 @@ class TypeEnvironment:
         layer, candidates = resolved
         return layer, {(ref.module_id, ref.scope_path, ref.name) for ref in candidates}
 
-    def _live_use_generic_key(self, name: NameAtom, span: SourceSpan | None) -> DeclKey | None:
-        """Resolve a generic identity from retained local-use contributions."""
-        layer = self._scope_nodes.get(self._type_scope)
-        if layer is None:
-            return None
-        keys = {
-            (ref.module_id, ref.scope_path, ref.name)
-            for contribution in layer.local_use_contributions
-            for ref in local_use_contribution_refs(contribution, name, self._scope_nodes)
-            if (ref.module_id, ref.scope_path, ref.name) in (self._program_generic_table or {})
-        }
-        return self._unique_bare_type_key(name, keys, span)
-
     def _opened_type_key(self, name: NameAtom, span: SourceSpan | None) -> DeclKey | None:
         """Return the unique type declaration contributed to this type region."""
         resolved = self._opened_type_layer_keys(name)
@@ -1447,7 +1433,9 @@ class TypeEnvironment:
         keys = set() if opened is None else set(opened[1])
         if opened is not None and opened[0].scope_path:
             return self._unique_bare_type_key(name, keys, span)
-        if self._import_env is not None and self._program_type_table is not None:
+        if self._import_env is not None and (
+            self._program_type_table is not None or self._program_generic_table is not None
+        ):
             keys.update(
                 self._qname_decl_key(qname)
                 for qname in self._import_env.unqualified.get(name, frozenset())
@@ -2321,8 +2309,6 @@ class TypeEnvironment:
         if gdef is not None:
             return name, gdef
         key = self._bare_type_key(name, span)
-        if key is None:
-            key = self._live_use_generic_key(name, span)
         if key is None or self._program_generic_table is None:
             return None
         gdef = self._program_generic_table.get(key)
@@ -2360,13 +2346,13 @@ class TypeEnvironment:
                 (*tuple(segment.name for segment in qualifier.segments), name)
             )
             opened_key = self._opened_type_key(opened_atom, span)
-            if opened_key is None:
-                opened_key = self._live_use_generic_key(opened_atom, span)
-            if opened_key is not None and self._program_generic_table is not None:
+            if opened_key is not None:
+                assert self._program_generic_table is not None
                 opened_gdef = self._program_generic_table.get(opened_key)
-                if opened_gdef is not None:
-                    rendered = qualifier.render()
-                    return f"{rendered}::{name}", opened_gdef
+                if opened_gdef is None:
+                    return None
+                rendered = qualifier.render()
+                return f"{rendered}::{name}", opened_gdef
         if self._import_env is None or self._program_generic_table is None:
             return None
         qname = self._resolve_import_qname(qualifier, name, span=span, required=False)

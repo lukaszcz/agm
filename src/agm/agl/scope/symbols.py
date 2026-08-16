@@ -498,35 +498,6 @@ class ScopeNode:
         }
 
 
-def local_use_contribution_refs(
-    contribution: LocalUseContribution,
-    name: BareAtom,
-    scope_nodes: Mapping[ScopePath, ScopeNode],
-) -> set[BindingRef]:
-    """Resolve one exposed atom against a live local-use surface."""
-    del scope_nodes
-    decl = contribution.declaration
-    if decl.alias is not None:
-        exposed_path = to_bare_path(name)
-        if not exposed_path or exposed_path[0] != decl.alias:
-            return set()
-        source_path = exposed_path[1:]
-    elif decl.tail == ():
-        source_path = to_bare_path(name)
-    else:
-        return set()
-    if any(
-        source_path[: len(prefix)] == prefix
-        for hidden in decl.hidden
-        if (prefix := import_item_path(hidden))
-    ):
-        return set()
-    if len(source_path) != 1:
-        return set()
-    selected_ref = contribution.source.members.get(source_path[0])
-    return set() if selected_ref is None else {selected_ref}
-
-
 def resolve_bare_contribution_layer(
     scope: ScopeNode,
     name: BareAtom,

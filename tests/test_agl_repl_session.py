@@ -6191,6 +6191,35 @@ class TestBareTypeEntry:
             render_entry_result(result, echo=True) == "<type:\nrecord Alias::Box[T]\n  value: T\n>"
         )
 
+    def test_use_alias_does_not_expose_another_qualifier(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("scope S\nrecord Box[T](value: T)\nend S").ok
+        assert session.eval_entry("use S as Alias").ok
+
+        assert not session.eval_entry("Other::Box").ok
+
+    def test_use_alias_nested_generic_record_name_echoes_definition(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry(
+            "scope S\nscope Nested\nrecord Box[T](value: T)\nend Nested\nend S"
+        ).ok
+        assert session.eval_entry("use S as Alias").ok
+
+        result = session.eval_entry("Alias::Nested::Box")
+
+        assert result.ok, result.diagnostics
+        assert result.kind == "type"
+
+    def test_use_alias_non_generic_enum_falls_back_to_type_display(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("scope S\nenum Status | ready\nend S").ok
+        assert session.eval_entry("use S as Alias").ok
+
+        result = session.eval_entry("Alias::Status")
+
+        assert result.ok, result.diagnostics
+        assert result.kind == "type"
+
     def test_bare_scoped_generic_record_name_echoes_definition(self) -> None:
         """A retained named-scope generic resolves by its qualified local name.
 

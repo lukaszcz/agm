@@ -1505,6 +1505,26 @@ class TestWildcardImports:
         ref = result.modules[ENTRY_ID].resolved.resolution[alpha_var.node_id]
         assert ref.module_id == ModuleId.from_path("foo/alpha")
 
+    def test_wildcard_facade_accepts_duplicate_routes_to_the_same_origin(
+        self, tmp_path: Path
+    ) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import pkg/* as F\nlet value = F::shared()",
+                "pkg/left": "export core::{shared}",
+                "pkg/right": "export core::{shared}",
+                "core": "def shared() -> int = 1",
+            },
+        )
+
+        result = resolve_program(graph)
+        entry_program = graph.modules[ENTRY_ID].program
+        shared_var = _find_varref(entry_program, "shared")
+        assert shared_var is not None
+        ref = result.modules[ENTRY_ID].resolved.resolution[shared_var.node_id]
+        assert ref.module_id == ModuleId.from_path("core")
+
     def test_unrelated_import_aliases_do_not_form_a_use_facade(self, tmp_path: Path) -> None:
         graph = _make_graph_from_files(
             tmp_path,

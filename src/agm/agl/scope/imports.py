@@ -613,7 +613,7 @@ def resolve_qualified(
 
     if route_members:
         route_qnames = {qname for _module, qname in route_members}
-        if len(route_members) > 1 or len(route_qnames | bare_qnames) > 1:
+        if len(route_qnames | bare_qnames) > 1:
             modules = {module for module, _qname in route_members}
             modules.update(module for module, _atom in bare_qnames)
             return QualResolutionAmbiguous(

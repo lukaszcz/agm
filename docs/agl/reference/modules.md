@@ -182,8 +182,9 @@ settings::timeout
 
 A non-aliased imported path may be named by any trailing sequence of its path
 segments. A qualifier route may match several imported modules; the requested
-member resolves when exactly one matching route contributes it. A leading `/`
-anchors a qualifier to the complete plain module path. Anchored qualifiers never
+member resolves when their contributions identify one declaration origin. Duplicate
+routes to that origin are allowed. A leading `/` anchors a qualifier to the complete
+plain module path. Anchored qualifiers never
 match aliases. Aliases are single-segment routes only.
 
 `::name` refers to a declaration in the current module root and bypasses a

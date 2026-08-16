@@ -23,8 +23,9 @@ scope remains a nameable `use` target without becoming a value. An import contri
 qualified surface, except paths hidden by that declaration. A positive
 import tail or `use` declaration contributes selected bare names without
 narrowing qualified access. A wildcard import alias retains its declaration
-identity as a shared facade; unrelated imports that reuse an alias remain
-ambiguous. `use` selects from an already nameable local scope or imported route,
+identity as a shared facade; routes through that facade may converge on the same
+origin, while unrelated imports that reuse an alias remain ambiguous. `use` selects
+from an already nameable local scope or imported route,
 including a scope route exposed by an earlier `use`; it does not create a
 module-loading edge. Region-scoped bare contributions apply within that region
 and its nested regions, while imports still make their qualified routes

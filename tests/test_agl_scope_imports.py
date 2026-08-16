@@ -128,6 +128,38 @@ def test_tail_rename_is_additive_for_bare_spelling() -> None:
     )
 
 
+def test_shared_route_resolves_duplicate_contributions_to_the_same_origin() -> None:
+    left = _module("pkg/left")
+    right = _module("pkg/right")
+    origin = _module("core")
+    qname = (origin, "shared")
+    env = ImportEnv(
+        contributions={
+            left: ModuleContribution(
+                left,
+                {"shared": qname},
+                frozenset(),
+                False,
+                frozenset({"Facade"}),
+                alias_members={"Facade": {"shared": qname}},
+            ),
+            right: ModuleContribution(
+                right,
+                {"shared": qname},
+                frozenset(),
+                False,
+                frozenset({"Facade"}),
+                alias_members={"Facade": {"shared": qname}},
+            ),
+        },
+        unqualified={},
+    )
+
+    result = resolve_qualified(env, ("Facade",), "shared")
+    assert isinstance(result, QualResolutionFound)
+    assert result.qname == qname
+
+
 def test_plain_hiding_repairs_a_shared_suffix_route() -> None:
     left_decl = _decl("one/config", hidden=(_item("shared"),))
     right_decl = _decl("two/config")

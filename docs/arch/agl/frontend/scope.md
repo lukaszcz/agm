@@ -6,12 +6,14 @@ whole module graph when a program imports files.
 
 ## Namespaces and Scopes
 
-Collection builds module-root and named-scope namespaces from declarations,
-bindings, parameters, types, and constructors. Declarations in a named scope
-are addressed by their complete `::` path; repeated scope regions extend the
-same namespace. The resolver applies lexical visibility for bindings and
-resolves qualified chains through local scope paths and imported module routes.
-Ambiguous bare or qualified routes are static errors.
+Collection builds module-root and named-scope layers and pre-populates them
+with static function/type declarations and constructors. Bindings and
+parameters are installed during the subsequent ordered resolution walk, which
+preserves their textual visibility. Declarations in a named scope are addressed
+by their complete `::` path; repeated scope regions extend the same namespace.
+The resolver applies lexical visibility for bindings and resolves qualified
+chains through local scope paths and imported module routes. Ambiguous bare or
+qualified routes are static errors.
 
 ## Imports and `use`
 

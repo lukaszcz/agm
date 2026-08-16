@@ -1062,7 +1062,8 @@ class EntryPipeline:
                 "\0scope",
                 *target[1:],
             )
-        elif target:
+        else:
+            assert target
             aliases = {
                 import_decl.alias: tuple(import_decl.module_path)
                 for import_decl in imports

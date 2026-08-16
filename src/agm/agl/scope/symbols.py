@@ -24,7 +24,6 @@ import enum
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TypeVar
 
 from agm.agl.diagnostics import AglError
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
@@ -489,24 +488,6 @@ class ScopeNode:
         members from its prior definition do not survive.
         """
         self.members.clear()
-
-
-_T = TypeVar("_T")
-
-
-def _nearest_layer_contribution(
-    scope: ScopeNode,
-    name: BareAtom,
-    snapshot: Callable[[ScopeNode], Mapping[BareAtom, set[_T]]],
-) -> set[_T] | None:
-    """Return the nearest region's snapshotted bare contribution of *name*."""
-    layer: ScopeNode | None = scope
-    while layer is not None:
-        stored = snapshot(layer).get(name)
-        if stored:
-            return set(stored)
-        layer = layer.parent
-    return None
 
 
 def resolve_bare_contribution(

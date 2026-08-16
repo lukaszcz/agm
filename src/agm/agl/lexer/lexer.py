@@ -243,8 +243,6 @@ def _is_use_declaration(tokens: list[Token], index: int) -> bool:
         return position == end
 
     def tail(position: int) -> bool:
-        if position >= end:
-            return False
         if tokens[position].type == STAR:
             return hiding_clause(position + 1)
         if tokens[position].type == LBRACE:
@@ -324,8 +322,6 @@ def _is_use_declaration(tokens: list[Token], index: int) -> bool:
             return False
         if tail(position + 1):
             return True
-        if position + 1 >= end:
-            return False
         position += 2
     return False
 

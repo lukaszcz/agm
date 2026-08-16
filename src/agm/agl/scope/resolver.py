@@ -2330,16 +2330,8 @@ class _Resolver:
         elif isinstance(expr, IsTest):
             if expr.qualifier is None:
                 candidates = self._regional_constructor_candidates(expr.variant)
-                if candidates is not None:
-                    if len(candidates) == 1:
-                        self._constructor_refs[expr.node_id] = next(iter(candidates))
-                else:
-                    self._resolve_constructor_chain(
-                        expr.node_id,
-                        expr.qualifier,
-                        expr.variant,
-                        defer_route_diagnostics=True,
-                    )
+                if candidates is not None and len(candidates) == 1:
+                    self._constructor_refs[expr.node_id] = next(iter(candidates))
             else:
                 self._resolve_constructor_chain(
                     expr.node_id, expr.qualifier, expr.variant, defer_route_diagnostics=True
@@ -2751,7 +2743,7 @@ class _Resolver:
     def _resolve_constructor_chain(
         self,
         node_id: int,
-        chain: QualifierChain | None,
+        chain: QualifierChain,
         variant: str,
         *,
         defer_route_diagnostics: bool = False,
@@ -2763,8 +2755,6 @@ class _Resolver:
         local/import clash until the checker can assess it against the enum
         being matched.
         """
-        if chain is None:
-            return False
         opened = self._use_constructor_candidates(chain, variant)
         if opened is not None:
             if len(opened) == 1:
@@ -2784,9 +2774,9 @@ class _Resolver:
                 tuple(segment.name for segment in chain.segments),
                 variant,
             ):
-                rendered = "::".join(segment.name for segment in chain.segments)
                 if defer_route_diagnostics:
                     return False
+                rendered = "::".join(segment.name for segment in chain.segments)
                 raise AglScopeError(
                     f"Qualifier '{rendered}' is both a type name and a module route for "
                     f"'{variant}'. {qualification_repair_guidance()}",
@@ -2902,13 +2892,6 @@ class _Resolver:
         """
         if chain.anchor is QualifierAnchor.CURRENT_MODULE or not chain.segments:
             return None
-        if len(chain.segments) == 1 and not chain.anchored:
-            bare_atom = _bare_atom((chain.segments[0].name, variant))
-            bare_candidates = self._regional_constructor_candidates(bare_atom)
-            # Several scope uses contributing the same owner fall through to
-            # the shared lookup below, which owns the ambiguity diagnostic.
-            if bare_candidates is not None and len(bare_candidates) == 1:
-                return next(iter(bare_candidates))
         owner_ref: BindingRef | None = None
         if len(chain.segments) == 1 and not chain.anchored:
             owner_ref = self._lookup_import_env_unqualified(chain.segments[0].name, chain.span)
@@ -3043,10 +3026,11 @@ class _Resolver:
         selected_layer, resolved, _constructors = nearest
         assert self._root_scope is not None
         if selected_layer is self._root_scope and name in self._root_scope.bare_contributions:
-            for qname in self._import_env.unqualified.get(name, frozenset()):
-                ref, _constructor = self._cross_module_member_ref(name, qname, span)
-                if not self._is_value_contribution(ref):
-                    continue
+            imported_refs = (
+                self._cross_module_member_ref(name, qname, span)[0]
+                for qname in self._import_env.unqualified.get(name, frozenset())
+            )
+            for ref in filter(self._is_value_contribution, imported_refs):
                 if not any(
                     (existing.module_id, existing.scope_path, existing.decl_node_id, existing.kind)
                     == (ref.module_id, ref.scope_path, ref.decl_node_id, ref.kind)
@@ -3111,7 +3095,7 @@ class _Resolver:
         """Resolve an imported qualified VarRef."""
         qname = self._resolve_qualified_qname(module_qualifier, node.name, node.span)
         constructor = self._cross_module_constructor_refs.get(qname)
-        if constructor is not None:
+        if constructor is not None and (constructor.owner_path or constructor.variant is not None):
             self._constructor_refs[node.node_id] = constructor
             return
         self._resolution[node.node_id] = self._make_cross_module_ref(

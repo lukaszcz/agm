@@ -81,6 +81,47 @@ def test_constructor_consumers_resolve_whole_use_aliases(tmp_path: Path, express
     check_program(resolve_program(graph), base_caps())
 
 
+def test_bare_renamed_constructor_must_belong_to_matched_enum(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use S::{A::X as Renamed}\n"
+                "scope S\n"
+                "enum A | X\n"
+                "enum B | Y\n"
+                "end S\n"
+                "let value = S::B::Y\n"
+                "case value of | Renamed => 1 | _ => 0\n"
+            ),
+        },
+    )
+
+    with pytest.raises(AglTypeError):
+        check_program(resolve_program(graph), base_caps())
+
+
+def test_bare_renamed_fieldful_constructor_must_use_a_constructor_pattern(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use S::{E::A as X}\n"
+                "scope S\n"
+                "enum E | A(value: int)\n"
+                "end S\n"
+                "let value = X(1)\n"
+                "case value of | X => 1 | _ => 0\n"
+            ),
+        },
+    )
+
+    with pytest.raises(AglTypeError):
+        check_program(resolve_program(graph), base_caps())
+
+
 def test_constructor_consumers_honor_use_tail_renames(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,
@@ -101,6 +142,29 @@ def test_constructor_consumers_honor_use_tail_renames(tmp_path: Path) -> None:
     checked = check_program(resolve_program(graph), base_caps())
     constructors = tuple(checked.modules[graph.entry_id].resolved.constructor_refs.values())
     assert any(constructor.variant == "A" for constructor in constructors)
+
+
+def test_ambiguous_whole_use_alias_constructor_qualifier_is_rejected(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use First as X\n"
+                "use Second as X\n"
+                "scope First\n"
+                "enum E | A\n"
+                "end First\n"
+                "scope Second\n"
+                "enum E | A\n"
+                "end Second\n"
+                "let value = First::E::A\n"
+                "value is X::E::A\n"
+            ),
+        },
+    )
+
+    with pytest.raises((AglScopeError, AglTypeError)):
+        check_program(resolve_program(graph), base_caps())
 
 
 @pytest.mark.parametrize(
@@ -163,6 +227,26 @@ def test_import_tails_keep_type_and_value_namespaces_separate(tmp_path: Path) ->
     check_program(resolve_program(graph), base_caps())
 
 
+def test_root_use_value_ignores_same_named_imported_type(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import types::*\n"
+                "use Values::*\n"
+                "scope Values\n"
+                "record T\n"
+                "  value: int\n"
+                "end Values\n"
+                "T(7)\n"
+            ),
+            "types": "enum T | member\n",
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
 def test_type_use_lookup_continues_past_inner_value_contribution(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,
@@ -198,6 +282,25 @@ def test_unbraced_single_member_use_tail_can_be_renamed(tmp_path: Path) -> None:
                 "end Scope\n"
                 "Alias()\n"
             ),
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+@pytest.mark.parametrize(
+    "use_decl",
+    (
+        "import lib\nuse /lib::Scope::member as Alias\n",
+        "import lib::{Scope::member}\nuse Scope::member as Alias\n",
+    ),
+)
+def test_unbraced_imported_member_use_tail_can_be_renamed(tmp_path: Path, use_decl: str) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": f"{use_decl}Alias()\n",
+            "lib": "scope Scope\ndef member() -> int = 1\nend Scope\n",
         },
     )
 

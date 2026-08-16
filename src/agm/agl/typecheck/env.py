@@ -2137,11 +2137,6 @@ class TypeEnvironment:
             ),
         )
 
-    def resolve_unqualified_enum_owner_form(self, owner_name: str) -> EnumOwnerForm | None:
-        """Resolve ``Owner::variant`` with local-before-scope-use precedence."""
-        local = self.resolve_enum_owner_form(EnumOwnerFormKind.LOCAL, owner_name)
-        return local or self.resolve_enum_owner_form(EnumOwnerFormKind.OPEN_IMPORT, owner_name)
-
     def _blocked_short_variants(self, form: EnumOwnerForm) -> frozenset[str]:
         """Return variants whose short owner spelling is occupied by a module route.
 

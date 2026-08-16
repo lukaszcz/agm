@@ -4100,13 +4100,6 @@ class _Checker:
         span: SourceSpan,
     ) -> None:
         """Validate a lone ``prefix::Variant`` qualifier."""
-        if not module_qualifier.anchored and len(module_qualifier.route_segments) == 1:
-            qualifier = module_qualifier.route_segments[0]
-            form = self._env.resolve_unqualified_enum_owner_form(qualifier)
-            if form is not None:
-                self._require_enum_owner_match(form, enum_type, qualifier, span)
-                return
-
         self._check_module_qualified_variant(module_qualifier, enum_name, enum_type, span)
 
     def _check_module_qualified_variant(
@@ -4983,9 +4976,7 @@ class _Checker:
         """Require a bare constructor spelling to be a nullary matched enum variant."""
         assert isinstance(enum_type, EnumType)
         variant = candidate.variant if candidate.variant is not None else pattern.name
-        fields = self._env.type_table.enum_variants(enum_type).get(variant)
-        if fields is None:
-            raise _variant_not_in_enum(variant, enum_type, pattern.span)
+        fields = self._env.type_table.enum_variants(enum_type)[variant]
         if fields:
             raise AglTypeError(
                 f"'{pattern.name}' has fields; write '{pattern.name}(...)' to match it.",

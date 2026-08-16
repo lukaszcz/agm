@@ -1714,7 +1714,10 @@ class _Resolver:
             # A same-named top-level exception already owns the bare name
             # (checked by its own plain atom, not the variant's owner-path
             # key); the exception's own bare contribution stands alone.
-            if isinstance(self._all_public_types.get((module, variant.name)), ExceptionDef):
+            exception_qname = (module, variant.name)
+            if exception_qname in selected_qnames and isinstance(
+                self._all_public_types.get(exception_qname), ExceptionDef
+            ):
                 continue
             variant_qname = (module, _bare_atom((*owner_path, variant.name)))
             if variant_qname not in selected_qnames:

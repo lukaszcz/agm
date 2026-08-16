@@ -252,8 +252,9 @@ def _build_cross_module_constructor_candidates(
                 add_candidate(exposed_name, constructor)
             elif isinstance(decl, EnumDef):
                 for variant in decl.variants:
-                    if (mid, variant.name) in all_public_types and isinstance(
-                        all_public_types[(mid, variant.name)], ExceptionDef
+                    exception_qname = (mid, variant.name)
+                    if exception_qname in exposed_qnames and isinstance(
+                        all_public_types.get(exception_qname), ExceptionDef
                     ):
                         continue
                     variant_qname = (mid, _atom((*src_path, variant.name)))

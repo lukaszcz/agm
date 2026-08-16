@@ -2209,6 +2209,26 @@ class TestExceptionDefInGraph:
         # MyErr is a constructor candidate resolved from the glob import.
         assert "MyErr" in entry_resolved.constructor_candidates
 
+    @pytest.mark.parametrize(
+        "entry",
+        (
+            "import mylib::{A::E as E}\nlet value: E = X",
+            "scope Local\nimport mylib::{A::E as E}\nlet value: E = X\nend Local",
+        ),
+    )
+    def test_selective_enum_import_keeps_variant_that_collides_with_unselected_exception(
+        self, tmp_path: Path, entry: str
+    ) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": entry,
+                "mylib": "scope A\nenum E | X | Y\nend A\nexception X extends Exception()",
+            },
+        )
+
+        assert ENTRY_ID in resolve_program(graph).modules
+
     def test_exception_skip_branch_enum_variant_collision(self, tmp_path: Path) -> None:
         """Exception-skip branch: an enum variant whose name collides with a public
         ExceptionDef in the same module is skipped as a constructor candidate.

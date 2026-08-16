@@ -61,6 +61,26 @@ class AglJson:
     value: object
 
 
+class AglException(Exception):
+    """Carry an AgL exception value through companion Python frames.
+
+    Companions construct this with an instance of a synthesized exception
+    class. Callbacks construct it from their already-materialized
+    :class:`ExceptionValue`. In either case, it carries the resulting AgL
+    exception value rather than turning it into a Python exception.
+    """
+
+    def __init__(self, value: ExceptionValue | object) -> None:
+        try:
+            decoded = value if isinstance(value, ExceptionValue) else decode_boundary_value(value)
+        except BoundaryViolation as exc:
+            raise TypeError("AglException requires an AgL exception value") from exc
+        if not isinstance(decoded, ExceptionValue):
+            raise TypeError("AglException requires an AgL exception value")
+        super().__init__(decoded.display_name)
+        self.value = decoded
+
+
 class _AglNominal:
     """Base implementation shared by synthesized record, exception, and enum-variant classes.
 

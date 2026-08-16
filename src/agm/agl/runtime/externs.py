@@ -28,6 +28,7 @@ from agm.agl.modules.ids import ModuleId
 from agm.agl.runtime.boundary import (
     AglArrayView,
     AglDictView,
+    AglException,
     AglJson,
     BoundaryTypeError,
     BoundaryViolation,
@@ -39,6 +40,9 @@ from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise
 from agm.agl.semantics.exceptions import AglRaise, make_builtin_exception
 from agm.agl.semantics.values import ArrayValue, DictValue, IrClosureValue, TextValue, Value
+
+# These companion module attributes are APIs, never synthesized nominal aliases.
+_COMPANION_API_NAMES = frozenset({"AglException", "array", "dict", "json", "nominals"})
 
 
 class ExternImportError(AglError):
@@ -177,7 +181,10 @@ class AglCallableProxy:
             values = tuple(decode_boundary_value(arg) for arg in args)
         except BoundaryViolation as exc:
             raise BoundaryTypeError(str(exc)) from exc
-        return self._encode(self._invoke(values))
+        try:
+            return self._encode(self._invoke(values))
+        except AglRaise as exc:
+            raise AglException(exc.exc) from exc
 
 
 class ExternCallable(Protocol):
@@ -268,6 +275,7 @@ class ExternRegistry:
         setattr(module, "array", _array)
         setattr(module, "dict", _dict)
         setattr(module, "json", AglJson)
+        setattr(module, "AglException", AglException)
         nominals = ModuleType("agl.nominals")
         setattr(module, "nominals", nominals)
         leaves: dict[tuple[str, ...], type[object]] = {}
@@ -280,7 +288,7 @@ class ExternRegistry:
         for cls in leaves.values():
             names.setdefault(cls.__name__, []).append(cls)
         for name, classes in names.items():
-            if len(classes) == 1 and name not in {"array", "dict", "json", "nominals"}:
+            if len(classes) == 1 and name not in _COMPANION_API_NAMES:
                 setattr(module, name, classes[0])
         return module
 
@@ -411,6 +419,8 @@ class ExternRegistry:
         try:
             with decimal.localcontext():
                 result = fn(*encoded_args)
+        except AglException as exc:
+            raise AglRaise(exc.value) from exc
         except AglCyclicValue as exc:
             raise cyclic_value_raise(nominals=nominals) from exc
         except Exception as exc:

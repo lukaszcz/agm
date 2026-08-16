@@ -428,8 +428,8 @@ class ScopeNode:
     - ``bare_contributions``/``bare_constructor_contributions``: selected
       imports snapshotted for this region.
 
-    ``members`` is read freely but written only through :meth:`register_member`
-    and :meth:`clear_members`.
+    ``members`` is read freely but written only through the member mutation
+    methods on this class.
 
     Membership is collected before resolution. Lookup walks the lexical binding
     parent chain; member-reference resolution is introduced separately.
@@ -488,6 +488,14 @@ class ScopeNode:
         members from its prior definition do not survive.
         """
         self.members.clear()
+
+    def clear_constructor_members(self) -> None:
+        """Discard constructors while retaining members valid on prior nominal values."""
+        self.members = {
+            name: ref
+            for name, ref in self.members.items()
+            if ref.kind is not BinderKind.constructor_binding
+        }
 
 
 def resolve_bare_contribution(

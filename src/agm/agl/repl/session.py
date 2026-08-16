@@ -1071,8 +1071,12 @@ class ReplSession:
             for item in entry_type_items
             if isinstance(item, EnumDef) and type_name_path(item) == (path, name)
         }
-        for path in promoted_enum_paths:
-            self._session_scope_nodes[path].clear_members()
+        promoted_type_paths = {(*path, name) for path, name in promoted_type_name_paths}
+        for path in promoted_type_paths:
+            if path in promoted_enum_paths:
+                self._session_scope_nodes[path].clear_members()
+            else:
+                self._session_scope_nodes[path].clear_constructor_members()
 
         for path, node in checked.resolved.scope_nodes.items():
             session_node = self._session_scope_nodes.get(path)

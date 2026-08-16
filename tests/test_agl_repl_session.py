@@ -2080,6 +2080,17 @@ enum Agent
         assert not stale.ok
         assert fresh.ok, fresh.diagnostics
 
+    def test_redeclaring_an_enum_as_a_record_drops_stale_variants(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("enum Color | Red").ok
+        assert session.eval_entry("record Color(value: int)").ok
+
+        stale_use = session.eval_entry("use Color::{Red}")
+        fresh = session.eval_entry("Color(value = 1)")
+
+        assert not stale_use.ok
+        assert fresh.ok, fresh.diagnostics
+
     def test_redeclaring_a_used_enum_drops_its_stale_bare_variant(self) -> None:
         """A local use recorded before the enum is redeclared must not
         resurrect a variant the redeclaration's fresh member layer dropped."""

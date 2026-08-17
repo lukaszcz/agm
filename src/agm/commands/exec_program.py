@@ -37,8 +37,10 @@ Flag notes:
       must declare at least one program; inline ``-c`` statements are wrapped in
       a synthetic ``program def main`` before scope resolution.
     - Every loaded entry and library module receives a ``std/core`` glob import
-      by default (except ``std/core`` itself). ``--no-stdlib`` disables that
-      automatic import throughout the loaded program. Ordinary imports are
+      by default (except ``std/core`` itself). An explicit import whose expansion
+      includes ``std/core`` supplies its core contribution instead, so plain
+      ``import std/core`` leaves core names qualified-only. ``--no-stdlib``
+      disables the automatic import throughout the loaded program. Ordinary imports are
       qualified by default; tails and ``use`` declarations make names bare.
     - A program reads and writes the engine settings (``strict-json``,
       ``max-iters``, ``default-agent``, ``timeout``, ``log``, ``log-file``) through the

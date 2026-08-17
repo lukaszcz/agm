@@ -227,8 +227,10 @@ invokes the sole one after initialization, or selects one of several with
 `-p`/`--program PATH` (for example, `review::main`). Inline `-c` source is wrapped
 in a synthetic entry when needed. Programs can span multiple `.agl` files via the
 module system (`import utils/math`). Every loaded entry and library module,
-except `std/core` itself, receives `import std/core::*` by default; `--no-stdlib`
-disables that automatic prelude throughout the loaded program.
+except `std/core` itself, receives `import std/core::*` by default. An explicit import
+whose expansion includes `std/core` supplies that module's core contribution instead,
+so plain `import std/core` leaves its names qualified-only. `--no-stdlib` disables the
+automatic prelude throughout the loaded program.
 Other imports are qualified by default; an import tail or `use` declaration makes selected names
 bare. `agm exec` searches the entry file's directory, the selected standard library
 (the active `<AGM-home>/packages/std/<AGM_VERSION>/` package, then the wheel-bundled or
@@ -255,8 +257,9 @@ calls fire exactly once. By default it fires agent calls immediately; `--confirm
 asks before each one. Multiline editing, syntax highlighting, tab-completion, and history are
 built in, and `:` meta-commands (`:help`, `:type`, `:bindings`, …) inspect the session.
 Each loaded program receives the `std/core` standard-library prelude, as in
-`agm exec`; pass `--no-stdlib` to disable it for the entry and its library
-modules. Imported-module params can be supplied by their qualified
+`agm exec`, unless an explicit import includes `std/core`; plain `import std/core`
+therefore leaves its names qualified-only. Pass `--no-stdlib` to disable the
+prelude for the entry and its library modules. Imported-module params can be supplied by their qualified
 config tables; params declared directly at the prompt use source defaults (or are required).
 
 ```bash

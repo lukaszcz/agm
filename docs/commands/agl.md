@@ -29,9 +29,11 @@ initialization, before the prompt appears — if the session never loads `std/co
 
 Like `agm exec`, the REPL supplies an automatic `import std/core::*` prelude to
 each loaded program, so standard-library names such as `Option`, `Some`, and
-`None` are available unqualified from a fresh prompt. Pass `--no-stdlib` to
-disable that prelude for each entry and its library modules; explicit imports
-still work, including after `:reset`.
+`None` are available unqualified from a fresh prompt. An explicit import whose
+expansion includes `std/core` supplies that contribution instead, so plain
+`import std/core` leaves core names qualified-only. Pass `--no-stdlib` to disable
+the prelude for each entry and its library modules; explicit imports still work,
+including after `:reset`.
 Entering a bare type name displays the type; an unapplied generic type name such as
 `Option` displays its generic definition instead of being evaluated as a value.
 

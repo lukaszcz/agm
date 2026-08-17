@@ -618,10 +618,11 @@ _HELP_TEXTS: dict[str, str] = {
         earlier results stay available and agent calls fire exactly once.  The
         session reuses the [exec] configuration (default agent, call-depth
         limit, JSON strictness, timeout). Like agm exec, it supplies an automatic
-        import std/core::* prelude to each loaded program, so
-        standard-library names are available unqualified. Other imports are
-        qualified by default; use --no-stdlib to require an explicit std/core
-        import instead.
+        import std/core::* prelude to each loaded program, so standard-library
+        names are available unqualified. An explicit import whose expansion
+        includes std/core supplies its core contribution instead, so plain
+        import std/core leaves core names qualified-only. Other imports are
+        qualified by default; --no-stdlib disables the automatic prelude.
 
         Trace logging is OFF by default.  A ``std/config::KEY := VALUE`` write
         entered at the REPL prompt takes effect from that point and persists for

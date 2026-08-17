@@ -1521,7 +1521,7 @@ class ReplSession:
         the parse diagnostic.  An empty or comment-only file has no items to
         run and yields an empty list (a benign no-op).
         """
-        from agm.agl.parser import AglSyntaxError, parse_program
+        from agm.agl.parser import AglSyntaxError, parse_repl_transcript
         from agm.core.fs import read_text
         from agm.util.text import normalize_newlines
 
@@ -1538,7 +1538,7 @@ class ReplSession:
         # this parse is never promoted (each slice is re-parsed by eval_entry with
         # the session's continuing node-id counter).  start_id=0 is fine here.
         try:
-            program = parse_program(normalized)
+            program = parse_repl_transcript(normalized)
         except AglSyntaxError as exc:
             return [self._fail([exc.to_diagnostic()], [])]
 

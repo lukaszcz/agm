@@ -435,6 +435,7 @@ class AstBuilder(Transformer):
         start_id: int = 0,
         source: SourceId | None = None,
         ambient_infix: "Mapping[str, tuple[int, syntax.InfixAssoc]] | None" = None,
+        allow_late_uses: bool = False,
     ) -> None:
         super().__init__()
         self._counter = count(start_id)
@@ -451,6 +452,9 @@ class AstBuilder(Transformer):
         # in an earlier entry can be used in a later one. ``None`` for a standalone
         # whole-program parse.
         self._ambient_infix = ambient_infix
+        # Transcript parsing discovers entry boundaries only; each entry is
+        # parsed normally before evaluation and owns its own header ordering.
+        self._allow_late_uses = allow_late_uses
         # Node ids of qualified patterns built by ``pat_qual_bare`` (no argument
         # list in the source). Provenance for ``let_decl``'s scoped-binding
         # reinterpretation only -- ``A::x`` and ``A::x()`` build structurally
@@ -532,7 +536,8 @@ class AstBuilder(Transformer):
     def module_block(self, meta: Meta, args: _Args) -> syntax.Block:
         """Build the module-root block, whose items may include scope regions."""
         block = self._build_block(meta, args)
-        self._validate_use_placement(block.items)
+        if not self._allow_late_uses:
+            self._validate_use_placement(block.items)
         return block
 
     def _validate_use_placement(self, items: tuple[syntax.Item, ...]) -> None:

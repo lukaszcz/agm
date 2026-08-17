@@ -26,8 +26,9 @@ while still falling back to their retained semantic routes when imports are
 renamed or replaced. Retained generations carry semantic identities rather than
 reconstructing them from import headers; a failed replacement entry still
 leaves the prior generation intact, and uses and imports at other paths remain. `:reset`
-clears retained declarations, imports, uses, and session runtime state. Retained
-explicit `std/core` imports suppress the normal per-entry prelude; `--no-stdlib`
+clears retained declarations, imports, uses, and session runtime state. Saved transcripts are
+split at top-level item boundaries and replayed as independent entries, so each replayed item has
+its own header ordering. Retained explicit `std/core` imports suppress the normal per-entry prelude; `--no-stdlib`
 disables that prelude for the whole session.
 
 ## Hosts and Settings

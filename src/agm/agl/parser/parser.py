@@ -167,13 +167,19 @@ def _transform_tree(
     filename: str,
     source: SourceId | None,
     ambient_infix: "Mapping[str, tuple[int, syntax.InfixAssoc]] | None" = None,
+    allow_late_uses: bool = False,
 ) -> tuple[object, int]:
     """Transform a Lark tree via ``AstBuilder``, unwrapping ``VisitError``.
 
     Returns ``(result, next_node_id)`` where ``next_node_id`` is the first id NOT
     consumed by the builder's counter (the seed for the next incremental parse).
     """
-    builder = AstBuilder(start_id=start_id, source=source, ambient_infix=ambient_infix)
+    builder = AstBuilder(
+        start_id=start_id,
+        source=source,
+        ambient_infix=ambient_infix,
+        allow_late_uses=allow_late_uses,
+    )
     try:
         result = builder.transform(tree)
     except VisitError as exc:
@@ -339,6 +345,25 @@ def parse_program(
         text, filename=filename, start_id=start_id, source=source, ambient_infix=ambient_infix
     )
     return program
+
+
+def parse_repl_transcript(text: str, *, filename: str = "<agl>") -> syntax.Program:
+    """Parse a saved REPL transcript for top-level entry boundary discovery.
+
+    Header ordering is deferred because each top-level item is subsequently
+    parsed as an independent REPL entry before it can be evaluated.
+    """
+
+    tree = _parse_tree(_PARSER, text, filename=filename, source=None)
+    result, _next_id = _transform_tree(
+        tree,
+        start_id=0,
+        filename=filename,
+        source=None,
+        allow_late_uses=True,
+    )
+    assert isinstance(result, syntax.Program)
+    return result
 
 
 def parse_program_seeded(

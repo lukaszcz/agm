@@ -1,4 +1,4 @@
-"""Built-in call (print/render/copy/shallow_copy/parse_json/ask/ask-request/exec)
+"""Built-in call (print/render/copy/shallow_copy/ask/ask-request/exec)
 type-checking collaborator.
 
 Driven by ``_Checker`` via the narrow ``BuiltinCheckCtx`` Protocol.  All logic
@@ -25,7 +25,6 @@ from agm.agl.semantics.types import (
     EnumType,
     ExceptionType,
     FunctionType,
-    JsonType,
     RecordType,
     TextType,
     Type,
@@ -261,18 +260,6 @@ class BuiltinCallChecker:
         except ResourceError as exc:
             raise AglTypeError(str(exc), span=node.span) from exc
         return TextType()
-
-    # --- parse_json ---
-
-    def check_parse_json(self, node: Call) -> Type:
-        if len(node.args) != 1 or node.named_args:
-            raise AglTypeError(
-                "parse_json() requires exactly one positional text argument.",
-                span=node.span,
-            )
-        arg_type = self._ctx._check_expr(node.args[0], expected=TextType())
-        self._ctx._assert_assignable_from(arg_type, TextType(), node.args[0].span, node.args[0])
-        return JsonType()
 
     # --- ask ---
 

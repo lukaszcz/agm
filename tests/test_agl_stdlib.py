@@ -130,7 +130,6 @@ def test_builtin_function_signature_mismatches_are_rejected() -> None:
     cases = [
         "builtin def print[T](value: T, extra: int) -> unit\n()\n",
         "builtin def print[T](item: T) -> unit\n()\n",
-        'builtin def parse_json(value: text = "{}") -> json\n()\n',
         "builtin def ask-request(prompt: text) -> ExecResult\n()\n",
         "builtin def exec(command: int) -> ExecResult\n()\n",
         "builtin def copy(value: int) -> int\n()\n",
@@ -319,13 +318,6 @@ def test_lowerer_skips_builtin_function_definitions() -> None:
 
     source = "builtin def print[T](value: T) -> unit\nprogram def main() = ()\n"
     lower_ir(source, caps=_CAPS, default_stdlib=False)
-
-
-def test_source_declared_builtin_function_call_is_classified() -> None:
-    """A program's own ``parse_json`` declaration is a duplicate of
-    ``std/core``'s while the standard library is loaded, so this checks the
-    entry module's declaration alone, without it."""
-    _check('builtin def parse_json(value: text) -> json\nparse_json("{}")\n', default_stdlib=False)
 
 
 def test_copy_and_shallow_copy_source_declared_calls_are_classified() -> None:

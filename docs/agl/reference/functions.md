@@ -234,12 +234,11 @@ same direct-call, bound-method, and generic-specialization rules as nominal
 methods.
 
 A `builtin def` receiver method is instead a call-only host route. Its name and
-signature must be one of `print`, `render`, `copy`, `shallow_copy`, or
-`parse_json`; the first four take only `self`, and `parse_json` requires a
-`text` receiver. `copy` and `shallow_copy` return the receiver's exact type,
-`print` returns `unit`, `render` returns `text`, and `parse_json` returns
-`json`. Such a call reuses the corresponding bare builtin operation with
-`self` as its value; it cannot be bound or partially applied.
+signature must be one of `print`, `render`, `copy`, or `shallow_copy`; each
+takes only `self`. `copy` and `shallow_copy` return the receiver's exact type,
+`print` returns `unit`, and `render` returns `text`. Such a call reuses the
+corresponding bare builtin operation with `self` as its value; it cannot be
+bound or partially applied.
 
 ```agl
 record Person
@@ -745,7 +744,7 @@ Error conditions are reported statically:
   forms such as a standalone `?`, `f(? + 1)`, and the single-argument sugar
   `f ?` do not parse.
 - Partial application is not supported by the special built-in calls `print`,
-  `render`, `exec`, `ask`, `ask-request`, `parse_json`, `copy`, and
+  `render`, `exec`, `ask`, `ask-request`, `copy`, and
   `shallow_copy`; for example, `print(?)` is rejected.
 - Numbered placeholders must be a permutation from `?1` through `?n`; examples
   such as `f(?0)`, `f(?2)`, `f(?1, ?1)`, and `f(?, ?1)` are rejected.

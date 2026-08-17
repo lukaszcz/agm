@@ -375,8 +375,6 @@ def _builtin_function_signature(name: str, *, is_method: bool = False) -> Functi
             return FunctionSignature(params=(_std_param("value", t),), result=t, type_params=("T",))
         case "shallow_copy":
             return FunctionSignature(params=(_std_param("value", t),), result=t, type_params=("T",))
-        case "parse_json":
-            return FunctionSignature(params=(_std_param("value", TextType()),), result=JsonType())
         case "resource":
             return FunctionSignature(params=(_std_param("path", TextType()),), result=TextType())
         case "resource-dir":
@@ -772,24 +770,15 @@ class _Checker:
             BuiltinKind.RENDER,
             BuiltinKind.COPY,
             BuiltinKind.SHALLOW_COPY,
-            BuiltinKind.PARSE_JSON,
         }:
             raise AglTypeError(
                 f"Builtin receiver method '{node.name}' has no host call route.", span=node.span
             )
-        if kind is BuiltinKind.PARSE_JSON and not isinstance(receiver.owner, TextType):
-            raise AglTypeError(
-                "Builtin receiver method 'parse_json' requires a text receiver.", span=node.span
-            )
-        result: Type
-        if kind in {BuiltinKind.COPY, BuiltinKind.SHALLOW_COPY}:
-            result = receiver.owner
-        elif kind is BuiltinKind.PRINT:
+        result: Type = receiver.owner
+        if kind is BuiltinKind.PRINT:
             result = UnitType()
         elif kind is BuiltinKind.RENDER:
             result = TextType()
-        else:
-            result = JsonType()
         expected = FunctionSignature(
             params=(
                 ParamSpec(
@@ -2656,8 +2645,6 @@ class _Checker:
                 return self._builtins.check_ask(node, expected=expected)
             if kind == BuiltinKind.ASK_REQUEST:
                 return self._builtins.check_ask_request(node)
-            if kind == BuiltinKind.PARSE_JSON:
-                return self._builtins.check_parse_json(node)
             if kind == BuiltinKind.RESOURCE:
                 return self._builtins.check_resource(node)
             if kind == BuiltinKind.RESOURCE_DIR:

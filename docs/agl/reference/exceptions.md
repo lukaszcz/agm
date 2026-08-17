@@ -406,8 +406,8 @@ it reports failure as `false`.
 
 ### `JsonParseError`
 
-The `parse_json` built-in received text that is not a well-formed JSON
-document ([Expressions](expressions.md#parse_json)).
+A `std/json` parsing function received text that is not a well-formed JSON
+document ([Modules](modules.md#stdjson)).
 
 ```text
 raw: text   # the input text that failed to parse
@@ -462,7 +462,7 @@ a cycle arises, which operations raise this and which tolerate a cycle instead
 | Division by zero | `ArithmeticError` |
 | Engine-setting write the host rejects (negative `max-iters`, unparseable `timeout`) | `TypeError` |
 | Fallible `as` cast — source does not conform to target type | `CastError` |
-| `parse_json` — input is not well-formed JSON | `JsonParseError` |
+| `std/json` parsing — input is not well-formed JSON | `JsonParseError` |
 | Rendering, `as text`, or `as json` encounters a reference cycle; or an extern companion `repr()`s the corresponding cyclic view | `CyclicValueError` |
 | `raise` of a constructed or re-raised value | any concrete type |
 

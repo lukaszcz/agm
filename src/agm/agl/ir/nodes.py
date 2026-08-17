@@ -102,7 +102,6 @@ __all__ = [
     "IrMakeJsonObject",
     "IrMakeRecord",
     "IrOr",
-    "IrParseJson",
     "IrPrint",
     "IrRaise",
     "IrReturn",
@@ -1027,20 +1026,6 @@ class IrRenderValue:
 
 
 @dataclass(frozen=True, slots=True)
-class IrParseJson:
-    """IR host-op: ``parse_json(text)`` — parse a JSON text value strictly.
-
-    Evaluates ``value`` (always a ``TextValue`` in well-lowered IR), then calls
-    ``parse_json_strict``.  On success returns ``JsonValue(obj)``; on
-    ``StrictJsonParseError`` raises ``AglRaise`` with a ``JsonParseError``
-    exception with the language-defined diagnostic fields.
-    """
-
-    location: Location
-    value: "IrExpr"
-
-
-@dataclass(frozen=True, slots=True)
 class IrCopyValue:
     """IR host-op for deep or shallow copying, selected by ``kind``.
 
@@ -1190,7 +1175,6 @@ IrExpr = (
     | IrIndirectCall
     | IrPrint
     | IrRenderValue
-    | IrParseJson
     | IrCopyValue
     | IrAsk
     | IrAskRequest

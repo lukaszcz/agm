@@ -229,7 +229,7 @@ Both are generic and identity-typed — `T -> T` — so they compose with any
 value and never change its type. An explicit type argument
 (`copy::[decimal](5)`) is accepted and behaves like passing that value to any
 other declaration expecting the explicit type: the argument must be
-assignable to it. Like `print`, `render`, and `parse_json`, neither `copy`
+assignable to it. Like `print` and `render`, neither `copy`
 nor `shallow_copy` can be bound as a function value — both are only valid in
 call position.
 
@@ -1056,10 +1056,9 @@ Because `text` is already JSON-shaped, `"42" as json` produces the JSON
 **string** `"42"` — it wraps the text in JSON representation and does not
 interpret it as a JSON value. This is a total, no-parse cast.
 
-To parse the *contents* of a text as JSON, use the built-in
-**`parse_json`** function ([Expressions](expressions.md)). `parse_json("42")`
-produces the JSON number `42` and raises `JsonParseError`
-([Exceptions](exceptions.md)) on malformed input.
+To parse the *contents* of a text as JSON, import `std/json` and use
+`json::parse("42")`. It produces the JSON number `42` and raises
+`JsonParseError` ([Modules](modules.md#stdjson)) on malformed input.
 
 ## Values and equality
 

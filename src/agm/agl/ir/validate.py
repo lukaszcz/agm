@@ -116,7 +116,6 @@ from agm.agl.ir.nodes import (
     IrMakeJsonObject,
     IrMakeRecord,
     IrOr,
-    IrParseJson,
     IrPrint,
     IrRaise,
     IrRenderTemplate,
@@ -968,10 +967,6 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                 _validate_expr(pretty, ctx)
             if quote_strings is not None:
                 _validate_expr(quote_strings, ctx)
-
-        case IrParseJson(value=val):
-            _validate_location(node.location, ctx)
-            _validate_expr(val, ctx)
 
         case IrCopyValue(value=val):
             _validate_location(node.location, ctx)

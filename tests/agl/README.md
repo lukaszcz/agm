@@ -23,7 +23,7 @@ Layout:
 | `basics/` | `let`/`var`/`:=`, params, agent calls, print rendering |
 | `calls/` | `ask` parse policies (`Retry`/`Abort`), format options |
 | `canonical/` | Multi-agent review/fix workflows |
-| `casts/` | `as`/`as?` casts, `CastError`/`JsonParseError`, `parse_json` |
+| `casts/` | `as`/`as?` casts and `CastError`/`JsonParseError` handling |
 | `control/` | `if`/`case`/`do…until`/`try…catch`/`raise` |
 | `errors/` | Exception types, field access in catch, rethrow |
 | `exec/` | Shell execution, `ExecResult` structured handle |

@@ -26,7 +26,7 @@ from prompt_toolkit.history import FileHistory, InMemoryHistory
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
-from agm.agl.repl import ReplSession
+from agm.agl.repl import ReplSession as _ReplSession
 from agm.agl.repl.agentmode import AgentMode
 from agm.agl.repl.agents import ConfirmDecision
 from agm.agl.repl.console import (
@@ -41,6 +41,19 @@ from agm.agl.repl.console import (
 )
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from tests._process_helpers import FakeShell
+
+
+class ReplSession(_ReplSession):
+    """Use the smallest session image for console-only behavior tests.
+
+    The automatic prelude is covered by the session tests. Loading it for each
+    headless console interaction competes with the full parallel suite and can
+    consume the hang guard's budget before prompt_toolkit reads its input.
+    """
+
+    def __init__(self, **kwargs: object) -> None:
+        default_stdlib = kwargs.pop("default_stdlib", False)
+        super().__init__(default_stdlib=default_stdlib, **kwargs)
 
 
 class _CountingAgent:
@@ -93,6 +106,10 @@ def drive(
 ) -> str:
     """Feed *keystrokes* to a headless REPL and return everything it printed."""
     repl_session = session if session is not None else ReplSession()
+    # Session bootstrapping compiles the standard library, which is setup work
+    # rather than a response to the scripted terminal input. Keep the hang
+    # guard focused on the console loop it is meant to validate.
+    assert repl_session.open() == ()
     with create_pipe_input() as pipe, _fail_on_hang():
         pipe.send_text(keystrokes)
         out = io.StringIO()
@@ -258,7 +275,9 @@ class TestMultiline:
         # closes it and runs one shell call.
         shell = FakeShell()
         with patch("agm.core.process.run_capture_result", side_effect=shell):
-            output = drive("exec!\r  echo one\r  echo two\r\r\x04")
+            output = drive(
+                "exec!\r  echo one\r  echo two\r\r\x04", session=ReplSession(default_stdlib=True)
+            )
 
         assert ": error:" not in output.lower()
         assert shell.commands == ["echo one\necho two"]
@@ -267,7 +286,8 @@ class TestMultiline:
     def test_raw_tail_ask_block_continues_and_uses_mocked_default_agent(self) -> None:
         agent = _CountingAgent("mocked reply")
         output = drive(
-            "ask!\r  summarize this\r\r\x04", session=ReplSession(agent_dispatcher=agent)
+            "ask!\r  summarize this\r\r\x04",
+            session=ReplSession(agent_dispatcher=agent, default_stdlib=True),
         )
 
         assert agent.calls == 1
@@ -661,7 +681,7 @@ class TestEvalOutput:
     def test_inline_raw_tail_exec_evaluates_through_the_console(self) -> None:
         shell = FakeShell()
         with patch("agm.core.process.run_capture_result", side_effect=shell):
-            output = drive("exec! echo hi\r\x04")
+            output = drive("exec! echo hi\r\x04", session=ReplSession(default_stdlib=True))
 
         assert ": error:" not in output.lower()
         assert shell.commands == ["echo hi"]
@@ -713,7 +733,7 @@ class TestDryRun:
         # An entry with an agent call type-checks and echoes its type, but the fake agent
         # is never invoked and no binding is persisted.
         agent = _CountingAgent("should-not-be-used")
-        session = ReplSession(agent_dispatcher=agent)
+        session = ReplSession(agent_dispatcher=agent, default_stdlib=True)
         output = drive(
             'let g: text = ask """say something"""\r\x04',
             session=session,
@@ -765,7 +785,7 @@ class TestMetaThroughLoop:
         # This command needs no prelude declarations. Avoid compiling the full
         # standard library twice, which makes the headless-loop hang guard
         # spuriously fire when the suite runs in parallel.
-        output = drive("1 + 2\r:type 1 + 2\r\x04", session=ReplSession(default_stdlib=False))
+        output = drive("1 + 2\r:type 1 + 2\r\x04", session=ReplSession())
         assert "int" in output
 
     def test_agent_meta_mutates_shared_mode(self) -> None:
@@ -854,7 +874,7 @@ def _confirming_session(*answers: str, reply: str = "agent-reply") -> tuple[Repl
     mode = AgentMode(mode="confirm")
     underlying = _CountingAgent(reply)
     wrapper = ConfirmingAgent(underlying, mode, confirm=confirm)
-    session = ReplSession(agent_dispatcher=wrapper)
+    session = ReplSession(agent_dispatcher=wrapper, default_stdlib=True)
     return session, underlying
 
 
@@ -935,7 +955,7 @@ class TestIsIncompleteSourceMemo:
         import agm.agl.parser.parser as parser_mod
         from agm.agl.parser import is_incomplete_source
 
-        text = "record R"
+        text = "record MemoRecord"
         real_parse = parser_mod._PARSER.parse
         with patch.object(parser_mod._PARSER, "parse", wraps=real_parse) as mock_parse:
             r1 = is_incomplete_source(text)

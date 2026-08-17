@@ -100,7 +100,6 @@ from agm.agl.ir.nodes import (
     IrMakeJsonObject,
     IrMakeRecord,
     IrOr,
-    IrParseJson,
     IrPrint,
     IrRaise,
     IrRenderTemplate,
@@ -2114,7 +2113,7 @@ class _Lowerer:
     ) -> IrExpr:
         """Lower a builtin call node by dispatching on ``BuiltinKind``.
 
-        Host builtins (``PRINT``, ``RENDER``, ``PARSE_JSON``, ``COPY``,
+        Host builtins (``PRINT``, ``RENDER``, ``COPY``,
         ``SHALLOW_COPY``, ``ASK``, ``ASK_REQUEST``, and ``EXEC``) are lowered
         here.
         """
@@ -2161,11 +2160,6 @@ class _Lowerer:
                     quote_strings=quote_strings,
                 )
 
-            case BuiltinKind.PARSE_JSON:
-                # parse_json(text) — arg is statically text; lower without coercion.
-                arg_ir = receiver if receiver is not None else self.lower_expr(call_node.args[0])
-                return IrParseJson(location=loc, value=arg_ir)
-
             case BuiltinKind.RESOURCE | BuiltinKind.RESOURCE_DIR:
                 try:
                     path = resource_path(call_node, is_directory=kind is BuiltinKind.RESOURCE_DIR)
@@ -2210,7 +2204,7 @@ class _Lowerer:
         to IrMakeRecord/IrMakeEnum/IrMakeException.  Direct user function
         calls are lowered to IrDirectCall.  Lambda calls are lowered to IrMakeClosure,
         indirect calls to IrIndirectCall, and host builtins to
-        IrPrint/IrRenderValue/IrParseJson/IrCopyValue/IrAsk/
+        IrPrint/IrRenderValue/IrCopyValue/IrAsk/
         IrAskRequest/IrExec.
         """
         callee = call_node.callee

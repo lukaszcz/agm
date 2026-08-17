@@ -5,7 +5,7 @@
       "stdlib_root": "program_modules/builtin_method_stdlib",
       "params": {"mode": 1},
       "expect": {
-        "stdout": "2\n3\n1\n<core>\n\"hello\"\n1\ntrue\nnull\n3\n-3\n1.5\n-1.5\ntrue\n8\n",
+        "stdout": "2\n3\n1\n<core>\n\"hello\"\n\"1\"\ntrue\nnull\n3\n-3\n1.5\n-1.5\ntrue\n8\n",
         "calls": {}
       }
     },

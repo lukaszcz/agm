@@ -2466,7 +2466,7 @@ class TestLowerGraph:
 
 
 # ---------------------------------------------------------------------------
-# Golden lowering: print, parse_json, param declarations
+# Golden lowering: print and parameter declarations
 # ---------------------------------------------------------------------------
 
 
@@ -2568,18 +2568,6 @@ class TestHostOpLowering:
         ir_print = desc.impl.body
         assert isinstance(ir_print, IrPrint)
         assert not isinstance(ir_print.value, IrCoerce)
-
-    def test_parse_json_lowers_to_ir_parse_json(self) -> None:
-        """parse_json(s) lowers to IrParseJson wrapping the argument expression."""
-        from agm.agl.ir.nodes import IrParseJson
-
-        source = "let j = parse_json('null')\n()"
-        prog = _lower(source)
-        entry = prog.modules[list(prog.modules.keys())[-1]]
-        ir_bind = _let_root_capture(entry.initializers[0])
-        assert isinstance(ir_bind.value, IrParseJson), (
-            f"Expected IrBind.value to be IrParseJson, got {type(ir_bind.value).__name__}"
-        )
 
     def test_copy_lowers_to_ir_copy_value(self) -> None:
         """copy(x) lowers to IrCopyValue wrapping the argument expression."""

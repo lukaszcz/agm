@@ -263,6 +263,8 @@ rules.
   `interp(template, vars) -> text` for name-only runtime interpolation; import
   it to call `interp`, and see [Types](types.md#stdtext) and
   [Strings and interpolation](strings-and-interpolation.md#runtime-interpolation).
+- `std/json` owns ambient `json` inspection methods and explicit strict and
+  lenient parsers; see [`std/json`](#stdjson).
 - `std/fs` exposes explicit text filesystem operations: `read`, `write`,
   `append`, `exists`, and `list`; see [`std/fs`](expressions.md#stdfs).
 
@@ -344,6 +346,42 @@ is preserved by `keys`, `values`, `entries`, and callback traversal.
 | Free function | Result |
 | --- | --- |
 | `from-entries(xs)` | `dict[text, V]` built from `array[Pair[text, V]]`; later duplicate keys win. |
+
+## `std/json`
+
+`std/json` provides parsing and inspection for untyped `json` values. The
+`std/builtin-methods` registry makes its methods ambient; import `std/json` to
+call its free functions. A plain import keeps those functions qualified, so
+use `json::parse(raw)`; `open import std/json` also makes them bare.
+
+```agl
+import std/json
+
+program def main() -> unit =
+  let strict = json::parse('{"count": 2}')
+  let recovered = json::parse-lenient("```json\n[1, 2]\n```")
+  print(strict)
+  print(recovered)
+```
+
+`parse(text)` accepts exactly one JSON value, apart from surrounding
+whitespace, and raises `JsonParseError` otherwise. `parse?(text)` returns
+`Option::None` instead of raising. `parse-lenient(text)` and
+`parse-lenient?(text)` use the same recovery rules as structured agent and
+shell output, allowing fenced or prose-wrapped JSON; their strict counterparts
+never recover or repair input. Rendering remains `render(value)` or `value as
+text`, rather than a `std/json` operation.
+
+| Method | Result |
+| --- | --- |
+| `kind()` | One of `null`, `bool`, `int`, `decimal`, `text`, `array`, or `object`. |
+| `size()` | Object property or array element count; `0` for scalars. |
+| `keys()` | Object keys in source order, or an empty array for other values. |
+| `has(key)` | Whether an object has `key`; `false` for other values. |
+| `get(key)` / `get?(key)` | Object value, raising `KeyError` or returning `Option::None` when the key is absent or the receiver is not an object. |
+
+JSON values remain index-only for data access; use `value["key"]` or
+`value[index]` to index the JSON tree directly.
 
 ## Library modules and cycles
 

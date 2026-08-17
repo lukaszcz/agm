@@ -109,7 +109,7 @@ def test_builtin_receiver_host_declaration_requires_a_supported_route(tmp_path: 
 @pytest.mark.parametrize(
     ("module", "source"),
     (
-        ("std/math", "builtin def int::parse_json(self) -> json\n"),
+        ("std/math", "builtin def int::print(self) -> json\n"),
         ("std/math", "builtin def int::copy(self) -> decimal\n"),
     ),
 )

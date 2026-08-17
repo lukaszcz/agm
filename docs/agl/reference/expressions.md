@@ -419,8 +419,8 @@ with `key` and `message` fields.
 ## Calls
 
 All calls use the same uniform parenthesized syntax. This applies equally to
-user `def`s, built-in functions (`ask`, `exec`, `print`, `render`, `parse_json`,
-`copy`, `shallow_copy`, `resource`, `resource-dir`), and
+user `def`s, built-in functions (`ask`, `exec`, `print`, `render`, `copy`,
+`shallow_copy`, `resource`, `resource-dir`), and
 function values stored in bindings:
 
 ```ebnf
@@ -517,47 +517,11 @@ assignable to it, and renders the argument coerced to that type — so
 `"hi"`: `quote_strings` controls only a top-level `text` argument, and the
 argument is no longer `text` once coerced to `json`.
 
-## `parse_json`
+## JSON parsing
 
-`parse_json` is a built-in function that parses a `text` value as a strict
-JSON document and returns the resulting `json` value:
-
-```text
-parse_json(input: text) -> json
-```
-
-It uses **strict JSON parsing**: the input must be exactly one well-formed
-JSON value with nothing but surrounding whitespace — no Markdown fences, no
-prose, no repair. On success it returns the parsed JSON tree. On failure it
-raises a catchable `JsonParseError` ([Exceptions](exceptions.md)).
-
-```agl
-program def main() -> unit =
-  let v: json = parse_json('{"key": 42}')
-  let n: json = parse_json("42")
-  let b: json = parse_json("true")
-  let embedded: json = "42" as json
-  let parsed: json   = parse_json("42")
-```
-
-**Contrast with `text as json`.** Because `text` is already JSON-shaped,
-`"42" as json` wraps the text in JSON representation — it yields the JSON
-**string** `"42"`. `parse_json("42")` instead interprets the characters of
-the text and yields the JSON **number** `42`. Use `parse_json` when you have
-a text value that contains serialized JSON and you want to traverse or
-validate its structure.
-
-<!-- agl-check: fragment -->
-```agl
-try
-  let data: json = parse_json(raw_output)
-  # use data...
-catch JsonParseError as e =>
-  print "Malformed JSON: %{e.raw}"
-```
-
-`parse_json` cannot be bound as a function value (`let f = parse_json` is a
-static error, because built-ins are only valid in call position).
+[`std/json`](modules.md#stdjson) provides strict and lenient text parsing for
+`json` values. Its `parse` functions are ordinary module functions and can be
+used as values where their function type is expected.
 
 ## `resource` and `resource-dir`
 

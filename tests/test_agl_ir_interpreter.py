@@ -2058,7 +2058,7 @@ class TestIndirectCallInterpreterDefensivePaths:
 
 
 # ===========================================================================
-# IrPrint / IrParseJson / IrParam evaluator tests
+# IrPrint and IrParam evaluator tests
 # ===========================================================================
 
 
@@ -2088,21 +2088,6 @@ class TestPrintParseJsonParam:
         )
         # No param_values provided — the required param has no value
         with pytest.raises(InvalidIrError, match="n"):
-            IrInterpreter(prog).run()
-
-    def test_ir_parse_json_non_text_value_raises_invalid_ir_error(self) -> None:
-        """IrParseJson with a non-TextValue argument raises InvalidIrError (bad IR)."""
-        from agm.agl.ir.nodes import IrParseJson
-
-        # Construct a program where parse_json is called on a bool (bad IR)
-        sym, desc = _let_sym(0, "r")
-        node = IrBind(
-            _LOC,
-            sym,
-            IrParseJson(_LOC, IrConstBool(_LOC, True)),  # bool is not TextValue
-        )
-        prog = _make_program(initializers=(node,), symbols={sym: desc})
-        with pytest.raises(InvalidIrError, match="IrParseJson"):
             IrInterpreter(prog).run()
 
     def test_ir_print_returns_void(self, capsys: pytest.CaptureFixture[str]) -> None:

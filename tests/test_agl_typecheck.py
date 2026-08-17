@@ -3525,7 +3525,7 @@ class TestFuncDef:
             "let values: array[text] = [recurse(0)]\nvalues",
             "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\n"
             'let values: dict[text, text] = {"value": recurse(0)}\nvalues',
-            "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\nparse_json(recurse(0))",
+            "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\nask(recurse(0))",
             "record Box\n  value: text\n"
             "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\n"
             "Box(value = recurse(0))",
@@ -3556,8 +3556,7 @@ class TestFuncDef:
         "source",
         (
             'def recurse(n: int) = if n == 0 => [1] else => recurse(n - 1)\nrecurse(0)["x"]',
-            "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\n"
-            "recurse(0) + parse_json(1)",
+            "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\nrecurse(0) + ask(1)",
         ),
         ids=("index-operand", "binary-child"),
     )
@@ -4259,7 +4258,7 @@ class TestPartialDeclaredCalls:
 
     @pytest.mark.parametrize(
         "name",
-        ["print", "render", "exec", "ask", "ask-request", "parse_json", "copy", "shallow_copy"],
+        ["print", "render", "exec", "ask", "ask-request", "copy", "shallow_copy"],
     )
     def test_special_builtin_partial_call_rejected(self, name: str) -> None:
         err = reject_type(f"let g = {name}(?)\ng")
@@ -11677,30 +11676,6 @@ class TestNoFiniteSchemaUseSites:
         assert accept_type(_PHANTOM_GROWING_TYPE_SRC + 'exec::[R[int]]("cmd")')
         assert accept_type(_PHANTOM_GROWING_TYPE_SRC + 'let raw: text = "{}"\nraw as R[int]')
         assert accept_type(_PHANTOM_GROWING_TYPE_SRC + "param r: R[int]\nr")
-
-
-class TestParseJsonCall:
-    """Tests for parse_json built-in."""
-
-    def test_parse_json_returns_json(self) -> None:
-        """parse_json("...") yields json."""
-        r = accept_type('let j: json = parse_json("42")\nj')
-        assert r
-
-    def test_parse_json_named_arg_rejected(self) -> None:
-        """Named args to parse_json are rejected."""
-        err = reject_type('parse_json(text = "42")')
-        assert "parse_json" in str(err).lower() or "positional" in str(err).lower()
-
-    def test_parse_json_wrong_arity_rejected(self) -> None:
-        """parse_json() with wrong arity is rejected."""
-        err = reject_type('parse_json("a", "b")')
-        assert "parse_json" in str(err).lower()
-
-    def test_parse_json_no_args_rejected(self) -> None:
-        """parse_json() with no args is rejected."""
-        err = reject_type("parse_json()")
-        assert "parse_json" in str(err).lower()
 
 
 class TestCopyAndShallowCopyCall:

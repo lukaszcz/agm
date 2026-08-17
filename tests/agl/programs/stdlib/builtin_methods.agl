@@ -17,7 +17,7 @@ program def main() =
     print(metadata.size())
     print("core".surround("<", ">"))
     print("hello".render())
-    print("1".parse_json())
+    print("1" as json)
     true.print()
     print(raw.kind())
     print((-3).abs())

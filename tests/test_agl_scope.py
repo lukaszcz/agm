@@ -1521,22 +1521,20 @@ class TestScopedBuiltinUsedAsValueRejected:
 
     def test_qualified_reference_used_as_a_value_is_rejected(self) -> None:
         err = reject_scope(
-            "scope H\nbuiltin def parse_json(value: text) -> json\nend H\n"
-            "let f = H::parse_json\nprint(f)"
+            "scope H\nbuiltin def render[T](value: T) -> text\nend H\nlet f = H::render\nprint(f)"
         )
         assert "cannot be used as a value" in err.to_diagnostic().message
 
     def test_bare_reference_inside_its_own_region_used_as_a_value_is_rejected(self) -> None:
         err = reject_scope(
-            "scope H\nbuiltin def parse_json(value: text) -> json\n"
-            "let f = parse_json\nend H\nprint(H::f)"
+            "scope H\nbuiltin def render[T](value: T) -> text\nlet f = render\nend H\nprint(H::f)"
         )
         assert "cannot be used as a value" in err.to_diagnostic().message
 
     def test_qualified_reference_with_a_type_argument_used_as_a_value_is_rejected(self) -> None:
         err = reject_scope(
-            "scope H\nbuiltin def parse_json(value: text) -> json\nend H\n"
-            "let f = H::parse_json[json]\nprint(f)"
+            "scope H\nbuiltin def render[T](value: T) -> text\nend H\n"
+            "let f = H::render[json]\nprint(f)"
         )
         assert "cannot be used as a value" in err.to_diagnostic().message
 
@@ -1544,7 +1542,7 @@ class TestScopedBuiltinUsedAsValueRejected:
         """The value-use rejection must not reject the legitimate call form
         it is easy to conflate it with: resolution must still succeed."""
         resolved = parse_and_resolve(
-            'scope H\nbuiltin def parse_json(value: text) -> json\nend H\nprint(H::parse_json("1"))'
+            'scope H\nbuiltin def render[T](value: T) -> text\nend H\nprint(H::render("1"))'
         )
         call_item = resolved.program.body.items[1]
         assert isinstance(call_item, Call)
@@ -3672,14 +3670,6 @@ class TestCastScope:
         """undefined var inside a cast is a scope error."""
         err = reject_scope("undefinedVar as int")
         assert "undefinedVar" in err.to_diagnostic().message
-
-    def test_parse_json_resolves_as_builtin(self) -> None:
-        """parse_json(x) resolves as a builtin — no 'undefined name parse_json' error."""
-        r = parse_and_resolve('let s = "hello"\nparse_json(s)')
-        # The call to parse_json should be classified as PARSE_JSON builtin
-        from agm.agl.scope.symbols import BuiltinKind
-
-        assert BuiltinKind.PARSE_JSON in r.builtin_calls.values()
 
     def test_copy_and_shallow_copy_resolve_as_builtins(self) -> None:
         """copy(x)/shallow_copy(x) resolve as builtins, not undefined names."""

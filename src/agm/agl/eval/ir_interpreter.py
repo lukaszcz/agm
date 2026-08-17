@@ -94,7 +94,6 @@ from agm.agl.ir.nodes import (
     IrMakeJsonObject,
     IrMakeRecord,
     IrOr,
-    IrParseJson,
     IrPrint,
     IrRaise,
     IrRenderTemplate,
@@ -131,7 +130,6 @@ from agm.agl.modules.ids import ModuleId
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.boundary import encode_boundary_value
 from agm.agl.runtime.codec import ParseResult, _parse_contract_output
-from agm.agl.runtime.convert import StrictJsonParseError, parse_json_strict
 from agm.agl.runtime.externs import AglCallableProxy, ExternCallWindow, ExternRegistry
 from agm.agl.runtime.option import none_value, option_text, some_value
 from agm.agl.runtime.params import engine_default_settings
@@ -1725,26 +1723,6 @@ class IrInterpreter:
                         self._eval(val_expr), pretty=pretty, quote_strings=quote_strings
                     )
                 )
-
-            case IrParseJson(value=val_expr):
-                val = self._eval(val_expr)
-                if not isinstance(val, TextValue):
-                    raise InvalidIrError(
-                        f"IrParseJson: expected TextValue, got {type(val).__name__}"
-                    )
-                try:
-                    obj = parse_json_strict(val.value)
-                except StrictJsonParseError as exc:
-                    raise AglRaise(
-                        _make_exc_value(
-                            "JsonParseError",
-                            exc.message,
-                            nominals=self._program.builtin_nominals,
-                            raw=TextValue(val.value),
-                        ),
-                        span=node.location,
-                    ) from exc
-                return JsonValue(obj)
 
             case IrCopyValue(kind=kind, value=val_expr):
                 value = self._eval(val_expr)

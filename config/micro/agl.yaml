@@ -13,7 +13,7 @@ rules:
     - statement: "\\bas\\?|\\b(as|and|or|not|is|in|to|downto|by)\\b"
 
     # Contextual built-ins and primitive type names.
-    - identifier: "\\b(print|render|parse_json|ask-request|ask|exec)\\b"
+    - identifier: "\\b(print|render|ask-request|ask|exec)\\b"
     - type: "\\b(unit|text|json|bool|int|decimal|list|dict)\\b"
 
     # By AgL convention, uppercase-leading names are types or constructors.

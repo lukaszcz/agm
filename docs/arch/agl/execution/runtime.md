@@ -4,7 +4,7 @@ The runtime package is the eval-free services layer: value-driven agents, codecs
 
 ## Codecs
 
-Built-in JSON contracts consume the typeless schema/decode data compiled during lowering. Custom codecs are materialized through their own `make_contract` hook before lowering, while checker types are still available, and then run from the embedded typeless payload — with compatibility shims for older host codecs.
+Built-in JSON contracts consume the typeless schema/decode data compiled during lowering. Custom codecs are materialized through their own `make_contract` hook before lowering, while checker types are still available, and then run from the embedded typeless payload — with compatibility shims for older host codecs. `runtime/codec.py` also exposes the codec's JSON-text recovery adapter for `std/json`; its strict parser remains separate, so explicit strict parsing cannot silently repair input while structured agent and shell output retains its configured leniency.
 
 ## Value Rendering
 

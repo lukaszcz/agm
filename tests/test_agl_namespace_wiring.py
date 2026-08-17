@@ -261,6 +261,61 @@ def test_imported_value_ignores_same_named_root_use_type(tmp_path: Path) -> None
     check_program(resolve_program(graph), base_caps())
 
 
+def test_inner_type_only_use_does_not_hide_root_imported_value(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import values::{x}\n"
+                "scope Inner\n"
+                "use Types::{x}\n"
+                "def call() -> int = x()\n"
+                "end Inner\n"
+                "scope Types\n"
+                "enum x | member\n"
+                "end Types\n"
+                "Inner::call()\n"
+            ),
+            "values": "def x() -> int = 7\n",
+        },
+    )
+
+    resolved = resolve_program(graph)
+
+    x_refs = [
+        ref
+        for ref in resolved.modules[graph.entry_id].resolved.resolution.values()
+        if ref.name == "x"
+    ]
+    assert {ref.module_id for ref in x_refs} == {ModuleId.from_path("values")}
+    check_program(resolved, base_caps())
+
+
+def test_inner_type_only_use_preserves_outer_value_ambiguity(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import left::{x}\n"
+                "import right::{x}\n"
+                "scope Inner\n"
+                "use Types::{x}\n"
+                "def call() -> int = x()\n"
+                "end Inner\n"
+                "scope Types\n"
+                "enum x | member\n"
+                "end Types\n"
+                "Inner::call()\n"
+            ),
+            "left": "def x() -> int = 1\n",
+            "right": "def x() -> int = 2\n",
+        },
+    )
+
+    with pytest.raises(AglScopeError, match="ambiguous"):
+        resolve_program(graph)
+
+
 def test_type_use_lookup_continues_past_inner_value_contribution(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,
@@ -640,7 +695,15 @@ def test_inner_use_shadows_root_import_and_use_contributions(tmp_path: Path) -> 
         },
     )
 
-    check_program(resolve_program(graph), base_caps())
+    resolved = resolve_program(graph)
+
+    x_refs = [
+        ref
+        for ref in resolved.modules[graph.entry_id].resolved.resolution.values()
+        if ref.name == "x"
+    ]
+    assert {ref.module_id for ref in x_refs} == {ModuleId.from_path("b")}
+    check_program(resolved, base_caps())
 
 
 _BARE_TYPE_USES = [

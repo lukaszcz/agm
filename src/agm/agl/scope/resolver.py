@@ -3478,18 +3478,17 @@ class _Resolver:
                 return None
         selected_layer, resolved, _constructors = nearest
         assert self._root_scope is not None
-        if selected_layer is self._root_scope:
-            imported_refs = {
-                ref
-                for qname in self._import_env.unqualified.get(name, frozenset())
-                if self._is_value_contribution(
-                    ref := self._cross_module_member_ref(name, qname, span)[0]
-                )
-            }
-            if imported_refs and not value_layer_found:
-                resolved = imported_refs
-            else:
-                resolved.update(imported_refs)
+        imported_refs = {
+            ref
+            for qname in self._import_env.unqualified.get(name, frozenset())
+            if self._is_value_contribution(
+                ref := self._cross_module_member_ref(name, qname, span)[0]
+            )
+        }
+        if imported_refs and not value_layer_found:
+            resolved = imported_refs
+        elif selected_layer is self._root_scope:
+            resolved.update(imported_refs)
         distinct = {
             (ref.module_id, ref.scope_path, ref.decl_node_id, ref.kind): ref for ref in resolved
         }

@@ -40,7 +40,9 @@ The module's qualified route remains complete. Incremental replay falls back to 
 the retained use target is no longer nameable through the current import spelling. `use` does not
 create a module-loading edge. Bare import-tail and `use` routes at the same region are
 resolved together: routes to one declaration deduplicate, while distinct origins
-are ambiguous. A nearer regional contribution shadows outer bare routes.
+are ambiguous. Bare lookup follows lexical layers independently in the type and
+value namespaces: a nearer regional contribution shadows outer routes only in the
+namespace it contributes, so a type-only use does not hide an outer value.
 Region-scoped bare contributions apply within that region and its nested regions,
 while imports still make their qualified routes available to the module.
 

@@ -1,13 +1,16 @@
-Read %{PLAN_FILE} and create implementation tasks. The tasks must collectively cover every plan requirement and acceptance criterion. Each task must fit an agent's 200k context; split larger work without losing coverage.
+Read %{PLAN_FILE} and create implementation tasks for this plan. Make sure that each task can be implemented by an agent in 200k context widow. If the steps described in the plan are too big, split them into multiple tasks.
 
-Give each task a brief `Context` section that summarizes the design goals and distinguishes those goals from the task-specific acceptance criteria.
+In each task, add a brief "Context" section summarizing what the ultimate goals of the whole plan are. Make it clear that any work done must be a step toward these goals, but the ultimate plan goals are not acceptance criteria for the task.
 
-Save task briefs to `.agent-files/tasks/TASK_*.md`, the index to `.agent-files/tasks/TASK_INDEX.md`, and the status tracker to `.agent-files/tasks/PROGRESS.md`.
+Save the task files to .agent-files/tasks/TASK_*.md. Create a task index in .agent-files/tasks/TASK_INDEX.md. Create .agent-files/tasks/PROGRESS.md to track task progress - list of completed and remaining tasks, next unblocked task.
 
-## Status tracker format
+## Format of PROGRESS.md
 
-Use only these sections:
+Only three sections:
+1. Task status for each task (a list)
+    - done / blocked / unblocked (not started / in progress)
+2. Next unblocked task
+3. Completion log
+    - ONE line per task as each task lands (explicitly state this requirement)
 
-1. Task status: one indexed entry per task, marked done, blocked, or unblocked (not started or in progress).
-2. Next unblocked task.
-3. Completion log: exactly one indexed line for each completed task.
+Keep PROGRESS.md concise.

@@ -9,6 +9,6 @@ Save any research reports created in this session to .agent-files/research/*.md
 
 All solutions must be principled, consistent, general and extensible - no pragmatic fixes.
 
-If anything is unclear, don't make assumptions, but ask me questions instead. Do NOT silently make major architectural choices that are not explicitly specified by the owner.
+If anything is unclear, don't make assumptions, but ask me questions instead. Do NOT silently make major architectural decisions that are not explicitly specified by the owner.
 
-For every owner choice, present several alternatives with pros and cons and a single recommendation. Before writing the design doc, ask me, one-by-one, about each choice, explaining the issue and presenting the options together with your recommendation.
+For every owner decision, present several alternatives with pros and cons and a single recommendation. Before writing the design doc, ask me, one-by-one, about each decision, explaining the issue and presenting the options together with your recommendation.

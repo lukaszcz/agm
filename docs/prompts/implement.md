@@ -1,11 +1,13 @@
-Implement the design brief from %{PLAN_FILE}.
+Implement the plan from %{PLAN_FILE}.
 
-Divide the work into well-scoped tasks doable by an agent in 200k context. Split work that is too large.
+Divide the implementation work into well-scoped tasks doable by an agent in 200k context widow. If the steps described in the plan are too big, split them into multiple tasks.
 
-Use Sonnet subagents sequentially. Each handoff must summarize the design goals and state the task-specific acceptance criteria. Save its accessible task brief under `.agent-files/tasks/*.md`.
+Use Sonnet subagents to implement the tasks. When handing off each task, include a brief summary of the ultimate goals of the whole plan. Make it clear that any work done must be a step toward these goals, but they are not acceptance criteria for the task. Write the subagent task description as a file under .agent-files/tasks/*.md that the implementer can reference. Launch subagents sequentially one at a time, not in parallel.
 
-After each implementation agent finishes, use an Opus subagent to review correctness, completeness, maintainability, and adherence to relevant `AGENTS.md` files.
+After each implementation agent finishes, use an Opus subagent to review its work for correctness, completeness, maintainability, adherence to the plan and to relevant AGENTS.md files.
 
-For every valid review finding, dispatch a Sonnet subagent to fix it. Resolve deeper architectural problems directly with principled, general, extensible, maintainable solutions.
+For EVERY issue identified by the reviewer, check if the issue is valid and if so, dispatch a Sonnet subagent to fix it. If the review surfaces deeper architectural problems, resolve them yourself first by making reasonable design and architecture choices. All solutions must be principled, general, extensible and maintainable. EVERY issue identified by a reviewer MUST be addressed.
 
-Commit after completing each task. The work is complete only when every acceptance criterion is met.
+Commit after completing each task.
+
+The goal is not complete until all acceptance criteria of the plan are met.

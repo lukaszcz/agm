@@ -33,6 +33,8 @@ identity as a shared facade, including through an incremental host's exact-modul
 expansion; routes through that facade may converge on the same origin, while unrelated
 imports that reuse an alias remain ambiguous. `use` selects
 from an already nameable local scope or imported route,
+with one target lookup determining both its reachable routes and whether a
+trailing alias names that route or one of its ordinary members,
 including a scope route exposed by an earlier `use`; imported `use` surfaces retain every filtered
 member and scope-route candidate on the owning lexical region, so colliding renamed routes remain
 ambiguous when subsequently used and selective bare imports cannot expose unselected nested scopes.

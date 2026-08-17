@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, Protocol, cast
 from agm.agl.diagnostics import Diagnostic, diagnostic_from_span
 from agm.agl.modules.ids import ModuleId
 from agm.agl.repl.entry import EntryKind, EntryResult
-from agm.agl.scope.symbols import ResolvedUseTarget
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -39,12 +38,9 @@ if TYPE_CHECKING:
     from agm.agl.semantics.values import Frame, Value
     from agm.agl.setting_overrides import SettingOverride
     from agm.agl.syntax.advisories import SpacedQualifier
-    from agm.agl.syntax.nodes import ImportDecl, Item, Program, ScopeItem, ScopeRegion, UseDecl
+    from agm.agl.syntax.nodes import ImportDecl, Item, Program, ScopeRegion
     from agm.agl.typecheck.env import CheckedModule, TypeEnvironment
     from agm.agl.typecheck.program import CheckedProgram
-
-
-_UseGenerationKey = tuple[tuple[str, ...], ResolvedUseTarget]
 
 
 # ---------------------------------------------------------------------------
@@ -58,8 +54,7 @@ class EntryPipelineCtx(Protocol):
     _loaded_lib_modules: dict[ModuleId, LoadedModule]
     _active_imported_params: dict[SymbolId, IrParam]
     _accumulated_imports: list[tuple[ImportDecl, ...]]
-    _accumulated_uses: list[tuple[UseDecl | ImportDecl | ScopeRegion, ...]]
-    _accumulated_use_targets: list[dict[int, ResolvedUseTarget]]
+    _accumulated_scoped_imports: list[tuple[ImportDecl | ScopeRegion, ...]]
     _link_image: LinkImage
     _ir_base_frame: Frame
     _setting_overrides: dict[str, SettingOverride]
@@ -153,7 +148,7 @@ class LoadedCheckedProgram:
     module_adjacency: "dict[ModuleId, tuple[ModuleId, ...]]"
     new_next_id: int
     entry_imports: "tuple[ImportDecl, ...]"
-    entry_uses: "tuple[UseDecl | ImportDecl | ScopeRegion, ...]"
+    entry_uses: "tuple[ImportDecl | ScopeRegion, ...]"
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +233,7 @@ class EntryPipeline:
         if override_diagnostics:
             raise OverrideRejected(override_diagnostics)
 
-        resolved_program = self._resolve_with_semantic_use_replacement(graph, entry_uses)
+        resolved_program = self._resolve_program(graph)
         checked_program = check_program(
             resolved_program, host_env.capabilities, entry_seed_env=self._ctx._type_env
         )
@@ -396,107 +391,27 @@ class EntryPipeline:
             default_stdlib=self._ctx._default_stdlib,
             spaced_qualifiers=spaced_qualifiers,
         )
-        resolved_program = self._resolve_with_semantic_use_replacement(graph, _entry_uses)
+        resolved_program = self._resolve_program(graph)
         return check_program(
             resolved_program, host_env.capabilities, entry_seed_env=self._ctx._type_env
         )
 
-    def _resolve_with_semantic_use_replacement(
+    def _resolve_program(
         self,
         graph: "ModuleGraph",
-        entry_uses: tuple[UseDecl | ImportDecl | ScopeRegion, ...],
     ) -> "ResolvedProgram":
-        """Resolve after applying replacement with scope's semantic use targets.
-
-        The retained-preamble pass can classify ordinary use spellings directly,
-        but ``use Scope::member as alias`` is intentionally semantic: scope may
-        reinterpret it as a selected member, while a nested scope at the same
-        spelling remains a whole-target alias. Run scope's target-only header
-        walk to obtain that definitive classification, remove only superseded
-        retained uses, then resolve the effective entry that type checking will
-        consume.
-        """
-        from agm.agl.modules.ids import ENTRY_ID
+        """Resolve one entry against the session's retained resolved scope state."""
         from agm.agl.scope.program import resolve_program
 
-        retained_use_targets = {
-            node_id: target
-            for generation in self._ctx._accumulated_use_targets
-            for node_id, target in generation.items()
-        }
-
-        def resolve(current_graph: ModuleGraph, *, use_targets_only: bool) -> ResolvedProgram:
-            return resolve_program(
-                current_graph,
-                entry_ambient_constructor_candidates=self._ctx._ambient_constructor_candidates,
-                entry_ambient_type_names=self._ctx._ambient_type_names,
-                entry_parent_scope=self._ctx._session_scope,
-                entry_repl_session_scope=self._ctx._session_scope,
-                entry_repl_session_scope_nodes=self._ctx._session_scope_nodes,
-                entry_repl_session_type_paths=self._ctx._session_type_paths,
-                entry_retained_use_targets=retained_use_targets,
-                _entry_use_targets_only=use_targets_only,
-            )
-
-        # Only this entry's own uses can supersede a retained one, so with none
-        # of them the classification walk cannot change the effective program.
-        # Skipping it spares the whole graph a second, throwaway resolve.
-        if not self._use_decls(entry_uses):
-            return resolve(graph, use_targets_only=False)
-
-        classified = resolve(graph, use_targets_only=True)
-        use_targets = classified.modules[ENTRY_ID].resolved.use_targets
-        effective_program = self._without_semantically_superseded_uses(
-            graph.modules[ENTRY_ID].program,
-            entry_uses,
-            use_targets,
+        return resolve_program(
+            graph,
+            entry_ambient_constructor_candidates=self._ctx._ambient_constructor_candidates,
+            entry_ambient_type_names=self._ctx._ambient_type_names,
+            entry_parent_scope=self._ctx._session_scope,
+            entry_repl_session_scope=self._ctx._session_scope,
+            entry_repl_session_scope_nodes=self._ctx._session_scope_nodes,
+            entry_repl_session_type_paths=self._ctx._session_type_paths,
         )
-        if effective_program is graph.modules[ENTRY_ID].program:
-            return resolve(graph, use_targets_only=False)
-
-        effective_entry = replace(graph.modules[ENTRY_ID], program=effective_program)
-        modules = dict(graph.modules)
-        modules[ENTRY_ID] = effective_entry
-        return resolve(replace(graph, modules=modules), use_targets_only=False)
-
-    @staticmethod
-    def _without_semantically_superseded_uses(
-        program: Program,
-        entry_uses: tuple[UseDecl | ImportDecl | ScopeRegion, ...],
-        use_targets: Mapping[int, ResolvedUseTarget],
-    ) -> Program:
-        """Remove retained uses replaced by this entry's resolved targets."""
-        from agm.agl.syntax.nodes import ScopeRegion, UseDecl
-
-        current = EntryPipeline._use_decls(entry_uses)
-        current_ids = {decl.node_id for decl in current}
-        current_keys = {EntryPipeline._use_generation_key(decl, use_targets) for decl in current}
-        superseded_ids = {
-            decl.node_id
-            for decl in EntryPipeline._use_decls(
-                EntryPipeline._retained_use_items(program.body.items)
-            )
-            if decl.node_id not in current_ids
-            and EntryPipeline._use_generation_key(decl, use_targets) in current_keys
-        }
-        if not superseded_ids:
-            return program
-
-        def retained(items: tuple[Item, ...]) -> tuple[Item, ...]:
-            effective: list[Item] = []
-            for item in items:
-                if isinstance(item, UseDecl) and item.node_id in superseded_ids:
-                    continue
-                if isinstance(item, ScopeRegion):
-                    nested = retained(cast("tuple[Item, ...]", item.items))
-                    if item.items and not nested:
-                        continue
-                    if nested != item.items:
-                        item = replace(item, items=cast("tuple[ScopeItem, ...]", nested))
-                effective.append(item)
-            return tuple(effective)
-
-        return EntryPipeline._replace_body_items(program, list(retained(program.body.items)))
 
     @staticmethod
     def _checked_program_from_module(entry: CheckedModule) -> CheckedModule:
@@ -530,9 +445,7 @@ class EntryPipeline:
         program: Program,
         next_start_id: int,
         roots: RootSet,
-    ) -> tuple[
-        Program, int, tuple[ImportDecl, ...], tuple[UseDecl | ImportDecl | ScopeRegion, ...]
-    ]:
+    ) -> tuple[Program, int, tuple[ImportDecl, ...], tuple[ImportDecl | ScopeRegion, ...]]:
         """Expand current wildcards, then inject retained imports and uses.
 
         REPL replacement is finer grained than batch import merging: each
@@ -561,7 +474,7 @@ class EntryPipeline:
         from agm.agl.syntax.nodes import ImportDecl
 
         entry_imports = tuple(item for item in program.body.items if isinstance(item, ImportDecl))
-        entry_uses = self._retained_use_items(program.body.items)
+        entry_uses = self._retained_scoped_import_items(program.body.items)
         expanded, next_start_id, expanded_imports = self._expand_entry_wildcards(
             program, next_start_id, roots
         )
@@ -682,7 +595,7 @@ class EntryPipeline:
         new_modules: dict[ModuleId, LoadedModule],
         module_adjacency: dict[ModuleId, tuple[ModuleId, ...]],
         entry_imports: tuple[ImportDecl, ...],
-        entry_uses: tuple[UseDecl | ImportDecl | ScopeRegion, ...],
+        entry_uses: tuple[ImportDecl | ScopeRegion, ...],
         contract_payloads: Mapping[int, "ContractPayload"],
     ) -> EntryResult:
         """Lower and execute one program entry in the persistent IR image."""
@@ -1004,7 +917,7 @@ class EntryPipeline:
         retain_library_state(
             frozenset(module_id for module_id in checked_program.modules if not module_id.is_entry)
         )
-        self._retain_import_context(entry_imports, entry_uses, checked.resolved.use_targets)
+        self._retain_import_context(entry_imports, entry_uses)
         marker = lowered.trailing_expression
         initializer_values = interp.module_initializer_values.get(lowered.program.entry_module)
         captured = (
@@ -1033,10 +946,10 @@ class EntryPipeline:
     def _retained_preamble(
         self,
         entry_imports: tuple[ImportDecl, ...],
-        entry_uses: tuple[UseDecl | ImportDecl | ScopeRegion, ...],
+        entry_uses: tuple[ImportDecl | ScopeRegion, ...],
         roots: RootSet,
         next_start_id: int,
-    ) -> tuple[list[ImportDecl], list[UseDecl | ImportDecl | ScopeRegion], int]:
+    ) -> tuple[list[ImportDecl], list[ImportDecl | ScopeRegion], int]:
         """Expand retained entries and keep the newest import generation per module.
 
         Retained wildcards are re-expanded against the current roots, so a
@@ -1048,20 +961,14 @@ class EntryPipeline:
         at that same region path are removed. An import at one region path
         never replaces a declaration at a different one -- in particular a
         region-scoped import never replaces a root import, or vice versa.
-        Retained use declarations have their own semantic replacement key.
-        Current uses do not provisionally filter them here: scope classifies
-        the complete current-versus-retained replacement decision later.
+        Resolved ``use`` contributions are retained by session scope nodes,
+        so this preamble contains imports only.
         """
-        generations: list[
-            tuple[list[ImportDecl], tuple[UseDecl | ImportDecl | ScopeRegion, ...]]
-        ] = []
+        generations: list[tuple[list[ImportDecl], tuple[ImportDecl | ScopeRegion, ...]]] = []
         latest_generation: dict[tuple[tuple[str, ...], tuple[str, ...]], int] = {}
-        latest_use_generation: dict[_UseGenerationKey, int] = {}
-        generation_use_keys: dict[int, _UseGenerationKey] = {}
-        for retained_root_decls, scoped_items, resolved_use_targets in zip(
+        for retained_root_decls, scoped_items in zip(
             self._ctx._accumulated_imports,
-            self._ctx._accumulated_uses,
-            self._ctx._accumulated_use_targets,
+            self._ctx._accumulated_scoped_imports,
             strict=True,
         ):
             expanded_root_decls, next_start_id = self._expand_decls(
@@ -1078,10 +985,6 @@ class EntryPipeline:
             )
             for decl in generation_imports:
                 latest_generation[self._generation_key(decl)] = index
-            for use_decl in self._use_decls(expanded_scoped):
-                use_key = self._use_generation_key(use_decl, resolved_use_targets)
-                generation_use_keys[use_decl.node_id] = use_key
-                latest_use_generation[use_key] = index
 
         # *entry_imports* arrives already expanded; only the scoped ones still
         # need their module identities resolved. Wildcard expansion has one
@@ -1096,7 +999,7 @@ class EntryPipeline:
             latest_generation[self._generation_key(decl)] = current_index
 
         retained_root: list[ImportDecl] = []
-        retained_scoped: list[UseDecl | ImportDecl | ScopeRegion] = []
+        retained_scoped: list[ImportDecl | ScopeRegion] = []
         for index, (root_decls, scoped_items) in enumerate(generations):
             retained_root.extend(
                 decl
@@ -1104,27 +1007,9 @@ class EntryPipeline:
                 if latest_generation[self._generation_key(decl)] == index
             )
             retained_scoped.extend(
-                self._filter_retained_scoped_decls(
-                    scoped_items,
-                    index,
-                    latest_generation,
-                    latest_use_generation,
-                    generation_use_keys,
-                )
+                self._filter_retained_scoped_decls(scoped_items, index, latest_generation)
             )
         return retained_root, retained_scoped, next_start_id
-
-    @staticmethod
-    def _use_generation_key(
-        decl: UseDecl, use_targets: Mapping[int, ResolvedUseTarget]
-    ) -> _UseGenerationKey:
-        """Return *decl*'s replacement-generation key: region path and resolved target.
-
-        The ``use`` counterpart of :meth:`_generation_key`: a use replaces an
-        earlier one only at the same region path and for the same semantic
-        target, which only scope can identify.
-        """
-        return (tuple(segment.name for segment in decl.scope_path), use_targets[decl.node_id])
 
     @staticmethod
     def _generation_key(decl: ImportDecl) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -1169,10 +1054,10 @@ class EntryPipeline:
         return expanded, next_start_id
 
     @staticmethod
-    def _retained_use_items(
+    def _retained_scoped_import_items(
         items: tuple[Item, ...],
-    ) -> tuple[UseDecl | ImportDecl | ScopeRegion, ...]:
-        """Extract uses and region-scoped imports, retaining their enclosing regions.
+    ) -> tuple[ImportDecl | ScopeRegion, ...]:
+        """Extract region-scoped imports, retaining their enclosing regions.
 
         A region-scoped ``import``'s bare contribution is only meaningful
         nested exactly where it was written -- unlike a root ``import``,
@@ -1182,23 +1067,21 @@ class EntryPipeline:
         """
         from dataclasses import replace
 
-        from agm.agl.syntax.nodes import ImportDecl, ScopeRegion, UseDecl
+        from agm.agl.syntax.nodes import ImportDecl, ScopeRegion
 
-        retained: list[UseDecl | ImportDecl | ScopeRegion] = []
+        retained: list[ImportDecl | ScopeRegion] = []
         for item in items:
-            if isinstance(item, UseDecl):
-                retained.append(item)
-            elif isinstance(item, ImportDecl) and item.scope_path:
+            if isinstance(item, ImportDecl) and item.scope_path:
                 retained.append(item)
             elif isinstance(item, ScopeRegion):
-                nested = EntryPipeline._retained_use_items(item.items)
+                nested = EntryPipeline._retained_scoped_import_items(item.items)
                 if nested:
                     retained.append(replace(item, items=nested))
         return tuple(retained)
 
     @staticmethod
     def _scoped_import_decls(
-        items: tuple[UseDecl | ImportDecl | ScopeRegion, ...],
+        items: tuple[ImportDecl | ScopeRegion, ...],
     ) -> tuple[ImportDecl, ...]:
         """Flatten the region-scoped imports retained inside *items*."""
         from agm.agl.syntax.nodes import ImportDecl, static_items
@@ -1210,49 +1093,24 @@ class EntryPipeline:
         )
 
     @staticmethod
-    def _use_decls(
-        items: tuple[UseDecl | ImportDecl | ScopeRegion, ...],
-    ) -> tuple[UseDecl, ...]:
-        """Flatten retained uses, including those nested in scope regions."""
-        from agm.agl.syntax.nodes import UseDecl, static_items
-
-        return tuple(
-            item
-            for item in static_items(cast("tuple[Item, ...]", items))
-            if isinstance(item, UseDecl)
-        )
-
-    @staticmethod
     def _rewrite_scoped_items(
-        items: tuple[UseDecl | ImportDecl | ScopeRegion, ...],
+        items: tuple[ImportDecl | ScopeRegion, ...],
         *,
         rewrite_import: Callable[[ImportDecl], Iterable[ImportDecl]] | None = None,
-        rewrite_use: Callable[[UseDecl], Iterable[UseDecl]] | None = None,
-    ) -> tuple[UseDecl | ImportDecl | ScopeRegion, ...]:
-        """Rebuild a retained scope tree, replacing declarations through the rewrites.
-
-        The single structure-preserving walk over a retained
-        ``use``/``import``/region tree: a declaration kind with no rewrite is
-        carried through untouched, a region is rebuilt around its rewritten
-        members, and a region left with no members is dropped -- one place
-        that decides how a retained region survives, whatever the caller does
-        to its declarations.
-        """
+    ) -> tuple[ImportDecl | ScopeRegion, ...]:
+        """Rebuild retained scoped imports, dropping empty region wrappers."""
         from dataclasses import replace
 
-        from agm.agl.syntax.nodes import ImportDecl, ScopeRegion, UseDecl
+        from agm.agl.syntax.nodes import ImportDecl, ScopeRegion
 
-        rewritten: list[UseDecl | ImportDecl | ScopeRegion] = []
+        rewritten: list[ImportDecl | ScopeRegion] = []
         for item in items:
             if isinstance(item, ImportDecl) and rewrite_import is not None:
                 rewritten.extend(rewrite_import(item))
-            elif isinstance(item, UseDecl) and rewrite_use is not None:
-                rewritten.extend(rewrite_use(item))
             elif isinstance(item, ScopeRegion):
                 nested = EntryPipeline._rewrite_scoped_items(
-                    cast("tuple[UseDecl | ImportDecl | ScopeRegion, ...]", item.items),
+                    cast("tuple[ImportDecl | ScopeRegion, ...]", item.items),
                     rewrite_import=rewrite_import,
-                    rewrite_use=rewrite_use,
                 )
                 if nested:
                     rewritten.append(replace(item, items=nested))
@@ -1262,10 +1120,10 @@ class EntryPipeline:
 
     @staticmethod
     def _expand_retained_scoped_imports(
-        items: tuple[UseDecl | ImportDecl | ScopeRegion, ...],
+        items: tuple[ImportDecl | ScopeRegion, ...],
         roots: RootSet,
         next_start_id: int,
-    ) -> tuple[tuple[UseDecl | ImportDecl | ScopeRegion, ...], int]:
+    ) -> tuple[tuple[ImportDecl | ScopeRegion, ...], int]:
         """Expand scoped wildcard imports while preserving their region wrappers."""
         node_id = next_start_id
 
@@ -1278,36 +1136,22 @@ class EntryPipeline:
 
     @staticmethod
     def _filter_retained_scoped_decls(
-        items: tuple[UseDecl | ImportDecl | ScopeRegion, ...],
+        items: tuple[ImportDecl | ScopeRegion, ...],
         generation: int,
         latest_generation: Mapping[tuple[tuple[str, ...], tuple[str, ...]], int],
-        latest_use_generation: Mapping[_UseGenerationKey, int],
-        generation_use_keys: Mapping[int, _UseGenerationKey],
-    ) -> tuple[UseDecl | ImportDecl | ScopeRegion, ...]:
-        """Keep only the newest retained import and use at each region path.
-
-        Imports key on region path and module, uses on region path and resolved
-        target, but both decisions narrow the same tree, so one walk applies
-        them together.
-        """
+    ) -> tuple[ImportDecl | ScopeRegion, ...]:
+        """Keep the newest retained import at each scoped module path."""
 
         def keep_newest_import(decl: ImportDecl) -> tuple[ImportDecl, ...]:
             key = EntryPipeline._generation_key(decl)
             return (decl,) if latest_generation[key] == generation else ()
 
-        def keep_newest_use(decl: UseDecl) -> tuple[UseDecl, ...]:
-            key = generation_use_keys[decl.node_id]
-            return (decl,) if latest_use_generation[key] == generation else ()
-
-        return EntryPipeline._rewrite_scoped_items(
-            items, rewrite_import=keep_newest_import, rewrite_use=keep_newest_use
-        )
+        return EntryPipeline._rewrite_scoped_items(items, rewrite_import=keep_newest_import)
 
     def _retain_import_context(
         self,
         entry_imports: tuple[ImportDecl, ...],
-        entry_uses: tuple[UseDecl | ImportDecl | ScopeRegion, ...],
-        resolved_use_targets: Mapping[int, ResolvedUseTarget],
+        entry_uses: tuple[ImportDecl | ScopeRegion, ...],
     ) -> None:
         """Retain one successful entry's aligned root/scoped import generation.
 
@@ -1318,8 +1162,7 @@ class EntryPipeline:
         if not entry_imports and not entry_uses:
             return
         self._ctx._accumulated_imports.append(entry_imports)
-        self._ctx._accumulated_uses.append(entry_uses)
-        self._ctx._accumulated_use_targets.append(dict(resolved_use_targets))
+        self._ctx._accumulated_scoped_imports.append(entry_uses)
 
     def _persist_interpreter_settings(self, interp: "IrInterpreter", trace: "TraceStore") -> None:
         """Persist completed setting writes and the live trace destination."""

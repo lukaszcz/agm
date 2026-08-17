@@ -113,26 +113,9 @@ class _Selection:
         return self.braces is None and self.atom is None
 
 
-@dataclass(frozen=True, slots=True)
-class _UseEnding:
-    """The final target segment, alias, or tail of a use declaration."""
-
-    prefixes: tuple[Token, ...]
-    target: Token | None
-    alias: str | None
-    tail: _Selection | None
-
-
 # Import and export selection items share a field set, so one builder serves
 # both; the value restriction keeps each instantiation concrete.
 _SelectionItemT = TypeVar("_SelectionItemT", syntax.ImportItem, syntax.ExportItem)
-
-
-@dataclass(frozen=True, slots=True)
-class _AnchoredUse:
-    """A current-module-anchored use target and its ending."""
-
-    ending: _UseEnding
 
 
 _SCOPED_DECLARATIONS = (
@@ -2708,86 +2691,77 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
-    @staticmethod
-    def _use_ending(args: _Args) -> _UseEnding:
-        """Collect whichever of a use suffix's four parts this alternative carries.
+    def use_suffix_alias(
+        self, meta: Meta, args: _Args
+    ) -> tuple[tuple[Token, ...], Token | None, str | None, _Selection | None]:
+        """Collect a whole-target alias without committing its target spelling."""
+        return (), None, next(a for a in args if type(a) is str), None
 
-        Every ``use_suffix`` alternative draws from the same slots -- merged
-        target prefixes, a final unmerged target segment, a whole-target alias,
-        and a selection tail -- and simply omits the ones its own grammar shape
-        cannot produce, so one scan serves them all.
-        """
-        return _UseEnding(
-            prefixes=tuple(a for a in args if isinstance(a, Token) and a.type == "USEQUAL"),
-            target=next(
-                (a for a in args if isinstance(a, Token) and a.type == "USE_TARGET_NAME"), None
-            ),
-            alias=next((a for a in args if type(a) is str), None),
-            tail=next((a for a in args if isinstance(a, _Selection)), None),
+    def use_suffix(
+        self, meta: Meta, args: _Args
+    ) -> tuple[tuple[Token, ...], Token | None, str | None, _Selection | None]:
+        """Pass through one colon-introduced unresolved use target."""
+        return next(a for a in args if isinstance(a, tuple))
+
+    def use_anchored_suffix(
+        self, meta: Meta, args: _Args
+    ) -> tuple[tuple[Token, ...], Token | None, str | None, _Selection | None]:
+        """Pass through one current-module unresolved use target."""
+        return next(a for a in args if isinstance(a, tuple))
+
+    def use_path_alias(
+        self, meta: Meta, args: _Args
+    ) -> tuple[tuple[Token, ...], Token | None, str | None, _Selection | None]:
+        """Collect an unresolved named use target with a trailing alias."""
+        return (
+            tuple(a for a in args if isinstance(a, Token) and a.type == "MODQUAL"),
+            next(a for a in args if isinstance(a, Token) and a.type == "NAME"),
+            next(a for a in args if type(a) is str),
+            None,
         )
 
-    def use_suffix_alias(self, meta: Meta, args: _Args) -> _UseEnding:
-        """Build a use suffix containing only an alias."""
-        return self._use_ending(args)
+    def use_path_single(
+        self, meta: Meta, args: _Args
+    ) -> tuple[tuple[Token, ...], Token | None, str | None, _Selection | None]:
+        """Build a single-member use tail after its unresolved target path."""
+        prefixes = tuple(a for a in args if isinstance(a, Token) and a.type == "MODQUAL")
+        target = next(a for a in args if isinstance(a, Token) and a.type == "NAME")
+        atom = _SelectedAtom(
+            path=_ScopePath(((str(target), self._span_from_token(target)),)),
+            rename=None,
+            span=self._span_from_token(target),
+        )
+        return prefixes, None, None, _Selection(atom=atom)
 
-    def use_suffix_target_alias(self, meta: Meta, args: _Args) -> _UseEnding:
-        """Build a use suffix with a final unmerged target segment and alias."""
-        return self._use_ending(args)
+    def use_path_glob(
+        self, meta: Meta, args: _Args
+    ) -> tuple[tuple[Token, ...], Token | None, str | None, _Selection | None]:
+        """Build a glob use tail after its unresolved target path."""
+        return (
+            tuple(a for a in args if isinstance(a, Token) and a.type == "MODQUAL"),
+            None,
+            None,
+            _Selection(),
+        )
 
-    def use_suffix_tail(self, meta: Meta, args: _Args) -> _UseEnding:
-        """Build a use suffix containing a selection tail."""
-        return self._use_ending(args)
-
-    def use_suffix_alias_path(self, meta: Meta, args: _Args) -> _UseEnding:
-        """Build a whole-target alias with two or more prefixed segments."""
-        path = next(a for a in args if isinstance(a, Token) and a.type == "USE_ALIAS_PATH")
-        start_pos = path.start_pos
-        line = path.line
-        column = path.column
-        assert start_pos is not None and line is not None and column is not None
-        prefixes: list[Token] = []
-        relative = 0
-        for name in str(path).removesuffix("::").split("::"):
-            value = f"{name}::"
-            prefixes.append(
-                Token(
-                    "USEQUAL",
-                    value,
-                    start_pos=start_pos + relative,
-                    line=line,
-                    column=column + relative,
-                    end_line=line,
-                    end_column=column + relative + len(value),
-                    end_pos=start_pos + relative + len(value),
-                )
-            )
-            relative += len(value)
-        return replace(self._use_ending(args), prefixes=tuple(prefixes))
-
-    def use_suffix_prefixed(self, meta: Meta, args: _Args) -> _UseEnding:
-        """Prepend one lexer-merged target segment to a use suffix."""
-        suffix = next(a for a in args if isinstance(a, _UseEnding))
-        prefix = next(a for a in args if isinstance(a, Token) and a.type == "USEQUAL")
-        return replace(suffix, prefixes=(prefix, *suffix.prefixes))
-
-    def use_suffix_prefixed_tail(self, meta: Meta, args: _Args) -> _UseEnding:
-        """Build a tail after one or more lexer-merged target segments."""
-        return self._use_ending(args)
-
-    def use_anchored_tail(self, meta: Meta, args: _Args) -> _AnchoredUse:
-        """Build a current-module target with a selection tail."""
-        return _AnchoredUse(self._use_ending(args))
-
-    def use_anchored_alias(self, meta: Meta, args: _Args) -> _AnchoredUse:
-        """Build a current-module target with an additive alias."""
-        return _AnchoredUse(self._use_ending(args))
+    def use_path_braces(
+        self, meta: Meta, args: _Args
+    ) -> tuple[tuple[Token, ...], Token | None, str | None, _Selection | None]:
+        """Build a braced use tail after its unresolved target path."""
+        braces = next(a for a in args if isinstance(a, _Braces))
+        return (
+            tuple(a for a in args if isinstance(a, Token) and a.type == "MODQUAL"),
+            None,
+            None,
+            _Selection(braces=braces),
+        )
 
     def use_decl(self, meta: Meta, args: _Args) -> syntax.UseDecl:
         """Build a use declaration and enforce its injection and hiding rules."""
         span = self._span_from_meta(meta)
-        anchored_target = next((a for a in args if isinstance(a, _AnchoredUse)), None)
         path_token = next((a for a in args if isinstance(a, Token) and a.type == "MODPATH"), None)
-        anchored = anchored_target is not None
+        current_module = path_token is None
+        anchored = current_module
         target_segments: list[tuple[str, SourceSpan]] = []
         if path_token is not None:
             spelling = str(path_token)
@@ -2798,23 +2772,36 @@ class AstBuilder(Transformer):
                     self._trim_token_span(path_token, start=int(anchored)),
                 )
             )
-        ending = (
-            anchored_target.ending
-            if anchored_target is not None
-            else next(a for a in args if isinstance(a, _UseEnding))
+        parts = cast(
+            tuple[tuple[Token, ...], Token | None, str | None, _Selection | None],
+            next(
+                a
+                for a in args
+                if isinstance(a, tuple)
+                and len(a) == 4
+                and isinstance(a[0], tuple)
+                and (not a[0] or isinstance(a[0][0], Token))
+            ),
         )
-        for token in ending.prefixes:
-            if anchored_target is not None and "/" in str(token):
+        prefixes, final_target, alias, tail = parts
+        for token in prefixes:
+            if anchored and "/" in str(token):
                 raise AglSyntaxError(_MODULE_ROUTE_MESSAGE, span=self._span_from_token(token))
             target_segments.append(
                 (str(token).removesuffix("::"), self._trim_token_span(token, end=2))
             )
-        if ending.target is not None:
-            target_segments.append((str(ending.target), self._span_from_token(ending.target)))
-        alias = ending.alias
-        tail = ending.tail
+        if final_target is not None:
+            target_segments.append((str(final_target), self._span_from_token(final_target)))
         hidden_paths = cast(
-            tuple[_ScopePath, ...], next((a for a in args if isinstance(a, tuple)), ())
+            tuple[_ScopePath, ...],
+            next(
+                (
+                    a
+                    for a in args
+                    if isinstance(a, tuple) and all(isinstance(path, _ScopePath) for path in a)
+                ),
+                (),
+            ),
         )
         if hidden_paths and (tail is None or not tail.glob):
             raise AglSyntaxError("Hiding is only valid with a glob use tail.", span=span)
@@ -2835,7 +2822,7 @@ class AstBuilder(Transformer):
             alias=alias,
             span=span,
             node_id=self._next_id(),
-            current_module=anchored_target is not None,
+            current_module=current_module,
         )
 
     def export_decl(self, meta: Meta, args: _Args) -> syntax.ExportDecl:

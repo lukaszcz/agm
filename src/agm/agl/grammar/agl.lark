@@ -76,7 +76,7 @@
 // ---------------------------------------------------------------------------
 
 %declare NAME OP_NAME
-%declare IMPORT USE HIDING EXPORT SCOPE END MODQUAL USEQUAL USE_ALIAS_PATH USE_TARGET_NAME MODPATH WILDCARD
+%declare IMPORT USE HIDING EXPORT SCOPE END MODQUAL MODPATH WILDCARD
 %declare PLACEHOLDER PLACEHOLDER_NUM
 %declare AS_QUESTION
 // TO, DOWNTO, BY: declared so they can appear in `field_name` (a keyword
@@ -849,17 +849,15 @@ pattern_field: field_name EQ pattern   -> pat_field_named
 // ---------------------------------------------------------------------------
 
 import_decl : IMPORT MODPATH WILDCARD? import_alias? import_tail_clause? hiding_clause?
-use_decl : USE MODPATH use_suffix? hiding_clause?
+use_decl : USE MODPATH use_suffix hiding_clause?
          | USE DCOLON use_anchored_suffix hiding_clause?
 use_suffix : use_alias                    -> use_suffix_alias
-           | DCOLON selection             -> use_suffix_tail
-           | DCOLON USEQUAL use_suffix    -> use_suffix_prefixed
-           | DCOLON USEQUAL+ selection     -> use_suffix_prefixed_tail
-           | DCOLON USE_ALIAS_PATH USE_TARGET_NAME use_alias -> use_suffix_alias_path
-           | DCOLON USE_TARGET_NAME use_alias -> use_suffix_target_alias
-           | USE_TARGET_NAME use_alias    -> use_suffix_target_alias
-use_anchored_suffix : USEQUAL+ selection                  -> use_anchored_tail
-                    | USEQUAL* USE_TARGET_NAME use_alias -> use_anchored_alias
+           | DCOLON use_path_tail
+use_anchored_suffix : use_path_tail
+use_path_tail : MODQUAL* NAME use_alias   -> use_path_alias
+              | MODQUAL* NAME             -> use_path_single
+              | MODQUAL* STAR             -> use_path_glob
+              | MODQUAL* braces           -> use_path_braces
 export_decl : EXPORT MODPATH WILDCARD? export_tail_clause? hiding_clause?
 
 import_alias : "as" NAME

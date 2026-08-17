@@ -2663,8 +2663,8 @@ class TestModuleSystemLexer:
         result = tok("import foo/bar")
         assert result[0] == ("IMPORT", "import")
 
-    def test_use_at_item_start_requires_a_declaration_suffix(self) -> None:
-        assert tok("use shared")[:2] == [("NAME", "use"), ("NAME", "shared")]
+    def test_use_at_item_start_promotes_a_bare_target_for_a_parse_diagnostic(self) -> None:
+        assert tok("use shared")[:2] == [("USE", "use"), ("MODPATH", "shared")]
         assert tok("use shared::*")[:2] == [("USE", "use"), ("MODPATH", "shared")]
 
     @pytest.mark.parametrize(

@@ -15,11 +15,12 @@ stable ids, and later passes attach conclusions in side tables instead of
 mutating the AST.
 
 `import`, `use`, `export`, `hiding`, `scope`, and `end` are contextual header
-words. They remain ordinary names outside their declaration contexts. Ambiguous item-start `use`
-forms are classified with a parser rooted at the canonical `use_decl` grammar rather than a second
-hand-maintained recognizer. The AST
-preserves import and use tails, hiding clauses, aliases, and scope paths for
-scope resolution; it does not decide their visibility.
+words. They remain ordinary names outside their declaration contexts. Item-start
+`use` promotion is decided from its header token shape; the grammar then
+requires a suffix for every declared use. Qualified use paths use the ordinary
+module-qualifier token contract, and the AST preserves their unresolved target,
+tails, hiding clauses, aliases, and scope paths for scope resolution to decide
+their visibility.
 
 ## Code Entry Points
 

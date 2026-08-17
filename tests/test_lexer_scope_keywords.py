@@ -73,6 +73,7 @@ def test_use_at_item_start_remains_an_identifier_without_a_declaration_form(sour
     ("source", "expected"),
     (
         ("use", ("NAME", "use")),
+        ("use Shared", ("USE", "use")),
         ("use /module/nested/deeper::*", ("USE", "use")),
         ("use ::Scope::*", ("USE", "use")),
         ("use ::Scope", ("NAME", "use")),
@@ -197,6 +198,18 @@ def test_multi_segment_qualifier_chain_emits_modqual_sequence() -> None:
         ("MODQUAL", "B"),
         ("MODQUAL", "C"),
         ("NAME", "member"),
+    ]
+
+
+def test_use_target_uses_ordinary_module_qualifier_tokens() -> None:
+    assert _non_layout_tokens("use A::B::member as Alias") == [
+        ("USE", "use"),
+        ("MODPATH", "A"),
+        ("DCOLON", "::"),
+        ("MODQUAL", "B"),
+        ("NAME", "member"),
+        ("as", "as"),
+        ("NAME", "Alias"),
     ]
 
 

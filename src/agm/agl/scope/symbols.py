@@ -21,9 +21,10 @@ Data model
 from __future__ import annotations
 
 import enum
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TypeAlias as TypingTypeAlias
 
 from agm.agl.diagnostics import AglError
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
@@ -46,6 +47,8 @@ from agm.agl.syntax.types import AppliedT, NameT
 ScopePath = tuple[str, ...]
 BareAtom = str | ScopePath
 DeclarationKey = tuple[ModuleId, ScopePath, str]
+QName: TypingTypeAlias = tuple[ModuleId, BareAtom]
+BareRoute: TypingTypeAlias = tuple[ModuleId, ScopePath]
 
 
 def to_bare_path(atom: BareAtom) -> ScopePath:
@@ -415,6 +418,19 @@ class LocalUseContribution:
 
     declaration: UseDecl
     source: ScopeNode
+    target: ResolvedUseTarget
+
+
+@dataclass(frozen=True, slots=True)
+class ImportedUseContribution:
+    """A resolved imported surface retained on its lexical scope layer."""
+
+    target: ResolvedUseTarget
+    refreshes_all_members: bool
+    members: Mapping[BareAtom, QName]
+    scope_routes: Mapping[BareAtom, frozenset[BareRoute]]
+    bindings: Mapping[BareAtom, frozenset[BindingRef]]
+    constructors: Mapping[BareAtom, frozenset[ConstructorRef]]
 
 
 @dataclass(slots=True)
@@ -446,6 +462,7 @@ class ScopeNode:
         default_factory=dict
     )
     local_use_contributions: list[LocalUseContribution] = field(default_factory=list)
+    imported_use_contributions: list[ImportedUseContribution] = field(default_factory=list)
 
     def lookup(self, name: str) -> BindingRef | None:
         """Search lexical bindings and named-scope members outward."""

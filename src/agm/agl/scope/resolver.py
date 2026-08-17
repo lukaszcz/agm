@@ -77,6 +77,7 @@ from agm.agl.scope.symbols import (
     BuiltinKind,
     ConstructorRef,
     DeclarationKey,
+    ImportedUseContribution,
     LocalUseContribution,
     ModuleResolution,
     PatternSlot,
@@ -231,11 +232,18 @@ class _LocalScopeRoute:
 
 
 @dataclass(frozen=True, slots=True)
-class _ImportedUseContribution:
-    """One imported surface exposed by a resolved ``use`` in a lexical region."""
+class _UseTargetResolution:
+    """All local and imported routes reachable through one ``use`` target."""
 
-    members: Mapping[NameAtom, QName]
-    scope_routes: Mapping[NameAtom, frozenset[BareRoute]]
+    declaration: UseDecl
+    target: ScopePath
+    local: ScopePath | None
+    route: tuple[str, ...]
+    route_target: ScopePath
+    direct_candidates: tuple[tuple[ModuleId, Mapping[NameAtom, QName]], ...]
+    direct_imports: tuple[tuple[BareRoute, Mapping[NameAtom, QName]], ...]
+    direct_import_scope_routes: Mapping[BareRoute, Mapping[NameAtom, frozenset[BareRoute]]]
+    imported: tuple[tuple[BareRoute, Mapping[NameAtom, QName]], ...]
 
 
 # Built-in call names: recognised in call position, not bindable as values.
@@ -318,7 +326,6 @@ class _Resolver:
         repl_session_scope: ScopeNode | None = None,
         repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
         repl_session_type_paths: Mapping[ScopePath, str | None] | None = None,
-        retained_use_targets: Mapping[int, ResolvedUseTarget] | None = None,
         origin_path: Path | None = None,
         spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
     ) -> None:
@@ -373,7 +380,6 @@ class _Resolver:
         # None for a nominal type: receiver classification cannot tell the two
         # apart from a path alone.
         self._repl_session_type_paths = dict(repl_session_type_paths or {})
-        self._retained_use_targets = retained_use_targets or {}
         # This module's canonical source file, or None for a module with no
         # backing file (inline `-c` sources, direct REPL entries). Drives the
         # `extern def` placement check — externs require a file-backed module.
@@ -389,7 +395,8 @@ class _Resolver:
         self._resolution: dict[int, BindingRef] = {}
         self._builtin_calls: dict[int, BuiltinKind] = {}
         self._use_targets: dict[int, ResolvedUseTarget] = {}
-        self._imported_use_contributions: dict[int, list[_ImportedUseContribution]] = {}
+        self._superseded_use_targets: set[ResolvedUseTarget] = set()
+        self._current_use_declaration_ids: set[int] = set()
         # Scope stack — top is the current scope.
         self._scope: ScopeNode | None = None
         # The module's root ScopeNode (set in run()); used by _lookup_own_root
@@ -505,7 +512,6 @@ class _Resolver:
         parent_scope: ScopeNode | None = None,
         ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
         ambient_type_names: frozenset[str] = frozenset(),
-        use_targets_only: bool = False,
     ) -> ModuleResolution:
         """Execute the resolution pass over *program*.
 
@@ -575,13 +581,9 @@ class _Resolver:
         # Define constructor bindings in root scope.
         self._define_constructor_bindings()
 
-        # Main walk: resolve either the complete module or just enough header
-        # context for an incremental host to classify use replacement keys.
-        if use_targets_only:
-            self._resolve_use_context(program.body.items)
-        else:
-            self._resolve_block_items(program.body.items)
-            self._validate_local_use_contributions()
+        self._resolve_block_items(program.body.items)
+        self._validate_local_use_contributions()
+        self._validate_retained_imported_use_routes()
 
         self._at_root = False
         self._pop_scope()
@@ -879,6 +881,51 @@ class _Resolver:
                 # from a layer this program declared itself.
                 for name, ref in retained.members.items():
                     node.register_member(name, ref)
+                node.bare_contributions = {
+                    atom: set(refs) for atom, refs in retained.bare_contributions.items()
+                }
+                node.bare_constructor_contributions = {
+                    atom: set(refs)
+                    for atom, refs in retained.bare_constructor_contributions.items()
+                }
+                node.imported_use_contributions = list(retained.imported_use_contributions)
+                node.local_use_contributions = list(retained.local_use_contributions)
+                for contribution in node.imported_use_contributions:
+                    origin = contribution.target.wildcard_facade_origin_node_id
+                    facade_modules = (
+                        frozenset(
+                            module
+                            for declarations in self._import_env.facade_aliases.values()
+                            for node_id, modules in declarations.items()
+                            if node_id == origin
+                            for module in modules
+                        )
+                        if origin is not None
+                        else None
+                    )
+                    # An unrelated import replacement can remove the facade
+                    # alias from this entry's import environment altogether.
+                    # Its retained contribution then keeps its last resolved
+                    # surface rather than being erased by an empty refresh.
+                    if facade_modules == frozenset():
+                        facade_modules = None
+                    for atom, refs in contribution.bindings.items():
+                        stale = {
+                            ref
+                            for ref in refs
+                            if facade_modules is not None and ref.module_id not in facade_modules
+                        }
+                        if stale:
+                            node.bare_contributions.get(atom, set()).difference_update(stale)
+                        node.bare_contributions.setdefault(atom, set()).update(
+                            ref
+                            for ref in refs
+                            if facade_modules is None or ref.module_id in facade_modules
+                        )
+                    for atom, constructor_refs in contribution.constructors.items():
+                        node.bare_constructor_contributions.setdefault(atom, set()).update(
+                            constructor_refs
+                        )
             nodes[path] = node
         # A replacement type declaration owns fresh constructors: stale enum
         # variants must not survive, while unrelated retained members remain.
@@ -1538,18 +1585,6 @@ class _Resolver:
     # Block item resolution
     # ------------------------------------------------------------------
 
-    def _resolve_use_context(self, items: tuple[Item, ...]) -> None:
-        """Resolve use targets without letting entry bodies observe retained uses."""
-        for item in items:
-            if isinstance(item, UseDecl):
-                self._resolve_use_decl(item)
-            elif isinstance(item, ImportDecl) and item.scope_path:
-                self._contribute_regional_import_bare(item)
-            elif isinstance(item, ScopeRegion):
-                path = self._current_scope().scope_path + (item.segment.name,)
-                with self._named_scope(path):
-                    self._resolve_use_context(cast(tuple[Item, ...], item.items))
-
     def _resolve_block_items(self, items: tuple[Item, ...]) -> None:
         """Resolve items in order; each binder adds to the current scope.
 
@@ -1754,23 +1789,60 @@ class _Resolver:
             assert constructor is not None
             scope.contribute_bare_constructor(variant.name, constructor)
 
-    def _resolve_use_decl(self, decl: UseDecl) -> None:
-        """Inject the selected members of one already-nameable route bare."""
-        retained_target = self._retained_use_targets.get(decl.node_id)
-        if retained_target is not None and retained_target.local_path is not None:
-            retained_local = retained_target.local_path
-            self._use_targets[decl.node_id] = retained_target
-            self._current_scope().contribute_local_use(
-                LocalUseContribution(declaration=decl, source=self._scope_nodes[retained_local])
+    def _validate_retained_imported_use_routes(self) -> None:
+        """Reject a retained imported use whose current import replacement hides its route."""
+        scope = self._root_scope.parent if self._root_scope is not None else None
+        while scope is not None:
+            for contribution in scope.imported_use_contributions:
+                if contribution.target.wildcard_facade_origin_node_id is not None:
+                    continue
+                for module, path in contribution.target.imported_routes:
+                    if not path:
+                        continue
+                    if module not in self._import_env.contributions:
+                        continue
+                    if (module, path) not in self._import_env.scope_origins_by_route:
+                        rendered = "::".join(path)
+                        raise AglScopeError(
+                            f"use target '{module.display()}::{rendered}' is not nameable.",
+                            span=None,
+                        )
+            scope = scope.parent
+
+    def _resolve_use_target(self, decl: UseDecl) -> _UseTargetResolution:
+        """Gather every local and imported route reachable through a use target."""
+        if decl.alias is not None and len(decl.target) >= 2:
+            parent_decl = replace(decl, target=decl.target[:-1], alias=None)
+            parent = self._resolve_use_target(parent_decl)
+            member = decl.target[-1].name
+            local_member = (
+                parent.local is not None
+                and (*parent.local, member) not in self._scope_nodes
+                and (
+                    member in self._scope_nodes[parent.local].members
+                    or (*parent.local, member) in self._ordered_binding_paths
+                )
             )
-            return
-        decl = self._reinterpret_single_member_use_alias(decl)
+            imported_member = any(
+                (qname := members.get(member)) is not None
+                and qname not in self._cross_module_type_scopes
+                for _route, members in parent.imported
+            )
+            if local_member or imported_member:
+                segment = decl.target[-1]
+                selected = ImportItem(
+                    name=segment.name,
+                    rename=decl.alias,
+                    span=segment.span,
+                    node_id=segment.node_id,
+                )
+                return self._resolve_use_target(
+                    replace(decl, target=decl.target[:-1], tail=(selected,), alias=None)
+                )
         target = tuple(segment.name for segment in decl.target)
-        local: ScopePath | None = None
-        if not (retained_target and retained_target.imported_routes):
-            local = self._use_local_target(decl, target)
-            if local is None and not decl.anchored:
-                local = self._use_contributed_local_target(target, decl.span)
+        local = self._use_local_target(decl, target)
+        if local is None and not decl.anchored:
+            local = self._use_contributed_local_target(target, decl.span)
         route = () if decl.current_module else tuple(target[0].split("/"))
         route_target = () if decl.current_module else target[1:]
         direct_candidates = (
@@ -1804,14 +1876,40 @@ class _Resolver:
         }
         bare_imports = () if decl.anchored else self._bare_use_import_targets(target)
         used_imports = () if decl.anchored else self._used_import_targets(target)
-        imported = self._merge_use_import_targets(direct_imports, bare_imports, used_imports)
-        available_import_routes = frozenset(route for route, _members in imported)
+        return _UseTargetResolution(
+            declaration=decl,
+            target=target,
+            local=local,
+            route=route,
+            route_target=route_target,
+            direct_candidates=direct_candidates,
+            direct_imports=direct_imports,
+            direct_import_scope_routes=direct_import_scope_routes,
+            imported=self._merge_use_import_targets(direct_imports, bare_imports, used_imports),
+        )
+
+    def _resolve_use_decl(self, decl: UseDecl) -> None:
+        """Inject the selected members of one already-nameable route bare."""
+        resolved_target = self._resolve_use_target(decl)
+        decl = resolved_target.declaration
+        resolved_identity = ResolvedUseTarget(
+            local_path=resolved_target.local,
+            imported_routes=tuple(route for route, _members in resolved_target.imported),
+        )
+        self._superseded_use_targets.add(resolved_identity)
+        self._current_use_declaration_ids.add(decl.node_id)
+        target = resolved_target.target
+        local = resolved_target.local
+        route = resolved_target.route
+        route_target = resolved_target.route_target
+        direct_candidates = resolved_target.direct_candidates
+        direct_imports = resolved_target.direct_imports
+        direct_import_scope_routes = resolved_target.direct_import_scope_routes
+        imported = resolved_target.imported
         facade_declarations = (
             self._import_env.facade_aliases.get(route[0], {}) if len(route) == 1 else {}
         )
-        facade_origin_node_id = (
-            retained_target.wildcard_facade_origin_node_id if retained_target is not None else None
-        )
+        facade_origin_node_id = None
         if facade_origin_node_id is None and not decl.anchored and len(route) == 1:
             direct_modules = frozenset(module for module, _members in direct_candidates)
             matching_origins = tuple(
@@ -1821,32 +1919,6 @@ class _Resolver:
             )
             if len(matching_origins) == 1:
                 facade_origin_node_id = matching_origins[0]
-        if retained_target is not None and retained_target.imported_routes:
-            available = {**dict(imported), **dict(direct_imports)}
-            replay_routes: dict[BareRoute, None] = {
-                imported_route: None for imported_route in retained_target.imported_routes
-            }
-            if facade_origin_node_id is not None:
-                origin_modules = facade_declarations.get(facade_origin_node_id, frozenset())
-                for imported_route, _members in direct_imports:
-                    if imported_route[0] in origin_modules:
-                        replay_routes.setdefault(imported_route, None)
-            replayed: list[tuple[BareRoute, Mapping[NameAtom, QName]]] = []
-            for imported_route in replay_routes:
-                members = available.get(imported_route)
-                if members is None:
-                    module, source = imported_route
-                    contribution = self._import_env.contributions.get(module)
-                    if contribution is None:
-                        continue
-                    members = self._relative_use_import_members(
-                        contribution.members,
-                        source,
-                        target_exists=(imported_route in self._import_env.scope_origins_by_route),
-                    )
-                if members is not None:
-                    replayed.append((imported_route, members))
-            imported = tuple(replayed)
         direct_routes = {imported_route for imported_route, _members in direct_imports}
         shared_alias_facade = (
             not decl.anchored
@@ -1854,10 +1926,6 @@ class _Resolver:
             and tuple(facade_declarations.values())
             == (frozenset(module for module, _members in direct_candidates),)
             and {imported_route for imported_route, _members in imported} == direct_routes
-        ) or bool(
-            retained_target
-            and len(imported) > 1
-            and (facade_origin_node_id is not None or len(retained_target.imported_routes) > 1)
         )
         if local is not None and imported:
             candidates = ", ".join(module.display() for (module, _root), _members in imported)
@@ -1900,7 +1968,11 @@ class _Resolver:
         if local is not None:
             self._use_targets[decl.node_id] = ResolvedUseTarget(local_path=local)
             self._current_scope().contribute_local_use(
-                LocalUseContribution(declaration=decl, source=self._scope_nodes[local])
+                LocalUseContribution(
+                    declaration=decl,
+                    source=self._scope_nodes[local],
+                    target=self._use_targets[decl.node_id],
+                )
             )
             return
 
@@ -1913,8 +1985,6 @@ class _Resolver:
                 **self._bare_use_import_scope_routes(target, imported_route),
                 **self._used_import_scope_routes(target, imported_route),
             }
-            if retained_target is not None and imported_route not in available_import_routes:
-                return {**self._import_scope_routes(imported_route), **selected}
             return selected
 
         if shared_alias_facade:
@@ -1934,63 +2004,6 @@ class _Resolver:
             wildcard_facade_origin_node_id=facade_origin_node_id,
         )
         self._contribute_use_members(decl, imported_members, scope_routes_for(imported_route))
-
-    def _reinterpret_single_member_use_alias(self, decl: UseDecl) -> UseDecl:
-        """Disambiguate ``use Scope::member as Alias`` from a whole-target alias."""
-        if decl.alias is None or len(decl.target) < 2:
-            return decl
-        target = tuple(segment.name for segment in decl.target)
-        parent = target[:-1]
-        member = target[-1]
-        ordinary = False
-        if not decl.anchored or decl.current_module:
-            bases = [()] if decl.current_module else self._scope_bases_for_use()
-            ordinary = any(
-                (scope := self._scope_nodes.get(base + parent)) is not None
-                and (member in scope.members or base + target in self._ordered_binding_paths)
-                and base + target not in self._scope_nodes
-                for base in bases
-            )
-        if not ordinary and not decl.anchored:
-            local_parent = self._use_contributed_local_target(parent, decl.span)
-            if local_parent is not None:
-                source_path = (*local_parent, member)
-                ordinary = source_path not in self._scope_nodes and (
-                    member in self._scope_nodes[local_parent].members
-                    or source_path in self._ordered_binding_paths
-                )
-        if not ordinary and not decl.anchored:
-            ordinary = any(
-                (qname := members.get(member)) is not None
-                and qname not in self._cross_module_type_scopes
-                for _route, members in self._used_import_targets(parent)
-            )
-        if not ordinary and not decl.current_module:
-            route = tuple(target[0].split("/"))
-            source = _bare_atom(target[1:])
-            ordinary = any(
-                (qname := members.get(source)) is not None
-                and qname not in self._cross_module_type_scopes
-                for _module, members in qualifier_members(
-                    self._import_env, route, anchored=decl.anchored
-                )
-            )
-        if not ordinary and not decl.anchored:
-            exposed = _bare_atom(target)
-            ordinary = any(
-                qname not in self._cross_module_type_scopes
-                for qname in self._import_env.unqualified.get(exposed, ())
-            )
-        if not ordinary:
-            return decl
-        segment = decl.target[-1]
-        selected = ImportItem(
-            name=segment.name,
-            rename=decl.alias,
-            span=segment.span,
-            node_id=segment.node_id,
-        )
-        return replace(decl, target=decl.target[:-1], tail=(selected,), alias=None)
 
     def _relative_use_import_members(
         self,
@@ -2132,7 +2145,7 @@ class _Resolver:
         exposed_target = _bare_atom(target)
         while layer is not None:
             candidates: list[tuple[BareRoute, Mapping[NameAtom, QName]]] = []
-            for contribution in self._imported_use_contributions.get(layer.node_id, ()):
+            for contribution in layer.imported_use_contributions:
                 imported_routes = contribution.scope_routes.get(exposed_target)
                 if imported_routes is None:
                     continue
@@ -2155,7 +2168,7 @@ class _Resolver:
         layer: ScopeNode | None = self._current_scope()
         exposed_target = _bare_atom(target)
         while layer is not None:
-            contributions = self._imported_use_contributions.get(layer.node_id, ())
+            contributions = layer.imported_use_contributions
             matching = [
                 contribution
                 for contribution in contributions
@@ -2215,8 +2228,14 @@ class _Resolver:
         layer: ScopeNode | None = self._current_scope()
         while layer is not None:
             candidates: set[ScopePath] = set()
-            for contribution in layer.local_use_contributions:
-                for exposed, source in self._local_use_exposures(contribution):
+            for local_contribution in layer.local_use_contributions:
+                if (
+                    local_contribution.target in self._superseded_use_targets
+                    and local_contribution.declaration.node_id
+                    not in self._current_use_declaration_ids
+                ):
+                    continue
+                for exposed, source in self._local_use_exposures(local_contribution):
                     exposed_path = _bare_path(exposed)
                     if exposed_path[: len(target)] != target:
                         continue
@@ -2326,19 +2345,16 @@ class _Resolver:
         exposed_scope_routes = {
             atom: route for atom, route in selected_scope_routes.items() if _bare_path(atom)
         }
-        if exposed_scope_routes:
-            self._imported_use_contributions.setdefault(scope.node_id, []).append(
-                _ImportedUseContribution(
-                    members=dict(selected),
-                    scope_routes=exposed_scope_routes,
-                )
-            )
+        contributed_bindings: dict[NameAtom, set[BindingRef]] = {}
+        contributed_constructors: dict[NameAtom, set[ConstructorRef]] = {}
 
         def contribute(exposed: NameAtom, source: QName) -> None:
             ref, constructor = self._cross_module_member_ref(exposed, source, decl.span)
             scope.contribute_bare(exposed, ref)
+            contributed_bindings.setdefault(exposed, set()).add(ref)
             if constructor is not None:
                 scope.contribute_bare_constructor(exposed, constructor)
+                contributed_constructors.setdefault(exposed, set()).add(constructor)
 
         selected_qnames = frozenset(selected.values())
         for exposed, qname in selected.items():
@@ -2349,6 +2365,18 @@ class _Resolver:
                 )
         for exposed, source in self._use_renamed_members(decl, members):
             contribute(exposed, source)
+        scope.imported_use_contributions.append(
+            ImportedUseContribution(
+                target=self._use_targets[decl.node_id],
+                refreshes_all_members=decl.tail == (),
+                members=dict(selected),
+                scope_routes=exposed_scope_routes,
+                bindings={atom: frozenset(refs) for atom, refs in contributed_bindings.items()},
+                constructors={
+                    atom: frozenset(refs) for atom, refs in contributed_constructors.items()
+                },
+            )
+        )
 
     @staticmethod
     def _use_renamed_members(
@@ -3459,8 +3487,59 @@ class _Resolver:
         while layer is not None:
             bindings = set(layer.bare_contributions.get(name, ()))
             constructors = set(layer.bare_constructor_contributions.get(name, ()))
-            for contribution in layer.local_use_contributions:
-                for exposed, source in self._local_use_exposures(contribution):
+            for contribution in layer.imported_use_contributions:
+                origin = contribution.target.wildcard_facade_origin_node_id
+                if origin is None or not contribution.refreshes_all_members:
+                    continue
+                modules = frozenset(
+                    module
+                    for declarations in self._import_env.facade_aliases.values()
+                    for node_id, candidates in declarations.items()
+                    if node_id == origin
+                    for module in candidates
+                )
+                # A direct replacement of one member import must not shrink a
+                # retained wildcard facade. Preserve contribution modules that
+                # are still independently importable, then add the facade's
+                # current wildcard members. Removed modules are absent from
+                # the import environment and therefore still disappear.
+                modules |= frozenset(
+                    ref.module_id
+                    for refs in contribution.bindings.values()
+                    for ref in refs
+                    if ref.module_id in self._import_env.contributions
+                )
+                if not modules:
+                    continue
+                stale = {
+                    ref
+                    for ref in contribution.bindings.get(name, frozenset())
+                    if ref.module_id not in modules
+                }
+                bindings.difference_update(stale)
+                existing_refs = tuple(
+                    ref for refs in contribution.bindings.values() for ref in refs
+                )
+                if not existing_refs:
+                    continue
+                for module in modules:
+                    qname = self._import_env.contributions[module].members.get(name)
+                    if qname is None:
+                        continue
+                    ref, constructor = self._cross_module_member_ref(
+                        name, qname, existing_refs[0].decl_span
+                    )
+                    bindings.add(ref)
+                    if constructor is not None:
+                        constructors.add(constructor)
+            for local_contribution in layer.local_use_contributions:
+                if (
+                    local_contribution.target in self._superseded_use_targets
+                    and local_contribution.declaration.node_id
+                    not in self._current_use_declaration_ids
+                ):
+                    continue
+                for exposed, source in self._local_use_exposures(local_contribution):
                     if exposed != name or not isinstance(source, BindingRef):
                         continue
                     bindings.add(source)

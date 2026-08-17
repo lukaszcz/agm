@@ -54,7 +54,6 @@ from agm.agl.scope.symbols import (
     BinderKind,
     ConstructorRef,
     ModuleResolution,
-    ResolvedUseTarget,
     ScopeNode,
     ScopePath,
     alias_denotes_constructible_type,
@@ -617,8 +616,6 @@ def resolve_program(
     entry_repl_session_scope: ScopeNode | None = None,
     entry_repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
     entry_repl_session_type_paths: Mapping[ScopePath, str | None] | None = None,
-    entry_retained_use_targets: Mapping[int, ResolvedUseTarget] | None = None,
-    _entry_use_targets_only: bool = False,
 ) -> ResolvedProgram:
     """Run the full scope-resolution pass over a :class:`~agm.agl.modules.loader.ModuleGraph`.
 
@@ -782,7 +779,6 @@ def resolve_program(
             repl_session_scope=entry_repl_session_scope if is_entry else None,
             repl_session_scope_nodes=entry_repl_session_scope_nodes if is_entry else None,
             repl_session_type_paths=entry_repl_session_type_paths if is_entry else None,
-            retained_use_targets=entry_retained_use_targets if is_entry else None,
             origin_path=loaded.path,
             spaced_qualifiers=loaded.spaced_qualifiers,
         )
@@ -791,7 +787,6 @@ def resolve_program(
             parent_scope=entry_parent_scope if is_entry else None,
             ambient_constructor_candidates=constructor_candidates or None,
             ambient_type_names=type_names,
-            use_targets_only=is_entry and _entry_use_targets_only,
         )
         resolved_modules[mid] = ResolvedModule(
             module_id=mid,

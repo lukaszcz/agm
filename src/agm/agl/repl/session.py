@@ -51,7 +51,6 @@ if TYPE_CHECKING:
         Program,
         ScopeRegion,
         TypeAlias,
-        UseDecl,
     )
     from agm.agl.syntax.types import TypeExpr
     from agm.agl.typecheck.env import CheckedModule, TypeEnvironment
@@ -315,10 +314,9 @@ class ReplSession:
         # one retained generation per entry, kept as written so a wildcard keeps
         # tracking the module set. Declarations for a module named in a later
         # generation replace earlier ones; the rest are prepended in program
-        # context for reuse. Uses follow the same entry retention model.
+        # context for reuse. Resolved ``use`` contributions live in scope nodes.
         self._accumulated_imports: list[tuple["ImportDecl", ...]] = []
-        self._accumulated_uses: list[tuple["UseDecl | ImportDecl | ScopeRegion", ...]] = []
-        self._accumulated_use_targets: list[dict[int, "ResolvedUseTarget"]] = []
+        self._accumulated_scoped_imports: list[tuple["ImportDecl | ScopeRegion", ...]] = []
         # Resolved user infix fixity declared in prior promoted entries
         # (operator name → ``(priority, associativity)``). Passed to the parser
         # as ambient fixity so an ``infixl``/``infixr`` declaration made in one
@@ -935,7 +933,7 @@ class ReplSession:
     ) -> tuple[str, ...]:
         """Promote declarations whose IR initialization completed in this entry."""
         from agm.agl.parser import resolve_infix_fixity
-        from agm.agl.scope.symbols import ScopeNode
+        from agm.agl.scope.symbols import LocalUseContribution, ScopeNode
         from agm.agl.syntax.nodes import (
             EnumDef,
             ExceptionDef,
@@ -1112,6 +1110,56 @@ class ReplSession:
                     if ref.decl_node_id in entry_declaration_node_ids:
                         displaced_param_keys.add(resolved_public_name(path, name))
                     session_node.register_member(name, ref)
+            current_targets = {
+                contribution.target for contribution in node.imported_use_contributions
+            }
+            for contribution in session_node.imported_use_contributions:
+                for atom, refs in contribution.bindings.items():
+                    retained = session_node.bare_contributions.get(atom)
+                    if retained is not None:
+                        retained.difference_update(refs)
+                        if not retained:
+                            del session_node.bare_contributions[atom]
+                for atom, constructor_refs in contribution.constructors.items():
+                    constructor_retained = session_node.bare_constructor_contributions.get(atom)
+                    if constructor_retained is not None:
+                        constructor_retained.difference_update(constructor_refs)
+                        if not constructor_retained:
+                            del session_node.bare_constructor_contributions[atom]
+            session_node.imported_use_contributions = [
+                contribution
+                for contribution in session_node.imported_use_contributions
+                if contribution.target not in current_targets
+            ]
+            session_node.imported_use_contributions.extend(node.imported_use_contributions)
+            for contribution in session_node.imported_use_contributions:
+                for atom, refs in contribution.bindings.items():
+                    session_node.bare_contributions.setdefault(atom, set()).update(refs)
+                for atom, constructor_refs in contribution.constructors.items():
+                    session_node.bare_constructor_contributions.setdefault(atom, set()).update(
+                        constructor_refs
+                    )
+            local_contributions = [
+                *session_node.local_use_contributions,
+                *node.local_use_contributions,
+            ]
+            latest_local_contributions: dict[ResolvedUseTarget, LocalUseContribution] = {
+                contribution.target: contribution for contribution in local_contributions
+            }
+            session_node.local_use_contributions = []
+            for local_contribution in latest_local_contributions.values():
+                source = self._session_scope_nodes.get(local_contribution.source.scope_path)
+                if source is not None:
+                    session_node.contribute_local_use(
+                        LocalUseContribution(
+                            declaration=local_contribution.declaration,
+                            source=source,
+                            target=local_contribution.target,
+                        )
+                    )
+                    if local_contribution.declaration.tail == ():
+                        for name, ref in source.members.items():
+                            session_node.contribute_bare(name, ref)
         alias_targets = {
             type_name_path(item): render_type_expr(item.type_expr)
             for item in entry_type_items
@@ -1528,8 +1576,7 @@ class ReplSession:
         self._loaded_lib_modules = {}
         self._active_imported_params = {}
         self._accumulated_imports = []
-        self._accumulated_uses = []
-        self._accumulated_use_targets = []
+        self._accumulated_scoped_imports = []
         self._accumulated_infix = {}
         # Discard the session's extern (Python FFI) registry like every other
         # session-scoped binding: a companion resolves and imports again on

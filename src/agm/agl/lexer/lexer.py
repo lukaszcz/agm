@@ -31,10 +31,9 @@ from __future__ import annotations
 import contextvars
 import importlib.resources
 from contextlib import contextmanager
-from typing import Iterator, cast
+from typing import Iterator
 
 from lark import Lark
-from lark.exceptions import LarkError
 from lark.lexer import Lexer, LexerState, Token
 
 from agm.agl.diagnostics import Diagnostic, SourceSpan
@@ -72,9 +71,6 @@ from agm.agl.lexer.tokens import (
     TEMPLATE_START,
     TYPEARG_LSQB,
     USE,
-    USE_ALIAS_PATH,
-    USE_TARGET_NAME,
-    USEQUAL,
     WILDCARD,
 )
 from agm.agl.syntax.advisories import SpacedQualifier
@@ -249,59 +245,37 @@ def _is_as(token: Token) -> bool:
     return _scanner_token_type(token.type) == KW_AS
 
 
-_FORCE_USE_DECLARATION: contextvars.ContextVar[bool] = contextvars.ContextVar(
-    "agl_force_use_declaration", default=False
-)
-_USE_DECL_PARSER: Lark | None = None
-
-
-def _use_decl_parser() -> Lark:
-    """Return a parser rooted at the canonical grammar's ``use_decl`` rule."""
-
-    global _USE_DECL_PARSER
-    if _USE_DECL_PARSER is None:
-        _USE_DECL_PARSER = build_parser("use_decl")
-    return _USE_DECL_PARSER
-
-
-# Memoized speculative-parse verdicts, keyed by the exact header slice. One
-# entry is a short header string, and only item-start ``use`` spellings reach
-# it, so the table stays proportional to the distinct headers a process lexes.
-_USE_DECLARATION_VERDICTS: dict[str, bool] = {}
-
-
-def _parses_as_use_declaration(header: str) -> bool:
-    """Whether one header slice parses under the canonical ``use_decl`` rule.
-
-    The verdict depends only on the header text, and real programs repeat
-    headers across modules, so it is memoized. Both the speculative parse's
-    advisories and its forced promotion are confined to the parse itself, so a
-    cached verdict is indistinguishable from re-running it.
-    """
-    cached = _USE_DECLARATION_VERDICTS.get(header)
-    if cached is not None:
-        return cached
-    forced = _FORCE_USE_DECLARATION.set(True)
-    try:
-        with tab_warning_collector():
-            _use_decl_parser().parse(header)
-        verdict = True
-    except (LarkError, LexError):
-        verdict = False
-    finally:
-        _FORCE_USE_DECLARATION.reset(forced)
-    _USE_DECLARATION_VERDICTS[header] = verdict
-    return verdict
-
-
-def _is_use_declaration(source: str, tokens: list[Token], index: int) -> bool:
-    """Ask the canonical ``use_decl`` grammar whether one item is a declaration."""
+def _is_use_declaration(tokens: list[Token], index: int) -> bool:
+    """Whether an item-start ``use`` has a declaration-shaped token header."""
 
     end = index + 1
     while end < len(tokens) and tokens[end].type not in _ITEM_START_TYPES:
         end += 1
-    header_tokens = tokens[index + 1 : end]
-    if not any(token.type == DCOLON or _is_as(token) for token in header_tokens):
+    header = tokens[index + 1 : end]
+    if not header:
+        return False
+    if header[0].type == SLASH and (
+        len(header) < 2 or header[1].type != NAME or header[0].end_pos != header[1].start_pos
+    ):
+        return False
+    if header[0].type == SLASH and not any(
+        token.type == DCOLON or _is_as(token) for token in header
+    ):
+        return False
+    for hiding_index, token in enumerate(header):
+        if not (
+            token.type == NAME
+            and str(token) == "hiding"
+            and hiding_index > 0
+            and header[hiding_index - 1].type in {STAR, "RBRACE"}
+        ):
+            continue
+        if hiding_index + 1 >= len(header) or header[hiding_index + 1].type != NAME:
+            return False
+    if any(
+        _is_as(token) and (position + 1 >= len(header) or header[position + 1].type != NAME)
+        for position, token in enumerate(header)
+    ):
         return False
     for position in range(index + 1, end):
         if tokens[position].type != DCOLON:
@@ -312,9 +286,10 @@ def _is_use_declaration(source: str, tokens: list[Token], index: int) -> bool:
             or (position > index + 1 and tokens[position - 1].end_pos != tokens[position].start_pos)
         ):
             return False
-    start_offset = cast(int, tokens[index].start_pos)
-    end_offset = cast(int, tokens[end - 1].end_pos)
-    return _parses_as_use_declaration(source[start_offset:end_offset])
+    current_module = header[0].type == DCOLON
+    if current_module and sum(token.type == DCOLON for token in header) == 1:
+        return any(_is_as(token) for token in header)
+    return header[-1].type in {NAME, STAR, "RBRACE"}
 
 
 def _promote_soft_keywords(tokens: list[Token], source: str) -> list[Token]:
@@ -343,11 +318,7 @@ def _promote_soft_keywords(tokens: list[Token], source: str) -> list[Token]:
             at_item_start = prev_type is None or prev_type in _ITEM_START_TYPES
             if tv == "import" and at_item_start:
                 tok = _retype(tok, IMPORT)
-            elif (
-                tv == "use"
-                and at_item_start
-                and (_FORCE_USE_DECLARATION.get() or _is_use_declaration(source, tokens, index))
-            ):
+            elif tv == "use" and at_item_start and _is_use_declaration(tokens, index):
                 tok = _retype(tok, USE)
             elif tv == "export" and at_item_start:
                 tok = _retype(tok, EXPORT)
@@ -626,22 +597,10 @@ def _merge_modqual(tokens: list[Token], source: str) -> list[Token]:
     """
     result: list[Token] = []
     seen_dcolons: set[int] = set()
-    in_use_target = False
     i = 0
     n = len(tokens)
     while i < n:
         start = tokens[i]
-        if start.type == USE:
-            result.append(start)
-            in_use_target = True
-            i += 1
-            continue
-        if in_use_target and start.type in {"_NEWLINE", "SEMICOLON", "LBRACE", "STAR"}:
-            in_use_target = False
-        if in_use_target and start.type == NAME and i + 1 < n and _is_as(tokens[i + 1]):
-            result.append(_retype(start, USE_TARGET_NAME))
-            i += 1
-            continue
         name_index = i
         if start.type == SLASH:
             name_index += 1
@@ -687,7 +646,7 @@ def _merge_modqual(tokens: list[Token], source: str) -> list[Token]:
             last_tok = tokens[j]
             result.append(
                 Token(
-                    USEQUAL if in_use_target else MODQUAL,
+                    MODQUAL,
                     qualifier_value,
                     start_pos=start.start_pos,
                     line=start.line,
@@ -765,63 +724,11 @@ def _reject_clinging_slash(tokens: list[Token]) -> list[Token]:
     return tokens
 
 
-def _merge_use_alias_paths(tokens: list[Token]) -> list[Token]:
-    """Merge multi-segment whole-target alias prefixes into one deterministic token.
-
-    Only ``_merge_modqual`` inside a use target emits ``USEQUAL``, so a stream
-    without one cannot change here and is returned as it came, exactly as
-    :func:`_reject_clinging_slash` returns its input untouched.
-    """
-    if not any(tok.type == USEQUAL for tok in tokens):
-        return tokens
-    result: list[Token] = []
-    index = 0
-    n = len(tokens)
-    while index < n:
-        end = index
-        while end < n and tokens[end].type == USEQUAL:
-            end += 1
-        if (
-            end > index
-            and index >= 2
-            and tokens[index - 2].type == USE
-            and tokens[index - 1].type == DCOLON
-        ):
-            result.extend(tokens[index:end])
-            index = end
-            continue
-        if (
-            end - index >= 2
-            and end + 1 < n
-            and tokens[end].type == USE_TARGET_NAME
-            and _is_as(tokens[end + 1])
-        ):
-            first = tokens[index]
-            last = tokens[end - 1]
-            result.append(
-                Token(
-                    USE_ALIAS_PATH,
-                    "".join(f"{str(token).removesuffix('::')}::" for token in tokens[index:end]),
-                    start_pos=first.start_pos,
-                    line=first.line,
-                    column=first.column,
-                    end_line=last.end_line,
-                    end_column=last.end_column,
-                    end_pos=last.end_pos,
-                )
-            )
-            index = end
-            continue
-        result.append(tokens[index])
-        index += 1
-    return result
-
-
 def apply_module_passes(tokens: list[Token], source: str) -> list[Token]:
     """Apply soft-keyword promotion, import path merging, and module-qualifier merging."""
     promoted = _promote_soft_keywords(tokens, source)
     merged = _merge_modqual(_promote_hiding(_merge_modpath(promoted)), source)
-    return _reject_clinging_slash(_merge_use_alias_paths(merged))
+    return _reject_clinging_slash(merged)
 
 
 def unclosed_scope_path(source: str) -> str | None:

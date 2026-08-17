@@ -434,6 +434,10 @@ class CheckedModule:
         ``binding_for`` and ``constructor_ref_for`` apply them to scope-created
         slot references; consumers must use these accessors for references that
         may be slots.
+    ``is_test_constructor_refs``
+        Checker-selected constructors for bare ``is`` tests whose scope result
+        retained multiple candidates. ``constructor_ref_for`` exposes the
+        selection to lowering without rewriting scope's resolution table.
     ``let_matched_types``
         Complete concrete matched type for every immutable ``let`` site. This
         is distinct from each binder's type, which is keyed by its pattern node
@@ -479,6 +483,7 @@ class CheckedModule:
     source_text: str = ""
     slot_resolution: dict[int, BindingRef] = field(default_factory=dict)
     slot_constructor_refs: dict[int, ConstructorRef] = field(default_factory=dict)
+    is_test_constructor_refs: dict[int, ConstructorRef] = field(default_factory=dict)
     let_matched_types: dict[int, Type] = field(default_factory=dict)
     pattern_binding_refs: dict[int, BindingRef] = field(default_factory=dict)
     pattern_constructor_refs: dict[int, ConstructorRef] = field(default_factory=dict)
@@ -495,7 +500,10 @@ class CheckedModule:
         )
 
     def constructor_ref_for(self, node_id: int) -> ConstructorRef | None:
-        """Return *node_id*'s checked constructor reference through a slot."""
+        """Return *node_id*'s scope or checker-selected constructor reference."""
+        selected = self.is_test_constructor_refs.get(node_id)
+        if selected is not None:
+            return selected
         return dereference_slot_constructor_ref(
             node_id,
             resolution=self.resolved.resolution,

@@ -530,6 +530,7 @@ class EntryPipeline:
             partial_calls=entry.partial_calls,
             slot_resolution=entry.slot_resolution,
             slot_constructor_refs=entry.slot_constructor_refs,
+            is_test_constructor_refs=entry.is_test_constructor_refs,
             let_matched_types=entry.let_matched_types,
             pattern_binding_refs=entry.pattern_binding_refs,
             pattern_constructor_refs=entry.pattern_constructor_refs,

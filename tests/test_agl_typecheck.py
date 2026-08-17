@@ -5699,6 +5699,20 @@ class TestIsTest:
             default_stdlib=False,
         )
 
+    def test_is_test_rejects_ambiguous_alias_set_owned_by_other_enums(self) -> None:
+        err = reject_type(
+            "use S::{First::A as X, Second::B as X}\n"
+            "scope S\n"
+            "enum First | A\n"
+            "enum Second | B\n"
+            "enum Third | C\n"
+            "end S\n"
+            "let value = S::Third::C\n"
+            "value is X",
+            default_stdlib=False,
+        )
+        assert "does not belong" in str(err)
+
     def test_is_test_self_qualified_enum_variant(self) -> None:
         r = accept_type("enum Status\n  | Pass\n  | Fail\nlet s = Pass()\ns is ::Status::Pass")
         assert r.resolved.program is not None

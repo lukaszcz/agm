@@ -596,6 +596,10 @@ class ModuleResolution:
         checker selects a bare name's final interpretation from the matched
         occurrence's type and field name. The spelling table preserves each
         immutable occurrence's source name alongside those candidates.
+    ``is_test_constructor_candidates``
+        Maps unqualified ``is`` test node ids to every visible constructor
+        candidate for their source spelling. Typecheck selects by the left
+        operand's nominal enum type.
     ``pattern_slots``
         Scope-created field-directed pattern-slot metadata keyed by slot id.
         Branch-body references resolve directly to the shared slot binding.
@@ -630,6 +634,9 @@ class ModuleResolution:
         default_factory=dict
     )
     pattern_constructor_spellings: dict[int, str] = field(default_factory=dict)
+    is_test_constructor_candidates: dict[int, tuple[ConstructorRef, ...]] = field(
+        default_factory=dict
+    )
     pattern_slots: dict[int, PatternSlot] = field(default_factory=dict)
     match_site_pattern_slots: dict[int, tuple[int, ...]] = field(default_factory=dict)
     method_declarations: dict[DeclarationKey, ScopePath] = field(default_factory=dict)

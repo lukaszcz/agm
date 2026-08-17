@@ -656,6 +656,10 @@ class _Checker:
         # values are fully dereferenced ordinary binders or constructors.
         self._slot_resolution: dict[int, BindingRef] = {}
         self._slot_constructor_refs: dict[int, ConstructorRef] = {}
+        # Scrutinee-directed selections for ambiguous bare ``is`` spellings.
+        # Scope's candidate table remains immutable; lowering reads this map
+        # through CheckedModule.constructor_ref_for.
+        self._is_test_constructor_refs: dict[int, ConstructorRef] = {}
         # Complete matched types and selected meanings for immutable let
         # patterns. These are checked artifacts; inference-region rollback
         # prevents candidate-session state from publishing through them.
@@ -2116,6 +2120,7 @@ class _Checker:
             ("pattern_classifications", self._pattern_classifications),
             ("slot_resolution", self._slot_resolution),
             ("slot_constructor_refs", self._slot_constructor_refs),
+            ("is_test_constructor_refs", self._is_test_constructor_refs),
             ("let_matched_types", self._let_matched_types),
             ("pattern_binding_refs", self._pattern_binding_refs),
             ("pattern_constructor_refs", self._pattern_constructor_refs),
@@ -2180,6 +2185,13 @@ class _Checker:
         self._pattern_classifications[node_id] = constructor
         if constructor is not None:
             self._record_pattern_constructor_ref(node_id, constructor)
+
+    def _record_is_test_constructor_ref(self, node_id: int, constructor: ConstructorRef) -> None:
+        """Publish the enum constructor selected for one ambiguous bare ``is`` test."""
+        self._record_side_table_addition(
+            "is_test_constructor_refs", self._is_test_constructor_refs, node_id
+        )
+        self._is_test_constructor_refs[node_id] = constructor
 
     def _record_let_matched_type(self, node_id: int, typ: Type) -> None:
         """Publish one concrete complete-value type for an immutable let site."""
@@ -3975,6 +3987,28 @@ class _Checker:
                     span=node.span,
                 )
             constructor = self._constructor_ref_for(node.node_id)
+            selected_from_candidates = False
+            if constructor is None and node.qualifier is None:
+                candidates = self._resolved.is_test_constructor_candidates.get(node.node_id, ())
+                matching = tuple(
+                    candidate
+                    for candidate in candidates
+                    if candidate.matches(
+                        expr_type,
+                        candidate.variant if candidate.variant is not None else node.variant,
+                    )
+                )
+                constructor = self._unique_constructor_candidate(
+                    node.variant,
+                    node.span,
+                    expr_type,
+                    matching,
+                    subject="'is' variant",
+                )
+                if constructor is not None:
+                    constructor = self._constructors.normalize_constructor_ref(constructor)
+                    self._record_is_test_constructor_ref(node.node_id, constructor)
+                    selected_from_candidates = True
             variant = (
                 constructor.variant
                 if constructor is not None and constructor.variant is not None
@@ -3987,7 +4021,7 @@ class _Checker:
                     enum_type=expr_type,
                     span=node.span,
                 )
-            elif not constructor.matches(expr_type, variant):
+            elif not selected_from_candidates and not constructor.matches(expr_type, variant):
                 if node.qualifier is None:
                     raise _variant_not_in_enum(variant, expr_type, node.span)
                 self._check_variant_qualification(
@@ -4909,19 +4943,27 @@ class _Checker:
             )
             is not None
         )
-        return self._unique_pattern_constructor(pattern.name, pattern.span, owner_type, matching)
+        return self._unique_constructor_candidate(
+            pattern.name,
+            pattern.span,
+            owner_type,
+            matching,
+            subject="Constructor pattern",
+        )
 
     @staticmethod
-    def _unique_pattern_constructor(
+    def _unique_constructor_candidate(
         name: str,
         span: SourceSpan,
         owner_type: RecordType | EnumType,
         candidates: tuple[ConstructorRef, ...],
+        *,
+        subject: str,
     ) -> ConstructorRef | None:
-        """Return one candidate unless it denotes multiple constructors of *owner_type*."""
+        """Return one owner-matched candidate unless distinct variants remain."""
         if len({candidate.variant for candidate in candidates}) > 1:
             raise AglTypeError(
-                f"Constructor pattern '{name}' is ambiguous for '{owner_type!r}'.",
+                f"{subject} '{name}' is ambiguous for '{owner_type!r}'.",
                 span=span,
             )
         return candidates[0] if candidates else None
@@ -4942,7 +4984,13 @@ class _Checker:
                 candidate.variant if candidate.variant is not None else pattern.name,
             )
         )
-        return self._unique_pattern_constructor(pattern.name, pattern.span, field_type, matching)
+        return self._unique_constructor_candidate(
+            pattern.name,
+            pattern.span,
+            field_type,
+            matching,
+            subject="Constructor pattern",
+        )
 
     def _check_top_level_bare_constructor(self, pattern: VarPattern, subj_type: Type) -> None:
         """Finalize a top-level bare pattern as a nullary enum constructor."""
@@ -5246,6 +5294,7 @@ class _Checker:
             partial_calls=self._partial_calls,
             slot_resolution=self._slot_resolution,
             slot_constructor_refs=self._slot_constructor_refs,
+            is_test_constructor_refs=self._is_test_constructor_refs,
             let_matched_types=self._let_matched_types,
             pattern_binding_refs=self._pattern_binding_refs,
             pattern_constructor_refs=self._pattern_constructor_refs,

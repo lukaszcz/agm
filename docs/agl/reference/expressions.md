@@ -729,7 +729,7 @@ review is Pass
 status is Status::Blocked     # qualified; aliases resolve transparently
 ```
 
-The left operand must have enum type; the variant must belong to that enum.
+The left operand must have enum type; the variant must belong to that enum. When one bare spelling exposes variants from multiple enums, the left operand's nominal enum type selects the variant. If the spelling exposes multiple distinct variants of that same enum, the test is ambiguous and must use an unambiguous spelling.
 
 ## `case` expressions
 

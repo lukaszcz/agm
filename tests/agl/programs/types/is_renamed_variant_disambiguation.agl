@@ -1,0 +1,19 @@
+# A bare alias shared by variants of distinct enums is selected from the
+# left-hand side's nominal type, and the selected canonical variant reaches execution.
+use Variants::{First::A as X, Second::B as X}
+
+scope Variants
+enum First
+  | A
+  | Other
+
+enum Second
+  | B
+  | Other
+end Variants
+
+program def main() -> unit =
+  let first: Variants::First = Variants::First::A
+  let second: Variants::Second = Variants::Second::B
+  print(first is X)
+  print(second is X)

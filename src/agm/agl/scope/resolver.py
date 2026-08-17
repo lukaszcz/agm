@@ -442,6 +442,9 @@ class _Resolver:
         # candidates do not depend on ordinary lexical value bindings.
         self._pattern_constructor_candidates: dict[int, tuple[ConstructorRef, ...]] = {}
         self._pattern_constructor_spellings: dict[int, str] = {}
+        # Bare ``is`` spellings remain candidate sets until typecheck knows the
+        # nominal type of the left operand.
+        self._is_test_constructor_candidates: dict[int, tuple[ConstructorRef, ...]] = {}
         # Each pattern-owning case branch or let declaration creates one shared
         # slot per binding name. The checker selects its final target after the
         # match site has been classified.
@@ -583,6 +586,7 @@ class _Resolver:
             constructor_refs=dict(self._constructor_refs),
             pattern_constructor_candidates=dict(self._pattern_constructor_candidates),
             pattern_constructor_spellings=dict(self._pattern_constructor_spellings),
+            is_test_constructor_candidates=dict(self._is_test_constructor_candidates),
             pattern_slots=dict(self._pattern_slots),
             match_site_pattern_slots=dict(self._match_site_pattern_slots_by_node),
             method_declarations=dict(self._method_declarations),
@@ -2752,8 +2756,9 @@ class _Resolver:
         elif isinstance(expr, IsTest):
             if expr.qualifier is None:
                 candidates = self._bare_constructor_candidates(expr.variant)
+                self._is_test_constructor_candidates[expr.node_id] = candidates
                 if len(candidates) == 1:
-                    self._constructor_refs[expr.node_id] = next(iter(candidates))
+                    self._constructor_refs[expr.node_id] = candidates[0]
             else:
                 self._resolve_constructor_chain(
                     expr.node_id, expr.qualifier, expr.variant, defer_route_diagnostics=True

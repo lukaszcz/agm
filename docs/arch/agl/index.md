@@ -21,7 +21,7 @@ source (.agl)
         ↘ host runtime: agents, shell execution, the Python FFI registry, codecs, rendering, trace store
 ```
 
-The linked IR is the only execution format; checked frontend objects are never fed to the evaluator. Scope emits immutable shared pattern slots for uncertain field-directed names, typecheck selects their concrete binders or constructors, and consumers resolve them through checked-artifact accessors. No pass rewrites another pass's resolution tables.
+The linked IR is the only execution format; checked frontend objects are never fed to the evaluator. Scope emits immutable shared pattern slots for uncertain field-directed names and candidate sets for ambiguous bare `is` variants; typecheck selects their concrete binders or constructors from nominal types, and consumers resolve them through checked-artifact accessors. No pass rewrites another pass's resolution tables.
 
 ## The Firewall
 

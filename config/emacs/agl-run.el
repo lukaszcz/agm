@@ -8,10 +8,15 @@
 ;; through `compile', so diagnostics land in a compilation buffer.  AGM
 ;; renders diagnostics GNU-style, which the default compilation error
 ;; regexp already matches, so an error is clickable with no extra entry.
+;; A column span (`file:2:11-24:') jumps correctly, though the built-in
+;; regexp reads the number after the dash as an end line, so the region it
+;; highlights is not the one AGM described.
 
 ;;; Code:
 
 (require 'compile)
+;; `agl-check-command' is defined here and shared with `agl-check'.
+(require 'agl-flymake)
 
 (defcustom agl-exec-command '("agm" "exec")
   "Command vector that runs an AgL program.

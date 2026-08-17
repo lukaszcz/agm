@@ -130,7 +130,7 @@
     (should (= (point) (point-max)))))
 
 ;; --- imenu: builtin def, multiple program defs, multi-segment scope,
-;;     and scope-stack pop (Fix 9) ---
+;;     and scope-stack pop ---
 
 (ert-deftest agl-nav-imenu-builtin-def-is-functions-category ()
   (agl-nav--with-buffer "builtin def copy[T](value: T) -> T\n"
@@ -164,7 +164,7 @@
       (should (member "outside" (agl-nav--category-names index "Functions")))
       (should-not (member "Geometry::outside" (agl-nav--category-names index "Functions"))))))
 
-;; --- imenu is case-sensitive (Fix 2) ---
+;; --- imenu is case-sensitive ---
 
 (ert-deftest agl-nav-imenu-case-sensitive-uppercase-def-not-indexed ()
   (agl-nav--with-buffer "DEF loud() -> int = 0\ndef quiet() -> int = 1\n"
@@ -172,7 +172,7 @@
       (should-not (member "loud" (agl-nav--category-names index "Functions")))
       (should (member "quiet" (agl-nav--category-names index "Functions"))))))
 
-;; --- imenu/defun ignore declarations that are only text (Fix 6) ---
+;; --- imenu/defun ignore declarations that are only text ---
 
 (ert-deftest agl-nav-imenu-skips-commented-out-declaration ()
   (agl-nav--with-buffer "# def hidden() -> int = 0\ndef real() -> int = 1\n"
@@ -196,7 +196,7 @@
       (should-not (member "hidden" (agl-nav--category-names index "Functions")))
       (should (member "real3" (agl-nav--category-names index "Functions"))))))
 
-;; --- beginning-of-defun return value and motion (Fix 12, Fix 6) ---
+;; --- beginning-of-defun return value and motion ---
 
 (ert-deftest agl-nav-beginning-of-defun-at-point-min-returns-nil ()
   (agl-nav--with-buffer "def only() -> int =\n  1\n"

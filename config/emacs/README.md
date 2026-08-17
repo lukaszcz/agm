@@ -24,7 +24,7 @@ just setup-emacs
 This stages the Elisp as a package and installs it with Emacs's own
 package machinery, which generates the autoloads and byte-compiles the
 sources. The package version tracks AGM's. `just install` runs the same
-step when an `emacs` binary is available and skips it with a notice
+step last, when an `emacs` binary is available, and skips it with a notice
 otherwise. Nothing is ever written to your init file.
 
 Pass a prefix to install under a different `HOME`:

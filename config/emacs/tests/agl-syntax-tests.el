@@ -355,5 +355,20 @@ Otherwise the block stays open and swallows the following code."
   (agl-test--with-buffer (concat "ask!\n" "  line one\n" "  line two")
     (should (agl-test--in-string-p (point-max)))))
 
+(ert-deftest agl-syntax-raw-block-drops-trailing-blank-lines ()
+  ;; The scanner drops the blank lines after a block payload's last content
+  ;; line, so they are not part of the verbatim region.
+  (agl-test--with-buffer "exec!\n  a\n\n"
+    (should-not (nth 3 (syntax-ppss (1- (point-max)))))))
+
+(ert-deftest agl-syntax-raw-block-keeps-its-content ()
+  (agl-test--with-buffer "exec!\n  a\n  b\nlet after = 1\n"
+    (goto-char (point-min))
+    (search-forward "  b")
+    (should (nth 3 (syntax-ppss (1- (point)))))
+    (goto-char (point-min))
+    (search-forward "let after")
+    (should-not (nth 3 (syntax-ppss (1- (point)))))))
+
 (provide 'agl-syntax-tests)
 ;;; agl-syntax-tests.el ends here

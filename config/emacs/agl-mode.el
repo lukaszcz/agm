@@ -30,7 +30,7 @@
 ;; (`agm check'), `C-c C-z' opens the inferior REPL, and `C-c C-r' /
 ;; `C-c C-b' send the region or buffer to it.
 ;;
-;; Font-lock is structural only (D3): capitalization is semantically
+;; Font-lock is structural only : capitalization is semantically
 ;; meaningless in AgL, so faces derive from declaration and annotation
 ;; positions, never from spelling; constructor use-sites in expressions
 ;; stay unfaced.  Later tasks add indentation, flymake, and exec/REPL
@@ -235,7 +235,18 @@ opener and never resumes scanning from inside the payload."
     (while (and (not (eobp))
                 (or (agl--blank-line-p) (> (current-indentation) opener-indent)))
       (forward-line 1))
-    (let* ((block-end (point))
+    ;; Trailing blank lines are not payload: the scanner drops the blank
+    ;; lines that follow the last content line, so the closing fence goes
+    ;; there rather than at the end of the run.
+    (let* ((block-end (save-excursion
+                        (let ((limit (point)))
+                          (goto-char limit)
+                          (while (and (> (point) block-start)
+                                      (save-excursion
+                                        (forward-line -1)
+                                        (agl--blank-line-p)))
+                            (forward-line -1))
+                          (point))))
            (has-content (> block-end block-start)))
       (when has-content
         (put-text-property block-start (1+ block-start)
@@ -509,7 +520,7 @@ function only ever adjusts the start of the region."
 ;; ---------------------------------------------------------------------------
 ;; Font-lock.
 ;;
-;; Structural highlighting only (D3): capitalization carries no syntactic
+;; Structural highlighting only : capitalization carries no syntactic
 ;; or semantic meaning in AgL (`option'/`Option' are equally valid as
 ;; types or values -- see docs/agl/reference/lexical-structure.md), so
 ;; faces derive only from declaration and annotation *positions*, never
@@ -557,7 +568,7 @@ The subset that gets `font-lock-keyword-face' rather than
 
 Anchors `agl--match-type-annotation' to a parameter/field/return-type
 annotation position (see docs/agl/reference/lexical-structure.md),
-which is what makes that rule contextual rather than case-based (D3).")
+which is what makes that rule contextual rather than case-based .")
 
 (defconst agl--number-re "[0-9]+\\(?:\\.[0-9]+\\)?"
   "Regexp matching an AgL `INT' or `DECIMAL' literal.")
@@ -737,6 +748,16 @@ name actually faced -- or nil if point is not at a NAME."
         (setq seg-end (point)))
       (list full-start seg-start seg-end))))
 
+(defun agl--qualifier-colon-p (pos anchor-end)
+  "Return non-nil when the `:' at POS belongs to a `::' qualifier.
+
+ANCHOR-END is the end of the matched anchor.  `::' separates a qualifier
+chain from the member it selects, so the name after it is an ordinary
+reference rather than a type annotation.  Either colon of the pair is
+rejected: the scan resumes inside the pair after the first one fails."
+  (or (eq (char-after anchor-end) ?:)
+      (eq (char-before pos) ?:)))
+
 (defun agl--dict-entry-colon-p (pos)
   "Return non-nil if the `:' at POS separates a dict-literal entry.
 
@@ -759,7 +780,7 @@ or field list) or after `->' (a return-type annotation): a `NAME' with
 an optional qualifier chain (`::' segments, and optionally a `/'
 module route -- see `agl--parse-type-head-chain') and optional
 `[...]' type arguments.  Only the terminal segment is faced, matching
-how the declared-name matchers treat a qualifier prefix (D3: position,
+how the declared-name matchers treat a qualifier prefix (position,
 not spelling, drives the face) -- so in `foo/bar::Point' only `Point'
 is faced.  The eight primitive type-annotation names
 \(`agl-primitive-type-names') are ordinary `NAME's, so this single rule
@@ -769,7 +790,8 @@ group 1 covers the terminal segment.  Return non-nil on success."
     (while (and (not found) (re-search-forward agl--type-annotation-anchor-re limit t))
       (let ((anchor-end (match-end 0)))
         (goto-char anchor-end)
-        (if (agl--dict-entry-colon-p (match-beginning 0))
+        (if (or (agl--qualifier-colon-p (match-beginning 0) anchor-end)
+                (agl--dict-entry-colon-p (match-beginning 0)))
             ;; A `:' directly inside a brace is a dict entry (`{ key: value }'),
             ;; not an annotation, so its value is an ordinary expression.
             nil
@@ -1047,7 +1069,7 @@ success."
   "Font-lock keyword rules for `agl-mode'.
 
 See the section commentary above this constant for the governing
-design (D3: structural highlighting only).")
+design (structural highlighting only).")
 
 ;; ---------------------------------------------------------------------------
 ;; imenu and defun navigation.

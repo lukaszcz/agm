@@ -31,7 +31,9 @@ so the front end never depends on how the process was spawned."
   "Regexp matching the plain REPL's primary and continuation prompts.
 
 The spellings come from the REPL's own prompt constants, which the plain
-front end prints unstyled.")
+front end prints unstyled.  The continuation prompt follows the previous
+entry on the same line, so in practice only the primary prompt matches at
+line start; the alternative is kept so the regexp describes both.")
 
 (define-derived-mode agl-repl-mode comint-mode "AgL-REPL"
   "Major mode for an inferior AgL REPL."

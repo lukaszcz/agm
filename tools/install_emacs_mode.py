@@ -103,20 +103,24 @@ def build_package_tar(emacs_dir: Path, staging: Path, version: str) -> Path:
 def install_elisp(archive: Path) -> str:
     """Return the Elisp that removes any installed copy and installs ARCHIVE."""
     return f"""
+;; Batch Emacs does not load early-init.el, which is the only effective
+;; place to relocate `package-user-dir' -- activation precedes init.el.
+(let ((early (locate-user-emacs-file "early-init.el")))
+  (when (file-exists-p early) (load early nil t)))
 (require 'package)
 (package-initialize)
 (dolist (installed (cdr (assq '{PACKAGE_NAME} package-alist)))
   (ignore-errors (package-delete installed t)))
 (package-install-file "{archive}")
-(princ (format "into %s\\n" package-user-dir))
+(princ (format "into %s\\n" (expand-file-name package-user-dir)))
 """
 
 
-def run_emacs_install(archive: Path, *, home: Path | None) -> str:
-    """Install ARCHIVE with ``emacs --batch``; return its output.
+def find_emacs() -> str:
+    """Return the ``emacs`` binary, or exit when it is not installed.
 
-    *home* overrides ``HOME`` so the package lands under that prefix's
-    ``package-user-dir`` — the parity the config installer's PREFIX gives.
+    Checked before anything is created or staged, so a host without Emacs
+    is reported for what it is and leaves nothing behind.
     """
     emacs = shutil.which("emacs")
     if emacs is None:
@@ -124,7 +128,15 @@ def run_emacs_install(archive: Path, *, home: Path | None) -> str:
             "Error: emacs was not found on PATH; install Emacs, or skip the "
             "Emacs mode (`just install` skips it automatically)."
         )
+    return emacs
 
+
+def run_emacs_install(emacs: str, archive: Path, *, home: Path | None) -> str:
+    """Install ARCHIVE with ``emacs --batch``; return its output.
+
+    *home* overrides ``HOME`` so the package lands under that prefix's
+    ``package-user-dir`` — the parity the config installer's PREFIX gives.
+    """
     with TemporaryDirectory(prefix="agm-emacs-install-") as scratch:
         script = Path(scratch) / "install.el"
         script.write_text(install_elisp(archive), encoding="utf-8")
@@ -134,7 +146,8 @@ def run_emacs_install(archive: Path, *, home: Path | None) -> str:
         if home is not None:
             env = dict(os.environ)
             env["HOME"] = str(home)
-        completed = subprocess.run(  # noqa: S603 - fixed argv, no shell
+        # Fixed argv, no shell.
+        completed = subprocess.run(
             [emacs, "--batch", "--load", str(script)],
             capture_output=True,
             text=True,
@@ -145,7 +158,17 @@ def run_emacs_install(archive: Path, *, home: Path | None) -> str:
         raise SystemExit(
             f"Error: emacs failed to install the package:\n{completed.stderr.strip()}"
         )
-    return completed.stdout.strip() or completed.stderr.strip()
+    # Surface Emacs's own warnings about the package sources, so an Elisp
+    # regression is visible.  The generated descriptor is excluded: it uses
+    # `define-package', which package.el still requires for a tar package
+    # and which Emacs 29 reports as obsolete on every install.
+    messages = [
+        line
+        for line in completed.stderr.splitlines()
+        if ("Warning:" in line or "Error:" in line)
+        and f"{PACKAGE_NAME}-pkg.el" not in line
+    ]
+    return "\n".join(filter(None, [completed.stdout.strip(), *messages]))
 
 
 def manual_setup_notice(emacs_dir: Path) -> str:
@@ -168,13 +191,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not emacs_dir.is_dir():
         raise SystemExit(f"Error: {emacs_dir} does not exist.")
 
+    emacs = find_emacs()
     home = None if args.prefix is None else Path(args.prefix).resolve()
     if home is not None:
         home.mkdir(parents=True, exist_ok=True)
 
     with TemporaryDirectory(prefix="agm-emacs-stage-") as staging:
         archive = build_package_tar(emacs_dir, Path(staging), AGM_VERSION)
-        output = run_emacs_install(archive, home=home)
+        output = run_emacs_install(emacs, archive, home=home)
 
     print(f"Installed {PACKAGE_NAME} {AGM_VERSION}")
     if output:

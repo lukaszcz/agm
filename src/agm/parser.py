@@ -686,9 +686,10 @@ _HELP_TEXTS: dict[str, str] = {
         `check` never evaluates anything and never invokes an agent.
 
         Every FILE is checked even when an earlier one failed.  Diagnostics
-        print to stderr as `path:line:col: error: message` /
-        `path:line:col: warning: message`; a clean FILE produces no output.
-        Warnings never affect the exit code.
+        print to stderr as a location, then `error:` or `warning:`, then the
+        message; a span renders as `path:line:col-endcol` (or
+        `path:line:col-endline:endcol` across lines).  A clean FILE produces
+        no output.  Warnings never affect the exit code.
 
         This is a different check from `agm pkg check`, which validates a
         package directory's manifest and module-tree discipline rather than

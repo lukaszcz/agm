@@ -2,9 +2,8 @@
 
 ;;; Commentary:
 
-;; Tests the structural font-lock layer of `agl-mode' (D3: no case-based
-;; type coloring anywhere -- faces derive only from declaration and
-;; annotation positions).  Covers: every declaration form's declared-name
+;; Tests the structural font-lock layer of `agl-mode' faces derive only from declaration and
+;; annotation positions, never from spelling.  Covers: every declaration form's declared-name
 ;; face, soft-keyword promotion windows (both directions), contextual
 ;; builtins, primitive-type-annotation positions, the absence of
 ;; case-based coloring, identifier-boundary safety, `%{...}' interpolation
@@ -70,7 +69,7 @@
 (ert-deftest agl-flt-qualified-def-name-faces-only-terminal-segment ()
   (agl-flt--with-buffer "def Box::get[E](self) -> E = self.value\n"
     (should (eq (agl-flt--face-of "get") 'font-lock-function-name-face))
-    ;; The qualifier segment "Box" is not a declaration position (D3):
+    ;; The qualifier segment "Box" is not a declaration position :
     ;; it stays unfaced.
     (should-not (eq (agl-flt--face-of "Box") 'font-lock-function-name-face))
     (should-not (eq (agl-flt--face-of "Box") 'font-lock-type-face))))
@@ -212,7 +211,7 @@
   (agl-flt--with-buffer "ask! Summarize this\n"
     (should (eq (agl-flt--face-of "ask!") 'font-lock-builtin-face))))
 
-;; --- Primitive type-annotation positions (contextual, D3) ---
+;; --- Primitive type-annotation positions (contextual) ---
 
 (ert-deftest agl-flt-primitive-type-after-colon-is-type-face ()
   (agl-flt--with-buffer "def f(x: text) -> text = x\n"
@@ -228,7 +227,7 @@
     ;; It is an ordinary `let'-bound variable name instead.
     (should (eq (agl-flt--face-of "text") 'font-lock-variable-name-face))))
 
-;; --- D3: no case-based coloring ---
+;; --- no case-based coloring ---
 
 (ert-deftest agl-flt-no-case-based-coloring-bare-operand-unfaced ()
   (agl-flt--with-buffer "let x = Option\n"
@@ -294,7 +293,7 @@
   (agl-flt--with-buffer "let a1b = 1\n"
     (should-not (eq (agl-flt--face-at (agl-flt--pos-before "1b")) agl--number-face))))
 
-;; --- Operators, including `::' (Fix 5) ---
+;; --- Operators, including `::' ---
 
 (ert-deftest agl-flt-single-char-operator-is-operator-face ()
   (agl-flt--with-buffer "let z = 1 + 2\n"
@@ -358,7 +357,7 @@
     (should (eq (agl-flt--face-at (1- (agl-flt--pos-after "as?"))) 'font-lock-keyword-face))))
 
 ;; --- Backslash runs before `%{': template parity vs. raw-tail semantics
-;;     (Fix 4) ---
+;;     ---
 
 (ert-deftest agl-flt-double-backslash-before-interpolation-is-not-escaped-in-template ()
   (agl-flt--with-buffer "let a = \"cost is \\\\%{100}\"\n"
@@ -382,7 +381,7 @@
     ;; counting, so a run of two is still escaped here.
     (should-not (eq (agl-flt--face-of "%{100}") 'agl-interpolation-face))))
 
-;; --- The interpolation face cannot leak outside its string region (Fix 3) ---
+;; --- The interpolation face cannot leak outside its string region ---
 
 (ert-deftest agl-flt-interpolation-face-does-not-leak-past-string-region ()
   (agl-flt--with-buffer "exec! echo %{p\nlet c = f(1)}\n"
@@ -406,7 +405,7 @@
               "end Outer\n")
     (should (eq (agl-flt--face-of "end Inner") 'font-lock-keyword-face))))
 
-;; --- Regression: user-defined types in annotation position (Fix 1) ---
+;; --- Regression: user-defined types in annotation position ---
 
 (ert-deftest agl-flt-user-defined-types-faced-in-annotation-position ()
   (agl-flt--with-buffer "def f(p: Point) -> Review = p\n"
@@ -416,7 +415,7 @@
 (ert-deftest agl-flt-module-route-qualified-type-faces-terminal-segment-only ()
   (agl-flt--with-buffer "def f(p: foo/bar::Point) -> int = 1\n"
     (should (eq (agl-flt--face-of "Point") 'font-lock-type-face))
-    ;; The module-route segments are not a declaration position (D3):
+    ;; The module-route segments are not a declaration position :
     ;; they stay unfaced, matching how a qualifier prefix is treated
     ;; everywhere else in this file.
     (should-not (eq (agl-flt--face-of "foo") 'font-lock-type-face))
@@ -432,7 +431,7 @@
     (should (eq (agl-flt--face-of "text") 'font-lock-type-face))))
 
 ;; --- Regression: a constructor pattern leaves the constructor unfaced
-;;     (Fix 7) ---
+;;     ---
 
 (ert-deftest agl-flt-let-constructor-pattern-does-not-face-constructor ()
   (agl-flt--with-buffer "let Point(x, y) = p\n"
@@ -461,6 +460,20 @@
 (ert-deftest agl-flt-plain-let-binder-is-still-variable-faced ()
   (agl-flt--with-buffer "let plain = 1\n"
     (should (eq (agl-flt--face-of "plain") 'font-lock-variable-name-face))))
+
+(ert-deftest agl-flt-qualifier-terminal-segment-is-not-type-faced ()
+  ;; `::' selects a member from a qualifier chain: the name after it is an
+  ;; ordinary reference, not a type annotation.
+  (agl-flt--with-buffer "let d = Point::distance(p)\n"
+    (should-not (eq (agl-flt--face-of "distance") 'font-lock-type-face)))
+  (agl-flt--with-buffer "std/config::max-iters := 5\n"
+    (should-not (eq (agl-flt--face-of "max-iters") 'font-lock-type-face)))
+  (agl-flt--with-buffer "let v = Status::Good\n"
+    (should-not (eq (agl-flt--face-of "Good") 'font-lock-type-face))))
+
+(ert-deftest agl-flt-qualified-type-in-annotation-is-still-faced ()
+  (agl-flt--with-buffer "def f(p: Nested::Point) -> int = 1\n"
+    (should (eq (agl-flt--face-of "Point") 'font-lock-type-face))))
 
 (provide 'agl-font-lock-tests)
 ;;; agl-font-lock-tests.el ends here

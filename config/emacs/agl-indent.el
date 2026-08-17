@@ -79,7 +79,7 @@ body on the following lines.")
     (skip-chars-forward " \t")
     (and (not (eolp))
          (eq (char-after) ?#)
-         (nth 4 (syntax-ppss (1+ (point)))))))
+         (save-excursion (nth 4 (syntax-ppss (1+ (point))))))))
 
 (defun agl--line-skippable-p ()
   "Return non-nil if the current line is ignored for layout purposes.
@@ -104,7 +104,10 @@ end of line when the line carries no comment."
           (found nil))
       (while (and (not found) (< (point) limit))
         (if (and (eq (char-after) ?#)
-                 (nth 4 (syntax-ppss (1+ (point)))))
+                 ;; `syntax-ppss' leaves point at its argument, so the scan
+                 ;; is wrapped: without it the recorded position lands after
+                 ;; the `#' and the comment stays in the code text.
+                 (save-excursion (nth 4 (syntax-ppss (1+ (point))))))
             (setq found (point))
           (forward-char 1)))
       (or found limit))))
@@ -188,10 +191,16 @@ line aligns just past that bracket."
     (beginning-of-line)
     (skip-chars-forward " \t")
     (and (looking-at agl--branch-marker-re)
-         ;; `|' is punctuation; the word markers must not be a prefix of a
-         ;; longer AgL identifier (`done-with' is one name).
-         (or (eq (char-after) ?|)
-             (agl--ident-boundary-after-p (match-end 0))))))
+         (if (eq (char-after) ?|)
+             ;; A branch `|' stands alone.  Operator characters after it
+             ;; make one `OP_NAME' instead — `|>' is a user infix operator,
+             ;; so such a line continues an expression rather than opening
+             ;; a branch.
+             (let ((next (char-after (1+ (point)))))
+               (or (null next) (memq next '(?\s ?\t ?\n))))
+           ;; A word marker must not be the prefix of a longer AgL
+           ;; identifier (`done-with' is one name).
+           (agl--ident-boundary-after-p (match-end 0))))))
 
 (defun agl--branch-owner ()
   "Return (INDENT . OPENS-BLOCK) for the construct a branch marker continues.

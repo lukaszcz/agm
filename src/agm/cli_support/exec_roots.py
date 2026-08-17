@@ -1,4 +1,4 @@
-"""Shared effective module-root assembly for ``agm exec`` host paths."""
+"""Shared effective module-root assembly for ``agm exec`` and ``agm check``."""
 
 from __future__ import annotations
 

@@ -184,10 +184,16 @@ message."
           (with-current-buffer buffer
             (push (flymake-make-diagnostic
                    buffer (point-min) (min (point-max) (1+ (point-min))) type
-                   (format "%s:%s: %s"
-                           (agl-flymake-report-path report)
-                           (agl-flymake-report-line report)
-                           text))
+                   (if (agl-flymake-report-column report)
+                       (format "%s:%s:%s: %s"
+                               (agl-flymake-report-path report)
+                               (agl-flymake-report-line report)
+                               (agl-flymake-report-column report)
+                               text)
+                     (format "%s:%s: %s"
+                             (agl-flymake-report-path report)
+                             (agl-flymake-report-line report)
+                             text)))
                   diagnostics)))))
     (nreverse diagnostics)))
 

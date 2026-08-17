@@ -54,10 +54,20 @@ rule.
 ### Diagnostics and warnings
 
 Diagnostics print to stderr in the same compiler-style form `agm exec` uses:
-`path:line:col: error: message` or `path:line:col: warning: message`. A diagnostic
-originating in an imported module carries that module's own path rather than the checked
-`FILE`'s. Advisory **warnings** (for example, an unused binding or a TAB-indented line)
-are printed but never affect the exit code — only error-severity diagnostics do.
+a location, then `error:` or `warning:`, then the message. Most diagnostics carry a
+span, so the location takes one of four shapes:
+
+```text
+path:line: error: message
+path:line:col: error: message
+path:line:col-endcol: error: message
+path:line:col-endline:endcol: error: message
+```
+
+A related note is indented two spaces under its diagnostic. A diagnostic originating in
+an imported module carries that module's own path rather than the checked `FILE`'s.
+Advisory **warnings** (a TAB-indented line, for example) are printed but never affect the
+exit code — only error-severity diagnostics do.
 
 ### Example
 

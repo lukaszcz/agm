@@ -165,5 +165,12 @@
       (should (cl-some (lambda (text) (string-match-p "local" text))
                        (agl-fm--texts diagnostics))))))
 
+(ert-deftest agl-fm-foreign-diagnostic-keeps-its-column ()
+  (agl-fm--with-buffer "import lib\n"
+    (let* ((reports (agl-flymake-parse "/other/lib.agl:4:2: error: boom\n"))
+           (diagnostic (car (agl-flymake--diagnostics
+                             (current-buffer) buffer-file-name reports))))
+      (should (string-match-p "/other/lib.agl:4:2:" (flymake-diagnostic-text diagnostic))))))
+
 (provide 'agl-flymake-tests)
 ;;; agl-flymake-tests.el ends here

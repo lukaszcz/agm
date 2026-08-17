@@ -176,5 +176,22 @@ indented; the resulting indentation column is returned."
                       "  print describe(Point(x = 0, y = 0))\n")))
     (should (equal (agl-ind--reindented text) text))))
 
+(ert-deftest agl-ind-pipe-operator-is-not-a-branch-marker ()
+  ;; `|>' is one OP_NAME, so a line starting with it continues an
+  ;; expression rather than opening a branch.
+  (should (= (agl-ind--indent-of "let a = 1\n  let b = 2\n|> g\n" 3) 2)))
+
+(ert-deftest agl-ind-bare-pipe-is-still-a-branch-marker ()
+  (should (= (agl-ind--indent-of "let v = if\n| a => 1\n" 2) 2)))
+
+(ert-deftest agl-ind-opener-with-a-trailing-comment-still-opens-a-block ()
+  ;; A trailing comment is not code, so it must not stop the line from
+  ;; opening its block.
+  (should (= (agl-ind--indent-of "def f() =  # note\nx\n" 2) 2))
+  (should (= (agl-ind--indent-of "if n > 0 =>  # note\nx\n" 2) 2)))
+
+(ert-deftest agl-ind-comment-only-line-is-skipped-for-layout ()
+  (should (= (agl-ind--indent-of "def f() -> unit =\n  print \"a\"\n# note\nprint \"b\"\n" 4) 2)))
+
 (provide 'agl-indent-tests)
 ;;; agl-indent-tests.el ends here

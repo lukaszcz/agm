@@ -47,7 +47,7 @@ Two front ends wire that seam to different I/O:
 - `agm.agl.repl.console` — the **only** module that imports prompt_toolkit. It builds a `PromptSession` (lexer, completer, key bindings, history, styling) and wires its `prompt()`/`print` as the reader/writer; `on_theme_change` swaps `prompt_session.style` and persists the choice.
 - `agm.agl.repl.plain_console` — a styling-free line front end: it prints the plain `agl>`/`...>` prompts and reads lines from a text stream, accumulating continuation lines with the same `is_incomplete` predicate so a pasted or programmatically sent multi-line block works; `on_theme_change` only persists. It also owns `plain_mode_engaged`, the pure engagement predicate `agm.commands.repl` uses to pick this front end (non-tty stdin/stdout, or `TERM=dumb`) unless `--plain` forces it; there is no flag to force prompt_toolkit onto a non-terminal.
 
-`agm.commands.repl` builds the session once and hands it to whichever front end is chosen; both imports are local so an interactive session never pulls in the plain path and a plain session never pulls in prompt_toolkit.
+`agm.commands.repl` builds the session once and hands it to whichever front end is chosen; the `console` import is local, so a plain session never pulls in prompt_toolkit; `plain_console` is UI-free and imported eagerly for the engagement predicate.
 
 ## Code Entry Points
 

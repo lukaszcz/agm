@@ -749,9 +749,9 @@ class TestClashDeferred:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import core::{E}\nimport facade::{E}\nuse E::*\nA",
+                "entry": "import core::{E as X}\nimport facade::{X}\nuse X::*\nA",
                 "core": "enum E\n  | A",
-                "facade": "export core::{E}",
+                "facade": "export core::{E as X}",
             },
         )
 
@@ -759,7 +759,7 @@ class TestClashDeferred:
 
         core_id = ModuleId.from_path("core")
         facade = result.modules[ModuleId.from_path("facade")]
-        assert facade.scope_exports["E"] == frozenset({(core_id, "E")})
+        assert facade.scope_exports["X"] == frozenset({(core_id, "E")})
 
     def test_use_deduplicates_empty_scope_routes_to_same_reexport_origin(
         self, tmp_path: Path

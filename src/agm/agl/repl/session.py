@@ -1563,13 +1563,13 @@ class ReplSession:
 
         saved_entries = _decode_transcript(normalized)
         if saved_entries is not None:
-            results: list[EntryResult] = []
+            saved_results: list[EntryResult] = []
             for entry in saved_entries:
                 result = self.eval_entry(entry)
-                results.append(result)
+                saved_results.append(result)
                 if not result.ok:
                     break
-            return results
+            return saved_results
 
         # A blank / comment-only file has nothing to run — load it as a no-op
         # rather than surfacing the parser's "Unexpected end of input" error.

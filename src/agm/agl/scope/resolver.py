@@ -879,9 +879,7 @@ class _Resolver:
         for item, path in self._type_declarations:
             type_path = path + (item.name,)
             nested_scope_names = frozenset(
-                nested_path[-1]
-                for nested_path in nodes
-                if nested_path[:-1] == type_path
+                nested_path[-1] for nested_path in nodes if nested_path[:-1] == type_path
             )
             nodes[type_path].clear_owned_constructor_members(nested_scope_names)
         for (_module_id, path, name), declaration in self._declarations.items():
@@ -1754,10 +1752,10 @@ class _Resolver:
         """Inject the selected members of one already-nameable route bare."""
         retained_target = self._retained_use_targets.get(decl.node_id)
         if retained_target is not None and retained_target.local_path is not None:
-            local = retained_target.local_path
+            retained_local = retained_target.local_path
             self._use_targets[decl.node_id] = retained_target
             self._current_scope().contribute_local_use(
-                LocalUseContribution(declaration=decl, source=self._scope_nodes[local])
+                LocalUseContribution(declaration=decl, source=self._scope_nodes[retained_local])
             )
             return
         decl = self._reinterpret_single_member_use_alias(decl)
@@ -3634,9 +3632,7 @@ class _Resolver:
             )
         route = tuple(part for part in route_segment.name.split("/"))
         atom_path = (*tuple(segment.name for segment in qualifier.segments[1:]), name)
-        route_members = qualifier_members(
-            self._import_env, route, anchored=qualifier.anchored
-        )
+        route_members = qualifier_members(self._import_env, route, anchored=qualifier.anchored)
         cumulative: ScopePath = ()
         for segment in qualifier.segments[1:]:
             cumulative = (*cumulative, segment.name)

@@ -814,9 +814,7 @@ def test_hidden_generic_does_not_validate_an_unrelated_plain_scope(tmp_path: Pat
             tmp_path,
             {
                 "entry": (
-                    "import one/shared\n"
-                    "import two/shared hiding Box\n"
-                    "shared::Box[int]::describe()"
+                    "import one/shared\nimport two/shared hiding Box\nshared::Box[int]::describe()"
                 ),
                 "one/shared": "scope Box\ndef describe() -> int = 7\nend Box",
                 "two/shared": "record Box[T](value: T)",

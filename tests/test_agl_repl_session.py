@@ -3609,6 +3609,22 @@ class TestReset:
 
 
 class TestLoadFile:
+    @pytest.mark.parametrize(
+        "transcript",
+        (
+            "# agm:repl-transcript:v1\ninvalid",
+            "# agm:repl-transcript:v1\n# agm:entry:1",
+            "# agm:repl-transcript:v1\n# agm:entry:x\n",
+            "# agm:repl-transcript:v1\n# agm:entry:2\nx\n",
+        ),
+    )
+    def test_malformed_saved_transcript_is_treated_as_an_ordinary_file(
+        self, transcript: str
+    ) -> None:
+        from agm.agl.repl.session import _decode_transcript
+
+        assert _decode_transcript(transcript) is None
+
     def test_load_file_executes_into_session(self, tmp_path: Path) -> None:
         f = tmp_path / "prog.agl"
         f.write_text("let a = 1\nlet b = a + 2\n")
@@ -3629,6 +3645,24 @@ class TestLoadFile:
         # Referencing it later does not re-run.
         s.eval_entry("g")
         assert agent.calls == 1
+
+    def test_saved_transcript_halts_at_first_failed_entry(self, tmp_path: Path) -> None:
+        transcript = tmp_path / "failed.agl"
+        transcript.write_text(
+            "# agm:repl-transcript:v1\n"
+            "# agm:entry:9\nlet a = 1\n"
+            "# agm:entry:7\nmissing\n"
+            "# agm:entry:9\nlet b = 2\n",
+            encoding="utf-8",
+        )
+
+        session = ReplSession()
+        results = session.load_file(transcript)
+
+        assert len(results) == 2
+        assert results[0].ok
+        assert not results[1].ok
+        assert [name for name, _type, _value in session.bindings()] == ["a"]
 
     def test_load_file_incremental_redefinition_round_trips(self, tmp_path: Path) -> None:
         # Redefinition across entries is supported; a saved transcript containing
@@ -3788,9 +3822,7 @@ class TestDumpSource:
         s.eval_entry("let a = 1")
         s.eval_entry("let b = 2")
         assert s.dump_source() == (
-            "# agm:repl-transcript:v1\n"
-            "# agm:entry:9\nlet a = 1\n"
-            "# agm:entry:9\nlet b = 2\n"
+            "# agm:repl-transcript:v1\n# agm:entry:9\nlet a = 1\n# agm:entry:9\nlet b = 2\n"
         )
 
     def test_dump_source_excludes_failed_entries(self) -> None:
@@ -3798,9 +3830,7 @@ class TestDumpSource:
         s.eval_entry("let a = 1")
         s.eval_entry("let z: decimal = 1 / 0")  # runtime fail
         s.eval_entry('let b = a + "x"')  # type fail
-        assert s.dump_source() == (
-            "# agm:repl-transcript:v1\n# agm:entry:9\nlet a = 1\n"
-        )
+        assert s.dump_source() == ("# agm:repl-transcript:v1\n# agm:entry:9\nlet a = 1\n")
 
 
 # ---------------------------------------------------------------------------

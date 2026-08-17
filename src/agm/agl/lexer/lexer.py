@@ -31,7 +31,7 @@ from __future__ import annotations
 import contextvars
 import importlib.resources
 from contextlib import contextmanager
-from typing import Iterator
+from typing import Iterator, cast
 
 from lark import Lark
 from lark.exceptions import LarkError
@@ -290,10 +290,8 @@ def _is_use_declaration(source: str, tokens: list[Token], index: int) -> bool:
             or (position > index + 1 and tokens[position - 1].end_pos != tokens[position].start_pos)
         ):
             return False
-    start_offset = tokens[index].start_pos
-    end_offset = tokens[end - 1].end_pos
-    if start_offset is None or end_offset is None:
-        return False
+    start_offset = cast(int, tokens[index].start_pos)
+    end_offset = cast(int, tokens[end - 1].end_pos)
     forced = _FORCE_USE_DECLARATION.set(True)
     try:
         _use_decl_parser().parse(source[start_offset:end_offset])

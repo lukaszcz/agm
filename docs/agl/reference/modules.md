@@ -54,8 +54,8 @@ import utils/strings using trim
 ```
 
 `using` and `hiding` name public declaration paths. Selecting a scope path
-selects its complete public subtree, including a same-named type and its enum
-variants. Selecting a path with no public content is an error. A bare path
+selects its complete public subtree, including a same-named type and its inline
+enum-member records. Selecting a path with no public content is an error. A bare path
 contributed by several imports is an error when used, not when imported; scopes
 with the same spelling from different modules never merge.
 
@@ -133,9 +133,9 @@ nested scopes retain their relative paths. An `open` in a scope region affects
 only that region and its nested regions.
 
 An opened scope may be local or reached through an imported module route.
-Selecting an unknown member is an error. Type-named scopes include enum variants and extension
-members. Opens neither export their members nor make another module's opens
-transitively available. Bare-name collisions are reported when the name is
+Selecting an unknown member is an error. Type-named scopes include inline
+enum-member records and extension members. Opens neither export their members
+nor make another module's opens transitively available. Bare-name collisions are reported when the name is
 used, including collisions with an `open import` contribution.
 
 ## Aliases
@@ -209,8 +209,8 @@ let p: points::Point = points::Point(x = 0, y = 0)
 ```
 
 `::name` refers to a declaration in the current module root and bypasses a
-lexical shadow. The same form works for `::Type` and `::Type::Variant`.
-Type-qualified constructors use `Type::Variant`; a short spelling can name an
+lexical shadow. The same form works for `::Type` and `::Type::Member`.
+Type-qualified constructors use `Type::Member`; a short spelling can name an
 in-scope type or a module route and is resolved at the use site.
 
 ## Re-exports and visibility
@@ -237,7 +237,9 @@ export math/*
 
 Re-exports preserve the original defining-module identity. Conflicting exposed
 names with different origins are static errors; duplicate paths to the same
-origin are allowed.
+origin are allowed. Referencing a record from an enum does not add that record
+to the enum's scope or export surface: import or qualify it through its own
+declaration path.
 
 ## Prelude
 

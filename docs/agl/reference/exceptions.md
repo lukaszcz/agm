@@ -87,7 +87,7 @@ exception Broken extends Exception
 
 For a required exception field, recursion must be guarded by a field type
 that itself has a finite base value, such as `array`/`dict` (empty collection)
-or an enum/option-style type with a base-case variant. The same inhabitation
+or an enum/option-style type with a base-case member. The same inhabitation
 rule also covers the `extends` chain itself: an `extends` cycle (two exceptions
 each extending the other) is rejected as uninhabitable for the same reason a
 field cycle is.

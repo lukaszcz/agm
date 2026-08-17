@@ -32,7 +32,7 @@ prevent execution.
 Each `ask` evaluates an `Agent` enum value that selects the backend command.
 The value may be passed explicitly or supplied by the
 `std/config::default-agent` setting. `AgentCommand` carries a command string;
-the provider variants carry their provider-specific fields. The host dispatches
+the provider member records carry their provider-specific fields. The host dispatches
 the selected value and does not contribute agent names or reconcile a registry.
 
 Per dispatch, an agent receives the rendered prompt, the output contract

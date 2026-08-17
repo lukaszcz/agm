@@ -187,7 +187,8 @@ let int_id = id::[int]
 print(int_id(9))
 ```
 
-A nullary variant can be inferred purely from the expected type:
+Once its bare name has resolved unambiguously in scope, a fieldless member can
+infer its type arguments from the expected enum type:
 
 ```agl
 enum Option[T]
@@ -217,8 +218,8 @@ program def main() -> unit =
 
 ## Constructor references and generic constructor values
 
-Field-bearing record constructors and enum variants are **ordinary function
-values** (see [Bindings and scope](bindings-and-scope.md)). Direct construction
+Field-bearing record constructors and enum-member constructors are **ordinary
+function values** (see [Bindings and scope](bindings-and-scope.md)). Direct construction
 uses positional-greedy binding — positional arguments fill positional-capable
 slots left to right, then named arguments follow. A field-bearing constructor
 reached through a variable is a normal function value, called **positionally**
@@ -270,7 +271,7 @@ program def main() -> unit =
 ```
 
 The same expression-local inference applies to every generic constructor form,
-including payload variants, fieldless constructors, and partial constructors.
+including field-bearing members, fieldless constructors, and partial constructors.
 Evidence may come from a later sibling argument or the enclosing result:
 
 ```agl
@@ -292,7 +293,7 @@ value.
 
 Instead of relying on an expected-type annotation, you can instantiate a
 bare generic member constructor explicitly with the same `::[…]` suffix used
-for generic functions. A payload member becomes a function value:
+for generic functions. A field-bearing member becomes a function value:
 
 ```agl
 enum Option[T]
@@ -316,8 +317,8 @@ immediately followed by `[` (`NAME[`):
 applies only to this constructor form; ordinary applied type expressions may
 have whitespace, so both `Option[int]` and `Option [int]` are valid type
 expressions. Both `Option` and the constructor (`some`/`none`) must be `NAME`,
-not `OP_NAME`. The result is an ordinary function value for a payload member
-or a constructed member-record value for a fieldless member. The latter can be
+not `OP_NAME`. The result is an ordinary function value for a field-bearing
+member or a constructed member-record value for a fieldless member. The latter can be
 passed as a value but is not callable; see
 [Fieldless constructor references](expressions.md#fieldless-constructor-references).
 
@@ -383,7 +384,7 @@ parameters. Annotated generic functions may use those recursive patterns.
 ## Recursive generic types
 
 A generic record or enum may reference itself, or another declaration that
-in turn reaches back to it, in its own field or variant definitions — the
+in turn reaches back to it, in its own fields or enum-member fields — the
 same recursion rule as [Recursive types](types.md#recursive-types), extended
 to generics. The self-reference's type argument is not required to be the
 declaration's own type parameter unchanged; it may be a different type built
@@ -399,7 +400,7 @@ enum Perfect[T]
   | Succ(next: Perfect[Pair[T, T]])
 ```
 
-`Perfect[T]`'s `Succ` variant carries a `Perfect[Pair[T, T]]`, not a
+`Perfect[T]`'s `Succ` member carries a `Perfect[Pair[T, T]]`, not a
 `Perfect[T]` — each `Succ` layer doubles the "roundness" of the payload type
 one level further. This is unrestricted: a recursive reference's argument may
 combine any number of type parameters, containers, and other generic
@@ -407,7 +408,7 @@ declarations, and different references (in a mutually recursive group of
 declarations) may each recurse at a different argument.
 
 The [inhabitation](types.md#inhabitation) rule applies exactly as for a
-non-generic recursive type: `Single` is the base-case variant that makes
+non-generic recursive type: `Single` is the base-case member that makes
 `Perfect[T]` constructible for every `T`. Constructing, matching, comparing,
 and folding a value works exactly like any other recursive type — a value is
 always a finite tree, regardless of how many argument levels its declaration
@@ -473,11 +474,9 @@ let also_bad = some_json as Perfect[int]
 
 Nothing else about `Perfect[int]` is restricted: it can still be
 constructed, matched, compared, passed to and returned from ordinary
-functions, rendered, and explicitly converted **to** `json`. That total
-`as json` direction does not derive a schema: finite source types use a
-static encode plan, while a statically JSON-convertible growing source uses a
-separate value-directed conversion strategy for its finite runtime value.
-Only the schema-needing boundaries reject it. A non-generic recursive type,
+functions, rendered, and explicitly converted **to** `json`. JSON conversion
+uses the expression's static type, so enum-typed positions retain their member
+`"$case"` tags. Only the schema-needing boundaries reject it. A non-generic recursive type,
 or a generic recursive type whose reachable instantiations close, crosses
 these boundaries normally. The [derived JSON
 Schema](agent-calls.md#derived-json-schema) for a recursive type uses
@@ -485,12 +484,16 @@ Schema](agent-calls.md#derived-json-schema) for a recursive type uses
 reachable from the target (`Tree[int]` and `Tree[text]` are distinct concrete
 shapes).
 
-## Unqualified variant ambiguity
+## Unqualified member ambiguity
 
-If two enums declare the same unqualified variant name, an unqualified
-reference to that name in expression position is a **static ambiguity error** —
-regardless of payload, surrounding context, or explicit type arguments.
-Disambiguate by **qualifying** the reference with the owning enum:
+If multiple visible constructor candidates share an unqualified member name,
+a reference in ordinary value position is a **static scope ambiguity error**.
+This is resolved before type checking, so an expected enum type cannot choose
+one candidate; it can only infer type arguments after scope has selected an
+unambiguous constructor. Disambiguate an inline member by qualifying it with
+its owning enum. A referenced member is not in that enum's scope, so qualify
+it through the referenced record's own declaration path instead (for example,
+`Source::Member::[int](...)`, not `Result[int]::Member(...)`):
 
 ```agl
 enum Option[T]
@@ -509,9 +512,11 @@ program def main() -> unit =
 
 Qualification is accepted in expression, pattern, and `is`-test positions
 (`Option::some(value = 1)`, `case … | Option::none => …`,
-`probe is Option::some`). In a pattern or `is` test, the scrutinee's static enum
-type selects the owner even when variants share a name, so qualification is
-optional; when present, it must agree with that type. A nearer ordinary binding
+`probe is Option::some`). In an enum-member pattern or `is` test, the
+scrutinee's static enum type selects the member even when enums share a
+terminal name, so qualification is optional; when present, it must agree with
+that type. This is scrutinee-directed selection, not ordinary value-position
+scope resolution. A nearer ordinary binding
 (a `let`, `var`, or function parameter) **shadows** a constructor or overload
 set in expression/value position, exactly like any other shadowing (see
 [Bindings and scope](bindings-and-scope.md)). In pattern position, lookup stays
@@ -562,4 +567,4 @@ reflection over a value's type arguments at run time.
 - [Bindings and scope](bindings-and-scope.md) — constructors as value
   bindings, overload sets, shadowing, namespaces.
 - [Functions](functions.md) — function values and higher-order functions.
-- [Pattern matching](pattern-matching.md) — qualified variant patterns.
+- [Pattern matching](pattern-matching.md) — qualified member patterns.

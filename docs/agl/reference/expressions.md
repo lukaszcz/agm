@@ -131,9 +131,9 @@ restriction does not apply to ordinary applied types, so both `Option[int]` and
 `Option [int]` are valid type expressions. This form requires `NAME` for both
 the applied type and constructor; it does not accept `OP_NAME` there.
 
-**Per-type field zones.** Record fields, enum payload fields, and an
+**Per-type field zones.** Record fields, inline enum-member fields, and an
 exception's own fields default to the **standard** zone (positional or named),
-regardless of payload arity. Markers (`/`, `*`, `@pos`, `@std`, `@named`) can
+regardless of the number of fields. Markers (`/`, `*`, `@pos`, `@std`, `@named`) can
 constrain fields to a different zone. An exception's inherited `message` field
 is named-only.
 
@@ -152,11 +152,12 @@ Issue(title = "Bug", severity = 2, description = "...")
 Every declared field must be supplied; unknown and duplicate fields are
 static errors.
 
-### Enum variant construction
+### Enum member construction
 
-An enum establishes a same-named scope and each variant is a member of it.
-Thus qualification uses the same chain syntax as every other scope member;
-the bare variant convenience is unchanged.
+An enum establishes a same-named scope and each inline member is a record in
+that scope. Qualification uses the same chain syntax as every other scope
+member; every enum member also contributes its terminal name as an injected
+bare constructor candidate.
 
 Qualified or unqualified:
 
@@ -168,16 +169,19 @@ Review::Fail(issues = ["missing tests"])
 let review: Review = Pass           # checked in an enum-typed slot
 ```
 
-A member constructor produces its own scoped record type. Assign it to an enum
-slot to widen it: `let pass = Pass` has type `Review::Pass`, while the annotated
+A member constructor produces its own record type. Assign it to an enum slot
+to widen it: `let pass = Pass` has type `Review::Pass`, while the annotated
 binding above has type `Review`. This is a directed check, not common-type
-inference: annotate a mixed member literal such as `array[Review]` explicitly.
+inference: `let items = [Pass, Fail(issues = [])]` has no inferred enum type,
+so write `let items: array[Review] = [Pass, Fail(issues = [])]`.
 
-An unqualified variant name resolves when the expected type is an enum
-containing it, or when exactly one declared enum has a variant of that name.
-A nullary variant is constructed by writing its name alone (no parentheses).
-Payload variants use positional-greedy binding. Every unmarked payload field
-is standard (positional or named), regardless of the number of fields.
+In ordinary value position, an unqualified member name must resolve to exactly
+one visible constructor candidate in lexical scope. An expected enum type
+checks the selected constructor but cannot choose between same-named
+candidates. A nullary member is constructed by writing its name alone (no
+parentheses). Field-bearing members use positional-greedy binding. Every
+unmarked member-record field is standard (positional or named), regardless of
+the number of fields.
 
 ```agl
 enum Result
@@ -190,12 +194,13 @@ let err = Err("bad", false)
 let named_err = Err(reason = "bad", fatal = false)
 ```
 
-### Unqualified variant ambiguity
+### Unqualified member ambiguity
 
-If **two or more** declared enums each have a variant of the same unqualified
-name, a bare reference to that name is a **static ambiguity error** — even
-when the expected type, the payload, or an explicit `::[…]` would in principle
-single out one enum. Disambiguate by qualifying with the owning enum:
+If two or more visible constructor candidates have the same unqualified name,
+a bare reference in ordinary value position is a **static scope ambiguity
+error**, even in a context with an expected enum type. Scope reports the
+ambiguity before type checking can use that type. Disambiguate by qualifying
+with the member's declaring record or, for an inline member, its owning enum:
 
 ```agl
 enum Holder[T]
@@ -215,14 +220,14 @@ the name refers to the binding, not the constructor.
 ### Generic constructors
 
 The constructors of a generic record or enum ([Generics](generics.md)) are
-generic too. Their type arguments are normally inferred — from payload
+generic too. Their type arguments are normally inferred — from constructor
 arguments, the expected type, or other evidence in the surrounding expression:
 
 ```agl
 record Box[T]
   value: T
 
-let bi: Box[int] = Box(value = 5)        # T = int, inferred from the payload
+let bi: Box[int] = Box(value = 5)        # T = int, inferred from the argument
 let bt: Box[text] = Box(value = "hi")    # same definition, T = text
 ```
 
@@ -247,8 +252,8 @@ program def main() -> unit =
   let b = build(Box(value = ?), 5)
 ```
 
-Nullary variants of a generic enum carry no payload to infer from, so they
-need contextual evidence (or an explicit `::[…]`):
+A fieldless member of a generic enum may need contextual evidence (or an
+owner-applied qualification) to determine the enum instantiation:
 
 ```agl
 enum Option[T]
@@ -553,7 +558,7 @@ argument (`render::[decimal](5)`) is accepted, requires the argument to be
 assignable to it, and renders the argument coerced to that type — so
 `render::[json]("hi", quote_strings = false)` renders the quoted json form
 `"hi"`: `quote_strings` controls only a top-level `text` argument, and the
-argument is no longer `text` once coerced to `json`.
+coerced argument has type `json`.
 
 ## `parse_json`
 
@@ -770,7 +775,7 @@ finite-schema restriction applies as for an agent output type: a
 whose reachable instantiations never close cannot be used as a cast target
 either — a static error at the `as`/`as?` expression, not a runtime failure.
 
-### Variant tests: `is`, `is not`
+### Enum-member tests: `is`, `is not`
 
 <!-- agl-check: fragment -->
 ```agl
@@ -963,8 +968,10 @@ An expected type propagates top-down where it helps:
 | Function call | each parameter type into the corresponding argument |
 | Function body | `-> RetType` propagated in |
 
-Propagation resolves unqualified variant constructors (`let r: Review = Pass`),
-types empty containers, and gives agent calls their output contracts. A target
-that depends on sibling constraints is resolved with the enclosing expression
-before its codec and schema are chosen. Where no expectation exists, inference
-is bottom-up, and an untyped `ask` defaults to `text`.
+After scope has resolved an unqualified enum-member constructor (`let r: Review = Pass`),
+propagation checks it against the expected enum type, types empty containers,
+and gives agent calls their output contracts. It does not select among
+same-named constructor candidates. A target that depends on sibling constraints
+is resolved with the enclosing expression before its codec and schema are
+chosen. Where no expectation exists, inference is bottom-up, and an untyped
+`ask` defaults to `text`.

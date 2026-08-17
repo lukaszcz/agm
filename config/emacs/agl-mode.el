@@ -1286,10 +1286,12 @@ function."
   (setq-local end-of-defun-function #'agl-end-of-defun)
   (setq-local indent-line-function #'agl-indent-line-function)
   (setq-local indent-region-function #'agl-indent-region)
-  (add-hook 'post-self-insert-hook #'agl-indent-post-self-insert nil t))
+  (add-hook 'post-self-insert-hook #'agl-indent-post-self-insert nil t)
+  (agl-flymake-setup))
 
-;; Loaded after the mode definition: `agl-indent' requires this file.
+;; Loaded after the mode definition: these require this file.
 (require 'agl-indent)
+(require 'agl-flymake)
 
 (provide 'agl-mode)
 ;;; agl-mode.el ends here

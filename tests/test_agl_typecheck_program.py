@@ -948,6 +948,54 @@ def test_imported_generic_alias_to_enum_constructs_variant(tmp_path: Path) -> No
     )
 
 
+def test_exact_use_of_enum_alias_constructs_variant(tmp_path: Path) -> None:
+    checked = _check_program(
+        tmp_path,
+        {
+            "entry": "import lib\nuse lib::{Alias}\nlet value = Alias::some(value = 1)\nvalue",
+            "lib": "enum Option\n  | some(value: int)\ntype Alias = Option",
+        },
+    )
+
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "value")) == EnumType(
+        "Option", module_id=ModuleId.from_path("lib")
+    )
+
+
+def test_use_of_generic_enum_alias_constructs_variant(tmp_path: Path) -> None:
+    checked = _check_program(
+        tmp_path,
+        {
+            "entry": (
+                "import lib\nuse lib::{Alias}\nlet value = Alias[int]::some(value = [1])\nvalue"
+            ),
+            "lib": "enum Option[T]\n  | some(value: T)\ntype Alias[T] = Option[array[T]]",
+        },
+    )
+
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "value")) == EnumType(
+        "Option", (ArrayType(IntType()),), module_id=ModuleId.from_path("lib")
+    )
+
+
+def test_use_of_enum_alias_does_not_restore_explicitly_hidden_child(tmp_path: Path) -> None:
+    with pytest.raises(AglScopeError):
+        _check_program(
+            tmp_path,
+            {
+                "entry": (
+                    "import lib\n"
+                    "use lib::* hiding Alias::some\n"
+                    "let value = Alias::some(value = 1)\n"
+                    "value"
+                ),
+                "lib": (
+                    "enum Option\n  | some(value: int)\ntype Alias = Option\nrecord Alias::some()"
+                ),
+            },
+        )
+
+
 def test_imported_generic_alias_to_record_constructs_transparently(tmp_path: Path) -> None:
     """A generic alias constructs its nominal record target."""
     checked = _check_program(

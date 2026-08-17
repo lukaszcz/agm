@@ -3280,12 +3280,16 @@ class _Resolver:
                 )
         if opened is not None:
             return opened
-        if (
-            relative_path
-            and self._bare_contribution_candidates(_bare_atom(relative_path)) is not None
-        ):
+        prefix_atom = _bare_atom(relative_path)
+        if self._bare_contribution_candidates(prefix_atom) is None:
+            return None
+        owner_ref = cast(BindingRef, self._lookup_bare_contribution(prefix_atom, chain.span))
+        if not isinstance(self._type_declaration_for_owner(owner_ref), TypeAlias):
             return set()
-        return None
+        declared_child = _bare_atom((*owner_ref.scope_path, owner_ref.name, variant))
+        if (owner_ref.module_id, declared_child) in self._decl_info:
+            return set()
+        return {self._constructor_for_owner_ref(owner_ref, variant)}
 
     def _constructor_for_type_path(
         self, path: ScopePath, variant: str, span: SourceSpan
@@ -3332,6 +3336,37 @@ class _Resolver:
             owner_path=path[:-1],
         )
 
+    def _type_declaration_for_owner(
+        self, owner_ref: BindingRef
+    ) -> RecordDef | EnumDef | ExceptionDef | TypeAlias | None:
+        """Return the program type declaration denoted by an owner binding."""
+        atom = _bare_atom((*owner_ref.scope_path, owner_ref.name))
+        return self._all_public_types.get((owner_ref.module_id, atom))
+
+    def _constructor_for_owner_ref(self, owner_ref: BindingRef, variant: str) -> ConstructorRef:
+        """Return a constructor-shaped result owned by a resolved type binding."""
+        candidate = next(
+            (
+                candidate
+                for candidates in self._constructor_candidates.values()
+                for candidate in candidates
+                if candidate.owner_module_id == owner_ref.module_id
+                and candidate.owner_path == owner_ref.scope_path
+                and candidate.owner_name == owner_ref.name
+            ),
+            None,
+        )
+        if candidate is not None:
+            return replace(candidate, variant=variant)
+        return ConstructorRef(
+            owner_name=owner_ref.name,
+            variant=variant,
+            owner_decl_node_id=owner_ref.decl_node_id,
+            type_params=(),
+            owner_module_id=owner_ref.module_id,
+            owner_path=owner_ref.scope_path,
+        )
+
     def _imported_chain_owner(self, chain: QualifierChain, variant: str) -> ConstructorRef | None:
         """Resolve a type-owning segment reached through imports.
 
@@ -3370,27 +3405,7 @@ class _Resolver:
                 raise AglScopeError(f"'{rendered}' is not a constructible type.", span=chain.span)
         if owner_ref is None:
             return None
-        candidate = next(
-            (
-                candidate
-                for candidates in self._constructor_candidates.values()
-                for candidate in candidates
-                if candidate.owner_module_id == owner_ref.module_id
-                and candidate.owner_path == owner_ref.scope_path
-                and candidate.owner_name == owner_ref.name
-            ),
-            None,
-        )
-        if candidate is None:
-            return ConstructorRef(
-                owner_name=owner_ref.name,
-                variant=variant,
-                owner_decl_node_id=owner_ref.decl_node_id,
-                type_params=(),
-                owner_module_id=owner_ref.module_id,
-                owner_path=owner_ref.scope_path,
-            )
-        return replace(candidate, variant=variant)
+        return self._constructor_for_owner_ref(owner_ref, variant)
 
     def _nearest_bare_contribution_layer(
         self,

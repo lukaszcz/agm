@@ -2017,6 +2017,87 @@ enum Agent
         assert isinstance(fresh.value_type, RecordType)
         assert fresh.value_type.name == "AgentCommand"
 
+    def test_referenced_enum_keeps_its_original_record_member_after_record_supersession(
+        self,
+    ) -> None:
+        """A retained enum selects its member by handle, not its record's current name."""
+        session = ReplSession()
+        assert session.eval_entry("record R(old: int)").ok
+        assert session.eval_entry("type OldR = R").ok
+        assert session.eval_entry("enum E = ::R").ok
+        assert session.eval_entry("let old: E = R(old = 1)").ok
+        assert session.eval_entry("record R(fresh: text)").ok
+
+        matched = session.eval_entry("case old of\n  | R(old) => old")
+        tested = session.eval_entry("old is R")
+        narrowed = session.eval_entry("(old as OldR).old")
+        not_a_member = session.eval_entry('let fresh: E = R(fresh = "new")')
+
+        assert matched.ok, matched.diagnostics
+        assert matched.value == IntValue(1)
+        assert tested.ok, tested.diagnostics
+        assert tested.value == BoolValue(True)
+        assert narrowed.ok, narrowed.diagnostics
+        assert narrowed.value == IntValue(1)
+        assert not not_a_member.ok
+
+    def test_enum_supersession_remints_inline_members_without_invalidating_old_ones(self) -> None:
+        """Old and new enum-member handles remain independently matchable and castable."""
+        session = ReplSession()
+        assert session.eval_entry("enum E\n  | A(old: int)").ok
+        assert session.eval_entry("type OldA = E::A").ok
+        assert session.eval_entry("let old: E = A(old = 1)").ok
+        assert session.eval_entry("enum E\n  | B(fresh: text)").ok
+        assert session.eval_entry('let new: E = B(fresh = "new")').ok
+
+        old_case = session.eval_entry("case old of\n  | A(old) => old")
+        old_is = session.eval_entry("old is A")
+        old_cast = session.eval_entry("(old as OldA).old")
+        new_case = session.eval_entry("case new of\n  | B(fresh) => fresh")
+        new_is = session.eval_entry("new is B")
+        new_cast = session.eval_entry("(new as E::B).fresh")
+        current_member_on_old_value = session.eval_entry("old as E::B")
+
+        assert old_case.ok, old_case.diagnostics
+        assert old_case.value == IntValue(1)
+        assert old_is.ok, old_is.diagnostics
+        assert old_is.value == BoolValue(True)
+        assert old_cast.ok, old_cast.diagnostics
+        assert old_cast.value == IntValue(1)
+        assert new_case.ok, new_case.diagnostics
+        assert new_case.value == TextValue("new")
+        assert new_is.ok, new_is.diagnostics
+        assert new_is.value == BoolValue(True)
+        assert new_cast.ok, new_cast.diagnostics
+        assert new_cast.value == TextValue("new")
+        assert not current_member_on_old_value.ok
+
+    def test_same_spelling_enum_member_supersession_keeps_old_and_new_identities_incompatible(
+        self,
+    ) -> None:
+        """A reused enum/member spelling never bridges its old and new identities."""
+        session = ReplSession()
+        assert session.eval_entry("enum E\n  | A(old: int)").ok
+        assert session.eval_entry("type OldE = E").ok
+        assert session.eval_entry("type OldA = E::A").ok
+        assert session.eval_entry("let old: OldE = E::A(old = 1)").ok
+        assert session.eval_entry("enum E\n  | A(fresh: text)").ok
+        assert session.eval_entry('let new: E = E::A(fresh = "new")').ok
+
+        old_to_new_cast = session.eval_entry("old as E::A")
+        new_to_old_cast = session.eval_entry("new as OldA")
+        old_to_new_assignment = session.eval_entry("let current: E = old")
+        new_to_old_assignment = session.eval_entry("let previous: OldE = new")
+        old_case_against_new_member = session.eval_entry("case old of\n  | E::A(fresh) => fresh")
+        new_case_against_old_member = session.eval_entry("case new of\n  | OldA(old) => old")
+
+        assert not old_to_new_cast.ok
+        assert not new_to_old_cast.ok
+        assert not old_to_new_assignment.ok
+        assert not new_to_old_assignment.ok
+        assert not old_case_against_new_member.ok
+        assert not new_case_against_old_member.ok
+
     def test_record_redefinition_clears_generic_metadata(self) -> None:
         s = ReplSession()
         first = s.eval_entry("record Box[T]\n  x: T")
@@ -2437,6 +2518,35 @@ class TestEchoData:
         assert r.name is None
         assert r.value is not None and _int(r.value) == 12
         assert isinstance(r.value_type, IntType)
+
+    @pytest.mark.parametrize(
+        ("source", "rendered"),
+        (
+            ('Agent::AgentCommand("runner")', 'Agent::AgentCommand(\n  command = "runner"\n)'),
+            (
+                'Agent::AgentClaude("sonnet", "medium")',
+                'Agent::AgentClaude(\n  model = "sonnet",\n  thinking = "medium"\n)',
+            ),
+            (
+                'Agent::AgentCodex("o3", "high")',
+                'Agent::AgentCodex(\n  model = "o3",\n  thinking = "high"\n)',
+            ),
+            (
+                'Agent::AgentPi("openai", "gpt", "low")',
+                'Agent::AgentPi(\n  provider = "openai",\n  model = "gpt",\n  thinking = "low"\n)',
+            ),
+        ),
+    )
+    def test_qualified_builtin_agent_constructor_echoes_its_surface_form(
+        self, source: str, rendered: str
+    ) -> None:
+        """REPL echoes every qualified built-in Agent constructor unambiguously."""
+        from agm.agl.repl.render import render_entry_result
+
+        result = ReplSession().eval_entry(source)
+
+        assert result.ok, result.diagnostics
+        assert render_entry_result(result, echo=True) == rendered
 
     @pytest.mark.parametrize("binder", ("let", "var"))
     def test_trailing_binder_echoes_declared_value(self, binder: str) -> None:

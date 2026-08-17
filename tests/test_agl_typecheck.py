@@ -120,6 +120,7 @@ from agm.agl.typecheck import (
     TextType,
     Type,
     TypeEnvironment,
+    TypeTemplate,
     UnitType,
     assert_checked_module_closed,
 )
@@ -871,6 +872,8 @@ class TestTypeEnvironment:
         )
         previous.register_type("Restored", restored)
         previous.register_alias("Restored", IntT(span=mk_span(), node_id=1), type_params=("T",))
+        previous.register_alias("Alias", IntT(span=mk_span(), node_id=2), type_params=("T",))
+        previous.freeze_alias("Alias", IntType(), type_params=("T",))
         previous.register_generic_type(
             "Restored",
             GenericTypeDef(
@@ -901,13 +904,16 @@ class TestTypeEnvironment:
 
         current = TypeEnvironment()
         current.register_type("Restored", TextType())
-        current.restore_type_names_from(previous, ("Abort", "Restored"))
+        current.restore_type_names_from(previous, ("Abort", "Restored", "Alias"))
 
         assert current.type_table.get(ENTRY_ID, "Restored") == previous.type_table.get(
             ENTRY_ID, "Restored"
         )
         assert current.get_type("Restored") == restored
         assert current.get_alias_type_params("Restored") == ("T",)
+        assert current.source_type_template_qname(ENTRY_ID, "Alias") == TypeTemplate(
+            IntType(), ("T",)
+        )
         assert current.get_generic_type("Restored") == previous.get_generic_type("Restored")
         assert current.get_constructor_signature("Restored") == previous.get_constructor_signature(
             "Restored"
@@ -915,6 +921,12 @@ class TestTypeEnvironment:
         assert current.get_constructor_field_kinds(
             "Restored"
         ) == previous.get_constructor_field_kinds("Restored")
+
+    def test_source_type_template_resolves_an_unfrozen_alias(self) -> None:
+        environment = TypeEnvironment()
+        environment.register_alias("Alias", IntT(span=mk_span(), node_id=1))
+
+        assert environment.source_type_template_qname(ENTRY_ID, "Alias") == TypeTemplate(IntType())
 
     def test_unregister_name(self) -> None:
         env = TypeEnvironment()

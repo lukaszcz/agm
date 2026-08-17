@@ -465,7 +465,11 @@ class _TypeBuilder:
         # like every other declaration — including a builtin one).
         field_kinds = tuple((fd.name, fd.kind) for fd in stmt.fields)
         self._env.register_constructor_field_kinds(
-            bare_name, field_kinds, scope_path=scope_path, module_id=module_id
+            bare_name,
+            field_kinds,
+            scope_path=scope_path,
+            module_id=module_id,
+            decl_id=typedef.decl_node_id,
         )
 
     def _build_enum(self, stmt: EnumDef) -> None:
@@ -599,6 +603,7 @@ class _TypeBuilder:
                 tuple((fd.name, fd.kind) for fd in member.fields),
                 scope_path=(*scope_path, bare_name),
                 module_id=module_id,
+                decl_id=_member_identity(stmt, member, module_id),
             )
 
     def _build_exception(self, stmt: ExceptionDef) -> None:
@@ -889,6 +894,7 @@ class _TypeBuilder:
             generic_record_field_kinds,
             scope_path=scope_path,
             module_id=module_id,
+            decl_id=template.decl_id,
         )
 
     def _build_generic_enum(self, stmt: EnumDef) -> None:
@@ -930,8 +936,9 @@ class _TypeBuilder:
         A parameterized alias body may reference its own type parameters, so
         they are in scope as type variables during validation.
         """
-        self._env.resolve_type_expr(
+        resolved = self._env.resolve_type_expr(
             stmt.type_expr,
             span=stmt.span,
             type_vars=frozenset(stmt.type_params),
         )
+        self._env.freeze_alias(stmt.name, resolved, type_params=stmt.type_params)

@@ -743,6 +743,24 @@ class TestClashDeferred:
 
         assert ENTRY_ID in result.modules
 
+    def test_use_deduplicates_type_scope_routes_to_same_reexport_origin(
+        self, tmp_path: Path
+    ) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import core::{E}\nimport facade::{E}\nuse E::*\nA",
+                "core": "enum E\n  | A",
+                "facade": "export core::{E}",
+            },
+        )
+
+        result = resolve_program(graph)
+
+        core_id = ModuleId.from_path("core")
+        facade = result.modules[ModuleId.from_path("facade")]
+        assert facade.scope_exports["E"] == frozenset({(core_id, "E")})
+
     def test_use_deduplicates_empty_scope_routes_to_same_reexport_origin(
         self, tmp_path: Path
     ) -> None:

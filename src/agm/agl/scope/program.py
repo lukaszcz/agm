@@ -309,7 +309,10 @@ def _compute_local_scope_exports(
             item,
             (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias, LetDecl, VarDecl),
         ):
-            add_path(tuple(segment.name for segment in item.scope_path))
+            scope_path = tuple(segment.name for segment in item.scope_path)
+            add_path(scope_path)
+            if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
+                add_path((*scope_path, item.name))
     return result
 
 

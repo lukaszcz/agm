@@ -6,9 +6,12 @@
 
 ;; A major mode for AgL, the statically typed workflow language implemented
 ;; by AGM (Agent Project Management).  This file provides the package
-;; skeleton and the context-sensitive lexing layer: a syntax table plus a
-;; `syntax-propertize-function' that make Emacs agree with AgL's lexical
-;; rules (see docs/agl/reference/lexical-structure.md), in particular:
+;; skeleton, the context-sensitive lexing layer, structural font-lock, and
+;; declaration navigation (imenu, `beginning-of-defun'/`end-of-defun').
+;;
+;; The lexing layer is a syntax table plus a `syntax-propertize-function'
+;; that make Emacs agree with AgL's lexical rules (see
+;; docs/agl/reference/lexical-structure.md), in particular:
 ;;
 ;; - An identifier starts with a Unicode letter or `_' and then greedily
 ;;   consumes every character that is not whitespace and not one of the
@@ -23,10 +26,12 @@
 ;;   optional byte-adjacent `::[T]' type argument) own a verbatim payload:
 ;;   the rest of the line, or a following indented block.
 ;;
-;; Later files/tasks add font-lock, indentation, imenu/navigation,
-;; flymake, and exec/REPL integration.  See
-;; docs/agl/reference/lexical-structure.md for the authoritative lexical
-;; rules.
+;; Font-lock is structural only (D3): capitalization is semantically
+;; meaningless in AgL, so faces derive from declaration and annotation
+;; positions, never from spelling; constructor use-sites in expressions
+;; stay unfaced.  Later tasks add indentation, flymake, and exec/REPL
+;; integration.  See docs/agl/reference/lexical-structure.md for the
+;; authoritative lexical rules.
 
 ;;; Code:
 
@@ -36,7 +41,7 @@
   :prefix "agl-")
 
 ;; ---------------------------------------------------------------------------
-;; Keyword inventories (data only; wired into font-lock in a later task).
+;; Keyword inventories, wired into font-lock further below.
 ;;
 ;; Canonical sources, kept in lockstep with this file and
 ;; config/micro/agl.yaml -- see the cross-reference comment in
@@ -103,6 +108,90 @@ keywords).")
 
 The complement of `IDENT_STOP' in `src/agm/util/ident.py'.")
 
+(defconst agl--ident-stop-chars (substring agl--ident-continue-skip 1)
+  "The characters that terminate an AgL identifier.
+
+The bracket-expression body of `agl--ident-continue-skip', with its
+leading `^' negation marker stripped.")
+
+(defconst agl--ident-stop-char-re (concat "[" agl--ident-stop-chars "]")
+  "Regexp matching one AgL identifier-terminating character.")
+
+(defconst agl--ident-stop-char-list (append agl--ident-stop-chars nil)
+  "The characters that terminate an AgL identifier, as a char list.
+
+Same character set as `agl--ident-stop-char-re', but usable with
+`memq' -- allocation-free and immune to the `match-data' clobbering a
+regexp match would risk (see `agl--ident-boundary-after-p').")
+
+(defconst agl--ident-continue-char-re (concat "[^" agl--ident-stop-chars "]")
+  "Regexp matching one AgL identifier-continuation character.")
+
+(defconst agl--name-re (concat agl--ident-start-re agl--ident-continue-char-re "*")
+  "Regexp matching one complete AgL `NAME' token.")
+
+;; ---------------------------------------------------------------------------
+;; Identifier-boundary-safe searching.
+;;
+;; Keywords, contextual builtins, and other fixed spellings must not match
+;; inside a larger AgL identifier: `-', `?', `!', `+', `*', `<', `>',
+;; quotes, and `#' are identifier-continuation characters (see
+;; `agl--ident-continue-skip'), so `ask-prompt' and `a+and+b' are each one
+;; name, and a naive `\\b'-anchored regexp would wrongly light up `ask' or
+;; `and' inside them.  `agl--search-ident-forward' is the shared primitive
+;; every font-lock matcher below is built from.
+;; ---------------------------------------------------------------------------
+
+(defun agl--ident-boundary-before-p (pos)
+  "Return non-nil unless POS lands inside a larger AgL identifier.
+
+Walks backward from POS over identifier-continuation characters; POS is
+embedded in a larger identifier only when that backward run is
+non-empty AND starts with a letter or `_'.  A run made only of operator
+characters (`-', `?', `!', `+', `*', `<', `>') never began as an
+identifier -- e.g. `-3' lexes as `MINUS' then `INT', not one run -- so
+it does not block a match at POS; this is what lets a keyword or number
+match right after an unspaced arrow or unary minus."
+  (save-excursion
+    (goto-char pos)
+    (let ((run-end (point)))
+      (skip-chars-backward agl--ident-continue-skip)
+      (or (= (point) run-end)
+          (not (looking-at agl--ident-start-re))))))
+
+(defun agl--ident-boundary-after-p (pos)
+  "Return non-nil unless POS abuts an AgL identifier-continuation character.
+
+See `agl--ident-continue-skip' for the character set checked."
+  (or (= pos (point-max))
+      (memq (char-after pos) agl--ident-stop-char-list)))
+
+(defun agl--search-ident-forward (regexp limit &optional pred)
+  "Search forward for REGEXP up to LIMIT, accepting only boundary-safe matches.
+
+AgL is case-sensitive, so the search binds `case-fold-search' to nil
+regardless of the buffer's default -- otherwise, e.g., `DEF loud()'
+would be mistaken for a `def' declaration.  A match is accepted only at
+AgL identifier boundaries (see `agl--ident-boundary-before-p' and
+`agl--ident-boundary-after-p').  When PRED is given, an otherwise-accepted
+match is accepted only if `(funcall PRED (match-beginning 0))' is also
+non-nil.  Return non-nil on success, with point left at the end of the
+accepted match and `match-data' set to describe it -- the boundary
+checks and PRED are free to call `looking-at'/`string-match' internally
+\(they do), which would otherwise clobber the global match data this
+function's own match relies on, so it is saved and restored around
+them."
+  (let ((case-fold-search nil) found)
+    (while (and (not found) (re-search-forward regexp limit t))
+      (let ((saved (match-data)) (mbeg (match-beginning 0)) (mend (match-end 0)))
+        (if (and (agl--ident-boundary-before-p mbeg)
+                 (agl--ident-boundary-after-p mend)
+                 (progn (set-match-data saved)
+                        (or (null pred) (funcall pred mbeg))))
+            (progn (set-match-data saved) (setq found t))
+          (goto-char (1+ mbeg)))))
+    found))
+
 ;; ---------------------------------------------------------------------------
 ;; syntax-propertize helpers.
 ;;
@@ -113,7 +202,11 @@ The complement of `IDENT_STOP' in `src/agm/util/ident.py'.")
 ;; constructs (triple-quoted templates, raw-tail blocks) are additionally
 ;; marked with the internal `agl-multiline' text property so that
 ;; `agl--propertize-extend-region' can always resume scanning from a safe
-;; boundary.
+;; boundary.  A raw-tail payload is further marked with the internal
+;; `agl-raw-tail-payload' text property, distinguishing it from a template
+;; region (both carry the same generic-string-fence `|' syntax, but only a
+;; raw-tail payload uses raw-tail backslash-escape semantics -- see
+;; `agl--escaped-interpolation-open-p').
 ;; ---------------------------------------------------------------------------
 
 (defun agl--blank-line-p ()
@@ -143,6 +236,7 @@ opener and never resumes scanning from inside the payload."
       (when has-content
         (put-text-property block-start (1+ block-start)
                             'syntax-table (string-to-syntax "|"))
+        (put-text-property block-start block-end 'agl-raw-tail-payload t)
         (if (and (eq (char-before block-end) ?\n)
                  (> (1- block-end) block-start))
             (progn
@@ -167,6 +261,7 @@ The payload is the rest of the current line, starting at point."
          (region-end (if has-trailing-newline (1+ line-end) (point-max))))
     (put-text-property payload-start (1+ payload-start)
                         'syntax-table (string-to-syntax "|"))
+    (put-text-property payload-start region-end 'agl-raw-tail-payload t)
     (if (and has-trailing-newline (> (1- region-end) payload-start))
         (progn
           (put-text-property (1- region-end) region-end
@@ -408,6 +503,749 @@ function only ever adjusts the start of the region."
   "Syntax table for `agl-mode'.")
 
 ;; ---------------------------------------------------------------------------
+;; Font-lock.
+;;
+;; Structural highlighting only (D3): capitalization carries no syntactic
+;; or semantic meaning in AgL (`option'/`Option' are equally valid as
+;; types or values -- see docs/agl/reference/lexical-structure.md), so
+;; faces derive only from declaration and annotation *positions*, never
+;; from spelling.  Constructor use-sites inside expressions therefore stay
+;; unfaced -- an accepted limit of lexical highlighting.  Every rule is a
+;; function matcher built on `agl--search-ident-forward' rather than a
+;; plain regexp, so matches respect AgL identifier boundaries instead of
+;; `\\b'.  Font-lock's default OVERRIDE (nil) never replaces a face
+;; already assigned by the syntactic (string/comment) pass, so these
+;; rules never light up text inside a template or raw-tail payload; the
+;; one deliberate exception is `agl--match-interpolation-delims', which
+;; explicitly overrides string face for `%{' / `}' delimiters.
+;; ---------------------------------------------------------------------------
+
+(defconst agl--reserved-keyword-only-names
+  (let (result)
+    (dolist (kw agl-keywords (nreverse result))
+      (unless (member kw agl-constant-keywords)
+        (push kw result))))
+  "`agl-keywords' minus `agl-constant-keywords'.
+
+The subset that gets `font-lock-keyword-face' rather than
+`font-lock-constant-face'.")
+
+(defconst agl--reserved-keyword-re (regexp-opt agl--reserved-keyword-only-names)
+  "Regexp matching one reserved AgL keyword (excluding the literal constants).")
+
+(defconst agl--constant-keyword-re (regexp-opt agl-constant-keywords)
+  "Regexp matching one of `agl-constant-keywords'.")
+
+(defconst agl--contextual-builtin-re (regexp-opt agl-contextual-builtins)
+  "Regexp matching one of `agl-contextual-builtins'.")
+
+(defconst agl--raw-tail-name-re (regexp-opt agl-raw-tail-names)
+  "Regexp matching one of `agl-raw-tail-names'.")
+
+(defconst agl--import-export-open-re (regexp-opt '("import" "export" "open"))
+  "Regexp matching one of the import/export/open soft keywords.")
+
+(defconst agl--using-hiding-re (regexp-opt '("using" "hiding"))
+  "Regexp matching one of the `using'/`hiding' soft keywords.")
+
+(defconst agl--type-annotation-anchor-re "\\(?::\\|->\\)"
+  "Regexp matching the `:' or `->' that opens a type-annotation position.
+
+Anchors `agl--match-type-annotation' to a parameter/field/return-type
+annotation position (see docs/agl/reference/lexical-structure.md),
+which is what makes that rule contextual rather than case-based (D3).")
+
+(defconst agl--number-re "[0-9]+\\(?:\\.[0-9]+\\)?"
+  "Regexp matching an AgL `INT' or `DECIMAL' literal.")
+
+(defconst agl--operator-re
+  (regexp-opt '("=>" "->" ":=" "==" "!=" "<=" ">=" "::"
+                "+" "-" "*" "/" "<" ">" "=" "|" "@"))
+  "Regexp matching one AgL operator token, multi- or single-character.")
+
+(defconst agl--single-char-operator-strings '("+" "-" "*" "/" "<" ">" "=" "|" "@")
+  "The single-character AgL operator spellings.
+
+Unlike the fixed multi-character tokens (`:: -> => := == != <= >='),
+these share characters with identifier continuations -- `a+b' is one
+identifier, not `a', `+', `b' (see `agl--ident-continue-skip') -- so a
+match must still pass the identifier-boundary predicates; see
+`agl--match-operator'.")
+
+(defconst agl--zone-marker-re "@\\(?:pos\\|std\\|named\\)"
+  "Regexp matching one zone marker (`@pos', `@std', `@named').")
+
+;; `font-lock-escape-face', `font-lock-number-face', and
+;; `font-lock-operator-face' were all added in Emacs 29.1.
+;; Package-Requires still floors at 27.1 (the plan's stated minimum, not
+;; owner-visible to bump), so each is resolved through a `facep' check with
+;; a pre-29 fallback rather than referenced directly -- on 27/28 nothing
+;; errors either way, but referencing the absent face directly would
+;; silently fontify with no face at all.
+
+(defconst agl--escape-face
+  (if (facep 'font-lock-escape-face) 'font-lock-escape-face 'font-lock-constant-face)
+  "Face for `agl-interpolation-face' to inherit.
+
+Falls back to `font-lock-constant-face', which has existed since
+ancient Emacs, when `font-lock-escape-face' (added in 29.1) is
+unavailable.")
+
+(defconst agl--number-face
+  (if (facep 'font-lock-number-face) 'font-lock-number-face 'font-lock-constant-face)
+  "Face for AgL `INT'/`DECIMAL' literals.
+
+Falls back to `font-lock-constant-face' -- the conventional pre-29
+choice for numeric literals -- when `font-lock-number-face' (added in
+29.1) is unavailable.")
+
+(defconst agl--operator-face
+  (if (facep 'font-lock-operator-face) 'font-lock-operator-face 'font-lock-builtin-face)
+  "Face for AgL operator tokens.
+
+Falls back to `font-lock-builtin-face' -- a conventional pre-29 choice
+for operator highlighting -- when `font-lock-operator-face' (added in
+29.1) is unavailable.")
+
+(defface agl-interpolation-face
+  `((t :inherit ,agl--escape-face))
+  "Face for the `%{' and `}' delimiters of an AgL interpolation hole.
+
+Hole contents (the expression between the delimiters) keep the
+surrounding string/template face; fontifying AgL expressions inside a
+hole is a documented non-goal (see
+docs/agl/reference/lexical-structure.md).  Inherits `agl--escape-face'
+-- a concrete, always-available face -- rather than
+`font-lock-escape-face' directly, which does not exist before Emacs
+29.1."
+  :group 'agl)
+
+(defun agl--item-start-p (pos)
+  "Return non-nil if POS is the first non-whitespace column of its line."
+  (save-excursion
+    (goto-char pos)
+    (skip-chars-backward " \t")
+    (bolp)))
+
+(defun agl--preceded-by-open-p (pos)
+  "Return non-nil if POS is immediately preceded, modulo whitespace, by `open'."
+  (save-excursion
+    (goto-char pos)
+    (skip-chars-backward " \t")
+    (let ((end (point)))
+      (and (>= (- end 4) (point-min))
+           (string= "open" (buffer-substring-no-properties (- end 4) end))
+           (agl--ident-boundary-before-p (- end 4))))))
+
+(defun agl--import-promoted-p (pos)
+  "Return non-nil if the `import' match at POS is in its promotion window.
+
+The window is item-start, or directly after `open'."
+  (or (agl--item-start-p pos) (agl--preceded-by-open-p pos)))
+
+(defun agl--on-import-export-open-line-p (pos)
+  "Return non-nil if POS's line begins, at item-start, with a soft keyword.
+
+The soft keyword is `import', `export', or `open'.  This approximates
+the `using'/`hiding' promotion window (\"within an import, export, or
+open declaration\") as the physical line the keyword is written on."
+  (save-excursion
+    (goto-char pos)
+    (beginning-of-line)
+    (skip-chars-forward " \t")
+    (and (looking-at agl--import-export-open-re)
+         (agl--ident-boundary-after-p (match-end 0)))))
+
+(defun agl--end-promoted-p (pos)
+  "Return non-nil if the `end' match at POS is in its promotion window.
+
+The window is item-start, followed by a `NAME (:: NAME)*' closer path."
+  (and (agl--item-start-p pos)
+       (save-excursion
+         (goto-char (match-end 0))
+         (skip-chars-forward " \t")
+         (looking-at agl--name-re))))
+
+(defun agl--match-reserved-keyword (limit)
+  "`font-lock-keywords' MATCHER for reserved AgL keywords, up to LIMIT."
+  (agl--search-ident-forward agl--reserved-keyword-re limit))
+
+(defun agl--match-constant-keyword (limit)
+  "`font-lock-keywords' MATCHER for `true'/`false'/`null', up to LIMIT."
+  (agl--search-ident-forward agl--constant-keyword-re limit))
+
+(defun agl--match-contextual-builtin (limit)
+  "`font-lock-keywords' MATCHER for `print'/`ask'/`exec', up to LIMIT."
+  (agl--search-ident-forward agl--contextual-builtin-re limit))
+
+(defun agl--match-raw-tail-name (limit)
+  "`font-lock-keywords' MATCHER for `exec!'/`ask!', up to LIMIT."
+  (agl--search-ident-forward agl--raw-tail-name-re limit))
+
+(defun agl--match-open-keyword (limit)
+  "`font-lock-keywords' MATCHER for item-start `open', up to LIMIT."
+  (agl--search-ident-forward "open" limit #'agl--item-start-p))
+
+(defun agl--match-export-keyword (limit)
+  "`font-lock-keywords' MATCHER for item-start `export', up to LIMIT."
+  (agl--search-ident-forward "export" limit #'agl--item-start-p))
+
+(defun agl--match-scope-soft-keyword (limit)
+  "`font-lock-keywords' MATCHER for item-start `scope', up to LIMIT."
+  (agl--search-ident-forward "scope" limit #'agl--item-start-p))
+
+(defun agl--match-import-keyword (limit)
+  "`font-lock-keywords' MATCHER for promoted `import', up to LIMIT."
+  (agl--search-ident-forward "import" limit #'agl--import-promoted-p))
+
+(defun agl--match-using-hiding-keyword (limit)
+  "`font-lock-keywords' MATCHER for promoted `using'/`hiding', up to LIMIT."
+  (agl--search-ident-forward agl--using-hiding-re limit #'agl--on-import-export-open-line-p))
+
+(defun agl--match-end-keyword (limit)
+  "`font-lock-keywords' MATCHER for promoted `end', up to LIMIT."
+  (agl--search-ident-forward "end" limit #'agl--end-promoted-p))
+
+(defun agl--parse-type-head-chain ()
+  "Parse a type expression's qualifier chain at point, consuming it.
+
+The shape is `qualifier_chain? name', where `qualifier_chain' is one or
+more `[\"/\"] NAME (\"/\" NAME)* \"::\"' segments (see
+docs/agl/reference/grammar.md's `qualifier_chain' and `type_expr').
+This is broader than a `decl_head' (see `agl--parse-decl-head-chain',
+used for declaration positions): a type expression may also route
+through a `/'-separated module path, as in `foo/bar::Point', which a
+`decl_head' never does.  Point moves to the end of the chain.  Return a
+list (FULL-START SEG-START SEG-END), where FULL-START begins the first
+segment and SEG-START/SEG-END bound only the terminal segment -- the
+name actually faced -- or nil if point is not at a NAME."
+  (skip-chars-forward " \t\n")
+  (when (looking-at agl--ident-start-re)
+    (let ((full-start (point)) seg-start seg-end)
+      (setq seg-start (point))
+      (skip-chars-forward agl--ident-continue-skip)
+      (setq seg-end (point))
+      (while (cond
+              ((looking-at "::[[:alpha:]_]") (forward-char 2) t)
+              ((looking-at "/[[:alpha:]_]") (forward-char 1) t))
+        (setq seg-start (point))
+        (skip-chars-forward agl--ident-continue-skip)
+        (setq seg-end (point)))
+      (list full-start seg-start seg-end))))
+
+(defun agl--match-type-annotation (limit)
+  "`font-lock-keywords' MATCHER for a type head in annotation position.
+
+Searches up to LIMIT.
+
+Matches the head name of the type expression after `:' (in a parameter
+or field list) or after `->' (a return-type annotation): a `NAME' with
+an optional qualifier chain (`::' segments, and optionally a `/'
+module route -- see `agl--parse-type-head-chain') and optional
+`[...]' type arguments.  Only the terminal segment is faced, matching
+how the declared-name matchers treat a qualifier prefix (D3: position,
+not spelling, drives the face) -- so in `foo/bar::Point' only `Point'
+is faced.  The eight primitive type-annotation names
+\(`agl-primitive-type-names') are ordinary `NAME's, so this single rule
+covers them too; there is no separate primitive-only case.  `match-data'
+group 1 covers the terminal segment.  Return non-nil on success."
+  (let (found)
+    (while (and (not found) (re-search-forward agl--type-annotation-anchor-re limit t))
+      (let ((anchor-end (match-end 0)))
+        (goto-char anchor-end)
+        (skip-chars-forward " \t\n")
+        (let ((chain (and (looking-at agl--ident-start-re)
+                           (agl--parse-type-head-chain))))
+          (if (and chain (agl--ident-boundary-before-p (nth 0 chain)))
+              (let ((seg-start (nth 1 chain)) (seg-end (nth 2 chain)))
+                (set-match-data (list seg-start seg-end seg-start seg-end))
+                (goto-char seg-end)
+                (setq found t))
+            (goto-char anchor-end)))))
+    found))
+
+(defun agl--match-number (limit)
+  "`font-lock-keywords' MATCHER for an `INT'/`DECIMAL' literal, up to LIMIT."
+  (agl--search-ident-forward agl--number-re limit))
+
+(defun agl--match-operator (limit)
+  "`font-lock-keywords' MATCHER for an AgL operator token, up to LIMIT.
+
+The fixed multi-character tokens (`:: -> => := == != <= >=') are exempt
+from the identifier-boundary predicates: each is either a structural
+delimiter or contains `:'/`=', both `IDENT_STOP' characters (see
+`agl--ident-continue-skip'), so none of them can occur embedded inside
+a `NAME' -- e.g. `Point::distance' would otherwise never get an
+operator face, because the boundary check (correctly) treats `::' as
+continuing the identifier `Point' when it only looks at what precedes a
+candidate match, not at whether the match's own first character could
+itself extend that identifier.  The single-character operators
+\(`agl--single-char-operator-strings') share characters with identifier
+continuations (`a+b' is one identifier) and so must still pass the
+boundary check.  As in `agl--search-ident-forward', `match-data' is
+saved and restored around the boundary checks, which call
+`looking-at' internally and would otherwise clobber it."
+  (let (found)
+    (while (and (not found) (re-search-forward agl--operator-re limit t))
+      (let ((saved (match-data)) (mbeg (match-beginning 0)) (mend (match-end 0))
+            (token (match-string-no-properties 0)))
+        (if (if (member token agl--single-char-operator-strings)
+                (and (agl--ident-boundary-before-p mbeg) (agl--ident-boundary-after-p mend))
+              t)
+            (progn (set-match-data saved) (setq found t))
+          (goto-char (1+ mbeg)))))
+    found))
+
+(defun agl--match-zone-marker (limit)
+  "`font-lock-keywords' MATCHER for `@pos'/`@std'/`@named', up to LIMIT."
+  (agl--search-ident-forward agl--zone-marker-re limit))
+
+(defun agl--in-string-p (pos)
+  "Return non-nil if POS is inside a string/template per `syntax-ppss'."
+  (nth 3 (syntax-ppss pos)))
+
+(defun agl--string-region-end (pos)
+  "Return the end of the string/template region enclosing POS.
+
+POS must satisfy `agl--in-string-p'.  The region's end is found with
+`forward-sexp' from the region's syntax-recorded start
+\(`(nth 8 (syntax-ppss POS))'), which handles both quote-character
+strings and generic-string-fence regions (triple-quoted templates,
+raw-tail payloads) uniformly, since both kinds are balanced sexps under
+`parse-sexp-lookup-properties' (non-nil by default, which is what makes
+the `syntax-table' text properties this file assigns visible to the
+sexp scanner at all).  An unterminated region has no matching close, so
+`forward-sexp' signals `scan-error'; this returns `point-max' in that
+case, matching how the propertize layer treats the rest of the buffer
+as inside an unterminated region."
+  (let ((region-start (nth 8 (syntax-ppss pos))))
+    (save-excursion
+      (goto-char region-start)
+      (condition-case nil
+          (progn (forward-sexp 1) (point))
+        (scan-error (point-max))))))
+
+(defun agl--preceding-backslash-parity-odd-p (pos)
+  "Return non-nil if an odd run of `\\' characters precedes POS.
+
+An odd run means POS itself is escaped.  This is *template* escape
+semantics (docs/agl/reference/strings-and-interpolation.md): `\\\\' is
+an escaped backslash, so backslashes pair off and only a leftover,
+unpaired one escapes what follows.  See
+`agl--escaped-interpolation-open-p' for the raw-tail-payload semantics,
+which are different."
+  (let ((count 0) (p pos))
+    (while (and (> p (point-min)) (eq (char-before p) ?\\))
+      (setq count (1+ count) p (1- p)))
+    (= 1 (mod count 2))))
+
+(defun agl--escaped-interpolation-open-p (pos)
+  "Return non-nil if the `%{' hole opener at POS is escaped.
+
+Dispatches on whether POS lies in a raw-tail payload (tagged with the
+internal `agl-raw-tail-payload' text property -- see
+`agl--propertize-raw-inline'/`agl--propertize-raw-block') or a template
+\(single-line or triple-quoted), since the two have different backslash
+semantics.  A template pairs backslashes
+\(`agl--preceding-backslash-parity-odd-p'): `\\\\%{' is an unescaped
+hole.  A raw-tail payload instead \"owns\" its
+ordinary backslashes (docs/agl/reference/lexical-structure.md's
+raw-tail-forms section), matching the real scanner
+\(`src/agm/agl/lexer/scanner.py'): any single immediately preceding `\\'
+escapes the hole, with no parity counting, so `\\\\%{' is still escaped
+there."
+  (if (get-text-property pos 'agl-raw-tail-payload)
+      (and (> pos (point-min)) (eq (char-before pos) ?\\))
+    (agl--preceding-backslash-parity-odd-p pos)))
+
+(defun agl--match-interpolation-delims (limit)
+  "Search forward for a `%{...}' interpolation hole, up to LIMIT.
+
+Only matches inside a string/template region.  `match-data' group 1
+covers the opening `%{' and group 2 covers the closing `}'; hole
+contents are left with their inherited string face (see
+`agl-interpolation-face').  An escaped `\\%{'
+\(docs/agl/reference/lexical-structure.md, and see
+`agl--escaped-interpolation-open-p' for the raw-tail-payload vs.
+template distinction) is skipped.  The closing-brace scan is bounded by
+the enclosing string region's own end (`agl--string-region-end'), not
+just LIMIT or `point-max': an unbalanced `%{' -- the normal transient
+state while typing one -- must never scan, or paint
+`agl-interpolation-face' (its rule uses OVERRIDE=t), past the string it
+opened in.  Return non-nil on success."
+  (let (found)
+    (while (and (not found) (search-forward "%{" limit t))
+      (let ((open-start (match-beginning 0)) (open-end (match-end 0)))
+        (if (and (agl--in-string-p open-start)
+                 (not (agl--escaped-interpolation-open-p open-start)))
+            (let ((depth 1) (p open-end)
+                  (region-end (min limit (agl--string-region-end open-start)))
+                  close-start close-end)
+              (while (and (> depth 0) (< p region-end))
+                (cond
+                 ((eq (char-after p) ?\{) (setq depth (1+ depth)) (setq p (1+ p)))
+                 ((eq (char-after p) ?\}) (setq depth (1- depth)) (setq p (1+ p)))
+                 (t (setq p (1+ p)))))
+              (if (= depth 0)
+                  (progn
+                    (setq close-end p close-start (1- p))
+                    (set-match-data (list open-start close-end
+                                          open-start open-end
+                                          close-start close-end))
+                    (goto-char close-end)
+                    (setq found t))
+                (goto-char open-end)))
+          (goto-char open-end))))
+    found))
+
+(defun agl--parse-decl-head-chain ()
+  "Parse a `decl_head'-shaped qualifier chain at point, consuming it.
+
+The shape is `[scope_path \"::\"] name' (see
+docs/agl/reference/grammar.md's `decl_head'); point moves to its end.
+Return a list (FULL-START SEG-START SEG-END), where FULL-START begins
+the first segment and SEG-START/SEG-END bound only the terminal
+segment, or nil if point is not at a NAME."
+  (skip-chars-forward " \t\n")
+  (when (looking-at agl--ident-start-re)
+    (let ((full-start (point)) seg-start seg-end)
+      (setq seg-start (point))
+      (skip-chars-forward agl--ident-continue-skip)
+      (setq seg-end (point))
+      (while (looking-at "::[[:alpha:]_]")
+        (forward-char 2)
+        (setq seg-start (point))
+        (skip-chars-forward agl--ident-continue-skip)
+        (setq seg-end (point)))
+      (list full-start seg-start seg-end))))
+
+(defun agl--decl-head-pattern-p (chain-end)
+  "Return non-nil if a decl-head chain ending at CHAIN-END names a pattern.
+
+Per docs/agl/reference/scopes.md's binder-path table (\"Writing an
+argument list, even an empty one, an `as' binder, ... keeps the
+pattern's ordinary match meaning\"), `let'/`var' followed by a
+qualifier chain and then `(' or `as' names a constructor pattern, not a
+scoped/root binding -- `let Point(x, y) = p' matches a `Point' pattern,
+it does not bind a variable named `Point'.  Checked, for symmetry, the
+same way `agl--search-catch-binder' checks for a trailing `as'."
+  (save-excursion
+    (goto-char chain-end)
+    (or (eq (char-after) ?\()
+        (progn
+          (skip-chars-forward " \t\n")
+          (and (looking-at "as") (agl--ident-boundary-after-p (match-end 0)))))))
+
+(defun agl--search-decl-head (keyword limit &optional require-item-start reject-pattern)
+  "Search forward for boundary-safe KEYWORD followed by a decl-head chain.
+
+Search is bounded by LIMIT.  Used for `def'/`record'/`enum'/`type'/
+`exception'/`let'/`var'/`param' (font-lock declared-name faces) and for
+`scope'/`end' (imenu's scope-nesting tracker) -- the single matcher
+both font-lock and imenu are built on.
+
+Sets `match-data' with four groups: 0 spans the whole match (keyword
+through the terminal name), 1 is the keyword itself, 2 is the full
+qualifier chain as written (e.g. `Box::get'), and 3 is only its
+terminal segment (e.g. `get') -- the position font-lock faces as the
+declared name.  When REQUIRE-ITEM-START is non-nil, KEYWORD must also be
+the first token on its line (see `agl--item-start-p').  When
+REJECT-PATTERN is non-nil (`let'/`var' only -- see
+`agl--decl-head-pattern-p'), a chain that names a constructor pattern
+rather than a binding is not accepted.  Return non-nil on success, with
+point left at the end of group 3."
+  (let ((kw-re (regexp-quote keyword)) found)
+    (while (and (not found) (agl--search-ident-forward kw-re limit))
+      (let ((kw-start (match-beginning 0)) (kw-end (match-end 0)))
+        (when (or (not require-item-start) (agl--item-start-p kw-start))
+          (let ((chain (agl--parse-decl-head-chain)))
+            (when (and chain
+                       (not (and reject-pattern (agl--decl-head-pattern-p (nth 2 chain)))))
+              (let ((full-start (nth 0 chain)) (seg-start (nth 1 chain)) (seg-end (nth 2 chain)))
+                (set-match-data (list kw-start seg-end
+                                       kw-start kw-end
+                                       full-start seg-end
+                                       seg-start seg-end))
+                (goto-char seg-end)
+                (setq found t)))))))
+    found))
+
+(defun agl--search-catch-binder (limit)
+  "Search forward for a `catch' clause's `as' alias, up to LIMIT.
+
+Only the alias introduced by `as' is a true binder: `catch_pattern' is
+`name (\"as\" name)?', and per docs/agl/reference/exceptions.md, \"`as
+name' binds the exception as `name'\" -- the leading name/`_' matches an
+exception type, it does not bind one.  So `catch NotFound => ...' has
+nothing to fontify, while `catch NotFound as e => ...' faces only `e'.
+Sets `match-data' so group 1 covers the alias.  Return non-nil on
+success."
+  (let (found)
+    (while (and (not found) (agl--search-ident-forward "catch" limit))
+      (skip-chars-forward " \t\n")
+      (when (looking-at agl--name-re)
+        (goto-char (match-end 0))
+        (skip-chars-forward " \t\n")
+        (when (and (looking-at "as") (agl--ident-boundary-after-p (match-end 0)))
+          (goto-char (match-end 0))
+          (skip-chars-forward " \t\n")
+          (when (looking-at agl--name-re)
+            (set-match-data (list (match-beginning 0) (match-end 0)
+                                   (match-beginning 0) (match-end 0)))
+            (goto-char (match-end 0))
+            (setq found t)))))
+    found))
+
+(defconst agl-font-lock-keywords
+  (list
+   (cons #'agl--match-reserved-keyword ''font-lock-keyword-face)
+   (cons #'agl--match-constant-keyword ''font-lock-constant-face)
+   (cons #'agl--match-open-keyword ''font-lock-keyword-face)
+   (cons #'agl--match-import-keyword ''font-lock-keyword-face)
+   (cons #'agl--match-export-keyword ''font-lock-keyword-face)
+   (cons #'agl--match-using-hiding-keyword ''font-lock-keyword-face)
+   (cons #'agl--match-scope-soft-keyword ''font-lock-keyword-face)
+   (cons #'agl--match-end-keyword ''font-lock-keyword-face)
+   (cons #'agl--match-contextual-builtin ''font-lock-builtin-face)
+   (cons #'agl--match-raw-tail-name ''font-lock-builtin-face)
+   (list (lambda (limit) (agl--search-decl-head "def" limit)) '(3 'font-lock-function-name-face))
+   (list (lambda (limit) (agl--search-decl-head "record" limit)) '(3 'font-lock-type-face))
+   (list (lambda (limit) (agl--search-decl-head "enum" limit)) '(3 'font-lock-type-face))
+   (list (lambda (limit) (agl--search-decl-head "type" limit)) '(3 'font-lock-type-face))
+   (list (lambda (limit) (agl--search-decl-head "exception" limit)) '(3 'font-lock-type-face))
+   (list (lambda (limit) (agl--search-decl-head "let" limit nil t)) '(3 'font-lock-variable-name-face))
+   (list (lambda (limit) (agl--search-decl-head "var" limit nil t)) '(3 'font-lock-variable-name-face))
+   (list (lambda (limit) (agl--search-decl-head "param" limit)) '(3 'font-lock-variable-name-face))
+   (list #'agl--search-catch-binder '(1 'font-lock-variable-name-face))
+   (list #'agl--match-type-annotation '(1 'font-lock-type-face))
+   (list #'agl--match-interpolation-delims
+         '(1 'agl-interpolation-face t)
+         '(2 'agl-interpolation-face t))
+   (cons #'agl--match-number 'agl--number-face)
+   (cons #'agl--match-operator 'agl--operator-face)
+   (cons #'agl--match-zone-marker ''font-lock-keyword-face))
+  "Font-lock keyword rules for `agl-mode'.
+
+See the section commentary above this constant for the governing
+design (D3: structural highlighting only).")
+
+;; ---------------------------------------------------------------------------
+;; imenu and defun navigation.
+;; ---------------------------------------------------------------------------
+
+(defun agl--decl-head-preceded-by-program-p (kw-start)
+  "Return non-nil if `program' precedes KW-START, modulo whitespace.
+
+KW-START is a `def' match's keyword start; `program def' is the
+Programs imenu category, while a bare `def'/`extern def' is Functions."
+  (save-excursion
+    (goto-char kw-start)
+    (skip-chars-backward " \t\n")
+    (let ((end (point)))
+      (and (>= (- end 7) (point-min))
+           (string= "program" (buffer-substring-no-properties (- end 7) end))
+           (agl--ident-boundary-before-p (- end 7))))))
+
+(defun agl--in-string-or-comment-p (pos)
+  "Return non-nil if POS is inside a string/template or comment.
+
+Per `syntax-ppss': `nth 3' flags a string/template (including a
+raw-tail payload, which carries generic-string-fence syntax), `nth 4' a
+comment.  Used to reject a decl-head candidate that is only text -- a
+commented-out declaration, or one embedded in a template or raw-tail
+payload -- from `agl-imenu-create-index' and `agl--toplevel-line-p'."
+  (let ((state (syntax-ppss pos)))
+    (or (nth 3 state) (nth 4 state))))
+
+(defun agl--decl-head-candidate-rejected-p (kw-start)
+  "Return non-nil if a decl-head candidate starting at KW-START is only text.
+
+Checked one character past KW-START, not at KW-START itself:
+`syntax-ppss' reports the state as of just *before* a position, so the
+state exactly at a region's first character would read as \"not
+inside\" even when that character is itself the region's content --
+concretely, the first character of an inline raw-tail payload doubles
+as that payload's synthetic opening fence (see
+`agl--propertize-raw-inline'), so a decl-head keyword landing exactly
+there (`exec! def fake()') would otherwise slip through unrejected.
+Checking one character in is always still inside the same region
+for any keyword this file matches against a decl head (they are all
+longer than one character), and is never inside a *different* region
+for an ordinary, non-embedded declaration.  Uses `save-match-data':
+`agl--in-string-or-comment-p' calls `syntax-ppss', which the caller
+cannot assume leaves `match-data' alone."
+  (save-match-data (agl--in-string-or-comment-p (1+ kw-start))))
+
+(defun agl--qualify-decl-name (name scope-stack)
+  "Prefix NAME with SCOPE-STACK's accumulated path, outer scope first.
+
+SCOPE-STACK holds innermost-first (its `car' is the innermost currently
+open `scope' region's own path text, per `agl--search-decl-head')."
+  (if scope-stack
+      (concat (mapconcat #'identity (reverse scope-stack) "::") "::" name)
+    name))
+
+(defun agl-imenu-create-index ()
+  "`imenu-create-index-function' for `agl-mode'.
+
+Categories: Programs (`program def'), Functions (`def', `extern def',
+`builtin def'), Types (`record'/`enum'/`type'/`exception'), and Scopes
+\(`scope' paths).  A declaration inside an open `scope' region, or
+written with its own `Type::member' qualifier, indexes under a
+qualified name (e.g. `Point::distance').  Reuses `agl--search-decl-head'
+-- the same declaration matcher `agl-font-lock-keywords' calls -- driven
+line-by-line here so open/close `scope' regions can be tracked as a
+stack in text order."
+  (let (programs functions types scopes scope-stack)
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (let ((line-start (point)) (line-end (line-end-position)))
+          ;; Each `agl--search-decl-head' call below must start from
+          ;; LINE-START: when the previous attempt's match is rejected
+          ;; (e.g. the "end" inside "extends"), `agl--search-ident-forward'
+          ;; leaves point wherever its last rejected retry landed, not
+          ;; back at its original position -- `re-search-forward' itself
+          ;; only guarantees that on an *outright* failed call, and here
+          ;; the calls that matter are the ones after an internal retry.
+          (cond
+           ((and (progn (goto-char line-start) (agl--search-decl-head "scope" line-end t))
+                 (not (save-match-data (agl--in-string-or-comment-p (match-beginning 0)))))
+            (let* ((chain (match-string-no-properties 2))
+                   (qualified (agl--qualify-decl-name chain scope-stack)))
+              (push (cons qualified (copy-marker (match-beginning 2))) scopes)
+              (push chain scope-stack)))
+           ((and (progn (goto-char line-start) (agl--search-decl-head "end" line-end t))
+                 (not (save-match-data (agl--in-string-or-comment-p (match-beginning 0)))))
+            (let ((chain (match-string-no-properties 2)))
+              (when (and scope-stack (string= (car scope-stack) chain))
+                (pop scope-stack))))
+           ((and (progn (goto-char line-start) (agl--search-decl-head "def" line-end))
+                 (not (save-match-data (agl--in-string-or-comment-p (match-beginning 0)))))
+            (let* ((chain (match-string-no-properties 2))
+                   (qualified (agl--qualify-decl-name chain scope-stack))
+                   (marker (copy-marker (match-beginning 3)))
+                   (entry (cons qualified marker)))
+              (if (agl--decl-head-preceded-by-program-p (match-beginning 1))
+                  (push entry programs)
+                (push entry functions))))
+           ((and (progn (goto-char line-start) (agl--search-decl-head "record" line-end))
+                 (not (save-match-data (agl--in-string-or-comment-p (match-beginning 0)))))
+            (push (cons (agl--qualify-decl-name (match-string-no-properties 2) scope-stack)
+                        (copy-marker (match-beginning 3)))
+                  types))
+           ((and (progn (goto-char line-start) (agl--search-decl-head "enum" line-end))
+                 (not (save-match-data (agl--in-string-or-comment-p (match-beginning 0)))))
+            (push (cons (agl--qualify-decl-name (match-string-no-properties 2) scope-stack)
+                        (copy-marker (match-beginning 3)))
+                  types))
+           ((and (progn (goto-char line-start) (agl--search-decl-head "type" line-end))
+                 (not (save-match-data (agl--in-string-or-comment-p (match-beginning 0)))))
+            (push (cons (agl--qualify-decl-name (match-string-no-properties 2) scope-stack)
+                        (copy-marker (match-beginning 3)))
+                  types))
+           ((and (progn (goto-char line-start) (agl--search-decl-head "exception" line-end))
+                 (not (save-match-data (agl--in-string-or-comment-p (match-beginning 0)))))
+            (push (cons (agl--qualify-decl-name (match-string-no-properties 2) scope-stack)
+                        (copy-marker (match-beginning 3)))
+                  types)))
+          (goto-char line-start)
+          (forward-line 1))))
+    (delq nil
+          (list (when programs (cons "Programs" (nreverse programs)))
+                (when functions (cons "Functions" (nreverse functions)))
+                (when types (cons "Types" (nreverse types)))
+                (when scopes (cons "Scopes" (nreverse scopes)))))))
+
+(defun agl--toplevel-line-p ()
+  "Return non-nil if point's line is a top-level AgL declaration line.
+
+Such a line begins at column 0 with a non-blank character that starts
+neither a comment nor a string/template/raw-tail-payload region.
+Checked via `agl--in-string-or-comment-p' at the position right after
+that character -- not at its own position, since `syntax-ppss' reports
+the state *before* a character is consumed, so a comment-opening `#'
+itself only registers as \"inside a comment\" one position later -- so a
+literal `#' test is unnecessary here; a comment-only line is correctly
+rejected by the general check."
+  (save-excursion
+    (beginning-of-line)
+    (and (looking-at "[^ \t\n]")
+         (not (agl--in-string-or-comment-p (match-end 0))))))
+
+(defun agl--search-toplevel-line-backward ()
+  "Move point to the beginning of the nearest earlier top-level line.
+
+Skips a candidate beginning-of-line that turns out to be inside a
+string/template, raw-tail payload, or comment (see
+`agl--toplevel-line-p') -- e.g. a continuation line of a multi-line
+string that merely looks top-level.  Return non-nil on success, leaving
+point unmoved on failure."
+  (let ((start (point)) found)
+    (while (and (not found) (re-search-backward "^[^ \t\n]" nil t))
+      (if (agl--toplevel-line-p)
+          (setq found t)
+        (goto-char (1- (point)))))
+    (unless found (goto-char start))
+    found))
+
+(defun agl--goto-defun-start-backward ()
+  "Move point to the start of the nearest top-level AgL declaration line.
+
+The target line is at or before point, skipping the line point is on
+when point is already at that line's very beginning.  Return non-nil
+on success."
+  (let ((bol (line-beginning-position)))
+    (when (and (= (point) bol) (not (bobp)))
+      (goto-char (1- (point))))
+    (beginning-of-line)
+    (if (agl--toplevel-line-p)
+        t
+      (agl--search-toplevel-line-backward))))
+
+(defun agl--goto-defun-end-forward ()
+  "Move point to just before the next top-level AgL declaration line.
+
+Move to `point-max' instead if there is no such line."
+  (let (found)
+    (while (and (not found) (not (eobp)))
+      (forward-line 1)
+      (when (or (eobp) (agl--toplevel-line-p)) (setq found t)))
+    (unless found (goto-char (point-max)))
+    t))
+
+(defun agl-beginning-of-defun (&optional arg)
+  "`beginning-of-defun-function' for `agl-mode'.
+
+Move point ARG (default 1) top-level AgL declarations backward, or
+forward if ARG is negative -- the contract `beginning-of-defun-function'
+documents (it is called with the same ARG `beginning-of-defun' itself
+receives, unlike `end-of-defun-function', which Emacs always calls with
+no argument -- see `agl-end-of-defun').  A declaration starts at column
+0 (AgL is layout-sensitive, so a declaration ends where a line returns
+to its own indentation or less).  Return non-nil if point moved; nil if
+it did not (e.g. ARG is 1 and point was already at the start of a
+top-level declaration, such as `point-min') -- the safer contract for a
+caller that loops on the return value."
+  (setq arg (or arg 1))
+  (let ((start (point)))
+    (if (< arg 0)
+        (dotimes (_ (- arg)) (agl--goto-defun-end-forward))
+      (dotimes (_ arg) (agl--goto-defun-start-backward)))
+    (/= (point) start)))
+
+(defun agl-end-of-defun ()
+  "`end-of-defun-function' for `agl-mode'.
+
+Move point to just before the next top-level AgL declaration line (or
+to `point-max' if there is none).  Takes no argument: Emacs always
+calls `end-of-defun-function' with none -- `end-of-defun' itself handles
+any ARG and negative-ARG looping by calling `beginning-of-defun-raw'
+\(which uses `agl-beginning-of-defun') before each call to this
+function."
+  (agl--goto-defun-end-forward))
+
+;; ---------------------------------------------------------------------------
 ;; Major mode definition.
 ;; ---------------------------------------------------------------------------
 
@@ -425,7 +1263,11 @@ function only ever adjusts the start of the region."
   (setq-local tab-width 4)
   (setq-local syntax-propertize-function #'agl-syntax-propertize-function)
   (add-hook 'syntax-propertize-extend-region-functions
-            #'agl--propertize-extend-region nil t))
+            #'agl--propertize-extend-region nil t)
+  (setq-local font-lock-defaults '(agl-font-lock-keywords nil nil))
+  (setq-local imenu-create-index-function #'agl-imenu-create-index)
+  (setq-local beginning-of-defun-function #'agl-beginning-of-defun)
+  (setq-local end-of-defun-function #'agl-end-of-defun))
 
 (provide 'agl-mode)
 ;;; agl-mode.el ends here

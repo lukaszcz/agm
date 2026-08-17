@@ -27,7 +27,7 @@ from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.parser import parse_program
 from agm.agl.scope import AglScopeError
-from agm.agl.scope.symbols import BinderKind, BindingRef, ScopeNode
+from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind, ScopeNode
 from agm.agl.scope.symbols import ModuleResolution as _ModuleResolution
 from agm.agl.semantics.type_table import (
     BUILTIN_PRELUDE_TYPE_DEFS,
@@ -1420,6 +1420,40 @@ class TestScopedBindingTypes:
         confirmed not to reach typechecking as an unresolved-reference crash."""
         with pytest.raises(AglScopeError):
             parse_resolve_check("scope Config\ndef f() -> int = 0\nlet f = 1\nend Config\n()")
+
+
+class TestQualifiedGenericFunctionBuiltinCollisions:
+    """Qualified generic functions retain an independent builtin namespace."""
+
+    def test_imported_qualified_generic_function_infers_while_bare_builtin_is_preserved(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.typecheck.program import check_program
+        from tests.agl.ir_harness import make_repl_graph_from_files, resolve_repl_graph
+
+        modules = {
+            "entry": (
+                "open import codec\nlet values = codec::render(1)\nlet text = render(1)\nvalues"
+            ),
+            "codec": "def render[T](value: T) -> array[T] = [value]\n",
+        }
+        checked = check_program(
+            resolve_repl_graph(make_repl_graph_from_files(tmp_path, modules)),
+            default_capabilities(),
+        ).modules[ENTRY_ID]
+
+        values, text = checked.resolved.program.body.items[-3:-1]
+        assert isinstance(values, LetDecl)
+        assert isinstance(text, LetDecl)
+        assert strip_decl_ids(checked.node_types[values.value.node_id]) == ArrayType(IntType())
+        assert checked.node_types[text.value.node_id] == TextType()
+        assert isinstance(text.value, Call)
+        assert checked.resolved.builtin_calls[text.value.node_id] is BuiltinKind.RENDER
+
+    def test_entry_root_generic_function_named_after_a_builtin_is_rejected(self) -> None:
+        err = reject_any("def render[T](value: T) -> array[T] = [value]\nrender(1)")
+
+        assert "built-in" in err.to_diagnostic().message.lower()
 
 
 class TestScopedParamTypes:

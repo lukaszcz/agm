@@ -18,7 +18,10 @@ rendering, meta-commands, and the prompt_toolkit console are future work.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from threading import Lock
 from typing import TYPE_CHECKING
 
 from agm.agl.diagnostics import AglError, Diagnostic
@@ -46,6 +49,7 @@ if TYPE_CHECKING:
     from agm.agl.semantics.values import EnumValue, Frame, Value
     from agm.agl.setting_overrides import SettingOverride
     from agm.agl.syntax.nodes import (
+        ExportDecl,
         ImportDecl,
         InfixAssoc,
         OpenDecl,
@@ -60,6 +64,32 @@ if TYPE_CHECKING:
 
 # Layout-only token types that carry no statement to evaluate.
 _TRIVIAL_TOKENS: frozenset[str] = frozenset({"_NEWLINE", "_INDENT", "_DEDENT"})
+
+
+@dataclass(frozen=True, slots=True)
+class _BootstrapSnapshot:
+    """Reusable checked image for an unchanged default-standard-library graph."""
+
+    modules: dict["ModuleId", "LoadedModule"]
+    type_env: "TypeEnvironment"
+    next_node_id: int
+    source_texts: tuple[tuple["Path", str], ...]
+    wildcard_matches: tuple[tuple[tuple[str, ...], tuple[tuple["ModuleId", "Path"], ...]], ...]
+    checked_modules: dict["ModuleId", "CheckedModule"]
+
+
+# Bootstrap images retain complete frontend graphs, so keep only a small working
+# set per process. LRU preserves the images active projects are most likely to
+# reopen without allowing one-off roots or capability combinations to grow the
+# resident cache indefinitely.
+BOOTSTRAP_CACHE_MAX_ENTRIES = 16
+_bootstrap_cache: OrderedDict[tuple[object, ...], _BootstrapSnapshot] = OrderedDict()
+_bootstrap_cache_lock = Lock()
+
+
+def _module_match_sort_key(match: tuple["ModuleId", "Path"]) -> tuple[str, ...]:
+    """Return the deterministic module-id key for a discovery match."""
+    return match[0].segments
 
 
 def _no_params_config_loader(_params: tuple["IrParam", ...]) -> Mapping[str, object]:
@@ -281,6 +311,9 @@ class ReplSession:
         self._roots: RootSet | None = None
         # Cached lib modules from prior REPL program entries.
         self._loaded_lib_modules: dict[ModuleId, LoadedModule] = {}
+        # Checked standard-library artifacts from ``open()``. They are reused
+        # only while a later entry's graph contains exactly this library image.
+        self._bootstrap_checked_modules: dict[ModuleId, CheckedModule] = {}
         # Imported params installed by successfully completed entries.  These
         # stay in the config-resolution inventory so later imports cannot make
         # an existing suffix route ambiguous, but they are not installed again.
@@ -400,30 +433,199 @@ class ReplSession:
         from agm.agl.repl.entry_pipeline import OverrideRejected
 
         host_env = self._runtime.host_environment()
-        # A throwaway unit expression: side-effect-free and never a Binder or
-        # Declaration, so it never becomes a scope member. Its own node ids
-        # are consumed from the counter like any other entry's and never
-        # referenced again once ``_next_node_id`` moves past them.
-        program, next_start_id = parse_program_seeded("()", start_id=self._next_node_id)
-
         try:
-            loaded = self._entry_pipeline.load_and_check_program(
-                pipeline_program=program,
-                host_env=host_env,
-                next_start_id=next_start_id,
-                validate_missing_std_config=True,
-            )
-        except OverrideRejected as exc:
-            return tuple(exc.diagnostics)
-        except AglError as exc:
-            return (exc.to_diagnostic(),)
+            roots = self._ensure_roots()
         except Exception as exc:
             return (Diagnostic(message=str(exc), line=1),)
+        cache_key = self._bootstrap_cache_key(roots, host_env.capabilities)
+        with _bootstrap_cache_lock:
+            if cache_key is not None:
+                cached = _bootstrap_cache.get(cache_key)
+                if cached is not None:
+                    if self._bootstrap_loader_inputs_match(
+                        cached
+                    ) and self._bootstrap_discovery_matches(cached, roots):
+                        _bootstrap_cache.move_to_end(cache_key)
+                        self._restore_bootstrap(cached)
+                        return ()
+                    # A source edit invalidates this image permanently; retaining it
+                    # until ordinary LRU eviction would waste one of the few slots.
+                    _bootstrap_cache.pop(cache_key)
 
-        self._loaded_lib_modules.update(loaded.new_modules)
-        self._next_node_id = loaded.new_next_id
-        self._type_env = loaded.checked_program.modules[ENTRY_ID].type_env
-        return ()
+            # A throwaway unit expression: side-effect-free and never a Binder or
+            # Declaration, so it never becomes a scope member. Its own node ids
+            # are consumed from the counter like any other entry's and never
+            # referenced again once ``_next_node_id`` moves past them.
+            program, next_start_id = parse_program_seeded("()", start_id=self._next_node_id)
+
+            try:
+                loaded = self._entry_pipeline.load_and_check_program(
+                    pipeline_program=program,
+                    host_env=host_env,
+                    next_start_id=next_start_id,
+                    validate_missing_std_config=True,
+                )
+            except OverrideRejected as exc:
+                return tuple(exc.diagnostics)
+            except AglError as exc:
+                return (exc.to_diagnostic(),)
+            except Exception as exc:
+                return (Diagnostic(message=str(exc), line=1),)
+
+            self._loaded_lib_modules.update(loaded.new_modules)
+            self._next_node_id = loaded.new_next_id
+            self._type_env = loaded.checked_program.modules[ENTRY_ID].type_env
+            self._bootstrap_checked_modules = {
+                module_id: checked
+                for module_id, checked in loaded.checked_program.modules.items()
+                if not module_id.is_entry
+            }
+            if cache_key is not None:
+                _bootstrap_cache[cache_key] = _BootstrapSnapshot(
+                    modules=dict(loaded.new_modules),
+                    type_env=self._type_env,
+                    next_node_id=self._next_node_id,
+                    source_texts=tuple(
+                        (module.path, module.source_text)
+                        for module in loaded.new_modules.values()
+                        if module.path is not None
+                    ),
+                    wildcard_matches=self._bootstrap_wildcard_matches(loaded.new_modules),
+                    checked_modules=dict(self._bootstrap_checked_modules),
+                )
+                _bootstrap_cache.move_to_end(cache_key)
+                while len(_bootstrap_cache) > BOOTSTRAP_CACHE_MAX_ENTRIES:
+                    _bootstrap_cache.popitem(last=False)
+            return ()
+
+    def _bootstrap_cache_key(
+        self, roots: "RootSet", capabilities: object
+    ) -> tuple[object, ...] | None:
+        """Return a cache key only for a pristine, default-stdlib session.
+
+        A bootstrap cache is safe only before an entry can contribute session
+        state, without source-level setting overrides, and when both module
+        roots and static host capabilities agree. The cached type environment
+        is sealed; later entry checks seed from it without mutating it.
+        """
+        from agm.agl.capabilities import HostCapabilities
+
+        if (
+            not self._default_stdlib
+            or self._setting_overrides
+            or self._next_node_id != 0
+            or self._loaded_lib_modules
+            or not isinstance(capabilities, HostCapabilities)
+        ):
+            return None
+        packages = tuple(
+            sorted(
+                (package.root, package.manifest.name, str(package.manifest.version))
+                for package in roots.packages
+            )
+        )
+        codec_kinds = tuple(
+            sorted((name, tuple(sorted(kinds))) for name, kinds in capabilities.codec_kinds.items())
+        )
+        return (
+            roots.roots,
+            roots.stdlib_roots,
+            roots.loose_roots,
+            packages,
+            capabilities.supports_shell_exec,
+            capabilities.supports_extern,
+            codec_kinds,
+        )
+
+    @staticmethod
+    def _bootstrap_loader_inputs_match(snapshot: _BootstrapSnapshot) -> bool:
+        """Return whether cached source and required extern companions still satisfy loading."""
+        from agm.core import fs
+        from agm.util.text import normalize_newlines
+
+        try:
+            return all(
+                normalize_newlines(path.read_text(encoding="utf-8")) == source
+                for path, source in snapshot.source_texts
+            ) and all(
+                module.companion_path is None or fs.is_file(module.companion_path)
+                for module in snapshot.modules.values()
+            )
+        except (OSError, UnicodeError):
+            return False
+
+    @staticmethod
+    def _bootstrap_wildcard_matches(
+        modules: Mapping["ModuleId", "LoadedModule"],
+    ) -> tuple[tuple[tuple[str, ...], tuple[tuple["ModuleId", "Path"], ...]], ...]:
+        """Capture each loaded wildcard's exact root-discovery result.
+
+        Every module whose id is under a wildcard prefix was necessarily
+        discovered by that wildcard: direct imports use the same roots and
+        mount policy. Capturing those paths therefore avoids a second root
+        traversal when a new snapshot is inserted, while later cache hits can
+        compare them with the resolver's authoritative expansion.
+        """
+        prefixes: set[tuple[str, ...]] = set()
+
+        def record_wildcards(declarations: Iterable["ImportDecl | ExportDecl"]) -> None:
+            prefixes.update(tuple(decl.module_path) for decl in declarations if decl.wildcard)
+
+        for module in modules.values():
+            record_wildcards(module.imports)
+            record_wildcards(module.export_decls)
+
+        def matches_for(prefix: tuple[str, ...]) -> tuple[tuple["ModuleId", "Path"], ...]:
+            matches: list[tuple[ModuleId, Path]] = []
+            for module_id, module in modules.items():
+                if module.path is not None and module_id.segments[: len(prefix)] == prefix:
+                    matches.append((module_id, module.path))
+            return tuple(sorted(matches, key=_module_match_sort_key))
+
+        return tuple((prefix, matches_for(prefix)) for prefix in sorted(prefixes))
+
+    @staticmethod
+    def _bootstrap_discovery_matches(snapshot: _BootstrapSnapshot, roots: "RootSet") -> bool:
+        """Return whether current root discovery still produces the cached graph.
+
+        Source text alone cannot show a newly created competing module file.
+        Re-resolving each cached id preserves the resolver's global-uniqueness
+        rule, while replaying wildcard discovery also notices newly matched
+        modules. The optional builtin-methods registry must be queried even
+        when it was absent from the cached graph.
+        """
+        from agm.agl.modules.errors import ModuleNotFound
+        from agm.agl.modules.ids import STD_BUILTIN_METHODS_ID
+        from agm.agl.modules.resolver import expand_wildcard, resolve_module
+
+        try:
+            for module_id, module in snapshot.modules.items():
+                if resolve_module(module_id, roots) != module.path:
+                    return False
+            try:
+                builtin_methods_path = resolve_module(STD_BUILTIN_METHODS_ID, roots)
+            except ModuleNotFound:
+                builtin_methods_path = None
+            cached_builtin_methods = snapshot.modules.get(STD_BUILTIN_METHODS_ID)
+            if builtin_methods_path != (
+                cached_builtin_methods.path if cached_builtin_methods is not None else None
+            ):
+                return False
+            return all(
+                tuple(expand_wildcard(prefix, roots).items()) == matches
+                for prefix, matches in snapshot.wildcard_matches
+            )
+        except (AglError, OSError):
+            # A cache-validation failure must be retried through normal loading,
+            # which turns it into the same user-facing diagnostic as a cold start.
+            return False
+
+    def _restore_bootstrap(self, snapshot: _BootstrapSnapshot) -> None:
+        """Install an immutable bootstrap image into this otherwise fresh session."""
+        self._loaded_lib_modules.update(snapshot.modules)
+        self._next_node_id = snapshot.next_node_id
+        self._type_env = snapshot.type_env
+        self._bootstrap_checked_modules = dict(snapshot.checked_modules)
 
     # ------------------------------------------------------------------
     # Core evaluation
@@ -1498,6 +1700,7 @@ class ReplSession:
         # Clear module state.
         self._roots = None
         self._loaded_lib_modules = {}
+        self._bootstrap_checked_modules = {}
         self._active_imported_params = {}
         self._accumulated_imports = []
         self._accumulated_opens = []

@@ -69,6 +69,7 @@ from agm.agl.scope.symbols import (
     PatternSlot,
     duplicate_binder_message,
     immutable_assignment_message,
+    is_qualified_function_member,
 )
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import (
@@ -679,7 +680,15 @@ class _Checker:
                 f"'{node.name}' is a built-in type name and cannot be used as a function name.",
                 span=node.span,
             )
-        if not is_method and node.name in _BUILTIN_FUNC_NAMES and not node.is_builtin:
+        if (
+            not is_method
+            and node.name in _BUILTIN_FUNC_NAMES
+            and not node.is_builtin
+            and not is_qualified_function_member(
+                self._resolved.is_entry_module,
+                tuple(segment.name for segment in node.scope_path),
+            )
+        ):
             raise AglTypeError(
                 f"'{node.name}' is a built-in function name and cannot be redefined.",
                 span=node.span,

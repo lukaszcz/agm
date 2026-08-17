@@ -65,7 +65,7 @@ from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import ImportEnv
 from agm.agl.scope.program import ResolvedProgram
-from agm.agl.scope.symbols import ModuleResolution
+from agm.agl.scope.symbols import ModuleResolution, is_qualified_function_member
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.analyses import compute_uninhabited, uninhabitable_message
 from agm.agl.semantics.type_table import (
@@ -697,7 +697,14 @@ def _build_program_func_sig_table(
             # when their name matches a global builtin.
             if receiver_owner is None and (
                 item.name in _BUILTIN_TYPE_NAMES
-                or (item.name in _BUILTIN_FUNC_NAMES and not item.is_builtin)
+                or (
+                    item.name in _BUILTIN_FUNC_NAMES
+                    and not item.is_builtin
+                    and not is_qualified_function_member(
+                        mid == resolved.entry_id,
+                        tuple(segment.name for segment in item.scope_path),
+                    )
+                )
             ):
                 continue
             if item.return_type is None:
@@ -885,6 +892,7 @@ def check_program(
     resolved: ResolvedProgram,
     capabilities: HostCapabilities,
     entry_seed_env: TypeEnvironment | None = None,
+    cached_checked_modules: Mapping[ModuleId, CheckedModule] | None = None,
 ) -> CheckedProgram:
     """Run the full type-checking pass over a :class:`ResolvedProgram`.
 
@@ -899,6 +907,10 @@ def check_program(
         environment before the program type table and function signatures are
         installed.  Used by the REPL program context to make prior session
         bindings available in program entries.
+    cached_checked_modules:
+        Checked library modules from an unchanged REPL bootstrap image. Their
+        bodies are immutable and can be reused after this call has rebuilt the
+        whole-program declaration and signature context for the fresh entry.
 
     Returns
     -------
@@ -1020,6 +1032,10 @@ def check_program(
     candidate_records = candidate_records_for(program_func_sig_table)
     checked_modules: dict[ModuleId, CheckedModule] = {}
     for mid in ordered_mids:
+        cached = cached_checked_modules.get(mid) if cached_checked_modules is not None else None
+        if cached is not None and cached.resolved.program is resolved.modules[mid].resolved.program:
+            checked_modules[mid] = cached
+            continue
         rmod = resolved.modules[mid]
         cp = _check_prepared_module(
             rmod.resolved,

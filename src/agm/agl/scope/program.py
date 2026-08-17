@@ -655,6 +655,7 @@ def resolve_program(
             cross_module_type_scopes=frozenset(all_public_types),
             all_public_types=all_public_types,
             allow_root_statements=is_entry and entry_parent_scope is not None,
+            is_entry_module=mid == graph.entry_id,
             repl_session_scope=entry_repl_session_scope if is_entry else None,
             repl_session_scope_nodes=entry_repl_session_scope_nodes if is_entry else None,
             repl_session_type_paths=entry_repl_session_type_paths if is_entry else None,

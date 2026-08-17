@@ -381,6 +381,25 @@ def id[T](x: T) -> T = x
 def fst[A, B](a: A, b: B) -> A = a
 ```
 
+An ordinary function in a named scope or imported module may use the same name
+as a built-in function because it is reached through its own qualified
+namespace. The bare built-in spelling remains reserved, even after opening
+that scope or module:
+
+<!-- agl-check: fragment -->
+```agl
+open Codec
+scope Codec
+def render[T](value: T) -> array[T] = [value]
+end Codec
+
+let values = Codec::render(1)  # the scoped generic function
+let text = render(1)           # the built-in render
+```
+
+An ordinary user `def` at the selected entry module's root cannot use a
+built-in function name.
+
 A type parameter is an ordinary name; it may be used anywhere a type may
 appear within the declaration — parameter types, the return type, and any
 annotation **nested inside the body**:

@@ -51,6 +51,7 @@ class EntryPipelineCtx(Protocol):
     """The minimal ReplSession surface the program pipeline needs."""
 
     _loaded_lib_modules: dict[ModuleId, LoadedModule]
+    _bootstrap_checked_modules: dict[ModuleId, CheckedModule]
     _active_imported_params: dict[SymbolId, IrParam]
     _accumulated_imports: list[tuple[ImportDecl, ...]]
     _accumulated_opens: list[tuple[OpenDecl | ImportDecl | ScopeRegion, ...]]
@@ -246,8 +247,16 @@ class EntryPipeline:
             entry_repl_session_scope_nodes=self._ctx._session_scope_nodes,
             entry_repl_session_type_paths=self._ctx._session_type_paths,
         )
+        bootstrap_modules = self._ctx._bootstrap_checked_modules
+        static_module_ids = frozenset(graph.modules) - {graph.entry_id}
+        cached_checked_modules = (
+            bootstrap_modules if static_module_ids == frozenset(bootstrap_modules) else None
+        )
         checked_program = check_program(
-            resolved_program, host_env.capabilities, entry_seed_env=self._ctx._type_env
+            resolved_program,
+            host_env.capabilities,
+            entry_seed_env=self._ctx._type_env,
+            cached_checked_modules=cached_checked_modules,
         )
         return LoadedCheckedProgram(
             checked_program=checked_program,

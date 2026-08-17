@@ -125,6 +125,16 @@ BUILTIN_CALL_NAMES: dict[str, BuiltinKind] = {
 }
 
 
+def is_qualified_function_member(is_entry_module: bool, scope_path: ScopePath) -> bool:
+    """Return whether a function is reachable only through a qualification.
+
+    A builtin spelling is reserved in the selected entry module's bare
+    namespace, but an imported-module or named-scope member has an independent
+    qualified namespace.
+    """
+    return not is_entry_module or bool(scope_path)
+
+
 # ---------------------------------------------------------------------------
 # BinderKind — how a binding was introduced
 # ---------------------------------------------------------------------------
@@ -771,6 +781,9 @@ class ModuleResolution:
     ``allows_root_statements``
         Whether this entry is an incremental REPL entry, whose root retains
         executable items instead of enforcing a static module root.
+    ``is_entry_module``
+        Whether this resolution belongs to the selected program entry rather
+        than one of its qualified library modules.
     ``origin_path``
         This module's canonical source file, or ``None`` for a module with no
         backing file (inline sources, REPL entries). Later passes consult it to
@@ -822,6 +835,7 @@ class ModuleResolution:
     scope_nodes: dict[ScopePath, ScopeNode] = field(default_factory=dict)
     declared_functions: dict[str, FuncDef] = field(default_factory=dict)
     allows_root_statements: bool = False
+    is_entry_module: bool = True
     origin_path: Path | None = None
     declared_type_names: frozenset[str] = frozenset()
     declared_type_paths: frozenset[ScopePath] = frozenset()

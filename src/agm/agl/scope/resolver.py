@@ -82,6 +82,7 @@ from agm.agl.scope.symbols import (
     duplicate_binder_message,
     immutable_binder_phrase,
     import_item_path,
+    is_qualified_function_member,
     local_scope_bindings,
     resolve_bare_constructor_contribution,
     resolve_bare_contribution,
@@ -277,6 +278,7 @@ class _Resolver:
         cross_module_constructible_types: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
         cross_module_type_scopes: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
         allow_root_statements: bool = False,
+        is_entry_module: bool = False,
         repl_session_scope: ScopeNode | None = None,
         repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
         repl_session_type_paths: Mapping[ScopePath, str | None] | None = None,
@@ -311,6 +313,7 @@ class _Resolver:
         # The REPL is an incremental host and intentionally retains root
         # statements. File and inline exec entries use static roots.
         self._allow_root_statements = allow_root_statements
+        self._is_entry_module = is_entry_module
         # Optional REPL session scope for ``::name`` self-ref fallback.
         # When set, ``_lookup_own_root`` falls back to this scope for names not
         # in the entry's own root scope, allowing ``::name`` to resolve to a
@@ -547,6 +550,7 @@ class _Resolver:
             scope_nodes=dict(self._scope_nodes),
             declared_functions=dict(self._declared_functions),
             allows_root_statements=self._allow_root_statements,
+            is_entry_module=self._is_entry_module,
             origin_path=self._origin_path,
             declared_type_names=frozenset(self._declared_type_names),
             declared_type_paths=frozenset(self._type_paths),
@@ -865,7 +869,13 @@ class _Resolver:
 
     def _validate_function_decl(self, decl: FuncDef) -> None:
         """Apply function declaration validation independently of its scope path."""
-        if decl.name in _RESERVED_NAMES and not decl.is_builtin:
+        if (
+            decl.name in _RESERVED_NAMES
+            and not decl.is_builtin
+            and not is_qualified_function_member(
+                self._is_entry_module, tuple(segment.name for segment in decl.scope_path)
+            )
+        ):
             raise AglScopeError(
                 f"'{decl.name}' is a built-in name and cannot be used as a function name.",
                 span=decl.span,
@@ -2267,20 +2277,20 @@ class _Resolver:
                 node, self._resolution.get(node.node_id), is_call_target=is_call_target
             )
             return
-        # Standard lexical lookup. A receiver method may legally share a host
-        # built-in's spelling, but bare call syntax still denotes the visible
-        # builtin declaration; methods are selected by qualification or member
-        # access. Discard that method candidate so the ordinary contribution
-        # lookup below can recover the builtin with its real provenance.
+        # A builtin spelling is reserved in bare namespace lookups. Qualified
+        # module and scope members may share it, but cannot intercept the
+        # builtin after an ``open`` or other bare contribution.
         ref = self._current_scope().lookup(node.name)
-        if (
-            is_call_target
-            and node.name in _BUILTIN_CALL_NAMES
-            and ref is not None
-            and ref.kind is BinderKind.function_binding
-            and not ref.is_builtin
+        if node.name in _BUILTIN_CALL_NAMES and (
+            ref is None
+            or (ref.kind is BinderKind.function_binding and not self._is_builtin_function_ref(ref))
         ):
-            ref = None
+            builtin_ref = self._bare_builtin_ref(node.name, node.span)
+            if builtin_ref is not None:
+                self._reject_builtin_value_ref(node, builtin_ref, is_call_target=is_call_target)
+                self._record_varref_binding(node, builtin_ref)
+                return
+            raise AglScopeError(f"'{node.name}' is not defined.", span=node.span)
         regional_candidates = self._regional_constructor_candidates(node.name)
         if ref is None or (
             ref.kind is BinderKind.constructor_binding
@@ -3023,6 +3033,19 @@ class _Resolver:
     def _is_builtin_function_ref(self, ref: BindingRef | None) -> bool:
         """Return whether *ref* names an actual ``builtin def`` declaration."""
         return ref is not None and ref.kind is BinderKind.function_binding and ref.is_builtin
+
+    def _bare_builtin_ref(self, name: str, span: SourceSpan) -> BindingRef | None:
+        """Find the host builtin made visible by the standard-library prelude."""
+        qnames = self._import_env.unqualified.get(name, frozenset())
+        builtin_refs = [
+            ref
+            for qname in qnames
+            for ref, _constructor in (self._cross_module_member_ref(name, qname, span),)
+            if self._is_builtin_function_ref(ref)
+        ]
+        if len(builtin_refs) == 1:
+            return builtin_refs[0]
+        return None
 
     def _resolve_call(self, node: Call) -> None:
         """Resolve a ``Call`` node.

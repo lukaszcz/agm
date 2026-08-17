@@ -265,6 +265,8 @@ rules.
   [Strings and interpolation](strings-and-interpolation.md#runtime-interpolation).
 - `std/json` owns ambient `json` inspection methods and explicit strict and
   lenient parsers; see [`std/json`](#stdjson).
+- `std/toml` converts TOML documents to and from `json`; see
+  [`std/toml`](#stdtoml).
 - `std/fs` exposes explicit text filesystem operations: `read`, `write`,
   `append`, `exists`, and `list`; see [`std/fs`](expressions.md#stdfs).
 
@@ -382,6 +384,37 @@ text`, rather than a `std/json` operation.
 
 JSON values remain index-only for data access; use `value["key"]` or
 `value[index]` to index the JSON tree directly.
+
+## `std/toml`
+
+`std/toml` converts TOML documents to and from untyped `json` values. Import it
+to use its functions:
+
+```agl
+import std/toml
+
+program def main() -> unit =
+  let settings = toml::parse('''
+[server]
+port = 8080
+''')
+  print(toml::render(settings))
+```
+
+`parse(text)` accepts one TOML document and returns its root table as `json`.
+Nested tables and arrays retain their JSON object and array shapes. TOML floats
+become `decimal`, while TOML date, time, and datetime values become ISO-8601
+text. Malformed input raises `TomlParseError`; `parse?(text)` returns
+`Option::None` instead.
+
+`render(value)` serializes a JSON object as a TOML document. A TOML document
+must have a table root, and TOML has no null value, so rendering a non-object
+root or any value containing `null` raises `TomlRenderError`. TOML integers
+must fit the signed 64-bit range; an out-of-range integer also raises that
+exception. Decimal values render as TOML floats, including ordinary signed
+`nan` and infinity values. TOML cannot preserve a signaling or payload NaN,
+so either also raises `TomlRenderError`. The resulting text can be passed to
+`parse` to recover the same JSON representation.
 
 ## Library modules and cycles
 

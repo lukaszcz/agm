@@ -1548,6 +1548,28 @@ class TestScopedBuiltinUsedAsValueRejected:
         assert isinstance(call_item, Call)
 
 
+class TestQualifiedMembersSharingBuiltinNames:
+    """A qualified member may share a bare builtin name without shadowing it."""
+
+    def test_qualified_scope_member_named_after_a_builtin_is_accepted(self) -> None:
+        resolved = parse_and_resolve(
+            "scope Codec\ndef render(value: int) -> int = value\nend Codec\nCodec::render(1)"
+        )
+
+        qualified = _find_varref(resolved.program, "render")
+        assert qualified.qualifier is not None
+
+    def test_opened_member_does_not_intercept_the_bare_builtin(self) -> None:
+        resolved = parse_and_resolve(
+            "open Codec\nscope Codec\ndef render(value: int) -> int = value\nend Codec\n"
+            "let value = render(1)\nCodec::render(1)"
+        )
+
+        bare = _find_varref(resolved.program, "render", occurrence=0)
+        assert bare.qualifier is None
+        assert BuiltinKind.RENDER in resolved.builtin_calls.values()
+
+
 # ---------------------------------------------------------------------------
 # Built-in call classification (builtin_calls side table)
 # ---------------------------------------------------------------------------

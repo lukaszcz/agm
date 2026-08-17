@@ -1,0 +1,74 @@
+{
+  "scenarios": [
+    {
+      "name": "parse_tables_nested_tables_and_arrays",
+      "params": {"mode": 1},
+      "expect": {"stdout": "true\ntrue\ntrue\n", "calls": {}}
+    },
+    {
+      "name": "parse_floats_as_decimals",
+      "params": {"mode": 2},
+      "expect": {"stdout": "1.25\n", "calls": {}}
+    },
+    {
+      "name": "parse_temporal_values_as_iso_text",
+      "params": {"mode": 3},
+      "expect": {"stdout": "true\ntrue\ntrue\n", "calls": {}}
+    },
+    {
+      "name": "invalid_toml_raises_or_returns_none",
+      "params": {"mode": 4},
+      "expect": {"stdout": "broken = [\nOption::None\n", "calls": {}}
+    },
+    {
+      "name": "render_valid_table",
+      "params": {"mode": 5},
+      "expect": {"stdout": "title = \"AGM\"\nenabled = true\n\n", "calls": {}}
+    },
+    {
+      "name": "render_rejects_null_values",
+      "params": {"mode": 6},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "TomlRenderError"},
+        "calls": {}
+      }
+    },
+    {
+      "name": "render_rejects_non_table_roots",
+      "params": {"mode": 7},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "TomlRenderError"},
+        "calls": {}
+      }
+    },
+    {
+      "name": "render_rejects_out_of_range_integers",
+      "params": {"mode": 8},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "TomlRenderError"},
+        "calls": {}
+      }
+    },
+    {
+      "name": "parse_and_render_decimal_special_values",
+      "params": {"mode": 9},
+      "expect": {
+        "stdout": "zero = 0.0\nnegative_zero = -0.0\nexponent = 1E+2\nnegative_nan = -nan\nnegative_infinity = -inf\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "optional_parse_wraps_valid_document",
+      "params": {"mode": 10},
+      "expect": {"stdout": "true\n", "calls": {}}
+    },
+    {
+      "name": "parse_render_round_trip",
+      "params": {"mode": 11},
+      "expect": {"stdout": "true\n", "calls": {}}
+    }
+  ]
+}

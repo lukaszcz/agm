@@ -413,6 +413,26 @@ document ([Modules](modules.md#stdjson)).
 raw: text   # the input text that failed to parse
 ```
 
+### `TomlParseError`
+
+A `std/toml` parsing function received text that is not a well-formed TOML
+document ([Modules](modules.md#stdtoml)).
+
+```text
+raw: text   # the input text that failed to parse
+```
+
+### `TomlRenderError`
+
+`std/toml::render` received a JSON value that TOML cannot represent: a
+non-object root, a value containing `null`, an integer outside TOML's signed
+64-bit range, or a signaling/payload `decimal` NaN. It carries only the base
+fields.
+
+```text
+(base fields only)
+```
+
 ### `RangeError`
 
 Raised when a range `for` step (`by k`) evaluates to a non-positive `int`
@@ -463,6 +483,8 @@ a cycle arises, which operations raise this and which tolerate a cycle instead
 | Engine-setting write the host rejects (negative `max-iters`, unparseable `timeout`) | `TypeError` |
 | Fallible `as` cast — source does not conform to target type | `CastError` |
 | `std/json` parsing — input is not well-formed JSON | `JsonParseError` |
+| `std/toml` parsing — input is not well-formed TOML | `TomlParseError` |
+| `std/toml` rendering — root is not an object, a value is `null`, an integer is outside signed 64-bit range, or a `decimal` NaN is signaling/payload | `TomlRenderError` |
 | Rendering, `as text`, or `as json` encounters a reference cycle; or an extern companion `repr()`s the corresponding cyclic view | `CyclicValueError` |
 | `raise` of a constructed or re-raised value | any concrete type |
 

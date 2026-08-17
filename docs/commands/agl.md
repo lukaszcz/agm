@@ -88,8 +88,8 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
 | `:params` | List declared params and their resolved values |
 | `:set echo on\|off` | Toggle result echoing |
 | `:agent confirm\|auto` | Switch the agent-call mode (or report it with no argument) |
-| `:load FILE` | Run an `.agl` file's items into the session, one per entry |
-| `:save FILE` | Write the accumulated session source to a file |
+| `:load FILE` | Load a saved transcript by its original entries, or an ordinary `.agl` file one item per entry |
+| `:save FILE` | Write the accumulated session source and entry boundaries to a transcript |
 | `:theme [dark\|light\|auto]` | Show or switch the syntax-highlighting theme; saves to `~/.agm/config.toml` |
 
 ### Agent-call confirmation

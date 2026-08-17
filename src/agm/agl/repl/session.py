@@ -60,6 +60,32 @@ if TYPE_CHECKING:
 
 # Layout-only token types that carry no statement to evaluate.
 _TRIVIAL_TOKENS: frozenset[str] = frozenset({"_NEWLINE", "_INDENT", "_DEDENT"})
+_TRANSCRIPT_HEADER = "# agm:repl-transcript:v1\n"
+_TRANSCRIPT_ENTRY_PREFIX = "# agm:entry:"
+
+
+def _decode_transcript(text: str) -> tuple[str, ...] | None:
+    """Decode a framed ``:save`` transcript, or return ``None`` for an ordinary file."""
+    if not text.startswith(_TRANSCRIPT_HEADER):
+        return None
+    entries: list[str] = []
+    offset = len(_TRANSCRIPT_HEADER)
+    while offset < len(text):
+        if not text.startswith(_TRANSCRIPT_ENTRY_PREFIX, offset):
+            return None
+        length_end = text.find("\n", offset)
+        if length_end < 0:
+            return None
+        rendered_length = text[offset + len(_TRANSCRIPT_ENTRY_PREFIX) : length_end]
+        if not rendered_length.isdecimal():
+            return None
+        entry_start = length_end + 1
+        entry_end = entry_start + int(rendered_length)
+        if entry_end >= len(text) or text[entry_end] != "\n":
+            return None
+        entries.append(text[entry_start:entry_end])
+        offset = entry_end + 1
+    return tuple(entries)
 
 
 def _no_params_config_loader(_params: tuple["IrParam", ...]) -> Mapping[str, object]:
@@ -1511,12 +1537,13 @@ class ReplSession:
         self._runtime.reset_extern_registry()
 
     def load_file(self, path: "Path") -> list[EntryResult]:
-        """Evaluate the contents of *path* INCREMENTALLY, one item per entry.
+        """Evaluate the contents of *path* incrementally.
 
-        Each top-level item is fed to :meth:`eval_entry` in order, exactly as
-        if the user had typed it at the prompt.  This makes redefinition/shadowing
-        work on load (within a single entry it would be a duplicate-declaration
-        error) so a ``:save`` transcript reliably round-trips through ``:load``.
+        Saved REPL transcripts retain their original entry boundaries. Other
+        files feed each top-level item to :meth:`eval_entry` in order. This
+        preserves both declaration-wide forward resolution and redefinition
+        across entries, so a ``:save`` transcript reliably round-trips through
+        ``:load``.
 
         The load halts at the FIRST non-``ok`` result (like running a script);
         the returned list holds the results collected so far, including the
@@ -1533,6 +1560,16 @@ class ReplSession:
         # Normalize newlines with the SAME helper the lexer/interpreter use so the
         # item-span char offsets align with the text we slice below.
         normalized = normalize_newlines(read_text(path))
+
+        saved_entries = _decode_transcript(normalized)
+        if saved_entries is not None:
+            results: list[EntryResult] = []
+            for entry in saved_entries:
+                result = self.eval_entry(entry)
+                results.append(result)
+                if not result.ok:
+                    break
+            return results
 
         # A blank / comment-only file has nothing to run — load it as a no-op
         # rather than surfacing the parser's "Unexpected end of input" error.
@@ -1557,5 +1594,12 @@ class ReplSession:
         return results
 
     def dump_source(self) -> str:
-        """Return the accumulated successfully-promoted entry sources (newline-joined)."""
-        return "\n".join(self._source_log)
+        """Serialize successfully promoted sources with their entry boundaries."""
+        if not self._source_log:
+            return ""
+        from agm.util.text import normalize_newlines
+
+        entries = tuple(normalize_newlines(source) for source in self._source_log)
+        return _TRANSCRIPT_HEADER + "".join(
+            f"{_TRANSCRIPT_ENTRY_PREFIX}{len(entry)}\n{entry}\n" for entry in entries
+        )

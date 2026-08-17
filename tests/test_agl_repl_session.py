@@ -3645,6 +3645,20 @@ class TestLoadFile:
         vals = {n: _int(v) for n, _t, v in b.bindings()}
         assert vals == {"x": 2}
 
+    def test_load_file_round_trips_a_forward_resolved_use_entry(self, tmp_path: Path) -> None:
+        original = ReplSession()
+        assert original.eval_entry("use S::*\ndef S::value() -> int = 1").ok
+        transcript = tmp_path / "session.agl"
+        transcript.write_text(original.dump_source(), encoding="utf-8")
+
+        loaded = ReplSession()
+        results = loaded.load_file(transcript)
+
+        assert all(result.ok for result in results)
+        value = loaded.eval_entry("value()")
+        assert value.ok, value.diagnostics
+        assert value.value == IntValue(1)
+
     def test_load_file_round_trips_a_use_after_a_declaration(self, tmp_path: Path) -> None:
         original = ReplSession()
         assert original.eval_entry("scope S\ndef value() -> int = 1\nend S").ok
@@ -3773,14 +3787,20 @@ class TestDumpSource:
         s = ReplSession()
         s.eval_entry("let a = 1")
         s.eval_entry("let b = 2")
-        assert s.dump_source() == "let a = 1\nlet b = 2"
+        assert s.dump_source() == (
+            "# agm:repl-transcript:v1\n"
+            "# agm:entry:9\nlet a = 1\n"
+            "# agm:entry:9\nlet b = 2\n"
+        )
 
     def test_dump_source_excludes_failed_entries(self) -> None:
         s = ReplSession()
         s.eval_entry("let a = 1")
         s.eval_entry("let z: decimal = 1 / 0")  # runtime fail
         s.eval_entry('let b = a + "x"')  # type fail
-        assert s.dump_source() == "let a = 1"
+        assert s.dump_source() == (
+            "# agm:repl-transcript:v1\n# agm:entry:9\nlet a = 1\n"
+        )
 
 
 # ---------------------------------------------------------------------------

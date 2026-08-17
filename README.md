@@ -27,12 +27,19 @@ just setup
 Install the CLI into an isolated `uv tool` environment and copy AGM config files,
 prompts, and sandbox templates into the selected AGM home (`$AGM_HOME`, or
 `$HOME/.agm/` by default). It also installs and activates the lockstep immutable
-`std` package at `<AGM-home>/packages/std/<version>/` and installs the AgL Micro
-syntax file into `$HOME/.config/micro/syntax/`:
+`std` package at `<AGM-home>/packages/std/<version>/` and installs the AgL editor
+support: the Micro syntax file into `$HOME/.config/micro/syntax/`, and — when an
+`emacs` binary is available — the AgL Emacs mode (skipped with a notice
+otherwise):
 
 ```bash
 just install
 ```
+
+Install the Emacs mode on its own with `just setup-emacs`. It gives `.agl` files
+syntax highlighting, indentation, declaration navigation, on-save diagnostics
+through `agm check`, and an inferior `agm repl` — see
+[config/emacs/README.md](config/emacs/README.md).
 
 Built wheels also contain a bundled standard-library fallback, so a direct wheel
 installation can execute AgL before an AGM home or managed `std` store is populated.

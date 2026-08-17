@@ -54,6 +54,6 @@ AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-c
 
 - `tests/` for the test suite.
 - `docs/` for project documentation.
-- `config/` for config templates.
+- `config/` for config templates and editor support (`micro/`, `emacs/`).
 - `stubs/` for local typing support for third-party modules.
 - `tools/` for repository tooling.

@@ -28,6 +28,19 @@ lint:
 vulture:
     uv run vulture src/agm/ --min-confidence 80
 
+# Install the AgL Emacs mode into the user's Emacs (requires emacs)
+setup-emacs *args:
+    uv run python tools/install_emacs_mode.py {{args}}
+
+# Install the Emacs mode when emacs is available, else skip with a notice
+[private]
+setup-emacs-optional *args:
+    if command -v emacs >/dev/null 2>&1; then \
+        just setup-emacs {{args}}; \
+    else \
+        echo "emacs not found; skipping the AgL Emacs mode install"; \
+    fi
+
 # Run the Emacs mode's ERT suite (requires emacs)
 test-emacs:
     emacs --batch -L config/emacs -l ert \
@@ -57,3 +70,4 @@ install *args:
         uv tool install --reinstall "{{justfile_directory()}}"; \
     fi
     uv run python tools/install_agm_config.py {{args}}
+    just setup-emacs-optional {{args}}

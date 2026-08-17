@@ -1096,26 +1096,24 @@ class EntryPipeline:
     def _rewrite_scoped_items(
         items: tuple[ImportDecl | ScopeRegion, ...],
         *,
-        rewrite_import: Callable[[ImportDecl], Iterable[ImportDecl]] | None = None,
+        rewrite_import: Callable[[ImportDecl], Iterable[ImportDecl]],
     ) -> tuple[ImportDecl | ScopeRegion, ...]:
         """Rebuild retained scoped imports, dropping empty region wrappers."""
         from dataclasses import replace
 
-        from agm.agl.syntax.nodes import ImportDecl, ScopeRegion
+        from agm.agl.syntax.nodes import ImportDecl
 
         rewritten: list[ImportDecl | ScopeRegion] = []
         for item in items:
-            if isinstance(item, ImportDecl) and rewrite_import is not None:
+            if isinstance(item, ImportDecl):
                 rewritten.extend(rewrite_import(item))
-            elif isinstance(item, ScopeRegion):
+            else:
                 nested = EntryPipeline._rewrite_scoped_items(
                     cast("tuple[ImportDecl | ScopeRegion, ...]", item.items),
                     rewrite_import=rewrite_import,
                 )
                 if nested:
                     rewritten.append(replace(item, items=nested))
-            else:
-                rewritten.append(item)
         return tuple(rewritten)
 
     @staticmethod

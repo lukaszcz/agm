@@ -5051,6 +5051,136 @@ class TestImports:
         assert fallback.ok, fallback.diagnostics
         assert fallback.value == IntValue(3)
 
+    def test_named_scope_retains_a_wildcard_facade_use_of_an_imported_enum_across_entries(
+        self, tmp_path: Path
+    ) -> None:
+        """A ``use`` targeting an imported module inside a named ``scope``
+        region -- not the REPL root -- is retained and replayed the same way
+        a root-level retained use already is, including the enum
+        constructors a wildcard selection exposes."""
+        (tmp_path / "lib.agl").write_text("enum Color\n  | Red\n  | Blue\n", encoding="utf-8")
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("import lib\nscope Outer\nuse lib::*\nend Outer").ok
+
+        declared = session.eval_entry(
+            "scope Outer\n"
+            "def describe(c: Color) -> int = case c of | Color::Red => 1 | Color::Blue => 2\n"
+            "end Outer"
+        )
+        assert declared.ok, declared.diagnostics
+        result = session.eval_entry("Outer::describe(lib::Color::Red)")
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(1)
+
+    def test_named_scope_retained_wildcard_facade_use_survives_a_shrinking_import(
+        self, tmp_path: Path
+    ) -> None:
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text("def first() -> int = 1\n", encoding="utf-8")
+        removed = package / "b.agl"
+        removed.write_text("def second() -> int = 2\n", encoding="utf-8")
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry(
+            "import pkg/* as Facade\nscope Outer\nuse Facade::*\nend Outer"
+        ).ok
+        removed.unlink()
+
+        declared = session.eval_entry("scope Outer\ndef readFirst() -> int = first()\nend Outer")
+        assert declared.ok, declared.diagnostics
+        result = session.eval_entry("Outer::readFirst()")
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(1)
+
+        stale = session.eval_entry("scope Outer\ndef readSecond() -> int = second()\nend Outer")
+        assert not stale.ok
+
+    def test_named_scope_retained_wildcard_facade_use_survives_direct_reimport_of_its_members(
+        self, tmp_path: Path
+    ) -> None:
+        """Once every module a wildcard facade discovered is ALSO reimported
+        directly under its own alias, the facade's own resolved origin no
+        longer matches any current declaration -- the retained contribution
+        must fall back to what is still independently importable rather than
+        losing its members."""
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text("def first() -> int = 1\n", encoding="utf-8")
+        (package / "b.agl").write_text("def second() -> int = 2\n", encoding="utf-8")
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry(
+            "import pkg/* as Facade\nscope Outer\nuse Facade::*\nend Outer"
+        ).ok
+
+        assert session.eval_entry("import pkg/a as Q1\nimport pkg/b as Q2").ok
+
+        declared = session.eval_entry(
+            "scope Outer\n"
+            "def readFirst() -> int = first()\n"
+            "def readSecond() -> int = second()\n"
+            "end Outer"
+        )
+        assert declared.ok, declared.diagnostics
+        result = session.eval_entry("Outer::readFirst() + Outer::readSecond()")
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(3)
+
+    def test_retained_deep_wildcard_facade_member_use_tolerates_a_removed_module(
+        self, tmp_path: Path
+    ) -> None:
+        """A retained use naming one wildcard-discovered module directly (not
+        through the facade alias) simply stops seeing that module once it is
+        removed from disk, rather than rejecting the unrelated entry that
+        triggers the replay."""
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text("scope S\ndef value() -> int = 1\nend S\n", encoding="utf-8")
+        (package / "b.agl").write_text("def other() -> int = 2\n", encoding="utf-8")
+        removed = package / "a.agl"
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("import pkg/*\nuse /pkg/a::S::*").ok
+        removed.unlink()
+
+        result = session.eval_entry("1")
+
+        assert result.ok, result.diagnostics
+
+    def test_retained_imported_use_with_constructors_survives_a_narrower_replacement(
+        self, tmp_path: Path
+    ) -> None:
+        """A retained imported wildcard use inside a named scope, that
+        exposed record constructors alongside plain bindings from TWO
+        overlapping modules -- each also named through both its bare and its
+        ``/``-anchored spelling -- keeps its plain bindings reachable once a
+        later entry narrows every one of those four declarations down to
+        just them. Two overlapping contributions per module (bare + anchored
+        spellings of the same target) exercise every shape the constructor
+        and binding retraction can see: an atom already retracted by an
+        earlier contribution, one a later contribution still shares, and one
+        a contribution owns outright."""
+        (tmp_path / "a.agl").write_text(
+            "record Point\n  x: int\ndef onlyA() -> int = 11\n", encoding="utf-8"
+        )
+        (tmp_path / "b.agl").write_text(
+            "record Point\n  y: int\ndef onlyB() -> int = 22\n", encoding="utf-8"
+        )
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry(
+            "import a\nimport b\nscope Outer\nuse a::*\nuse /a::*\nuse b::*\nuse /b::*\nend Outer"
+        ).ok
+
+        narrowed = session.eval_entry(
+            "scope Outer\n"
+            "use a::{onlyA}\nuse /a::{onlyA}\nuse b::{onlyB}\nuse /b::{onlyB}\nend Outer"
+        )
+        assert narrowed.ok, narrowed.diagnostics
+
+        result = session.eval_entry(
+            "scope Outer\ndef check() -> int = onlyA() + onlyB()\nend Outer"
+        )
+        assert result.ok, result.diagnostics
+        assert session.eval_entry("Outer::check()").value == IntValue(33)
+
     def test_retained_separate_wildcard_aliases_do_not_form_one_facade(
         self, tmp_path: Path
     ) -> None:
@@ -6812,6 +6942,84 @@ class TestLocalUseNarrowing:
         assert result.ok, result.diagnostics
 
         assert not session.eval_entry("scope Outer\nlet distance: Meters = 1\nend Outer").ok
+
+    def test_a_narrower_use_supersedes_a_retained_local_scope_route_within_the_same_entry(
+        self,
+    ) -> None:
+        """A local scope reached only through an earlier bare ``use`` (not
+        declared as a top-level scope of its own) stops being nameable once
+        that earlier ``use`` is narrowed away by a later declaration in the
+        SAME entry -- the earlier declaration is retained from a prior entry,
+        so the narrowing here must see it as superseded mid-entry, not only
+        once the next entry rebuilds the scope from scratch."""
+        session = ReplSession()
+        assert session.eval_entry(
+            "scope A\nscope B\ndef value() -> int = 1\nend B\ndef direct() -> int = 5\nend A"
+        ).ok
+        assert session.eval_entry("use A::*").ok
+
+        narrowed = session.eval_entry("use A::{direct}\nuse B::*")
+
+        assert not narrowed.ok
+
+    def test_narrowing_local_use_retracts_constructors_shared_by_overlapping_glob_uses(
+        self,
+    ) -> None:
+        """Mirrors ``test_narrowing_local_use_retracts_a_member_exposed_by_an_earlier_glob_use``
+        for the record constructors two overlapping local wildcard ``use``s
+        inside a named scope expose, not just their plain bindings: a bare
+        constructor pattern needs the source scopes' own constructor
+        candidates, so it stops matching once every wildcard is narrowed
+        away. Each source is named through both its bare and its
+        current-module-anchored spelling, so retraction sees an atom already
+        cleared by an earlier contribution, one a later contribution still
+        shares, and one a contribution owns outright."""
+        session = ReplSession()
+        assert session.eval_entry(
+            "scope SourceA\nrecord Point\n  x: int\ndef onlyA() -> int = 11\nend SourceA\n"
+            "scope SourceB\nrecord Point\n  y: int\ndef onlyB() -> int = 22\nend SourceB\n"
+        ).ok
+        assert session.eval_entry(
+            "scope Outer\n"
+            "use SourceA::*\nuse ::SourceA::*\nuse SourceB::*\nuse ::SourceB::*\n"
+            "end Outer"
+        ).ok
+
+        narrowed = session.eval_entry(
+            "scope Outer\n"
+            "use SourceA::{onlyA}\nuse ::SourceA::{onlyA}\n"
+            "use SourceB::{onlyB}\nuse ::SourceB::{onlyB}\n"
+            "end Outer"
+        )
+        assert narrowed.ok, narrowed.diagnostics
+
+        result = session.eval_entry(
+            "scope Outer\ndef check() -> int = onlyA() + onlyB()\nend Outer"
+        )
+        assert result.ok, result.diagnostics
+        assert session.eval_entry("Outer::check()").value == IntValue(33)
+
+        stale = session.eval_entry(
+            "scope Outer\ndef mk() -> int = case Point(x = 1) of | Point(x) => x\nend Outer"
+        )
+        assert not stale.ok
+
+    def test_local_use_of_a_scope_that_never_promotes_is_dropped_on_replay(self) -> None:
+        """A retained local ``use`` whose source scope fails to promote on
+        the SAME entry that declared it (first declaration, runtime failure)
+        must not be replayed on a later entry -- there is no promoted source
+        scope left to resolve it against."""
+        session = ReplSession()
+        assert session.eval_entry("scope Outer\nend Outer").ok
+
+        failed = session.eval_entry(
+            "let z: decimal = 1 / 0\n"
+            "enum Color\n  | Red\n  | Blue\n"
+            "scope Outer\nuse Color::*\nend Outer\n"
+        )
+        assert not failed.ok
+
+        assert not session.eval_entry("Color::Red").ok
 
 
 # ---------------------------------------------------------------------------

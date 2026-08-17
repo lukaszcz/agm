@@ -6,10 +6,9 @@ record Task
   effort: int
 
 def parse_int_or_zero(s: text) -> int =
-  if s as? int =>
-    s as int
-  else =>
-    0
+  case s as? int of
+    | Some(value = _ as n) => n
+    | None => 0
 
 # A helper that doubles a numeric text value
 def double_text_int(s: text) -> text =

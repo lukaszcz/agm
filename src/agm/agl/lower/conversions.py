@@ -128,6 +128,10 @@ def compile_recipe(
                 decode=decode_plan.root,
                 defs=decode_plan.defs,
             )
+        case CastKind.IDENTITY_UPCAST | CastKind.NOMINAL_DOWNCAST:  # pragma: no cover
+            raise AssertionError(
+                f"nominal identity cast reached recipe compilation: {source!r} as {target!r}"
+            )
         case CastKind.STATIC_ERROR:  # pragma: no cover
             # The checker rejects statically-impossible casts before lowering.
             raise AssertionError(f"STATIC_ERROR cast reached lowering: {source!r} as {target!r}")

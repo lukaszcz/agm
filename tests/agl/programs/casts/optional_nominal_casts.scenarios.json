@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "name": "optional_nominal_casts_and_cycle_safe_error",
+      "expect": {
+        "stdout": "true\n7\nno node\nupcast\nShape -> Shape::Circle: <cyclic value>\n"
+      }
+    }
+  ]
+}

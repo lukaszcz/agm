@@ -3,7 +3,7 @@
 [← Index](index.md)
 
 AgL is statically typed with nominal user types, a small set of built-ins,
-and two implicit coercions. The full program is scope-resolved and
+and directed implicit coercions. The full program is scope-resolved and
 type-checked before any expression executes; checking stops at the first
 error, and a program with a static error never runs.
 
@@ -187,8 +187,8 @@ and `as json` walk a value's containers and therefore raise the catchable
 re-enters a container already on its own path. An `extern def` call can pass a
 cyclic array or dict as a live view; rendering that view in its companion
 raises `CyclicValueError`. `as?` never
-raises: it predicts whether the corresponding `as` would succeed, so `as?
-text` and `as? json` on a cyclic value evaluate to `false` instead. `copy` is
+raises: it returns `None` when the corresponding conversion fails, so `as?
+text` and `as? json` on a cyclic value evaluate to `None` instead. `copy` is
 the exception: it is the one deep, structure-rebuilding walk that traverses a
 cyclic value to completion instead of raising — see [Copying
 values](#copying-values) below. A **shared** (diamond) structure — the same
@@ -811,7 +811,7 @@ regions](scopes.md), but not in ordinary expression blocks.
 
 ## Assignability and coercion
 
-Typing is exact nominal matching with **two** implicit coercions:
+Typing is exact nominal matching with these implicit coercions:
 
 1. **`int` widens to `decimal`.** An `int` value is accepted wherever a
    `decimal` is expected. Mixed arithmetic yields `decimal`, and `1 == 1.0`
@@ -819,16 +819,19 @@ Typing is exact nominal matching with **two** implicit coercions:
 2. **A `json` target accepts any *scalar* JSON-shaped value** — `null`,
    `bool`, `int`, `decimal`, or `text` — storing it in canonical `json`
    representation.
-3. There are no other implicit conversions. In particular, an `array` or
+3. **An enum member record widens to an enum that declares it.** This applies only
+   when checking against a known enum slot; it never finds a common enum while
+   inferring a mixed expression.
+4. There are no other implicit conversions. In particular, an `array` or
    `dict` value — even one that is JSON-shaped — is never implicitly absorbed
    into `json`: an implicit conversion never copies a data structure, and
    converting a container to `json` builds one. Use an explicit `as json`
    cast (see [Casts and convertibility](#casts-and-convertibility) below).
-4. Equality (`==`, `!=`) and ordering comparisons require both operands to
+5. Equality (`==`, `!=`) and ordering comparisons require both operands to
    have the *same* type after rule 1. Operands whose type is, or transitively
    contains, a function or `unit` value are a static error — see
    [Values and equality](#values-and-equality) below.
-5. All branches of a `case` expression must have the same type after rule 1.
+6. All branches of a `case` expression must have the same type after rule 1.
 
 For explicit, user-requested conversions between types, see
 [Casts and convertibility](#casts-and-convertibility) below.
@@ -840,9 +843,15 @@ AgL provides two cast operators:
 - **`EXPR as T`** — converts the value of `EXPR` to type `T`. If the
   conversion cannot succeed at runtime it raises `CastError`
   ([Exceptions](exceptions.md)).
-- **`EXPR as? T`** — tests whether the value of `EXPR` is convertible to `T`
-  without actually performing the conversion. Always yields `bool`; never
-  raises. Equivalent to asking whether `EXPR as T` would succeed.
+- **`EXPR as? T`** — performs the same conversion without raising. It yields
+  `Option[T]`: `Some(value)` on success and `None` on failure.
+
+For an enum member record, these operators are identity casts rather than
+parsing conversions. A member value may be cast up to an enum that declares
+it only when the checker can establish that membership; this upcast is a
+compile-time-checked no-op. An enum value may be cast down only to one of that
+enum's declared member records; this downcast checks the runtime nominal
+identity and returns the same record value on success.
 
 The target type `T` is a type expression written the same way as any other
 type annotation (`int`, `array[text]`, `MyRecord`, etc.).
@@ -879,6 +888,8 @@ may raise `CastError`.
 | record `R` | same record `R` | total (no-op) |
 | record `R` | `text`, `json` | fallible — strict JSON parse then field validation |
 | enum `E` | same enum `E` | total (no-op) |
+| member record `R` of enum `E` | `E` | total compile-time-checked identity upcast (no-op) |
+| enum `E` | declared member record `R` | fallible identity downcast — checks that the runtime member is `R` |
 | enum `E` | `text`, `json` | fallible — strict JSON parse then variant validation |
 | any type | `unit`, function type | **static cast error** |
 | `unit`, function type | any type | **static cast error** |
@@ -916,7 +927,7 @@ know whether the eventual instantiation of `T` will carry a non-data value.
 
 A **total** cast has no conformance failure, so it does not raise `CastError`.
 Rendering or JSON conversion still raises `CyclicValueError` when it walks a
-reference cycle; the corresponding `as?` expression yields `false` instead.
+reference cycle; the corresponding `as?` expression yields `None` instead.
 Redundant casts to the same type are accepted with no warning and are no-ops;
 `int as decimal` is the accepted widening conversion. Casting an array or dict
 to its own type (`xs as array[int]`) is a true no-op: it yields the *same*
@@ -926,12 +937,12 @@ independent snapshot (see [`array[T]` and `dict[text, T]`](#arrayt-and-dicttext-
 above).
 
 A **fallible** cast may raise `CastError` if the value does not conform to
-the target type. The `as?` form lets you probe convertibility without
+the target type. The `as?` form returns an optional converted value without
 handling an exception:
 
 <!-- agl-check: fragment -->
 ```agl
-let ok: bool = some_json as? int   # true if the value is an integral number
+let parsed: Option[int] = some_json as? int
 ```
 
 ### Strict parsing in text and json casts

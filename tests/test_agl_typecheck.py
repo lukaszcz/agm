@@ -45,6 +45,7 @@ from agm.agl.semantics.types import (
     contains_inference_var,
     is_assignable,
     is_json_shaped,
+    option_type,
 )
 from agm.agl.syntax.nodes import (
     ArrayLit,
@@ -10973,7 +10974,7 @@ class TestGenericEnumQualifiersAndTypeVarScoping:
             + "let o: Option[int] = some(value = 5)\n"
             + "if o is Maybe::just => print 1\n"
         )
-        assert "resolves to enum" in str(err).lower()
+        assert "does not belong" in str(err).lower()
 
     def test_type_var_lambda_annotation_in_generic_def_body(self) -> None:
         # A lambda inside a generic def may annotate its params/return with the
@@ -11585,19 +11586,17 @@ class TestCast:
         assert isinstance(decl, LetDecl)
         assert r.node_types[decl.value.node_id] == DecimalType()
 
-    def test_as_question_yields_bool(self) -> None:
-        """as? always yields bool."""
-        r = accept_type('let b: bool = "42" as? int\nb')
+    def test_as_question_yields_target_option(self) -> None:
+        r = accept_type('let b: Option[int] = "42" as? int\nb')
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
-        assert r.node_types[decl.value.node_id] == BoolType()
+        assert r.node_types[decl.value.node_id] == option_type(IntType())
 
-    def test_as_question_on_total_cast_yields_bool(self) -> None:
-        """as? on a total cast also yields bool."""
-        r = accept_type("let b: bool = 1 as? text\nb")
+    def test_as_question_on_total_cast_yields_target_option(self) -> None:
+        r = accept_type("let b: Option[text] = 1 as? text\nb")
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
-        assert r.node_types[decl.value.node_id] == BoolType()
+        assert r.node_types[decl.value.node_id] == option_type(TextType())
 
     def test_bool_to_int_rejected(self) -> None:
         """bool as int is a static error."""

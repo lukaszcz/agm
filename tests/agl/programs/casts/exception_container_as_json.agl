@@ -9,6 +9,11 @@ exception Failure extends Exception
 exception Nested extends Failure
   causes: array[Failure]
 
+def succeeds[T](value: Option[T]) -> bool =
+  case value of
+    | Some(_) => true
+    | None => false
+
 program def main() -> unit =
   let one = Failure(message = note, code = code)
   print(one as json)
@@ -23,5 +28,5 @@ program def main() -> unit =
   let deep = Nested(message = note, code = code, causes = [one])
   print(deep as json)
 
-  print(one as? json)
-  print(many as? json)
+  print(succeeds(one as? json))
+  print(succeeds(many as? json))

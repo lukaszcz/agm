@@ -114,7 +114,9 @@ __all__ = [
     "IrTry",
     "IrUnary",
     "IrUpdateRecord",
+    "IrNominalCast",
     "IrNominalIs",
+    "IrOptionSome",
     "UseDefault",
     "is_canonical_literal_scalar",
 ]
@@ -585,15 +587,39 @@ class IrConvert:
     Evaluates ``value`` once, then runs ``recipe`` (a typeless
     ``ConversionRecipe``).  ``failure_mode`` selects behavior on a fallible
     failure: ``RAISE_CAST_ERROR`` raises a ``CastError`` (the ``as`` operator);
-    ``RETURN_BOOL`` yields ``False`` (the fallible ``as?`` operator).  Total
-    ``as?`` is lowered to ``IrSequence((source, IrConstBool(True)))`` and never
-    reaches this node.
+    ``RETURN_OPTION`` yields ``Option::None`` on failure, while a successful
+    ``as?`` result is wrapped in ``Option::Some``.
     """
 
     location: Location
     value: "IrExpr"
     recipe: ConversionRecipe
     failure_mode: ConversionFailureMode
+
+
+@dataclass(frozen=True, slots=True)
+class IrNominalCast:
+    """Identity cast from an enum value to one of its member records.
+
+    ``optional`` selects an ``Option`` result instead of a ``CastError`` on a
+    nominal mismatch. The labels are statically selected source type names for
+    a failed ordinary cast.
+    """
+
+    location: Location
+    nominal: NominalId
+    value: "IrExpr"
+    optional: bool
+    source_label: str
+    target_label: str
+
+
+@dataclass(frozen=True, slots=True)
+class IrOptionSome:
+    """Wrap one value in the standard-library ``Option::Some`` member."""
+
+    location: Location
+    value: "IrExpr"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1139,7 +1165,9 @@ IrExpr = (
     | IrMakeRecord
     | IrMakeException
     | IrMakeConstructor
+    | IrNominalCast
     | IrNominalIs
+    | IrOptionSome
     | IrConvert
     | IrIf
     | IrRaise

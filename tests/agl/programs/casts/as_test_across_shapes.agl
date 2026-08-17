@@ -14,6 +14,11 @@ enum Tree
   | leaf
   | branch(next: Tree)
 
+def succeeds[T](value: Option[T]) -> bool =
+  case value of
+    | Some(_) => true
+    | None => false
+
 program def main() -> unit =
   let scalar = Scalar(value = 1)
   let tree = leaf
@@ -24,15 +29,15 @@ program def main() -> unit =
   if close_cycle =>
     nodes[0] := node
 
-  print(1 as? text)
-  print(1 as? json)
-  print(scalar as? text)
-  print(scalar as? json)
-  print(tree as? text)
-  print(tree as? json)
-  print(boxed_int as? text)
-  print(boxed_int as? json)
-  print(boxed_array as? text)
-  print(boxed_array as? json)
-  print(node as? text)
-  print(node as? json)
+  print(succeeds(1 as? text))
+  print(succeeds(1 as? json))
+  print(succeeds(scalar as? text))
+  print(succeeds(scalar as? json))
+  print(succeeds(tree as? text))
+  print(succeeds(tree as? json))
+  print(succeeds(boxed_int as? text))
+  print(succeeds(boxed_int as? json))
+  print(succeeds(boxed_array as? text))
+  print(succeeds(boxed_array as? json))
+  print(succeeds(node as? text))
+  print(succeeds(node as? json))

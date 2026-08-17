@@ -8,11 +8,16 @@ param close_cycle: bool
 
 record Node(children: array[Node])
 
+def succeeds[T](value: Option[T]) -> bool =
+  case value of
+    | Some(_) => true
+    | None => false
+
 program def main() -> unit =
   var xs: array[Node] = [Node(children = [])]
   let n = Node(children = xs)
   if close_cycle =>
     xs[0] := n
 
-  print(n as? text)
-  print(n as? json)
+  print(succeeds(n as? text))
+  print(succeeds(n as? json))

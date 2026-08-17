@@ -1481,6 +1481,19 @@ def cast_classification(source: Type, target: Type, table: TypeTable) -> CastKin
     if isinstance(target, ExceptionType):
         return CastKind.STATIC_ERROR
 
+    # Nominal membership casts are identity operations. A member-to-enum cast
+    # is a statically established widening; enum-to-member needs one runtime
+    # nominal check. They must precede ordinary assignability, which deliberately
+    # knows nothing about declaration-table membership.
+    if isinstance(source, RecordType) and isinstance(target, EnumType):
+        if source in table.enum_members(target):
+            return CastKind.IDENTITY_UPCAST
+        return CastKind.STATIC_ERROR
+    if isinstance(source, EnumType) and isinstance(target, RecordType):
+        if target in table.enum_members(source):
+            return CastKind.NOMINAL_DOWNCAST
+        return CastKind.STATIC_ERROR
+
     # Handle is_assignable cases first (no-op / widen / json-absorb).
     # Note: is_assignable(X, TextType) is true only when X is TextType itself
     # (no implicit widening to text), so the only assignable-to-text case is noop.

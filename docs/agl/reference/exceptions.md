@@ -383,7 +383,8 @@ value the host rejects.
 ### `CastError`
 
 A fallible `as` cast failed at runtime: the source value did not conform to
-the target type.
+the target type. This includes an enum-to-member identity downcast when the
+value has a different member identity.
 
 ```text
 source_type: text   # name of the source type, e.g. "json"
@@ -393,7 +394,7 @@ raw: text           # text representation of the value that failed to convert
 
 `CastError` is raised by `as` casts that are fallible (see
 [Types](types.md#casts-and-convertibility)). The `as?` form never raises —
-it reports failure as `false`.
+it reports failure as `None`.
 
 ### `JsonParseError`
 

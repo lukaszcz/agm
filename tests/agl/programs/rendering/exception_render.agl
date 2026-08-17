@@ -19,10 +19,9 @@ program def main() -> unit =
     print(e as json)
 
   # --- as? cast: check convertibility without exception ---
-  if bad_input as? int =>
-    print "got int"
-  else =>
-    print "no int"
+  case bad_input as? int of
+    | Some(_) => print "got int"
+    | None => print "no int"
 
   # --- ArithmeticError rendered via print ---
   try

@@ -35,9 +35,11 @@ from agm.agl.ir.contracts import (
     VariantEncode,
 )
 from agm.agl.ir.ids import NominalId
-from agm.agl.ir.nodes import IrBind, IrConvert, IrSequence
+from agm.agl.ir.nodes import IrBind, IrConvert, IrNominalCast, IrOptionSome, IrSequence
 from agm.agl.ir.program import NominalDescriptor, NominalKind, VariantDescriptor
+from agm.agl.ir.validate import validate_ir
 from agm.agl.modules.ids import ENTRY_ID
+from agm.agl.runtime.option import none_value, some_value
 from agm.agl.semantics.values import (
     ArrayValue,
     BoolValue,
@@ -206,41 +208,35 @@ let x = "{\\"$case\\": \\"Purple\\"}" as Color
 
 
 # ---------------------------------------------------------------------------
-# IR evaluation tests — `as?` booleans
+# IR evaluation tests — nullable `as?`
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
     "source,expected",
     [
-        ("let r = 42 as? text\n()\n", True),  # total as?
-        ("let r = 42 as? json\n()\n", True),
-        ("let r = 3 as? decimal\n()\n", True),  # total noop/widen as?
-        ('let r = "42" as? int\n()\n', True),  # fallible success
-        ('let r = "nope" as? int\n()\n', False),  # fallible failure
-        ("let r = 4.5 as? int\n()\n", False),
-        ("let r = 4.0 as? int\n()\n", True),
+        ("let r = 42 as? text\n()\n", some_value(TextValue("42"))),
+        ("let r = 42 as? json\n()\n", some_value(JsonValue(42))),
+        ("let r = 3 as? decimal\n()\n", some_value(DecimalValue(Decimal(3)))),
+        ('let r = "42" as? int\n()\n', some_value(IntValue(42))),
+        ('let r = "nope" as? int\n()\n', none_value()),
+        ("let r = 4.5 as? int\n()\n", none_value()),
+        ("let r = 4.0 as? int\n()\n", some_value(IntValue(4))),
     ],
 )
-def test_as_optional_booleans_agree(source: str, expected: bool) -> None:
+def test_as_optional_returns_option(source: str, expected: RecordValue) -> None:
     ir = evaluate_ir(source)
-    assert ir["r"] == BoolValue(expected)
+    assert ir["r"] == expected
 
 
-def test_total_as_optional_evaluates_source_then_true() -> None:
-    """A total `as?` evaluates its (bound) source and yields True.
-
-    `x as? text` is TOTAL_RENDER: it trial-converts via IrConvert (rendering
-    a plain int cannot fail) rather than short-circuiting, but still
-    evaluates the bound source and yields True.
-    """
+def test_total_as_optional_evaluates_source_and_wraps_result() -> None:
     source = """\
 let x = 5
 let r = x as? text
 ()
 """
     ir = evaluate_ir(source)
-    assert ir["r"] == BoolValue(True)
+    assert ir["r"] == some_value(TextValue("5"))
     assert ir["x"] == IntValue(5)
 
 
@@ -280,24 +276,45 @@ def test_golden_as_lowers_to_ir_convert_raise() -> None:
     assert value.recipe.decode == ScalarDecode(ScalarKind.INT)
 
 
-def test_golden_fallible_as_optional_lowers_to_ir_convert_return_bool() -> None:
+def test_golden_fallible_as_optional_lowers_to_ir_convert_return_option() -> None:
     value = _bound_value('let r = "42" as? int\n()\n', "r")
     assert isinstance(value, IrConvert)
-    assert value.failure_mode is ConversionFailureMode.RETURN_BOOL
+    assert value.failure_mode is ConversionFailureMode.RETURN_OPTION
 
 
-def test_golden_total_noop_as_optional_lowers_to_sequence() -> None:
-    """Only TOTAL_NOOP short-circuits `as?` to IrSequence — it performs no walk.
+def test_nominal_downcasts_lower_to_identity_checks() -> None:
+    source = """\
+enum Shape | Circle(radius: int) | Square
+let shape: Shape = Circle(radius = 2)
+let circle = shape as Shape::Circle
+let is_circle = shape as? Shape::Circle
+let is_square = shape as? Shape::Square
+let upcast = Circle(radius = 3) as? Shape
+()
+"""
+    circle = _bound_value(source, "circle")
+    is_circle = _bound_value(source, "is_circle")
+    is_square = _bound_value(source, "is_square")
+    upcast = _bound_value(source, "upcast")
+    assert isinstance(circle, IrNominalCast) and circle.optional is False
+    assert isinstance(is_circle, IrNominalCast) and is_circle.optional is True
+    assert isinstance(is_square, IrNominalCast) and is_square.optional is True
+    assert isinstance(upcast, IrOptionSome)
+    validate_ir(_lower(source), deep=True)
+    values = evaluate_ir(source)
+    assert values["circle"] == RecordValue(circle.nominal, "Shape::Circle", {"radius": IntValue(2)})
+    assert values["is_circle"] == some_value(values["circle"])
+    assert values["is_square"] == none_value()
+    assert values["upcast"] == some_value(
+        RecordValue(circle.nominal, "Shape::Circle", {"radius": IntValue(3)})
+    )
 
-    TOTAL_RENDER/TOTAL_JSON as? casts (e.g. `42 as? text`) instead lower to a
-    trial IrConvert(RETURN_BOOL): rendering/JSON-serializing can raise
-    CyclicValueError, so `as?` must trial-convert them and yield False on
-    that failure rather than always short-circuiting to True.
-    """
+
+def test_golden_total_noop_as_optional_lowers_to_ir_convert() -> None:
     value = _bound_value("let r = 3 as? decimal\n()\n", "r")
-    assert isinstance(value, IrSequence)
-    # last item is the constant True; the source is preserved as the first item.
-    assert len(value.items) == 2
+    assert isinstance(value, IrConvert)
+    assert value.failure_mode is ConversionFailureMode.RETURN_OPTION
+    assert value.recipe.strategy is ConversionStrategy.WIDEN_INT_TO_DECIMAL
 
 
 def _strategy_of(source: str, name: str) -> ConversionStrategy:
@@ -513,7 +530,7 @@ def test_run_recipe_value_conversion_failed_when_schema_permits() -> None:
 
 
 def test_run_recipe_return_bool_on_failure() -> None:
-    """A RETURN_BOOL conversion that fails surfaces via AglCastConversion (caught by caller)."""
+    """A failing conversion surfaces via AglCastConversion for its caller."""
     recipe = ConversionRecipe(
         strategy=ConversionStrategy.PARSE_TEXT_THEN_DECODE,
         source_label="text",

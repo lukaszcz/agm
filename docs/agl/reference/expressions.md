@@ -698,11 +698,14 @@ Operands must be `bool`. `and` and `or` short-circuit.
 <!-- agl-check: fragment -->
 ```agl
 EXPR as T     # cast: convert EXPR to type T
-EXPR as? T    # convertibility test: bool, never raises
+EXPR as? T    # nullable conversion: Option[T], never raises
 ```
 
-`as` converts the value to the named type; `as?` tests whether the
-conversion would succeed. The full conversion matrix and semantics are in
+`as` converts the value to the named type; `as?` performs the same conversion
+without raising, returning `Some(converted_value)` on success or `None` on
+failure. Casting from an enum to one of its member records is an identity
+downcast; casting a member record to a containing enum is an identity upcast.
+The full conversion matrix and semantics are in
 [Types](types.md#casts-and-convertibility).
 
 **Precedence.** Cast operators sit between unary `-` (tighter) and `* /`
@@ -726,7 +729,11 @@ Examples:
 <!-- agl-check: fragment -->
 ```agl
 let n: int = raw_value as int          # raises CastError if not an int
-let ok: bool = raw_value as? int       # true when cast would succeed
+let parsed: Option[int] = raw_value as? int
+
+case parsed of
+  | Some(value = _ as n) => print n
+  | None => print "not an int"
 
 let s: text = some_int as text         # total — always succeeds
 let j: json = my_record.count as json  # total — int is JSON-shaped
@@ -734,10 +741,10 @@ let j: json = my_record.count as json  # total — int is JSON-shaped
 # left-associativity chains
 let t: text = some_int as json as text   # (some_int as json) as text
 
-# convertibility test without exception handling
-if count_json as? int =>
-  let n: int = count_json as int
-  print n
+# nullable conversion without exception handling
+case count_json as? int of
+  | Some(value = _ as n) => print n
+  | None => print "not an int"
 ```
 
 A `text` cast from a fallible source reads the value and formats it as text;
@@ -764,7 +771,11 @@ review is Pass
 status is Status::Blocked     # qualified; aliases resolve transparently
 ```
 
-The left operand must have enum type; the variant must belong to that enum.
+The left operand must have enum type; the member must belong to that enum.
+A member may be written by its bare injected name, its record declaration name,
+or a qualified enum-member spelling. The test compares nominal member identity.
+It does not narrow the static type of the left operand in either branch; cast to
+the member record before accessing that record's fields or methods.
 
 ## `case` expressions
 

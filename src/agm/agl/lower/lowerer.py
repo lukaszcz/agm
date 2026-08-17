@@ -98,7 +98,9 @@ from agm.agl.ir.nodes import (
     IrMakeJsonObject,
     IrMakeRecord,
     IrNominalCaseKey,
+    IrNominalCast,
     IrNominalIs,
+    IrOptionSome,
     IrOr,
     IrParseJson,
     IrPrint,
@@ -1338,49 +1340,46 @@ class _Lowerer:
             case Cast(expr=operand, test_only=test_only, span=span, node_id=nid):
                 spec = self._checked.cast_specs[nid]
                 source_type = self._node_type(operand.node_id)
-                recipe = compile_recipe(source_type, spec.target_type, spec.kind, self._type_table)
                 inner = self.lower_expr(operand)
-                if not test_only:
-                    return IrConvert(
+                if spec.kind is CastKind.IDENTITY_UPCAST:
+                    return (
+                        IrOptionSome(location=self._loc(span), value=inner) if test_only else inner
+                    )
+                if spec.kind is CastKind.NOMINAL_DOWNCAST:
+                    assert isinstance(spec.target_type, RecordType)
+                    return IrNominalCast(
                         location=self._loc(span),
+                        nominal=NominalId(spec.target_type.decl_id),
                         value=inner,
-                        recipe=recipe,
-                        failure_mode=ConversionFailureMode.RAISE_CAST_ERROR,
+                        optional=test_only,
+                        source_label=repr(source_type),
+                        target_label=repr(spec.target_type),
                     )
-                # `as?`: a no-op conversion performs no walk and cannot fail, so it
-                # short-circuits to evaluating the (possibly effectful) source, then
-                # yielding True.  `TOTAL_RENDER`/`TOTAL_JSON` are NOT short-circuited
-                # here even though they always succeed on an acyclic value: rendering
-                # or JSON-serializing a cyclic value raises `CyclicValueError`, so
-                # `as?` must trial-convert them too and yield False on that failure
-                # (see `_on_cast_failure`'s `RETURN_BOOL` handling in the evaluator).
-                if spec.kind is CastKind.TOTAL_NOOP:
-                    return IrSequence(
-                        location=self._loc(span),
-                        items=(inner, IrConstBool(location=self._loc(span), value=True)),
-                    )
+                recipe = compile_recipe(source_type, spec.target_type, spec.kind, self._type_table)
                 return IrConvert(
                     location=self._loc(span),
                     value=inner,
                     recipe=recipe,
-                    failure_mode=ConversionFailureMode.RETURN_BOOL,
+                    failure_mode=(
+                        ConversionFailureMode.RETURN_OPTION
+                        if test_only
+                        else ConversionFailureMode.RAISE_CAST_ERROR
+                    ),
                 )
 
-            case IsTest(expr=operand, variant=variant, negated=negated, span=span):
-                # A precise member record is still valid in an `is` test. Resolve
-                # its enum owner only for the tested runtime nominal; the checked
-                # operand retains its exact record type.
-                operand_type = self._node_type(operand.node_id)
-                enum_type = (
-                    self._type_table.enum_owner_for_member(operand_type)
-                    if isinstance(operand_type, RecordType)
-                    else operand_type
-                )
-                assert isinstance(enum_type, EnumType), "is-test operand must be enum-related"
-                member = self._type_table.enum_member_names(enum_type)[variant]
+            case IsTest(expr=operand, variant=variant, negated=negated, span=span, node_id=nid):
+                member = self._checked.constructor_ref_for(nid)
+                if member is not None:
+                    member_decl_id = member.owner_decl_node_id
+                else:
+                    operand_type = self._node_type(operand.node_id)
+                    assert isinstance(operand_type, EnumType)
+                    member_decl_id = self._type_table.enum_member_names(operand_type)[
+                        variant
+                    ].decl_id
                 return IrNominalIs(
                     location=self._loc(span),
-                    nominal=NominalId(member.decl_id),
+                    nominal=NominalId(member_decl_id),
                     value=self.lower_expr(operand),
                     negated=negated,
                 )

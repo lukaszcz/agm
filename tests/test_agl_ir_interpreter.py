@@ -911,6 +911,25 @@ class TestDefensiveErrors:
         with pytest.raises(InvalidIrError, match="IrNominalIs"):
             IrInterpreter(prog).run()
 
+    def test_ir_nominal_cast_on_non_record_raises(self) -> None:
+        """IrNominalCast accepts only record values from checked enum slots."""
+        from agm.agl.ir import IrNominalCast, NominalId
+
+        prog = _make_program(
+            (
+                IrNominalCast(
+                    _LOC,
+                    nominal=NominalId(1),
+                    value=IrConstInt(_LOC, 1),
+                    optional=False,
+                    source_label="int",
+                    target_label="Record",
+                ),
+            ),
+        )
+        with pytest.raises(InvalidIrError, match="IrNominalCast"):
+            IrInterpreter(prog).run()
+
 
 # ---------------------------------------------------------------------------
 # Enum member dispatch

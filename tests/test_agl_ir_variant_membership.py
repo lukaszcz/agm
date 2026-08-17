@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from agm.agl.ir.ids import Location, NominalId, SourceId
-from agm.agl.ir.nodes import IrBind, IrConstInt, IrNominalIs, IrSequence
+from agm.agl.ir.nodes import IrBind, IrConstInt, IrNominalCast, IrNominalIs, IrSequence
 from agm.agl.ir.program import (
     ExecutableModule,
     ExecutableProgram,
@@ -142,7 +142,7 @@ let r = c is not Blue
 
 
 def _variant_is_program(
-    node: IrNominalIs, nominals: dict[NominalId, NominalDescriptor]
+    node: IrNominalIs | IrNominalCast, nominals: dict[NominalId, NominalDescriptor]
 ) -> ExecutableProgram:
     sid = SourceId(0)
     return ExecutableProgram(
@@ -164,6 +164,19 @@ def test_validate_cheap_tier_skips_nominal_checks_for_ir_variant_is() -> None:
         negated=False,
     )
     validate_ir(_variant_is_program(node, {}), deep=False)  # no exception
+
+
+def test_validate_cheap_tier_skips_nominal_checks_for_ir_nominal_cast() -> None:
+    loc = Location(source_id=SourceId(0), start_offset=0, end_offset=1, start_line=1, start_col=0)
+    node = IrNominalCast(
+        location=loc,
+        nominal=NominalId(1),
+        value=IrConstInt(loc, 1),
+        optional=False,
+        source_label="int",
+        target_label="Record",
+    )
+    validate_ir(_variant_is_program(node, {}), deep=False)
 
 
 def test_validate_rejects_ir_variant_is_with_unknown_nominal() -> None:

@@ -97,7 +97,9 @@ from agm.agl.ir.nodes import (
     IrMakeJsonObject,
     IrMakeRecord,
     IrNominalCaseKey,
+    IrNominalCast,
     IrNominalIs,
+    IrOptionSome,
     IrOr,
     IrParseJson,
     IrPrint,
@@ -693,12 +695,8 @@ class IrInterpreter:
 
     def _on_cast_failure(
         self, failure_mode: ConversionFailureMode, exc: AglCastConversion
-    ) -> BoolValue:
-        """Handle a fallible-cast failure per the conversion failure mode.
-
-        ``RAISE_CAST_ERROR`` (``as``) raises a ``CastError`` matching the legacy
-        field shapes; ``RETURN_BOOL`` (``as?``) yields ``BoolValue(False)``.
-        """
+    ) -> Value:
+        """Handle a fallible-cast failure per the conversion failure mode."""
         match failure_mode:
             case ConversionFailureMode.RAISE_CAST_ERROR:
                 raise AglRaise(
@@ -711,10 +709,18 @@ class IrInterpreter:
                         raw=TextValue(exc.raw),
                     ),
                 )
-            case ConversionFailureMode.RETURN_BOOL:
-                return BoolValue(False)
+            case ConversionFailureMode.RETURN_OPTION:
+                return none_value()
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
+
+    @staticmethod
+    def _cast_raw(value: Value) -> str:
+        """Render a failed nominal cast without letting a cycle mask CastError."""
+        try:
+            return render_value(value)
+        except AglCyclicValue:
+            return "<cyclic value>"
 
     def _get_closure_for(self, fn_id: FunctionId) -> IrClosureValue:
         """Look up a direct-call closure in its lexical evaluation frame."""
@@ -1428,6 +1434,36 @@ class IrInterpreter:
             case IrMakeConstructor(nominal=nominal, display_name=display_name):
                 return ConstructorValue(nominal=nominal, display_name=display_name)
 
+            case IrNominalCast(
+                nominal=nominal,
+                value=val_expr,
+                optional=optional,
+                source_label=source_label,
+                target_label=target_label,
+            ):
+                value = self._eval(val_expr)
+                if not isinstance(value, RecordValue):
+                    raise InvalidIrError(
+                        f"IrNominalCast: value is not a record, got {type(value).__name__}"
+                    )
+                if value.nominal == nominal:
+                    return some_value(value) if optional else value
+                if optional:
+                    return none_value()
+                raise AglRaise(
+                    _make_exc_value(
+                        "CastError",
+                        f"cannot cast '{source_label}' to '{target_label}'",
+                        nominals=self._program.builtin_nominals,
+                        source_type=TextValue(source_label),
+                        target_type=TextValue(target_label),
+                        raw=TextValue(self._cast_raw(value)),
+                    )
+                )
+
+            case IrOptionSome(value=val_expr):
+                return some_value(self._eval(val_expr))
+
             case IrNominalIs(nominal=nominal, value=val_expr, negated=negated):
                 value = self._eval(val_expr)
                 if not isinstance(value, (RecordValue, ExceptionValue)):
@@ -1443,17 +1479,14 @@ class IrInterpreter:
                 except AglCastConversion as exc:
                     return self._on_cast_failure(failure_mode, exc)
                 except AglCyclicValue:
-                    # `as` (RAISE_CAST_ERROR) raises the catchable CyclicValueError.
-                    # `as?` (RETURN_BOOL) is a trial conversion: a cyclic value fails
-                    # the same as any other unconvertible source, so it yields False
-                    # rather than raising — see the lowerer's `as?` short-circuit
-                    # comment for why RENDER/JSON casts reach here instead of
-                    # skipping straight to True.
-                    if failure_mode is ConversionFailureMode.RETURN_BOOL:
-                        return BoolValue(False)
+                    # A nullable cast treats a cycle encountered by a conversion
+                    # walk as a failed conversion; ordinary `as` still reports the
+                    # catchable CyclicValueError.
+                    if failure_mode is ConversionFailureMode.RETURN_OPTION:
+                        return none_value()
                     raise self._cyclic_failure()
-                if failure_mode is ConversionFailureMode.RETURN_BOOL:
-                    return BoolValue(True)
+                if failure_mode is ConversionFailureMode.RETURN_OPTION:
+                    return some_value(converted)
                 return converted
 
             case IrIf(branches=branches, has_else=has_else):

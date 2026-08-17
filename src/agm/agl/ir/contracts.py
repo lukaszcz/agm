@@ -395,7 +395,7 @@ class ConversionFailureMode(enum.Enum):
     """What a failed fallible conversion does at runtime."""
 
     RAISE_CAST_ERROR = "raise_cast_error"  # `as`
-    RETURN_BOOL = "return_bool"  # `as?` (fallible)
+    RETURN_OPTION = "return_option"  # `as?`
 
 
 @dataclass(frozen=True, slots=True)

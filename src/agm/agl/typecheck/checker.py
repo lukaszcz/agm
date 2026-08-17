@@ -103,6 +103,7 @@ from agm.agl.semantics.types import (
     UnitType,
     contains_inference_var,
     free_type_vars,
+    option_type,
     reroot_type,
     substitute,
 )
@@ -2039,7 +2040,7 @@ class _Checker:
                     span=node.span,
                 )
         self._record_cast_spec(node.node_id, CastSpec(target_type=target_type, kind=kind))
-        return BoolType() if node.test_only else target_type
+        return option_type(target_type) if node.test_only else target_type
 
     # --- Call dispatch ---
 
@@ -3963,15 +3964,51 @@ class _Checker:
                 )
             enum_type = expr_type
             constructor = self._constructor_ref_for(node.node_id)
-            if constructor is None or not constructor.matches(enum_type, node.variant):
+            if constructor is None:
                 self._check_variant_qualification(
                     qualifier=node.qualifier,
                     variant=node.variant,
                     enum_type=enum_type,
                     span=node.span,
                 )
-            if node.variant not in self._env.type_table.enum_member_names(enum_type):
+                if node.variant not in self._env.type_table.enum_member_names(enum_type):
+                    raise _variant_not_in_enum(node.variant, enum_type, node.span)
+                return BoolType()
+
+            member = next(
+                (
+                    candidate
+                    for candidate in self._env.type_table.enum_members(enum_type)
+                    if candidate.decl_id == constructor.owner_decl_node_id
+                ),
+                None,
+            )
+            if member is None:
                 raise _variant_not_in_enum(node.variant, enum_type, node.span)
+
+            # An owner-applied member spelling resolves to its concrete record
+            # handle. Members that capture no owner type parameters therefore
+            # remain valid across owner instantiations; capturing members must
+            # match the subject enum's concrete member handle.
+            qualified_member = (
+                None
+                if node.qualifier is None
+                else self._env.resolve_owner_applied_inline_member_type(
+                    node.qualifier,
+                    constructor.owner_name,
+                    type_vars=self._current_type_vars,
+                    span=node.span,
+                )
+            )
+            if qualified_member is not None and qualified_member != member:
+                raise _variant_not_in_enum(node.variant, enum_type, node.span)
+            if qualified_member is None:
+                self._check_variant_qualification(
+                    qualifier=node.qualifier,
+                    variant=node.variant,
+                    enum_type=enum_type,
+                    span=node.span,
+                )
             return BoolType()
 
     def _qualified_constructor_typed_call_error(self, span: SourceSpan) -> AglTypeError:
@@ -4005,6 +4042,18 @@ class _Checker:
                         span=span,
                     )
                 assert isinstance(local_enum, EnumType)
+                type_args = qualifier.segments[-1].type_args
+                if type_args is not None:
+                    local_enum = EnumType(
+                        name=local_enum.name,
+                        type_args=tuple(
+                            self._env.resolve_type_expr(type_arg, span=span)
+                            for type_arg in type_args
+                        ),
+                        module_id=local_enum.module_id,
+                        scope_path=local_enum.scope_path,
+                        decl_id=local_enum.decl_id,
+                    )
                 # A generic enum's bare name denotes its uninstantiated
                 # template, which legitimately qualifies any instantiation of
                 # the SAME declaration. Identity is the declaration, never the

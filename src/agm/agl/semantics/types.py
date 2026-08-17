@@ -1077,6 +1077,16 @@ COMPATIBILITY_PRELUDE_TYPE_NAMES: frozenset[str] = frozenset(
 # ---------------------------------------------------------------------------
 
 
+def option_type(value_type: Type) -> EnumType:
+    """Return the standard-library ``Option`` instantiation for *value_type*."""
+    return EnumType(
+        name="Option",
+        type_args=(value_type,),
+        module_id=STD_CORE_ID,
+        decl_id=_reserved_id("Option"),
+    )
+
+
 class CastKind(_enum.Enum):
     """Classification of a cast operation.
 
@@ -1088,6 +1098,8 @@ class CastKind(_enum.Enum):
     TOTAL_NOOP = "TOTAL_NOOP"  # source already assignable to target (no-op/widen)
     TOTAL_RENDER = "TOTAL_RENDER"  # render data value to text; a cyclic walk can fail
     TOTAL_JSON = "TOTAL_JSON"  # convert to json; a cyclic walk can fail
+    IDENTITY_UPCAST = "IDENTITY_UPCAST"  # member record → containing enum
+    NOMINAL_DOWNCAST = "NOMINAL_DOWNCAST"  # enum → one of its member records
     FALLIBLE = "FALLIBLE"  # runtime-fallible conversion
     STATIC_ERROR = "STATIC_ERROR"  # statically impossible — raise AglTypeError
 

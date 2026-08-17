@@ -1,0 +1,37 @@
+# `as?` returns an Option containing the identity-cast value on success and
+# None on a failed nominal downcast. It also accepts a member-to-enum upcast.
+# A concrete member that captures no owner type parameters remains the same
+# member across owner instantiations, so it is valid in `is` tests.
+record Marker()
+record Node(children: array[Node])
+
+enum Tree[T] = ::Marker | Leaf | Node(value: T)
+
+enum Shape
+  | Circle
+  | Miss(nodes: array[Node])
+
+program def main() -> unit =
+  let leaf: Tree[int] = Tree::Leaf
+  let node: Tree[int] = Tree[int]::Node(value = 7)
+  print(leaf is Tree[text]::Leaf)
+
+  case node as? Tree[int]::Node of
+    | Some(value = _ as n) => print n.value
+    | None => print "missing node"
+  case leaf as? Tree[int]::Node of
+    | Some(value = _) => print "unexpected node"
+    | None => print "no node"
+  case Tree::Leaf as? Tree[int] of
+    | Some(value = _) => print "upcast"
+    | None => print "missing upcast"
+
+  var nodes: array[Node] = [Node(children = [])]
+  let cyclic = Node(children = nodes)
+  nodes[0] := cyclic
+  let shape: Shape = Miss(nodes = nodes)
+  try
+    let _ = shape as Shape::Circle
+    print "unexpected cast"
+  catch CastError as e =>
+    print "%{e.source_type} -> %{e.target_type}: %{e.raw}"

@@ -17,4 +17,6 @@ program def main() -> unit =
   let encoded: json = claude as json
   let decoded: Agent = encoded as Agent
   print (decoded == claude)
-  print (encoded as? Agent)
+  case encoded as? Agent of
+    | Some(_) => print true
+    | None => print false

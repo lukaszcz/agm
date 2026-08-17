@@ -30,18 +30,36 @@ def is_std_package_name(name: str) -> bool:
     return name == STD_PACKAGE_NAME
 
 
-def unmet_std_requirement(requirement: DependencySpec) -> str | None:
-    """Describe why a ``std`` dependency exceeds the running AGM, or ``None``.
+def std_compatibility_upper_bound(requirement: DependencySpec) -> semver.Version:
+    """Return the exclusive AGM compatibility bound for a ``std`` requirement.
 
-    ``std`` is shipped by the AGM binary rather than stored as an installed
-    package, so a ``std`` dependency states a minimum AGM version. Callers
+    Pre-1.0 releases are compatible within one minor line; stable releases
+    are compatible within one major line.
+    """
+
+    version = requirement.version
+    if version.major == 0:
+        return semver.Version(0, version.minor + 1, 0)
+    return semver.Version(version.major + 1, 0, 0)
+
+
+def unmet_std_requirement(requirement: DependencySpec) -> str | None:
+    """Describe an incompatible ``std`` dependency, or return ``None``.
+
+    ``std`` is shipped by AGM rather than resolved like an ordinary package.
+    Its version is a minimum within one compatible AGM release line. Callers
     prefix the returned clause with their own subject and raise their own
     error type.
     """
 
-    if requirement.version <= semver.Version.parse(AGM_VERSION):
+    running = semver.Version.parse(AGM_VERSION)
+    upper_bound = std_compatibility_upper_bound(requirement)
+    if requirement.version <= running < upper_bound:
         return None
-    return f"requires AGM at least {requirement.version} via std, but running AGM is {AGM_VERSION}"
+    return (
+        f"requires AGM >= {requirement.version}, < {upper_bound} via std, "
+        f"but running AGM is {AGM_VERSION}"
+    )
 
 
 @dataclass(frozen=True, slots=True)

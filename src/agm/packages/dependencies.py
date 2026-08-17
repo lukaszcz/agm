@@ -61,8 +61,8 @@ def _validate_package_dependencies(package: PackageInfo, state: _CheckState) -> 
     state.checking.add(root)
     try:
         for name, requirement in package.manifest.dependencies.items():
-            # The standard library is supplied by the running AGM binary
-            # rather than the package store.
+            # The standard library is supplied by a compatible running AGM
+            # release rather than the package store.
             if is_std_package_name(name):
                 unmet = unmet_std_requirement(requirement)
                 if unmet is not None:

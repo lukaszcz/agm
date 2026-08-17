@@ -122,6 +122,26 @@ def test_create_command_reports_validation_or_archive_errors(
         create_command.run(PkgCreateArgs(directory=str(package.root), output="out.agmpkg"))
 
 
+def test_create_rejects_an_older_incompatible_std_before_archive_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = _package(tmp_path)
+    (package.root / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n\n[dependencies]\nstd = "0.1.0"\n',
+        encoding="utf-8",
+    )
+    (package.root / "alpha" / "main.agl").write_text(
+        "program def main() -> unit = ()\n", encoding="utf-8"
+    )
+    destination = tmp_path / "alpha.agmpkg"
+    monkeypatch.setattr(create_command, "current_config_context", lambda: _context(tmp_path))
+
+    with pytest.raises(SystemExit):
+        create_command.run(PkgCreateArgs(directory=str(package.root), output=str(destination)))
+
+    assert not destination.exists()
+
+
 def test_install_command_delegates_and_renders_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -467,7 +487,7 @@ def test_info_command_renders_metadata_and_reports_unknown_package(
     assert "keywords: agents, tools" in output
     assert "commands:" in output
     assert "run: alpha/main::main (Run Alpha)" in output
-    assert f"requires std >= {AGM_VERSION}: running AGM {AGM_VERSION}" in output
+    assert f"requires std >= {AGM_VERSION}, < 0.3.0: running AGM {AGM_VERSION}" in output
     assert "requires bravo >= 1.0.0: missing" in output
     assert "requires charlie >= 2.0.0: active 1.0.0 (unsatisfied)" in output
     assert "requires delta >= 1.0.0: editable 1.0.0" in output
@@ -483,7 +503,7 @@ def test_info_command_renders_metadata_and_reports_unknown_package(
     )
     info_command.run(PkgInfoArgs("alpha"))
     assert (
-        f"requires std >= {newer_agm}: running AGM {AGM_VERSION} (unsatisfied)"
+        f"requires std >= {newer_agm}, < 2.0.0: running AGM {AGM_VERSION} (unsatisfied)"
         in capsys.readouterr().out
     )
 

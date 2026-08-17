@@ -48,7 +48,7 @@ def _restore_dry_run() -> Generator[None, None, None]:
 
 
 def _newer_agm_requirement() -> str:
-    """Return a valid minimum version no running AGM release can satisfy."""
+    """Return a valid std requirement no running AGM release can satisfy."""
     return str(semver.Version.parse(AGM_VERSION).bump_major())
 
 
@@ -437,6 +437,22 @@ def test_install_refuses_a_package_requiring_a_newer_agm(tmp_path: Path) -> None
         install_directory(source, home=home, env={})
 
     assert not (home / ".agm" / "packages" / "alpha").exists()
+
+
+def test_install_rejects_an_older_incompatible_std_before_publication(tmp_path: Path) -> None:
+    source = _package(
+        tmp_path / "source",
+        "alpha",
+        "1.0.0",
+        '\n[dependencies]\nstd = "0.1.0"\n',
+    )
+    home = tmp_path / "home"
+
+    with pytest.raises(PackageInstallError, match="AGM"):
+        install_directory(source, home=home, env={})
+
+    assert not (home / ".agm" / "packages" / "alpha").exists()
+    assert load_activation_index(home=home, env={}) == ActivationIndex()
 
 
 def test_install_accepts_a_package_requiring_the_running_agm_without_active_stdlib(

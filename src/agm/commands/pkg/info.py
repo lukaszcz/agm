@@ -13,7 +13,11 @@ from agm.packages.activation import (
     resolve_active_package,
 )
 from agm.packages.manifest import ManifestError
-from agm.packages.model import is_std_package_name, unmet_std_requirement
+from agm.packages.model import (
+    is_std_package_name,
+    std_compatibility_upper_bound,
+    unmet_std_requirement,
+)
 from agm.version import AGM_VERSION
 
 
@@ -50,7 +54,9 @@ def run(args: PkgInfoArgs) -> None:
             description = "" if command.description is None else f" ({command.description})"
             print(f"  {path}: {command.program}{description}")
     for name, dependency in sorted(manifest.dependencies.items()):
+        requirement = f">= {dependency.version}"
         if is_std_package_name(name):
+            requirement += f", < {std_compatibility_upper_bound(dependency)}"
             status = f"running AGM {AGM_VERSION}"
             if unmet_std_requirement(dependency) is not None:
                 status += " (unsatisfied)"
@@ -63,4 +69,4 @@ def run(args: PkgInfoArgs) -> None:
             else:
                 kind = "editable" if selected.editable is not None else "active"
                 status = f"{kind} {active_versions[name]}"
-        print(f"requires {name} >= {dependency.version}: {status}")
+        print(f"requires {name} {requirement}: {status}")

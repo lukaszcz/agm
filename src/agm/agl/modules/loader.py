@@ -4,7 +4,7 @@ This module provides :func:`load_graph`, which drives the full load-and-graph
 phase of the AgL module system:
 
 1. Parse the entry source (inline ``-c`` or a file on disk).
-2. Extract top-level import, use, and export declarations.
+2. Extract import, use, and export declarations from the module and its named scope regions.
 3. BFS over transitive import and export declarations, resolving each module id
    to its canonical file via :func:`~agm.agl.modules.resolver.resolve_module` (or
    :func:`~agm.agl.modules.resolver.expand_wildcard` for ``/*`` imports),
@@ -64,14 +64,14 @@ class LoadedModule:
         The :class:`~agm.agl.syntax.spans.SourceId` stamped on every span in
         ``program``.
     imports:
-        :class:`~agm.agl.syntax.nodes.ImportDecl` nodes extracted from
-        ``program.body.items``.
+        :class:`~agm.agl.syntax.nodes.ImportDecl` nodes extracted from the
+        module root and named scope regions.
     uses:
-        :class:`~agm.agl.syntax.nodes.UseDecl` nodes extracted from
-        ``program.body.items``. They do not create module-graph edges.
+        :class:`~agm.agl.syntax.nodes.UseDecl` nodes extracted from the module
+        root and named scope regions. They do not create module-graph edges.
     export_decls:
-        Top-level :class:`~agm.agl.syntax.nodes.ExportDecl` nodes extracted
-        from ``program.body.items``.
+        :class:`~agm.agl.syntax.nodes.ExportDecl` nodes extracted from the
+        module root and named scope regions.
     spaced_qualifiers:
         Lexical advisories for qualifier runs this module's source separated
         from their ``::`` by whitespace — see

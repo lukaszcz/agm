@@ -808,6 +808,22 @@ def test_type_arguments_are_rejected_on_imported_route_and_scope_segments(
         )
 
 
+def test_hidden_generic_does_not_validate_an_unrelated_plain_scope(tmp_path: Path) -> None:
+    with pytest.raises(AglScopeError, match="Type arguments cannot be applied"):
+        _entry_resolution(
+            tmp_path,
+            {
+                "entry": (
+                    "import one/shared\n"
+                    "import two/shared hiding Box\n"
+                    "shared::Box[int]::describe()"
+                ),
+                "one/shared": "scope Box\ndef describe() -> int = 7\nend Box",
+                "two/shared": "record Box[T](value: T)",
+            },
+        )
+
+
 def test_type_arguments_on_an_imported_generic_type_scope_still_resolve(tmp_path: Path) -> None:
     """``lib::Box[int]::describe()`` keeps working: ``Box`` is a real generic type."""
     resolution = _entry_resolution(

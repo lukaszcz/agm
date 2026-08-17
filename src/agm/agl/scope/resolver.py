@@ -3620,34 +3620,22 @@ class _Resolver:
                 span=route_segment.span,
             )
         route = tuple(part for part in route_segment.name.split("/"))
-        candidate_modules = qualifier_candidates(
+        atom_path = (*tuple(segment.name for segment in qualifier.segments[1:]), name)
+        route_members = qualifier_members(
             self._import_env, route, anchored=qualifier.anchored
         )
         cumulative: ScopePath = ()
         for segment in qualifier.segments[1:]:
             cumulative = (*cumulative, segment.name)
-            if segment.type_args is not None:
-                direct_type = any(
-                    (module, _bare_atom(cumulative)) in self._cross_module_type_scopes
-                    for module in candidate_modules
+            if segment.type_args is not None and not any(
+                members.get(_bare_atom(cumulative)) in self._cross_module_type_scopes
+                and members.get(_bare_atom(atom_path)) is not None
+                for _, members in route_members
+            ):
+                raise AglScopeError(
+                    f"Type arguments cannot be applied to scope segment '{segment.name}'.",
+                    span=segment.span,
                 )
-                resolved_origin = resolve_qualified(
-                    self._import_env,
-                    route,
-                    _bare_atom(cumulative),
-                    anchored=qualifier.anchored,
-                )
-                origin = (
-                    resolved_origin.qname
-                    if isinstance(resolved_origin, QualResolutionFound)
-                    else None
-                )
-                if not direct_type and origin not in self._cross_module_type_scopes:
-                    raise AglScopeError(
-                        f"Type arguments cannot be applied to scope segment '{segment.name}'.",
-                        span=segment.span,
-                    )
-        atom_path = (*cumulative, name)
         atom: NameAtom = atom_path[0] if len(atom_path) == 1 else atom_path
         return resolve_qualified_member(
             self._import_env,

@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from agm.agl.eval.ir_interpreter import IrInterpreter
+    from agm.agl.ir.builtin_vars import BuiltinVarKey
     from agm.agl.ir.ids import SymbolId
     from agm.agl.ir.program import IrParam
     from agm.agl.modules.ids import ModuleId
@@ -164,6 +165,8 @@ class ReplSession:
         shell_exec_timeout: float | None = None,
         trace_path: "Path | None" = None,
         engine_base: "Mapping[str, Value] | None" = None,
+        builtin_var_seeds: "Mapping[BuiltinVarKey, Value] | None" = None,
+        process_environment: "Mapping[str, str] | None" = None,
         setting_overrides: "Mapping[str, SettingOverride] | None" = None,
         host_settings_policy: "HostSettingsPolicy | None" = None,
         cwd: "Path | None" = None,
@@ -184,6 +187,11 @@ class ReplSession:
         from agm.core.parse import format_timeout
 
         self._default_stdlib = default_stdlib
+        self._process_environment = (
+            dict(process_environment) if process_environment is not None else None
+        )
+        self._builtin_var_seed: dict[BuiltinVarKey, Value] = {}
+        self._builtin_var_values: dict[BuiltinVarKey, Value] = {}
         self._params_config_loader = (
             params_config_loader if params_config_loader is not None else _no_params_config_loader
         )
@@ -206,6 +214,15 @@ class ReplSession:
         # an engine key touches only this map and its ``Value`` conversion in
         # :meth:`_engine_snapshot`.
         self._engine_seed: dict[str, Value] = dict(engine_base) if engine_base is not None else {}
+        if builtin_var_seeds is not None:
+            from agm.agl.ir.builtin_vars import is_engine_builtin_var_key
+
+            for key, value in builtin_var_seeds.items():
+                if is_engine_builtin_var_key(key):
+                    self._engine_seed[key[2]] = value
+                else:
+                    self._builtin_var_seed[key] = value
+        self._builtin_var_values = dict(self._builtin_var_seed)
         # Host-supplied AgL source overrides (currently only ``default-agent``
         # from ``--agent``/``[exec] default-agent``) spliced into the module
         # graph the FIRST time it loads ``std/config`` (see
@@ -1002,6 +1019,7 @@ class ReplSession:
             self._current["strict-json"] = snapshot["strict-json"]
         self._default_loop_limit = interp.loop_limit
         self._shell_exec_timeout = interp.shell_exec_timeout
+        self._builtin_var_values = interp.builtin_vars
 
     def _pre_eval_param_values(
         self, params: tuple["IrParam", ...], warnings: list[Diagnostic]
@@ -1697,6 +1715,7 @@ class ReplSession:
         self._default_loop_limit = self._seeded_loop_limit()
         self._shell_exec_timeout = self._seeded_timeout_seconds()
         self._trace_path = self._initial_trace_path
+        self._builtin_var_values = dict(self._builtin_var_seed)
         # Clear module state.
         self._roots = None
         self._loaded_lib_modules = {}

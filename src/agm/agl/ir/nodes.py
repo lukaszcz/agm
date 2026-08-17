@@ -27,6 +27,7 @@ import enum
 from dataclasses import dataclass
 from typing import TypeAlias
 
+from agm.agl.ir.builtin_vars import BuiltinVarKey
 from agm.agl.ir.contracts import ConversionFailureMode, ConversionRecipe
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SymbolId
 from agm.agl.ir.operations import (
@@ -1090,27 +1091,25 @@ class IrExec:
 
 @dataclass(frozen=True, slots=True)
 class IrBuiltinLoad:
-    """IR read of a ``builtin var`` engine setting from its interpreter register.
+    """IR read of a host-backed ``builtin var`` binding.
 
-    ``key`` is the engine-key name (e.g. ``"max-iters"``).  Evaluating yields the
-    current register value as an AgL ``Value``.
+    ``key`` identifies the declaration by its owning module, scope path, and name.
     """
 
     location: Location
-    key: str
+    key: BuiltinVarKey | str
 
 
 @dataclass(frozen=True, slots=True)
 class IrBuiltinStore:
-    """IR write of a ``builtin var`` engine setting to its interpreter register.
+    """IR write of a host-backed ``builtin var`` binding.
 
-    ``key`` is the engine-key name; ``value`` is the new value.  For the
-    runtime-live keys the store also applies the corresponding live engine
-    effect (e.g. capping unguarded loops for ``max-iters``).  Yields ``unit``.
+    ``key`` identifies the declaration by its owning module, scope path, and name.
+    Root ``std/config`` engine keys additionally apply their live engine effect.
     """
 
     location: Location
-    key: str
+    key: BuiltinVarKey | str
     value: "IrExpr"
 
 

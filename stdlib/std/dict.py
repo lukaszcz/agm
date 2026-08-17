@@ -41,6 +41,10 @@ def remove_option(values: object, key: str) -> object:
     return Option.Some(value=values.pop(key)) if key in values else _none()
 
 
+def set(values: object, key: str, value: object) -> None:
+    values[key] = value
+
+
 def contains(values: object, key: str) -> bool:
     return key in values
 
@@ -110,6 +114,7 @@ __all__ = [
     "merge_in_place",
     "remove",
     "remove_option",
+    "set",
     "size",
     "values",
 ]

@@ -160,6 +160,9 @@ STD_OPTION_ID: ModuleId = ModuleId(segments=("std", "option"))
 #: (``std/config``), which declares the engine keys as ``builtin var`` bindings.
 STD_CONFIG_ID: ModuleId = ModuleId(segments=("std", "config"))
 
+#: Logical module id for the ambient process-environment standard library.
+STD_ENV_ID: ModuleId = ModuleId(segments=("std", "env"))
+
 #: Optional standard-library registry of modules that declare methods on
 #: structural and scalar builtin receivers. The loader follows this module as
 #: an ambient dependency: its methods are selectable everywhere, while its

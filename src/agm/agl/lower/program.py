@@ -9,8 +9,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from agm.agl.ir.builtin_vars import BuiltinVarKey, builtin_var_key
 from agm.agl.ir.contracts import ContractPayload
 from agm.agl.ir.ids import NominalId, SourceId
+from agm.agl.ir.nodes import IrExpr
 from agm.agl.ir.program import (
     DryRunEntry,
     ExecutableModule,
@@ -238,10 +240,22 @@ def lower_program(
             initializers=initializers,
         )
 
-    # Lower declared engine defaults separately from program initializers. They
-    # are constant expressions evaluated only while an interpreter is seeded.
-    builtin_setting_defaults = {
-        item.name: lowerer.lower_expr(item.default)
+    # Inventory every declaration, including ones without defaults and ones
+    # retained from earlier REPL entries, so structural validation can verify
+    # the module, scope path, and name of each structured host-backed key.
+    builtin_var_declarations = frozenset(
+        builtin_var_key(mid, (segment.name for segment in item.scope_path), item.name)
+        for mid, checked_module in checked.modules.items()
+        for item in static_items(checked_module.resolved.program.body.items)
+        if isinstance(item, BuiltinVarDecl)
+    )
+
+    # Lower declared builtin-var defaults separately from program initializers.
+    # They are constant expressions evaluated only while an interpreter is seeded.
+    builtin_setting_defaults: dict[BuiltinVarKey | str, IrExpr] = {
+        builtin_var_key(
+            mid, (segment.name for segment in item.scope_path), item.name
+        ): lowerer.lower_expr(item.default)
         for mid, lowerer in module_lowerers.items()
         for item in static_items(checked.modules[mid].resolved.program.body.items)
         if isinstance(item, BuiltinVarDecl) and item.default is not None
@@ -303,6 +317,7 @@ def lower_program(
         contracts=dict(link.contracts),
         dry_run_inventory=dry_run_inventory,
         builtin_nominals=link.builtin_nominals,
+        builtin_var_declarations=builtin_var_declarations,
         builtin_setting_defaults=builtin_setting_defaults,
     )
     if self_validation_enabled():

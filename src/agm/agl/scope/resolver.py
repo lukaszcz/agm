@@ -49,7 +49,7 @@ from functools import partial
 from typing import TYPE_CHECKING, cast
 
 from agm.agl.diagnostics import static_root_message
-from agm.agl.modules.ids import STD_CONFIG_ID, STD_CORE_ID, ModuleId, spell_declaration
+from agm.agl.modules.ids import STD_CORE_ID, ModuleId, spell_declaration
 from agm.agl.scope.imports import (
     NameAtom,
     QName,
@@ -279,6 +279,7 @@ class _Resolver:
         cross_module_type_scopes: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
         allow_root_statements: bool = False,
         is_entry_module: bool = False,
+        is_standard_library_module: bool = False,
         repl_session_scope: ScopeNode | None = None,
         repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
         repl_session_type_paths: Mapping[ScopePath, str | None] | None = None,
@@ -314,6 +315,7 @@ class _Resolver:
         # statements. File and inline exec entries use static roots.
         self._allow_root_statements = allow_root_statements
         self._is_entry_module = is_entry_module
+        self._is_standard_library_module = is_standard_library_module
         # Optional REPL session scope for ``::name`` self-ref fallback.
         # When set, ``_lookup_own_root`` falls back to this scope for names not
         # in the entry's own root scope, allowing ``::name`` to resolve to a
@@ -1308,13 +1310,13 @@ class _Resolver:
             self._current_scope().define(name, ref)
 
     def _resolve_builtin_var(self, node: BuiltinVarDecl) -> None:
-        """Resolve a standard-library engine setting into a mutable register binding.
+        """Resolve a standard-library host-backed mutable binding.
 
-        ``builtin var`` is reserved to the canonical ``std/config`` module, but
+        A ``builtin var`` may be declared by any standard-library module and
         is otherwise a member like any other: legal at the module root and
         inside a named scope region (both keep ``_at_root`` set), rejected
-        only inside a nested block. The typecheck pass then validates that the
-        name is a known engine key with its canonical type.
+        only inside a nested block. The typecheck pass reserves engine-setting
+        names and types to ``std/config``.
         """
         if not self._at_root:
             raise AglScopeError(
@@ -1322,10 +1324,10 @@ class _Resolver:
                 f"not inside a nested block (found 'builtin var {node.name}' here).",
                 span=node.span,
             )
-        if self._module_id != STD_CONFIG_ID:
+        if not self._is_standard_library_module:
             raise AglScopeError(
-                "'builtin var' declarations are only allowed in the standard-library "
-                "module 'std/config'.",
+                "'builtin var' declarations are only allowed in standard-library modules "
+                "(including std/config).",
                 span=node.span,
             )
         ref = BindingRef(

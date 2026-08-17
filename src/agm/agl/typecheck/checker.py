@@ -1152,27 +1152,25 @@ class _Checker:
         assert_never(schema_type)  # pragma: no cover
 
     def _check_builtin_var(self, node: BuiltinVarDecl) -> None:
-        """Check a ``builtin var`` declaration against the engine-key registry.
-
-        The name whitelist that gates every builtin declaration applies here: a
-        ``builtin var`` must name a known engine key, and its declared type must
-        match the key's canonical type.  The canonical engine-key type is
-        recorded as the binding type.
-        """
+        """Check a host-backed binding and preserve ``std/config`` engine rules."""
+        from agm.agl.modules.ids import STD_CONFIG_ID
         from agm.agl.semantics.engine_keys import get_engine_key_type
 
-        key_type = get_engine_key_type(node.name)
-        if key_type is None:
-            raise AglTypeError(
-                f"Unknown builtin var '{node.name}'.",
-                span=node.span,
-            )
         declared = self._env.resolve_type_expr(node.type_ann, span=node.span, type_vars=frozenset())
-        if declared != key_type:
-            raise AglTypeError(
-                f"builtin var '{node.name}' must have type '{key_type!r}', got '{declared!r}'.",
-                span=node.span,
-            )
+        if self._module_id == STD_CONFIG_ID and not node.scope_path:
+            key_type = get_engine_key_type(node.name)
+            if key_type is None:
+                raise AglTypeError(
+                    f"Unknown builtin var '{node.name}'.",
+                    span=node.span,
+                )
+            if declared != key_type:
+                raise AglTypeError(
+                    f"builtin var '{node.name}' must have type '{key_type!r}', got '{declared!r}'.",
+                    span=node.span,
+                )
+        else:
+            key_type = declared
         self._env.set_binding_type(node.node_id, key_type)
         if node.default is not None:
             default_type = self._check_boundary_expr(node.default, expected=key_type)

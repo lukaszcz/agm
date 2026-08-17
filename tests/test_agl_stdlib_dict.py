@@ -30,6 +30,8 @@ class _DictCompanion(Protocol):
 
     def remove_option(self, values: object, key: str) -> object: ...
 
+    def set(self, values: object, key: str, value: object) -> None: ...
+
     def merge(self, values: object, other: object) -> object: ...
 
     def merge_in_place(self, values: object, other: object) -> None: ...
@@ -100,6 +102,16 @@ def test_dict_companion_get_and_remove_options_preserve_the_live_dict() -> None:
         _OPTION, "Option", "None", {}
     )
     assert _entries(values) == {}
+
+
+def test_dict_companion_set_updates_the_live_dict() -> None:
+    companion = _dict_companion()
+    values = AglDictView(DictValue({"one": IntValue(1)}))
+
+    companion.set(values, "two", 2)
+    companion.set(values, "one", 10)
+
+    assert _entries(values) == {"one": 10, "two": 2}
 
 
 def test_dict_companion_mutating_operations_update_boundary_views() -> None:

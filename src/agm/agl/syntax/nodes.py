@@ -1294,13 +1294,13 @@ class BuiltinVarDecl:
     MUTABLE binding.
 
     Mirrors ``builtin def`` / ``builtin record`` (a host-provided declaration with
-    a signature but no body).  A ``builtin var`` names an engine setting whose
-    value lives in an interpreter register: programs read it as an ordinary value
-    and assign it with ``:=``.  An optional constant initializer supplies the
-    engine default when the host has not seeded the key; the declaration itself
-    still introduces no program initializer.
+    a signature but no body). A ``builtin var`` names a host-backed value identified
+    by its defining module, scope path, and name: programs read it as an ordinary value
+    and assign it with ``:=``. An optional constant initializer supplies the value when the host
+    has not seeded that identity; the declaration itself still introduces no program
+    initializer. ``std/config`` reserves its bindings for named engine settings.
 
-    ``name``      — the declared engine key (kebab-case, e.g. ``"max-iters"``).
+    ``name``      — the declared binding name (for example, ``"max-iters"``).
     ``type_ann``  — the mandatory declared type.
     ``default``   — an optional constant expression of that type.
 

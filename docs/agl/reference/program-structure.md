@@ -26,7 +26,7 @@ item          ::= import_decl                     (* header position only *)
              | param_decl                          (* root or scope region *)
              | program_func_def                    (* root or scope region *)
              | infix_decl                          (* root only *)
-             | builtin_var_def                     (* root only; std/config only *)
+             | builtin_var_def                     (* root or standard-library scope region *)
              | func_def                            (* root only *)
              | builtin_func_def                    (* root only *)
              | extern_func_def                     (* module root only; file-backed modules *)
@@ -88,11 +88,12 @@ region.
   declaration path (`main`, `review::main`). `agm exec` selects declarations
   from its file entry module; declarations reached through imports remain ordinary
   callable functions.
-- **`builtin var` declarations** — body-less engine-backed mutable bindings.
-  They are reserved to the canonical standard-library `std/config` module;
-  entry programs and ordinary libraries cannot declare them. A `builtin var`
-  may be a member of a named scope region inside `std/config`, read and
-  written through its full path, exactly like any other scoped member.
+- **`builtin var` declarations** — body-less host-backed mutable bindings.
+  Any standard-library module may declare one; entry programs and ordinary
+  libraries cannot. A declaration may be a member of a named scope region and
+  is read and written through its full path like any other scoped member.
+  `std/config` exclusively owns engine settings; other standard-library
+  modules own their domain-specific ambient bindings.
 - **`infix` declarations** — root-only operator-fixity declarations.
 - **Function declarations** — ordinary `def`s, `program def` entry functions, and body-less companion-backed
   `extern def`s. They may be declared at the root or in named scope regions.

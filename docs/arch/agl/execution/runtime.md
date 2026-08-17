@@ -35,6 +35,23 @@ value-driven transport boundary and sends that composed prompt verbatim.
 
 The trace destination is the sole live host service configured by an AgL `builtin var` write. The engine-key catalog names its `log`/`log-file` register pair explicitly; either write repoints the same trace store, while other host-consumed settings remain registers read on demand. `runtime/host_settings.py` applies the command-supplied trace-path policy without importing the command layer.
 
+## Host-backed standard-library values
+
+`builtin var` bindings are identified in the linked IR by their defining module,
+scope path, and name. Root `std/config` keys retain their dedicated engine-setting
+registers and live effects; scoped `std/config` and other standard-library bindings
+use ordinary host-backed values with declared defaults. `agm exec` and `agm repl` take one full `os.environ`
+snapshot at startup and pass it to the interpreter for `std/env::environ`.
+The interpreter constructs the typed `Environ` value after linking, so the host
+snapshot never mutates and AgL `setenv`/`unsetenv` remain in-process language
+state. A host that suppresses the standard library has no `std/env` binding,
+so no process seed is installed. `PipelineDriver.run` and `run_prepared` expose
+strongly typed `builtin_var_seeds` keyed by `(ModuleId, scope_path, name)` for all such
+bindings, and `ReplSession` exposes the same seed API; the older engine-name
+`builtin_host_settings` input remains a
+compatibility adapter. A non-engine binding with neither kind of seed nor a
+declared default reports a host-configuration diagnostic when read.
+
 ## Pipeline Orchestrator
 
 The pipeline sits on top: it drives the compile → lower → evaluate sequence and assembles the host environment, and it is the public entry point used by `agm exec` and the REPL. Programs are parameterized by `param` declarations resolved at evaluation time (external value > default expression > error for a required param), and its discovery artifact also records `program def` declarations with their module and scope paths so a host can select an entry before execution; the selected entry runs after module initialization within the interpreter's normal execution boundary ([repl.md](../repl.md)). Every artifact a pass produces is handed forward rather than recomputed, so however many times a host resumes the pipeline, the program compiles and lowers exactly once. A preflight executable's source and host-capability provenance stays in a pipeline-owned sidecar rather than the typeless IR: only the issuing pipeline can resume it against the same prepared resolution, while changed capabilities invalidate it and trigger fresh checking and lowering. Pure compile-time schema and format-instruction generation lives in its own helper so lowering stays independent of runtime execution.

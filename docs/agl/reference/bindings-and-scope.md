@@ -276,7 +276,7 @@ types are `text`,
 Runtime-only types such as `unit` and function types cannot be used as program
 param types. `Agent` is ordinary enum data and is valid wherever an enum is.
 
-## `builtin var` — engine-setting bindings
+## `builtin var` — host-backed bindings
 
 ```ebnf
 builtin_var_def ::= "builtin" NEWLINE? "var" name ":" type_expr ["=" expr]
@@ -288,11 +288,13 @@ constant expression of the declared type: literals, literal containers,
 constructor applications, and a unary operator over any of those (`-1`,
 `not true`) are allowed; reads, calls other than constructors, and binary
 operators are not. The `builtin` marker may be on the same line as `var` or on
-the line directly above it. A declaration may appear only at the root, or in a
-named scope region, of the canonical standard-library module
-`std/config`; declarations in entry programs or other library modules are
-static errors regardless of scoping. `std/config` uses it to expose the
-program's engine settings:
+the line directly above it. A declaration may appear only at the root, or in a named scope region, of a
+standard-library module; declarations in entry programs or ordinary library
+modules are static errors regardless of scoping. A binding's host identity is
+its defining module, scope path, and name, so equal names in different scopes
+or standard-library modules are independent. Root `std/config` bindings are
+the program's engine settings; scoped `std/config` bindings are ordinary
+host-backed values:
 
 ```agl
 open import std/config
@@ -307,13 +309,17 @@ An engine setting is an ordinary mutable binding in another module, so an
 assignment target names it exactly as a read does: a qualifier always works, and
 a bare name works whenever the import is open, so the name is in scope
 unqualified. When the host supplies no initial value, the declared default is
-used; a host seed wins over it. A write takes effect from its program point
-onward, exactly like any `var` mutation. The `Option[text]` settings
+used; a host seed wins over it. Reading another standard-library binding with
+neither a host seed nor a declared default instead reports a language
+diagnostic. A write takes effect from its program point onward, exactly like
+any `var` mutation. The `Option[text]` settings
 are set with `Some("…")` or `None`.
 
-See [Host environment](host-environment.md) for the settings table, their types
-and defaults, and how a source write combines with the host's CLI and config-file
-layers.
+Other standard-library modules may use `builtin var` for their own ambient
+host values. For example, [`std/env`](modules.md#stdenv) exposes an in-memory
+process-environment snapshot. See [Host environment](host-environment.md) for
+the engine settings table, their types and defaults, and how a source write
+combines with the host's CLI and config-file layers.
 
 ## Agent values
 

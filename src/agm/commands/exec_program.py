@@ -54,6 +54,7 @@ Flag notes:
 
 from __future__ import annotations
 
+import os
 import sys
 from collections.abc import Iterable
 from dataclasses import replace
@@ -419,6 +420,7 @@ def run(
     elif args.no_log_file:
         cli_values["log-file"] = None
 
+    process_environment = dict(os.environ)
     engine_seeds = build_host_engine_seeds(
         config=config,
         primary_table=engine_program_table,
@@ -561,6 +563,7 @@ def run(
         executable=param_preflight.executable,
         host_settings_policy=policy,
         builtin_host_settings=engine_seeds.values,
+        process_environment=process_environment,
         program_symbol=program_symbol,
     )
 

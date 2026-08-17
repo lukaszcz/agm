@@ -734,27 +734,34 @@ def _build_program_func_sig_table(
 
 
 def _build_program_builtin_var_table(
-    resolved: ResolvedProgram,
+    resolved: ResolvedProgram, module_envs: Mapping[ModuleId, TypeEnvironment]
 ) -> dict[int, Type]:
     """Compute binding types for every ``builtin var`` across all modules.
 
-    A ``builtin var`` names a fixed engine key whose type is canonical (from the
-    engine-key registry), so no type-expression resolution or per-module env is
-    needed.  The table is keyed by the declaration node id (globally unique), so
-    seeding it into every module's env makes each engine setting readable and
-    assignable from any module that imports its owner (e.g. ``std/config``).
-    Unknown-key declarations are omitted; the owning module's own check rejects
-    them with a clear error.
+    Engine settings retain their canonical types from the engine-key registry.
+    Other standard-library bindings use their declared type, resolved through
+    their owning module's complete type environment. The node-id keyed result
+    is then seeded into every module environment for cross-module access.
     """
+    from agm.agl.modules.ids import STD_CONFIG_ID
     from agm.agl.semantics.engine_keys import get_engine_key_type
 
     result: dict[int, Type] = {}
-    for _mid, loaded in resolved.modules.items():
+    for mid, loaded in resolved.modules.items():
+        env = module_envs[mid]
         for item in static_items(loaded.resolved.program.body.items):
-            if isinstance(item, BuiltinVarDecl):
+            if not isinstance(item, BuiltinVarDecl):
+                continue
+            if mid == STD_CONFIG_ID and not item.scope_path:
                 key_type = get_engine_key_type(item.name)
                 if key_type is not None:
                     result[item.node_id] = key_type
+                continue
+            scope_path = tuple(segment.name for segment in item.scope_path)
+            with env.type_scope(scope_path):
+                result[item.node_id] = env.resolve_type_expr(
+                    item.type_ann, span=item.span, type_vars=frozenset()
+                )
     return result
 
 
@@ -788,7 +795,6 @@ def _prepare_module_environment(
     program_type_table: dict[DeclKey, Type],
     import_env_map: Mapping[ModuleId, object],
     program_func_sig_table: dict[int, FunctionSignatureRecord],
-    program_builtin_var_table: dict[int, Type],
     program_generic_table: dict[DeclKey, GenericTypeDef],
     program_alias_table: dict[DeclKey, GenericAliasDef],
     program_ctor_sig_table: dict[tuple[DeclKey, str | None], ConstructorSignature],
@@ -873,13 +879,6 @@ def _prepare_module_environment(
         if record.is_extern:
             env.register_extern_node_id(node_id)
 
-    # Seed builtin-var binding types (engine settings) from the whole-program
-    # pre-pass so a ``std/config::key`` read/assign in any module resolves its
-    # type.  Keyed by globally-unique decl node id, so seeding the whole table
-    # into every module's env is safe and collision-free.
-    for var_node_id, var_type in program_builtin_var_table.items():
-        env.set_binding_type(var_node_id, var_type)
-
     return env
 
 
@@ -955,10 +954,6 @@ def check_program(
         entry_seed_env=entry_seed_env,
     )
 
-    # Phase 2b: canonical binding types for every ``builtin var`` (engine
-    # settings), keyed by decl node id, seeded into every module's env below.
-    program_builtin_var_table = _build_program_builtin_var_table(resolved)
-
     # Collect import envs for per-module checking.
     import_env_map: dict[ModuleId, object] = {
         mid: rmod.import_env for mid, rmod in resolved.modules.items()
@@ -979,7 +974,6 @@ def check_program(
             program_type_table,
             import_env_map,
             program_func_sig_table,
-            program_builtin_var_table,
             program_generic_table,
             program_alias_table,
             program_ctor_sig_table,
@@ -987,6 +981,14 @@ def check_program(
             shared_type_table,
             entry_seed_env=entry_seed_env if mid.is_entry else None,
         )
+
+    # Builtin-var types need each module's complete type environment, while
+    # the environments themselves need those types only for later body checks.
+    # Build the environments first, then seed the completed binding table.
+    program_builtin_var_table = _build_program_builtin_var_table(resolved, module_envs)
+    for env in module_envs.values():
+        for var_node_id, var_type in program_builtin_var_table.items():
+            env.set_binding_type(var_node_id, var_type)
 
     program_modules = {module_id: module.resolved for module_id, module in resolved.modules.items()}
     validate_builtin_method_ownership(program_modules)

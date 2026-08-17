@@ -6,6 +6,7 @@ extern def size[V](self: dict[text, V]) -> int
 extern def get[V](self: dict[text, V], key: text) -> V
 extern def get_option[V](self: dict[text, V], key: text) -> Option[V]
 extern def remove[V](self: dict[text, V], key: text) -> V
+extern def set[V](self: dict[text, V], key: text, value: V) -> unit
 extern def remove_option[V](self: dict[text, V], key: text) -> Option[V]
 extern def contains[V](self: dict[text, V], key: text) -> bool
 extern def clear[V](self: dict[text, V]) -> unit
@@ -26,6 +27,7 @@ def dict[text, V]::is-empty(self) -> bool = self.size() == 0
 def dict[text, V]::get(self, key: text) -> V = DictInternals::get(self, key)
 def dict[text, V]::get?(self, key: text) -> Option[V] = DictInternals::get_option(self, key)
 def dict[text, V]::remove(self, key: text) -> V = DictInternals::remove(self, key)
+def dict[text, V]::set(self, key: text, value: V) -> unit = DictInternals::set(self, key, value)
 def dict[text, V]::remove?(self, key: text) -> Option[V] = DictInternals::remove_option(self, key)
 def dict[text, V]::contains(self, key: text) -> bool = DictInternals::contains(self, key)
 def dict[text, V]::clear(self) -> unit = DictInternals::clear(self)

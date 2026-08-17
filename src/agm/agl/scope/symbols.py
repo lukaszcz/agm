@@ -159,8 +159,9 @@ class BinderKind(enum.Enum):
     ``function_binding``
         A top-level ``def`` declaration (immutable value binding).
     ``builtin_var_binding``
-        A ``builtin var`` declaration (mutable, engine-backed setting; readable
-        and assignable with ``:=``).
+        A mutable, host-backed ``builtin var`` declaration, readable and
+        assignable with ``:=``. ``std/config`` bindings are engine settings;
+        other standard-library modules may own independent bindings.
     ``constructor_binding``
         A record constructor or enum variant binding (immutable value binding).
     ``loop_var_binding``

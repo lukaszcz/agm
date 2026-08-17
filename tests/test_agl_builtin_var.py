@@ -1,8 +1,9 @@
-"""Tests for ``builtin var`` engine-setting declarations and the ``std/config`` module.
+"""Tests for ``builtin var`` declarations and ``std/config`` engine settings.
 
-A ``builtin var NAME : Type`` is a body-less, engine-backed, mutable binding
-reserved to the ``std/config`` standard-library module. Programs read it
-through a qualified reference and assign it with ``:=``.
+A ``builtin var NAME : Type`` is a body-less, host-backed mutable binding in a
+standard-library module. ``std/config`` reserves its bindings for engine
+settings. Programs read a binding through a qualified reference and assign it
+with ``:=``.
 """
 
 from __future__ import annotations
@@ -52,13 +53,14 @@ def _run_with_std_config(
     std_config: str,
     root: Path,
     *,
+    default_loop_limit: int | None = None,
     builtin_host_settings: dict[str, Value] | None = None,
 ) -> RunResult:
     """Run against a test ``std/config`` module without ordinary entry declarations."""
     config_path = root / "std" / "config.agl"
     config_path.parent.mkdir(parents=True)
     config_path.write_text(std_config, encoding="utf-8")
-    rt = PipelineDriver()
+    rt = PipelineDriver(default_loop_limit=default_loop_limit)
     return run_inline_command(
         rt,
         source,
@@ -262,9 +264,8 @@ class TestBuiltinVarGate:
 
 
 class TestScopedBuiltinVar:
-    def test_scoped_engine_setting_round_trips_through_its_full_path(self, tmp_path: Path) -> None:
-        """A ``builtin var`` declared inside a region in ``std/config`` is
-        written and read through its full ``std/config::Region::name`` path."""
+    def test_scoped_builtin_var_round_trips_through_its_full_path(self, tmp_path: Path) -> None:
+        """A scoped ``std/config`` binding is read and written through its full path."""
         result = _run_with_std_config(
             "open import std/config\n"
             "std/config::Region::max-iters := 3\n"
@@ -276,7 +277,7 @@ class TestScopedBuiltinVar:
         assert result.ok, f"expected success but got: {result.error!r}"
         assert result.bindings["n"] == IntValue(3)
 
-    def test_scoped_engine_setting_bare_after_open(self, tmp_path: Path) -> None:
+    def test_scoped_builtin_var_is_bare_after_open(self, tmp_path: Path) -> None:
         result = _run_with_std_config(
             "open import std/config\nopen std/config::Region\nmax-iters := 4\nlet n = max-iters\nn",
             "scope Region\nbuiltin var max-iters: int\nend Region",
@@ -284,6 +285,52 @@ class TestScopedBuiltinVar:
         )
         assert result.ok, f"expected success but got: {result.error!r}"
         assert result.bindings["n"] == IntValue(4)
+
+    def test_scoped_config_binding_is_not_an_engine_setting(self, tmp_path: Path) -> None:
+        result = _run_with_std_config(
+            "import std/config\n"
+            'std/config::Region::runner := "updated"\n'
+            "let value = std/config::Region::runner\n"
+            "value",
+            'scope Region\nbuiltin var runner: text = "declared"\nend Region',
+            tmp_path,
+        )
+
+        assert result.ok, f"expected success but got: {result.error!r}"
+        assert result.bindings["value"] == TextValue("updated")
+
+    def test_scoped_same_named_settings_are_independent(self, tmp_path: Path) -> None:
+        result = _run_with_std_config(
+            "import std/config\n"
+            "std/config::First::max-iters := 3\n"
+            "let second = std/config::Second::max-iters\n"
+            "second",
+            "scope First\nbuiltin var max-iters: int = 1\nend First\n"
+            "scope Second\nbuiltin var max-iters: int = 2\nend Second",
+            tmp_path,
+        )
+
+        assert result.ok, f"expected success but got: {result.error!r}"
+        assert result.bindings["second"] == IntValue(2)
+
+    def test_scoped_engine_named_binding_does_not_apply_engine_effects(
+        self, tmp_path: Path
+    ) -> None:
+        result = _run_with_std_config(
+            "import std/config\n"
+            "std/config::Region::max-iters := 3\n"
+            "var i = 0\n"
+            "do\n"
+            "  i := i + 1\n"
+            "until i >= 2\n",
+            "scope Region\nbuiltin var max-iters: int = 0\nend Region",
+            tmp_path,
+            default_loop_limit=1,
+        )
+
+        assert not result.ok
+        assert result.error is not None
+        assert result.error.type_name == "MaxIterationsExceeded"
 
     def test_scoped_declaration_still_confined_to_std_config(self, tmp_path: Path) -> None:
         """A scoped ``builtin var`` outside ``std/config`` is rejected, same as a root one."""

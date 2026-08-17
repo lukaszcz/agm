@@ -103,10 +103,12 @@ A `def` whose first parameter is `self` in a record, enum, or exception scope is
 `let _ = value` and `var _ = value` still resolve their right-hand sides but
 register no binding, so `_` may be repeated. `_` never resolves as a readable
 identifier, even when another binding form uses that name in an enclosing scope.
-Register-backed `builtin var` declarations are admitted only in the canonical
-`std/config` module, at its root or inside a named scope region; every
-`builtin` form otherwise rides the same member/duplicate/visibility path as
-an ordinary declaration, with no shape-specific placement logic of its own.
+Host-backed `builtin var` declarations are admitted in any standard-library
+module, at its root or inside a named scope region; every `builtin` form
+otherwise rides the same member/duplicate/visibility path as an ordinary
+declaration, with no shape-specific placement logic of its own. Only root
+`std/config` bindings are engine-setting registers; scoped `std/config` and
+other standard-library bindings are ordinary host-backed values.
 The pass enforces lexical control-flow boundaries —
 `break`/`continue` must stay within a loop in the same function, `return` must
 appear inside a function body — and the extern (Python FFI) placement rule that

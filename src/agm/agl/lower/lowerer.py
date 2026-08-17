@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import assert_never, cast
 
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals, DeclaredNominal
+from agm.agl.ir.builtin_vars import builtin_var_key
 from agm.agl.ir.contracts import (
     ContractPayload,
     ContractRequest,
@@ -158,7 +159,7 @@ from agm.agl.matchcompile import (
     OccurrenceId,
     RecordConstructor,
 )
-from agm.agl.modules.ids import STD_CORE_ID, ModuleId, spell_scope_path
+from agm.agl.modules.ids import STD_CONFIG_ID, STD_CORE_ID, ModuleId, spell_scope_path
 from agm.agl.scope.symbols import BUILTIN_CALL_NAMES, BinderKind, BindingRef, BuiltinKind
 from agm.agl.semantics.type_table import MethodDef, TypeTable
 from agm.agl.semantics.types import (
@@ -1223,9 +1224,13 @@ class _Lowerer:
                 ref = self._checked.binding_for(nid)
                 assert ref is not None, f"compiler bug: no binding for VarRef node_id={nid!r}"
                 if ref.kind is BinderKind.builtin_var_binding:
-                    # A ``builtin var`` read pulls the engine setting from its
-                    # interpreter register, keyed by the engine-key name.
-                    return IrBuiltinLoad(location=self._loc(span), key=ref.name)
+                    # A ``builtin var`` read is keyed by its defining module
+                    # and name; the interpreter routes ``std/config`` keys to
+                    # engine registers and other keys to host-backed values.
+                    return IrBuiltinLoad(
+                        location=self._loc(span),
+                        key=builtin_var_key(ref.module_id, ref.scope_path, ref.name),
+                    )
                 if ref.kind is BinderKind.constructor_binding:
                     node_typ = self._node_type(nid)
                     assert isinstance(node_typ, FunctionType)
@@ -3195,7 +3200,10 @@ class _Lowerer:
         elif "agent" in named_map:
             agent_ir = self.lower_expr(named_map["agent"].value)
         else:
-            agent_ir = IrBuiltinLoad(location=loc, key="default-agent")
+            agent_ir = IrBuiltinLoad(
+                location=loc,
+                key=builtin_var_key(STD_CONFIG_ID, (), "default-agent"),
+            )
 
         # ask-request neither dispatches nor parses output — it builds an
         # AgentRequest whose contract fields are fixed constants — so it needs
@@ -3513,12 +3521,13 @@ class _Lowerer:
         )
 
         if ref.kind is BinderKind.builtin_var_binding:
-            # A ``builtin var`` assignment stores into the engine setting's
-            # interpreter register (keyed by engine-key name); it has no symbol.
+            # A ``builtin var`` assignment stores by defining module, scope path,
+            # and name; it has no symbol. Root ``std/config`` stores additionally
+            # apply their engine effects.
             slot_type = self._binding_type(ref.decl_node_id)
             return IrBuiltinStore(
                 location=self._loc(span),
-                key=ref.name,
+                key=builtin_var_key(ref.module_id, ref.scope_path, ref.name),
                 value=self.lower_coerced(rhs, slot_type),
             )
 

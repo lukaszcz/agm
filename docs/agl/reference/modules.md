@@ -255,6 +255,8 @@ rules.
 - `std/either` declares the neutral `Either[A, B]` sum and its mapping, query, optional-projection, and swapping methods.
 - `std/result` declares `Result[T, E]`, its outcome methods, and `attempt`, which turns a raising nullary function into a `Result`.
 - `std/config` exposes the host engine settings as `builtin var` bindings.
+- `std/env` provides the ambient `Environ` snapshot and environment helpers; see
+  [`std/env`](#stdenv).
 - `std/array` owns array methods and array utility functions; see
   [`std/array`](#stdarray).
 - `std/dict` owns dictionary methods and conversion from key/value pairs; see
@@ -269,6 +271,33 @@ rules.
   [`std/toml`](#stdtoml).
 - `std/fs` exposes explicit text filesystem operations: `read`, `write`,
   `append`, `exists`, and `list`; see [`std/fs`](expressions.md#stdfs).
+
+## `std/env`
+
+`std/env` models the ambient environment as `Environ(vars: dict[text, text])`.
+Its `builtin var environ` is seeded by `agm exec` and `agm repl` from one full
+snapshot of their startup process environment. It is independent from
+`os.environ`: AgL changes never alter the host process, and the snapshot does
+not change after startup. When the standard library is suppressed, no ambient
+environment binding is installed.
+
+`Environ` methods are `get(name)`, `get?(name)`, `set(name, value)`,
+`unset(name)`, `contains(name)`, and `extended(overrides)`. `get` and `unset`
+raise `KeyError` when the name is absent; `get?` returns `Option[text]`.
+`extended` returns a new environment with an overlaid copy of the variables.
+
+After `open import std/env`, `getenv`, `getenv?`, `setenv`, and `unsetenv` are
+shortcuts over `environ`. They mutate only this AgL-side environment:
+
+<!-- agl-check: fragment -->
+```agl
+open import std/env
+
+let _ = setenv("MODE", "test")
+let mode = getenv("MODE")
+let child_env = environ.extended({"DEBUG": "1"})
+let _ = unsetenv("MODE")
+```
 
 ## `std/array`
 
@@ -337,6 +366,7 @@ is preserved by `keys`, `values`, `entries`, and callback traversal.
 | `size()` / `is-empty()` | Entry count / whether it is zero. |
 | `get(k)` / `get?(k)` | Value for `k`, raising or as `Option`. |
 | `remove(k)` / `remove?(k)` | Remove and return the value for `k`, raising or as `Option`. |
+| `set(k, v)` | Insert or replace `k` with `v` and return `unit`. |
 | `contains(k)` | Whether `k` is present. |
 | `clear()` | Remove every entry and return `unit`. |
 | `keys()` / `values()` / `entries()` | Ordered `array[text]`, `array[V]`, or `array[Pair[text, V]]`. |

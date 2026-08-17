@@ -27,8 +27,10 @@ Two tiers (validate_ir runs ONLY when explicitly called):
        there; extern boundary contracts are checked for internal consistency
        (registered nominals, type-variable positions matching their declared
        type parameters).
-    8. Every ``IrBuiltinLoad``/``IrBuiltinStore`` key belongs to the canonical
-       engine-key catalog.
+    8. Every non-engine module-qualified ``IrBuiltinLoad``/``IrBuiltinStore``
+       and declared builtin-default key identifies a loaded host-backed binding
+       declaration, including its scope path. Canonical root ``std/config``
+       engine keys (including legacy strings) remain valid independently.
     9. Every ``IrField`` nominal is registered, field-bearing, and declares
        its projected field (on at least one enum payload shape for enums).
     10. ``program_symbols`` and ``program_functions`` form a one-to-one,
@@ -50,6 +52,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TypeVar, assert_never
 
+from agm.agl.ir.builtin_vars import BuiltinVarKey, is_engine_builtin_var_key
 from agm.agl.ir.contracts import (
     ArrayDecode,
     ContractRequest,
@@ -141,7 +144,7 @@ from agm.agl.ir.program import (
     NominalKind,
     SourceFile,
 )
-from agm.agl.modules.ids import ModuleId
+from agm.agl.modules.ids import STD_CONFIG_ID, ModuleId
 from agm.config.engine_keys import ENGINE_KEY_NAMES
 
 __all__ = ["InvalidIrError", "validate_ir"]
@@ -251,10 +254,25 @@ def _validate_location(loc: Location, ctx: _Context) -> None:
         _check_location_deep(loc, ctx)
 
 
-def _validate_builtin_key(key: str, ctx: _Context) -> None:
-    """Reject an engine-register key outside the canonical closed catalog."""
-    if ctx.deep and key not in ENGINE_KEY_NAMES:
-        raise InvalidIrError(f"IR builtin-var node has unknown engine key {key!r}")
+def _validate_builtin_key(key: BuiltinVarKey | str, ctx: _Context) -> None:
+    """Validate a host-backed binding key, including legacy engine strings."""
+    if isinstance(key, str):
+        if not ctx.deep:
+            return
+        if key not in ENGINE_KEY_NAMES:
+            raise InvalidIrError(f"unknown engine builtin-var key {key!r}")
+        return
+    module_id, scope_path, name = key
+    if not ctx.deep:
+        return
+    if is_engine_builtin_var_key(key):
+        return
+    if module_id == STD_CONFIG_ID and not scope_path:
+        raise InvalidIrError(f"IR builtin-var node has unknown engine key {name!r}")
+    if module_id not in ctx.program.modules:
+        raise InvalidIrError(f"IR builtin-var key references unloaded module {module_id!r}")
+    if key not in ctx.program.builtin_var_declarations:
+        raise InvalidIrError(f"IR builtin-var key has no matching declaration: {key!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -1039,6 +1057,11 @@ def _validate_program_tables(ctx: _Context) -> None:
                 f"program.modules entry keyed by {key!r} has module_id={em.module_id!r} (mismatch)"
             )
 
+    # 1c. builtin-var defaults reference available bindings. Their expression
+    # structure is checked with the module initializers below.
+    for builtin_key in program.builtin_setting_defaults:
+        _validate_builtin_key(builtin_key, ctx)
+
     # 2. symbol descriptor consistency
     for sym_key, sym_desc in program.symbols.items():
         if sym_desc.symbol_id != sym_key:
@@ -1289,6 +1312,8 @@ def validate_ir(program: ExecutableProgram, *, deep: bool = True) -> None:
     for _module_id, em in program.modules.items():
         for node in em.initializers:
             _validate_expr(node, ctx)
+    for default in program.builtin_setting_defaults.values():
+        _validate_expr(default, ctx)
 
     if deep:
         _check_payload_dominance(ctx)

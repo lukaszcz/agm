@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from agm.agl.capabilities import HostCapabilities
+    from agm.agl.ir.builtin_vars import BuiltinVarKey
     from agm.agl.ir.contracts import ContractPayload
     from agm.agl.ir.ids import NominalId, SymbolId
     from agm.agl.ir.program import ExecutableProgram, NominalDescriptor
@@ -408,6 +409,8 @@ class PipelineDriver:
         warnings: list[Diagnostic],
         host_settings_policy: "HostSettingsPolicy | None" = None,
         builtin_host_settings: "Mapping[str, Value] | None" = None,
+        builtin_var_seeds: "Mapping[BuiltinVarKey, Value] | None" = None,
+        process_environment: "Mapping[str, str] | None" = None,
         program_symbol: "SymbolId | None" = None,
         select_default_program: bool = False,
     ) -> RunResult:
@@ -498,6 +501,18 @@ class PipelineDriver:
         else:
             reconfigurer = None
 
+        # ``builtin_host_settings`` is the legacy, engine-key-only API. Keep
+        # it for config-host compatibility while exposing module-qualified
+        # seeds for every host-backed standard-library binding.
+        interpreter_builtin_settings: dict[str | BuiltinVarKey, Value] = {}
+        if builtin_host_settings is not None:
+            interpreter_builtin_settings.update(builtin_host_settings)
+        if builtin_var_seeds is not None:
+            # The structured API wins for a ``std/config`` key supplied by
+            # both routes: it is the more specific host declaration.
+            for key, value in builtin_var_seeds.items():
+                interpreter_builtin_settings[key] = value
+
         try:
             interp = IrInterpreter(
                 executable,
@@ -511,7 +526,8 @@ class PipelineDriver:
                 host_contracts=host_contracts,
                 extern_registry=host_env.extern_registry,
                 host_reconfigurer=reconfigurer,
-                builtin_host_settings=builtin_host_settings,
+                builtin_host_settings=interpreter_builtin_settings,
+                process_environment=process_environment,
             )
             entry_bindings = interp.run(program_symbol=program_symbol)
         except AglRaise as exc:
@@ -546,11 +562,10 @@ class PipelineDriver:
                 trace_path=trace.path,
             )
         except HostConfigurationError as exc:
-            # The materialized ``default-agent`` value cannot be dispatched: a
-            # pre-execution host-configuration failure (exit 1 per the CLI
-            # contract), not an uncaught AgL exception — nothing has executed
-            # yet, so it is reported as an ordinary diagnostic rather than
-            # ``result.error``.
+            # An invalid startup host value, or an unseeded non-engine binding
+            # read during evaluation, is a host-configuration failure (exit 1
+            # per the CLI contract), not an uncaught AgL exception. Report it
+            # as an ordinary language diagnostic rather than ``result.error``.
             trace.run_end(ok=False)
             return RunResult(
                 ok=False,
@@ -876,8 +891,15 @@ class PipelineDriver:
         roots: "RootSet | None" = None,
         package_roots: "Iterable[PackageInfo]" = (),
         default_stdlib: bool = True,
+        builtin_var_seeds: "Mapping[BuiltinVarKey, Value] | None" = None,
+        process_environment: "Mapping[str, str] | None" = None,
     ) -> RunResult:
-        """Compile and run a program with the standard module roots by default."""
+        """Compile and run a program with the standard module roots by default.
+
+        ``builtin_var_seeds`` supplies typed host values by their complete
+        ``(ModuleId, scope_path, name)`` identity. It is independent of the legacy
+        engine-only ``builtin_host_settings`` accepted by :meth:`run_prepared`.
+        """
         return self.run_prepared(
             self.prepare_program(
                 source,
@@ -889,6 +911,8 @@ class PipelineDriver:
             param_values=param_values,
             check_only=check_only,
             log_file=log_file,
+            builtin_var_seeds=builtin_var_seeds,
+            process_environment=process_environment,
             select_default_program=True,
         )
 
@@ -1073,6 +1097,8 @@ class PipelineDriver:
         executable: "ExecutableProgram | None" = None,
         host_settings_policy: "HostSettingsPolicy | None" = None,
         builtin_host_settings: "Mapping[str, Value] | None" = None,
+        builtin_var_seeds: "Mapping[BuiltinVarKey, Value] | None" = None,
+        process_environment: "Mapping[str, str] | None" = None,
         program_symbol: "SymbolId | None" = None,
         select_default_program: bool = False,
     ) -> RunResult:
@@ -1113,6 +1139,8 @@ class PipelineDriver:
             executable=executable,
             host_settings_policy=host_settings_policy,
             builtin_host_settings=builtin_host_settings,
+            builtin_var_seeds=builtin_var_seeds,
+            process_environment=process_environment,
             program_symbol=program_symbol,
             select_default_program=select_default_program,
         )
@@ -1164,6 +1192,8 @@ class PipelineDriver:
         executable: "ExecutableProgram | None" = None,
         host_settings_policy: "HostSettingsPolicy | None" = None,
         builtin_host_settings: "Mapping[str, Value] | None" = None,
+        builtin_var_seeds: "Mapping[BuiltinVarKey, Value] | None" = None,
+        process_environment: "Mapping[str, str] | None" = None,
         program_symbol: "SymbolId | None" = None,
         select_default_program: bool = False,
         selected_program: ProgramDeclInfo | None = None,
@@ -1325,6 +1355,8 @@ class PipelineDriver:
                 warnings=warnings,
                 host_settings_policy=host_settings_policy,
                 builtin_host_settings=builtin_host_settings,
+                builtin_var_seeds=builtin_var_seeds,
+                process_environment=process_environment,
                 program_symbol=program_symbol,
                 select_default_program=select_default_program,
             ),

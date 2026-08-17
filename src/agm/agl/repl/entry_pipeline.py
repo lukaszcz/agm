@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from agm.agl.eval.ir_interpreter import IrInterpreter
+    from agm.agl.ir.builtin_vars import BuiltinVarKey
     from agm.agl.ir.contracts import ContractPayload
     from agm.agl.ir.ids import SymbolId
     from agm.agl.ir.program import IrParam
@@ -70,6 +71,9 @@ class EntryPipelineCtx(Protocol):
     _default_call_depth_limit: int
     _default_stdlib: bool
     _shell_exec_timeout: float | None
+    _process_environment: dict[str, str] | None
+    _builtin_var_seed: dict[BuiltinVarKey, Value]
+    _builtin_var_values: dict[BuiltinVarKey, Value]
     # The current-value register for the five engine keys with a ``Value``
     # form (strict-json, timeout, log, log-file, default-agent); a key is
     # present only once a host seed or a learned declared default has made it
@@ -734,7 +738,8 @@ class EntryPipeline:
                 # an earlier entry): a key genuinely absent here is exactly one
                 # this interpreter should learn its own ``std/config`` declared
                 # default for, rather than have imposed on it.
-                builtin_host_settings=dict(self._ctx._current),
+                builtin_host_settings=self._builtin_host_settings(),
+                process_environment=self._ctx._process_environment,
             )
         except AglRaise as exc:
             error = exception_value_to_run_error(exc.exc, span=exc.span)
@@ -783,8 +788,17 @@ class EntryPipeline:
                 ok=False,
                 trace_path=self._ctx._trace_path,
             )
+        from agm.agl.modules.ids import STD_CONFIG_ID
+
         self._ctx._record_declared_engine_defaults(
-            frozenset(lowered.program.builtin_setting_defaults), interp
+            frozenset(
+                name
+                for module_id, scope_path, name in cast(
+                    "Mapping[BuiltinVarKey, object]", lowered.program.builtin_setting_defaults
+                )
+                if module_id == STD_CONFIG_ID and not scope_path
+            ),
+            interp,
         )
 
         def retain_library_state(module_ids: frozenset[ModuleId]) -> None:
@@ -913,6 +927,11 @@ class EntryPipeline:
                 diagnostics=[_parameter_default_cycle_diagnostic(program_to_run, exc)],
                 error=None,
             )
+        except HostConfigurationError as exc:
+            # A host-backed library value may be read after earlier entry work
+            # completed. Preserve that completed state while reporting the
+            # missing/invalid host value as an ordinary language diagnostic.
+            return partial_failure(diagnostics=[Diagnostic(message=str(exc), line=1)], error=None)
         except (AgentCancelled, KeyboardInterrupt) as exc:
             cancellation_message = (
                 "Agent call cancelled — entry aborted."
@@ -1189,6 +1208,15 @@ class EntryPipeline:
             return
         self._ctx._accumulated_imports.append(entry_imports)
         self._ctx._accumulated_opens.append(entry_opens)
+
+    def _builtin_host_settings(self) -> dict[str | BuiltinVarKey, Value]:
+        """Combine persistent engine and standard-library binding state."""
+        settings: dict[str | BuiltinVarKey, Value] = {}
+        for engine_key, value in self._ctx._current.items():
+            settings[engine_key] = value
+        for builtin_key, value in self._ctx._builtin_var_values.items():
+            settings[builtin_key] = value
+        return settings
 
     def _persist_interpreter_settings(self, interp: "IrInterpreter", trace: "TraceStore") -> None:
         """Persist completed setting writes and the live trace destination."""

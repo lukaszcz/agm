@@ -24,7 +24,7 @@ block         ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 
 item       ::= import_decl                  (* header position only; scope_item also permits it *)
              | open_decl                    (* module-root or scope-region header only *)
-             | builtin_var_def              (* root only; standard library only *)
+             | builtin_var_def              (* root or standard-library scope region *)
              | builtin_modifier? record_def (* root only *)
              | builtin_modifier? enum_def   (* root only *)
              | type_alias                   (* root only *)
@@ -359,20 +359,23 @@ parenthesize one side or assign distinct priorities.
 ```ebnf
 let_decl       ::= "let" pattern type_ann? "=" expr
 var_decl       ::= "var" decl_head type_ann? "=" expr
-builtin_var_def ::= "builtin" NEWLINE? "var" name type_ann ["=" expr]  (* std/config only *)
+builtin_var_def ::= "builtin" NEWLINE? "var" name type_ann ["=" expr]  (* standard library only *)
 assign_stmt ::= assign_target ":=" expr
 assign_target ::= qualifier_chain? name
                 | postfix "[" expr "]"
 ```
 
 A `builtin var` is a body-less, host-backed mutable binding with a mandatory
-type and an optional constant initializer. The initializer must have the
+type and an optional constant initializer. Its host identity is its defining
+module, scope path, and name, so same-named declarations in distinct scope
+regions remain independent. The initializer must have the
 declared type and use only literals, literal containers, constructors, and
 unary operators over those. It
-becomes the engine default only when the host supplies no initial value. The
+becomes the binding default only when the host supplies no initial value. The
 `builtin` modifier may sit on the same line or the line directly above (like
 `builtin def`). It may be declared only at the root, or in a named scope region,
-of `std/config`; entry modules and other library modules cannot declare one.
+of a standard-library module; entry modules and ordinary library modules cannot
+declare one. `std/config` reserves builtin vars for engine settings.
 
 `var`'s `decl_head` accepts the same optional scope-path prefix as the type
 declarations above (`var A::count = 0`). `let` needs no separate grammar for

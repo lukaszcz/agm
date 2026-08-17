@@ -12,6 +12,7 @@ import semver
 
 import agm.packages.archive as package_archive
 import agm.packages.install as package_install
+import agm.packages.model as package_model
 import agm.stdlib_locator as stdlib_locator
 from agm.core import dry_run
 from agm.packages.activation import (
@@ -78,6 +79,41 @@ def test_refresh_registers_stdlib_package_under_an_isolated_agm_home(tmp_path: P
     assert verify_record(installed.root)
     index = load_activation_index(home=tmp_path / "ignored-home", env={"AGM_HOME": str(agm_home)})
     assert index.packages["std"].version == installed.manifest.version
+
+
+def test_managed_stdlib_refresh_deactivates_packages_from_an_incompatible_release_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = Path(__file__).resolve().parent.parent / "stdlib"
+    home = tmp_path / "home"
+    dependency = f'\n[dependencies]\nstd = "{AGM_VERSION}"\n'
+    alpha = install_directory(
+        _package(tmp_path / "alpha", "alpha", "1.0.0", dependency), home=home, env={}
+    )
+    bravo = install_directory(
+        _package(tmp_path / "bravo", "bravo", "1.0.0", dependency), home=home, env={}
+    )
+    dependent = install_directory(
+        _package(
+            tmp_path / "dependent",
+            "dependent",
+            "1.0.0",
+            '\n[dependencies]\nalpha = "1.0.0"\n',
+        ),
+        home=home,
+        env={},
+    )
+    monkeypatch.setattr(
+        package_model, "AGM_VERSION", str(semver.Version.parse(AGM_VERSION).bump_major())
+    )
+
+    refresh_managed_stdlib(source, home=home, env={})
+
+    active = load_activation_index(home=home, env={}).packages
+    assert set(active) == {"std"}
+    assert alpha.root.is_dir()
+    assert bravo.root.is_dir()
+    assert dependent.root.is_dir()
 
 
 def test_managed_stdlib_refresh_stages_under_the_store_lock(

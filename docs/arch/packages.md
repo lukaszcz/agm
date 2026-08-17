@@ -83,7 +83,8 @@ the store root is relocated across filesystems; dry runs repeat in-archive disci
 resolved dependency closure. The shipped
 `std` package is a managed store package whose
 version must exactly match the running AGM version. Package `std` requirements accept that version
-only when it meets their floor and compatible-line upper bound. A shared locator finds its source at the
+only when it meets their floor and compatible-line upper bound. Refreshing it after an AGM release-line
+upgrade deactivates incompatible packages and their dependents while retaining their installed trees. A shared locator finds its source at the
 repository root during development and inside the installed `agm` package in a wheel. It is
 refreshed by `just install`, not by the ordinary package-install paths, and cannot be uninstalled.
 Its package-domain refresh holds the store lock while staging and validating a complete replacement

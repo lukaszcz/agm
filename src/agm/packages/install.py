@@ -259,6 +259,7 @@ def refresh_managed_stdlib(
                 env=env,
                 index=_load_install_index(home=home, env=env),
             )
+            _deactivate_release_incompatible_packages(state)
             _resolve_dependencies(package, state)
             _activate_package(installed, state, editable_root=None, shadow=False)
             _commit_activation(state.index, home=home, env=env)
@@ -737,6 +738,39 @@ def _set_transaction_index(state: _InstallState, index: ActivationIndex) -> None
 
     state.index = index
     state.resolved_active = None
+
+
+def _deactivate_release_incompatible_packages(state: _InstallState) -> None:
+    """Drop selections that cannot remain active after an AGM release-line change."""
+
+    packages = _transaction_resolved_packages(state)
+    deactivated = {
+        package.manifest.name
+        for package in packages
+        if (requirement := package.manifest.dependencies.get(STD_PACKAGE_NAME)) is not None
+        and unmet_std_requirement(requirement) is not None
+    }
+    while True:
+        dependents = {
+            package.manifest.name
+            for package in packages
+            if package.manifest.name not in deactivated
+            and any(name in deactivated for name in package.manifest.dependencies)
+        }
+        if not dependents:
+            break
+        deactivated.update(dependents)
+    if deactivated:
+        _set_transaction_index(
+            state,
+            ActivationIndex(
+                {
+                    name: active
+                    for name, active in state.index.packages.items()
+                    if name not in deactivated
+                }
+            ),
+        )
 
 
 def _record_transient_package(state: _InstallState, name: str, package: PackageInfo) -> None:

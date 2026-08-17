@@ -150,7 +150,9 @@ tree, never in the `RECORD`-covered payload, so rebuilding a lost activation ind
 The built-in `std` package is installed and activated with AGM itself at the same version as the
 running binary. Its managed store tree is refreshed only from AGM's shipped `stdlib/` directory
 by `just install`; editable and archive installs are rejected, and `agm pkg uninstall std` always
-refuses. A package's `std` requirement is an AGM compatibility contract: the running AGM must be
+refuses. When an AGM upgrade crosses a compatibility line, that refresh deactivates packages requiring
+the previous line and packages that depend on them, while retaining their immutable store trees. A
+package's `std` requirement is an AGM compatibility contract: the running AGM must be
 at least the declared version and remain in its compatible release line. Installation therefore
 refuses both newer requirements and older requirements from an incompatible line.
 

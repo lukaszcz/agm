@@ -556,9 +556,7 @@ def _compute_reexport_additions(
             source_prefix = (
                 source_path[:length] if item.rename is None else (*prefix, *exposed_path[1:length])
             )
-            origins = target_scopes.get(_atom(source_prefix))
-            if origins is None:
-                continue
+            origins = target_scopes[_atom(source_prefix)]
             rooted = rooted_atom(exposed_path[:length])
             scope_result[rooted] = scope_result.get(rooted, frozenset()) | origins
 

@@ -4885,6 +4885,31 @@ class TestImports:
         assert session.eval_entry("import pkg/* as Facade\nuse Facade::*").ok
         assert session.eval_entry("first() + second()").value == IntValue(3)
 
+    def test_retained_wildcard_facade_refreshes_only_its_original_import(
+        self, tmp_path: Path
+    ) -> None:
+        package = tmp_path / "pkg"
+        unrelated = tmp_path / "unrelated"
+        package.mkdir()
+        unrelated.mkdir()
+        (package / "a.agl").write_text("def first() -> int = 1\n", encoding="utf-8")
+        (unrelated / "c.agl").write_text("def intruder() -> int = 3\n", encoding="utf-8")
+        session = self._make_session_with_root(tmp_path)
+
+        assert session.eval_entry("import pkg/* as Facade\nuse Facade::*").ok
+        (package / "b.agl").write_text("def second() -> int = 2\n", encoding="utf-8")
+        assert session.eval_entry("import unrelated/* as Facade").ok
+
+        refreshed = session.eval_entry("first() + second()")
+        assert refreshed.ok, refreshed.diagnostics
+        assert refreshed.value == IntValue(3)
+        assert not session.eval_entry("intruder()").ok
+
+        assert session.eval_entry("import pkg/a as Direct").ok
+        fallback = session.eval_entry("first() + second()")
+        assert fallback.ok, fallback.diagnostics
+        assert fallback.value == IntValue(3)
+
     def test_retained_separate_wildcard_aliases_do_not_form_one_facade(
         self, tmp_path: Path
     ) -> None:

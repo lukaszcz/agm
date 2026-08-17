@@ -1785,10 +1785,33 @@ class _Resolver:
         used_imports = () if decl.anchored else self._used_import_targets(target)
         imported = self._merge_use_import_targets(direct_imports, bare_imports, used_imports)
         available_import_routes = frozenset(route for route, _members in imported)
+        facade_declarations = (
+            self._import_env.facade_aliases.get(route[0], {}) if len(route) == 1 else {}
+        )
+        facade_origin_node_id = (
+            retained_target.wildcard_facade_origin_node_id if retained_target is not None else None
+        )
+        if facade_origin_node_id is None and not decl.anchored and len(route) == 1:
+            direct_modules = frozenset(module for module, _members in direct_candidates)
+            matching_origins = tuple(
+                origin
+                for origin, modules in facade_declarations.items()
+                if modules == direct_modules
+            )
+            if len(matching_origins) == 1:
+                facade_origin_node_id = matching_origins[0]
         if retained_target is not None and retained_target.imported_routes:
-            available = dict(imported)
+            available = {**dict(imported), **dict(direct_imports)}
+            replay_routes: dict[BareRoute, None] = {
+                imported_route: None for imported_route in retained_target.imported_routes
+            }
+            if facade_origin_node_id is not None:
+                origin_modules = facade_declarations.get(facade_origin_node_id, frozenset())
+                for imported_route, _members in direct_imports:
+                    if imported_route[0] in origin_modules:
+                        replay_routes.setdefault(imported_route, None)
             replayed: list[tuple[BareRoute, Mapping[NameAtom, QName]]] = []
-            for imported_route in retained_target.imported_routes:
+            for imported_route in replay_routes:
                 members = available.get(imported_route)
                 if members is None:
                     module, source = imported_route
@@ -1803,16 +1826,17 @@ class _Resolver:
                 replayed.append((imported_route, members))
             imported = tuple(replayed)
         direct_routes = {imported_route for imported_route, _members in direct_imports}
-        facade_declarations = (
-            self._import_env.facade_aliases.get(route[0], {}) if len(route) == 1 else {}
-        )
         shared_alias_facade = (
             not decl.anchored
             and len(direct_candidates) > 1
             and tuple(facade_declarations.values())
             == (frozenset(module for module, _members in direct_candidates),)
             and {imported_route for imported_route, _members in imported} == direct_routes
-        ) or bool(retained_target and len(retained_target.imported_routes) > 1)
+        ) or bool(
+            retained_target
+            and len(imported) > 1
+            and (facade_origin_node_id is not None or len(retained_target.imported_routes) > 1)
+        )
         if local is not None and imported:
             candidates = ", ".join(module.display() for (module, _root), _members in imported)
             module_targets = ", ".join(
@@ -1873,7 +1897,8 @@ class _Resolver:
 
         if shared_alias_facade:
             self._use_targets[decl.node_id] = ResolvedUseTarget(
-                imported_routes=tuple(route for route, _members in imported)
+                imported_routes=tuple(route for route, _members in imported),
+                wildcard_facade_origin_node_id=facade_origin_node_id,
             )
             self._contribute_use_facade_members(
                 decl,
@@ -1882,7 +1907,10 @@ class _Resolver:
             )
             return
         imported_route, imported_members = imported[0]
-        self._use_targets[decl.node_id] = ResolvedUseTarget(imported_routes=(imported_route,))
+        self._use_targets[decl.node_id] = ResolvedUseTarget(
+            imported_routes=(imported_route,),
+            wildcard_facade_origin_node_id=facade_origin_node_id,
+        )
         self._contribute_use_members(decl, imported_members, scope_routes_for(imported_route))
 
     def _reinterpret_single_member_use_alias(self, decl: UseDecl) -> UseDecl:

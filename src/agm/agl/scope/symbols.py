@@ -528,10 +528,17 @@ def resolve_bare_contribution(
 
 @dataclass(frozen=True, slots=True)
 class ResolvedUseTarget:
-    """Stable semantic identity of one local or imported ``use`` target."""
+    """Stable semantic identity of one local or imported ``use`` target.
+
+    ``wildcard_facade_origin_node_id`` ties a retained facade use to the
+    wildcard declaration that formed it, allowing incremental wildcard
+    expansion without adopting modules from another declaration reusing the
+    same alias.
+    """
 
     local_path: ScopePath | None = None
     imported_routes: tuple[tuple[ModuleId, ScopePath], ...] = ()
+    wildcard_facade_origin_node_id: int | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True, slots=True)

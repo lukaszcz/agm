@@ -19,10 +19,13 @@ at that path, even when an import alias changes. Retained replay compares prior
 semantic identities only with one another and leaves current-versus-retained
 replacement to scope classification before the effective entry is compiled, so
 single-member aliases replace their semantic parent target immediately while
-nested whole-target aliases remain distinct. Retained generations carry those
-semantic identities rather than reconstructing them from import headers; a
-failed replacement entry still leaves the prior generation intact, and uses and
-imports at other paths remain. `:reset`
+nested whole-target aliases remain distinct. Retained wildcard-facade uses also
+carry their source wildcard identity: replay refreshes routes added by that
+wildcard without adopting modules from a later wildcard that reuses its alias,
+while still falling back to their retained semantic routes when imports are
+renamed or replaced. Retained generations carry semantic identities rather than
+reconstructing them from import headers; a failed replacement entry still
+leaves the prior generation intact, and uses and imports at other paths remain. `:reset`
 clears retained declarations, imports, uses, and session runtime state. Retained
 explicit `std/core` imports suppress the normal per-entry prelude; `--no-stdlib`
 disables that prelude for the whole session.

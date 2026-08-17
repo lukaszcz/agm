@@ -4864,6 +4864,19 @@ class TestImports:
         assert s.eval_entry("new()").value == IntValue(2)
         assert not s.eval_entry("old()").ok
 
+    def test_retained_local_use_ignores_a_later_colliding_import(self, tmp_path: Path) -> None:
+        (tmp_path / "lib.agl").write_text("def imported() -> int = 2\n")
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("def Source::local() -> int = 1").ok
+        assert session.eval_entry("use Source::*").ok
+
+        imported = session.eval_entry("import lib as Source")
+        local = session.eval_entry("local()")
+
+        assert imported.ok, imported.diagnostics
+        assert local.ok, local.diagnostics
+        assert local.value == IntValue(1)
+
     def test_retained_import_canonicalizes_a_later_use_replacement(self, tmp_path: Path) -> None:
         (tmp_path / "lib.agl").write_text(
             "def old() -> int = 1\ndef new() -> int = 2\n", encoding="utf-8"

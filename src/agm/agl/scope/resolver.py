@@ -1752,10 +1752,17 @@ class _Resolver:
 
     def _resolve_use_decl(self, decl: UseDecl) -> None:
         """Inject the selected members of one already-nameable route bare."""
+        retained_target = self._retained_use_targets.get(decl.node_id)
+        if retained_target is not None and retained_target.local_path is not None:
+            local = retained_target.local_path
+            self._use_targets[decl.node_id] = retained_target
+            self._current_scope().contribute_local_use(
+                LocalUseContribution(declaration=decl, source=self._scope_nodes[local])
+            )
+            return
         decl = self._reinterpret_single_member_use_alias(decl)
         target = tuple(segment.name for segment in decl.target)
-        retained_target = self._retained_use_targets.get(decl.node_id)
-        local = retained_target.local_path if retained_target is not None else None
+        local = None
         if local is None and not (retained_target and retained_target.imported_routes):
             local = self._use_local_target(decl, target)
             if local is None and not decl.anchored:

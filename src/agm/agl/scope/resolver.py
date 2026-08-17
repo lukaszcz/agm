@@ -1820,14 +1820,15 @@ class _Resolver:
                 if members is None:
                     module, source = imported_route
                     contribution = self._import_env.contributions.get(module)
-                    assert contribution is not None
+                    if contribution is None:
+                        continue
                     members = self._relative_use_import_members(
                         contribution.members,
                         source,
                         target_exists=(imported_route in self._import_env.scope_origins_by_route),
                     )
-                assert members is not None
-                replayed.append((imported_route, members))
+                if members is not None:
+                    replayed.append((imported_route, members))
             imported = tuple(replayed)
         direct_routes = {imported_route for imported_route, _members in direct_imports}
         shared_alias_facade = (

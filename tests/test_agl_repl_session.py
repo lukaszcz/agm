@@ -4863,6 +4863,20 @@ class TestImports:
         assert result.ok, result.diagnostics
         assert result.value == IntValue(1)
 
+    def test_retained_imported_use_reports_when_a_replacement_hides_its_target(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "lib.agl").write_text(
+            "scope S\ndef value() -> int = 1\nend S\n", encoding="utf-8"
+        )
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("import lib\nuse lib::S::*").ok
+
+        replacement = session.eval_entry("import lib hiding S")
+
+        assert not replacement.ok
+        assert replacement.diagnostics[0].message
+
     def test_retained_imported_use_keeps_nested_scope_routes_after_alias_change(
         self, tmp_path: Path
     ) -> None:
@@ -4904,6 +4918,24 @@ class TestImports:
 
         assert session.eval_entry("import pkg/* as Facade\nuse Facade::*").ok
         assert session.eval_entry("first() + second()").value == IntValue(3)
+
+    def test_retained_wildcard_facade_use_survives_a_shrinking_import(
+        self, tmp_path: Path
+    ) -> None:
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text("def first() -> int = 1\n", encoding="utf-8")
+        removed = package / "b.agl"
+        removed.write_text("def second() -> int = 2\n", encoding="utf-8")
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("import pkg/* as Facade\nuse Facade::*").ok
+        removed.unlink()
+
+        result = session.eval_entry("first()")
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(1)
+        assert not session.eval_entry("second()").ok
 
     def test_retained_wildcard_facade_refreshes_only_its_original_import(
         self, tmp_path: Path

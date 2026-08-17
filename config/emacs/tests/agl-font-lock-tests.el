@@ -279,6 +279,8 @@
   (agl-flt--with-buffer "exec! let x = 1\n"
     (should (eq (agl-flt--face-of "let x") 'font-lock-string-face))))
 
+;; --- Numbers ---
+
 (ert-deftest agl-flt-int-literal-is-number-face ()
   (agl-flt--with-buffer "let x = 42\n"
     (should (eq (agl-flt--face-of "42") agl--number-face))))
@@ -286,6 +288,11 @@
 (ert-deftest agl-flt-decimal-literal-is-number-face ()
   (agl-flt--with-buffer "let x = 3.14\n"
     (should (eq (agl-flt--face-of "3.14") agl--number-face))))
+
+(ert-deftest agl-flt-digits-inside-identifier-are-not-number-faced ()
+  ;; `a1b' is one identifier: digits within it are not a numeric literal.
+  (agl-flt--with-buffer "let a1b = 1\n"
+    (should-not (eq (agl-flt--face-at (agl-flt--pos-before "1b")) agl--number-face))))
 
 ;; --- Operators, including `::' (Fix 5) ---
 
@@ -301,6 +308,15 @@
   (agl-flt--with-buffer "let x = a::b\n"
     (should (eq (agl-flt--face-of "::") agl--operator-face))))
 
+(ert-deftest agl-flt-assignment-operator-is-operator-faced ()
+  (agl-flt--with-buffer "r := 1\n"
+    (should (eq (agl-flt--face-of ":=") agl--operator-face))))
+
+(ert-deftest agl-flt-unspaced-plus-is-part-of-identifier ()
+  ;; `a+b' is a single identifier, so its `+' is not an operator.
+  (agl-flt--with-buffer "let s = a+b\n"
+    (should-not (eq (agl-flt--face-of "+") agl--operator-face))))
+
 ;; --- Zone markers `@pos'/`@std'/`@named' ---
 
 (ert-deftest agl-flt-zone-marker-pos-is-keyword-face ()
@@ -315,6 +331,10 @@
   (agl-flt--with-buffer "def f(x: int, @named, y: int) -> int = x + y\n"
     (should (eq (agl-flt--face-of "@named") 'font-lock-keyword-face))))
 
+(ert-deftest agl-flt-unknown-at-name-is-not-a-zone-marker ()
+  (agl-flt--with-buffer "def f(x: int, @nope, y: int) -> int = x\n"
+    (should-not (eq (agl-flt--face-of "@nope") 'font-lock-builtin-face))))
+
 ;; --- A keyword immediately after a delimiter or operator is still faced ---
 
 (ert-deftest agl-flt-keyword-immediately-after-open-paren-is-faced ()
@@ -328,6 +348,8 @@
 (ert-deftest agl-flt-keyword-immediately-after-comma-is-faced ()
   (agl-flt--with-buffer "let ok = f(x,and,y)\n"
     (should (eq (agl-flt--face-of "and") 'font-lock-keyword-face))))
+
+;; --- `as?' is a single lexeme ---
 
 (ert-deftest agl-flt-as-optional-is-single-lexeme-keyword-face ()
   (agl-flt--with-buffer "let ok = v as? int\n"
@@ -369,6 +391,10 @@
     ;; be painted with `agl-interpolation-face'.
     (should-not (eq (agl-flt--face-of "}") 'agl-interpolation-face))))
 
+(ert-deftest agl-flt-close-brace-without-hole-is-not-faced ()
+  (agl-flt--with-buffer "let a = { x = 1 }\n"
+    (should-not (eq (agl-flt--face-of "}") 'agl-interpolation-face))))
+
 ;; --- `end' promotion works at any indentation, not just column 0 ---
 
 (ert-deftest agl-flt-end-promoted-at-indented-item-start ()
@@ -387,47 +413,14 @@
     (should (eq (agl-flt--face-of "Point") 'font-lock-type-face))
     (should (eq (agl-flt--face-of "Review") 'font-lock-type-face))))
 
-;; --- Regression: a constructor pattern leaves the constructor unfaced
-;;     (Fix 7) ---
-
-(ert-deftest agl-flt-let-constructor-pattern-does-not-face-constructor ()
-  (agl-flt--with-buffer "let Point(x, y) = p\n"
-    (should-not (eq (agl-flt--face-of "Point") 'font-lock-variable-name-face))))
-
-(ert-deftest agl-flt-digits-inside-identifier-are-not-number-faced ()
-  ;; `a1b' is one identifier: digits within it are not a numeric literal.
-  (agl-flt--with-buffer "let a1b = 1\n"
-    (should-not (eq (agl-flt--face-at (agl-flt--pos-before "1b")) agl--number-face))))
-
-;; --- Operators ---
-
-(ert-deftest agl-flt-assignment-operator-is-operator-faced ()
-  (agl-flt--with-buffer "r := 1\n"
-    (should (eq (agl-flt--face-of ":=") agl--operator-face))))
-
-(ert-deftest agl-flt-unspaced-plus-is-part-of-identifier ()
-  ;; `a+b' is a single identifier, so its `+' is not an operator.
-  (agl-flt--with-buffer "let s = a+b\n"
-    (should-not (eq (agl-flt--face-of "+") agl--operator-face))))
-
-(ert-deftest agl-flt-unknown-at-name-is-not-a-zone-marker ()
-  (agl-flt--with-buffer "def f(x: int, @nope, y: int) -> int = x\n"
-    (should-not (eq (agl-flt--face-of "@nope") 'font-lock-builtin-face))))
-
-;; --- Backslash runs before `%{' ---
-;;
-;; Templates use escape-parity semantics (`\\' is an escaped backslash), so an
-;; ODD run escapes the hole and an EVEN run leaves it interpolating.  Raw-tail
-;; payloads own their backslashes: ANY single immediately preceding backslash
-;; escapes, with no parity count.  See docs/agl/reference/lexical-structure.md.
-
-;; --- The interpolation face never leaks outside a string region ---
-
-(ert-deftest agl-flt-close-brace-without-hole-is-not-faced ()
-  (agl-flt--with-buffer "let a = { x = 1 }\n"
-    (should-not (eq (agl-flt--face-of "}") 'agl-interpolation-face))))
-
-;; --- Type expressions in annotation position (not only the primitives) ---
+(ert-deftest agl-flt-module-route-qualified-type-faces-terminal-segment-only ()
+  (agl-flt--with-buffer "def f(p: foo/bar::Point) -> int = 1\n"
+    (should (eq (agl-flt--face-of "Point") 'font-lock-type-face))
+    ;; The module-route segments are not a declaration position (D3):
+    ;; they stay unfaced, matching how a qualifier prefix is treated
+    ;; everywhere else in this file.
+    (should-not (eq (agl-flt--face-of "foo") 'font-lock-type-face))
+    (should-not (eq (agl-flt--face-of "bar") 'font-lock-type-face))))
 
 (ert-deftest agl-flt-generic-type-head-in-annotation-is-type-faced ()
   (agl-flt--with-buffer "def f(o: Option[int]) -> int = 1\n"
@@ -438,15 +431,32 @@
     (should (eq (agl-flt--face-of "Point") 'font-lock-type-face))
     (should (eq (agl-flt--face-of "text") 'font-lock-type-face))))
 
-(ert-deftest agl-flt-primitive-name-as-binder-is-not-type-faced ()
-  (agl-flt--with-buffer "let text = 1\n"
-    (should-not (eq (agl-flt--face-of "text") 'font-lock-type-face))))
+;; --- Regression: a constructor pattern leaves the constructor unfaced
+;;     (Fix 7) ---
 
-;; --- Constructor patterns are not binders (D3: use-sites stay unfaced) ---
+(ert-deftest agl-flt-let-constructor-pattern-does-not-face-constructor ()
+  (agl-flt--with-buffer "let Point(x, y) = p\n"
+    (should-not (eq (agl-flt--face-of "Point") 'font-lock-variable-name-face))))
 
 (ert-deftest agl-flt-let-qualified-nullary-pattern-is-not-variable-faced ()
   (agl-flt--with-buffer "let A::x() = e\n"
     (should-not (eq (agl-flt--face-of "x()") 'font-lock-variable-name-face))))
+
+;; --- Annotation position is contextual, not a bare `:' anywhere ---
+
+(ert-deftest agl-flt-dict-literal-value-is-not-type-faced ()
+  ;; `{ key: value }' is a dict literal: the `:' separates an entry, so the
+  ;; value is an ordinary expression rather than a type annotation.
+  (agl-flt--with-buffer "let d = { foo: bar }\n"
+    (should-not (eq (agl-flt--face-of "bar") 'font-lock-type-face))))
+
+(ert-deftest agl-flt-primitive-name-as-dict-value-is-not-type-faced ()
+  (agl-flt--with-buffer "let d = { foo: text }\n"
+    (should-not (eq (agl-flt--face-of "text") 'font-lock-type-face))))
+
+(ert-deftest agl-flt-primitive-name-as-binder-is-not-type-faced ()
+  (agl-flt--with-buffer "let text = 1\n"
+    (should-not (eq (agl-flt--face-of "text") 'font-lock-type-face))))
 
 (ert-deftest agl-flt-plain-let-binder-is-still-variable-faced ()
   (agl-flt--with-buffer "let plain = 1\n"

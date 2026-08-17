@@ -733,6 +733,18 @@ name actually faced -- or nil if point is not at a NAME."
         (setq seg-end (point)))
       (list full-start seg-start seg-end))))
 
+(defun agl--dict-entry-colon-p (pos)
+  "Return non-nil if the `:' at POS separates a dict-literal entry.
+
+A `:' whose innermost enclosing bracket is a brace belongs to a dict
+literal (`{ key: value }'), where the value is an ordinary expression
+rather than a type annotation.  Parameter and field lists use
+parentheses, and layout-form field blocks and return types are not
+inside a brace at all, so this rejects only the dict case."
+  (save-excursion
+    (let ((open (nth 1 (syntax-ppss pos))))
+      (and open (eq (char-after open) ?\{)))))
+
 (defun agl--match-type-annotation (limit)
   "`font-lock-keywords' MATCHER for a type head in annotation position.
 
@@ -753,6 +765,10 @@ group 1 covers the terminal segment.  Return non-nil on success."
     (while (and (not found) (re-search-forward agl--type-annotation-anchor-re limit t))
       (let ((anchor-end (match-end 0)))
         (goto-char anchor-end)
+        (if (agl--dict-entry-colon-p (match-beginning 0))
+            ;; A `:' directly inside a brace is a dict entry (`{ key: value }'),
+            ;; not an annotation, so its value is an ordinary expression.
+            nil
         (skip-chars-forward " \t\n")
         (let ((chain (and (looking-at agl--ident-start-re)
                            (agl--parse-type-head-chain))))
@@ -761,7 +777,7 @@ group 1 covers the terminal segment.  Return non-nil on success."
                 (set-match-data (list seg-start seg-end seg-start seg-end))
                 (goto-char seg-end)
                 (setq found t))
-            (goto-char anchor-end)))))
+            (goto-char anchor-end))))))
     found))
 
 (defun agl--match-number (limit)
@@ -1110,18 +1126,18 @@ stack in text order."
           ;; the calls that matter are the ones after an internal retry.
           (cond
            ((and (progn (goto-char line-start) (agl--search-decl-head "scope" line-end t))
-                 (not (save-match-data (agl--in-string-or-comment-p (match-beginning 0)))))
+                 (not (agl--decl-head-candidate-rejected-p (match-beginning 0))))
             (let* ((chain (match-string-no-properties 2))
                    (qualified (agl--qualify-decl-name chain scope-stack)))
               (push (cons qualified (copy-marker (match-beginning 2))) scopes)
               (push chain scope-stack)))
            ((and (progn (goto-char line-start) (agl--search-decl-head "end" line-end t))
-                 (not (save-match-data (agl--in-string-or-comment-p (match-beginning 0)))))
+                 (not (agl--decl-head-candidate-rejected-p (match-beginning 0))))
             (let ((chain (match-string-no-properties 2)))
               (when (and scope-stack (string= (car scope-stack) chain))
                 (pop scope-stack))))
            ((and (progn (goto-char line-start) (agl--search-decl-head "def" line-end))
-                 (not (save-match-data (agl--in-string-or-comment-p (match-beginning 0)))))
+                 (not (agl--decl-head-candidate-rejected-p (match-beginning 0))))
             (let* ((chain (match-string-no-properties 2))
                    (qualified (agl--qualify-decl-name chain scope-stack))
                    (marker (copy-marker (match-beginning 3)))
@@ -1130,22 +1146,22 @@ stack in text order."
                   (push entry programs)
                 (push entry functions))))
            ((and (progn (goto-char line-start) (agl--search-decl-head "record" line-end))
-                 (not (save-match-data (agl--in-string-or-comment-p (match-beginning 0)))))
+                 (not (agl--decl-head-candidate-rejected-p (match-beginning 0))))
             (push (cons (agl--qualify-decl-name (match-string-no-properties 2) scope-stack)
                         (copy-marker (match-beginning 3)))
                   types))
            ((and (progn (goto-char line-start) (agl--search-decl-head "enum" line-end))
-                 (not (save-match-data (agl--in-string-or-comment-p (match-beginning 0)))))
+                 (not (agl--decl-head-candidate-rejected-p (match-beginning 0))))
             (push (cons (agl--qualify-decl-name (match-string-no-properties 2) scope-stack)
                         (copy-marker (match-beginning 3)))
                   types))
            ((and (progn (goto-char line-start) (agl--search-decl-head "type" line-end))
-                 (not (save-match-data (agl--in-string-or-comment-p (match-beginning 0)))))
+                 (not (agl--decl-head-candidate-rejected-p (match-beginning 0))))
             (push (cons (agl--qualify-decl-name (match-string-no-properties 2) scope-stack)
                         (copy-marker (match-beginning 3)))
                   types))
            ((and (progn (goto-char line-start) (agl--search-decl-head "exception" line-end))
-                 (not (save-match-data (agl--in-string-or-comment-p (match-beginning 0)))))
+                 (not (agl--decl-head-candidate-rejected-p (match-beginning 0))))
             (push (cons (agl--qualify-decl-name (match-string-no-properties 2) scope-stack)
                         (copy-marker (match-beginning 3)))
                   types)))

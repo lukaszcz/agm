@@ -1,17 +1,18 @@
 """prompt_toolkit front end for the AgL REPL.
 
 This module is the **only** place that touches prompt_toolkit; everything else
-in :mod:`agm.agl.repl` is UI-free.  It provides:
+in :mod:`agm.agl.repl` is UI-free, including the read-eval-print loop body
+itself (:mod:`agm.agl.repl.loop`), which this module builds a
+``PromptSession`` for and delegates to. It provides:
 
 - :class:`AglPromptLexer` — syntax highlighting that drives the *real* AgL lexer
   (:func:`agm.agl.lexer.tokenize`) so colours track the grammar exactly;
 - :class:`AglCompleter` — completion fed from live session state (keywords,
   bindings, meta-command names);
-- :func:`is_incomplete` — the multiline continuation predicate (delegates to the
-  parser's structured incompleteness signal);
 - :func:`build_prompt_session` — a configured ``PromptSession`` with history,
   styling, and the multiline Enter binding;
-- :func:`run_console` — the read-eval-print loop itself.
+- :func:`run_console` — builds that session and hands the read-eval-print loop
+  off to :func:`agm.agl.repl.loop.run_repl_loop`.
 
 mypy note: the whole surface types cleanly under ``--strict`` /
 ``disallow_any_expr`` without any ``stubs/prompt_toolkit/`` shims.  The Enter key
@@ -43,15 +44,8 @@ from prompt_toolkit.output import Output
 from agm.agl.keywords import KEYWORDS
 from agm.agl.lexer import tokenize
 from agm.agl.lexer.tokens import RAW_TAIL_NAME
-from agm.agl.parser import (
-    has_open_raw_tail_block,
-    has_unterminated_triple_quoted_string,
-    is_incomplete_source,
-)
 from agm.agl.repl import meta as meta_mod
-from agm.agl.repl import render as render_mod
-from agm.agl.repl import session as session_mod
-from agm.agl.repl.agentmode import AgentMode
+from agm.agl.repl.loop import CONTINUATION, PROMPT, is_incomplete, run_repl_loop
 from agm.agl.repl.themes import get_style
 from agm.agl.scope.symbols import BUILTIN_CALL_NAMES
 from agm.agl.syntax import BUILTIN_TYPE_NAMES
@@ -61,38 +55,8 @@ if TYPE_CHECKING:
 
     from lark.lexer import Token
 
-    from agm.agl.repl.agents import ConfirmDecision
+    from agm.agl.repl.agentmode import AgentMode
     from agm.agl.repl.session import ReplSession
-
-
-# ---------------------------------------------------------------------------
-# Prompts and banner
-# ---------------------------------------------------------------------------
-
-PROMPT = "agl> "
-CONTINUATION = "...> "
-
-
-def format_banner(agent_mode: "AgentMode | None" = None) -> str:
-    """Return the startup banner, noting the active agent-call mode.
-
-    The first line is always ``AgL REPL …`` (a stable prefix other tooling and
-    tests key on).  Subsequent lines state the prompt, how to get help, how to
-    quit, and — when an :class:`AgentMode` is supplied — the current agent-call
-    mode so the user knows up front whether live calls will prompt for
-    confirmation.
-    """
-    lines = [
-        "AgL REPL — an interactive read-eval-print loop for AgL.",
-        f"  Enter AgL at the {PROMPT!r} prompt; a block continues on {CONTINUATION!r}.",
-        "  Type :help for the meta-command list; :quit or Ctrl-D to exit.",
-    ]
-    if agent_mode is not None:
-        if agent_mode.mode == "auto":
-            lines.append("  Agent-call mode: auto (live calls fire without confirmation).")
-        else:
-            lines.append("  Agent-call mode: confirm (you approve each live agent call).")
-    return "\n".join(lines)
 
 
 # AgL keywords offered by the completer (the reserved-word set, sorted for a
@@ -562,37 +526,6 @@ def _completion_word_before_cursor(text_before_cursor: str) -> str | None:
     return match.group(0)
 
 
-# ---------------------------------------------------------------------------
-# Multiline continuation
-# ---------------------------------------------------------------------------
-
-
-def is_incomplete(text: str) -> bool:
-    """Return ``True`` when *text* is a prefix of a valid entry (keep prompting).
-
-    *text* is the current buffer content (no synthetic trailing newline).  Blank
-    or whitespace-only input force-submits (returns ``False``) so pressing Enter
-    on an empty prompt gives a fresh prompt rather than inserting a newline; the
-    loop then no-ops the blank entry.  A trailing blank line — the user pressed
-    Enter on an empty continuation line, so the buffer ends with ``\\n`` —
-    likewise force-submits so the user can always escape a continuation even when
-    the buffer is still syntactically incomplete.  Otherwise the structured
-    parser signal decides, except that a registered raw-tail block stays open
-    until its payload is closed by a blank line or dedent.
-    """
-    if not text.strip():
-        return False
-    if text.endswith("\n") and not has_unterminated_triple_quoted_string(text):
-        return False
-    return is_incomplete_source(text) or has_open_raw_tail_block(text)
-
-
-# ``has_runnable_statements`` (the blank/comment-only-entry predicate) lives in
-# the UI-free ``session`` module so ``load_file`` can share it; re-exported here
-# under its original name for the console loop and its tests.
-has_runnable_statements = session_mod.has_runnable_statements
-
-
 def _make_key_bindings() -> KeyBindings:
     """Build the Enter binding implementing AgL-aware multiline continuation.
 
@@ -664,64 +597,6 @@ def _prompt_continuation(width: int, line_number: int, wrap_count: int) -> Style
 
 
 # ---------------------------------------------------------------------------
-# Agent-call confirmation prompt
-# ---------------------------------------------------------------------------
-
-# How much of a rendered prompt to show inline before truncating; longer prompts
-# offer a ``[v]iew`` option to print the full text.
-_PROMPT_PREVIEW_CHARS = 200
-
-# The reader the confirm prompt uses to read a line.  Injected so headless tests
-# can script answers without a terminal; defaults to stdlib ``input``.
-PromptReader = Callable[[str], str]
-
-
-def make_console_confirm(
-    *,
-    reader: "PromptReader | None" = None,
-    printer: Callable[[str], None] | None = None,
-) -> "Callable[[str, str], ConfirmDecision]":
-    """Return a confirm callback for :class:`~agm.agl.repl.agents.ConfirmingAgent`.
-
-    The callback shows the *callee* and the rendered prompt (truncated, with a
-    ``[v]iew`` option to print the full text), then reads ``[Y]es / [n]o /
-    [a]lways`` and maps the answer to ``"yes"`` / ``"no"`` / ``"always"``.  An
-    empty answer defaults to ``"yes"`` (the capitalised default).  Anything
-    unrecognised re-asks.
-
-    *reader* / *printer* are injected so headless tests drive it without a
-    terminal; they default to stdlib ``input`` / ``print``.
-    """
-    read: PromptReader = reader if reader is not None else input
-    write: Callable[[str], None] = printer if printer is not None else print
-
-    def confirm(callee: str, prompt: str) -> ConfirmDecision:
-        write(f"Agent call to {callee!r}:")
-        write(_preview_prompt(prompt))
-        while True:
-            answer = read("Run this agent call? [Y]es / [n]o / [a]lways: ").strip().lower()
-            if answer in ("", "y", "yes"):
-                return "yes"
-            if answer in ("n", "no"):
-                return "no"
-            if answer in ("a", "always"):
-                return "always"
-            if answer in ("v", "view"):
-                write(prompt)
-                continue
-            write("Please answer y(es), n(o), a(lways), or v(iew).")
-
-    return confirm
-
-
-def _preview_prompt(prompt: str) -> str:
-    """Return the inline prompt preview, truncated with a ``[v]iew`` hint."""
-    if len(prompt) <= _PROMPT_PREVIEW_CHARS:
-        return prompt
-    return f"{prompt[:_PROMPT_PREVIEW_CHARS]}… (truncated; type 'v' to view full)"
-
-
-# ---------------------------------------------------------------------------
 # The read-eval-print loop
 # ---------------------------------------------------------------------------
 
@@ -738,71 +613,33 @@ def run_console(
     input: Input | None = None,
     output: Output | None = None,
 ) -> None:
-    """Run the interactive AgL REPL against *session*.
+    """Run the interactive AgL REPL against *session* using prompt_toolkit.
 
-    Reads one (possibly multiline) entry per iteration.  ``EOFError`` (Ctrl-D)
-    or a ``:quit`` / ``:exit`` meta-command exits the loop; ``KeyboardInterrupt``
-    (Ctrl-C) cancels the current entry and keeps looping.  A ``:`` line is routed
-    to :func:`agm.agl.repl.meta.dispatch_meta`; a blank or comment-only entry is
-    a no-op (fresh prompt, no error); any other entry is evaluated and its result
-    rendered via :func:`agm.agl.repl.render.render_entry_result`.
-
-    When *check_only* is set the REPL is in dry-run mode: each entry is run
-    through the full static pipeline (parse / resolve / typecheck / match
-    compilation) only — no evaluation, no agent/exec calls, and no bindings
-    are persisted — and its inferred type is echoed.
-
-    *theme* selects the initial colour palette; *on_theme_save* is called with
-    the new theme name whenever ``:theme`` switches the active theme (use it to
-    persist the choice to config).
-
-    The loop is intentionally thin: formatting lives in ``render`` and meta
-    handling in ``meta`` so both paths can evolve without touching it.
+    Builds the configured ``PromptSession`` and delegates the actual
+    read-eval-print loop to :func:`agm.agl.repl.loop.run_repl_loop`: this
+    function's own job is wiring the loop's reader/writer seam to
+    prompt_toolkit — ``prompt_session.prompt`` as the reader (it already raises
+    ``EOFError`` on Ctrl-D and ``KeyboardInterrupt`` on Ctrl-C, exactly as the
+    loop expects) and ``print`` as the writer — and swapping
+    ``prompt_session.style`` when the theme changes before persisting it via
+    *on_theme_save*.
     """
     prompt_session = build_prompt_session(
         session, theme=theme, history_path=history_path, input=input, output=output
     )
-    # A shared, mutable agent-mode holder: ``:agent`` mutates it here, and the wrapper
-    # will pass this SAME instance to the confirming agent wrapper so the wrapper
-    # observes the mutation.  Defaults to confirm-each-call.
-    ctx = meta_mod.MetaContext(
-        session=session,
+
+    def on_theme_change(new_theme: str) -> None:
+        prompt_session.style = get_style(new_theme)
+        if on_theme_save is not None:
+            on_theme_save(new_theme)
+
+    run_repl_loop(
+        session,
+        reader=prompt_session.prompt,
+        writer=print,
         echo=echo,
-        agent_mode=agent_mode if agent_mode is not None else AgentMode(),
+        check_only=check_only,
+        agent_mode=agent_mode,
         theme=theme,
+        on_theme_change=on_theme_change,
     )
-
-    print(format_banner(ctx.agent_mode))
-    current_theme = theme
-    while True:
-        try:
-            entry = prompt_session.prompt()
-        except KeyboardInterrupt:
-            # Ctrl-C cancels the current entry but never exits the REPL.
-            continue
-        except EOFError:
-            # Ctrl-D exits.
-            break
-
-        if entry.lstrip().startswith(":"):
-            outcome = meta_mod.dispatch_meta(entry, ctx)
-            if outcome.text is not None:
-                print(outcome.text)
-            if ctx.theme != current_theme:
-                current_theme = ctx.theme
-                prompt_session.style = get_style(current_theme)
-                if on_theme_save is not None:
-                    on_theme_save(current_theme)
-            if outcome.quit:
-                break
-            continue
-
-        # Blank or comment-only entries have nothing to run; give a fresh prompt
-        # without invoking the evaluator (whose parser would reject them).
-        if not has_runnable_statements(entry):
-            continue
-
-        result = session.eval_entry(entry, check_only=check_only)
-        rendered = render_mod.render_entry_result(result, echo=ctx.echo, check_only=check_only)
-        if rendered is not None:
-            print(rendered)

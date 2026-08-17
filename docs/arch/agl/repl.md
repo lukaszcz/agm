@@ -38,9 +38,20 @@ Because a write is an ordinary positional statement, settings take effect in pro
 
 The REPL console adds interactivity around the UI-free session: a confirmation wrapper gating live agent calls (confirm/auto modes, Ctrl-C converted into cancellation), syntax highlighting that runs the real lexer and classifies names semantically from declaration context rather than capitalization, parser-driven multiline submission that treats an unterminated string or a line-final raw-tail header as continuation input, and terminal-detected color themes persisted to config.
 
+## Front-End Seam
+
+The read-eval-print loop body — meta-command dispatch, the blank/comment no-op, entry evaluation, and result rendering — exists exactly once, in the UI-free `agm.agl.repl.loop` module (`run_repl_loop`), along with the prompt spellings, the startup banner, the multiline-continuation predicate (`is_incomplete`), and the agent-call confirmation callback (`make_console_confirm`). `run_repl_loop` is parameterized by a reader (returns the next entry; raises `EOFError`/`KeyboardInterrupt`), a writer, and an `on_theme_change` hook fired when `:theme` switches.
+
+Two front ends wire that seam to different I/O:
+
+- `agm.agl.repl.console` — the **only** module that imports prompt_toolkit. It builds a `PromptSession` (lexer, completer, key bindings, history, styling) and wires its `prompt()`/`print` as the reader/writer; `on_theme_change` swaps `prompt_session.style` and persists the choice.
+- `agm.agl.repl.plain_console` — a styling-free line front end: it prints the plain `agl>`/`...>` prompts and reads lines from a text stream, accumulating continuation lines with the same `is_incomplete` predicate so a pasted or programmatically sent multi-line block works; `on_theme_change` only persists. It also owns `plain_mode_engaged`, the pure engagement predicate `agm.commands.repl` uses to pick this front end (non-tty stdin/stdout, or `TERM=dumb`) unless `--plain` forces it; there is no flag to force prompt_toolkit onto a non-terminal.
+
+`agm.commands.repl` builds the session once and hands it to whichever front end is chosen; both imports are local so an interactive session never pulls in the plain path and a plain session never pulls in prompt_toolkit.
+
 ## Code Entry Points
 
-- `src/agm/agl/repl/` — the incremental session, type-focused display helpers, the console, agent confirmation, and themes.
+- `src/agm/agl/repl/` — the incremental session, type-focused display helpers, the shared loop core (`loop.py`), the two front ends (`console.py`, `plain_console.py`), agent confirmation, and themes (the UI-free `theme_selection.py` leaf plus the prompt_toolkit-touching `themes.py`).
 - `src/agm/agl/pipeline.py` — program preparation, parameter discovery, and host-environment assembly shared by `exec` and the REPL.
-- `src/agm/commands/exec.py` and `src/agm/commands/repl.py` — the hosting commands, including `default-agent` override construction (`cli_support/engine_seeds.py`); `src/agm/cli_support/exec_params.py` — parameter discovery and option wiring for `agm exec`.
+- `src/agm/commands/exec.py` and `src/agm/commands/repl.py` — the hosting commands, including `default-agent` override construction (`cli_support/engine_seeds.py`) and REPL front-end selection; `src/agm/cli_support/exec_params.py` — parameter discovery and option wiring for `agm exec`.
 - Tests: `tests/test_agl_repl_*.py`, `tests/test_agl_builtin_var.py`, `tests/test_agl_builtin_var_host.py`, `tests/test_exec_command.py`.

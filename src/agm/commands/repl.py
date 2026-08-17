@@ -6,23 +6,30 @@ timeout), so an interactive session evaluates entries with the same agent
 dispatch backing a batch ``agm exec`` run would use.
 
 The command itself is thin: it resolves configuration the same way ``exec``
-does, builds a value-driven dispatcher wrapped in a confirming wrapper, constructs a
-:class:`ReplSession`, and hands control to
-:func:`agm.agl.repl.console.run_console`.  All the interactive logic lives in
-:mod:`agm.agl.repl`.
+does, builds a value-driven dispatcher wrapped in a confirming wrapper,
+constructs a :class:`ReplSession`, then hands control to one of two front
+ends sharing the same UI-free loop core (:mod:`agm.agl.repl.loop`):
+:func:`agm.agl.repl.console.run_console` (prompt_toolkit) or
+:func:`agm.agl.repl.plain_console.run_plain_console` (plain line I/O, for a
+pipe, comint buffer, or any other non-terminal consumer). The front end is
+chosen by :func:`~agm.agl.repl.plain_console.plain_mode_engaged` (non-tty
+stdin/stdout, or ``TERM=dumb``) or by the explicit ``--plain`` flag; there is
+no flag to force prompt_toolkit onto a pipe. All the interactive logic lives
+in :mod:`agm.agl.repl`.
 
 Agent calls are gated: a single shared :class:`AgentMode` (``confirm`` by
 default, ``auto``; ``confirm`` under ``--confirm-agents``) is passed to BOTH the confirming
-wrapper and the console, so the ``:agent`` meta-command, an ``always`` answer,
-and the wrapper all stay in sync.  Trace logging (``--log-file`` / ``--no-log``)
-Each REPL entry and its loaded library modules open ``std/core`` by default;
-``--no-stdlib`` disables that automatic opening throughout every loaded REPL
-program. Imports are qualified by default, with ``open import`` and ``using``
-opting into bare names.
+wrapper and the chosen front end, so the ``:agent`` meta-command, an ``always``
+answer, and the wrapper all stay in sync.  Trace logging (``--log-file`` /
+``--no-log``) Each REPL entry and its loaded library modules open ``std/core``
+by default; ``--no-stdlib`` disables that automatic opening throughout every
+loaded REPL program. Imports are qualified by default, with ``open import``
+and ``using`` opting into bare names.
 """
 
 from __future__ import annotations
 
+import os
 import sys
 from typing import TYPE_CHECKING
 
@@ -30,6 +37,8 @@ from agm.agl.diagnostics import format_diagnostic
 from agm.agl.repl import ReplSession
 from agm.agl.repl.agentmode import AgentMode
 from agm.agl.repl.agents import ConfirmingAgent
+from agm.agl.repl.loop import make_console_confirm
+from agm.agl.repl.plain_console import plain_mode_engaged
 from agm.agl.runtime.agents import value_driven_agent_factory
 from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.cli_support.args import ReplArgs
@@ -108,14 +117,12 @@ def run(args: ReplArgs) -> None:
     runner_agent = value_driven_agent_factory(idle_timeout=config.timeout)
 
     # ONE shared agent-mode holder: passed to BOTH the confirming wrapper and the
-    # console, so ``:agent``/``always`` and the wrapper observe the same mode.
-    # ``--confirm-agents`` starts in ``confirm``; otherwise auto (decision 2).
+    # chosen front end, so ``:agent``/``always`` and the wrapper observe the same
+    # mode.  ``--confirm-agents`` starts in ``confirm``; otherwise auto (decision 2).
     agent_mode = AgentMode(mode="confirm" if args.confirm_agents else "auto")
 
-    # Importing the console pulls in prompt_toolkit; defer it so non-interactive
-    # code paths never pay for the terminal dependency.
-    from agm.agl.repl.console import make_console_confirm, run_console
-
+    # UI-free: shared by both front ends, so building it never pulls in
+    # prompt_toolkit even when the plain front end is the one that runs.
     confirm_agent_call = make_console_confirm()
     confirming_agent = ConfirmingAgent(runner_agent, agent_mode, confirm=confirm_agent_call)
 
@@ -210,15 +217,44 @@ def run(args: ReplArgs) -> None:
     history_path = agm_home_dir(home=ctx.home) / "repl_history"
     history_path.parent.mkdir(parents=True, exist_ok=True)
 
+    def on_theme_save(new_theme: str) -> None:
+        save_repl_theme(new_theme, home=ctx.home)
+
     # ``--dry-run`` means type-check only in the REPL: every entry runs the full
     # static pipeline but is never evaluated, so no agent/exec calls fire and no
     # bindings are persisted.  It reads the same global flag ``agm exec`` honours.
-    run_console(
-        session,
-        echo=not args.quiet,
-        check_only=dry_run.enabled(),
-        agent_mode=agent_mode,
-        history_path=history_path,
-        theme=repl_config.theme,
-        on_theme_save=lambda t: save_repl_theme(t, home=ctx.home),
-    )
+    #
+    # The front end is chosen once, here: ``--plain`` forces the plain line
+    # front end; otherwise ``plain_mode_engaged`` auto-detects it from
+    # stdin/stdout (a pipe, redirected file, or a dumb terminal). There is no
+    # flag to force prompt_toolkit onto a non-terminal. The ``console`` import
+    # stays local so a plain session never pulls in prompt_toolkit; the
+    # ``plain_console`` import is local too for symmetry and late binding —
+    # ``plain_mode_engaged`` is already imported from it at module top, so
+    # this local import defers nothing on the plain branch, but the late
+    # binding is what test fixtures rely on when they monkeypatch it.
+    if args.plain or plain_mode_engaged(stdin=sys.stdin, stdout=sys.stdout, env=os.environ):
+        from agm.agl.repl.plain_console import run_plain_console
+
+        run_plain_console(
+            session,
+            echo=not args.quiet,
+            check_only=dry_run.enabled(),
+            agent_mode=agent_mode,
+            theme=repl_config.theme,
+            on_theme_save=on_theme_save,
+            stdin=sys.stdin,
+            stdout=sys.stdout,
+        )
+    else:
+        from agm.agl.repl.console import run_console
+
+        run_console(
+            session,
+            echo=not args.quiet,
+            check_only=dry_run.enabled(),
+            agent_mode=agent_mode,
+            history_path=history_path,
+            theme=repl_config.theme,
+            on_theme_save=on_theme_save,
+        )

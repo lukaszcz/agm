@@ -9,7 +9,7 @@ described here. The AgL language itself is documented in the
 ```text
 agm repl [--strict-json|--no-strict-json]
          [--max-iters N] [--max-call-depth N] [--agent AGL_LITERAL] [--confirm-agents]
-         [--quiet] [--dry-run] [--no-stdlib] [--log|--log-file PATH|--no-log]
+         [--quiet] [--dry-run] [--no-stdlib] [--log|--log-file PATH|--no-log] [--plain]
 ```
 
 Start an interactive read-eval-print loop for AgL. Unlike `agm exec`, which runs a
@@ -17,6 +17,25 @@ whole program from a fresh environment, the REPL keeps a **persistent session**:
 entry is parsed, statically checked (including pattern coverage), and evaluated once against an environment that
 accumulates bindings, types, and declarations across entries, so earlier results stay
 available and agent calls fire exactly once.
+
+### Front ends
+
+`agm repl` has two front ends sharing the same session and evaluation behavior:
+
+- An interactive console (prompt_toolkit) with syntax highlighting,
+  tab-completion, multiline editing, command history, and colour themes — see
+  [Entry editing](#entry-editing) and [Console-only editing
+  features](#console-only-editing-features) below.
+- A **plain** line-oriented mode with no styling, colour, or ANSI escapes: it
+  prints the same `agl> ` / `...> ` prompts and reads lines from stdin,
+  accumulating a multiline entry exactly as the console does, so a pasted or
+  programmatically sent multi-line block still works. This is what drives the
+  REPL over a pipe or from a non-terminal consumer such as an editor's comint
+  buffer.
+
+The plain front end engages automatically when stdin or stdout is not a
+terminal, or when `TERM=dumb`; `--plain` forces it even on a terminal. There is
+no flag to force the console front end onto a non-terminal.
 
 The REPL reuses `[exec]` settings for `default-agent`, the max-iters valve,
 call-depth limit, JSON strictness, and timeout. Imported-module params resolve from
@@ -49,11 +68,24 @@ uses them normally.
 
 ### Entry editing
 
+These behaviors are shared by both front ends:
+
 - Multiline editing is **AgL-aware**: pressing Enter on an unterminated block
   (`record`, `enum`, `if`, `case`, `try`, `do`, …) or a line-final raw-tail header
   such as `exec!`/`ask!` opens a continuation line (`...>`); a complete entry submits.
   Pressing Enter on a blank continuation line force-submits even an unfinished buffer
-  so you can always escape.
+  so you can always escape. In the plain front end this accumulation happens as lines
+  are read from stdin rather than through key bindings, but the same predicate decides
+  when an entry is complete, so a pasted or programmatically sent multi-line block
+  works identically.
+- Press Ctrl-C to cancel the current entry without exiting. During a live agent call,
+  Ctrl-C interrupts the call and stops the current entry; effects completed before
+  cancellation remain visible, and unreached operations do not run.
+
+### Console-only editing features
+
+The interactive console front end (not the plain front end) additionally provides:
+
 - Syntax highlighting and tab-completion are driven from the live session.
   Highlighting colours keywords, string/number literals, operators, the builtin types
   (`text`, `int`, `decimal`, `bool`, `json`, `array`, `dict`, `unit`), and the types and
@@ -68,11 +100,10 @@ uses them normally.
   `$COLORFGBG` environment variable (set by most terminal emulators; falls back to
   dark). Use `:theme dark|light|auto` to switch at runtime; the choice is saved to
   `~/.agm/config.toml` under `[repl] theme`. You can also set `theme = "light"`
-  directly in the config file.
+  directly in the config file. `:theme` still works and persists in the plain front
+  end — it accepts the same names and saves the same way — but has no visible effect
+  there, since plain output carries no colour.
 - Command history persists under `~/.agm/repl_history`.
-- Press Ctrl-C to cancel the current entry without exiting. During a live agent call,
-  Ctrl-C interrupts the call and stops the current entry; effects completed before
-  cancellation remain visible, and unreached operations do not run.
 
 ### Meta-commands
 
@@ -123,6 +154,10 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
   no bindings are persisted. The inferred type is echoed instead of a value
   (`name : Type` for a binding, `: Type` for a bare expression), making it a quick way
   to explore types interactively.
+- `--plain`: Force the plain, non-interactive line front end (see
+  [Front ends](#front-ends)) even when stdin and stdout are both terminals. There is no
+  `--no-plain`; the auto-detected default already avoids the console front end whenever
+  it would not work (a pipe, a redirected file, or `TERM=dumb`).
 
 ### Evaluation notes
 

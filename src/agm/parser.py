@@ -610,7 +610,7 @@ _HELP_TEXTS: dict[str, str] = {
     "repl": textwrap.dedent("""\
         agm repl [--strict-json|--no-strict-json] [--max-iters N] [--max-call-depth N]
                  [--agent AGL_LITERAL] [--confirm-agents] [--dry-run] [--no-stdlib]
-                 [--quiet] [--log|--log-file PATH|--no-log]
+                 [--quiet] [--log|--log-file PATH|--no-log] [--plain]
 
         Start an interactive read-eval-print loop for AgL.  Each entry is
         parsed, type-checked, and evaluated once against a persistent session
@@ -622,6 +622,14 @@ _HELP_TEXTS: dict[str, str] = {
         standard-library names are available unqualified. Other imports are
         qualified by default; use --no-stdlib to require an explicit std/core
         import instead.
+
+        The REPL has two front ends: an interactive prompt_toolkit console
+        with syntax highlighting, completion, and history, and a plain
+        line-oriented mode with no styling or ANSI escapes, for a pipe, a
+        comint buffer, or any other non-terminal consumer. The plain front end
+        is used automatically when stdin or stdout is not a terminal, or when
+        TERM=dumb; --plain forces it even on a terminal. There is no flag to
+        force the console front end onto a non-terminal.
 
         Trace logging is OFF by default.  A ``std/config::KEY := VALUE`` write
         entered at the REPL prompt takes effect from that point and persists for
@@ -655,6 +663,8 @@ _HELP_TEXTS: dict[str, str] = {
           --dry-run             Statically check only: run the full static pipeline
                                 for each entry but never evaluate it (no agent/exec
                                 calls, no persisted bindings); echo the inferred type.
+          --plain               Force the plain, non-interactive line front end
+                                (auto-detected otherwise).
 
         Type :help inside the REPL for the meta-command list; :quit or Ctrl-D
         exits.  Ctrl-C cancels the current entry without exiting.

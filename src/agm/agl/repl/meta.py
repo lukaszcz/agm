@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agm.agl.repl.agentmode import AgentMode
-from agm.agl.repl.themes import THEME_NAMES
+from agm.agl.repl.theme_selection import THEME_NAMES
 
 if TYPE_CHECKING:
     from agm.agl.repl.session import ReplSession

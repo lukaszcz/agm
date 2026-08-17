@@ -1,23 +1,23 @@
-"""Colour themes for the AgL REPL.
+"""Colour themes for the AgL REPL — the prompt_toolkit-touching half.
 
 Two concrete themes are provided — ``dark`` (VS Code Dark+) and ``light``
-(VS Code Light+).  :func:`detect_terminal_theme` infers the terminal background
-from the ``$COLORFGBG`` environment variable (set by most terminal emulators):
-the last semicolon-delimited segment is a 0–15 ANSI colour index where ``15``
-signals a white/light background.  If the variable is absent or unparseable
-the function defaults to ``"dark"``.
+(VS Code Light+).  :func:`get_style` resolves an ``"auto"`` theme name via
+:func:`agm.agl.repl.theme_selection.detect_terminal_theme` before returning the
+matching ``prompt_toolkit`` ``Style`` object.
 
-:func:`get_style` resolves an ``"auto"`` theme name to the detected theme before
-returning the matching ``prompt_toolkit`` ``Style`` object.
+Theme *names* and terminal-background *detection* are UI-free and live in
+:mod:`agm.agl.repl.theme_selection`, which this module imports; keeping that
+half separate means an importer that only needs names/detection (the
+meta-command dispatcher, the plain REPL front end) never pulls prompt_toolkit
+in — only this module (and its sole importer, :mod:`agm.agl.repl.console`)
+does.
 """
 
 from __future__ import annotations
 
-import os
-
 from prompt_toolkit.styles import Style
 
-THEME_NAMES: tuple[str, ...] = ("dark", "light", "auto")
+from agm.agl.repl.theme_selection import detect_terminal_theme
 
 DARK_THEME: Style = Style.from_dict(
     {
@@ -50,26 +50,11 @@ LIGHT_THEME: Style = Style.from_dict(
 _THEME_STYLES: dict[str, Style] = {"dark": DARK_THEME, "light": LIGHT_THEME}
 
 
-def detect_terminal_theme() -> str:
-    """Infer whether the terminal background is dark or light.
-
-    Reads ``$COLORFGBG`` (set by most terminal emulators as ``fg;bg`` or
-    ``fg;unknown;bg``).  A trailing segment of ``15`` (white) indicates a light
-    terminal; any other value, or an absent/malformed variable, returns ``"dark"``.
-    """
-    colorfgbg = os.environ.get("COLORFGBG", "")
-    if colorfgbg:
-        parts = colorfgbg.split(";")
-        if parts[-1] == "15":
-            return "light"
-    return "dark"
-
-
 def get_style(theme: str) -> Style:
     """Return the ``prompt_toolkit`` ``Style`` for *theme*.
 
-    ``"auto"`` resolves via :func:`detect_terminal_theme`.  Unknown names fall
-    back to the dark theme.
+    ``"auto"`` resolves via :func:`~agm.agl.repl.theme_selection.detect_terminal_theme`.
+    Unknown names fall back to the dark theme.
     """
     resolved = detect_terminal_theme() if theme == "auto" else theme
     return _THEME_STYLES.get(resolved, DARK_THEME)

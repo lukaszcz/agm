@@ -2,7 +2,11 @@
 
 Drives :func:`run_console` through prompt_toolkit's ``create_pipe_input`` +
 ``DummyOutput`` so no real terminal is required, and exercises the highlighting
-lexer, the completer, and the multiline incompleteness predicate directly.
+lexer and the completer directly. Tests for the UI-free predicates and helpers
+``run_console`` delegates to (``format_banner``, ``is_incomplete``,
+``has_runnable_statements``, ``make_console_confirm``) live in
+``tests/test_agl_repl_loop.py`` alongside the rest of ``agm.agl.repl.loop``'s
+direct tests; this file covers only what actually needs the console driven.
 
 Scripted keystrokes use ``\\r`` for the Enter key (so the custom multiline Enter
 binding fires), ``\\x04`` for Ctrl-D (EOF → exit), and ``\\x03`` for Ctrl-C
@@ -15,7 +19,7 @@ from __future__ import annotations
 import contextlib
 import io
 import signal
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from types import FrameType
 from unittest.mock import patch
 
@@ -28,15 +32,11 @@ from prompt_toolkit.output import DummyOutput
 
 from agm.agl.repl import ReplSession
 from agm.agl.repl.agentmode import AgentMode
-from agm.agl.repl.agents import ConfirmDecision
 from agm.agl.repl.console import (
     AglCompleter,
     AglPromptLexer,
     _make_history,
     build_prompt_session,
-    format_banner,
-    has_runnable_statements,
-    is_incomplete,
     run_console,
 )
 from agm.agl.runtime.request import AgentRequest, AgentResponse
@@ -130,12 +130,6 @@ class TestLoop:
         output = drive("\x04", agent_mode=AgentMode(mode="auto"))
         assert "auto" in output.lower()
 
-    def test_format_banner_starts_with_stable_prefix(self) -> None:
-        # The first banner line is a stable prefix regardless of mode.
-        assert format_banner().startswith("AgL REPL")
-        assert format_banner(AgentMode(mode="auto")).startswith("AgL REPL")
-        assert format_banner(AgentMode(mode="confirm")).startswith("AgL REPL")
-
     def test_single_expression_submits_and_echoes(self) -> None:
         output = drive("1 + 2\r\x04")
         assert "3" in output
@@ -227,23 +221,6 @@ class TestMultiline:
         assert "declared" not in output
         assert ": error:" in output.lower()
 
-    def test_blank_line_force_submits_incomplete(self) -> None:
-        # A buffer still ending in an unfinished header is incomplete, but once
-        # the user presses Enter on a blank continuation line (buffer ends with
-        # a newline) ``is_incomplete`` force-submits.
-        assert is_incomplete("record R") is True
-        assert is_incomplete("record R\n") is False
-
-    @pytest.mark.parametrize("quote", ['"""', "'''"])
-    def test_unterminated_triple_quoted_string_keeps_prompting(self, quote: str) -> None:
-        # An open triple-quoted string is a lexical EOF condition, but in the
-        # REPL it is a natural multiline entry and must keep accepting lines
-        # until the matching delimiter is typed.
-        assert is_incomplete(f"let text = {quote}first") is True
-        assert is_incomplete(f"let text = {quote}first\n") is True
-        assert is_incomplete(f"let text = {quote}first\n\nsecond") is True
-        assert is_incomplete(f"let text = {quote}first\n\nsecond{quote}") is False
-
     @pytest.mark.parametrize("quote", ['"""', "'''"])
     def test_triple_quoted_string_continues_through_blank_lines(self, quote: str) -> None:
         # Pressing Enter on a blank line inside an open triple-quoted string
@@ -273,64 +250,6 @@ class TestMultiline:
         assert agent.calls == 1
         assert agent.prompts == ["summarize this"]
         assert "mocked reply" in output
-
-
-class TestIsIncomplete:
-    @pytest.mark.parametrize("source", ["exec!", "ask!::[text]", "let reply = ask!"])
-    def test_raw_tail_headers_open_blocks(self, source: str) -> None:
-        assert is_incomplete(source) is True
-
-    @pytest.mark.parametrize(
-        "source",
-        [
-            "exec! echo hi",
-            "exec!\n  echo hi\nnext",
-            "let x: text = exec!\n    echo hi\n# trailing comment",
-        ],
-    )
-    def test_closed_raw_tail_blocks_submit(self, source: str) -> None:
-        assert is_incomplete(source) is False
-
-    @pytest.mark.parametrize(
-        "source",
-        ["record R", "enum E", "case x of", "try", "do agent", "if x == 1 =>", "1 +"],
-    )
-    def test_incomplete_sources(self, source: str) -> None:
-        assert is_incomplete(source) is True
-
-    @pytest.mark.parametrize(
-        "source",
-        ["1 + 2", "let x = 1", "let = 5", "x == y", "record R\n  x: int"],
-    )
-    def test_complete_sources(self, source: str) -> None:
-        assert is_incomplete(source) is False
-
-    @pytest.mark.parametrize("source", ["", "   ", "\t", "  \n  "])
-    def test_blank_input_force_submits(self, source: str) -> None:
-        # Blank / whitespace-only input force-submits so Enter on an empty prompt
-        # gives a fresh prompt instead of inserting a newline.
-        assert is_incomplete(source) is False
-
-
-class TestHasRunnableStatements:
-    @pytest.mark.parametrize(
-        "source",
-        ["", "   ", "\t", "# a comment", "  # indented comment", "# one\n# two"],
-    )
-    def test_blank_or_comment_only_has_nothing_to_run(self, source: str) -> None:
-        assert has_runnable_statements(source) is False
-
-    @pytest.mark.parametrize(
-        "source",
-        ["1 + 1", "let x = 1", "# lead\nlet y = 2", "record R\n  x: int"],
-    )
-    def test_real_entry_has_statements(self, source: str) -> None:
-        assert has_runnable_statements(source) is True
-
-    def test_lexer_error_is_treated_as_runnable(self) -> None:
-        # An odd/unlexable entry is conservatively runnable so it reaches the
-        # evaluator and surfaces a real diagnostic rather than being dropped.
-        assert has_runnable_statements("@") is True
 
 
 # ---------------------------------------------------------------------------
@@ -797,54 +716,21 @@ class TestMetaThroughLoop:
 
 
 # ---------------------------------------------------------------------------
-# Agent-call confirmation callback + confirm flow through run_console
+# Confirm flow through run_console
 # ---------------------------------------------------------------------------
-
-
-class TestConfirmCallback:
-    def _confirm_factory(
-        self, *answers: str
-    ) -> tuple[Callable[[str, str], ConfirmDecision], list[str]]:
-        """Build a confirm callback whose reader replays scripted answers."""
-        from agm.agl.repl.console import make_console_confirm
-
-        replies = iter(answers)
-        printed: list[str] = []
-        confirm = make_console_confirm(
-            reader=lambda _prompt: next(replies),
-            printer=printed.append,
-        )
-        return confirm, printed
-
-    def test_yes_no_always(self) -> None:
-        confirm, _printed = self._confirm_factory("y", "n", "a")
-        assert confirm("writer", "do it") == "yes"
-        assert confirm("writer", "do it") == "no"
-        assert confirm("writer", "do it") == "always"
-
-    def test_empty_answer_defaults_to_yes(self) -> None:
-        confirm, _printed = self._confirm_factory("")
-        assert confirm("writer", "do it") == "yes"
-
-    def test_unrecognised_reasks_then_accepts(self) -> None:
-        confirm, printed = self._confirm_factory("huh?", "yes")
-        assert confirm("writer", "do it") == "yes"
-        assert any("y(es)" in line for line in printed)
-
-    def test_view_prints_full_prompt_then_accepts(self) -> None:
-        long_prompt = "X" * 500
-        confirm, printed = self._confirm_factory("v", "y")
-        assert confirm("writer", long_prompt) == "yes"
-        # The truncated preview AND the full text both appear.
-        assert any("truncated" in line for line in printed)
-        assert any(long_prompt in line for line in printed)
+#
+# make_console_confirm's own behaviour (yes/no/always, the empty-answer
+# default, re-asking, the [v]iew option) is a pure-callback unit test with no
+# console involved; it lives in ``tests/test_agl_repl_loop.py`` alongside the
+# other ``agm.agl.repl.loop`` exports. What belongs here is the confirm flow
+# actually driven through the console loop end to end.
 
 
 def _confirming_session(*answers: str, reply: str = "agent-reply") -> tuple[ReplSession, "object"]:
     """A session whose default agent is a ConfirmingAgent with a scripted confirm."""
     from agm.agl.repl.agentmode import AgentMode
     from agm.agl.repl.agents import ConfirmingAgent
-    from agm.agl.repl.console import make_console_confirm
+    from agm.agl.repl.loop import make_console_confirm
 
     replies = iter(answers)
     confirm = make_console_confirm(reader=lambda _prompt: next(replies), printer=lambda _s: None)

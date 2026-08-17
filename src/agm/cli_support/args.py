@@ -286,3 +286,6 @@ class ReplArgs:
     no_stdlib: bool = False
     # An AgL ``Agent`` literal used to seed std/config::default-agent.
     agent: str | None = None
+    # Force the plain, non-interactive line front end even on a tty; the
+    # auto-detected default (non-tty stdin/stdout, or TERM=dumb) needs no flag.
+    plain: bool = False

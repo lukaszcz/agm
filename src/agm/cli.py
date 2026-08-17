@@ -1311,6 +1311,14 @@ def repl_cmd(
             "(entries and library modules)."
         ),
     ),
+    plain: bool = typer.Option(
+        False,
+        "--plain",
+        help=(
+            "Force the plain, non-interactive line front end. Auto-detected "
+            "otherwise: engaged when stdin/stdout is not a terminal or TERM=dumb."
+        ),
+    ),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
@@ -1333,6 +1341,7 @@ def repl_cmd(
             log_file=log_file,
             log=log,
             no_stdlib=no_stdlib,
+            plain=plain,
         )
     )
 

@@ -8924,14 +8924,13 @@ class TestReplCommand:
     ) -> None:
         work = tmp_path / "work"
         work.mkdir()
-        # Feed an expression then quit.  prompt-toolkit reads stdin line by
-        # line even when not a terminal, and the REPL prints each result.
+        # Feed an expression then quit.  Piped, non-tty stdin auto-selects the
+        # plain line front end, which reads stdin line by line and prints each
+        # result with no styling.
         result = run_agm(
             ["repl"],
             env=env,
             cwd=str(work),
-            # ``run_agm`` captures stderr; the REPL warns about non-tty stdin
-            # but still evaluates entries and exits 0 on :quit.
             input="1 + 2\n:quit\n",
         )
 

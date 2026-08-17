@@ -7,12 +7,23 @@ Covers:
 - ``--input`` option has been removed (params resolve eagerly from
   config/defaults; there is no pre-seed CLI option);
 - ``repl.run`` resolves ``[exec]`` config, builds a session, and hands off to
-  ``run_console`` (mocked) with the echo flag and a history path derived from
+  a REPL front end (mocked) with the echo flag and a history path derived from
   AGM home.
+- front-end selection: ``--plain``, and the ``plain_mode_engaged`` predicate,
+  decide between the plain and prompt_toolkit front ends.
+
+Most of these tests run under pytest, where stdin/stdout are typically not
+real terminals, so the *default* front end actually invoked is plain; the
+``_args()`` helper defaults ``plain=True`` to make that explicit and
+deterministic rather than relying on the test process's incidental tty state.
+The two tests that specifically verify prompt_toolkit-console wiring force
+that front end explicitly (``plain=False`` plus a patched engagement
+predicate) so they do not depend on whether the test runner has a tty either.
 """
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Protocol
 
@@ -66,6 +77,7 @@ class TestReplArgsParsing:
         assert getattr(args, "quiet") is False
         assert getattr(args, "no_log") is False
         assert getattr(args, "log_file") is None
+        assert getattr(args, "plain") is False
 
     def test_input_option_removed(self, runner: CliRunner, recorded_runs: list[object]) -> None:
         # --input has been removed from agm repl.
@@ -100,6 +112,10 @@ class TestReplArgsParsing:
         assert invoke(runner, ["repl", "--no-log"]).exit_code == 0
         assert getattr(recorded_runs[0], "no_log") is True
 
+    def test_plain_flag(self, runner: CliRunner, recorded_runs: list[object]) -> None:
+        assert invoke(runner, ["repl", "--plain"]).exit_code == 0
+        assert getattr(recorded_runs[0], "plain") is True
+
 
 class TestReplMutualExclusion:
     def test_no_log_and_log_file_conflict(
@@ -122,8 +138,54 @@ class _ReplConsoleCall(Protocol):
 
 
 @pytest.fixture()
+def fake_plain_console(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
+    """Patch the plain front end so ``repl.run`` never blocks on real stdin.
+
+    ``_args()`` defaults ``plain=True``, so this is the front end virtually
+    every ``repl.run`` config-wiring test below actually exercises.
+    """
+    calls: list[dict[str, object]] = []
+
+    def fake_run_plain_console(
+        session: ReplSession,
+        *,
+        echo: bool = True,
+        check_only: bool = False,
+        agent_mode: object = None,
+        theme: str = "auto",
+        on_theme_save: object = None,
+        stdin: object = None,
+        stdout: object = None,
+    ) -> None:
+        calls.append(
+            {
+                "session": session,
+                "echo": echo,
+                "check_only": check_only,
+                "agent_mode": agent_mode,
+                "theme": theme,
+                "on_theme_save": on_theme_save,
+            }
+        )
+
+    # The command imports ``run_plain_console`` lazily from the plain_console module.
+    import agm.agl.repl.plain_console as plain_console_mod
+
+    monkeypatch.setattr(plain_console_mod, "run_plain_console", fake_run_plain_console)
+    return calls
+
+
+@pytest.fixture()
 def fake_console(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
-    """Patch the console entry point so ``repl.run`` never opens a terminal."""
+    """Patch the prompt_toolkit front end and force ``repl.run`` to select it.
+
+    Used only by the tests that specifically verify console-only wiring (e.g.
+    ``history_path``, which the plain front end has no use for): patches both
+    ``run_console`` and the engagement predicate (to ``False``), so selecting
+    this front end does not depend on the test process's own tty state —
+    callers must still pass ``plain=False`` explicitly since ``--plain`` short
+    -circuits the predicate.
+    """
     calls: list[dict[str, object]] = []
 
     def fake_run_console(
@@ -154,6 +216,7 @@ def fake_console(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
     import agm.agl.repl.console as console_mod
 
     monkeypatch.setattr(console_mod, "run_console", fake_run_console)
+    monkeypatch.setattr(repl_command, "plain_mode_engaged", lambda **_kwargs: False)
     return calls
 
 
@@ -175,8 +238,15 @@ def _args(
     max_iters: int | None = None,
     agent: str | None = None,
     no_stdlib: bool = False,
+    plain: bool = True,
 ) -> ReplArgs:
-    """Build ``ReplArgs`` with sensible defaults, overriding named fields."""
+    """Build ``ReplArgs`` with sensible defaults, overriding named fields.
+
+    ``plain`` defaults to ``True``: most of these tests only care about
+    session/config wiring, not which front end runs it, and forcing the plain
+    front end keeps that deterministic regardless of the test process's own
+    tty state (see the module docstring).
+    """
     return ReplArgs(
         strict_json=strict_json,
         confirm_agents=confirm_agents,
@@ -187,6 +257,7 @@ def _args(
         max_iters=max_iters,
         agent=agent,
         no_stdlib=no_stdlib,
+        plain=plain,
     )
 
 
@@ -198,14 +269,7 @@ class TestReplRun:
         fake_console: list[dict[str, object]],
     ) -> None:
         home = _isolated_home(monkeypatch, tmp_path)
-        args = ReplArgs(
-            strict_json=None,
-            confirm_agents=False,
-            quiet=False,
-            no_log=False,
-            log_file=None,
-        )
-        repl_command.run(args)
+        repl_command.run(_args(plain=False))
 
         assert len(fake_console) == 1
         call = fake_console[0]
@@ -215,11 +279,48 @@ class TestReplRun:
         assert call["history_path"] == home / ".agm" / "repl_history"
         assert (home / ".agm").is_dir()
 
+    def test_builds_session_and_runs_plain_console(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+    ) -> None:
+        home = _isolated_home(monkeypatch, tmp_path)
+        repl_command.run(_args())
+
+        assert len(fake_plain_console) == 1
+        call = fake_plain_console[0]
+        assert isinstance(call["session"], ReplSession)
+        assert call["echo"] is True
+        assert call["check_only"] is False  # not a dry-run by default
+        assert (home / ".agm").is_dir()
+
+    def test_on_theme_save_persists_the_theme_to_config(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+    ) -> None:
+        """The ``on_theme_save`` callback passed to the front end persists to config.
+
+        Both front ends receive the same callback (built once in ``repl.run``);
+        it is exercised here directly rather than by driving a live loop.
+        """
+        home = _isolated_home(monkeypatch, tmp_path)
+        repl_command.run(_args())
+
+        on_theme_save = fake_plain_console[0]["on_theme_save"]
+        assert callable(on_theme_save)
+        on_theme_save("light")
+
+        config_text = (home / ".agm" / "config.toml").read_text(encoding="utf-8")
+        assert 'theme = "light"' in config_text
+
     def test_invalid_development_package_exits_before_opening_the_console(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
     ) -> None:
         _isolated_home(monkeypatch, tmp_path / "home")
         (tmp_path / "package.toml").write_text("not valid TOML")
@@ -228,13 +329,13 @@ class TestReplRun:
         with pytest.raises(SystemExit):
             repl_command.run(_args())
 
-        assert fake_console == []
+        assert fake_plain_console == []
 
     def test_imported_param_resolves_from_qualified_config(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
     ) -> None:
         from agm.agl.semantics.values import TextValue
 
@@ -247,7 +348,7 @@ class TestReplRun:
         (tmp_path / "settings.agl").write_text("param region: text\ndef read() -> text = region\n")
 
         repl_command.run(_args())
-        session: ReplSession = fake_console[0]["session"]
+        session: ReplSession = fake_plain_console[0]["session"]
         result = session.eval_entry("import settings\nsettings::read()")
 
         assert result.ok, result.diagnostics
@@ -260,7 +361,7 @@ class TestReplRun:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
     ) -> None:
         home = _isolated_home(monkeypatch, tmp_path)
         config_dir = home / ".agm"
@@ -271,7 +372,7 @@ class TestReplRun:
         (tmp_path / "settings.agl").write_text("param count: int\ndef read() -> int = count\n")
 
         repl_command.run(_args())
-        session: ReplSession = fake_console[0]["session"]
+        session: ReplSession = fake_plain_console[0]["session"]
         result = session.eval_entry("import settings\nsettings::read()")
 
         assert not result.ok
@@ -280,7 +381,7 @@ class TestReplRun:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
     ) -> None:
         home = _isolated_home(monkeypatch, tmp_path)
         config_dir = home / ".agm"
@@ -294,7 +395,7 @@ class TestReplRun:
         (nested / "settings.agl").write_text("param region: text\ndef read() -> text = region\n")
 
         repl_command.run(_args())
-        session: ReplSession = fake_console[0]["session"]
+        session: ReplSession = fake_plain_console[0]["session"]
         result = session.eval_entry("import nested/settings\nsettings::read()")
 
         assert not result.ok
@@ -303,7 +404,7 @@ class TestReplRun:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
     ) -> None:
         home = _isolated_home(monkeypatch, tmp_path)
         calls: list[Path] = []
@@ -323,7 +424,7 @@ class TestReplRun:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
     ) -> None:
         from agm.agl.semantics.values import IntValue
 
@@ -347,7 +448,7 @@ class TestReplRun:
         monkeypatch.chdir(alpha)
 
         repl_command.run(_args(no_stdlib=True))
-        session: ReplSession = fake_console[0]["session"]
+        session: ReplSession = fake_plain_console[0]["session"]
         result = session.eval_entry("import alpha/main\nalpha/main::value()")
 
         assert result.ok, result.diagnostics
@@ -357,7 +458,7 @@ class TestReplRun:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
     ) -> None:
         home = _isolated_home(monkeypatch, tmp_path)
         config_dir = home / ".agm"
@@ -371,7 +472,7 @@ class TestReplRun:
             (module_dir / "settings.agl").write_text("param region: text\n")
 
         repl_command.run(_args())
-        session: ReplSession = fake_console[0]["session"]
+        session: ReplSession = fake_plain_console[0]["session"]
         assert session.eval_entry("import first/settings\n()").ok
 
         result = session.eval_entry("import second/settings\n()")
@@ -382,14 +483,14 @@ class TestReplRun:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
     ) -> None:
         from agm.agl.semantics.values import EnumValue, TextValue
         from agm.agl.setting_overrides import SettingOverride
 
         _isolated_home(monkeypatch, tmp_path)
         repl_command.run(_args(agent='AgentCommand("configured")'))
-        session: ReplSession = fake_console[0]["session"]
+        session: ReplSession = fake_plain_console[0]["session"]
         assert session._setting_overrides["default-agent"] == SettingOverride(
             source='AgentCommand("configured")', origin="--agent"
         )
@@ -413,14 +514,14 @@ class TestReplRun:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
     ) -> None:
         """``:reset`` clears the session's cached stdlib, but the override reapplies."""
         from agm.agl.semantics.values import EnumValue, TextValue
 
         _isolated_home(monkeypatch, tmp_path)
         repl_command.run(_args(agent='AgentCommand("configured")'))
-        session: ReplSession = fake_console[0]["session"]
+        session: ReplSession = fake_plain_console[0]["session"]
 
         assert session.eval_entry("import std/config").ok
         session.reset()
@@ -435,7 +536,7 @@ class TestReplRun:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
     ) -> None:
         home = _isolated_home(monkeypatch, tmp_path)
         agm_dir = home / ".agm"
@@ -454,7 +555,7 @@ class TestReplRun:
 
         repl_command.run(_args())
 
-        session: ReplSession = fake_console[0]["session"]
+        session: ReplSession = fake_plain_console[0]["session"]
         assert set(session._engine_seed) == {
             "strict-json",
             "max-iters",
@@ -467,7 +568,7 @@ class TestReplRun:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
     ) -> None:
         from agm.agl.semantics.values import BoolValue
 
@@ -478,7 +579,7 @@ class TestReplRun:
 
         repl_command.run(_args(strict_json=False))
 
-        session: ReplSession = fake_console[0]["session"]
+        session: ReplSession = fake_plain_console[0]["session"]
         assert session._engine_seed["strict-json"] == BoolValue(False)
 
     def test_history_path_uses_agm_home_override(
@@ -491,7 +592,7 @@ class TestReplRun:
         agm_home = tmp_path / "relocated-agm"
         monkeypatch.setenv("AGM_HOME", str(agm_home))
 
-        repl_command.run(_args())
+        repl_command.run(_args(plain=False))
 
         call = fake_console[0]
         assert call["history_path"] == agm_home / "repl_history"
@@ -500,12 +601,12 @@ class TestReplRun:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
     ) -> None:
         """``--max-iters`` resolves to the session's max-iters valve (ON at N)."""
         _isolated_home(monkeypatch, tmp_path)
         repl_command.run(_args(max_iters=10))
-        session: ReplSession = fake_console[0]["session"]
+        session: ReplSession = fake_plain_console[0]["session"]
         assert session._default_loop_limit == 10
 
     @pytest.mark.parametrize("limit", [0, -1])
@@ -513,7 +614,7 @@ class TestReplRun:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
         limit: int,
     ) -> None:
         _isolated_home(monkeypatch, tmp_path)
@@ -522,7 +623,7 @@ class TestReplRun:
             repl_command.run(_args(max_iters=limit))
 
         assert exc_info.value.code == 1
-        assert fake_console == []
+        assert fake_plain_console == []
 
     @pytest.mark.parametrize(
         ("args", "expected_log", "expected_file"),
@@ -536,7 +637,7 @@ class TestReplRun:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
         args: ReplArgs,
         expected_log: bool,
         expected_file: str | None,
@@ -548,7 +649,7 @@ class TestReplRun:
             repl_command, "prepare_trace_log_from_decision", lambda *args, **kwargs: None
         )
         repl_command.run(args)
-        session: ReplSession = fake_console[0]["session"]
+        session: ReplSession = fake_plain_console[0]["session"]
         assert session._persisted_host_settings["log"] == BoolValue(expected_log)
         if expected_file is None:
             assert "log-file" not in session._persisted_host_settings
@@ -561,7 +662,7 @@ class TestReplRun:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
     ) -> None:
         # ``--dry-run`` sets the shared global flag; the REPL honours it by
         # driving the console in type-check-only mode.
@@ -569,38 +670,24 @@ class TestReplRun:
 
         _isolated_home(monkeypatch, tmp_path)
         monkeypatch.setattr(dry_run, "enabled", lambda: True)
-        args = ReplArgs(
-            strict_json=None,
-            confirm_agents=False,
-            quiet=False,
-            no_log=False,
-            log_file=None,
-        )
-        repl_command.run(args)
-        assert fake_console[0]["check_only"] is True
+        repl_command.run(_args())
+        assert fake_plain_console[0]["check_only"] is True
 
     def test_quiet_disables_echo(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
     ) -> None:
         _isolated_home(monkeypatch, tmp_path)
-        args = ReplArgs(
-            strict_json=None,
-            confirm_agents=False,
-            quiet=True,
-            no_log=False,
-            log_file=None,
-        )
-        repl_command.run(args)
-        assert fake_console[0]["echo"] is False
+        repl_command.run(_args(quiet=True))
+        assert fake_plain_console[0]["echo"] is False
 
     def test_blank_agent_literal_exits_1(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """A blank ``--agent`` value is a host-shape error, rejected before the session builds."""
@@ -611,13 +698,13 @@ class TestReplRun:
 
         assert exc_info.value.code == 1
         assert "default-agent" in capsys.readouterr().err
-        assert fake_console == []
+        assert fake_plain_console == []
 
     def test_malformed_agent_literal_exits_1_before_the_session_builds(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """A syntactically valid but wrong-typed ``--agent`` literal exits 1 up front.
@@ -634,13 +721,13 @@ class TestReplRun:
 
         assert exc_info.value.code == 1
         assert "--agent" in capsys.readouterr().err
-        assert fake_console == []
+        assert fake_plain_console == []
 
     def test_unparseable_agent_literal_exits_1_before_the_session_builds(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """A ``--agent`` literal that fails to parse as AgL also exits before the banner."""
@@ -651,13 +738,13 @@ class TestReplRun:
 
         assert exc_info.value.code == 1
         assert "--agent" in capsys.readouterr().err
-        assert fake_console == []
+        assert fake_plain_console == []
 
     def test_non_constant_agent_literal_exits_1_before_the_session_builds(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """A well-typed but non-constant ``--agent`` literal also exits before the banner."""
@@ -668,13 +755,13 @@ class TestReplRun:
 
         assert exc_info.value.code == 1
         assert "--agent" in capsys.readouterr().err
-        assert fake_console == []
+        assert fake_plain_console == []
 
     def test_malformed_agent_literal_with_no_stdlib_fails_at_session_open(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """``--no-stdlib`` never loads ``std/config``, but ``--agent`` is still an
@@ -688,13 +775,13 @@ class TestReplRun:
 
         assert exc_info.value.code == 1
         assert "--agent" in capsys.readouterr().err
-        assert fake_console == []
+        assert fake_plain_console == []
 
     def test_config_default_agent_with_no_stdlib_opens_cleanly(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
     ) -> None:
         """A project-configured ``[exec] default-agent`` is ambient configuration,
         not a request: with ``--no-stdlib`` (``std/config`` never loads), it must
@@ -708,13 +795,13 @@ class TestReplRun:
 
         repl_command.run(_args(no_stdlib=True))
 
-        assert len(fake_console) == 1
+        assert len(fake_plain_console) == 1
 
     def test_stdlib_version_mismatch_exits_1(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """A stdlib version mismatch from root resolution causes exit 1."""
@@ -735,13 +822,13 @@ class TestReplRun:
         assert "Error:" in captured.err
         assert "0.0.1" in captured.err
         assert "just install" in captured.err
-        assert fake_console == []
+        assert fake_plain_console == []
 
     def test_blank_default_agent_config_literal_exits_1(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         home = _isolated_home(monkeypatch, tmp_path)
@@ -755,13 +842,13 @@ class TestReplRun:
         assert exc_info.value.code == 1
         error = capsys.readouterr().err
         assert "default-agent" in error
-        assert fake_console == []
+        assert fake_plain_console == []
 
     def test_malformed_default_agent_config_literal_exits_1_before_the_session_builds(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """A non-blank but malformed ``[exec] default-agent`` exits 1 up front, naming it."""
@@ -775,13 +862,13 @@ class TestReplRun:
 
         assert exc_info.value.code == 1
         assert "[exec] default-agent" in capsys.readouterr().err
-        assert fake_console == []
+        assert fake_plain_console == []
 
     def test_exec_runner_config_seeds_default_agent_as_agent_command(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
     ) -> None:
         """``[exec] runner`` is a bare host command, decoded into an ``AgentCommand`` value seed."""
         from agm.agl.semantics.values import EnumValue, TextValue
@@ -793,7 +880,7 @@ class TestReplRun:
 
         repl_command.run(_args())
 
-        session: ReplSession = fake_console[0]["session"]
+        session: ReplSession = fake_plain_console[0]["session"]
         seeded = session._engine_seed["default-agent"]
         assert isinstance(seeded, EnumValue)
         assert seeded.variant == "AgentCommand"
@@ -804,7 +891,7 @@ class TestReplRun:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
     ) -> None:
         _isolated_home(monkeypatch, tmp_path)
 
@@ -822,13 +909,13 @@ class TestReplRun:
         with pytest.raises(SystemExit) as excinfo:
             repl_command.run(args)
         assert excinfo.value.code == 1
-        assert fake_console == []
+        assert fake_plain_console == []
 
     def test_numeric_timeout_in_config_accepted(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
     ) -> None:
         """An int-typed [exec].timeout in the TOML config is accepted."""
         home = _isolated_home(monkeypatch, tmp_path)
@@ -836,13 +923,13 @@ class TestReplRun:
         agm_dir.mkdir(parents=True, exist_ok=True)
         (agm_dir / "config.toml").write_text("[exec]\ntimeout = 30\n")
         repl_command.run(_args())
-        assert len(fake_console) == 1
+        assert len(fake_plain_console) == 1
 
     def test_tiny_numeric_timeout_round_trips_through_builtin_setting(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
     ) -> None:
         from agm.agl.semantics.values import EnumValue, TextValue
 
@@ -852,7 +939,7 @@ class TestReplRun:
         (agm_dir / "config.toml").write_text("[exec]\ntimeout = 0.0000001\n")
 
         repl_command.run(_args())
-        session = fake_console[0]["session"]
+        session = fake_plain_console[0]["session"]
         assert isinstance(session, ReplSession)
         result = session.eval_entry(
             "import std/config\nstd/config::timeout := std/config::timeout\nstd/config::timeout"
@@ -866,7 +953,7 @@ class TestReplRun:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
     ) -> None:
         """A string-typed [exec].timeout in the TOML config is accepted."""
         home = _isolated_home(monkeypatch, tmp_path)
@@ -874,7 +961,88 @@ class TestReplRun:
         agm_dir.mkdir(parents=True, exist_ok=True)
         (agm_dir / "config.toml").write_text('[exec]\ntimeout = "30s"\n')
         repl_command.run(_args())
+        assert len(fake_plain_console) == 1
+
+
+# ---------------------------------------------------------------------------
+# Front-end selection: --plain and plain_mode_engaged
+# ---------------------------------------------------------------------------
+
+
+class TestReplFrontEndSelection:
+    """``repl.run`` ORs ``args.plain`` with the ``plain_mode_engaged`` predicate.
+
+    Each test monkeypatches ``repl_command.plain_mode_engaged`` directly so the
+    outcome never depends on whether the test process itself has a tty.
+    """
+
+    def test_plain_flag_forces_plain_even_when_the_predicate_says_console(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        _isolated_home(monkeypatch, tmp_path)
+        # fake_console already forces the predicate False (as if on a tty);
+        # --plain must still win.
+        repl_command.run(_args(plain=True))
+
+        assert len(fake_plain_console) == 1
+        assert fake_console == []
+
+    def test_predicate_true_selects_plain_without_the_flag(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+    ) -> None:
+        _isolated_home(monkeypatch, tmp_path)
+        monkeypatch.setattr(repl_command, "plain_mode_engaged", lambda **_kwargs: True)
+
+        repl_command.run(_args(plain=False))
+
+        assert len(fake_plain_console) == 1
+
+    def test_predicate_false_and_no_flag_selects_console(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
+    ) -> None:
+        _isolated_home(monkeypatch, tmp_path)
+
+        repl_command.run(_args(plain=False))
+
         assert len(fake_console) == 1
+        assert fake_plain_console == []
+
+    def test_predicate_receives_the_real_streams_and_environment(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+    ) -> None:
+        """``repl.run`` passes the live ``sys.stdin``/``sys.stdout``/``os.environ``."""
+        _isolated_home(monkeypatch, tmp_path)
+        received: dict[str, object] = {}
+
+        def fake_predicate(*, stdin: object, stdout: object, env: object) -> bool:
+            received["stdin"] = stdin
+            received["stdout"] = stdout
+            received["env"] = env
+            return True
+
+        monkeypatch.setattr(repl_command, "plain_mode_engaged", fake_predicate)
+
+        repl_command.run(_args(plain=False))
+
+        import os
+
+        assert received["stdin"] is sys.stdin
+        assert received["stdout"] is sys.stdout
+        assert received["env"] is os.environ
 
 
 # ---------------------------------------------------------------------------
@@ -887,11 +1055,11 @@ class TestReplAgentMode:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
     ) -> None:
         _isolated_home(monkeypatch, tmp_path)
         repl_command.run(_args())
-        mode = fake_console[0]["agent_mode"]
+        mode = fake_plain_console[0]["agent_mode"]
         from agm.agl.repl.agentmode import AgentMode
 
         assert isinstance(mode, AgentMode)
@@ -901,11 +1069,11 @@ class TestReplAgentMode:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
     ) -> None:
         _isolated_home(monkeypatch, tmp_path)
         repl_command.run(_args(confirm_agents=True))
-        mode = fake_console[0]["agent_mode"]
+        mode = fake_plain_console[0]["agent_mode"]
         from agm.agl.repl.agentmode import AgentMode
 
         assert isinstance(mode, AgentMode)
@@ -917,7 +1085,7 @@ class TestReplModuleRoots:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
     ) -> None:
         """When [modules] lib_root is set in config, it is resolved and passed to the session."""
         home = _isolated_home(monkeypatch, tmp_path)
@@ -930,7 +1098,7 @@ class TestReplModuleRoots:
         agm_home.mkdir(parents=True, exist_ok=True)
         (agm_home / "config.toml").write_text(f"[modules]\nlib_root = {str(lib_dir)!r}\n")
         repl_command.run(_args())
-        session = fake_console[0]["session"]
+        session = fake_plain_console[0]["session"]
         assert isinstance(session, ReplSession)
         # The lib_root is wired: importing a module from lib_dir succeeds.
         result = session.eval_entry("import mymod")
@@ -942,21 +1110,21 @@ class TestReplTrace:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
     ) -> None:
         _isolated_home(monkeypatch, tmp_path)
         log_file = tmp_path / "trace.log"
         repl_command.run(_args(log_file=str(log_file)))
         # The validate-up-front touch creates the (empty) file.
         assert log_file.exists()
-        session = fake_console[0]["session"]
+        session = fake_plain_console[0]["session"]
         assert isinstance(session, ReplSession)
 
     def test_no_log_writes_no_trace(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
     ) -> None:
         _isolated_home(monkeypatch, tmp_path)
         repl_command.run(_args(no_log=True))
@@ -967,7 +1135,7 @@ class TestReplTrace:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
     ) -> None:
         from agm.core import dry_run
 
@@ -982,7 +1150,7 @@ class TestReplTrace:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        fake_console: list[dict[str, object]],
+        fake_plain_console: list[dict[str, object]],
     ) -> None:
         _isolated_home(monkeypatch, tmp_path)
         # A path whose parent is a regular file cannot be created (mkdir fails).
@@ -992,4 +1160,4 @@ class TestReplTrace:
         with pytest.raises(SystemExit) as excinfo:
             repl_command.run(_args(log_file=str(log_file)))
         assert excinfo.value.code == 1
-        assert fake_console == []
+        assert fake_plain_console == []

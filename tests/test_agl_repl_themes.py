@@ -1,16 +1,11 @@
-"""Tests for :mod:`agm.agl.repl.themes`."""
+"""Tests for :mod:`agm.agl.repl.themes` and :mod:`agm.agl.repl.theme_selection`."""
 
 from __future__ import annotations
 
 import pytest
 
-from agm.agl.repl.themes import (
-    DARK_THEME,
-    LIGHT_THEME,
-    THEME_NAMES,
-    detect_terminal_theme,
-    get_style,
-)
+from agm.agl.repl.theme_selection import THEME_NAMES, detect_terminal_theme
+from agm.agl.repl.themes import DARK_THEME, LIGHT_THEME, get_style
 
 
 class TestDetectTerminalTheme:

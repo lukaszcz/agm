@@ -481,12 +481,12 @@ class ScopeNode:
         """
         self.members[name] = ref
 
-    def clear_constructor_members(self) -> None:
-        """Discard constructors while retaining members valid on prior nominal values."""
+    def clear_owned_constructor_members(self, nested_scope_names: frozenset[str]) -> None:
+        """Discard an owning type's constructors while retaining nested type members."""
         self.members = {
             name: ref
             for name, ref in self.members.items()
-            if ref.kind is not BinderKind.constructor_binding
+            if ref.kind is not BinderKind.constructor_binding or name in nested_scope_names
         }
 
 

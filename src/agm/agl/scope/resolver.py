@@ -877,7 +877,13 @@ class _Resolver:
         # A replacement type declaration owns fresh constructors: stale enum
         # variants must not survive, while unrelated retained members remain.
         for item, path in self._type_declarations:
-            nodes[path + (item.name,)].clear_constructor_members()
+            type_path = path + (item.name,)
+            nested_scope_names = frozenset(
+                nested_path[-1]
+                for nested_path in nodes
+                if nested_path[:-1] == type_path
+            )
+            nodes[type_path].clear_owned_constructor_members(nested_scope_names)
         for (_module_id, path, name), declaration in self._declarations.items():
             nodes[path].register_member(name, declaration)
         return nodes

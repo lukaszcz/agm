@@ -2148,6 +2148,19 @@ enum Agent
         assert retained.value == IntValue(42)
         assert not obsolete.ok
 
+    def test_redeclaring_a_type_preserves_nested_constructor_members(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("enum Color | Old").ok
+        assert session.eval_entry("record Color::Meta(value: int)").ok
+        assert session.eval_entry("use Color::*").ok
+        assert session.eval_entry("enum Color | New").ok
+
+        nested = session.eval_entry("Meta(value = 1)")
+
+        assert nested.ok, nested.diagnostics
+        assert isinstance(nested.value, RecordValue)
+        assert nested.value.display_name == "Color::Meta"
+
     def test_redeclaring_a_used_enum_drops_its_stale_bare_variant(self) -> None:
         """A local use recorded before the enum is redeclared must not
         resurrect a variant the redeclaration's fresh member layer dropped."""

@@ -1068,7 +1068,12 @@ class ReplSession:
             )
         promoted_type_paths = {(*path, name) for path, name in promoted_type_name_paths}
         for path in promoted_type_paths:
-            self._session_scope_nodes[path].clear_constructor_members()
+            nested_scope_names = frozenset(
+                nested_path[-1]
+                for nested_path in self._session_scope_nodes
+                if nested_path[:-1] == path
+            )
+            self._session_scope_nodes[path].clear_owned_constructor_members(nested_scope_names)
 
         for path, node in checked.resolved.scope_nodes.items():
             session_node = self._session_scope_nodes.get(path)

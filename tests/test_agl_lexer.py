@@ -1529,6 +1529,15 @@ class TestAglLexerClass:
             ("INT", "1"),
         ]
 
+    def test_speculative_use_parse_does_not_duplicate_tab_warning(self) -> None:
+        from agm.agl.parser import parse_program
+
+        with tab_warning_collector() as warnings:
+            parse_program("import shared\nuse\tshared::*")
+
+        assert len(warnings) == 1
+        assert warnings[0].line == 2
+
     def test_tab_warning_collector_receives_lexer_warnings(self) -> None:
         lexer = AglLexer(None)
         state = LexerState("let\tx = 1")

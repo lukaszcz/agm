@@ -294,7 +294,8 @@ def _is_use_declaration(source: str, tokens: list[Token], index: int) -> bool:
     end_offset = cast(int, tokens[end - 1].end_pos)
     forced = _FORCE_USE_DECLARATION.set(True)
     try:
-        _use_decl_parser().parse(source[start_offset:end_offset])
+        with tab_warning_collector():
+            _use_decl_parser().parse(source[start_offset:end_offset])
     except (LarkError, LexError):
         return False
     finally:

@@ -1,4 +1,10 @@
-"""Dependency-free canonical inventory of reserved AgL keywords."""
+"""Dependency-free canonical inventory of reserved AgL keywords.
+
+Editor syntax/keyword definitions mirror this inventory and must be updated
+alongside it: `config/micro/agl.yaml` (Micro syntax highlighting) and
+`config/emacs/agl-mode.el` (`agl-keywords` and the other keyword-inventory
+constants near the top of that file).
+"""
 
 from __future__ import annotations
 

@@ -28,6 +28,12 @@ lint:
 vulture:
     uv run vulture src/agm/ --min-confidence 80
 
+# Run the Emacs mode's ERT suite (requires emacs)
+test-emacs:
+    emacs --batch -L config/emacs -l ert \
+        $(for f in config/emacs/tests/*.el; do printf ' -l %s' "$f"; done) \
+        -f ert-run-tests-batch-and-exit
+
 # Type-check with mypy
 typecheck:
     MYPYPATH=src:stubs uv run mypy src/agm/ --strict --python-version 3.12

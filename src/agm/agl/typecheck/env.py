@@ -1459,6 +1459,14 @@ class TypeEnvironment:
             or local_name in self._alias_targets
         )
 
+    def _own_alias_name_for_key(self, key: DeclKey) -> str | None:
+        """Return the root-stored name for an own-module alias identity."""
+        module, path, source_name = key
+        local_name = "::".join((*path, source_name))
+        if module == self._module_id and local_name in self._alias_targets:
+            return local_name
+        return None
+
     def _resolve_type_key_as_bare(
         self, key: DeclKey, exposed_name: str, *, span: SourceSpan | None
     ) -> Type | None:
@@ -1466,7 +1474,13 @@ class TypeEnvironment:
         module, path, source_name = key
         assert self._program_type_table is not None
         qname: QName = (module, source_name if not path else (*path, source_name))
-        return self._resolve_program_qname_as_bare_type(qname, exposed_name, span=span)
+        resolved = self._resolve_program_qname_as_bare_type(qname, exposed_name, span=span)
+        if resolved is not None:
+            return resolved
+        alias_name = self._own_alias_name_for_key(key)
+        if alias_name is None:
+            return None
+        return self._resolve_name_type(alias_name, span=span, _resolving=frozenset(), lexical=False)
 
     def _resolve_type_key_unapplied(
         self, key: DeclKey, name: NameAtom, span: SourceSpan | None
@@ -1511,8 +1525,49 @@ class TypeEnvironment:
         alias = self._program_alias_table.get(key)
         if alias is not None:
             return self.instantiate_alias(key[2], alias, args, span=span)
+        alias_name = self._own_alias_name_for_key(key)
+        if alias_name is not None:
+            resolved = self._resolve_local_applied_alias(alias_name, args, span)
+            assert resolved is not None
+            return resolved
         raise AglTypeError(
             f"Type '{_render_type_atom(name)}' does not take type arguments.", span=span
+        )
+
+    def _resolve_local_applied_alias(
+        self,
+        name: str,
+        args: tuple[Type, ...],
+        span: SourceSpan | None,
+        *,
+        body_span: SourceSpan | None = None,
+        resolving: frozenset[str] = frozenset(),
+        type_vars: frozenset[str] = frozenset(),
+    ) -> Type | None:
+        """Resolve and instantiate an alias stored in the root type environment."""
+        alias_expr = self._alias_targets.get(name)
+        if alias_expr is None:
+            return None
+        if name in resolving:
+            raise AglTypeError(f"Type alias '{name}' is part of a cycle.", span=span)
+        alias_params = self._alias_type_params.get(name, ())
+        if len(args) != len(alias_params):
+            raise AglTypeError(
+                f"Alias '{name}' requires {len(alias_params)} type argument(s), got {len(args)}.",
+                span=span,
+            )
+        with self.type_scope(_split_scoped_type_name(name)[0]):
+            body_type = self.resolve_type_expr(
+                alias_expr,
+                span=body_span,
+                _resolving=resolving | {name},
+                type_vars=type_vars | frozenset(alias_params),
+            )
+        return self.instantiate_alias(
+            name,
+            GenericAliasDef(type_params=alias_params, template=body_type),
+            args,
+            span=span,
         )
 
     def _resolve_opened_applied_type(
@@ -1764,33 +1819,16 @@ class TypeEnvironment:
             gdef = self._generic_types.get(name)
             if gdef is not None:
                 return self.instantiate_nominal(name, resolved_args, span=eff_span)
-            alias_expr = self._alias_targets.get(name)
-            if alias_expr is not None:
-                if name in _resolving:
-                    raise AglTypeError(
-                        f"Type alias '{name}' is part of a cycle.",
-                        span=eff_span,
-                    )
-                alias_params = self._alias_type_params.get(name, ())
-                if len(resolved_args) != len(alias_params):
-                    raise AglTypeError(
-                        f"Alias '{name}' requires {len(alias_params)} type argument(s), "
-                        f"got {len(resolved_args)}.",
-                        span=eff_span,
-                    )
-                with self.type_scope(_split_scoped_type_name(name)[0]):
-                    body_type = self.resolve_type_expr(
-                        alias_expr,
-                        span=span,
-                        _resolving=_resolving | {name},
-                        type_vars=type_vars | frozenset(alias_params),
-                    )
-                return self.instantiate_alias(
-                    name,
-                    GenericAliasDef(type_params=alias_params, template=body_type),
-                    resolved_args,
-                    span=eff_span,
-                )
+            local_alias = self._resolve_local_applied_alias(
+                name,
+                resolved_args,
+                eff_span,
+                body_span=span,
+                resolving=_resolving,
+                type_vars=type_vars,
+            )
+            if local_alias is not None:
+                return local_alias
             program_alias_def = self._program_alias_table.get((self._module_id, (), name))
             if program_alias_def is not None:
                 return self.instantiate_alias(name, program_alias_def, resolved_args, span=eff_span)

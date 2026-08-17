@@ -793,6 +793,26 @@ class TestScopedBindingRetention:
         assert result.ok, result.diagnostics
         assert result.value == IntValue(1)
 
+    def test_retained_use_exposes_a_retained_scoped_type_alias(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("type A::Meters = int").ok
+        assert session.eval_entry("use A::*").ok
+
+        result = session.eval_entry("let distance: Meters = 1")
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(1)
+
+    def test_retained_use_exposes_a_retained_scoped_generic_type_alias(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("type A::Items[T] = array[T]").ok
+        assert session.eval_entry("use A::*").ok
+
+        result = session.eval_entry("let items: Items[int] = [1]")
+
+        assert result.ok, result.diagnostics
+        assert result.value == ArrayValue([IntValue(1)])
+
     def test_retained_relative_use_keeps_its_resolved_scope_target(self) -> None:
         session = ReplSession()
         assert session.eval_entry("scope Source\ndef value() -> int = 1\nend Source").ok

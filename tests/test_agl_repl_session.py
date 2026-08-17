@@ -4721,6 +4721,25 @@ class TestImports:
             "scope Outer\ndef read() -> int = old()\nend Outer\nOuter::read()"
         ).ok
 
+    def test_relative_use_does_not_replace_retained_target_after_nearer_scope_appears(
+        self,
+    ) -> None:
+        session = ReplSession()
+        assert session.eval_entry("def Source::old() -> int = 1").ok
+        assert session.eval_entry("scope Outer\nuse Source::{old}\nend Outer").ok
+        assert session.eval_entry("def Outer::Source::new() -> int = 2").ok
+
+        result = session.eval_entry(
+            "scope Outer\n"
+            "use Source::{new}\n"
+            "def both() -> int = old() + new()\n"
+            "end Outer\n"
+            "Outer::both()"
+        )
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(3)
+
     def test_replacing_nested_relative_use_hides_old_names_in_replacement_entry(self) -> None:
         session = ReplSession()
         assert session.eval_entry("def Source::old() -> int = 1").ok

@@ -3631,26 +3631,17 @@ class _Resolver:
                     (module, _bare_atom(cumulative)) in self._cross_module_type_scopes
                     for module in candidate_modules
                 )
-                try:
-                    origin = resolve_qualified_member(
-                        self._import_env,
-                        route,
-                        _bare_atom(cumulative),
-                        anchored=qualifier.anchored,
-                        unknown_qualifier=lambda rendered: AglScopeError(
-                            f"No module imported under qualifier '{rendered}'.", span=span
-                        ),
-                        missing_member=lambda rendered: AglScopeError(
-                            f"'{segment.name}' is not a public member of imported module "
-                            f"'{rendered}' or is hidden.",
-                            span=segment.span,
-                        ),
-                        ambiguous=lambda message: AglScopeError(message, span=segment.span),
-                    )
-                except AglScopeError:
-                    if not candidate_modules:
-                        raise
-                    origin = None
+                resolved_origin = resolve_qualified(
+                    self._import_env,
+                    route,
+                    _bare_atom(cumulative),
+                    anchored=qualifier.anchored,
+                )
+                origin = (
+                    resolved_origin.qname
+                    if isinstance(resolved_origin, QualResolutionFound)
+                    else None
+                )
                 if not direct_type and origin not in self._cross_module_type_scopes:
                     raise AglScopeError(
                         f"Type arguments cannot be applied to scope segment '{segment.name}'.",

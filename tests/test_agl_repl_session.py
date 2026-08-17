@@ -6293,6 +6293,45 @@ class TestBareTypeEntry:
 
         assert not session.eval_entry("Other::Box").ok
 
+    @pytest.mark.parametrize(
+        "local_route",
+        (
+            "use S as a\nscope S\nrecord Box[T](value: T)\nend S",
+            "scope a\nrecord Box[T](value: T)\nend a",
+        ),
+    )
+    def test_qualified_unapplied_generic_rejects_distinct_local_and_import_routes(
+        self, tmp_path: Path, local_route: str
+    ) -> None:
+        (tmp_path / "a.agl").write_text("record Box[T](value: T)\n")
+        session = ReplSession(
+            cwd=tmp_path,
+            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+        )
+        setup = session.eval_entry(f"import a\n{local_route}")
+        assert setup.ok, setup.diagnostics
+
+        assert not session.eval_entry("a::Box[int]").ok
+        assert not session.eval_entry("a::Box").ok
+
+    def test_qualified_unapplied_generic_displays_equivalent_duplicate_routes(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.repl.render import render_entry_result
+
+        (tmp_path / "a.agl").write_text("record Box[T](value: T)\n")
+        session = ReplSession(
+            cwd=tmp_path,
+            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+        )
+        setup = session.eval_entry("import a\nuse /a as a")
+        assert setup.ok, setup.diagnostics
+
+        result = session.eval_entry("a::Box")
+
+        assert result.ok, result.diagnostics
+        assert render_entry_result(result, echo=True) == "<type:\nrecord a::Box[T]\n  value: T\n>"
+
     def test_use_alias_nested_generic_record_name_echoes_definition(self) -> None:
         session = ReplSession()
         assert session.eval_entry(

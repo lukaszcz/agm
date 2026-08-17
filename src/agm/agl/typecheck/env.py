@@ -837,21 +837,25 @@ class TypeEnvironment:
         atom: NameAtom = atom_path[0] if len(atom_path) == 1 else atom_path
         return qualifier_contributes(self._import_env, route, atom, anchored=qualifier.anchored)
 
-    def _import_route_matches_opened_type(
+    def _ensure_qualified_type_route_unambiguous(
         self,
         qualifier: QualifierChain,
         name: str,
-        opened_atom: NameAtom,
+        selected_key: DeclKey,
         *,
+        selected_route: Literal["type name", "use route"],
         span: SourceSpan | None,
-    ) -> bool:
-        """Return whether import and use routes select the same type declaration."""
-        opened_key = self._opened_type_key(opened_atom, span)
+    ) -> None:
+        """Reject a qualified local/import collision unless both routes select one declaration."""
+        if qualifier.anchor is not None or not self.has_qualified_import_member(qualifier, name):
+            return
         imported_qname = self._resolve_import_qname(qualifier, name, span=span, required=False)
-        return (
-            opened_key is not None
-            and imported_qname is not None
-            and self._qname_decl_key(imported_qname) == opened_key
+        if imported_qname is not None and self._qname_decl_key(imported_qname) == selected_key:
+            return
+        raise AglTypeError(
+            f"Qualifier '{qualifier.render()}' is both a {selected_route} and a module route "
+            f"for '{name}'. {qualification_repair_guidance()}",
+            span=span,
         )
 
     def _resolve_import_qname(
@@ -1777,14 +1781,14 @@ class TypeEnvironment:
             if qualifier is not None:
                 local_name = self._local_qualified_type_name(qualifier, name)
                 if local_name is not None:
-                    if qualifier.anchor is None and self.has_qualified_import_member(
-                        qualifier, name
-                    ):
-                        raise AglTypeError(
-                            f"Qualifier '{qualifier.render()}' is both a type name and a module "
-                            f"route for '{name}'. {qualification_repair_guidance()}",
-                            span=eff_span,
-                        )
+                    local_path, declared_name = _split_scoped_type_name(local_name)
+                    self._ensure_qualified_type_route_unambiguous(
+                        qualifier,
+                        name,
+                        (self._module_id, local_path, declared_name),
+                        selected_route="type name",
+                        span=eff_span,
+                    )
                     name = local_name
                     qualifier = None
             resolved_args = tuple(
@@ -1801,16 +1805,15 @@ class TypeEnvironment:
                     span=eff_span,
                 )
                 if opened is not None:
-                    if self.has_qualified_import_member(
-                        qualifier, name
-                    ) and not self._import_route_matches_opened_type(
-                        qualifier, name, opened_atom, span=eff_span
-                    ):
-                        raise AglTypeError(
-                            f"Qualifier '{qualifier.render()}' is both a use route and a module "
-                            f"route for '{name}'. {qualification_repair_guidance()}",
-                            span=eff_span,
-                        )
+                    opened_key = self._opened_type_key(opened_atom, eff_span)
+                    assert opened_key is not None
+                    self._ensure_qualified_type_route_unambiguous(
+                        qualifier,
+                        name,
+                        opened_key,
+                        selected_route="use route",
+                        span=eff_span,
+                    )
                     return opened
             if qualifier is not None and qualifier.route_segments:
                 return self._resolve_qualified_applied_type(
@@ -1968,12 +1971,14 @@ class TypeEnvironment:
         rendered = qualifier.render()
         local_name = self._local_qualified_type_name(qualifier, name)
         if local_name is not None:
-            if qualifier.anchor is None and self.has_qualified_import_member(qualifier, name):
-                raise AglTypeError(
-                    f"Qualifier '{rendered}' is both a type name and a module route for "
-                    f"'{name}'. {qualification_repair_guidance()}",
-                    span=span,
-                )
+            local_path, declared_name = _split_scoped_type_name(local_name)
+            self._ensure_qualified_type_route_unambiguous(
+                qualifier,
+                name,
+                (self._module_id, local_path, declared_name),
+                selected_route="type name",
+                span=span,
+            )
             return self._resolve_name_type(
                 local_name, span=span, _resolving=frozenset(), lexical=False
             )
@@ -1984,16 +1989,15 @@ class TypeEnvironment:
             )
             opened = self._resolve_opened_type(opened_atom, span)
             if opened is not None:
-                if self.has_qualified_import_member(
-                    qualifier, name
-                ) and not self._import_route_matches_opened_type(
-                    qualifier, name, opened_atom, span=span
-                ):
-                    raise AglTypeError(
-                        f"Qualifier '{rendered}' is both a use route and a module route for "
-                        f"'{name}'. {qualification_repair_guidance()}",
-                        span=span,
-                    )
+                opened_key = self._opened_type_key(opened_atom, span)
+                assert opened_key is not None
+                self._ensure_qualified_type_route_unambiguous(
+                    qualifier,
+                    name,
+                    opened_key,
+                    selected_route="use route",
+                    span=span,
+                )
                 return opened
         if self._is_missing_local_scoped_type(qualifier):
             raise AglTypeError(self._unknown_scoped_type_message(qualifier, name), span=span)
@@ -2378,6 +2382,14 @@ class TypeEnvironment:
             local_name is not None
             and (local_gdef := self._generic_types.get(local_name)) is not None
         ):
+            local_path, declared_name = _split_scoped_type_name(local_name)
+            self._ensure_qualified_type_route_unambiguous(
+                qualifier,
+                name,
+                (self._module_id, local_path, declared_name),
+                selected_route="type name",
+                span=span,
+            )
             return local_name, local_gdef
         if qualifier.anchor is None:
             opened_atom = _type_path_atom(
@@ -2389,6 +2401,13 @@ class TypeEnvironment:
                 opened_gdef = self._program_generic_table.get(opened_key)
                 if opened_gdef is None:
                     return None
+                self._ensure_qualified_type_route_unambiguous(
+                    qualifier,
+                    name,
+                    opened_key,
+                    selected_route="use route",
+                    span=span,
+                )
                 rendered = qualifier.render()
                 return f"{rendered}::{name}", opened_gdef
         if self._import_env is None or self._program_generic_table is None:

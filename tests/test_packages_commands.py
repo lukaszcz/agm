@@ -36,6 +36,7 @@ from agm.packages.manifest import CommandSpec, DependencySpec, PackageManifest
 from agm.packages.model import PackageInfo
 from agm.packages.record import write_record
 from agm.version import AGM_VERSION
+from tests._package_helpers import older_incompatible_std_requirement, std_compatibility_bound
 
 
 def _context(tmp_path: Path) -> ConfigContext:
@@ -127,7 +128,8 @@ def test_create_rejects_an_older_incompatible_std_before_archive_publication(
 ) -> None:
     package = _package(tmp_path)
     (package.root / "package.toml").write_text(
-        '[package]\nname = "alpha"\nversion = "1.0.0"\n\n[dependencies]\nstd = "0.1.0"\n',
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
+        f'[dependencies]\nstd = "{older_incompatible_std_requirement()}"\n',
         encoding="utf-8",
     )
     (package.root / "alpha" / "main.agl").write_text(
@@ -487,7 +489,8 @@ def test_info_command_renders_metadata_and_reports_unknown_package(
     assert "keywords: agents, tools" in output
     assert "commands:" in output
     assert "run: alpha/main::main (Run Alpha)" in output
-    assert f"requires std >= {AGM_VERSION}, < 0.3.0: running AGM {AGM_VERSION}" in output
+    bound = std_compatibility_bound(AGM_VERSION)
+    assert f"requires std >= {AGM_VERSION}, < {bound}: running AGM {AGM_VERSION}" in output
     assert "requires bravo >= 1.0.0: missing" in output
     assert "requires charlie >= 2.0.0: active 1.0.0 (unsatisfied)" in output
     assert "requires delta >= 1.0.0: editable 1.0.0" in output

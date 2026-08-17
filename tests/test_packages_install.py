@@ -38,6 +38,7 @@ from agm.packages.manifest import PackageManifest
 from agm.packages.model import PackageInfo
 from agm.packages.record import content_hash, read_record, verify_record, write_record
 from agm.version import AGM_VERSION
+from tests._package_helpers import older_incompatible_std_requirement
 
 
 @pytest.fixture(autouse=True)
@@ -480,7 +481,7 @@ def test_install_rejects_an_older_incompatible_std_before_publication(tmp_path: 
         tmp_path / "source",
         "alpha",
         "1.0.0",
-        '\n[dependencies]\nstd = "0.1.0"\n',
+        f'\n[dependencies]\nstd = "{older_incompatible_std_requirement()}"\n',
     )
     home = tmp_path / "home"
 

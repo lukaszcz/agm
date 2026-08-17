@@ -12,7 +12,7 @@ from agm.version import AGM_VERSION
 
 def test_agm_version_has_plain_semver_shape() -> None:
     assert re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", AGM_VERSION)
-    assert AGM_VERSION == "0.2.0"
+    assert AGM_VERSION == "0.1.0"
 
 
 def test_release_metadata_matches_runtime_version() -> None:

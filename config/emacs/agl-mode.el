@@ -26,6 +26,10 @@
 ;;   optional byte-adjacent `::[T]' type argument) own a verbatim payload:
 ;;   the rest of the line, or a following indented block.
 ;;
+;; Key bindings: `C-c C-c' runs the file (`agm exec'), `C-c C-k' checks it
+;; (`agm check'), `C-c C-z' opens the inferior REPL, and `C-c C-r' /
+;; `C-c C-b' send the region or buffer to it.
+;;
 ;; Font-lock is structural only (D3): capitalization is semantically
 ;; meaningless in AgL, so faces derive from declaration and annotation
 ;; positions, never from spelling; constructor use-sites in expressions
@@ -1292,6 +1296,16 @@ function."
 ;; Loaded after the mode definition: these require this file.
 (require 'agl-indent)
 (require 'agl-flymake)
+(require 'agl-run)
+(require 'agl-repl)
+
+;; Keybindings live here, with the mode, so the whole surface is visible
+;; in one place; each feature file defines only its commands.
+(define-key agl-mode-map (kbd "C-c C-c") #'agl-run)
+(define-key agl-mode-map (kbd "C-c C-k") #'agl-check)
+(define-key agl-mode-map (kbd "C-c C-z") #'agl-repl)
+(define-key agl-mode-map (kbd "C-c C-r") #'agl-send-region)
+(define-key agl-mode-map (kbd "C-c C-b") #'agl-send-buffer)
 
 (provide 'agl-mode)
 ;;; agl-mode.el ends here

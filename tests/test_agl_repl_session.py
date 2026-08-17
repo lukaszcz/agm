@@ -4934,9 +4934,7 @@ class TestImports:
         assert session.eval_entry("import pkg/* as Facade\nuse Facade::*").ok
         assert session.eval_entry("first() + second()").value == IntValue(3)
 
-    def test_retained_wildcard_facade_use_survives_a_shrinking_import(
-        self, tmp_path: Path
-    ) -> None:
+    def test_retained_wildcard_facade_use_survives_a_shrinking_import(self, tmp_path: Path) -> None:
         package = tmp_path / "pkg"
         package.mkdir()
         (package / "a.agl").write_text("def first() -> int = 1\n", encoding="utf-8")

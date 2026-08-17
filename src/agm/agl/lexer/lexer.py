@@ -287,10 +287,7 @@ def _is_use_declaration(source: str, tokens: list[Token], index: int) -> bool:
         if (
             position + 1 >= end
             or tokens[position].end_pos != tokens[position + 1].start_pos
-            or (
-                position > index + 1
-                and tokens[position - 1].end_pos != tokens[position].start_pos
-            )
+            or (position > index + 1 and tokens[position - 1].end_pos != tokens[position].start_pos)
         ):
             return False
     start_offset = tokens[index].start_pos
@@ -333,8 +330,10 @@ def _promote_soft_keywords(tokens: list[Token], source: str) -> list[Token]:
             at_item_start = prev_type is None or prev_type in _ITEM_START_TYPES
             if tv == "import" and at_item_start:
                 tok = _retype(tok, IMPORT)
-            elif tv == "use" and at_item_start and (
-                _FORCE_USE_DECLARATION.get() or _is_use_declaration(source, tokens, index)
+            elif (
+                tv == "use"
+                and at_item_start
+                and (_FORCE_USE_DECLARATION.get() or _is_use_declaration(source, tokens, index))
             ):
                 tok = _retype(tok, USE)
             elif tv == "export" and at_item_start:

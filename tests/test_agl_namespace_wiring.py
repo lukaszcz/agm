@@ -388,13 +388,7 @@ def test_whole_target_alias_preserves_an_empty_local_scope(tmp_path: Path) -> No
     graph = make_graph_from_files(
         tmp_path,
         {
-            "entry": (
-                "use Empty as Alias\n"
-                "use Alias::*\n"
-                "scope Empty\n"
-                "end Empty\n"
-                "()\n"
-            ),
+            "entry": ("use Empty as Alias\nuse Alias::*\nscope Empty\nend Empty\n()\n"),
         },
     )
 

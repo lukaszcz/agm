@@ -4021,15 +4021,25 @@ class _Checker:
                     enum_type=expr_type,
                     span=node.span,
                 )
-            elif not selected_from_candidates and not constructor.matches(expr_type, variant):
-                if node.qualifier is None:
-                    raise _variant_not_in_enum(variant, expr_type, node.span)
-                self._check_variant_qualification(
-                    qualifier=node.qualifier,
-                    variant=node.variant,
-                    enum_type=expr_type,
-                    span=node.span,
+            elif not selected_from_candidates:
+                source_owner_matches = (
+                    self._env.match_source_type_qname(
+                        constructor.owner_module_id,
+                        constructor.owner_name,
+                        expr_type,
+                        scope_path=constructor.owner_path,
+                    )
+                    is not None
                 )
+                if not constructor.matches(expr_type, variant) and not source_owner_matches:
+                    if node.qualifier is None:
+                        raise _variant_not_in_enum(variant, expr_type, node.span)
+                    self._check_variant_qualification(
+                        qualifier=node.qualifier,
+                        variant=node.variant,
+                        enum_type=expr_type,
+                        span=node.span,
+                    )
             if variant not in self._env.type_table.enum_variants(expr_type):
                 raise _variant_not_in_enum(variant, expr_type, node.span)
             return BoolType()

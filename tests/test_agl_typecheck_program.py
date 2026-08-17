@@ -978,6 +978,25 @@ def test_use_of_generic_enum_alias_constructs_variant(tmp_path: Path) -> None:
     )
 
 
+def test_use_of_generic_enum_alias_qualifies_is_variant(tmp_path: Path) -> None:
+    checked = _check_program(
+        tmp_path,
+        {
+            "entry": (
+                "import lib\n"
+                "use lib::{Alias}\n"
+                "let value = Alias[int]::some(value = [1])\n"
+                "let result = value is Alias::some\n"
+                "result"
+            ),
+            "lib": "enum Option[T]\n  | some(value: T)\ntype Alias[T] = Option[array[T]]",
+        },
+        default_stdlib=False,
+    )
+
+    assert _binding_value_type(checked, ENTRY_ID, "result") == BoolType()
+
+
 def test_use_of_enum_alias_does_not_restore_explicitly_hidden_child(tmp_path: Path) -> None:
     with pytest.raises(AglScopeError):
         _check_program(

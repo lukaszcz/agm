@@ -90,6 +90,23 @@ def _resolve_without_loader(modules: dict[str, str]) -> ModuleResolution:
     return resolve_program(graph).modules[ENTRY_ID].resolved
 
 
+def test_generic_enum_constructor_resolves_through_a_reexport_facade(tmp_path: Path) -> None:
+    resolved = _entry_resolution(
+        tmp_path,
+        {
+            "entry": "import facade\nfacade::Option[int]::some(value = 1)",
+            "facade": "export lib::{Option}",
+            "lib": "enum Option[T]\n  | some(value: T)",
+        },
+    )
+
+    (call,) = _find_nodes(resolved.program, Call)
+    constructor = resolved.constructor_refs[call.callee.node_id]
+    assert constructor.owner_module_id == ModuleId.from_path("lib")
+    assert constructor.owner_name == "Option"
+    assert constructor.variant == "some"
+
+
 def test_qualified_expression_keeps_segment_spans_and_type_arguments() -> None:
     ref = _ref("module::Type[int]::member")
 

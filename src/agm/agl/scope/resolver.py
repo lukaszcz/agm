@@ -3621,20 +3621,30 @@ class _Resolver:
                 span=route_segment.span,
             )
         route = tuple(part for part in route_segment.name.split("/"))
-        candidate_modules = qualifier_candidates(
-            self._import_env, route, anchored=qualifier.anchored
-        )
         cumulative: ScopePath = ()
         for segment in qualifier.segments[1:]:
             cumulative = (*cumulative, segment.name)
-            if segment.type_args is not None and not any(
-                (module, _bare_atom(cumulative)) in self._cross_module_type_scopes
-                for module in candidate_modules
-            ):
-                raise AglScopeError(
-                    f"Type arguments cannot be applied to scope segment '{segment.name}'.",
-                    span=segment.span,
+            if segment.type_args is not None:
+                origin = resolve_qualified_member(
+                    self._import_env,
+                    route,
+                    _bare_atom(cumulative),
+                    anchored=qualifier.anchored,
+                    unknown_qualifier=lambda rendered: AglScopeError(
+                        f"No module imported under qualifier '{rendered}'.", span=span
+                    ),
+                    missing_member=lambda rendered: AglScopeError(
+                        f"'{segment.name}' is not a public member of imported module "
+                        f"'{rendered}' or is hidden.",
+                        span=segment.span,
+                    ),
+                    ambiguous=lambda message: AglScopeError(message, span=segment.span),
                 )
+                if origin not in self._cross_module_type_scopes:
+                    raise AglScopeError(
+                        f"Type arguments cannot be applied to scope segment '{segment.name}'.",
+                        span=segment.span,
+                    )
         atom_path = (*cumulative, name)
         atom: NameAtom = atom_path[0] if len(atom_path) == 1 else atom_path
         return resolve_qualified_member(

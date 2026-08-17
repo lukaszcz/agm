@@ -204,7 +204,7 @@ _LET_PATTERN_POLICY = _PatternResolutionPolicy(
 
 @dataclass(frozen=True, slots=True)
 class _LocalScopeRoute:
-    """Identity of a nested local scope exposed through ``use``."""
+    """Identity of a local scope exposed through ``use``."""
 
     path: ScopePath
 
@@ -2256,8 +2256,7 @@ class _Resolver:
             if path[: len(target)] != target:
                 continue
             relative = path[len(target) :]
-            if relative:
-                members.setdefault(_bare_atom(relative), _LocalScopeRoute(path))
+            members.setdefault(_bare_atom(relative), _LocalScopeRoute(path))
             for name, ref in scope.members.items():
                 members[_bare_atom((*relative, name))] = ref
         return members

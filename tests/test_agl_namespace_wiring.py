@@ -384,6 +384,23 @@ def test_unbraced_single_member_use_tail_can_be_renamed(tmp_path: Path) -> None:
     check_program(resolve_program(graph), base_caps())
 
 
+def test_whole_target_alias_preserves_an_empty_local_scope(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use Empty as Alias\n"
+                "use Alias::*\n"
+                "scope Empty\n"
+                "end Empty\n"
+                "()\n"
+            ),
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
 def test_local_use_can_expose_empty_nested_scope(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,

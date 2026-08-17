@@ -133,7 +133,6 @@ from agm.agl.ir.nodes import (
     IrNominalCaseKey,
     IrNominalCast,
     IrNominalIs,
-    IrOptionSome,
     IrOr,
     IrParseJson,
     IrPrint,
@@ -1071,10 +1070,6 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             _validate_location(node.location, ctx)
             if ctx.deep:
                 _check_record_nominal(nominal, ctx, "IrNominalCast")
-            _validate_expr(val, ctx)
-
-        case IrOptionSome(value=val):
-            _validate_location(node.location, ctx)
             _validate_expr(val, ctx)
 
         case IrNominalIs(nominal=nominal, value=val):

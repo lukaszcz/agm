@@ -1,21 +1,20 @@
-# `as?` returns Option without raising. Pattern matching drives the success
-# and fallback paths without repeating a potentially-failing cast.
+# `as?` returns whether the corresponding `as` cast would succeed. A successful
+# test can select a branch before the explicit cast produces the converted value.
 param user_input
 param d: decimal
 
 # Check if the text is a valid int before using it
 
 program def main() -> unit =
-  case user_input as? int of
-    | Some(value = _ as n) =>
-        print "got int: %{n}"
-        print "squared: %{(n * n) as text}"
-    | None => print "not an int: %{user_input}"
+  if user_input as? int =>
+    let n = user_input as int
+    print "got int: %{n}"
+    print "squared: %{(n * n) as text}"
+  else => print "not an int: %{user_input}"
 
-  case d as? int of
-    | Some(value = _ as i) => print "decimal is integral: %{i}"
-    | None => print "decimal has fraction: %{d as text}"
+  if d as? int =>
+    let i = d as int
+    print "decimal is integral: %{i}"
+  else => print "decimal has fraction: %{d as text}"
 
-  case 42 as? text of
-    | Some(_) => print true
-    | None => print false
+  print(42 as? text)

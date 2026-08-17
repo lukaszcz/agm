@@ -28,9 +28,7 @@ program def main() -> unit =
   print(shared_again.double())
   let narrow = node as Tree[int]::Node
   print(narrow.value)
-  case leaf as? Tree[int]::Node of
-    | Some(_) => print true
-    | None => print false
+  print(leaf as? Tree[int]::Node)
   try
     let _ = leaf as Tree[int]::Node
     print "unreachable"

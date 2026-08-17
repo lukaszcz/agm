@@ -3210,6 +3210,33 @@ def test_cross_module_qualified_generic_nullary_constructor_as_value(tmp_path: P
     )
 
 
+def test_cross_module_direct_member_owner_type_args_preserve_member_result(tmp_path: Path) -> None:
+    lib_id = ModuleId.from_path("lib")
+    modules = {
+        "lib": (
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "enum Outcome[T, E]\n"
+            "  | ok(value: T)\n"
+            "  | err(error: E)"
+        ),
+        "entry": (
+            "import lib\n"
+            "let n = lib::Option::none::[int]\n"
+            "let value = lib::Outcome::ok::[int, text](value = 1)\n"
+            "value"
+        ),
+    }
+    checked = _check_program(tmp_path, modules)
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "n")) == RecordType(
+        "none", scope_path=("Option",), module_id=lib_id
+    )
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "value")) == RecordType(
+        "ok", (IntType(),), scope_path=("Outcome",), module_id=lib_id
+    )
+
+
 def test_open_imported_generic_constructor_payload_type_apply_as_value(tmp_path: Path) -> None:
     """Open-imported generic payload constructor as a value with explicit type args.
 

@@ -45,7 +45,6 @@ from agm.agl.semantics.types import (
     contains_inference_var,
     is_assignable,
     is_json_shaped,
-    option_type,
 )
 from agm.agl.syntax.nodes import (
     ArrayLit,
@@ -6371,9 +6370,14 @@ class TestBareConstructorTypeApply:
         assert result_type.result.name == "some"
         assert result_type.result.type_args == (IntType(),)
 
-    def test_bare_nullary_constructor_type_apply_is_rejected(self) -> None:
-        err = reject_type(self._OPT + "let z = none::[int]\nz")
-        assert "not a generic constructor" in str(err).lower()
+    def test_legacy_nullary_constructor_owner_type_apply_is_precise_member_value(self) -> None:
+        checked = accept_type(self._OPT + "let z = none::[int]\nz")
+        expr = checked.resolved.program.body.items[-1]
+        assert isinstance(expr, VarRef)
+        result_type = checked.node_types[expr.node_id]
+        assert isinstance(result_type, RecordType)
+        assert result_type.name == "none"
+        assert result_type.type_args == ()
 
     def test_bare_payload_constructor_callable(self) -> None:
         # `some::[int]` applied positionally yields its member record.
@@ -6386,9 +6390,13 @@ class TestBareConstructorTypeApply:
         assert value_type.name == "some"
         assert value_type.type_args == (IntType(),)
 
-    def test_bare_nullary_constructor_with_type_apply_is_rejected_in_context(self) -> None:
-        err = reject_type(self._OPT + "let z: Option[int] = none::[int]\nz")
-        assert "not a generic constructor" in str(err).lower()
+    def test_legacy_nullary_constructor_owner_type_apply_widens_to_enum_context(self) -> None:
+        checked = accept_type(self._OPT + "let z: Option[int] = none::[int]\nz")
+        binding = checked.resolved.program.body.items[-2]
+        assert isinstance(binding, LetDecl)
+        binding_type = checked.type_env.get_binding_type(binding.pattern.node_id)
+        option_type = checked.type_env.instantiate_nominal("Option", (IntType(),))
+        assert binding_type == option_type
 
     def test_owner_apply_requires_an_enum_owner(self) -> None:
         error = reject_type("record Box[T]\n  value: T\nBox[int]::Box")
@@ -6411,9 +6419,32 @@ class TestBareConstructorTypeApply:
         assert function_type.result.name == "ok"
         assert function_type.result.type_args == (IntType(),)
 
-    def test_direct_member_apply_rejects_uncaptured_owner_argument(self) -> None:
+    def test_legacy_member_owner_type_apply_substitutes_captured_parameters(self) -> None:
+        checked = accept_type(
+            "enum Outcome[T, E]\n"
+            "  | ok(value: T)\n"
+            "  | err(error: E)\n"
+            "let value = ok::[int, text](value = 1)\n"
+            "value"
+        )
+        expr = checked.resolved.program.body.items[-1]
+        assert isinstance(expr, VarRef)
+        result_type = checked.node_types[expr.node_id]
+        assert isinstance(result_type, RecordType)
+        assert result_type.name == "ok"
+        assert result_type.type_args == (IntType(),)
+
+    def test_standalone_constructor_does_not_accept_enum_owner_type_args(self) -> None:
+        err = reject_type("record Box[T]\n  value: T\nBox::[int, text]")
+        assert "requires 1 type argument" in str(err).lower()
+
+    def test_scoped_record_is_not_an_enum_member_owner_application(self) -> None:
         err = reject_type(
-            "enum Outcome[T, E]\n  | ok(value: T)\n  | err(error: E)\nok::[int, text]"
+            "enum Envelope[T, E]\n"
+            "  | none\n"
+            "record Envelope::Nested[T]\n"
+            "  value: T\n"
+            "Envelope::Nested::[int, text]"
         )
         assert "requires 1 type argument" in str(err).lower()
 
@@ -6442,7 +6473,7 @@ class TestBareConstructorTypeApply:
 
     def test_non_generic_constructor_type_apply_rejected(self) -> None:
         err = reject_type("enum E\n  | Pass\nlet f = Pass::[int]\nf")
-        assert "not a generic constructor" in str(err).lower()
+        assert "type argument" in str(err).lower()
 
     def test_qualified_non_generic_constructor_type_apply_rejected(self) -> None:
         err = reject_type("enum E\n  | Pass\nlet f = E[int]::Pass\nf")
@@ -10648,9 +10679,11 @@ class TestGenericConstructorExplicit:
         err = reject_type("record Box[T]\n  value: T\nBox::[int, text](value = 42)")
         assert "type argument" in str(err).lower()
 
-    def test_nullary_member_explicit_type_arg_rejected(self) -> None:
-        err = reject_type("enum Option[T]\n  | none\n  | some(value: T)\nnone::[int]()")
-        assert "not a generic constructor" in str(err).lower()
+    def test_nullary_member_owner_type_args_are_accepted_in_direct_call(self) -> None:
+        checked = accept_type("enum Option[T]\n  | none\n  | some(value: T)\nnone::[int]()")
+        call = checked.resolved.program.body.items[-1]
+        assert isinstance(call, Call)
+        assert isinstance(checked.node_types[call.node_id], RecordType)
 
 
 class TestGenericConstructorErrors:
@@ -11598,17 +11631,17 @@ class TestCast:
         assert isinstance(decl, LetDecl)
         assert r.node_types[decl.value.node_id] == DecimalType()
 
-    def test_as_question_yields_target_option(self) -> None:
-        r = accept_type('let b: Option[int] = "42" as? int\nb')
+    def test_as_question_yields_bool(self) -> None:
+        r = accept_type('let b: bool = "42" as? int\nb')
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
-        assert r.node_types[decl.value.node_id] == option_type(IntType())
+        assert r.node_types[decl.value.node_id] == BoolType()
 
-    def test_as_question_on_total_cast_yields_target_option(self) -> None:
-        r = accept_type("let b: Option[text] = 1 as? text\nb")
+    def test_as_question_on_total_cast_yields_bool(self) -> None:
+        r = accept_type("let b: bool = 1 as? text\nb")
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
-        assert r.node_types[decl.value.node_id] == option_type(TextType())
+        assert r.node_types[decl.value.node_id] == BoolType()
 
     def test_bool_to_int_rejected(self) -> None:
         """bool as int is a static error."""
@@ -11638,6 +11671,11 @@ class TestCast:
         """as? on a static-error pair is also a static error."""
         err = reject_type("true as? int")
         assert "cannot cast" in str(err).lower()
+
+    def test_as_question_is_a_boolean_condition(self) -> None:
+        r = accept_type('if "42" as? int => 1 else => 0')
+        test = r.resolved.program.body.items[0]
+        assert r.node_types[test.node_id] == IntType()
 
     def test_json_to_text_render(self) -> None:
         """json as text yields text (TOTAL_RENDER —  completeness)."""

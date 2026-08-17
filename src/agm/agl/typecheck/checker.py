@@ -103,7 +103,6 @@ from agm.agl.semantics.types import (
     UnitType,
     contains_inference_var,
     free_type_vars,
-    option_type,
     reroot_type,
     substitute,
 )
@@ -2040,7 +2039,7 @@ class _Checker:
                     span=node.span,
                 )
         self._record_cast_spec(node.node_id, CastSpec(target_type=target_type, kind=kind))
-        return option_type(target_type) if node.test_only else target_type
+        return BoolType() if node.test_only else target_type
 
     # --- Call dispatch ---
 

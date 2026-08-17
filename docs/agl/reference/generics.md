@@ -305,12 +305,15 @@ program def main() -> unit =
   let z = Option[int]::none
 ```
 
-A direct member application supplies only the type parameters that member
-captures, so `none::[int]` is invalid: `none` captures none of `Option`'s
-parameters. Applying an enum owner instead supplies its full parameter list,
-then substitutes the captured parameters into the selected member. Thus both
-`Option[int]::some` and `Option[int]::none` are valid, as is
-`Outcome[int, text]::ok` when `ok` captures only `T`. In this explicit
+A direct inline member application accepts either the type parameters that
+member captures or the owning enum's full parameter list. The full form
+substitutes its arguments through the member's captured parameters, so
+`none::[int]` constructs `Option::none` and `ok::[int, text]` constructs the
+`ok[int]` member of `Outcome[int, text]` when `ok` captures only `T`.
+`Option[int]::some` and `Option[int]::none` provide the same owner-applied
+qualification. A standalone record constructor accepts only its own type
+parameters, and a referenced enum member is applied through its record
+constructor rather than through an enum owner. In this explicit
 applied-type-qualified constructor form, the applied type name must be
 immediately followed by `[` (`NAME[`):
 `Option[int]::some` is valid, but `Option [int]::some` is invalid. This rule

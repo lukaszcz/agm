@@ -254,7 +254,7 @@ class TestFreshImportSeesTheCurrentDeclaration:
         assert r.ok, r.diagnostics
         assert r.value == TextValue("extra,value")
 
-    def test_fresh_import_sees_the_new_enum_variants_not_the_old_ones(self, tmp_path: Path) -> None:
+    def test_fresh_import_sees_the_new_enum_members_not_the_old_ones(self, tmp_path: Path) -> None:
         _write_extern_lib(
             tmp_path,
             "capture_enum_after",

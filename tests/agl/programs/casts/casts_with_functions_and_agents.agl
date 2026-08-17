@@ -1,14 +1,12 @@
 # Casts inside user-defined function bodies and with agent-supplied text.
-# Demonstrates: `as?` inside a def, cast in a recursive helper, and casting
+# Demonstrates: a boolean `as?` condition inside a def, cast in a recursive helper, and casting
 # an agent's text response to a typed record.
 record Task
   title: text
   effort: int
 
 def parse_int_or_zero(s: text) -> int =
-  case s as? int of
-    | Some(value = _ as n) => n
-    | None => 0
+  if s as? int => s as int else => 0
 
 # A helper that doubles a numeric text value
 def double_text_int(s: text) -> text =

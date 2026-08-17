@@ -365,7 +365,7 @@ class TestRegisterAndGet:
 
 
 # ---------------------------------------------------------------------------
-# record_fields / enum_variants on non-generic handles
+# record_fields / enum_members on non-generic handles
 # ---------------------------------------------------------------------------
 
 
@@ -384,7 +384,7 @@ class TestNonGenericAccessors:
         handle = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700000)
         assert dict(table.record_fields(handle)) == {"x": IntType(), "y": IntType()}
 
-    def test_enum_variants_non_generic(self) -> None:
+    def test_enum_members_non_generic(self) -> None:
         table = TypeTable()
         table.register(
             TypeDef(
@@ -408,7 +408,7 @@ class TestNonGenericAccessors:
         with pytest.raises(KeyError):
             table.record_fields(handle)
 
-    def test_enum_variants_missing_def_raises_keyerror(self) -> None:
+    def test_enum_members_missing_def_raises_keyerror(self) -> None:
         table = TypeTable()
         handle = EnumType(name="Ghost", module_id=ENTRY_ID)
         with pytest.raises(KeyError):
@@ -429,7 +429,7 @@ class TestNonGenericAccessors:
         with pytest.raises(AssertionError):
             table.record_fields(handle)
 
-    def test_enum_variants_raises_when_key_registered_as_record(self) -> None:
+    def test_enum_members_raises_when_key_registered_as_record(self) -> None:
         table = TypeTable()
         table.register(
             TypeDef(
@@ -1272,7 +1272,7 @@ class TestGenericSubstitution:
             "seconds": DictType(TextType()),
         }
 
-    def test_enum_variants_substitutes_type_args(self) -> None:
+    def test_enum_members_substitute_type_args(self) -> None:
         table = TypeTable()
         table.register(
             TypeDef(
@@ -1314,7 +1314,7 @@ class TestMemoization:
         second = table.record_fields(handle)
         assert first is second
 
-    def test_enum_variants_returns_same_object_for_same_handle(self) -> None:
+    def test_enum_members_return_same_object_for_same_handle(self) -> None:
         table = TypeTable()
         table.register(
             TypeDef(
@@ -1353,7 +1353,7 @@ class TestMemoization:
         # Re-fetching the first handle still returns its own cached result.
         assert dict(table.record_fields(int_handle)) == {"value": IntType()}
 
-    def test_enum_variants_caches_each_generic_instantiation_separately(self) -> None:
+    def test_enum_members_cache_each_generic_instantiation_separately(self) -> None:
         table = TypeTable()
         table.register(
             TypeDef(

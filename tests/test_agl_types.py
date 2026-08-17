@@ -937,7 +937,7 @@ class TestHelpers:
         r = RecordType("R")
         assert free_type_vars(r) == frozenset()
 
-    def test_free_type_vars_enum_variants(self) -> None:
+    def test_free_type_vars_enum_type_arguments(self) -> None:
         e = EnumType("Either", type_args=(TypeVarType("A"), TypeVarType("B")))
         assert free_type_vars(e) == frozenset({"A", "B"})
 

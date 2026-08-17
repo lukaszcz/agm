@@ -921,7 +921,7 @@ class TestDefensiveErrors:
                     _LOC,
                     nominal=NominalId(1),
                     value=IrConstInt(_LOC, 1),
-                    optional=False,
+                    test_only=False,
                     source_label="int",
                     target_label="Record",
                 ),

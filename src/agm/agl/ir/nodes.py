@@ -116,7 +116,6 @@ __all__ = [
     "IrUpdateRecord",
     "IrNominalCast",
     "IrNominalIs",
-    "IrOptionSome",
     "UseDefault",
     "is_canonical_literal_scalar",
 ]
@@ -587,8 +586,7 @@ class IrConvert:
     Evaluates ``value`` once, then runs ``recipe`` (a typeless
     ``ConversionRecipe``).  ``failure_mode`` selects behavior on a fallible
     failure: ``RAISE_CAST_ERROR`` raises a ``CastError`` (the ``as`` operator);
-    ``RETURN_OPTION`` yields ``Option::None`` on failure, while a successful
-    ``as?`` result is wrapped in ``Option::Some``.
+    ``RETURN_BOOL`` makes ``as?`` evaluate to whether the conversion succeeded.
     """
 
     location: Location
@@ -601,25 +599,17 @@ class IrConvert:
 class IrNominalCast:
     """Identity cast from an enum value to one of its member records.
 
-    ``optional`` selects an ``Option`` result instead of a ``CastError`` on a
-    nominal mismatch. The labels are statically selected source type names for
-    a failed ordinary cast.
+    ``test_only`` makes a nominal mismatch evaluate to ``false`` instead of
+    raising ``CastError``. The labels are statically selected source type names
+    for a failed ordinary cast.
     """
 
     location: Location
     nominal: NominalId
     value: "IrExpr"
-    optional: bool
+    test_only: bool
     source_label: str
     target_label: str
-
-
-@dataclass(frozen=True, slots=True)
-class IrOptionSome:
-    """Wrap one value in the standard-library ``Option::Some`` member."""
-
-    location: Location
-    value: "IrExpr"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1167,7 +1157,6 @@ IrExpr = (
     | IrMakeConstructor
     | IrNominalCast
     | IrNominalIs
-    | IrOptionSome
     | IrConvert
     | IrIf
     | IrRaise

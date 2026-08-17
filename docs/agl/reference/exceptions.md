@@ -394,7 +394,7 @@ raw: text           # text representation of the value that failed to convert
 
 `CastError` is raised by `as` casts that are fallible (see
 [Types](types.md#casts-and-convertibility)). The `as?` form never raises —
-it reports failure as `None`.
+it reports whether the cast would succeed as a `bool`.
 
 ### `JsonParseError`
 

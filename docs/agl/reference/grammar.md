@@ -586,7 +586,7 @@ is_expr   ::= cast "is" "not"? qualified_constructor
             | cast
 
 cast           ::= cast "as" type_expr      (* type cast; may raise CastError *)
-               | cast "as?" type_expr      (* nullable conversion; yields Option[T] *)
+               | cast "as?" type_expr      (* convertibility test; yields bool *)
                | unary
                (* left-associative; "as?" is a single token — no whitespace *)
 

@@ -172,7 +172,7 @@ def test_validate_cheap_tier_skips_nominal_checks_for_ir_nominal_cast() -> None:
         location=loc,
         nominal=NominalId(1),
         value=IrConstInt(loc, 1),
-        optional=False,
+        test_only=False,
         source_label="int",
         target_label="Record",
     )

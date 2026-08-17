@@ -35,7 +35,6 @@ from agm.agl.semantics.values import (
     RecordValue,
     TextValue,
 )
-from agm.agl.typecheck.env import AglTypeError
 from tests._agl_helpers import let_root_capture
 from tests.agl.ir_harness import evaluate_ir, inline_main_items, lower_inline_ir, nominal_id_for
 
@@ -423,16 +422,19 @@ let v = mk(7)
     assert v.display_name == "Option::some" and v.fields["value"] == IntValue(7)
 
 
-def test_direct_nullary_constructor_type_apply_is_rejected() -> None:
-    """A member that captures no generic arguments cannot be directly applied."""
+def test_direct_nullary_constructor_owner_type_apply_constructs_member_value() -> None:
+    """An inline member accepts its generic enum owner's type arguments directly."""
     source = """\
 enum Option[T]
   | none
   | some(value: T)
-none::[int]
+let z = none::[int]
+()
 """
-    with pytest.raises(AglTypeError, match="not a generic constructor"):
-        evaluate_ir(source)
+    ir = evaluate_ir(source)
+    z = ir["z"]
+    assert isinstance(z, RecordValue)
+    assert z.display_name == "Option::none"
 
 
 def test_owner_applied_constructor_value_is_callable_or_constructed() -> None:

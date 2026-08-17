@@ -99,7 +99,6 @@ from agm.agl.ir.nodes import (
     IrNominalCaseKey,
     IrNominalCast,
     IrNominalIs,
-    IrOptionSome,
     IrOr,
     IrParseJson,
     IrPrint,
@@ -709,8 +708,8 @@ class IrInterpreter:
                         raw=TextValue(exc.raw),
                     ),
                 )
-            case ConversionFailureMode.RETURN_OPTION:
-                return none_value()
+            case ConversionFailureMode.RETURN_BOOL:
+                return BoolValue(False)
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
 
@@ -1437,7 +1436,7 @@ class IrInterpreter:
             case IrNominalCast(
                 nominal=nominal,
                 value=val_expr,
-                optional=optional,
+                test_only=test_only,
                 source_label=source_label,
                 target_label=target_label,
             ):
@@ -1447,9 +1446,9 @@ class IrInterpreter:
                         f"IrNominalCast: value is not a record, got {type(value).__name__}"
                     )
                 if value.nominal == nominal:
-                    return some_value(value) if optional else value
-                if optional:
-                    return none_value()
+                    return BoolValue(True) if test_only else value
+                if test_only:
+                    return BoolValue(False)
                 raise AglRaise(
                     _make_exc_value(
                         "CastError",
@@ -1460,9 +1459,6 @@ class IrInterpreter:
                         raw=TextValue(self._cast_raw(value)),
                     )
                 )
-
-            case IrOptionSome(value=val_expr):
-                return some_value(self._eval(val_expr))
 
             case IrNominalIs(nominal=nominal, value=val_expr, negated=negated):
                 value = self._eval(val_expr)
@@ -1479,14 +1475,13 @@ class IrInterpreter:
                 except AglCastConversion as exc:
                     return self._on_cast_failure(failure_mode, exc)
                 except AglCyclicValue:
-                    # A nullable cast treats a cycle encountered by a conversion
-                    # walk as a failed conversion; ordinary `as` still reports the
-                    # catchable CyclicValueError.
-                    if failure_mode is ConversionFailureMode.RETURN_OPTION:
-                        return none_value()
+                    # A conversion test reports a cycle as failure; ordinary
+                    # `as` still reports the catchable CyclicValueError.
+                    if failure_mode is ConversionFailureMode.RETURN_BOOL:
+                        return BoolValue(False)
                     raise self._cyclic_failure()
-                if failure_mode is ConversionFailureMode.RETURN_OPTION:
-                    return some_value(converted)
+                if failure_mode is ConversionFailureMode.RETURN_BOOL:
+                    return BoolValue(True)
                 return converted
 
             case IrIf(branches=branches, has_else=has_else):

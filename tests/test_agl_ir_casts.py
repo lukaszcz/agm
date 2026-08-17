@@ -35,11 +35,10 @@ from agm.agl.ir.contracts import (
     VariantEncode,
 )
 from agm.agl.ir.ids import NominalId
-from agm.agl.ir.nodes import IrBind, IrConvert, IrNominalCast, IrOptionSome, IrSequence
+from agm.agl.ir.nodes import IrBind, IrConvert, IrNominalCast, IrSequence
 from agm.agl.ir.program import NominalDescriptor, NominalKind, VariantDescriptor
 from agm.agl.ir.validate import validate_ir
 from agm.agl.modules.ids import ENTRY_ID
-from agm.agl.runtime.option import none_value, some_value
 from agm.agl.semantics.values import (
     ArrayValue,
     BoolValue,
@@ -208,35 +207,35 @@ let x = "{\\"$case\\": \\"Purple\\"}" as Color
 
 
 # ---------------------------------------------------------------------------
-# IR evaluation tests — nullable `as?`
+# IR evaluation tests — boolean `as?`
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
     "source,expected",
     [
-        ("let r = 42 as? text\n()\n", some_value(TextValue("42"))),
-        ("let r = 42 as? json\n()\n", some_value(JsonValue(42))),
-        ("let r = 3 as? decimal\n()\n", some_value(DecimalValue(Decimal(3)))),
-        ('let r = "42" as? int\n()\n', some_value(IntValue(42))),
-        ('let r = "nope" as? int\n()\n', none_value()),
-        ("let r = 4.5 as? int\n()\n", none_value()),
-        ("let r = 4.0 as? int\n()\n", some_value(IntValue(4))),
+        ("let r = 42 as? text\n()\n", True),
+        ("let r = 42 as? json\n()\n", True),
+        ("let r = 3 as? decimal\n()\n", True),
+        ('let r = "42" as? int\n()\n', True),
+        ('let r = "nope" as? int\n()\n', False),
+        ("let r = 4.5 as? int\n()\n", False),
+        ("let r = 4.0 as? int\n()\n", True),
     ],
 )
-def test_as_optional_returns_option(source: str, expected: RecordValue) -> None:
+def test_as_question_returns_bool(source: str, expected: bool) -> None:
     ir = evaluate_ir(source)
-    assert ir["r"] == expected
+    assert ir["r"] == BoolValue(expected)
 
 
-def test_total_as_optional_evaluates_source_and_wraps_result() -> None:
+def test_total_as_question_evaluates_source() -> None:
     source = """\
 let x = 5
 let r = x as? text
 ()
 """
     ir = evaluate_ir(source)
-    assert ir["r"] == some_value(TextValue("5"))
+    assert ir["r"] == BoolValue(True)
     assert ir["x"] == IntValue(5)
 
 
@@ -276,10 +275,10 @@ def test_golden_as_lowers_to_ir_convert_raise() -> None:
     assert value.recipe.decode == ScalarDecode(ScalarKind.INT)
 
 
-def test_golden_fallible_as_optional_lowers_to_ir_convert_return_option() -> None:
+def test_golden_fallible_as_question_lowers_to_ir_convert_return_bool() -> None:
     value = _bound_value('let r = "42" as? int\n()\n', "r")
     assert isinstance(value, IrConvert)
-    assert value.failure_mode is ConversionFailureMode.RETURN_OPTION
+    assert value.failure_mode is ConversionFailureMode.RETURN_BOOL
 
 
 def test_nominal_downcasts_lower_to_identity_checks() -> None:
@@ -296,24 +295,22 @@ let upcast = Circle(radius = 3) as? Shape
     is_circle = _bound_value(source, "is_circle")
     is_square = _bound_value(source, "is_square")
     upcast = _bound_value(source, "upcast")
-    assert isinstance(circle, IrNominalCast) and circle.optional is False
-    assert isinstance(is_circle, IrNominalCast) and is_circle.optional is True
-    assert isinstance(is_square, IrNominalCast) and is_square.optional is True
-    assert isinstance(upcast, IrOptionSome)
+    assert isinstance(circle, IrNominalCast) and circle.test_only is False
+    assert isinstance(is_circle, IrNominalCast) and is_circle.test_only is True
+    assert isinstance(is_square, IrNominalCast) and is_square.test_only is True
+    assert isinstance(upcast, IrConvert)
     validate_ir(_lower(source), deep=True)
     values = evaluate_ir(source)
     assert values["circle"] == RecordValue(circle.nominal, "Shape::Circle", {"radius": IntValue(2)})
-    assert values["is_circle"] == some_value(values["circle"])
-    assert values["is_square"] == none_value()
-    assert values["upcast"] == some_value(
-        RecordValue(circle.nominal, "Shape::Circle", {"radius": IntValue(3)})
-    )
+    assert values["is_circle"] == BoolValue(True)
+    assert values["is_square"] == BoolValue(False)
+    assert values["upcast"] == BoolValue(True)
 
 
-def test_golden_total_noop_as_optional_lowers_to_ir_convert() -> None:
+def test_golden_total_as_question_lowers_to_ir_convert() -> None:
     value = _bound_value("let r = 3 as? decimal\n()\n", "r")
     assert isinstance(value, IrConvert)
-    assert value.failure_mode is ConversionFailureMode.RETURN_OPTION
+    assert value.failure_mode is ConversionFailureMode.RETURN_BOOL
     assert value.recipe.strategy is ConversionStrategy.WIDEN_INT_TO_DECIMAL
 
 

@@ -1,5 +1,5 @@
-# `as?` returns an Option containing the identity-cast value on success and
-# None on a failed nominal downcast. It also accepts a member-to-enum upcast.
+# `as?` reports whether an identity cast would succeed. `as` retains the
+# identity value after a successful enum-member downcast or member-to-enum upcast.
 # A concrete member that captures no owner type parameters remains the same
 # member across owner instantiations, so it is valid in `is` tests.
 record Marker()
@@ -16,15 +16,12 @@ program def main() -> unit =
   let node: Tree[int] = Tree[int]::Node(value = 7)
   print(leaf is Tree[text]::Leaf)
 
-  case node as? Tree[int]::Node of
-    | Some(value = _ as n) => print n.value
-    | None => print "missing node"
-  case leaf as? Tree[int]::Node of
-    | Some(value = _) => print "unexpected node"
-    | None => print "no node"
-  case Tree::Leaf as? Tree[int] of
-    | Some(value = _) => print "upcast"
-    | None => print "missing upcast"
+  if node as? Tree[int]::Node =>
+    let n = node as Tree[int]::Node
+    print n.value
+  else => print "missing node"
+  if leaf as? Tree[int]::Node => print "unexpected node" else => print "no node"
+  if Tree::Leaf as? Tree[int] => print "upcast" else => print "missing upcast"
 
   var nodes: array[Node] = [Node(children = [])]
   let cyclic = Node(children = nodes)

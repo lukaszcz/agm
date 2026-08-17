@@ -100,7 +100,6 @@ from agm.agl.ir.nodes import (
     IrNominalCaseKey,
     IrNominalCast,
     IrNominalIs,
-    IrOptionSome,
     IrOr,
     IrParseJson,
     IrPrint,
@@ -1341,17 +1340,15 @@ class _Lowerer:
                 spec = self._checked.cast_specs[nid]
                 source_type = self._node_type(operand.node_id)
                 inner = self.lower_expr(operand)
-                if spec.kind is CastKind.IDENTITY_UPCAST:
-                    return (
-                        IrOptionSome(location=self._loc(span), value=inner) if test_only else inner
-                    )
+                if spec.kind is CastKind.IDENTITY_UPCAST and not test_only:
+                    return inner
                 if spec.kind is CastKind.NOMINAL_DOWNCAST:
                     assert isinstance(spec.target_type, RecordType)
                     return IrNominalCast(
                         location=self._loc(span),
                         nominal=NominalId(spec.target_type.decl_id),
                         value=inner,
-                        optional=test_only,
+                        test_only=test_only,
                         source_label=repr(source_type),
                         target_label=repr(spec.target_type),
                     )
@@ -1361,7 +1358,7 @@ class _Lowerer:
                     value=inner,
                     recipe=recipe,
                     failure_mode=(
-                        ConversionFailureMode.RETURN_OPTION
+                        ConversionFailureMode.RETURN_BOOL
                         if test_only
                         else ConversionFailureMode.RAISE_CAST_ERROR
                     ),

@@ -17,11 +17,6 @@ record Node
   tag: int
   children: array[Node]
 
-def succeeds[T](value: Option[T]) -> bool =
-  case value of
-    | Some(_) => true
-    | None => false
-
 program def main() -> unit =
   let rs: array[R] = [R(x = n, label = tag), R(x = n + 1, label = tag)]
   print(rs as json)
@@ -50,8 +45,8 @@ program def main() -> unit =
   else =>
     print "round trip mismatch"
 
-  # `as?` returns Some for the same successful conversions.
-  print(succeeds(rs as? json))
-  print(succeeds(by_name as? json))
-  print(succeeds(opts as? json))
-  print(succeeds(tree as? json))
+  # `as?` reports success for the same conversions.
+  print(rs as? json)
+  print(by_name as? json)
+  print(opts as? json)
+  print(tree as? json)

@@ -1072,21 +1072,6 @@ COMPATIBILITY_PRELUDE_TYPE_NAMES: frozenset[str] = frozenset(
 )
 
 
-# ---------------------------------------------------------------------------
-# Cast classification
-# ---------------------------------------------------------------------------
-
-
-def option_type(value_type: Type) -> EnumType:
-    """Return the standard-library ``Option`` instantiation for *value_type*."""
-    return EnumType(
-        name="Option",
-        type_args=(value_type,),
-        module_id=STD_CORE_ID,
-        decl_id=_reserved_id("Option"),
-    )
-
-
 class CastKind(_enum.Enum):
     """Classification of a cast operation.
 

@@ -710,13 +710,13 @@ Operands must be `bool`. `and` and `or` short-circuit.
 <!-- agl-check: fragment -->
 ```agl
 EXPR as T     # cast: convert EXPR to type T
-EXPR as? T    # nullable conversion: Option[T], never raises
+EXPR as? T    # convertibility test: bool, never raises
 ```
 
-`as` converts the value to the named type; `as?` performs the same conversion
-without raising, returning `Some(converted_value)` on success or `None` on
-failure. Casting from an enum to one of its member records is an identity
-downcast; casting a member record to a containing enum is an identity upcast.
+`as` converts the value to the named type; `as?` tests whether the same `as`
+conversion would succeed, returning `true` on success and `false` on failure.
+Casting from an enum to one of its member records is an identity downcast;
+casting a member record to a containing enum is an identity upcast.
 The full conversion matrix and semantics are in
 [Types](types.md#casts-and-convertibility).
 
@@ -741,11 +741,12 @@ Examples:
 <!-- agl-check: fragment -->
 ```agl
 let n: int = raw_value as int          # raises CastError if not an int
-let parsed: Option[int] = raw_value as? int
+let is_int: bool = raw_value as? int
 
-case parsed of
-  | Some(value = _ as n) => print n
-  | None => print "not an int"
+if is_int =>
+  let n = raw_value as int
+  print n
+else => print "not an int"
 
 let s: text = some_int as text         # total — always succeeds
 let j: json = my_record.count as json  # total — int is JSON-shaped
@@ -753,10 +754,9 @@ let j: json = my_record.count as json  # total — int is JSON-shaped
 # left-associativity chains
 let t: text = some_int as json as text   # (some_int as json) as text
 
-# nullable conversion without exception handling
-case count_json as? int of
-  | Some(value = _ as n) => print n
-  | None => print "not an int"
+# convertibility test without exception handling
+if count_json as? int => print(count_json as int)
+else => print "not an int"
 ```
 
 A `text` cast from a fallible source reads the value and formats it as text;

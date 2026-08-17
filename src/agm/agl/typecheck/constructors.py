@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import Literal, Protocol
 
-from agm.agl.scope.symbols import BindingRef, ConstructorRef, ModuleResolution, ScopePath
+from agm.agl.scope.symbols import BindingRef, ConstructorRef, ModuleResolution
 from agm.agl.semantics.types import (
     EnumType,
     ExceptionType,
@@ -20,6 +20,7 @@ from agm.agl.semantics.types import (
     RecordType,
     Type,
     TypeTemplate,
+    TypeVarType,
     substitute,
 )
 from agm.agl.syntax.nodes import Call, Expr, NamedArg, ParamKind, Placeholder, VarRef
@@ -233,6 +234,26 @@ class ConstructorChecker:
             assert sig is not None, f"No constructor signature for {owner_name}"
             return ctor_ref, sig, gdef
 
+        inline_member = self._inline_enum_member_data(ctor_ref)
+        if inline_member is not None:
+            _enum_gdef, member_type = inline_member
+            fields = self._ctx._env.type_table.record_fields(member_type)
+            return (
+                ctor_ref,
+                ConstructorSignature(
+                    owner_name=owner_name,
+                    field_names=tuple(fields),
+                    field_templates=tuple(fields.values()),
+                    result_template=member_type,
+                    type_params=tuple(
+                        argument.name
+                        for argument in member_type.type_args
+                        if isinstance(argument, TypeVarType)
+                    ),
+                ),
+                None,
+            )
+
         source = self._ctx._env.source_type_template_qname(
             ctor_ref.owner_module_id, owner_name, scope_path=ctor_ref.owner_path
         )
@@ -272,7 +293,6 @@ class ConstructorChecker:
     def _instantiate_constructor_value(
         self,
         *,
-        owner_name: str,
         type_params: tuple[str, ...],
         type_args: tuple[TypeExpr, ...],
         sig: ConstructorSignature,
@@ -285,12 +305,6 @@ class ConstructorChecker:
         types to its concrete member record; a fieldless one constructs that
         record immediately.
         """
-        if len(type_args) != len(type_params):
-            raise AglTypeError(
-                f"'{owner_name}' requires {len(type_params)} type argument(s), "
-                f"but {len(type_args)} were supplied.",
-                span=span,
-            )
         subst = {
             p: self._ctx._env.resolve_type_expr(
                 ta, span=span, type_vars=self._ctx._current_type_vars
@@ -303,6 +317,63 @@ class ConstructorChecker:
             return concrete_result
         return FunctionType(params=concrete_params, result=concrete_result)
 
+    def _inline_enum_member_data(
+        self, ctor_ref: ConstructorRef
+    ) -> tuple[GenericTypeDef, RecordType] | None:
+        """Return a direct inline member's generic enum and record template."""
+        if not ctor_ref.owner_path:
+            return None
+        enum_name = ctor_ref.owner_path[-1]
+        enum_path = ctor_ref.owner_path[:-1]
+        enum_gdef = self._ctx._env.get_generic_type_from_module(
+            ctor_ref.owner_module_id, enum_name, scope_path=enum_path
+        )
+        if enum_gdef is None:
+            scoped_name = "::".join((*enum_path, enum_name))
+            enum_gdef = self._ctx._env.get_generic_type(scoped_name)
+        if enum_gdef is None or enum_gdef.kind != "enum":
+            return None
+        assert isinstance(enum_gdef.template, EnumType)
+        member = next(
+            (
+                candidate
+                for candidate in self._ctx._env.type_table.enum_members(enum_gdef.template)
+                if candidate.decl_id == ctor_ref.owner_decl_node_id
+            ),
+            None,
+        )
+        if member is None:
+            return None
+        captured = tuple(
+            argument.name for argument in member.type_args if isinstance(argument, TypeVarType)
+        )
+        return (enum_gdef, member) if captured == ctor_ref.type_params else None
+
+    def _inline_enum_owner_type_params(self, ctor_ref: ConstructorRef) -> tuple[str, ...] | None:
+        """Return the generic owner parameters for an inline member constructor.
+
+        A direct member reference normally applies just the parameters captured
+        by that member record. Its enclosing enum is a second, unambiguous
+        application target only when the member's captured parameters agree
+        with the selected constructor metadata.
+        """
+        member_data = self._inline_enum_member_data(ctor_ref)
+        if member_data is None:
+            return None
+        enum_gdef, _member = member_data
+        return enum_gdef.type_params
+
+    def _explicit_constructor_type_params(
+        self, ctor_ref: ConstructorRef, type_args: tuple[TypeExpr, ...]
+    ) -> tuple[str, ...] | None:
+        """Select direct-member or owner parameters for explicit type arguments."""
+        if len(type_args) == len(ctor_ref.type_params):
+            return ctor_ref.type_params
+        owner_type_params = self._inline_enum_owner_type_params(ctor_ref)
+        if owner_type_params is not None and len(type_args) == len(owner_type_params):
+            return owner_type_params
+        return None
+
     def check_constructor_type_apply(
         self,
         *,
@@ -310,21 +381,28 @@ class ConstructorChecker:
         type_args: tuple[TypeExpr, ...],
         span: SourceSpan,
     ) -> Type:
-        """Type a generic constructor with explicit type args used as a value.
+        """Type an explicitly instantiated constructor used as a value.
 
-        ``some::[int]`` yields ``FunctionType((int,), Option::some[int])``;
-        a fieldless constructor yields its instantiated record value.
+        Direct members accept their captured parameters.  An inline generic
+        enum member also accepts its owner's complete parameter list, which is
+        substituted through the member's captured result and field templates.
         """
-        if not ctor_ref.type_params:
+        type_params = self._explicit_constructor_type_params(ctor_ref, type_args)
+        if type_params is None:
+            if not ctor_ref.type_params and self._inline_enum_owner_type_params(ctor_ref) is None:
+                raise AglTypeError(
+                    f"'{ctor_ref.owner_name}' is not a generic constructor and does not accept "
+                    "type arguments.",
+                    span=span,
+                )
             raise AglTypeError(
-                f"'{ctor_ref.owner_name}' is not a generic constructor and does not accept "
-                "type arguments.",
+                f"'{ctor_ref.owner_name}' requires {len(ctor_ref.type_params)} type argument(s), "
+                f"but {len(type_args)} were supplied.",
                 span=span,
             )
-        ctor_ref, sig, gdef = self._generic_constructor_data(ctor_ref)
+        ctor_ref, sig, _gdef = self._generic_constructor_data(ctor_ref)
         return self._instantiate_constructor_value(
-            owner_name=ctor_ref.owner_name,
-            type_params=ctor_ref.type_params,
+            type_params=type_params,
             type_args=type_args,
             sig=sig,
             span=span,
@@ -337,12 +415,14 @@ class ConstructorChecker:
         *,
         owner_name: str,
         gdef: GenericTypeDef | None,
-        owner_path: ScopePath = (),
+        signature: ConstructorSignature,
     ) -> tuple[tuple[str, ParamKind], ...]:
         field_kinds = (
             self._ctx._env.get_constructor_field_kinds_for_type(gdef.template, owner_name)
             if gdef is not None
-            else self._ctx._env.get_constructor_field_kinds(owner_name, scope_path=owner_path)
+            else self._ctx._env.get_constructor_field_kinds_for_type(
+                signature.result_template, owner_name
+            )
         )
         assert field_kinds is not None, (
             f"compiler bug: no field-kinds for generic constructor '{owner_name}'"
@@ -367,7 +447,7 @@ class ConstructorChecker:
         owner_name = ctor_ref.owner_name
         type_params = ctor_ref.type_params
         field_kinds = self._generic_constructor_field_kinds(
-            owner_name=owner_name, gdef=gdef, owner_path=ctor_ref.owner_path
+            owner_name=owner_name, gdef=gdef, signature=sig
         )
         bound_exprs = bind_constructor_args(
             field_kinds,
@@ -378,12 +458,6 @@ class ConstructorChecker:
         )
 
         if node_type_args:
-            if len(node_type_args) != len(type_params):
-                raise AglTypeError(
-                    f"'{owner_name}' requires {len(type_params)} type argument(s), "
-                    f"but {len(node_type_args)} were supplied.",
-                    span=span,
-                )
             subst = {
                 type_param: self._ctx._env.resolve_type_expr(
                     type_arg, span=span, type_vars=self._ctx._current_type_vars
@@ -759,8 +833,20 @@ class ConstructorChecker:
         """Handle a Call whose callee is an unqualified constructor VarRef."""
         assert isinstance(node.callee, VarRef)
         type_args = () if constructor_type_args is None else constructor_type_args
-        if ctor_ref.type_params:
+        explicit_type_params = (
+            self._explicit_constructor_type_params(ctor_ref, type_args) if type_args else None
+        )
+        if ctor_ref.type_params or explicit_type_params:
+            if type_args and explicit_type_params is None:
+                raise AglTypeError(
+                    f"'{ctor_ref.owner_name}' requires "
+                    f"{len(ctor_ref.type_params)} type argument(s), "
+                    f"but {len(type_args)} were supplied.",
+                    span=node.span,
+                )
             ctor_ref, sig, gdef = self._generic_constructor_data(ctor_ref)
+            if explicit_type_params is not None:
+                ctor_ref = replace(ctor_ref, type_params=explicit_type_params)
             return self._check_generic_constructor_call(
                 node_type_args=type_args,
                 ctor_ref=ctor_ref,

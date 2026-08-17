@@ -1283,7 +1283,13 @@ function."
   (setq-local font-lock-defaults '(agl-font-lock-keywords nil nil))
   (setq-local imenu-create-index-function #'agl-imenu-create-index)
   (setq-local beginning-of-defun-function #'agl-beginning-of-defun)
-  (setq-local end-of-defun-function #'agl-end-of-defun))
+  (setq-local end-of-defun-function #'agl-end-of-defun)
+  (setq-local indent-line-function #'agl-indent-line-function)
+  (setq-local indent-region-function #'agl-indent-region)
+  (add-hook 'post-self-insert-hook #'agl-indent-post-self-insert nil t))
+
+;; Loaded after the mode definition: `agl-indent' requires this file.
+(require 'agl-indent)
 
 (provide 'agl-mode)
 ;;; agl-mode.el ends here

@@ -1,0 +1,11 @@
+{
+  "scenarios": [
+    {
+      "name": "inline_and_referenced_member_records",
+      "expect": {
+        "stdout": "3\nright\n8\n8\nref saved!\nnode 8\n8\nTree::Leaf\nTree::Leaf\n9\n{\"value\": 9}\nReferenced(value = \"saved\")\n",
+        "calls": {}
+      }
+    }
+  ]
+}

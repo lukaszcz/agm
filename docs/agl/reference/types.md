@@ -507,6 +507,14 @@ is not; `Saved` remains reachable at its original declaration path. Every
 member's terminal name remains available as an ordinary constructor and
 pattern candidate wherever the enum is visible.
 
+Each member is a record type. An inline member may appear in field, parameter,
+return, and generic-argument positions such as `array[Result::Fresh]`; a
+referenced member retains its own record type and declaration path. Member
+records support record construction, field access, methods, `with`, casts, and
+standalone JSON decoding exactly like other records. A member value widens to
+an enum only in a known enum-typed slot, so its inferred type remains the
+member record type.
+
 Enums are the intended model for agent outcomes. An enum establishes a
 same-named scope for its declared members, so `Review::Pass` is a qualified
 member access. The unqualified variant spelling remains available under the

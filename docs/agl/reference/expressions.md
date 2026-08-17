@@ -362,15 +362,22 @@ program def main() -> unit =
 Thus `meter.add(3)` calls the method with `meter` as its receiver, while
 `meter.add` can be stored, passed to another function, or partially applied.
 A member access is statically checked. Dictionaries and arrays have no members;
-use indexing for those values. Enum payloads are still extracted by pattern
-matching rather than field access.
+use indexing for those values. A member record value exposes its own fields and
+methods. An enum-typed value exposes only methods declared by that enum: it
+has no fields, even when every member record defines the same field. Likewise,
+method selection never crosses the member/enum boundary: a member-record
+method requires a member-record receiver, and an enum method requires an
+enum-typed receiver. Bind or cast a member value to the enum type before
+calling an enum method; use a pattern or member-record cast before accessing a
+member's fields or methods.
 
 ## Record update
 
 `target with field = value, ...` builds a **shallow copy** of a **record** or
-**exception** value with the listed fields replaced; all other fields keep
-their values — an unlisted array or dict field is shared with the target, not
-copied, so mutating it through the update's result is observed through the
+**exception** value with the listed fields replaced; an enum member record is
+a record for this rule. All other fields keep their values — an unlisted array
+or dict field is shared with the target, not copied, so mutating it through the
+update's result is observed through the
 target too. The target itself is unchanged (values are immutable):
 
 <!-- agl-check: fragment -->

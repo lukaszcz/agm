@@ -1,0 +1,7 @@
+enum Status
+  | Open(x: int)
+  | Closed(x: int)
+
+program def main() -> unit =
+  let status: Status = Open(x = 1)
+  print(status.x)

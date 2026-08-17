@@ -2627,6 +2627,89 @@ class TestExportDecl:
         assert ("Api", "read") not in facade_exports
         assert ("Api", "hidden") not in facade_exports
 
+    def test_selective_nested_reexport_publishes_structural_parent_scopes(
+        self, tmp_path: Path
+    ) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import facade\nuse facade::A::*\n()",
+                "facade": "export lib::{A::B}",
+                "lib": "scope A\nscope B\nend B\nend A",
+            },
+            default_stdlib=False,
+        )
+
+        result = resolve_program(graph)
+
+        lib_id = ModuleId.from_path("lib")
+        facade = result.modules[ModuleId.from_path("facade")]
+        assert facade.scope_exports["A"] == frozenset({(lib_id, "A")})
+        assert facade.scope_exports[("A", "B")] == frozenset({(lib_id, ("A", "B"))})
+
+    def test_selective_deep_declaration_reexport_publishes_its_scope_chain(
+        self, tmp_path: Path
+    ) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": ("import facade\nuse facade::A::*\nuse B::*\nchosen()"),
+                "facade": "export lib::{A::B::chosen}",
+                "lib": (
+                    "scope A\nscope B\ndef chosen() -> int = 1\n"
+                    "def hidden() -> int = 2\nend B\nend A"
+                ),
+            },
+            default_stdlib=False,
+        )
+
+        result = resolve_program(graph)
+
+        facade = result.modules[ModuleId.from_path("facade")]
+        assert set(facade.scope_exports) == {"A", ("A", "B")}
+        assert set(facade.exports) == {("A", "B", "chosen")}
+
+    def test_selective_nested_reexport_scope_collides_with_local_ordinary_declaration(
+        self, tmp_path: Path
+    ) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import facade\n()",
+                "facade": "export lib::{A::B}\ndef A() -> int = 1",
+                "lib": "scope A\nscope B\nend B\nend A",
+            },
+            default_stdlib=False,
+        )
+
+        with pytest.raises(AglScopeError):
+            resolve_program(graph)
+
+    def test_selective_rename_and_region_reroot_only_publish_destination_scope_paths(
+        self, tmp_path: Path
+    ) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": ("import facade\nuse facade::Outer::*\nuse Public::*\nchosen()"),
+                "facade": (
+                    "scope Outer\nexport lib::{A::B as Public, A::B::chosen as selected}\nend Outer"
+                ),
+                "lib": "scope A\nscope B\ndef chosen() -> int = 1\nend B\nend A",
+            },
+            default_stdlib=False,
+        )
+
+        result = resolve_program(graph)
+
+        facade_id = ModuleId.from_path("facade")
+        facade = result.modules[facade_id]
+        assert set(facade.scope_exports) == {"Outer", ("Outer", "Public")}
+        assert set(facade.exports) == {
+            ("Outer", "Public", "chosen"),
+            ("Outer", "selected"),
+        }
+
     def test_hiding_reexport(self, tmp_path: Path) -> None:
         """export lib hiding secret — all except 'secret' are re-exported."""
         graph = _make_graph_from_files(

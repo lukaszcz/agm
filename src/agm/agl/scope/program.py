@@ -521,19 +521,43 @@ def _compute_reexport_additions(
         for source in scopes
     }
 
+    def rooted_atom(path: PathAtom) -> NameAtom:
+        return _atom(region_prefix + path) if region_prefix else _atom(path)
+
     def add(
         source: NameAtom,
         exposed: NameAtom,
         origins: Mapping[NameAtom, QName],
         destination: dict[NameAtom, QName],
     ) -> None:
-        exposed_path = _path(exposed)
-        rooted = _atom(region_prefix + exposed_path) if region_prefix else exposed
+        rooted = rooted_atom(_path(exposed))
         origin = origins[source]
         existing = destination.get(rooted)
         if existing is not None and existing != origin:
             _raise_reexport_conflict(rooted, existing, origin, decl)
         destination[rooted] = origin
+
+    def add_selected_scope_prefixes(
+        item: ExportItem,
+        source: NameAtom,
+        exposed: NameAtom,
+        *,
+        include_leaf: bool,
+    ) -> None:
+        """Publish actual source scopes needed to reach one selected path."""
+        source_path = _path(source)
+        exposed_path = _path(exposed)
+        prefix = item_path(item)
+        limit = len(exposed_path) if include_leaf else len(exposed_path) - 1
+        for length in range(1, limit + 1):
+            source_prefix = (
+                source_path[:length] if item.rename is None else (*prefix, *exposed_path[1:length])
+            )
+            origins = target_scopes.get(_atom(source_prefix))
+            if origins is None:
+                continue
+            rooted = rooted_atom(exposed_path[:length])
+            scope_result[rooted] = scope_result.get(rooted, frozenset()) | origins
 
     if not decl.items:
         for source in target_exports:
@@ -541,8 +565,7 @@ def _compute_reexport_additions(
                 add(source, source, target_exports, result)
         for source, origins in target_scopes.items():
             if source not in hidden_scopes:
-                exposed_path = _path(source)
-                rooted = _atom(region_prefix + exposed_path) if region_prefix else source
+                rooted = rooted_atom(_path(source))
                 scope_result[rooted] = scope_result.get(rooted, frozenset()) | origins
         return result, scope_result
 
@@ -554,14 +577,13 @@ def _compute_reexport_additions(
                 source if item.rename is None else _atom((item.rename, *source_path[len(prefix) :]))
             )
             add(source, exposed, target_exports, result)
+            add_selected_scope_prefixes(item, source, exposed, include_leaf=False)
         for source in scopes:
             source_path = _path(source)
             exposed = (
                 source if item.rename is None else _atom((item.rename, *source_path[len(prefix) :]))
             )
-            exposed_path = _path(exposed)
-            rooted = _atom(region_prefix + exposed_path) if region_prefix else exposed
-            scope_result[rooted] = scope_result.get(rooted, frozenset()) | target_scopes[source]
+            add_selected_scope_prefixes(item, source, exposed, include_leaf=True)
     return result, scope_result
 
 

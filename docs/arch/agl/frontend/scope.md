@@ -19,7 +19,8 @@ qualified routes are static errors.
 
 `scope/imports.py` builds contribution environments for import declarations.
 Program resolution publishes named-scope identities separately from declaration exports on each resolved
-module. Region and declaration-path spellings establish the same identities; re-exports preserve all
+module. Region and declaration-path spellings establish the same identities; selective re-exports keep
+their exposed scope paths prefix-closed after renaming and regional re-rooting. Re-exports preserve all
 origins when several scopes form one facade and enforce the same ordinary-name collisions as local
 scope identities, while preserving type-owned namespaces. Import environments retain scope identities
 per qualified route, so selection and hiding govern whether a scope is a `use` target without affecting another route.

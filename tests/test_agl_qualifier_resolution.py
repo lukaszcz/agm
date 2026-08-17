@@ -224,7 +224,6 @@ def test_typecheck_import_member_query_uses_the_shared_route_environment() -> No
             module: ModuleContribution(
                 module=module,
                 members={},
-                bare_names=frozenset(),
                 path_enabled=True,
                 aliases=frozenset(),
                 path_members={"Color": (module, "Color")},

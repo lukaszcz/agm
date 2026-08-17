@@ -21,7 +21,7 @@ Data model
 from __future__ import annotations
 
 import enum
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -31,6 +31,7 @@ from agm.agl.semantics.types import EnumType
 from agm.agl.syntax.nodes import (
     EnumDef,
     ExceptionDef,
+    ExportItem,
     FuncDef,
     ImportItem,
     Program,
@@ -61,8 +62,8 @@ def to_bare_atom(path: ScopePath) -> BareAtom:
     return path[0] if len(path) == 1 else path
 
 
-def import_item_path(item: ImportItem) -> ScopePath:
-    """The selection prefix an import item names: its scope path plus its name."""
+def import_item_path(item: ImportItem | ExportItem) -> ScopePath:
+    """The selection prefix an import or export item names: scope path plus name."""
     return (*(segment.name for segment in item.scope_path), item.name)
 
 
@@ -493,12 +494,10 @@ class ScopeNode:
 def resolve_bare_contribution_layer(
     scope: ScopeNode,
     name: BareAtom,
-    scope_nodes: Mapping[ScopePath, ScopeNode],
     *,
     predicate: Callable[[BindingRef], bool] | None = None,
 ) -> tuple[ScopeNode, set[BindingRef]] | None:
     """Return the nearest region and its bare candidates in one namespace."""
-    del scope_nodes
     layer: ScopeNode | None = scope
     while layer is not None:
         stored = layer.bare_contributions.get(name, ())
@@ -507,18 +506,6 @@ def resolve_bare_contribution_layer(
             return layer, selected
         layer = layer.parent
     return None
-
-
-def resolve_bare_contribution(
-    scope: ScopeNode,
-    name: BareAtom,
-    scope_nodes: Mapping[ScopePath, ScopeNode],
-    *,
-    predicate: Callable[[BindingRef], bool] | None = None,
-) -> set[BindingRef] | None:
-    """Return the nearest region's bare candidates for *name* in one namespace."""
-    resolved = resolve_bare_contribution_layer(scope, name, scope_nodes, predicate=predicate)
-    return None if resolved is None else resolved[1]
 
 
 # ---------------------------------------------------------------------------

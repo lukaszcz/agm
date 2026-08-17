@@ -27,7 +27,7 @@ from __future__ import annotations
 import decimal
 from dataclasses import dataclass, replace
 from itertools import count
-from typing import Iterable, Mapping, TypeAlias, TypeGuard, cast
+from typing import Iterable, Mapping, TypeAlias, TypeGuard, TypeVar, cast
 
 from lark import Transformer, v_args
 from lark.lexer import Token
@@ -104,9 +104,13 @@ class _Braces:
 class _Selection:
     """A declaration tail before source-form validation."""
 
-    glob: bool
-    braces: _Braces | None
-    atom: _SelectedAtom | None
+    braces: _Braces | None = None
+    atom: _SelectedAtom | None = None
+
+    @property
+    def glob(self) -> bool:
+        """A selection that names neither braces nor an atom is a glob."""
+        return self.braces is None and self.atom is None
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +121,11 @@ class _UseEnding:
     target: Token | None
     alias: str | None
     tail: _Selection | None
+
+
+# Import and export selection items share a field set, so one builder serves
+# both; the value restriction keeps each instantiation concrete.
+_SelectionItemT = TypeVar("_SelectionItemT", syntax.ImportItem, syntax.ExportItem)
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,15 +159,10 @@ _MODULE_ROUTE_MESSAGE = "scope paths use '::' between name segments."
 
 def _prefix_scope_path(
     item: syntax.ScopeItem, prefix: tuple[syntax.ScopeSegment, ...]
-) -> syntax.ScopeItem | None:
+) -> syntax.ScopeItem:
     """Add *prefix* to every declaration path contained by a scope item."""
     if isinstance(item, syntax.ScopeRegion):
-        return replace(
-            item,
-            items=tuple(
-                cast(syntax.ScopeItem, _prefix_scope_path(child, prefix)) for child in item.items
-            ),
-        )
+        return replace(item, items=tuple(_prefix_scope_path(child, prefix) for child in item.items))
     return replace(item, scope_path=prefix + item.scope_path)
 
 
@@ -2593,23 +2597,15 @@ class AstBuilder(Transformer):
 
     def selection_glob(self, meta: Meta, args: _Args) -> _Selection:
         """Build a glob selection."""
-        return _Selection(glob=True, braces=None, atom=None)
+        return _Selection()
 
     def selection_braces(self, meta: Meta, args: _Args) -> _Selection:
         """Build a brace selection."""
-        return _Selection(
-            glob=False,
-            braces=next(a for a in args if isinstance(a, _Braces)),
-            atom=None,
-        )
+        return _Selection(braces=next(a for a in args if isinstance(a, _Braces)))
 
     def selection_single(self, meta: Meta, args: _Args) -> _Selection:
         """Build a single-atom selection."""
-        return _Selection(
-            glob=False,
-            braces=None,
-            atom=next(a for a in args if isinstance(a, _SelectedAtom)),
-        )
+        return _Selection(atom=next(a for a in args if isinstance(a, _SelectedAtom)))
 
     def import_tail_clause(self, meta: Meta, args: _Args) -> _Selection:
         """Pass through an import tail selection."""
@@ -2642,35 +2638,14 @@ class AstBuilder(Transformer):
 
     def _path_span(self, path: _ScopePath) -> SourceSpan:
         """Return the span from the first through last segment of a path."""
-        start = path.segments[0][1]
-        end = path.segments[-1][1]
-        return SourceSpan(
-            start_line=start.start_line,
-            start_col=start.start_col,
-            end_line=end.end_line,
-            end_col=end.end_col,
-            start_offset=start.start_offset,
-            end_offset=end.end_offset,
-            source=start.source,
-        )
+        return _span_covering(path.segments[0][1], path.segments[-1][1])
 
-    def _import_item_from_path(
-        self, path: _ScopePath, rename: str | None, span: SourceSpan
-    ) -> syntax.ImportItem:
+    def _selection_item(
+        self, cls: type[_SelectionItemT], path: _ScopePath, rename: str | None, span: SourceSpan
+    ) -> _SelectionItemT:
+        """Build one import or export selection item from a parsed path."""
         name, _name_span = path.segments[-1]
-        return syntax.ImportItem(
-            name=name,
-            rename=rename,
-            scope_path=self._scope_segments(_ScopePath(path.segments[:-1])),
-            span=span,
-            node_id=self._next_id(),
-        )
-
-    def _export_item_from_path(
-        self, path: _ScopePath, rename: str | None, span: SourceSpan
-    ) -> syntax.ExportItem:
-        name, _name_span = path.segments[-1]
-        return syntax.ExportItem(
+        return cls(
             name=name,
             rename=rename,
             scope_path=self._scope_segments(_ScopePath(path.segments[:-1])),
@@ -2722,40 +2697,46 @@ class AstBuilder(Transformer):
             tail=None
             if tail is None
             else tuple(
-                self._import_item_from_path(atom.path, atom.rename, atom.span)
+                self._selection_item(syntax.ImportItem, atom.path, atom.rename, atom.span)
                 for atom in tail_atoms
             ),
             hidden=tuple(
-                self._import_item_from_path(path, None, self._path_span(path))
+                self._selection_item(syntax.ImportItem, path, None, self._path_span(path))
                 for path in hidden_paths
             ),
             span=span,
             node_id=self._next_id(),
         )
 
+    @staticmethod
+    def _use_ending(args: _Args) -> _UseEnding:
+        """Collect whichever of a use suffix's four parts this alternative carries.
+
+        Every ``use_suffix`` alternative draws from the same slots -- merged
+        target prefixes, a final unmerged target segment, a whole-target alias,
+        and a selection tail -- and simply omits the ones its own grammar shape
+        cannot produce, so one scan serves them all.
+        """
+        return _UseEnding(
+            prefixes=tuple(a for a in args if isinstance(a, Token) and a.type == "USEQUAL"),
+            target=next(
+                (a for a in args if isinstance(a, Token) and a.type == "USE_TARGET_NAME"), None
+            ),
+            alias=next((a for a in args if type(a) is str), None),
+            tail=next((a for a in args if isinstance(a, _Selection)), None),
+        )
+
     def use_suffix_alias(self, meta: Meta, args: _Args) -> _UseEnding:
         """Build a use suffix containing only an alias."""
-        return _UseEnding(
-            prefixes=(), target=None, alias=next(a for a in args if type(a) is str), tail=None
-        )
+        return self._use_ending(args)
 
     def use_suffix_target_alias(self, meta: Meta, args: _Args) -> _UseEnding:
         """Build a use suffix with a final unmerged target segment and alias."""
-        return _UseEnding(
-            prefixes=tuple(a for a in args if isinstance(a, Token) and a.type == "USEQUAL"),
-            target=next(a for a in args if isinstance(a, Token) and a.type == "USE_TARGET_NAME"),
-            alias=next(a for a in args if type(a) is str),
-            tail=None,
-        )
+        return self._use_ending(args)
 
     def use_suffix_tail(self, meta: Meta, args: _Args) -> _UseEnding:
         """Build a use suffix containing a selection tail."""
-        return _UseEnding(
-            prefixes=(),
-            target=None,
-            alias=None,
-            tail=next(a for a in args if isinstance(a, _Selection)),
-        )
+        return self._use_ending(args)
 
     def use_suffix_alias_path(self, meta: Meta, args: _Args) -> _UseEnding:
         """Build a whole-target alias with two or more prefixed segments."""
@@ -2781,12 +2762,7 @@ class AstBuilder(Transformer):
                 )
             )
             relative += len(value)
-        return _UseEnding(
-            prefixes=tuple(prefixes),
-            target=next(a for a in args if isinstance(a, Token) and a.type == "USE_TARGET_NAME"),
-            alias=next(a for a in args if type(a) is str),
-            tail=None,
-        )
+        return replace(self._use_ending(args), prefixes=tuple(prefixes))
 
     def use_suffix_prefixed(self, meta: Meta, args: _Args) -> _UseEnding:
         """Prepend one lexer-merged target segment to a use suffix."""
@@ -2796,37 +2772,15 @@ class AstBuilder(Transformer):
 
     def use_suffix_prefixed_tail(self, meta: Meta, args: _Args) -> _UseEnding:
         """Build a tail after one or more lexer-merged target segments."""
-        prefixes = tuple(a for a in args if isinstance(a, Token) and a.type == "USEQUAL")
-        return _UseEnding(
-            prefixes=prefixes,
-            target=None,
-            alias=None,
-            tail=next(a for a in args if isinstance(a, _Selection)),
-        )
+        return self._use_ending(args)
 
     def use_anchored_tail(self, meta: Meta, args: _Args) -> _AnchoredUse:
         """Build a current-module target with a selection tail."""
-        return _AnchoredUse(
-            _UseEnding(
-                prefixes=tuple(a for a in args if isinstance(a, Token) and a.type == "USEQUAL"),
-                target=None,
-                alias=None,
-                tail=next(a for a in args if isinstance(a, _Selection)),
-            )
-        )
+        return _AnchoredUse(self._use_ending(args))
 
     def use_anchored_alias(self, meta: Meta, args: _Args) -> _AnchoredUse:
         """Build a current-module target with an additive alias."""
-        return _AnchoredUse(
-            _UseEnding(
-                prefixes=tuple(a for a in args if isinstance(a, Token) and a.type == "USEQUAL"),
-                target=next(
-                    a for a in args if isinstance(a, Token) and a.type == "USE_TARGET_NAME"
-                ),
-                alias=next(a for a in args if type(a) is str),
-                tail=None,
-            )
-        )
+        return _AnchoredUse(self._use_ending(args))
 
     def use_decl(self, meta: Meta, args: _Args) -> syntax.UseDecl:
         """Build a use declaration and enforce its injection and hiding rules."""
@@ -2871,11 +2825,11 @@ class AstBuilder(Transformer):
             tail=None
             if tail is None
             else tuple(
-                self._import_item_from_path(atom.path, atom.rename, atom.span)
+                self._selection_item(syntax.ImportItem, atom.path, atom.rename, atom.span)
                 for atom in tail_atoms
             ),
             hidden=tuple(
-                self._import_item_from_path(path, None, self._path_span(path))
+                self._selection_item(syntax.ImportItem, path, None, self._path_span(path))
                 for path in hidden_paths
             ),
             alias=alias,
@@ -2904,10 +2858,11 @@ class AstBuilder(Transformer):
             module_path=module_path,
             wildcard=wildcard,
             items=tuple(
-                self._export_item_from_path(atom.path, atom.rename, atom.span) for atom in atoms
+                self._selection_item(syntax.ExportItem, atom.path, atom.rename, atom.span)
+                for atom in atoms
             ),
             hidden=tuple(
-                self._export_item_from_path(path, None, self._path_span(path))
+                self._selection_item(syntax.ExportItem, path, None, self._path_span(path))
                 for path in hidden_paths
             ),
             span=span,

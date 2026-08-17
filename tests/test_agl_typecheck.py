@@ -9232,39 +9232,6 @@ class TestResolveTypeExprTypeVars:
         err = reject_type("let x: ::Missing[int] = null\nx")
         assert "Unknown type 'Missing'" in str(err)
 
-    def test_open_imported_generic_lookup_edge_cases(self) -> None:
-        from agm.agl.modules.ids import ModuleId
-        from agm.agl.scope.imports import ImportEnv
-        from agm.agl.typecheck.env import GenericTypeDef
-
-        lib_a = ModuleId.from_path("a")
-        lib_b = ModuleId.from_path("b")
-        gdef = GenericTypeDef(
-            kind="record",
-            type_params=("T",),
-            template=RecordType("Box"),
-        )
-        assert TypeEnvironment().get_open_imported_generic_type("Box") is None
-        env = TypeEnvironment(
-            import_env=ImportEnv(
-                unqualified={
-                    "Point": frozenset({(lib_a, "Point")}),
-                    "Box": frozenset({(lib_a, "Box"), (lib_b, "Box")}),
-                },
-                contributions={},
-            ),
-            program_generic_table={(lib_a, "Box"): gdef, (lib_b, "Box"): gdef},
-        )
-        assert env.get_open_imported_generic_type("Point") is None
-        assert env.get_open_imported_generic_type("Box") is None
-        env = TypeEnvironment(
-            import_env=ImportEnv(
-                unqualified={"Box": frozenset({(lib_a, "Box")})}, contributions={}
-            ),
-            program_generic_table={(lib_a, "Box"): gdef},
-        )
-        assert env.get_open_imported_generic_type("Box") == (lib_a, "Box", gdef)
-
     def test_name_in_type_vars_resolves_to_typevar(self) -> None:
         from agm.agl.syntax.types import NameT
 

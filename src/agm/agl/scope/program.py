@@ -44,6 +44,7 @@ from agm.agl.scope.imports import (
     SingleTarget,
     WildcardTarget,
     build_import_env,
+    matching_atoms,
     resolve_alias_target,
     sibling_qname,
 )
@@ -58,6 +59,7 @@ from agm.agl.scope.symbols import (
     ScopePath,
     alias_denotes_constructible_type,
 )
+from agm.agl.scope.symbols import import_item_path as _item_path
 from agm.agl.scope.symbols import to_bare_atom as _atom
 from agm.agl.scope.symbols import to_bare_path as _path
 from agm.agl.syntax.nodes import (
@@ -494,51 +496,42 @@ def _compute_reexport_additions(
     scope_result: dict[NameAtom, ScopeOrigins] = {}
     region_prefix = tuple(segment.name for segment in decl.scope_path)
 
-    def item_path(item: ExportItem) -> PathAtom:
-        return (*tuple(segment.name for segment in item.scope_path), item.name)
-
-    def matches(surface: Mapping[NameAtom, object], prefix: PathAtom) -> tuple[NameAtom, ...]:
-        return tuple(atom for atom in surface if _path(atom)[: len(prefix)] == prefix)
-
-    matched_items: list[tuple[ExportItem, tuple[NameAtom, ...], tuple[NameAtom, ...]]] = []
-    for item in (*decl.items, *decl.hidden):
-        prefix = item_path(item)
-        declarations = matches(target_exports, prefix)
-        scopes = matches(target_scopes, prefix)
+    def match(item: ExportItem) -> tuple[tuple[NameAtom, ...], tuple[NameAtom, ...]]:
+        """Expand one selection item over the target's declaration and scope surfaces."""
+        prefix = _item_path(item)
+        declarations = matching_atoms(target_exports, prefix)
+        scopes = matching_atoms(target_scopes, prefix)
         if not declarations and not scopes and not allow_missing:
             raise AglScopeError(
                 f"name {'::'.join(prefix)!r} is not exported by module "
                 f"{'/'.join(decl.module_path)!r}",
                 span=decl.span,
             )
-        matched_items.append((item, declarations, scopes))
+        return declarations, scopes
 
+    selected_items = [(item, *match(item)) for item in decl.items]
+    hidden_items = [match(item) for item in decl.hidden]
     hidden_declarations = {
-        source
-        for _item, declarations, _scopes in matched_items[len(decl.items) :]
-        for source in declarations
+        source for declarations, _scopes in hidden_items for source in declarations
     }
-    hidden_scopes = {
-        source
-        for _item, _declarations, scopes in matched_items[len(decl.items) :]
-        for source in scopes
-    }
+    hidden_scopes = {source for _declarations, scopes in hidden_items for source in scopes}
 
     def rooted_atom(path: PathAtom) -> NameAtom:
         return _atom(region_prefix + path) if region_prefix else _atom(path)
 
-    def add(
-        source: NameAtom,
-        exposed: NameAtom,
-        origins: Mapping[NameAtom, QName],
-        destination: dict[NameAtom, QName],
-    ) -> None:
+    def exposed_for(item: ExportItem, source: NameAtom) -> NameAtom:
+        """Spell one matched source under the item's rename, if it has one."""
+        if item.rename is None:
+            return source
+        return _atom((item.rename, *_path(source)[len(_item_path(item)) :]))
+
+    def add(source: NameAtom, exposed: NameAtom) -> None:
         rooted = rooted_atom(_path(exposed))
-        origin = origins[source]
-        existing = destination.get(rooted)
+        origin = target_exports[source]
+        existing = result.get(rooted)
         if existing is not None and existing != origin:
             _raise_reexport_conflict(rooted, existing, origin, decl)
-        destination[rooted] = origin
+        result[rooted] = origin
 
     def add_selected_scope_prefixes(
         item: ExportItem,
@@ -550,7 +543,7 @@ def _compute_reexport_additions(
         """Publish actual source scopes needed to reach one selected path."""
         source_path = _path(source)
         exposed_path = _path(exposed)
-        prefix = item_path(item)
+        prefix = _item_path(item)
         limit = len(exposed_path) if include_leaf else len(exposed_path) - 1
         for length in range(1, limit + 1):
             source_prefix = (
@@ -563,28 +556,20 @@ def _compute_reexport_additions(
     if not decl.items:
         for source in target_exports:
             if source not in hidden_declarations:
-                add(source, source, target_exports, result)
+                add(source, source)
         for source, origins in target_scopes.items():
             if source not in hidden_scopes:
                 rooted = rooted_atom(_path(source))
                 scope_result[rooted] = scope_result.get(rooted, frozenset()) | origins
         return result, scope_result
 
-    for item, declarations, scopes in matched_items[: len(decl.items)]:
-        prefix = item_path(item)
+    for item, declarations, scopes in selected_items:
         for source in declarations:
-            source_path = _path(source)
-            exposed = (
-                source if item.rename is None else _atom((item.rename, *source_path[len(prefix) :]))
-            )
-            add(source, exposed, target_exports, result)
+            exposed = exposed_for(item, source)
+            add(source, exposed)
             add_selected_scope_prefixes(item, source, exposed, include_leaf=False)
         for source in scopes:
-            source_path = _path(source)
-            exposed = (
-                source if item.rename is None else _atom((item.rename, *source_path[len(prefix) :]))
-            )
-            add_selected_scope_prefixes(item, source, exposed, include_leaf=True)
+            add_selected_scope_prefixes(item, source, exposed_for(item, source), include_leaf=True)
     return result, scope_result
 
 

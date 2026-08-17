@@ -21,7 +21,7 @@ from agm.agl.modules.errors import (
 from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 from agm.agl.modules.loader import LoadedModule, ModuleGraph, build_repl_graph, load_graph
 from agm.agl.modules.roots import RootSet, assemble_roots
-from agm.agl.syntax.nodes import ImportDecl, UseDecl
+from agm.agl.syntax.nodes import ImportDecl
 from agm.agl.syntax.spans import SourceId
 from agm.packages.manifest import load_manifest
 from agm.packages.model import PackageInfo
@@ -1037,22 +1037,6 @@ class TestUseDeclarationLoading:
         assert graph.adjacency[ENTRY_ID] == ()
         with pytest.raises(AglScopeError):
             resolve_program(graph)
-
-    def test_scoped_use_declarations_are_extracted(self, tmp_path: Path) -> None:
-        root = tmp_path / "modules"
-        root.mkdir()
-        _write_module(root, "library", "def value() -> int = 1\n")
-
-        graph = load_graph(
-            "import library\nscope Local\nuse library::*\nend Local\n()",
-            entry_path=None,
-            roots=_roots(root),
-        )
-
-        entry = graph.modules[ENTRY_ID]
-        assert len(entry.uses) == 1
-        assert isinstance(entry.uses[0], UseDecl)
-        assert entry.uses[0].scope_path[0].name == "Local"
 
 
 class TestPreludeSupersession:

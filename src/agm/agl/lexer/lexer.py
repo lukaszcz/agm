@@ -38,6 +38,7 @@ from lark.exceptions import LarkError
 from lark.lexer import Lexer, LexerState, Token
 
 from agm.agl.diagnostics import Diagnostic, SourceSpan
+from agm.agl.keywords import KW_AS
 from agm.agl.lexer.errors import LexError
 from agm.agl.lexer.layout import layout
 from agm.agl.lexer.scanner import _Scanner
@@ -200,6 +201,9 @@ def _remap(tokens: Iterator[Token]) -> Iterator[Token]:
 
 _ITEM_START_TYPES = frozenset({"_NEWLINE", "_INDENT", "_DEDENT", "SEMICOLON"})
 
+# The three header keywords whose clause a hiding promotion can terminate.
+_HEADER_TYPES = frozenset({IMPORT, USE, EXPORT})
+
 
 def _retype(tok: Token, new_type: str) -> Token:
     """Return a copy of *tok* with a new token type, preserving value and span."""
@@ -242,7 +246,7 @@ def _is_scope_closer(tokens: list[Token], index: int) -> bool:
 
 def _is_as(token: Token) -> bool:
     """Whether *token* is ``as`` before or after parser keyword remapping."""
-    return token.type in {"as", "AS"}
+    return _scanner_token_type(token.type) == KW_AS
 
 
 _FORCE_USE_DECLARATION: contextvars.ContextVar[bool] = contextvars.ContextVar(
@@ -256,20 +260,38 @@ def _use_decl_parser() -> Lark:
 
     global _USE_DECL_PARSER
     if _USE_DECL_PARSER is None:
-        grammar = (
-            importlib.resources.files("agm.agl")
-            .joinpath("grammar/agl.lark")
-            .read_text(encoding="utf-8")
-        )
-        _USE_DECL_PARSER = Lark(
-            grammar,
-            parser="lalr",
-            lexer=AglLexer,
-            start="use_decl",
-            maybe_placeholders=True,
-            cache=True,
-        )
+        _USE_DECL_PARSER = build_parser("use_decl")
     return _USE_DECL_PARSER
+
+
+# Memoized speculative-parse verdicts, keyed by the exact header slice. One
+# entry is a short header string, and only item-start ``use`` spellings reach
+# it, so the table stays proportional to the distinct headers a process lexes.
+_USE_DECLARATION_VERDICTS: dict[str, bool] = {}
+
+
+def _parses_as_use_declaration(header: str) -> bool:
+    """Whether one header slice parses under the canonical ``use_decl`` rule.
+
+    The verdict depends only on the header text, and real programs repeat
+    headers across modules, so it is memoized. Both the speculative parse's
+    advisories and its forced promotion are confined to the parse itself, so a
+    cached verdict is indistinguishable from re-running it.
+    """
+    cached = _USE_DECLARATION_VERDICTS.get(header)
+    if cached is not None:
+        return cached
+    forced = _FORCE_USE_DECLARATION.set(True)
+    try:
+        with tab_warning_collector():
+            _use_decl_parser().parse(header)
+        verdict = True
+    except (LarkError, LexError):
+        verdict = False
+    finally:
+        _FORCE_USE_DECLARATION.reset(forced)
+    _USE_DECLARATION_VERDICTS[header] = verdict
+    return verdict
 
 
 def _is_use_declaration(source: str, tokens: list[Token], index: int) -> bool:
@@ -292,15 +314,7 @@ def _is_use_declaration(source: str, tokens: list[Token], index: int) -> bool:
             return False
     start_offset = cast(int, tokens[index].start_pos)
     end_offset = cast(int, tokens[end - 1].end_pos)
-    forced = _FORCE_USE_DECLARATION.set(True)
-    try:
-        with tab_warning_collector():
-            _use_decl_parser().parse(source[start_offset:end_offset])
-    except (LarkError, LexError):
-        return False
-    finally:
-        _FORCE_USE_DECLARATION.reset(forced)
-    return True
+    return _parses_as_use_declaration(source[start_offset:end_offset])
 
 
 def _promote_soft_keywords(tokens: list[Token], source: str) -> list[Token]:
@@ -365,7 +379,7 @@ def _promote_hiding(tokens: list[Token]) -> list[Token]:
     saw_dcolon = False
     saw_alias = False
     for tok in tokens:
-        if tok.type in {IMPORT, USE, EXPORT}:
+        if tok.type in _HEADER_TYPES:
             header = tok.type
             hiding_promoted = False
             brace_depth = 0
@@ -752,12 +766,20 @@ def _reject_clinging_slash(tokens: list[Token]) -> list[Token]:
 
 
 def _merge_use_alias_paths(tokens: list[Token]) -> list[Token]:
-    """Merge multi-segment whole-target alias prefixes into one deterministic token."""
+    """Merge multi-segment whole-target alias prefixes into one deterministic token.
+
+    Only ``_merge_modqual`` inside a use target emits ``USEQUAL``, so a stream
+    without one cannot change here and is returned as it came, exactly as
+    :func:`_reject_clinging_slash` returns its input untouched.
+    """
+    if not any(tok.type == USEQUAL for tok in tokens):
+        return tokens
     result: list[Token] = []
     index = 0
-    while index < len(tokens):
+    n = len(tokens)
+    while index < n:
         end = index
-        while end < len(tokens) and tokens[end].type == USEQUAL:
+        while end < n and tokens[end].type == USEQUAL:
             end += 1
         if (
             end > index
@@ -770,7 +792,7 @@ def _merge_use_alias_paths(tokens: list[Token]) -> list[Token]:
             continue
         if (
             end - index >= 2
-            and end + 1 < len(tokens)
+            and end + 1 < n
             and tokens[end].type == USE_TARGET_NAME
             and _is_as(tokens[end + 1])
         ):
@@ -941,3 +963,30 @@ class AglLexer(Lexer):
             if sink is not None:
                 sink.extend(scanner.tab_warnings)
         return iter(tokens)
+
+
+def load_grammar() -> str:
+    """Load the canonical grammar file via importlib.resources (package-anchored)."""
+    return (
+        importlib.resources.files("agm.agl")
+        .joinpath("grammar/agl.lark")
+        .read_text(encoding="utf-8")
+    )
+
+
+def build_parser(start: str = "start") -> Lark:
+    """Build a Lark instance over the canonical grammar rooted at *start*.
+
+    The one place the grammar file and the Lark options are named, so every
+    parser -- the program parser and each alternate-start parser -- is built
+    from identical settings and shares one on-disk cache shape.
+    """
+    return Lark(
+        load_grammar(),
+        parser="lalr",
+        lexer=AglLexer,
+        propagate_positions=True,
+        maybe_placeholders=True,
+        start=start,
+        cache=True,
+    )

@@ -6626,9 +6626,7 @@ class TestBareTypeEntry:
         no_name_env = TypeEnvironment(
             program_generic_table={},
             import_env=ImportEnv(
-                contributions={
-                    lib: ModuleContribution(lib, {}, frozenset(), False, frozenset({"missing"}))
-                },
+                contributions={lib: ModuleContribution(lib, {}, False, frozenset({"missing"}))},
                 unqualified={},
             ),
         )
@@ -6648,7 +6646,6 @@ class TestBareTypeEntry:
                     missing: ModuleContribution(
                         missing,
                         {"Box": (missing, "Box")},
-                        frozenset(),
                         True,
                         frozenset(),
                         {"Box": (missing, "Box")},

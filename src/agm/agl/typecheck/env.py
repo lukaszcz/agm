@@ -1136,11 +1136,12 @@ class TypeEnvironment:
         # alias-transparent qualifier checks even though ordinary bare type
         # expressions require arguments.
         try:
-            key = self._bare_type_key(name, None)
-            if key is None:
+            resolved = self._bare_type_key(name, None)
+            if resolved is None:
                 return None
+            key, from_region = resolved
             generic = (self._program_generic_table or {}).get(key)
-            if generic is not None and self._opened_type_contains(name, key):
+            if generic is not None and from_region:
                 return generic.template
             return self._resolve_type_key_as_bare(key, name, span=None)
         except AglTypeError:
@@ -1421,7 +1422,7 @@ class TypeEnvironment:
         if scope is None:
             return None
         resolved = resolve_bare_contribution_layer(
-            scope, name, self._scope_nodes, predicate=self._is_type_contribution
+            scope, name, predicate=self._is_type_contribution
         )
         if resolved is None:
             return None
@@ -1434,26 +1435,27 @@ class TypeEnvironment:
         keys = set() if resolved is None else resolved[1]
         return self._unique_bare_type_key(name, keys, span)
 
-    def _opened_type_contains(self, name: NameAtom, key: DeclKey) -> bool:
-        """Return whether the nearest regional contribution reaches *key*."""
-        resolved = self._opened_type_layer_keys(name)
-        return resolved is not None and key in resolved[1]
+    def _bare_type_key(self, name: str, span: SourceSpan | None) -> tuple[DeclKey, bool] | None:
+        """Resolve a bare type across equally ranked root use and import routes.
 
-    def _bare_type_key(self, name: str, span: SourceSpan | None) -> DeclKey | None:
-        """Resolve a bare type across equally ranked root use and import routes."""
+        Reports alongside the identity whether it came from the nearest
+        region's own contributions, which callers need to choose between an
+        unapplied and a bare resolution. One layer walk answers both.
+        """
         opened = self._opened_type_layer_keys(name)
-        keys = set() if opened is None else set(opened[1])
-        if opened is not None and opened[0].scope_path:
-            return self._unique_bare_type_key(name, keys, span)
-        if self._import_env is not None and (
-            self._program_type_table is not None or self._program_generic_table is not None
-        ):
-            keys.update(
-                self._qname_decl_key(qname)
-                for qname in self._import_env.unqualified.get(name, frozenset())
-                if self._is_program_type_candidate(qname)
-            )
-        return self._unique_bare_type_key(name, keys, span)
+        opened_keys = set() if opened is None else opened[1]
+        keys = set(opened_keys)
+        if opened is None or not opened[0].scope_path:
+            if self._import_env is not None and (
+                self._program_type_table is not None or self._program_generic_table is not None
+            ):
+                keys.update(
+                    self._qname_decl_key(qname)
+                    for qname in self._import_env.unqualified.get(name, frozenset())
+                    if self._is_program_type_candidate(qname)
+                )
+        key = self._unique_bare_type_key(name, keys, span)
+        return None if key is None else (key, key in opened_keys)
 
     def _is_type_contribution(self, ref: BindingRef) -> bool:
         """Whether a shared bare contribution refers to a type declaration."""
@@ -1515,10 +1517,11 @@ class TypeEnvironment:
 
     def _resolve_bare_type(self, name: str, span: SourceSpan | None) -> Type | None:
         """Resolve a bare type across root uses and import tails at the same rank."""
-        key = self._bare_type_key(name, span)
-        if key is None:
+        resolved = self._bare_type_key(name, span)
+        if resolved is None:
             return None
-        if self._opened_type_contains(name, key):
+        key, from_region = resolved
+        if from_region:
             return self._resolve_type_key_unapplied(key, name, span)
         return self._resolve_type_key_as_bare(key, name, span=span)
 
@@ -1593,8 +1596,10 @@ class TypeEnvironment:
         self, name: str, args: tuple[Type, ...], span: SourceSpan | None
     ) -> Type | None:
         """Resolve a bare generic across root uses and import tails at the same rank."""
-        key = self._bare_type_key(name, span)
-        return None if key is None else self._resolve_applied_type_key(key, name, args, span)
+        resolved = self._bare_type_key(name, span)
+        if resolved is None:
+            return None
+        return self._resolve_applied_type_key(resolved[0], name, args, span)
 
     def _lexical_type_name(self, name: str) -> str:
         """Return the nearest scoped spelling of an unqualified type name."""
@@ -2334,15 +2339,6 @@ class TypeEnvironment:
             return None
         return self._program_generic_table.get((module_id, scope_path, name))
 
-    def get_open_imported_generic_type(
-        self, exposed_name: str
-    ) -> tuple[ModuleId, str, GenericTypeDef] | None:
-        """Return the unique generic type exposed by an import tail."""
-        matches = self._open_imported_generic_type_matches(exposed_name)
-        if len(matches) == 1:
-            return matches[0]
-        return None
-
     def resolve_unapplied_generic_type(
         self,
         name: str,
@@ -2358,10 +2354,10 @@ class TypeEnvironment:
         gdef = self._generic_types.get(name)
         if gdef is not None:
             return name, gdef
-        key = self._bare_type_key(name, span)
-        if key is None or self._program_generic_table is None:
+        resolved = self._bare_type_key(name, span)
+        if resolved is None or self._program_generic_table is None:
             return None
-        gdef = self._program_generic_table.get(key)
+        gdef = self._program_generic_table.get(resolved[0])
         return None if gdef is None else (name, gdef)
 
     def resolve_qualified_unapplied_generic_type(
@@ -2429,19 +2425,6 @@ class TypeEnvironment:
         rendered = qualifier.render()
         qualified_name = f"{rendered}::{name}"
         return qualified_name, gdef
-
-    def _open_imported_generic_type_matches(
-        self, exposed_name: str
-    ) -> list[tuple[ModuleId, str, GenericTypeDef]]:
-        if self._import_env is None or self._program_generic_table is None:
-            return []
-        matches: list[tuple[ModuleId, str, GenericTypeDef]] = []
-        for module_id, source_name in self._import_env.unqualified.get(exposed_name, frozenset()):
-            source_path = (source_name,) if isinstance(source_name, str) else source_name
-            gdef = self._program_generic_table.get((module_id, source_path[:-1], source_path[-1]))
-            if gdef is not None:
-                matches.append((module_id, source_path[-1], gdef))
-        return matches
 
     def get_ctor_sig_from_module(
         self,

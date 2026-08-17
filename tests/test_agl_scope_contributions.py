@@ -13,13 +13,24 @@ from agm.agl.scope.imports import (
     build_import_env,
     resolve_qualified,
 )
-from agm.agl.scope.symbols import BinderKind, BindingRef, ScopeNode, resolve_bare_contribution
+from agm.agl.scope.symbols import (
+    BinderKind,
+    BindingRef,
+    ScopeNode,
+    resolve_bare_contribution_layer,
+)
 from agm.agl.syntax.nodes import ImportDecl, ImportItem, ScopeSegment
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
 
 
 def _span() -> SourceSpan:
     return SourceSpan(1, 1, 1, 1, 0, 0, UNKNOWN_SOURCE)
+
+
+def resolve_bare_contribution(scope: ScopeNode, name: NameAtom) -> set[BindingRef] | None:
+    """Return just the candidates the nearest contributing layer holds for *name*."""
+    resolved = resolve_bare_contribution_layer(scope, name)
+    return None if resolved is None else resolved[1]
 
 
 _next_node_id = 0
@@ -171,13 +182,13 @@ def test_regional_tail_bare_contributions_narrow_at_the_scope_seam() -> None:
                     ),
                 )
 
-    assert resolve_bare_contribution(root, "selected", {}) is None
-    assert {
-        ref.module_id for ref in resolve_bare_contribution(left_scope, "selected", {}) or ()
-    } == {left_module}
-    assert {
-        ref.module_id for ref in resolve_bare_contribution(right_scope, "selected", {}) or ()
-    } == {right_module}
+    assert resolve_bare_contribution(root, "selected") is None
+    assert {ref.module_id for ref in resolve_bare_contribution(left_scope, "selected") or ()} == {
+        left_module
+    }
+    assert {ref.module_id for ref in resolve_bare_contribution(right_scope, "selected") or ()} == {
+        right_module
+    }
 
 
 def test_import_tail_and_use_route_of_the_same_origin_are_not_ambiguous() -> None:
@@ -196,7 +207,7 @@ def test_import_tail_and_use_route_of_the_same_origin_are_not_ambiguous() -> Non
         ),
     )
 
-    candidates = resolve_bare_contribution(root, "selected", {})
+    candidates = resolve_bare_contribution(root, "selected")
 
     assert candidates is not None
     assert len(candidates) == 1

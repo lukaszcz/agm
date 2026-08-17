@@ -4,7 +4,7 @@ This module provides :func:`load_graph`, which drives the full load-and-graph
 phase of the AgL module system:
 
 1. Parse the entry source (inline ``-c`` or a file on disk).
-2. Extract import, use, and export declarations from the module and its named scope regions.
+2. Extract import and export declarations from the module and its named scope regions.
 3. BFS over transitive import and export declarations, resolving each module id
    to its canonical file via :func:`~agm.agl.modules.resolver.resolve_module` (or
    :func:`~agm.agl.modules.resolver.expand_wildcard` for ``/*`` imports),
@@ -39,7 +39,7 @@ from agm.agl.modules.roots import RootSet
 from agm.agl.parser import AglSyntaxError
 from agm.agl.parser.parser import parse_program_seeded
 from agm.agl.syntax.advisories import SpacedQualifier
-from agm.agl.syntax.nodes import ExportDecl, FuncDef, ImportDecl, UseDecl, static_items
+from agm.agl.syntax.nodes import ExportDecl, FuncDef, ImportDecl, static_items
 from agm.agl.syntax.spans import SourceId, SourceSpan
 from agm.core import fs
 from agm.packages.model import owning_package
@@ -66,9 +66,6 @@ class LoadedModule:
     imports:
         :class:`~agm.agl.syntax.nodes.ImportDecl` nodes extracted from the
         module root and named scope regions.
-    uses:
-        :class:`~agm.agl.syntax.nodes.UseDecl` nodes extracted from the module
-        root and named scope regions. They do not create module-graph edges.
     export_decls:
         :class:`~agm.agl.syntax.nodes.ExportDecl` nodes extracted from the
         module root and named scope regions.
@@ -91,7 +88,6 @@ class LoadedModule:
     path: Path | None
     source: SourceId
     imports: tuple[ImportDecl, ...]
-    uses: tuple[UseDecl, ...]
     export_decls: tuple[ExportDecl, ...]
     source_text: str
     spaced_qualifiers: tuple[SpacedQualifier, ...]
@@ -166,22 +162,15 @@ class ModuleGraph:
 # ---------------------------------------------------------------------------
 
 
-def _extract_imports(
-    program: syntax.Program,
-) -> tuple[tuple[ImportDecl, ...], tuple[UseDecl, ...]]:
-    """Return a module's imports and uses, including region-nested declarations.
+def _extract_imports(program: syntax.Program) -> tuple[ImportDecl, ...]:
+    """Return a module's imports, including region-nested declarations.
 
     Named scope regions are transparent to this walk. Imports create
-    module-graph edges; uses are retained for consumers that resolve their
-    targets against those imports. Declarations inside ordinary nested blocks
-    are not valid and are ignored here (the scope pass enforces the
-    restriction).
+    module-graph edges; ``use`` declarations do not, and the scope pass reads
+    them straight from the AST. Declarations inside ordinary nested blocks are
+    not valid and are ignored here (the scope pass enforces the restriction).
     """
-    declarations = tuple(static_items(program.body.items))
-    return (
-        tuple(item for item in declarations if isinstance(item, ImportDecl)),
-        tuple(item for item in declarations if isinstance(item, UseDecl)),
-    )
+    return tuple(item for item in static_items(program.body.items) if isinstance(item, ImportDecl))
 
 
 def _extract_exports(program: syntax.Program) -> tuple[ExportDecl, ...]:
@@ -253,7 +242,7 @@ def _with_default_stdlib_import(
     *,
     import_node_id: int,
 ) -> syntax.Program:
-    imports, _uses = _extract_imports(program)
+    imports = _extract_imports(program)
     if any(
         decl.module_path == STD_CORE_ID.segments
         or (decl.wildcard and STD_CORE_ID.segments[: len(decl.module_path)] == decl.module_path)
@@ -435,14 +424,13 @@ def _load_into_graph(
         if default_stdlib and mid != STD_CORE_ID:
             program = _with_default_stdlib_import(program, import_node_id=next_id)
             next_id += 1
-        imports, uses = _extract_imports(program)
+        imports = _extract_imports(program)
         loaded = LoadedModule(
             module_id=mid,
             program=program,
             path=canon_path,
             source=file_source_id,
             imports=imports,
-            uses=uses,
             export_decls=_extract_exports(program),
             source_text=source_text,
             spaced_qualifiers=tuple(spaced_sink),
@@ -532,14 +520,13 @@ def _build_entry_loaded_module(
     if default_stdlib:
         program = _with_default_stdlib_import(program, import_node_id=next_id)
         next_id += 1
-    imports, uses = _extract_imports(program)
+    imports = _extract_imports(program)
     entry_loaded = LoadedModule(
         module_id=ENTRY_ID,
         program=program,
         path=canonical_entry_path,
         source=entry_source_id,
         imports=imports,
-        uses=uses,
         export_decls=_extract_exports(program),
         source_text=source_text,
         spaced_qualifiers=spaced_qualifiers,

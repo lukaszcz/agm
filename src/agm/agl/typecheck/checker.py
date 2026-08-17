@@ -4022,16 +4022,17 @@ class _Checker:
                     span=node.span,
                 )
             elif not selected_from_candidates:
-                source_owner_matches = (
+                # Resolving the owner's source template is the expensive half,
+                # so let the cheap direct match short-circuit it.
+                if not constructor.matches(expr_type, variant) and (
                     self._env.match_source_type_qname(
                         constructor.owner_module_id,
                         constructor.owner_name,
                         expr_type,
                         scope_path=constructor.owner_path,
                     )
-                    is not None
-                )
-                if not constructor.matches(expr_type, variant) and not source_owner_matches:
+                    is None
+                ):
                     if node.qualifier is None:
                         raise _variant_not_in_enum(variant, expr_type, node.span)
                     self._check_variant_qualification(
@@ -4118,9 +4119,7 @@ class _Checker:
                 span,
             )
         else:
-            self._check_qualified_variant_prefix(
-                qualifier, enum_type.name, variant, enum_type, span
-            )
+            self._check_module_qualified_variant(qualifier, enum_type.name, enum_type, span)
 
     def _require_enum_owner_match(
         self,
@@ -4143,17 +4142,6 @@ class _Checker:
                 f"but the value has enum type '{enum_type.name}'.",
                 span=span,
             )
-
-    def _check_qualified_variant_prefix(
-        self,
-        module_qualifier: QualifierChain,
-        enum_name: str,
-        variant: str,
-        enum_type: EnumType,
-        span: SourceSpan,
-    ) -> None:
-        """Validate a lone ``prefix::Variant`` qualifier."""
-        self._check_module_qualified_variant(module_qualifier, enum_name, enum_type, span)
 
     def _check_module_qualified_variant(
         self,
@@ -4878,16 +4866,14 @@ class _Checker:
                 else pattern.name
             )
             qualifier = pattern.qualifier
-            raw_owner = (
-                "::".join(segment.name for segment in qualifier.segments)
-                if qualifier is not None
-                else ""
-            )
             if constructor_ref is None or (
                 qualifier is not None
                 and (
                     qualifier.anchor is not None
-                    or self._env.resolve_named_type(raw_owner) is not None
+                    or self._env.resolve_named_type(
+                        "::".join(segment.name for segment in qualifier.segments)
+                    )
+                    is not None
                     or self._env.has_qualified_import_member(qualifier, pattern.name)
                 )
             ):

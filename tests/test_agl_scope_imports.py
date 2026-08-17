@@ -77,9 +77,7 @@ def _build(decls: list[ImportDecl], exports: dict[ModuleId, dict[NameAtom, QName
 def test_alias_route_without_members_is_not_a_use_target() -> None:
     module = _module("tools/text")
     env = ImportEnv(
-        contributions={
-            module: ModuleContribution(module, {}, frozenset(), False, frozenset({"text"}))
-        },
+        contributions={module: ModuleContribution(module, {}, False, frozenset({"text"}))},
         unqualified={},
     )
 
@@ -138,7 +136,6 @@ def test_shared_route_resolves_duplicate_contributions_to_the_same_origin() -> N
             left: ModuleContribution(
                 left,
                 {"shared": qname},
-                frozenset(),
                 False,
                 frozenset({"Facade"}),
                 alias_members={"Facade": {"shared": qname}},
@@ -146,7 +143,6 @@ def test_shared_route_resolves_duplicate_contributions_to_the_same_origin() -> N
             right: ModuleContribution(
                 right,
                 {"shared": qname},
-                frozenset(),
                 False,
                 frozenset({"Facade"}),
                 alias_members={"Facade": {"shared": qname}},

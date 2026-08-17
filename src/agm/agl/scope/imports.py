@@ -43,6 +43,7 @@ __all__ = [
     "ambiguous_qualification_message",
     "build_import_env",
     "contribution_routes",
+    "matching_atoms",
     "qualification_repair_guidance",
     "qualifier_candidates",
     "qualifier_contributes",
@@ -138,7 +139,6 @@ class ModuleContribution:
 
     module: ModuleId
     members: Mapping[NameAtom, QName]
-    bare_names: frozenset[NameAtom]
     path_enabled: bool
     aliases: frozenset[str]
     path_members: Mapping[NameAtom, QName] = field(default_factory=dict)
@@ -327,7 +327,6 @@ QualResolution = (
 @dataclass(slots=True)
 class _ContributionAccumulator:
     members: dict[NameAtom, QName]
-    bare_names: set[NameAtom]
     path_enabled: bool
     aliases: set[str]
     path_members: dict[NameAtom, QName]
@@ -336,8 +335,9 @@ class _ContributionAccumulator:
     alias_scope_paths: dict[str, set[NameAtom]]
 
 
-def _matching_atoms(exports: Mapping[NameAtom, object], prefix: PathAtom) -> tuple[NameAtom, ...]:
-    return tuple(atom for atom in exports if _path(atom)[: len(prefix)] == prefix)
+def matching_atoms(surface: Mapping[NameAtom, object], prefix: PathAtom) -> tuple[NameAtom, ...]:
+    """Return every atom of *surface* that a selection *prefix* reaches."""
+    return tuple(atom for atom in surface if _path(atom)[: len(prefix)] == prefix)
 
 
 def _selected_public_atoms(
@@ -352,8 +352,8 @@ def _selected_public_atoms(
     matched_scopes: dict[NameAtom, None] = {}
     for item in items:
         prefix = _item_path(item)
-        declarations = _matching_atoms(exports, prefix)
-        scopes = _matching_atoms(scope_exports, prefix)
+        declarations = matching_atoms(exports, prefix)
+        scopes = matching_atoms(scope_exports, prefix)
         if not declarations and not scopes:
             rendered = "::".join(prefix)
             raise AglScopeError(
@@ -368,33 +368,14 @@ def _selected_public_atoms(
 
 def _tail_exposures(
     decl: ImportDecl,
-    exports: Mapping[NameAtom, QName],
-    hidden: set[NameAtom],
-    selected: tuple[NameAtom, ...],
-) -> tuple[tuple[NameAtom, QName, NameAtom], ...]:
-    """Return the implicit use-style bare declaration contribution of a tailed import."""
-    if decl.tail is None:
-        return ()
-    result: list[tuple[NameAtom, QName, NameAtom]] = []
-    for source in selected:
-        if source in hidden:
-            continue
-        qname = exports[source]
-        result.append((source, qname, source))
-        source_path = _path(source)
-        for item in decl.tail:
-            prefix = _item_path(item)
-            if item.rename is not None and source_path[: len(prefix)] == prefix:
-                result.append((_atom((item.rename, *source_path[len(prefix) :])), qname, source))
-    return tuple(result)
-
-
-def _tail_scope_exposures(
-    decl: ImportDecl,
     hidden: set[NameAtom],
     selected: tuple[NameAtom, ...],
 ) -> tuple[tuple[NameAtom, NameAtom], ...]:
-    """Return bare scope spellings paired with their module-surface paths."""
+    """Return the bare spellings a tailed import exposes, paired with their source paths.
+
+    Serves both namespaces: declarations look their ``QName`` up from the
+    module's export map, named scopes carry only the surface path.
+    """
     if decl.tail is None:
         return ()
     result: dict[tuple[NameAtom, NameAtom], None] = {}
@@ -417,10 +398,6 @@ def _targets(target: ImportTarget) -> tuple[ModuleId, ...]:
         if isinstance(target, SingleTarget)
         else tuple(sorted(target.modules, key=ModuleId.path_str))
     )
-
-
-def _merge_member(members: dict[NameAtom, QName], exposed: NameAtom, qname: QName) -> None:
-    members[exposed] = qname
 
 
 def build_import_env(
@@ -478,7 +455,7 @@ def build_import_env(
             hidden_scope_paths = set(hidden_scopes)
             acc = accumulators.setdefault(
                 module,
-                _ContributionAccumulator({}, set(), False, set(), {}, {}, set(), {}),
+                _ContributionAccumulator({}, False, set(), {}, {}, set(), {}),
             )
             if decl.alias is None:
                 route_members = acc.path_members
@@ -490,17 +467,16 @@ def build_import_env(
                 acc.aliases.add(decl.alias)
             for source, qname in module_exports.items():
                 if source not in hidden:
-                    _merge_member(acc.members, source, qname)
-                    _merge_member(route_members, source, qname)
+                    acc.members[source] = qname
+                    route_members[source] = qname
             visible_scope_paths = tuple(
                 source for source in module_scopes if source not in hidden_scope_paths
             )
             route_scope_paths.update(visible_scope_paths)
             for source in visible_scope_paths:
                 scope_origins_by_route[(module, _path(source))] = module_scopes[source]
-            for exposed, qname, source in _tail_exposures(
-                decl, module_exports, hidden, selected_exports
-            ):
+            for exposed, source in _tail_exposures(decl, hidden, selected_exports):
+                qname = module_exports[source]
                 route = (module, _path(source))
                 if decl.scope_path:
                     decl_bare.setdefault(decl.node_id, {}).setdefault(exposed, set()).add(qname)
@@ -510,8 +486,7 @@ def build_import_env(
                 else:
                     root_bare.setdefault(exposed, set()).add(qname)
                     root_bare_routes.setdefault(exposed, set()).add(route)
-                acc.bare_names.add(exposed)
-            for exposed, source in _tail_scope_exposures(decl, hidden_scope_paths, selected_scopes):
+            for exposed, source in _tail_exposures(decl, hidden_scope_paths, selected_scopes):
                 route = (module, _path(source))
                 destination = (
                     decl_scope_routes.setdefault(decl.node_id, {})
@@ -525,7 +500,6 @@ def build_import_env(
         contributions[module] = ModuleContribution(
             module,
             acc.members,
-            frozenset(acc.bare_names),
             acc.path_enabled,
             frozenset(acc.aliases),
             acc.path_members,
@@ -614,6 +588,20 @@ def _matching_contribution_routes(
     return tuple(routes)
 
 
+def _route_members(contribution: ModuleContribution, route: str | None) -> Mapping[NameAtom, QName]:
+    """Project one import route's declaration surface; ``None`` selects the path route."""
+    return contribution.path_members if route is None else contribution.alias_members.get(route, {})
+
+
+def _route_scope_paths(contribution: ModuleContribution, route: str | None) -> frozenset[NameAtom]:
+    """Project one import route's named-scope surface; ``None`` selects the path route."""
+    return (
+        contribution.path_scope_paths
+        if route is None
+        else contribution.alias_scope_paths.get(route, frozenset())
+    )
+
+
 def _member_qname(
     contribution: ModuleContribution,
     qualifier: tuple[str, ...],
@@ -626,11 +614,7 @@ def _member_qname(
     qnames = {
         qname
         for route in _matching_contribution_routes(contribution, qualifier, anchored=anchored)
-        for exposed, qname in (
-            contribution.path_members
-            if route is None
-            else contribution.alias_members.get(route, {})
-        ).items()
+        for exposed, qname in _route_members(contribution, route).items()
         if _path(exposed) == member_path
     }
     return next(iter(qnames)) if len(qnames) == 1 else None
@@ -647,11 +631,7 @@ def qualifier_members(
         merged = {
             atom: qname
             for route in routes
-            for atom, qname in (
-                contribution.path_members
-                if route is None
-                else contribution.alias_members.get(route, {})
-            ).items()
+            for atom, qname in _route_members(contribution, route).items()
         }
         if routes:
             members.append((module, MappingProxyType(merged)))
@@ -667,13 +647,7 @@ def qualifier_scope_paths(
         contribution = env.contributions[module]
         routes = _matching_contribution_routes(contribution, qualifier, anchored=anchored)
         scope_paths = frozenset(
-            path
-            for route in routes
-            for path in (
-                contribution.path_scope_paths
-                if route is None
-                else contribution.alias_scope_paths.get(route, frozenset())
-            )
+            path for route in routes for path in _route_scope_paths(contribution, route)
         )
         result.append((module, scope_paths))
     return tuple(result)

@@ -6,7 +6,7 @@ Start here for the system shape, then read only the subsystem documents relevant
 
 ## System Shape
 
-AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-contained subsystem used by `agm exec`, `agm repl`, package discipline validation, and registered package commands:
+AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-contained subsystem used by `agm exec`, `agm repl`, `agm check`, package discipline validation, and registered package commands:
 
 - **CLI layer** — a Typer command tree whose directory structure mirrors the command tree exactly. It parses arguments into typed containers and dispatches to command implementations.
 - **Command layer** — one module per command/command-group; each orchestrates domain logic but holds little of its own.

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from agm.agl.modules.roots import RootSet, assemble_roots
 from agm.config.module_roots import (
+    StdlibResolutionError,
     load_module_roots,
     resolve_lib_root,
     resolve_stdlib_root,
@@ -69,3 +71,32 @@ def effective_exec_roots(
         package_roots=selected_packages,
     )
     return ExecRoots(roots=roots)
+
+
+def effective_exec_roots_or_none(
+    *,
+    entry_path: Path | None,
+    module_paths: list[str],
+    cwd: Path,
+    home: Path,
+    proj_dir: Path | None,
+) -> ExecRoots | None:
+    """Build the effective module roots, reporting an invalid configuration.
+
+    Same parameters as :func:`effective_exec_roots`. Catches
+    ``StdlibResolutionError``/``ValueError``, prints the single canonical
+    ``Error: invalid module roots configuration: {exc}`` line to stderr, and
+    returns ``None`` instead of raising — so every caller of this helper
+    reports the same message the same way.
+    """
+    try:
+        return effective_exec_roots(
+            entry_path=entry_path,
+            module_paths=module_paths,
+            cwd=cwd,
+            home=home,
+            proj_dir=proj_dir,
+        )
+    except (StdlibResolutionError, ValueError) as exc:
+        print(f"Error: invalid module roots configuration: {exc}", file=sys.stderr)
+        return None

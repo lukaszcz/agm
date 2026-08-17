@@ -36,6 +36,30 @@ def read_text(path: Path, *, encoding: str = "utf-8") -> str:
     return path.read_text(encoding=encoding)
 
 
+def read_text_arg_or_none(path: Path, *, encoding: str = "utf-8") -> str | None:
+    """Read text from a user-supplied *path* argument, reporting failure.
+
+    On failure, print a friendly ``Error: ...`` message to stderr (using the
+    repo's display-path convention) and return ``None`` instead of raising —
+    the seam for a command that loops over many inputs and must keep checking
+    the rest after one fails. ``read_text_arg`` is the raising wrapper over
+    this for callers with a single input to read.
+    """
+
+    try:
+        return path.read_text(encoding=encoding)
+    except UnicodeDecodeError:
+        print(
+            f"Error: cannot read {display_path(path)}: file is not valid UTF-8 text",
+            file=sys.stderr,
+        )
+        return None
+    except OSError as exc:
+        detail = exc.strerror if exc.strerror is not None else str(exc)
+        print(f"Error: cannot read {display_path(path)}: {detail}", file=sys.stderr)
+        return None
+
+
 def read_text_arg(path: Path, *, encoding: str = "utf-8") -> str:
     """Read text from a user-supplied *path* argument.
 
@@ -43,18 +67,10 @@ def read_text_arg(path: Path, *, encoding: str = "utf-8") -> str:
     repo's display-path convention) and raise ``SystemExit(1)``.
     """
 
-    try:
-        return path.read_text(encoding=encoding)
-    except UnicodeDecodeError as exc:
-        print(
-            f"Error: cannot read {display_path(path)}: file is not valid UTF-8 text",
-            file=sys.stderr,
-        )
-        raise SystemExit(1) from exc
-    except OSError as exc:
-        detail = exc.strerror if exc.strerror is not None else str(exc)
-        print(f"Error: cannot read {display_path(path)}: {detail}", file=sys.stderr)
-        raise SystemExit(1) from exc
+    text = read_text_arg_or_none(path, encoding=encoding)
+    if text is None:
+        raise SystemExit(1)
+    return text
 
 
 def stat(path: Path) -> os.stat_result:

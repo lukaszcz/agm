@@ -664,6 +664,40 @@ _HELP_TEXTS: dict[str, str] = {
           1  Pre-loop setup failure: invalid [exec] config or an
              unwritable --log-file (reported before the prompt).
     """),
+    "check": textwrap.dedent("""\
+        agm check [-I DIR]... [--no-stdlib] FILE...
+
+        Run the full static AgL pipeline (parse, module loading, scope
+        resolution, type checking, match compilation, and lowering) over each
+        FILE independently, in argument order, and report GNU-style
+        diagnostics.  Unlike `agm exec`, no FILE needs to declare a `program
+        def`, so library modules can be checked too.  A `program def` present
+        in a file is validated but never selected, param-checked, or run:
+        `check` never evaluates anything and never invokes an agent.
+
+        Every FILE is checked even when an earlier one failed.  Diagnostics
+        print to stderr as `path:line:col: error: message` /
+        `path:line:col: warning: message`; a clean FILE produces no output.
+        Warnings never affect the exit code.
+
+        This is a different check from `agm pkg check`, which validates a
+        package directory's manifest and module-tree discipline rather than
+        AgL program correctness.
+
+        Options:
+          -I DIR, --module-path DIR
+                                Add DIR as an additional module search root
+                                (repeatable). Resolved relative to the invocation
+                                working directory. Joins the unordered root set;
+                                a module id found in two roots is an ambiguity error.
+          --no-stdlib           Disable automatic std/core opening throughout
+                                each checked file (entry and library modules).
+
+        Exit codes:
+          0  No FILE produced an error-severity diagnostic.
+          1  Some FILE produced an error-severity diagnostic, was unreadable
+             or missing, or had an invalid module-root configuration.
+    """),
     "help": textwrap.dedent("""\
         agm help [COMMAND...]
 

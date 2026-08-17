@@ -48,6 +48,7 @@ _HELP_TREE: dict[tuple[str, ...], list[str]] = {
         "refine",
         "exec",
         "repl",
+        "check",
         "run",
         "loop",
         "tmux",

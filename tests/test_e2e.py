@@ -8834,6 +8834,88 @@ class TestExecCommand:
         assert "stop now" in result.stderr
 
 
+class TestCheckCommand:
+    """agm check: static AgL diagnostics without executing anything."""
+
+    def test_check_clean_file_exits_0_silently(self, tmp_path: Path, env: dict[str, str]) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+        program = work / "hello.agl"
+        write_file_program(program, 'print "hello from agl"\n', encoding="utf-8")
+
+        result = run_agm(["check", str(program)], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert result.stdout == ""
+        assert result.stderr == ""
+
+    def test_check_library_module_without_program_def_succeeds(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """Unlike `agm exec --dry-run`, `agm check` accepts a file with no `program def`."""
+        work = tmp_path / "work"
+        work.mkdir()
+        module = work / "lib.agl"
+        module.write_text("def double(n: int) -> int = n * 2\n", encoding="utf-8")
+
+        result = run_agm(["check", str(module)], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert result.stdout == ""
+
+    def test_check_static_error_reports_diagnostic_and_exits_1(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+        program = work / "bad.agl"
+        write_file_program(program, "let x = undefined_name\nx\n", encoding="utf-8")
+
+        result = run_agm(["check", str(program)], env=env, cwd=str(work), check=False)
+
+        assert result.returncode == 1
+        assert result.stderr
+        assert "bad.agl" in result.stderr
+        assert "error:" in result.stderr
+
+    def test_check_multiple_files_all_reported_and_exit_1(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+        clean = work / "clean.agl"
+        clean.write_text("def value() -> int = 1\n", encoding="utf-8")
+        bad = work / "bad.agl"
+        bad.write_text("def bad() -> int = undeclared_name\n", encoding="utf-8")
+
+        result = run_agm(["check", str(clean), str(bad)], env=env, cwd=str(work), check=False)
+
+        assert result.returncode == 1
+        assert "bad.agl" in result.stderr
+        assert "clean.agl" not in result.stderr
+
+    def test_check_no_stdlib_requires_explicit_core_import(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+        module = work / "opt.agl"
+        module.write_text("let x = Some(value = 1)\n", encoding="utf-8")
+
+        result = run_agm(["check", "--no-stdlib", str(module)], env=env, cwd=str(work), check=False)
+
+        assert result.returncode == 1
+
+    def test_check_missing_file_argument_errors(self, tmp_path: Path, env: dict[str, str]) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(["check"], env=env, cwd=str(work), check=False)
+
+        assert result.returncode != 0
+        assert result.stderr
+
+
 class TestReplCommand:
     """agm repl: interactive AgL read-eval-print loop."""
 

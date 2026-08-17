@@ -25,6 +25,7 @@ COMMAND_OVERVIEW: tuple[tuple[str, str], ...] = (
     ("refine", "Run review/revise refinement"),
     ("exec", "Execute an AgL workflow program"),
     ("repl", "Start an interactive AgL REPL"),
+    ("check", "Statically check AgL files"),
     ("run", "Run a command in a sandbox"),
     ("config", "Manage project configuration files"),
     ("worktree", "Git worktree management"),

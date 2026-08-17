@@ -30,6 +30,7 @@ help for a single command or command group. Each command also accepts `--help`.
 | [Agent workflows](agents.md) | `agm review`, `agm revise`, `agm refine` |
 | [Loop automation](loop.md) | `agm loop` run/step/select, prompts, selectors, logging |
 | [`agm exec`](exec.md) | Execute an AgL workflow program |
+| [`agm check`](check.md) | Statically check AgL files |
 | [AgL workflow DSL](agl.md) | `agm repl` |
 | [Configuration](config.md) | `agm config` copy/env/update |
 | [Dependencies](dependencies.md) | `agm dep` |

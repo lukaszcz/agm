@@ -244,6 +244,13 @@ class TmuxLayoutArgs:
 
 
 @dataclass(slots=True)
+class CheckArgs:
+    files: list[str]
+    module_paths: list[str] = field(default_factory=list)
+    no_stdlib: bool = False
+
+
+@dataclass(slots=True)
 class ExecArgs:
     file: str | None
     strict_json: bool | None

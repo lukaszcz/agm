@@ -3,6 +3,7 @@
 - [Agent workflows](agents.md)
 - [Loop automation](loop.md)
 - [`agm exec`](exec.md)
+- [`agm check`](check.md)
 - [AgL workflow DSL (REPL)](agl.md)
 - [Configuration](config.md)
 - [Dependencies](dependencies.md)

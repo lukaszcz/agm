@@ -246,6 +246,23 @@ agm exec --dry-run workflow.agl   # static check only — no agent calls
 See `agm help exec` for options, exit codes, and config. The AgL language itself is
 documented in the [AgL language reference](docs/agl/reference/index.md).
 
+### `agm check`
+
+Statically check one or more AgL files: run the full static pipeline (parse, module
+loading, scope resolution, type checking, match compilation, and lowering) and report
+GNU-style diagnostics, without evaluating anything or running an agent. Unlike `agm exec`,
+no file needs to declare a `program def`, so plain library modules can be checked too.
+Each file is checked independently, in argument order; a clean file produces no output.
+
+```bash
+agm check workflow.agl
+agm check lib/*.agl              # library modules, no `program def` required
+```
+
+See `agm help check` and [docs/commands/check.md](docs/commands/check.md) for options and
+exit codes. This is distinct from [`agm pkg check`](docs/commands/pkg.md), which validates
+a package directory's manifest and module-tree discipline.
+
 ### `agm repl`
 
 Start an interactive read-eval-print loop for AgL. The REPL keeps a persistent session:

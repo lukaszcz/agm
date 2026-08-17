@@ -75,7 +75,7 @@ from agm.cli_support.exec_params import (
     param_option_flags,
     parse_param_tokens,
 )
-from agm.cli_support.exec_roots import effective_exec_roots
+from agm.cli_support.exec_roots import effective_exec_roots_or_none
 from agm.cli_support.exec_target import (
     ExecTargetError,
     PackageProgramReference,
@@ -83,7 +83,6 @@ from agm.cli_support.exec_target import (
 )
 from agm.config.context import ConfigContext, current_config_context
 from agm.config.general import GeneralConfig, exec_config_from_merged, load_general_config
-from agm.config.module_roots import StdlibResolutionError
 from agm.config.qualified_keys import (
     RESERVED_CONFIG_SECTION_NAMES,
     QualifiedConfigKey,
@@ -257,17 +256,15 @@ def run(
     # reused below for scoping the graph, and its mounted packages classify a
     # directly executed package file so it keeps its package-qualified config
     # route.
-    try:
-        exec_roots = effective_exec_roots(
-            entry_path=entry_path,
-            module_paths=args.module_paths,
-            cwd=ctx.cwd,
-            home=ctx.home,
-            proj_dir=ctx.proj_dir,
-        )
-    except (StdlibResolutionError, ValueError) as exc:
-        print(f"Error: invalid module roots configuration: {exc}", file=sys.stderr)
-        raise SystemExit(1) from exc
+    exec_roots = effective_exec_roots_or_none(
+        entry_path=entry_path,
+        module_paths=args.module_paths,
+        cwd=ctx.cwd,
+        home=ctx.home,
+        proj_dir=ctx.proj_dir,
+    )
+    if exec_roots is None:
+        raise SystemExit(1)
 
     entry_stem: str | None = Path(args.file).stem if args.file is not None else None
     package_entry_segments = _package_entry_segments(entry_path, exec_roots.roots.packages)

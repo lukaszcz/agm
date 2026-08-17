@@ -410,19 +410,31 @@ class PipelineDriver:
         builtin_host_settings: "Mapping[str, Value] | None" = None,
         program_symbol: "SymbolId | None" = None,
         select_default_program: bool = False,
+        validate_params: bool = True,
     ) -> RunResult:
         """Run a freshly lowered ``executable`` — the shared tail of the
         shared pipeline tail.
 
-        Validates external params, materializes host codec contracts, honours
-        the ``check_only`` dry-run stop (call-site inventory, no execution),
-        then builds and runs the :class:`IrInterpreter`, mapping an uncaught
-        ``AglRaise`` to a failing ``RunResult``.  All return paths carry
-        *warnings*.
+        Validates external params (unless *validate_params* is ``False``),
+        materializes host codec contracts, honours the ``check_only`` dry-run
+        stop (call-site inventory, no execution), then builds and runs the
+        :class:`IrInterpreter`, mapping an uncaught ``AglRaise`` to a failing
+        ``RunResult``.  All return paths carry *warnings*.
+
+        *validate_params* is a private knob: nothing between the
+        ``_prepare_ir_params`` call and the ``check_only`` return reads its
+        result, so skipping it (used only by :meth:`check_prepared`) loses
+        nothing else. It is never exposed publicly — every public entry point
+        that reaches this method other than :meth:`check_prepared` keeps
+        validating params.
         """
-        ir_param_values, param_errors = _prepare_ir_params(executable, param_values)
-        if param_errors:
-            return RunResult(ok=False, diagnostics=param_errors, error=None, warnings=warnings)
+        ir_param_values: "dict[SymbolId, Value]"
+        if validate_params:
+            ir_param_values, param_errors = _prepare_ir_params(executable, param_values)
+            if param_errors:
+                return RunResult(ok=False, diagnostics=param_errors, error=None, warnings=warnings)
+        else:
+            ir_param_values = {}
 
         host_contracts, contract_errors = _materialize_ir_contracts(executable, host_env.codecs)
         if contract_errors:
@@ -1118,6 +1130,36 @@ class PipelineDriver:
         )
         return result
 
+    def check_prepared(
+        self,
+        prepared: PreparedProgram,
+        *,
+        compiled: "MatchCompiledProgram | None" = None,
+    ) -> RunResult:
+        """Run the full static pipeline over *prepared*, with no execution.
+
+        Drives typecheck, match compilation, custom-contract payload
+        materialization, and lowering — everything ``run_prepared`` does with
+        ``check_only=True`` except host parameter binding: no params are
+        resolved or validated, and nothing is executed. This is the entry
+        point for a static checker (``agm check``) that must accept a module
+        declaring a required ``param`` with no default, while still reporting
+        every other static failure lowering catches (an invalid
+        ``resource``/``resource-dir`` path, an unmaterializable output
+        contract).
+
+        ``compiled``
+            As in :meth:`run_prepared`: a caller-supplied typecheck/match-compile
+            artifact to reuse instead of running those passes here.
+        """
+        result, _executable = self._run_program(
+            prepared,
+            check_only=True,
+            compiled=compiled,
+            validate_params=False,
+        )
+        return result
+
     def preflight_params(
         self,
         prepared: PreparedProgram,
@@ -1167,12 +1209,16 @@ class PipelineDriver:
         program_symbol: "SymbolId | None" = None,
         select_default_program: bool = False,
         selected_program: ProgramDeclInfo | None = None,
+        validate_params: bool = True,
     ) -> "tuple[RunResult, ExecutableProgram | None]":
         """Back program execution and parameter preflight with one pipeline body.
 
         Returns the run result together with the lowered program it ran (the one
         supplied as *executable*, or the one lowered here), or ``None`` when a
         pass before lowering failed.
+
+        *validate_params* is private — see :meth:`_execute_ir`; only
+        :meth:`check_prepared` passes ``False``.
         """
         if param_values is None:
             param_values = {}
@@ -1327,6 +1373,7 @@ class PipelineDriver:
                 builtin_host_settings=builtin_host_settings,
                 program_symbol=program_symbol,
                 select_default_program=select_default_program,
+                validate_params=validate_params,
             ),
             executable,
         )

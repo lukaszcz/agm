@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
+from typing import NoReturn
 
 import typer
 
@@ -39,6 +40,7 @@ from agm import completion
 from agm import parser as parser_helpers
 from agm.cli_dispatch import RegisteredCommandGroup, set_dry_run
 from agm.cli_support.args import (
+    CheckArgs,
     CloseArgs,
     ConfigCopyArgs,
     ConfigEnvArgs,
@@ -138,7 +140,7 @@ def _dry_run_option() -> bool:
     )
 
 
-def _missing_arguments(command_path: Sequence[str], names: Sequence[str]) -> None:
+def _missing_arguments(command_path: Sequence[str], names: Sequence[str]) -> NoReturn:
     joined = ", ".join(names)
     exit_with_usage_error(command_path, f"error: the following arguments are required: {joined}")
 
@@ -1335,6 +1337,54 @@ def repl_cmd(
     )
 
 
+@app.command(name="check")
+def check_cmd(
+    file: list[str] | None = typer.Argument(
+        None,
+        metavar="FILE...",
+        autocompletion=completion.complete_agl_file,
+    ),
+    module_paths: list[str] = typer.Option(
+        [],
+        "-I",
+        "--module-path",
+        metavar="DIR",
+        help=(
+            "Add DIR as an additional module search root (repeatable). "
+            "Resolved relative to the invocation working directory. "
+            "Joins the unordered root set; a module id found in two roots is an ambiguity error."
+        ),
+        autocompletion=completion.complete_dir_argument,
+    ),
+    no_stdlib: bool = typer.Option(
+        False,
+        "--no-stdlib",
+        help=(
+            "Disable automatic std/core opening throughout each checked file "
+            "(entry and library modules)."
+        ),
+    ),
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    # ``--dry-run`` is meaningless here: ``check`` is already side-effect free.
+    del _dry_run
+    if not file:
+        _missing_arguments(["check"], ["FILE"])
+    # Imported lazily: pulls in the AgL DSL (runtime, jsonschema), which would
+    # otherwise slow every non-AgL ``agm`` invocation's startup.
+    import agm.commands.check as check_command
+
+    check_command.run(
+        CheckArgs(
+            files=file,
+            module_paths=module_paths,
+            no_stdlib=no_stdlib,
+        )
+    )
+
+
 @worktree_app.command(name="rm")
 def worktree_rm(
     branch: str | None = typer.Argument(
@@ -1454,8 +1504,6 @@ def dep_switch(
     del _dry_run
     if dep is None or branch is None:
         _missing_arguments(["dep", "switch"], ["dep", "branch"])
-    assert dep is not None
-    assert branch is not None
     dep_switch_command.run(DepSwitchArgs(dep=dep, branch=branch, create_branch=create_branch))
 
 

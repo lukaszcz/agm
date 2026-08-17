@@ -32,8 +32,9 @@ through wildcard expansion, supplies that module's core contribution instead.
 
 The loader produces a `ModuleGraph` for whole-program passes. Scope resolves
 declarations and import contributions across the graph; typecheck, match
-compilation, and lowering then process the same graph. Module roots are static:
-workflow code belongs in a `program def` body.
+compilation, and lowering then process the same graph. File-backed module roots
+are static: workflow code belongs in a `program def` body. Incremental REPL entries
+are the executable-root exception.
 
 ## Code Entry Points
 

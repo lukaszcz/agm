@@ -29,9 +29,12 @@ and downstream tooling rely on.
 from __future__ import annotations
 
 import contextvars
+import importlib.resources
 from contextlib import contextmanager
 from typing import Iterator
 
+from lark import Lark
+from lark.exceptions import LarkError
 from lark.lexer import Lexer, LexerState, Token
 
 from agm.agl.diagnostics import Diagnostic, SourceSpan
@@ -242,131 +245,69 @@ def _is_as(token: Token) -> bool:
     return token.type in {"as", "AS"}
 
 
-def _is_use_declaration(tokens: list[Token], index: int) -> bool:
-    """Whether item-start ``use`` is followed by one complete declaration header."""
+_FORCE_USE_DECLARATION: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "agl_force_use_declaration", default=False
+)
+_USE_DECL_PARSER: Lark | None = None
+
+
+def _use_decl_parser() -> Lark:
+    """Return a parser rooted at the canonical grammar's ``use_decl`` rule."""
+
+    global _USE_DECL_PARSER
+    if _USE_DECL_PARSER is None:
+        grammar = (
+            importlib.resources.files("agm.agl")
+            .joinpath("grammar/agl.lark")
+            .read_text(encoding="utf-8")
+        )
+        _USE_DECL_PARSER = Lark(
+            grammar,
+            parser="lalr",
+            lexer=AglLexer,
+            start="use_decl",
+            maybe_placeholders=True,
+            cache=True,
+        )
+    return _USE_DECL_PARSER
+
+
+def _is_use_declaration(source: str, tokens: list[Token], index: int) -> bool:
+    """Ask the canonical ``use_decl`` grammar whether one item is a declaration."""
+
     end = index + 1
     while end < len(tokens) and tokens[end].type not in _ITEM_START_TYPES:
         end += 1
-
-    def tight_dcolon(position: int) -> bool:
-        return (
-            0 < position < end - 1
-            and tokens[position].type == DCOLON
-            and tokens[position - 1].end_pos == tokens[position].start_pos
-            and tokens[position].end_pos == tokens[position + 1].start_pos
-        )
-
-    def path_atom(position: int) -> int | None:
-        if position >= end or tokens[position].type not in {NAME, OP_NAME}:
-            return None
-        position += 1
-        while position + 1 < end and tokens[position].type == DCOLON:
-            if tokens[position + 1].type not in {NAME, OP_NAME}:
-                break
-            position += 2
-        return position
-
-    def hiding_clause(position: int) -> bool:
-        if position == end:
-            return True
-        if tokens[position].type != NAME or str(tokens[position]) != "hiding":
-            return False
-        parsed = path_atom(position + 1)
-        if parsed is None:
-            return False
-        position = parsed
-        while position < end and tokens[position].type == "COMMA":
-            parsed = path_atom(position + 1)
-            if parsed is None:
-                return False
-            position = parsed
-        return position == end
-
-    def tail(position: int) -> bool:
-        if tokens[position].type == STAR:
-            return hiding_clause(position + 1)
-        if tokens[position].type == LBRACE:
-            position += 1
-            parsed = path_atom(position)
-            if parsed is None:
-                return False
-            position = parsed
-            if position < end and _is_as(tokens[position]):
-                position += 1
-                if position >= end or tokens[position].type not in {NAME, OP_NAME}:
-                    return False
-                position += 1
-            while position < end and tokens[position].type == "COMMA":
-                position += 1
-                if position < end and tokens[position].type == "RBRACE":
-                    break
-                parsed = path_atom(position)
-                if parsed is None:
-                    return False
-                position = parsed
-                if position < end and _is_as(tokens[position]):
-                    position += 1
-                    if position >= end or tokens[position].type not in {NAME, OP_NAME}:
-                        return False
-                    position += 1
-            return (
-                position < end and tokens[position].type == "RBRACE" and hiding_clause(position + 1)
-            )
-        parsed = path_atom(position)
-        if parsed is None:
-            return False
-        position = parsed
-        if position < end and _is_as(tokens[position]):
-            position += 1
-            if position >= end or tokens[position].type not in {NAME, OP_NAME}:
-                return False
-            position += 1
-        return hiding_clause(position)
-
-    position = index + 1
-    if position < end and tokens[position].type in {SLASH, DCOLON}:
-        anchor = tokens[position]
-        position += 1
-        if position >= end or anchor.end_pos != tokens[position].start_pos:
-            return False
-    if position >= end or tokens[position].type != NAME:
+    header_tokens = tokens[index + 1 : end]
+    if not any(token.type == DCOLON or _is_as(token) for token in header_tokens):
         return False
-    position += 1
-    while position + 1 < end and tokens[position].type == SLASH:
+    for position in range(index + 1, end):
+        if tokens[position].type != DCOLON:
+            continue
         if (
-            tokens[position + 1].type != NAME
-            or tokens[position - 1].end_pos != tokens[position].start_pos
+            position + 1 >= end
             or tokens[position].end_pos != tokens[position + 1].start_pos
+            or (
+                position > index + 1
+                and tokens[position - 1].end_pos != tokens[position].start_pos
+            )
         ):
             return False
-        position += 2
-
-    # A whole-target alias consumes every nested target segment.
-    alias_position = position
-    while (
-        alias_position + 1 < end
-        and tight_dcolon(alias_position)
-        and tokens[alias_position + 1].type == NAME
-    ):
-        alias_position += 2
-    if (
-        alias_position + 1 < end
-        and _is_as(tokens[alias_position])
-        and tokens[alias_position + 1].type in {NAME, OP_NAME}
-    ):
-        return hiding_clause(alias_position + 2)
-
-    # Otherwise any remaining ``::`` may separate the target from its tail.
-    while position < end:
-        if tokens[position].type != DCOLON or not tight_dcolon(position):
-            return False
-        if tail(position + 1):
-            return True
-        position += 2
-    return False
+    start_offset = tokens[index].start_pos
+    end_offset = tokens[end - 1].end_pos
+    if start_offset is None or end_offset is None:
+        return False
+    forced = _FORCE_USE_DECLARATION.set(True)
+    try:
+        _use_decl_parser().parse(source[start_offset:end_offset])
+    except (LarkError, LexError):
+        return False
+    finally:
+        _FORCE_USE_DECLARATION.reset(forced)
+    return True
 
 
-def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
+def _promote_soft_keywords(tokens: list[Token], source: str) -> list[Token]:
     """Contextually promote soft keywords in the post-layout token stream.
 
     Rules:
@@ -392,7 +333,9 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
             at_item_start = prev_type is None or prev_type in _ITEM_START_TYPES
             if tv == "import" and at_item_start:
                 tok = _retype(tok, IMPORT)
-            elif tv == "use" and at_item_start and _is_use_declaration(tokens, index):
+            elif tv == "use" and at_item_start and (
+                _FORCE_USE_DECLARATION.get() or _is_use_declaration(source, tokens, index)
+            ):
                 tok = _retype(tok, USE)
             elif tv == "export" and at_item_start:
                 tok = _retype(tok, EXPORT)
@@ -421,17 +364,25 @@ def _promote_hiding(tokens: list[Token]) -> list[Token]:
     header: str | None = None
     hiding_promoted = False
     brace_depth = 0
+    saw_dcolon = False
+    saw_alias = False
     for tok in tokens:
         if tok.type in {IMPORT, USE, EXPORT}:
             header = tok.type
             hiding_promoted = False
             brace_depth = 0
+            saw_dcolon = False
+            saw_alias = False
         elif tok.type in {"_NEWLINE", "_INDENT", "_DEDENT", "SEMICOLON"}:
             header = None
         elif tok.type == LBRACE:
             brace_depth += 1
         elif tok.type == "RBRACE":
             brace_depth -= 1
+        elif header is not None and tok.type == DCOLON:
+            saw_dcolon = True
+        elif header is not None and _is_as(tok):
+            saw_alias = True
         elif (
             header is not None
             and not hiding_promoted
@@ -445,9 +396,8 @@ def _promote_hiding(tokens: list[Token]) -> list[Token]:
                 or (
                     header in {IMPORT, USE}
                     and result[-1].type in {NAME, OP_NAME}
-                    and any(previous.type == DCOLON for previous in result)
+                    and (saw_dcolon or saw_alias)
                 )
-                or (header == IMPORT and len(result) >= 2 and result[-2].type in {"as", "AS"})
             )
         ):
             tok = _retype(tok, HIDING)
@@ -849,7 +799,7 @@ def _merge_use_alias_paths(tokens: list[Token]) -> list[Token]:
 
 def apply_module_passes(tokens: list[Token], source: str) -> list[Token]:
     """Apply soft-keyword promotion, import path merging, and module-qualifier merging."""
-    promoted = _promote_soft_keywords(tokens)
+    promoted = _promote_soft_keywords(tokens, source)
     merged = _merge_modqual(_promote_hiding(_merge_modpath(promoted)), source)
     return _reject_clinging_slash(_merge_use_alias_paths(merged))
 

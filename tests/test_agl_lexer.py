@@ -2665,7 +2665,6 @@ class TestModuleSystemLexer:
             "use S::* hiding x,",
             "use S::",
             "use S::{x as}",
-            "use S::{x, *}",
             "use S::{x, y as}",
             "use S::x as",
         ),
@@ -2716,6 +2715,17 @@ class TestModuleSystemLexer:
         result = tok("import foo hiding bar")
         types = [t for t, _ in result]
         assert "HIDING" in types
+
+    def test_use_alias_hiding_is_independent_of_preceding_qualifiers(self) -> None:
+        plain = tok("use S as A hiding x")
+        after_qualifier = tok("let q = f::[int]()\nuse S as A hiding x")
+
+        assert ("HIDING", "hiding") in plain
+        assert ("HIDING", "hiding") in after_qualifier
+
+    @pytest.mark.parametrize("source", ("use S::{}", "use S::{{*}}", "use S::{x, *}"))
+    def test_use_promotion_tracks_canonical_nested_brace_grammar(self, source: str) -> None:
+        assert tok(source)[0] == ("USE", "use")
 
     def test_hiding_outside_import_stays_name(self) -> None:
         result = tok("let hiding = 1")

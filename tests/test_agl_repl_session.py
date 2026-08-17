@@ -6771,6 +6771,50 @@ class TestBareTypeEntry:
 
 
 # ---------------------------------------------------------------------------
+# Local `use` narrowing across REPL entries
+# ---------------------------------------------------------------------------
+
+
+class TestLocalUseNarrowing:
+    """A retained local-scope ``use`` stays in sync with later narrowing ``use``s.
+
+    Mirrors how a region-scoped ``import`` narrowing replaces the prior
+    selection (see ``TestImports``): a later, narrower ``use`` of the same
+    local scope must supersede an earlier glob ``use``, not merely add to it.
+    """
+
+    def test_narrowing_local_use_retracts_a_member_exposed_by_an_earlier_glob_use(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("scope S\ndef foo() -> int = 1\ndef bar() -> int = 2\nend S").ok
+        assert session.eval_entry("use S::*").ok
+        assert session.eval_entry("use S::{bar}").ok
+
+        assert session.eval_entry("bar()").ok
+        assert not session.eval_entry("foo()").ok
+
+    def test_narrowing_local_use_in_a_named_scope_retracts_a_type_in_a_later_entry(
+        self,
+    ) -> None:
+        """A tail-selecting (non-glob) local use, retained on a NAMED scope,
+
+        must stop exposing its selected type once a later ``use`` on the same
+        target supersedes it -- even in an entry that declares no ``use`` of
+        its own, and even though type resolution has no live fallback and
+        depends entirely on the retained static bare-contribution table.
+        """
+        session = ReplSession()
+        assert session.eval_entry("type Source::Meters = int").ok
+        assert session.eval_entry("type Source::Seconds = int").ok
+        assert session.eval_entry("scope Outer\nuse Source::{Meters}\nend Outer").ok
+        assert session.eval_entry("scope Outer\nuse Source::{Seconds}\nend Outer").ok
+
+        result = session.eval_entry("scope Outer\nlet duration: Seconds = 1\nend Outer")
+        assert result.ok, result.diagnostics
+
+        assert not session.eval_entry("scope Outer\nlet distance: Meters = 1\nend Outer").ok
+
+
+# ---------------------------------------------------------------------------
 # Session bootstrap (ReplSession.open)
 # ---------------------------------------------------------------------------
 

@@ -1543,3 +1543,52 @@ def test_wildcard_alias_is_a_member_filtered_facade(tmp_path: Path) -> None:
     )
 
     assert resolve_program(graph).entry_id == graph.entry_id
+
+
+def test_wildcard_facade_use_hiding_stays_hidden(tmp_path: Path) -> None:
+    modules = {
+        "facade/one": "def first() -> int = 1",
+        "facade/two": "def second() -> int = 2",
+    }
+    visible = make_graph_from_files(
+        tmp_path,
+        {"entry": "import facade/* as api\nuse api::* hiding first\nsecond()", **modules},
+    )
+    assert resolve_program(visible).entry_id == visible.entry_id
+
+    hidden = make_graph_from_files(
+        tmp_path,
+        {"entry": "import facade/* as api\nuse api::* hiding first\nfirst()", **modules},
+    )
+    with pytest.raises(AglScopeError):
+        resolve_program(hidden)
+
+
+def test_wildcard_facade_use_hiding_keeps_a_variant_constructor_hidden(tmp_path: Path) -> None:
+    modules = {"facade/one": "enum E\n  | A(value: int)\n  | B\n"}
+    visible = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import facade/* as api\n"
+                "use api::* hiding E::A\n"
+                "let value = E::B\n"
+                "case value of | E::B => 1 | _ => 0\n"
+            ),
+            **modules,
+        },
+    )
+    checked = check_program(resolve_program(visible), base_caps())
+    assert checked.modules[visible.entry_id] is not None
+
+    hidden = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import facade/* as api\nuse api::* hiding E::A\nlet value = E::A(1)\nvalue\n"
+            ),
+            **modules,
+        },
+    )
+    with pytest.raises((AglScopeError, AglTypeError)):
+        check_program(resolve_program(hidden), base_caps())

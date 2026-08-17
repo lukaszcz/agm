@@ -412,18 +412,37 @@ class BindingRef:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class LocalUseContribution:
-    """A live local-scope use contribution owned by one lexical layer."""
+    """A resolved local-scope use contribution retained on its lexical layer.
+
+    ``bindings``/``constructors`` snapshot exactly the bare bindings and
+    constructor candidates this contribution exposed once its target's
+    members were fully validated (see
+    :meth:`_Resolver._validate_local_use_contributions`), mirroring
+    :class:`ImportedUseContribution`'s snapshot so both use kinds share the
+    same subtract-then-readd retraction protocol on REPL supersession. A
+    freshly declared contribution starts with empty snapshots -- they are
+    filled in once validation has walked the whole target subtree.
+    """
 
     declaration: UseDecl
     source: ScopeNode
     target: ResolvedUseTarget
+    bindings: Mapping[BareAtom, frozenset[BindingRef]] = field(default_factory=dict)
+    constructors: Mapping[BareAtom, frozenset[ConstructorRef]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
 class ImportedUseContribution:
-    """A resolved imported surface retained on its lexical scope layer."""
+    """A resolved imported surface retained on its lexical scope layer.
+
+    ``hidden_prefixes`` records the declaration's ``hiding`` clause as
+    selection prefixes (see :func:`import_item_path`), so a wildcard-facade
+    refresh (:meth:`_Resolver._nearest_bare_contribution_layer`) can skip
+    re-adding a name the ``use`` hid instead of reinstating it from the
+    import environment.
+    """
 
     target: ResolvedUseTarget
     refreshes_all_members: bool
@@ -431,6 +450,7 @@ class ImportedUseContribution:
     scope_routes: Mapping[BareAtom, frozenset[BareRoute]]
     bindings: Mapping[BareAtom, frozenset[BindingRef]]
     constructors: Mapping[BareAtom, frozenset[ConstructorRef]]
+    hidden_prefixes: frozenset[ScopePath]
 
 
 @dataclass(slots=True)

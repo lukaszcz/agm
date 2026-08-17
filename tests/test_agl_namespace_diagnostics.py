@@ -34,8 +34,9 @@ def test_legacy_module_header_spellings_are_syntax_errors(source: str) -> None:
         parse_program(source)
 
 
-def test_bare_use_remains_an_expression() -> None:
-    parse_program("use Tools")
+def test_use_target_without_tail_or_alias_is_a_syntax_error() -> None:
+    with pytest.raises(AglSyntaxError):
+        parse_program("use Tools")
 
 
 def test_use_bare_target_ambiguity_suggests_a_reachable_module_anchor(tmp_path: Path) -> None:

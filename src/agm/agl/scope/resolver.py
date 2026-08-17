@@ -189,6 +189,17 @@ def _relative_under(atom: NameAtom, target: ScopePath) -> ScopePath | None:
     return path[len(target) :] if path[: len(target)] == target else None
 
 
+def _atom_under_prefix(atom: NameAtom, prefix: ScopePath) -> bool:
+    """Whether *atom* falls under a selection *prefix* (a use tail or hiding item).
+
+    The one definition of the prefix-match test, shared by
+    ``_select_use_members`` (tail selection and its ``hiding`` loop) and the
+    wildcard-facade refresh in ``_nearest_bare_contribution_layer`` -- so a
+    name a ``use`` declaration hid cannot be reinstated by either path.
+    """
+    return _relative_under(atom, prefix) is not None
+
+
 def _route_root(source: ScopePath, relative: ScopePath) -> ScopePath:
     """Return *source* with a target-relative suffix trimmed back off its end."""
     return source[: len(source) - len(relative)] if relative else source
@@ -1909,8 +1920,8 @@ class _Resolver:
         facade_declarations = (
             self._import_env.facade_aliases.get(route[0], {}) if len(route) == 1 else {}
         )
-        facade_origin_node_id = None
-        if facade_origin_node_id is None and not decl.anchored and len(route) == 1:
+        facade_origin_node_id: int | None = None
+        if not decl.anchored and len(route) == 1:
             direct_modules = frozenset(module for module, _members in direct_candidates)
             matching_origins = tuple(
                 origin
@@ -2023,17 +2034,6 @@ class _Resolver:
                 exists = True
                 relative_members[_bare_atom(path[len(target) :])] = qname
         return relative_members if exists else None
-
-    def _import_scope_routes(
-        self, imported_route: BareRoute
-    ) -> dict[NameAtom, frozenset[BareRoute]]:
-        """Return all scope identities beneath one exact imported route."""
-        contribution = self._import_env.contributions.get(imported_route[0])
-        assert contribution is not None
-        scope_paths = set(contribution.path_scope_paths)
-        for alias_paths in contribution.alias_scope_paths.values():
-            scope_paths.update(alias_paths)
-        return self._relative_use_import_scope_routes(scope_paths, imported_route)
 
     @staticmethod
     def _relative_use_import_scope_routes(
@@ -2221,6 +2221,33 @@ class _Resolver:
             scope = scope.parent
         return bases
 
+    def _local_contribution_superseded(self, contribution: LocalUseContribution) -> bool:
+        """Whether *contribution*'s target was re-targeted earlier in this entry.
+
+        A retained contribution's target can be re-targeted by a fresh ``use``
+        declaration resolved anywhere in the current entry (``_resolve_use_decl``
+        adds every target it resolves to ``_superseded_use_targets``, keyed by
+        target rather than declaration). ``_current_use_declaration_ids``
+        exempts the declarations resolved so far in *this* entry, so a
+        contribution is never treated as stale by its own declaration's
+        target -- only a target some OTHER (necessarily earlier) declaration
+        introduced counts as superseded. In a batch (non-REPL) run every use
+        decl belongs to the single resolution pass, so every contribution's
+        declaration is always in ``_current_use_declaration_ids`` and this is
+        always ``False``; only a REPL entry can see a retained contribution
+        from a prior entry whose declaration id was never added here.
+
+        The one definition of this predicate, shared by the two live
+        consumers below and by :meth:`_validate_local_use_contributions`'s
+        bare-contribution snapshot, so a superseded contribution's members
+        never leak into a static ``bare_contributions`` read that (unlike the
+        live consumers) applies no filter of its own.
+        """
+        return (
+            contribution.target in self._superseded_use_targets
+            and contribution.declaration.node_id not in self._current_use_declaration_ids
+        )
+
     def _use_contributed_local_target(
         self, target: ScopePath, span: SourceSpan
     ) -> ScopePath | None:
@@ -2229,11 +2256,7 @@ class _Resolver:
         while layer is not None:
             candidates: set[ScopePath] = set()
             for local_contribution in layer.local_use_contributions:
-                if (
-                    local_contribution.target in self._superseded_use_targets
-                    and local_contribution.declaration.node_id
-                    not in self._current_use_declaration_ids
-                ):
+                if self._local_contribution_superseded(local_contribution):
                     continue
                 for exposed, source in self._local_use_exposures(local_contribution):
                     exposed_path = _bare_path(exposed)
@@ -2295,15 +2318,53 @@ class _Resolver:
         return members
 
     def _validate_local_use_contributions(self) -> None:
-        """Validate local use selections after all target members are collected."""
+        """Validate local use selections and snapshot what each one exposed.
+
+        Rebuilds each scope's ``local_use_contributions`` with snapshot-carrying
+        replacements (the dataclass is frozen) so a later replay -- the REPL
+        promotion loop in ``session.py`` -- can subtract and re-add exactly
+        what a contribution exposed, the same protocol
+        :class:`ImportedUseContribution` already uses.
+
+        A contribution :meth:`_local_contribution_superseded` in this entry is
+        still validated (a retained target must remain nameable even once
+        superseded) but is dropped from the rebuilt list rather than kept with
+        an empty snapshot: a named (non-root) scope re-seeds its node from the
+        retained one on every later entry (see ``_build_scope_nodes``), so a
+        superseded contribution kept around would keep being copied forward
+        and, once some later entry declares no competing ``use`` of its own,
+        would read as live again through the two consumers above -- dropping
+        it here is what makes supersession permanent rather than only good
+        for the one entry that introduced it.
+        """
         for scope in self._scope_nodes.values():
+            rebuilt: list[LocalUseContribution] = []
             for contribution in scope.local_use_contributions:
-                for exposed, source in self._local_use_exposures(contribution, validate=True):
+                # ``_local_use_exposures`` returns a materialized list, so
+                # calling it for its ``validate=True`` side effect alone (a
+                # superseded contribution below) still runs the check even
+                # though the result is otherwise unused.
+                exposures = self._local_use_exposures(contribution, validate=True)
+                if self._local_contribution_superseded(contribution):
+                    continue
+                bindings: dict[NameAtom, set[BindingRef]] = {}
+                constructors: dict[NameAtom, set[ConstructorRef]] = {}
+                for exposed, source in exposures:
                     if not isinstance(source, BindingRef):
                         continue
                     scope.contribute_bare(exposed, source)
+                    bindings.setdefault(exposed, set()).add(source)
                     for constructor in self._declaring_constructor_candidates(source.name, source):
                         scope.contribute_bare_constructor(exposed, constructor)
+                        constructors.setdefault(exposed, set()).add(constructor)
+                rebuilt.append(
+                    replace(
+                        contribution,
+                        bindings={atom: frozenset(refs) for atom, refs in bindings.items()},
+                        constructors={atom: frozenset(refs) for atom, refs in constructors.items()},
+                    )
+                )
+            scope.local_use_contributions = rebuilt
 
     def _contribute_use_facade_members(
         self,
@@ -2375,6 +2436,7 @@ class _Resolver:
                 constructors={
                     atom: frozenset(refs) for atom, refs in contributed_constructors.items()
                 },
+                hidden_prefixes=frozenset(_item_path(item) for item in decl.hidden),
             )
         )
 
@@ -2404,7 +2466,7 @@ class _Resolver:
 
         def matching(item: ImportItem) -> tuple[NameAtom, ...]:
             prefix = _item_path(item)
-            matches = tuple(atom for atom in members if _bare_path(atom)[: len(prefix)] == prefix)
+            matches = tuple(atom for atom in members if _atom_under_prefix(atom, prefix))
             if not matches and validate:
                 raise AglScopeError(
                     f"name {'::'.join(prefix)!r} is not declared by this use target.",
@@ -3491,6 +3553,8 @@ class _Resolver:
                 origin = contribution.target.wildcard_facade_origin_node_id
                 if origin is None or not contribution.refreshes_all_members:
                     continue
+                if any(_atom_under_prefix(name, prefix) for prefix in contribution.hidden_prefixes):
+                    continue
                 modules = frozenset(
                     module
                     for declarations in self._import_env.facade_aliases.values()
@@ -3533,17 +3597,26 @@ class _Resolver:
                     if constructor is not None:
                         constructors.add(constructor)
             for local_contribution in layer.local_use_contributions:
-                if (
-                    local_contribution.target in self._superseded_use_targets
-                    and local_contribution.declaration.node_id
-                    not in self._current_use_declaration_ids
-                ):
-                    continue
+                superseded = self._local_contribution_superseded(local_contribution)
                 for exposed, source in self._local_use_exposures(local_contribution):
                     if exposed != name or not isinstance(source, BindingRef):
                         continue
+                    candidate_constructors = self._declaring_constructor_candidates(
+                        source.name, source
+                    )
+                    if superseded:
+                        # A static ``bare_contributions`` read above (this
+                        # entry's own copy-forward, or the retained session
+                        # node reached via ``.parent``) can already carry a
+                        # now-superseded contribution's binding, since that
+                        # read applies no filter of its own. Retract it here
+                        # rather than merely skip it, mirroring the wildcard
+                        # facade's stale-module subtraction above.
+                        bindings.discard(source)
+                        constructors.difference_update(candidate_constructors)
+                        continue
                     bindings.add(source)
-                    constructors.update(self._declaring_constructor_candidates(source.name, source))
+                    constructors.update(candidate_constructors)
             if binding_predicate is not None:
                 bindings = {ref for ref in bindings if binding_predicate(ref)}
                 constructors = {

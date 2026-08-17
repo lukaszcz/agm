@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.agents import AgentFn
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.host_settings import HostSettingsPolicy
-    from agm.agl.scope.symbols import ConstructorRef, ResolvedUseTarget, ScopeNode
+    from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import EnumValue, Frame, Value
     from agm.agl.setting_overrides import SettingOverride
@@ -932,8 +932,10 @@ class ReplSession:
         promoted_declaration_ids: frozenset[int],
     ) -> tuple[str, ...]:
         """Promote declarations whose IR initialization completed in this entry."""
+        from dataclasses import replace
+
         from agm.agl.parser import resolve_infix_fixity
-        from agm.agl.scope.symbols import LocalUseContribution, ScopeNode
+        from agm.agl.scope.symbols import ScopeNode
         from agm.agl.syntax.nodes import (
             EnumDef,
             ExceptionDef,
@@ -1139,27 +1141,40 @@ class ReplSession:
                     session_node.bare_constructor_contributions.setdefault(atom, set()).update(
                         constructor_refs
                     )
-            local_contributions = [
-                *session_node.local_use_contributions,
-                *node.local_use_contributions,
-            ]
-            latest_local_contributions: dict[ResolvedUseTarget, LocalUseContribution] = {
-                contribution.target: contribution for contribution in local_contributions
+            current_local_targets = {
+                local_contribution.target for local_contribution in node.local_use_contributions
             }
-            session_node.local_use_contributions = []
-            for local_contribution in latest_local_contributions.values():
+            for local_contribution in session_node.local_use_contributions:
+                for atom, refs in local_contribution.bindings.items():
+                    retained_local = session_node.bare_contributions.get(atom)
+                    if retained_local is not None:
+                        retained_local.difference_update(refs)
+                        if not retained_local:
+                            del session_node.bare_contributions[atom]
+                for atom, constructor_refs in local_contribution.constructors.items():
+                    constructor_retained_local = session_node.bare_constructor_contributions.get(
+                        atom
+                    )
+                    if constructor_retained_local is not None:
+                        constructor_retained_local.difference_update(constructor_refs)
+                        if not constructor_retained_local:
+                            del session_node.bare_constructor_contributions[atom]
+            session_node.local_use_contributions = [
+                local_contribution
+                for local_contribution in session_node.local_use_contributions
+                if local_contribution.target not in current_local_targets
+            ]
+            for local_contribution in node.local_use_contributions:
                 source = self._session_scope_nodes.get(local_contribution.source.scope_path)
                 if source is not None:
-                    session_node.contribute_local_use(
-                        LocalUseContribution(
-                            declaration=local_contribution.declaration,
-                            source=source,
-                            target=local_contribution.target,
-                        )
+                    session_node.contribute_local_use(replace(local_contribution, source=source))
+            for local_contribution in session_node.local_use_contributions:
+                for atom, refs in local_contribution.bindings.items():
+                    session_node.bare_contributions.setdefault(atom, set()).update(refs)
+                for atom, constructor_refs in local_contribution.constructors.items():
+                    session_node.bare_constructor_contributions.setdefault(atom, set()).update(
+                        constructor_refs
                     )
-                    if local_contribution.declaration.tail == ():
-                        for name, ref in source.members.items():
-                            session_node.contribute_bare(name, ref)
         alias_targets = {
             type_name_path(item): render_type_expr(item.type_expr)
             for item in entry_type_items

@@ -292,7 +292,7 @@ def _is_use_declaration(tokens: list[Token], index: int) -> bool:
     return header[-1].type in {NAME, STAR, "RBRACE"}
 
 
-def _promote_soft_keywords(tokens: list[Token], source: str) -> list[Token]:
+def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
     """Contextually promote soft keywords in the post-layout token stream.
 
     Rules:
@@ -726,7 +726,7 @@ def _reject_clinging_slash(tokens: list[Token]) -> list[Token]:
 
 def apply_module_passes(tokens: list[Token], source: str) -> list[Token]:
     """Apply soft-keyword promotion, import path merging, and module-qualifier merging."""
-    promoted = _promote_soft_keywords(tokens, source)
+    promoted = _promote_soft_keywords(tokens)
     merged = _merge_modqual(_promote_hiding(_merge_modpath(promoted)), source)
     return _reject_clinging_slash(merged)
 

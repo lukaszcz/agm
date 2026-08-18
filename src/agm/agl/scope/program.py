@@ -7,7 +7,7 @@ results plus whole-program pre-pass tables.
 
 Design
 ------
-- **Export maps**: top-level ``def``/``record``/``enum``/``type`` names per
+- **Export maps**: top-level declarations and named immutable bindings per
   module plus explicit ``export`` declarations, computed before any body is
   resolved.
 - **Contribution import environment per module**: built from each module's
@@ -61,10 +61,12 @@ from agm.agl.syntax.nodes import (
     ExportItem,
     FuncDef,
     ImportDecl,
+    LetDecl,
     Program,
     QualifierChain,
     RecordDef,
     TypeAlias,
+    simple_let_pattern_name,
     static_items,
 )
 from agm.agl.syntax.spans import SourceSpan
@@ -251,6 +253,15 @@ def _item_atom(
     return _atom((*tuple(segment.name for segment in item.scope_path), item.name))
 
 
+def _let_atom(item: LetDecl) -> NameAtom | None:
+    if item.type_ann is None:
+        return None
+    name = simple_let_pattern_name(item.pattern)
+    if name is None or name == "_":
+        return None
+    return _atom((*tuple(segment.name for segment in item.scope_path), name))
+
+
 def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[NameAtom, QName]:
     """Compute declaration paths, including members below named scopes."""
     result: dict[NameAtom, QName] = {}
@@ -273,6 +284,10 @@ def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[NameAtom
         elif isinstance(item, BuiltinVarDecl):
             atom = _item_atom(item)
             result[atom] = (self_id, atom)
+        elif isinstance(item, LetDecl):
+            let_atom = _let_atom(item)
+            if let_atom is not None:
+                result[let_atom] = (self_id, let_atom)
     return result
 
 
@@ -619,6 +634,16 @@ def resolve_program(
                     BinderKind.builtin_var_binding,
                     False,
                 )
+            elif isinstance(item, LetDecl):
+                let_atom = _let_atom(item)
+                if let_atom is not None:
+                    key = (mid, let_atom)
+                    decl_info[key] = (
+                        item.pattern.node_id,
+                        item.span,
+                        BinderKind.let_binding,
+                        False,
+                    )
 
     cross_module_constructor_refs = _cross_module_constructor_refs(all_public_types)
     cross_module_constructible_types = frozenset(

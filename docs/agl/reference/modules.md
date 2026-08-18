@@ -215,8 +215,8 @@ in-scope type or a module route and is resolved at the use site.
 
 ## Re-exports and visibility
 
-`def`, `record`, `enum`, `exception`, and `type` declarations are exported
-under their full declaration paths. Grouping helpers in a
+`def`, `record`, `enum`, `exception`, and `type` declarations, plus annotated
+simple `let` bindings, are exported under their full declaration paths. Grouping helpers in a
 [named scope](scopes.md) keeps them off a module's bare surface: an importer
 reaches such a member only through its full scope path. A module that must
 publish a narrower surface does so with a facade — the implementation lives in
@@ -259,6 +259,8 @@ rules.
   [`std/env`](#stdenv).
 - `std/process` provides process metadata and controlled program termination; see
   [`std/process`](#stdprocess).
+- `std/math` owns scalar numeric methods, aggregates, and mathematical constants; see
+  [`std/math`](#stdmath).
 - `std/array` owns array methods and array utility functions; see
   [`std/array`](#stdarray).
 - `std/dict` owns dictionary methods and conversion from key/value pairs; see
@@ -325,6 +327,29 @@ portable process-status range `0..255`, so the calling environment observes the
 same number on every supported host. Omitting `code` uses zero; a zero code
 indicates success and a nonzero code indicates failure. An out-of-range code is
 a normal runtime error and does not terminate the host.
+
+## `std/math`
+
+`std/math` owns methods on `int` and `decimal`. The `std/builtin-methods`
+registry makes these methods available on scalar values without an import.
+Import `std/math` to call its free functions or read its constants; a plain
+import keeps them qualified, for example `math::sum([1, 2, 3])` and `math::pi`.
+
+| Receiver | Method | Result |
+| --- | --- | --- |
+| `int` | `abs()`, `min(other)`, `max(other)`, `clamp(lower, upper)` | Integer absolute value or selected bound. |
+| `int` | `compare(other)`, `sign()` | `-1`, `0`, or `1`. `compare` is suitable for an `array.sort` comparator through `fn(left, right) => left.compare(right)`. |
+| `int` | `pow(exponent)` | Integer power for a non-negative exponent; a negative exponent raises `RangeError`. |
+| `int` | `to-decimal()` | The same numeric value as `decimal`. |
+| `decimal` | `abs()`, `min(other)`, `max(other)`, `clamp(lower, upper)` | Decimal absolute value or selected bound. |
+| `decimal` | `compare(other)`, `sign()` | `-1`, `0`, or `1`. |
+| `decimal` | `floor()`, `ceil()` | Greatest integer at or below / least integer at or above the value. |
+| `decimal` | `round(digits = 0)` | Decimal rounded to `digits` fractional places using the language decimal context. |
+| `decimal` | `sqrt()`, `pow(exponent)` | Square root or integer-exponent power under the language decimal context. |
+
+`sum(values: array[int]) -> int` and
+`sum-decimal(values: array[decimal]) -> decimal` add their values using their
+respective numeric semantics. `pi` and `e` are `decimal` constants.
 
 ## `std/array`
 

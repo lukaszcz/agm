@@ -4,3 +4,4 @@ import std/array
 import std/dict
 import std/text
 import std/json
+import std/math

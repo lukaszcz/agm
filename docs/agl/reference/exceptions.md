@@ -435,8 +435,9 @@ fields.
 
 ### `RangeError`
 
-Raised when a range `for` step (`by k`) evaluates to a non-positive `int`
-(`k ≤ 0`) at loop entry. Carries only the base fields. It is catchable.
+Raised when `int.pow` receives a negative exponent or a range `for` step
+(`by k`) evaluates to a non-positive `int` (`k ≤ 0`) at loop entry. Carries
+only the base fields. It is catchable.
 
 ```text
 (base fields only)
@@ -476,7 +477,7 @@ a cycle arises, which operations raise this and which tolerate a cycle instead
 | Spawn failure (either exec form) | `ExecError` |
 | Extern (Python FFI) companion raised, or its return value violated the contract | `ExternError` |
 | Loop bound exhausted | `MaxIterationsExceeded` |
-| Non-positive range `for` step (`by k` with `k ≤ 0`) | `RangeError` |
+| Negative `int.pow` exponent or non-positive range `for` step (`by k` with `k ≤ 0`) | `RangeError` |
 | Call-depth limit exceeded | `RecursionError` |
 | Explicit `raise MatchError(...)` | `MatchError` |
 | Division by zero | `ArithmeticError` |

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from agm.project.worktree import (
     has_expected_worktree,
 )
 from agm.vcs.git import WorktreeInfo
+from tests._git_helpers import clone_with_fork_remote
 
 
 class TestProjectWorktreeHelpers:
@@ -61,7 +63,9 @@ class TestProjectWorktreeHelpers:
             worktree_mod.git_helpers, "local_branch_exists", lambda repo, branch, env=None: False
         )
         monkeypatch.setattr(
-            worktree_mod.git_helpers, "remote_branch_exists", lambda repo, branch, env=None: True
+            worktree_mod.git_helpers,
+            "unique_remote_branch_ref",
+            lambda repo, branch, env=None: f"origin/{branch}",
         )
 
         assert branch_exists(tmp_path, "feature")
@@ -237,6 +241,8 @@ class TestEnsureWorktree:
         *,
         repo_branch: str = "main",
         existing_worktrees: list[WorktreeInfo] | None = None,
+        local_branch: bool = True,
+        remote_branch_ref: str | None = None,
     ) -> list[dict[str, object]]:
         """Patch common dependencies; return list to accumulate worktree_add calls."""
         if existing_worktrees is None:
@@ -251,6 +257,14 @@ class TestEnsureWorktree:
             worktree_mod, "discover_current_project_dir", lambda cwd=None, env=None: project_dir
         )
         monkeypatch.setattr(worktree_mod.git_helpers, "fetch", lambda p, env=None: None)
+        monkeypatch.setattr(
+            worktree_mod.git_helpers, "local_branch_exists", lambda p, b, env=None: local_branch
+        )
+        monkeypatch.setattr(
+            worktree_mod.git_helpers,
+            "unique_remote_branch_ref",
+            lambda p, b, env=None: remote_branch_ref,
+        )
         monkeypatch.setattr(
             worktree_mod.git_helpers, "worktree_list", lambda p, env=None: existing_worktrees
         )
@@ -273,6 +287,7 @@ class TestEnsureWorktree:
             branch: str,
             *,
             create: bool = False,
+            track: bool = False,
             start_point: str | None = None,
             env: dict[str, str] | None = None,
         ) -> None:
@@ -282,6 +297,7 @@ class TestEnsureWorktree:
                     "path": path,
                     "branch": branch,
                     "create": create,
+                    "track": track,
                     "start_point": start_point,
                 }
             )
@@ -579,8 +595,8 @@ class TestEnsureWorktree:
         monkeypatch.setattr(
             worktree_mod.git_helpers,
             "worktree_add",
-            lambda repo, path, branch, create=False, start_point=None, env=None: add_calls.append(
-                path
+            lambda repo, path, branch, create=False, track=False, start_point=None, env=None: (
+                add_calls.append(path)
             ),
         )
 
@@ -901,7 +917,10 @@ class TestEnsureWorktreeRelativePath:
         monkeypatch.setattr(
             worktree_module.git_helpers,
             "worktree_add",
-            lambda p, dirname, branch, create=False, start_point=None, env=None: None,
+            lambda p, dirname, branch, create=False, track=False, start_point=None, env=None: None,
+        )
+        monkeypatch.setattr(
+            worktree_module.git_helpers, "local_branch_exists", lambda p, b, env=None: True
         )
         monkeypatch.setattr(
             worktree_module,
@@ -930,3 +949,64 @@ class TestEnsureWorktreeRelativePath:
         # The result should be absolute (resolved against cwd=repo)
         assert result.is_absolute()
         assert result == repo / relative_dir / "feat"
+
+
+class TestEnsureWorktreeRemoteBranches:
+    """Checking out branches that exist only on a remote, including forks."""
+
+    def _repo(
+        self, tmp_path: Path, env: dict[str, str], *, on_origin: bool = False
+    ) -> tuple[Path, Path]:
+        repo = clone_with_fork_remote(
+            tmp_path, env, branch="branch-x", on_origin=on_origin, on_fork=True
+        )
+        return repo, tmp_path / "worktrees"
+
+    def test_checks_out_branch_carried_only_by_a_non_origin_remote(
+        self, tmp_path: Path, env: dict[str, str], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        repo, worktrees = self._repo(tmp_path, env)
+
+        result = ensure_worktree(
+            new_branch=None,
+            worktrees_dir=str(worktrees),
+            branch="branch-x",
+            existing_ok=True,
+            cwd=repo,
+            env=env,
+        )
+        capsys.readouterr()
+
+        assert result == worktrees / "branch-x"
+        # The workspace holds the fork's commit, not a fresh branch off main.
+        assert (result / "fork.txt").exists()
+        upstream = subprocess.run(
+            ["git", "config", "--get", "branch.branch-x.remote"],
+            cwd=repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert upstream.stdout.strip() == "fork"
+
+    def test_exits_when_the_branch_is_carried_by_several_remotes(
+        self, tmp_path: Path, env: dict[str, str], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        repo, worktrees = self._repo(tmp_path, env, on_origin=True)
+
+        with pytest.raises(SystemExit) as exc_info:
+            ensure_worktree(
+                new_branch=None,
+                worktrees_dir=str(worktrees),
+                branch="branch-x",
+                existing_ok=True,
+                cwd=repo,
+                env=env,
+            )
+
+        assert exc_info.value.code == 1
+        assert not (worktrees / "branch-x").exists()
+        err = capsys.readouterr().err
+        assert "fork" in err
+        assert "origin" in err

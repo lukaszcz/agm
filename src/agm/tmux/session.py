@@ -299,6 +299,57 @@ def queue_command_in_session(
     )
 
 
+def _focus_command(session_name: str, env: dict[str, str]) -> list[str]:
+    """Return the tmux command that brings *session_name* to the foreground."""
+
+    if env.get("TMUX"):
+        return ["tmux", "switch-client", "-t", session_name]
+    return ["tmux", "attach-session", "-t", session_name]
+
+
+def session_exists(
+    session_name: str,
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> bool:
+    """Return whether a tmux session named *session_name* is running."""
+
+    current = Path.cwd() if cwd is None else cwd.resolve()
+    returncode, _stdout, _stderr = run_capture(
+        ["tmux", "has-session", "-t", f"={session_name}"],
+        cwd=current,
+        env=env,
+    )
+    return returncode == 0
+
+
+def require_session_absent(
+    *,
+    session_name: str,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> None:
+    """Exit when a tmux session named *session_name* is already running.
+
+    Creating a second session under an existing name is what tmux rejects as a
+    duplicate, so callers stop here — before doing any work — and point at the
+    running session instead.  A dry run plans without consulting tmux.
+    """
+
+    if dry_run.enabled():
+        return
+    resolved_env = clone_env(env)
+    if not session_exists(session_name, cwd=cwd, env=resolved_env):
+        return
+    focus = " ".join(_focus_command(session_name, resolved_env))
+    print(
+        f"error: tmux session '{session_name}' is already open; focus it with '{focus}'",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+
 def focus_tmux_session(
     *,
     session_name: str,
@@ -309,11 +360,7 @@ def focus_tmux_session(
 
     current = Path.cwd() if cwd is None else cwd.resolve()
     resolved_env = clone_env(env)
-    command = (
-        ["tmux", "switch-client", "-t", session_name]
-        if resolved_env.get("TMUX")
-        else ["tmux", "attach-session", "-t", session_name]
-    )
+    command = _focus_command(session_name, resolved_env)
     if dry_run.enabled():
         dry_run.print_command(command, cwd=current)
         return 0

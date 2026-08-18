@@ -130,6 +130,54 @@ def test_dry_run_omits_extern_calls_in_ambient_method_modules() -> None:
     assert lower_program(discovery.compiled).dry_run_inventory == ()
 
 
+def test_dry_run_keeps_source_reachable_ambient_registry_modules() -> None:
+    """An explicit import remains runtime-reachable even when the registry also loads it."""
+    stdlib_root = Path(__file__).resolve().parents[1] / "stdlib"
+    prepared = PipelineDriver.prepare_program(
+        'import std/array using join\nprogram def main() -> unit = print(join(["a"], ","))\n',
+        roots=RootSet(roots=frozenset({stdlib_root})),
+    )
+    discovery = PipelineDriver().discover_params(prepared)
+
+    assert discovery.compiled is not None, discovery.diagnostics
+    inventory = lower_program(discovery.compiled).dry_run_inventory
+    assert any(entry.module == ModuleId.from_path("std/array") for entry in inventory)
+
+
+def test_dry_run_keeps_registry_method_modules_reached_through_source_imports(
+    tmp_path: Path,
+) -> None:
+    """Source provenance reaches a registry method module through an intermediary module."""
+    stdlib = tmp_path / "stdlib"
+    std = stdlib / "std"
+    std.mkdir(parents=True)
+    (std / "core.agl").write_text("builtin def print[T](value: T) -> unit\n")
+    (std / "builtin-methods.agl").write_text("import std/math\n")
+    (std / "math.agl").write_text(
+        "param limit: int = 3\nextern def helper() -> int\n"
+        "def int::external(self) -> int = helper()\n"
+    )
+    (std / "math.py").write_text("def helper():\n    return 3\n")
+    (tmp_path / "bridge.agl").write_text("import std/math\n")
+
+    prepared = PipelineDriver.prepare_program(
+        "import bridge\nprogram def main() -> unit = ()\n",
+        roots=RootSet(roots=frozenset({tmp_path, stdlib})),
+    )
+    runtime = PipelineDriver()
+    discovery = runtime.discover_params(prepared)
+
+    assert prepared.resolved is not None, prepared.diagnostics
+    assert ModuleId.from_path("std/math") in prepared.resolved.graph.ambient_modules
+    assert [param.name for param in discovery.params] == ["limit"]
+    assert discovery.compiled is not None, discovery.diagnostics
+    preflight = runtime.preflight_params(prepared, compiled=discovery.compiled)
+    assert preflight.result.ok, preflight.result.diagnostics
+    assert preflight.executable is not None
+    assert [param.public_name for param in preflight.executable.params] == ["limit"]
+    assert [site.callee for site in preflight.result.call_sites] == ["helper"]
+
+
 def test_builtin_methods_are_ambient_but_owning_module_free_functions_are_not() -> None:
     stdlib_root = Path(__file__).parent / "agl" / "program_modules" / "builtin_method_stdlib"
     prepared = PipelineDriver.prepare_program(

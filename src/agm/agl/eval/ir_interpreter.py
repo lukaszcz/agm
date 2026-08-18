@@ -1781,11 +1781,22 @@ class IrInterpreter:
 
             case IrExec(
                 command=command_expr,
+                env=env_expr,
+                cwd=cwd_expr,
+                timeout=timeout_expr,
                 contract_id=contract_id,
                 max_attempts=max_attempts,
             ):
                 try:
-                    return self._effects.eval_ir_exec(node, command_expr, contract_id, max_attempts)
+                    return self._effects.eval_ir_exec(
+                        node,
+                        command_expr,
+                        env_expr,
+                        cwd_expr,
+                        timeout_expr,
+                        contract_id,
+                        max_attempts,
+                    )
                 except AglRaise as exc:
                     if exc.span is None:
                         exc.span = node.location

@@ -114,6 +114,27 @@ _LOC = Location(
 _SOURCE_TEXT = "x"
 
 
+def _empty_environ(location: Location) -> IrMakeRecord:
+    """Build a minimal Environ operand for hand-built exec IR."""
+    return IrMakeRecord(
+        location=location,
+        nominal=NominalId(-1),
+        display_name="Environ",
+        fields=(("vars", IrMakeDict(location=location, entries=())),),
+    )
+
+
+def _none_option(location: Location) -> IrMakeEnum:
+    """Build the absent cwd/timeout operand for hand-built exec IR."""
+    return IrMakeEnum(
+        location=location,
+        nominal=NominalId(-2),
+        display_name="Option",
+        variant="None",
+        fields=(),
+    )
+
+
 def _make_program(
     initializers: tuple[IrExpr, ...],
     symbols: dict[SymbolId, SymbolDescriptor] | None = None,
@@ -2157,6 +2178,9 @@ class TestIrExec:
         node = IrExec(
             location=location,
             command=command,
+            env=_empty_environ(location),
+            cwd=_none_option(location),
+            timeout=_none_option(location),
             contract_id=cid,
             max_attempts=max_attempts,
         )
@@ -2235,6 +2259,9 @@ class TestIrExec:
         exec_node = IrExec(
             location=_LOC,
             command=IrLoad(location=_LOC, symbol=sym_xs),
+            env=_empty_environ(_LOC),
+            cwd=_none_option(_LOC),
+            timeout=_none_option(_LOC),
             contract_id=cid,
             max_attempts=1,
         )
@@ -2271,8 +2298,11 @@ class TestIrExec:
             args: list[str],
             *,
             idle_timeout: float | None = None,
+            cwd: pathlib.Path | None = None,
+            env: dict[str, str] | None = None,
             isolate_process_group: bool = False,
         ) -> ProcessCaptureResult:
+            del idle_timeout, cwd, env, isolate_process_group
             call_count[0] += 1
             if call_count[0] == 1:
                 # First call: succeeds but returns invalid JSON (triggers retry)
@@ -2321,6 +2351,9 @@ class TestIrExec:
         node = IrExec(
             location=_LOC,
             command=IrConstText(_LOC, "dummy"),
+            env=_empty_environ(_LOC),
+            cwd=_none_option(_LOC),
+            timeout=_none_option(_LOC),
             contract_id=cid,
             max_attempts=2,
         )
@@ -2450,8 +2483,11 @@ class TestIrExec:
             args: list[str],
             *,
             idle_timeout: float | None = None,
+            cwd: pathlib.Path | None = None,
+            env: dict[str, str] | None = None,
             isolate_process_group: bool = False,
         ) -> ProcessCaptureResult:
+            del idle_timeout, cwd, env, isolate_process_group
             call_count[0] += 1
             if call_count[0] == 1:
                 return ProcessCaptureResult(
@@ -2489,6 +2525,9 @@ class TestIrExec:
         node = IrExec(
             location=_LOC,
             command=IrConstText(_LOC, "dummy"),
+            env=_empty_environ(_LOC),
+            cwd=_none_option(_LOC),
+            timeout=_none_option(_LOC),
             contract_id=cid,
             max_attempts=2,
         )
@@ -2529,8 +2568,11 @@ class TestIrExec:
             args: list[str],
             *,
             idle_timeout: float | None = None,
+            cwd: pathlib.Path | None = None,
+            env: dict[str, str] | None = None,
             isolate_process_group: bool = False,
         ) -> ProcessCaptureResult:
+            del idle_timeout, cwd, env, isolate_process_group
             call_count[0] += 1
             if call_count[0] == 1:
                 return ProcessCaptureResult(
@@ -2568,6 +2610,9 @@ class TestIrExec:
         node = IrExec(
             location=_LOC,
             command=IrConstText(_LOC, "dummy"),
+            env=_empty_environ(_LOC),
+            cwd=_none_option(_LOC),
+            timeout=_none_option(_LOC),
             contract_id=cid,
             max_attempts=2,
         )
@@ -2604,8 +2649,11 @@ class TestIrExec:
             args: list[str],
             *,
             idle_timeout: float | None = None,
+            cwd: pathlib.Path | None = None,
+            env: dict[str, str] | None = None,
             isolate_process_group: bool = False,
         ) -> ProcessCaptureResult:
+            del idle_timeout, cwd, env, isolate_process_group
             # Returns a valid JSON string (not int), so schema validation fails with errors
             return ProcessCaptureResult(
                 returncode=0,
@@ -2632,6 +2680,9 @@ class TestIrExec:
         node = IrExec(
             location=_LOC,
             command=IrConstText(_LOC, "dummy"),
+            env=_empty_environ(_LOC),
+            cwd=_none_option(_LOC),
+            timeout=_none_option(_LOC),
             contract_id=cid,
             max_attempts=1,
         )

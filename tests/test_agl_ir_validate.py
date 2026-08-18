@@ -2258,6 +2258,9 @@ class TestIrExecValidation:
         node = IrExec(
             location=LOC,
             command=IrConstText(location=LOC, value="echo hi"),
+            env=IrConstText(location=LOC, value="env"),
+            cwd=IrConstText(location=LOC, value="cwd"),
+            timeout=IrConstText(location=LOC, value="timeout"),
             contract_id=cid,
             max_attempts=1,
         )
@@ -2273,6 +2276,9 @@ class TestIrExecValidation:
         node = IrExec(
             location=LOC,
             command=IrConstText(location=LOC, value="echo hi"),
+            env=IrConstText(location=LOC, value="env"),
+            cwd=IrConstText(location=LOC, value="cwd"),
+            timeout=IrConstText(location=LOC, value="timeout"),
             contract_id=cid,
             max_attempts=1,
         )
@@ -2301,6 +2307,9 @@ class TestIrExecValidation:
         node = IrExec(
             location=LOC,
             command=IrConstText(location=LOC, value="echo hi"),
+            env=IrConstText(location=LOC, value="env"),
+            cwd=IrConstText(location=LOC, value="cwd"),
+            timeout=IrConstText(location=LOC, value="timeout"),
             contract_id=cid,
             max_attempts=1,
         )
@@ -2332,6 +2341,9 @@ class TestIrExecValidation:
         node = IrExec(
             location=LOC,
             command=IrConstText(location=LOC, value="echo hi"),
+            env=IrConstText(location=LOC, value="env"),
+            cwd=IrConstText(location=LOC, value="cwd"),
+            timeout=IrConstText(location=LOC, value="timeout"),
             contract_id=cid,
             max_attempts=1,
         )
@@ -2360,6 +2372,9 @@ class TestIrExecValidation:
         node = IrExec(
             location=LOC,
             command=IrConstText(location=LOC, value="echo hi"),
+            env=IrConstText(location=LOC, value="env"),
+            cwd=IrConstText(location=LOC, value="cwd"),
+            timeout=IrConstText(location=LOC, value="timeout"),
             contract_id=cid,
             max_attempts=1,
         )
@@ -2387,6 +2402,9 @@ class TestIrExecValidation:
         node = IrExec(
             location=LOC,
             command=IrConstText(location=LOC, value="echo hi"),
+            env=IrConstText(location=LOC, value="env"),
+            cwd=IrConstText(location=LOC, value="cwd"),
+            timeout=IrConstText(location=LOC, value="timeout"),
             contract_id=cid,
             max_attempts=1,
         )
@@ -2414,6 +2432,9 @@ class TestIrExecValidation:
         node = IrExec(
             location=LOC,
             command=IrConstText(location=LOC, value="echo hi"),
+            env=IrConstText(location=LOC, value="env"),
+            cwd=IrConstText(location=LOC, value="cwd"),
+            timeout=IrConstText(location=LOC, value="timeout"),
             contract_id=cid,
             max_attempts=1,
         )
@@ -2441,6 +2462,9 @@ class TestIrExecValidation:
         node = IrExec(
             location=LOC,
             command=IrConstText(location=LOC, value="echo hi"),
+            env=IrConstText(location=LOC, value="env"),
+            cwd=IrConstText(location=LOC, value="cwd"),
+            timeout=IrConstText(location=LOC, value="timeout"),
             contract_id=cid,
             max_attempts=0,  # invalid
         )

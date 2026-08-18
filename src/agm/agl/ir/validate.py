@@ -1010,9 +1010,18 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             _validate_expr(agent_expr, ctx)
             _validate_expr(prompt_expr, ctx)
 
-        case IrExec(command=command_expr, contract_id=contract_id):
+        case IrExec(
+            command=command_expr,
+            env=env_expr,
+            cwd=cwd_expr,
+            timeout=timeout_expr,
+            contract_id=contract_id,
+        ):
             _validate_location(node.location, ctx)
             _validate_expr(command_expr, ctx)
+            _validate_expr(env_expr, ctx)
+            _validate_expr(cwd_expr, ctx)
+            _validate_expr(timeout_expr, ctx)
             if ctx.deep:
                 if contract_id not in ctx.program.contracts:
                     raise InvalidIrError(

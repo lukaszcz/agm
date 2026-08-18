@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
+from shutil import copyfile
 from unittest.mock import patch
 
 import pytest
@@ -79,10 +80,9 @@ def _write_command_stdlib(root: Path, config: str) -> Path:
         'builtin var default-agent: Agent = AgentCommand("echo")\n' + config,
         encoding="utf-8",
     )
-    for name in ("core.agl", "option.agl", "pair.agl", "either.agl", "result.agl"):
-        (config_path.parent / name).write_text(
-            (_STDLIB / "std" / name).read_text(encoding="utf-8"), encoding="utf-8"
-        )
+    for source in (_STDLIB / "std").iterdir():
+        if source.is_file() and source.name != "config.agl":
+            copyfile(source, config_path.parent / source.name)
     return stdlib_root
 
 

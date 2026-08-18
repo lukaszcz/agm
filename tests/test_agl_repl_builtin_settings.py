@@ -16,6 +16,7 @@ Agents are always mocked — no real agent is ever run.
 from __future__ import annotations
 
 from pathlib import Path
+from shutil import copyfile
 
 import pytest
 
@@ -32,11 +33,22 @@ _STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 
 
 def _copy_core_and_option(directory: Path) -> None:
-    """Copy the standard-library modules required by a custom ``std/config``."""
-    for name in ("core.agl", "option.agl", "pair.agl", "either.agl", "result.agl"):
-        (directory / name).write_text(
-            (_STDLIB_ROOT / "std" / name).read_text(encoding="utf-8"), encoding="utf-8"
+    """Copy standard-library dependencies required by a custom ``std/config``."""
+    for source in (_STDLIB_ROOT / "std").iterdir():
+        if source.is_file() and source.name != "config.agl":
+            copyfile(source, directory / source.name)
+    config_path = directory / "config.agl"
+    config = config_path.read_text(encoding="utf-8")
+    additions = ""
+    if "builtin var timeout" not in config:
+        additions += "builtin var timeout: Option[text] = Option[text]::None\n"
+    if "builtin var default-agent" not in config:
+        additions += 'builtin var default-agent: Agent = AgentCommand("runner")\n'
+    if additions:
+        imports = (
+            "" if "std/core using Option" in config else "import std/core using Option, Agent\n"
         )
+        config_path.write_text(imports + config + additions, encoding="utf-8")
 
 
 class _FencedAgent:

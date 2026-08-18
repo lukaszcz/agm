@@ -167,9 +167,9 @@ class CheckedProgram:
         Loader-computed reverse-topological import components, retained for
         dependency-ordered lowering after this pass's presentation ordering.
     ``runtime_modules``
-        Entry-reachable modules in the source import/export graph. Ambient
-        builtin-method modules do not add dry-run call sites unless source
-        imports them directly.
+        Entry-reachable modules through explicit source imports and exports.
+        Loader-injected standard-library and ambient-registry edges do not add
+        dry-run call sites.
     """
 
     modules: dict[ModuleId, CheckedModule]
@@ -1063,14 +1063,7 @@ def check_program(
     presentation_order = tuple(mid for mid in resolved.modules if not mid.is_entry) + (
         resolved.entry_id,
     )
-    runtime_modules: set[ModuleId] = set()
-    pending_modules = [resolved.entry_id]
-    while pending_modules:
-        module_id = pending_modules.pop()
-        if module_id in runtime_modules:
-            continue
-        runtime_modules.add(module_id)
-        pending_modules.extend(resolved.graph.adjacency[module_id])
+    runtime_modules = frozenset(resolved.graph.source_reachable_modules(resolved.entry_id))
 
     checked = CheckedProgram(
         modules={mid: checked_modules[mid] for mid in presentation_order},
@@ -1082,7 +1075,7 @@ def check_program(
         capabilities=capabilities,
         import_sccs=resolved.import_sccs,
         resource_roots={mid: resolved.graph.resource_root_for(mid) for mid in presentation_order},
-        runtime_modules=frozenset(runtime_modules),
+        runtime_modules=runtime_modules,
     )
     if self_validation_enabled():
         assert_checked_program_closed(checked)

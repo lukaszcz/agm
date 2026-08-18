@@ -6,6 +6,8 @@ and asserts the produced values, stdout, and raised exceptions.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from agm.core.process import ProcessCaptureResult
@@ -217,8 +219,11 @@ def test_t7_retry_success() -> None:
         args: list[str],
         *,
         idle_timeout: float | None = None,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
         isolate_process_group: bool = False,
     ) -> ProcessCaptureResult:
+        del idle_timeout, cwd, env, isolate_process_group
         call_count[0] += 1
         if call_count[0] == 1:
             return _ok("not_a_number\n")
@@ -235,6 +240,44 @@ def test_t7_retry_success() -> None:
     from agm.agl.semantics.values import IntValue
 
     assert ir_snap["n"] == IntValue(99)
+
+
+def test_t7_retry_forwards_spawn_settings_on_every_attempt() -> None:
+    """Retries reuse the evaluated child environment, working directory, and timeout."""
+    calls: list[tuple[dict[str, str] | None, Path | None, float | None]] = []
+
+    def fake_shell(
+        args: list[str],
+        *,
+        idle_timeout: float | None = None,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+        isolate_process_group: bool = False,
+    ) -> ProcessCaptureResult:
+        del args, isolate_process_group
+        calls.append((env, cwd, idle_timeout))
+        return _ok("not-an-int\n" if len(calls) == 1 else "9\n")
+
+    source = (
+        "import std/env using Environ\n"
+        'let child = Environ(vars = {"ONLY": "child"})\n'
+        'let n: int = exec("cmd", env = child, '
+        'cwd = Option[text]::Some(value = "/work"), '
+        'timeout = Option[text]::Some(value = "2s"), '
+        "on_parse_error = Retry(n = 1))\n"
+        "n"
+    )
+    from tests.agl.ir_harness import _run_ir_exec
+
+    snapshot, _ = _run_ir_exec(source, fake_shell, shell_caps())
+
+    from agm.agl.semantics.values import IntValue
+
+    assert snapshot["n"] == IntValue(9)
+    assert calls == [
+        ({"ONLY": "child"}, Path("/work"), 2.0),
+        ({"ONLY": "child"}, Path("/work"), 2.0),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -310,8 +353,8 @@ def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
 
     from agm.agl.eval.ir_interpreter import IrInterpreter
     from agm.agl.ir.contracts import ContractRequest
-    from agm.agl.ir.ids import ContractId, SourceId
-    from agm.agl.ir.nodes import IrConstText, IrExec
+    from agm.agl.ir.ids import ContractId, NominalId, SourceId
+    from agm.agl.ir.nodes import IrConstText, IrExec, IrMakeDict, IrMakeEnum, IrMakeRecord
     from agm.agl.ir.program import (
         ExecutableModule,
         ExecutableProgram,
@@ -346,6 +389,14 @@ def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
     node = IrExec(
         location=loc,
         command=IrConstText(loc, "cmd"),
+        env=IrMakeRecord(
+            loc,
+            nominal=NominalId(-1),
+            display_name="Environ",
+            fields=(("vars", IrMakeDict(loc, ())),),
+        ),
+        cwd=IrMakeEnum(loc, NominalId(-2), "Option", "None", ()),
+        timeout=IrMakeEnum(loc, NominalId(-2), "Option", "None", ()),
         contract_id=cid,
         max_attempts=1,
     )
@@ -386,6 +437,118 @@ def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_exec_with_an_extended_environment_reaches_the_process_boundary() -> None:
+    """An explicit extended Environ is passed intact to the shell child."""
+    calls: list[dict[str, str] | None] = []
+
+    def fake_shell(
+        args: list[str],
+        *,
+        idle_timeout: float | None = None,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+        isolate_process_group: bool = False,
+    ) -> ProcessCaptureResult:
+        del args, idle_timeout, cwd, isolate_process_group
+        calls.append(env)
+        return _ok("ok\\n")
+
+    source = (
+        "open import std/env\n"
+        'let child = environ.extended({"base": "override", "extra": "value"})\n'
+        'let output: text = exec("child", env = child)\n'
+        "output"
+    )
+    from unittest.mock import patch
+
+    from agm.agl import PipelineDriver
+    from agm.agl.modules.roots import RootSet
+    from tests._agl_helpers import run_inline_command
+
+    with patch("agm.core.process.run_capture_result", side_effect=fake_shell):
+        result = run_inline_command(
+            PipelineDriver(),
+            source,
+            roots=RootSet(roots=frozenset({Path(__file__).resolve().parents[1] / "stdlib"})),
+            process_environment={"base": "original", "preserved": "kept"},
+        )
+
+    assert result.ok, result.diagnostics
+    assert calls == [{"base": "override", "preserved": "kept", "extra": "value"}]
+
+
+def test_exec_raw_tail_uses_the_live_std_config_timeout_default() -> None:
+    """An omitted timeout on exec! reads std/config at the call point."""
+    calls: list[float | None] = []
+
+    def fake_shell(
+        args: list[str],
+        *,
+        idle_timeout: float | None = None,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+        isolate_process_group: bool = False,
+    ) -> ProcessCaptureResult:
+        del args, cwd, env, isolate_process_group
+        calls.append(idle_timeout)
+        return _ok("ok\\n")
+
+    source = (
+        "import std/config\n"
+        'std/config::timeout := Option[text]::Some(value = "2s")\n'
+        "let output: text = exec! configured\n"
+        "output"
+    )
+    from tests.agl.ir_harness import _run_ir_exec
+
+    _run_ir_exec(source, fake_shell, shell_caps())
+
+    assert calls == [2.0]
+
+
+def test_t13_exec_spawn_parameters_and_defaults() -> None:
+    """Exec evaluates its env/cwd/timeout operands; omitted operands use ambient bindings."""
+    calls: list[tuple[dict[str, str] | None, object | None, float | None]] = []
+
+    def fake_shell(
+        args: list[str],
+        *,
+        idle_timeout: float | None = None,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+        isolate_process_group: bool = False,
+    ) -> ProcessCaptureResult:
+        del args, isolate_process_group
+        calls.append((env, cwd, idle_timeout))
+        return _ok("ok\\n")
+
+    source = (
+        "import std/env using Environ\n"
+        'let child = Environ(vars = {"ONLY": "child"})\n'
+        'let explicit: text = exec("explicit", env = child, '
+        'cwd = Option[text]::Some(value = "/work"), '
+        'timeout = Option[text]::Some(value = "2s"))\n'
+        "let ambient: text = exec! ambient\n"
+        "let configured: text = exec! configured\n"
+        "()"
+    )
+    from tests.agl.ir_harness import _run_ir_exec
+
+    _run_ir_exec(
+        source,
+        fake_shell,
+        shell_caps(),
+        process_environment={"AMBIENT": "present"},
+        shell_exec_timeout=3.5,
+    )
+
+    assert calls == [
+        ({"ONLY": "child"}, Path("/work"), 2.0),
+        ({"AMBIENT": "present"}, None, 3.5),
+        ({"AMBIENT": "present"}, None, 3.5),
+    ]
+
+
 def test_t12_retry_then_nonzero_exit() -> None:
     """exec() with Retry(n:1): first attempt returns bad JSON, retry exits non-zero.
 
@@ -397,8 +560,11 @@ def test_t12_retry_then_nonzero_exit() -> None:
         args: list[str],
         *,
         idle_timeout: float | None = None,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
         isolate_process_group: bool = False,
     ) -> ProcessCaptureResult:
+        del idle_timeout, cwd, env, isolate_process_group
         call_count[0] += 1
         if call_count[0] == 1:
             return _ok("not_a_number\n")
@@ -416,3 +582,12 @@ def test_t12_retry_then_nonzero_exit() -> None:
         _run_ir_exec(source, fake_shell, caps)
     assert isinstance(exc_info.value.exc, ExceptionValue)
     assert exc_info.value.exc.display_name == "ExecError"
+
+
+def test_t14_invalid_exec_timeout_raises_type_error_before_shell_execution() -> None:
+    """An explicit invalid timeout is rejected while evaluating exec operands."""
+    source = 'let _: text = exec("must-not-run", timeout = Option[text]::Some(value = "bad"))\n()'
+
+    ir_exc = evaluate_ir_raises_with_shell(source, {})
+
+    assert ir_exc.display_name == "TypeError"

@@ -4745,8 +4745,9 @@ class TestImports:
         std_dir = tmp_path / "std"
         std_dir.mkdir()
         source_std_dir = Path(__file__).resolve().parents[1] / "stdlib" / "std"
-        for name in ("core.agl", "option.agl", "pair.agl", "either.agl", "result.agl"):
-            copyfile(source_std_dir / name, std_dir / name)
+        for source in source_std_dir.iterdir():
+            if source.is_file():
+                copyfile(source, std_dir / source.name)
         config = std_dir / "config.agl"
         config.write_text(
             "import std/core using Option, Agent\n"
@@ -6667,20 +6668,9 @@ class TestDeferredStdlibResolution:
         std_dir = stdlib_root / "std"
         std_dir.mkdir(parents=True)
         real_stdlib = Path(__file__).resolve().parents[1] / "stdlib" / "std"
-        for name in (
-            "core.agl",
-            "option.agl",
-            "pair.agl",
-            "either.agl",
-            "result.agl",
-            "config.agl",
-            "fs.agl",
-            "fs.py",
-            "text.agl",
-            "text.py",
-        ):
-            source = real_stdlib / name
-            (std_dir / name).write_bytes(source.read_bytes())
+        for source in real_stdlib.iterdir():
+            if source.is_file():
+                (std_dir / source.name).write_bytes(source.read_bytes())
         (stdlib_root / "package.toml").write_bytes(
             (Path(__file__).resolve().parents[1] / "stdlib" / "package.toml").read_bytes()
         )

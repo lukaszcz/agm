@@ -179,6 +179,21 @@ class TestGraphBuild:
         assert graph.adjacency[ENTRY_ID] == (STD_CORE_ID,)
         assert {array_id, text_id}.issubset(graph.adjacency[registry_id])
 
+    def test_explicit_builtin_method_registry_import_is_not_ambient(self, tmp_path: Path) -> None:
+        """A user registry import retains ordinary source-import semantics."""
+        root = tmp_path / "r"
+        root.mkdir()
+
+        graph = load_graph(
+            "import std/builtin-methods\n()",
+            entry_path=None,
+            roots=_roots(root),
+        )
+
+        registry_id = ModuleId.from_path("std/builtin-methods")
+        assert registry_id in graph.adjacency[ENTRY_ID]
+        assert registry_id not in graph.ambient_modules
+
     def test_imported_module_appears_in_graph(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
         root.mkdir()

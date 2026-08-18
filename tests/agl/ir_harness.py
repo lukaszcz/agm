@@ -274,13 +274,19 @@ def _run_ir(
     caps: HostCapabilities | None = None,
     agent_dispatcher: AgentFn | None = None,
     default_stdlib: bool = True,
+    process_environment: dict[str, str] | None = None,
+    shell_exec_timeout: float | None = None,
 ) -> tuple[dict[str, Value], str]:
     executable = lower_inline_ir(source, caps=caps, default_stdlib=default_stdlib)
     params = _build_ir_param_values(executable, param_values) if param_values else None
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         result = IrInterpreter(
-            executable, agent_dispatcher=agent_dispatcher, param_values=params
+            executable,
+            agent_dispatcher=agent_dispatcher,
+            param_values=params,
+            process_environment=process_environment,
+            shell_exec_timeout=shell_exec_timeout,
         ).run(program_symbol=executable.synthetic_main_symbol)
     return result, output.getvalue()
 
@@ -630,9 +636,11 @@ def _scripted_shell(
         args: list[str],
         *,
         idle_timeout: float | None = None,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
         isolate_process_group: bool = False,
     ) -> ProcessCaptureResult:
-        del idle_timeout, isolate_process_group
+        del idle_timeout, cwd, env, isolate_process_group
         command = args[2]
         if cmd_log is not None:
             cmd_log.append(command)
@@ -645,9 +653,17 @@ def _run_ir_exec(
     source: str,
     shell_fake: Callable[..., ProcessCaptureResult],
     caps: HostCapabilities,
+    *,
+    process_environment: dict[str, str] | None = None,
+    shell_exec_timeout: float | None = None,
 ) -> tuple[dict[str, Value], str]:
     with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell_fake):
-        return _run_ir(source, caps=caps)
+        return _run_ir(
+            source,
+            caps=caps,
+            process_environment=process_environment,
+            shell_exec_timeout=shell_exec_timeout,
+        )
 
 
 def evaluate_ir_with_shell(

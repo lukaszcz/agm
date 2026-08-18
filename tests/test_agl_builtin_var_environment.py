@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from shutil import copytree
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.roots import RootSet
@@ -163,6 +164,28 @@ def test_std_env_uses_a_controlled_process_snapshot_without_mutating_os_environ(
     assert result.ok, result.diagnostics
     assert result.bindings["before"] == TextValue("original")
     assert result.bindings["after"] == TextValue("changed")
+
+
+def test_std_env_and_core_work_without_the_optional_method_registry(tmp_path: Path) -> None:
+    """A custom stdlib may omit the loader's optional method registry."""
+    stdlib = tmp_path / "stdlib"
+    copytree(_STDLIB, stdlib)
+    (stdlib / "std" / "builtin-methods.agl").unlink()
+
+    result = run_inline_command(
+        PipelineDriver(),
+        "open import std/env\n"
+        'let extended = environ.extended({"added": "value"})\n'
+        'extended.get("added")',
+        roots=RootSet(roots=frozenset({stdlib})),
+        process_environment={"preserved": "original"},
+    )
+
+    assert result.ok, result.diagnostics
+    assert result.bindings["extended"].fields["vars"].entries == {
+        "preserved": TextValue("original"),
+        "added": TextValue("value"),
+    }
 
 
 def test_std_env_default_is_empty_when_no_process_snapshot_is_supplied() -> None:

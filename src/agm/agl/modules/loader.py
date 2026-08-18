@@ -149,9 +149,13 @@ class ModuleGraph:
         Direct dependency edges for every loaded module. This includes both
         imports and exports, after wildcard expansion, and is the authoritative
         reachability relation for graph consumers.
+    source_adjacency:
+        The subset of direct dependency edges authored in source. Loader
+        injections are absent, retaining provenance for runtime inventories.
     ambient_modules:
-        Standard-library modules loaded through the optional builtin-method
-        registry. They are linked and initialized for every selected program,
+        Standard-library modules reached from the optional builtin-method
+        registry when the loader, rather than source imports, introduced it.
+        They are linked and initialized for every selected program,
         but contribute no names to an entry's import environment. They are
         virtual dependencies only for :attr:`inference_sccs`; :attr:`adjacency`
         and :attr:`sccs` retain source import/export graph semantics.
@@ -161,6 +165,7 @@ class ModuleGraph:
     entry_id: ModuleId
     sccs: tuple[tuple[ModuleId, ...], ...]
     adjacency: dict[ModuleId, tuple[ModuleId, ...]]
+    source_adjacency: dict[ModuleId, tuple[ModuleId, ...]] = field(default_factory=dict)
     ambient_modules: frozenset[ModuleId] = frozenset()
     roots: RootSet = field(default_factory=lambda: RootSet(roots=frozenset()))
     # Unambiguous root-level user fixities visible while assembling the entry.
@@ -191,6 +196,27 @@ class ModuleGraph:
             for mid, targets in self.adjacency.items()
         }
         return _tarjan_sccs(inference_adjacency)
+
+    def source_reachable_modules(self, module_id: ModuleId) -> tuple[ModuleId, ...]:
+        """Return modules reachable through source-authored import/export edges.
+
+        ``source_adjacency`` records edge provenance at load time, excluding
+        loader-injected standard-library and builtin-method-registry edges.
+        Thus a module reached through a source import remains reachable even
+        if it also belongs to the ambient registry closure.
+        """
+        adjacency = self.source_adjacency or self.adjacency
+        reachable: list[ModuleId] = []
+        seen: set[ModuleId] = set()
+        pending = [module_id]
+        while pending:
+            current = pending.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            reachable.append(current)
+            pending.extend(reversed(adjacency[current]))
+        return tuple(reachable)
 
     def resource_root_for(self, module_id: ModuleId) -> Path | None:
         """Return the filesystem anchor used by a module's resource calls."""
@@ -859,6 +885,7 @@ def _load_into_graph(
     modules[ENTRY_ID] = entry_loaded
     newly_loaded: dict[ModuleId, LoadedModule] = {}
     adj: dict[ModuleId, list[ModuleId]] = {}
+    source_adj: dict[ModuleId, list[ModuleId]] = {}
     next_id = start_id
 
     # BFS queue: (module id, dependency decl, canonical target path). We sort each
@@ -866,6 +893,7 @@ def _load_into_graph(
     # and therefore the start_id seed assignments — are stable regardless of
     # dict/set ordering.
     queue: deque[_ResolvedDependency] = deque()
+    loader_injected_registry = False
 
     def _resolve_dependencies(
         source: ModuleId,
@@ -873,6 +901,7 @@ def _load_into_graph(
     ) -> None:
         """Record *source*'s module dependencies in ``adj`` and enqueue new ones."""
         targets: list[ModuleId] = []
+        source_targets: list[ModuleId] = []
         new_pairs: list[_ResolvedDependency] = []
         source_path = modules[source].path
         for decl in decls:
@@ -886,9 +915,12 @@ def _load_into_graph(
                     source_path, target_path, mid, roots=roots, span=decl.span
                 )
                 targets.append(mid)
+                if decl.span.source.label not in {"<stdlib-import>", "<builtin-method-registry>"}:
+                    source_targets.append(mid)
                 if mid not in modules:
                     new_pairs.append((mid, decl, target_path))
         adj[source] = targets
+        source_adj[source] = source_targets
         new_pairs.sort(key=_pair_sort_key)
         queue.extend(new_pairs)
 
@@ -901,7 +933,6 @@ def _load_into_graph(
         if mid != ENTRY_ID:
             _resolve_dependencies(mid, (*loaded.imports, *loaded.export_decls))
 
-    ambient_roots: set[ModuleId] = set()
     if default_stdlib:
         registry_decl = _ambient_builtin_methods_import()
         try:
@@ -912,7 +943,7 @@ def _load_into_graph(
             pass
         else:
             queue.append((STD_BUILTIN_METHODS_ID, registry_decl, registry_path))
-            ambient_roots.add(STD_BUILTIN_METHODS_ID)
+            loader_injected_registry = True
 
     while queue:
         mid, decl, canon_path = queue.popleft()
@@ -953,6 +984,15 @@ def _load_into_graph(
         _resolve_dependencies(mid, (*loaded.imports, *loaded.export_decls))
 
     sccs = _tarjan_sccs(adj)
+    # The registry is ambient only when the loader alone introduced it. An
+    # explicit source import (including one in a standard-library module)
+    # keeps its normal route, visibility, and runtime-dependency semantics.
+    ambient_roots = (
+        {STD_BUILTIN_METHODS_ID}
+        if loader_injected_registry
+        and not any(STD_BUILTIN_METHODS_ID in targets for targets in adj.values())
+        else set()
+    )
     ambient_modules: set[ModuleId] = set()
     pending = list(ambient_roots)
     while pending:
@@ -966,6 +1006,7 @@ def _load_into_graph(
         entry_id=ENTRY_ID,
         sccs=sccs,
         adjacency={mid: tuple(targets) for mid, targets in adj.items()},
+        source_adjacency={mid: tuple(targets) for mid, targets in source_adj.items()},
         ambient_modules=frozenset(ambient_modules),
         roots=roots,
     )

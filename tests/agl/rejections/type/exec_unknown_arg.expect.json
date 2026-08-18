@@ -2,7 +2,7 @@
   "diagnostic": {
     "line": 2,
     "message_contains": [
-      "timeout"
+      "unknown"
     ]
   }
 }

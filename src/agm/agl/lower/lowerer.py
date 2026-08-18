@@ -159,7 +159,7 @@ from agm.agl.matchcompile import (
     OccurrenceId,
     RecordConstructor,
 )
-from agm.agl.modules.ids import STD_CONFIG_ID, STD_CORE_ID, ModuleId, spell_scope_path
+from agm.agl.modules.ids import STD_CONFIG_ID, STD_CORE_ID, STD_ENV_ID, ModuleId, spell_scope_path
 from agm.agl.scope.symbols import BUILTIN_CALL_NAMES, BinderKind, BindingRef, BuiltinKind
 from agm.agl.semantics.type_table import MethodDef, TypeTable
 from agm.agl.semantics.types import (
@@ -420,6 +420,7 @@ class _Lowerer:
         sites: Mapping[int, CompiledMatchSite],
         resource_root: Path | None = None,
         *,
+        has_std_env: bool = False,
         contract_payloads: Mapping[int, ContractPayload] | None = None,
     ) -> None:
         self._checked = checked
@@ -429,6 +430,7 @@ class _Lowerer:
         self._source_text = normalize_newlines(source_text)
         self._compiled_sites = sites
         self._resource_root = resource_root
+        self._has_std_env = has_std_env
         self._params: list[IrParam] = []
         # Shared TypeTable built during checking; resolves record/enum field
         # and variant shapes for constructor lowering, nominal descriptors,
@@ -3273,8 +3275,41 @@ class _Lowerer:
         """Lower an exec() builtin call to IrExec."""
         loc = self._loc(span)
 
-        # command is first positional arg
+        # The command is positional. The host-backed defaults are expressed
+        # as ordinary IR operands so each call reads the current module binding.
         command_ir = self.lower_expr(call_node.args[0])
+        named_map = {arg.name: arg for arg in call_node.named_args}
+        if "env" in named_map:
+            env_ir = self.lower_expr(named_map["env"].value)
+        elif self._has_std_env:
+            env_ir = IrBuiltinLoad(
+                location=loc,
+                key=builtin_var_key(STD_ENV_ID, (), "environ"),
+            )
+        else:
+            # A user-supplied legacy host declaration can expose only the
+            # original command parameter outside the standard library. It has
+            # no ambient Environ binding, so retain its empty child env.
+            env_ir = IrMakeDict(location=loc, entries=())
+        cwd_ir = (
+            self.lower_expr(named_map["cwd"].value)
+            if "cwd" in named_map
+            else IrMakeEnum(
+                location=loc,
+                nominal=NominalId(require_reserved_nominal_id("Option")),
+                display_name="Option",
+                variant="None",
+                fields=(),
+            )
+        )
+        timeout_ir = (
+            self.lower_expr(named_map["timeout"].value)
+            if "timeout" in named_map
+            else IrBuiltinLoad(
+                location=loc,
+                key=builtin_var_key(STD_CONFIG_ID, (), "timeout"),
+            )
+        )
 
         max_attempts = self._extract_max_attempts(call_node)
 
@@ -3302,6 +3337,9 @@ class _Lowerer:
         return IrExec(
             location=loc,
             command=command_ir,
+            env=env_ir,
+            cwd=cwd_ir,
+            timeout=timeout_ir,
             contract_id=contract_id,
             max_attempts=max_attempts,
         )

@@ -1,4 +1,5 @@
 import std/config
+open import std/env
 import std/option using Option
 import std/pair
 import std/either
@@ -183,4 +184,9 @@ builtin def ask-request(
   agent: Agent = std/config::default-agent,
 ) -> AgentRequest
 builtin def Agent::ask-request(self, prompt: text) -> AgentRequest
-builtin def exec(command: text) -> ExecResult
+builtin def exec(
+  command: text,
+  env: Environ = std/env::environ,
+  cwd: Option[text] = Option[text]::None,
+  timeout: Option[text] = std/config::timeout,
+) -> ExecResult

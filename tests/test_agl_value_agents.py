@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import fields
 from typing import get_type_hints
 
@@ -306,6 +307,47 @@ def test_codex_agent_dispatch_delivers_prompt_via_stdin(monkeypatch: pytest.Monk
     assert not any(str(element).startswith("@") for element in cmd)
     assert cmd[-1] == "-"
     assert captured["stdin_text"] == "hello"
+
+
+def test_agent_runner_gets_a_fresh_copy_of_the_host_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Runner mutations neither reach the host nor leak into a later agent call."""
+    from agm.core.process import ProcessCaptureResult
+
+    variable = "AGL_AGENT_HOST_ENV"
+    monkeypatch.setenv(variable, "original")
+    received: list[dict[str, str]] = []
+
+    def fake_run_capture_result(
+        command: list[str], *, env: dict[str, str] | None = None, **kwargs: object
+    ) -> ProcessCaptureResult:
+        del command, kwargs
+        assert env is not None
+        received.append(dict(env))
+        env[variable] = "changed-by-runner"
+        return ProcessCaptureResult(
+            returncode=0,
+            stdout="ok",
+            stderr="",
+            elapsed=0.1,
+            timed_out=False,
+            spawn_error=None,
+            spawn_errno=None,
+        )
+
+    monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
+
+    result = run_inline_command(
+        PipelineDriver(agent_dispatcher=value_driven_agent_factory(idle_timeout=None)),
+        'let first: text = ask("one", agent = AgentCommand("runner"))\n'
+        'let second: text = ask("two", agent = AgentCommand("runner"))\n'
+        "second",
+    )
+
+    assert result.ok, result.diagnostics
+    assert [env[variable] for env in received] == ["original", "original"]
+    assert os.environ[variable] == "original"
 
 
 def test_unrecognized_agent_variant_becomes_a_typed_error() -> None:

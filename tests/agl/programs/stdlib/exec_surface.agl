@@ -1,0 +1,15 @@
+# exec accepts a complete child environment, working directory, and timeout.
+import std/env using Environ
+
+program def main() -> unit =
+  let child = Environ(vars = {"ONLY": "child"})
+  let explicit: text = exec(
+    "explicit",
+    env = child,
+    cwd = Option[text]::Some(value = "/work"),
+    timeout = Option[text]::Some(value = "2s"),
+  )
+  print explicit
+
+  let ambient: text = exec! ambient
+  print ambient

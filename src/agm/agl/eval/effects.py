@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import ContextManager, NoReturn, Protocol, cast
 
 from agm.agl.ir.ids import ContractId, Location
@@ -20,7 +21,7 @@ from agm.agl.runtime.agents import AgentFn, dispatch_agent_value
 from agm.agl.runtime.codec import ParseResult
 from agm.agl.runtime.contract import OutputContract
 from agm.agl.runtime.externs import ExternRegistry
-from agm.agl.runtime.option import none_value, some_value
+from agm.agl.runtime.option import none_value, option_text, some_value
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.request import (
     AgentCallHostError,
@@ -39,6 +40,7 @@ from agm.agl.semantics.exceptions import make_builtin_exception as _make_exc_val
 from agm.agl.semantics.values import (
     VOID_VALUE,
     BoolValue,
+    DictValue,
     EnumValue,
     ExceptionValue,
     IntValue,
@@ -47,6 +49,7 @@ from agm.agl.semantics.values import (
     TextValue,
     Value,
 )
+from agm.core.parse import parse_timeout
 
 # ---------------------------------------------------------------------------
 # Narrow context Protocol
@@ -60,7 +63,6 @@ class EffectCtx(Protocol):
     _trace: TraceStore
     _agent_dispatcher: AgentFn | None
     _strict_json: bool
-    _shell_exec_timeout: float | None
     _host_contracts: Mapping[ContractId, OutputContract]
     _extern_registry: ExternRegistry
 
@@ -490,7 +492,14 @@ class EffectHandlers:
             stderr=detail,
         )
 
-    def _run_exec_shell(self, cmd: str, location: Location) -> tuple[str, str, int | None]:
+    def _run_exec_shell(
+        self,
+        cmd: str,
+        env: dict[str, str],
+        cwd: Path | None,
+        timeout: float | None,
+        location: Location,
+    ) -> tuple[str, str, int | None]:
         """Run *cmd* via the shell; raise ``ExecError`` on spawn failure or timeout.
 
         Returns ``(stdout, stderr, returncode)`` — a non-zero exit code is NOT
@@ -501,7 +510,9 @@ class EffectHandlers:
 
         result = run_capture_result(
             ["sh", "-c", cmd],
-            idle_timeout=self._ctx._shell_exec_timeout,
+            idle_timeout=timeout,
+            cwd=cwd,
+            env=env,
             isolate_process_group=True,
         )
         if result.spawn_error is not None:
@@ -556,17 +567,53 @@ class EffectHandlers:
         self,
         _node: IrExec,
         command_expr: IrExpr,
+        env_expr: IrExpr,
+        cwd_expr: IrExpr,
+        timeout_expr: IrExpr,
         contract_id: ContractId,
         max_attempts: int,
     ) -> Value:
         """Handle IrExec: run shell command and parse output."""
-        # 1. Evaluate command expression
+        # Evaluate every call operand once. Retried parsing reruns the shell,
+        # not the argument expressions, just as an ordinary call would.
         cmd = self._text_of(self._ctx._eval(command_expr))
+        environ = self._ctx._eval(env_expr)
+        vars_value: Value
+        if isinstance(environ, DictValue):
+            vars_value = environ
+        else:
+            assert isinstance(environ, RecordValue)
+            vars_value = environ.fields["vars"]
+        assert isinstance(vars_value, DictValue)
+        env: dict[str, str] = {}
+        for name, value in vars_value.entries.items():
+            assert isinstance(value, TextValue)
+            env[name] = value.value
+        cwd_value = self._ctx._eval(cwd_expr)
+        assert isinstance(cwd_value, EnumValue)
+        cwd_text = option_text(cwd_value)
+        timeout_value = self._ctx._eval(timeout_expr)
+        assert isinstance(timeout_value, EnumValue)
+        timeout_text = option_text(timeout_value)
+        if timeout_text is None:
+            timeout = None
+        else:
+            try:
+                timeout = parse_timeout(timeout_text)
+            except ValueError as exc:
+                raise AglRaise(
+                    _make_exc_value(
+                        "TypeError",
+                        f"invalid timeout: {exc}",
+                        nominals=self._ctx._program.builtin_nominals,
+                    )
+                ) from exc
+        cwd = None if cwd_text is None else Path(cwd_text)
 
         contract = self._ctx._program.contracts[contract_id]
 
-        # 2. Run shell once (raises on spawn error or timeout)
-        stdout, stderr, returncode = self._run_exec_shell(cmd, _node.location)
+        # Run shell once (raises on spawn error or timeout).
+        stdout, stderr, returncode = self._run_exec_shell(cmd, env, cwd, timeout, _node.location)
 
         # 3. Structured exec: return ExecResult regardless of exit code
         if contract.structured_exec:
@@ -613,7 +660,7 @@ class EffectHandlers:
         for attempt in range(max_attempts):
             if attempt > 0:
                 # Re-run shell on retry (raises on spawn error / timeout / non-zero exit)
-                stdout2, stderr2, rc2 = self._run_exec_shell(cmd, _node.location)
+                stdout2, stderr2, rc2 = self._run_exec_shell(cmd, env, cwd, timeout, _node.location)
                 if rc2 is not None and rc2 != 0:
                     raise AglRaise(
                         _make_exc_value(

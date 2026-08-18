@@ -31,7 +31,7 @@ from agm.agl.lower.lowerer import (
     builtin_nominals_from_declarations,
 )
 from agm.agl.matchcompile import MatchCompiledProgram
-from agm.agl.modules.ids import ModuleId
+from agm.agl.modules.ids import STD_ENV_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.types import ExceptionType, RecordType
 from agm.agl.syntax.nodes import BuiltinVarDecl, FuncDef, static_items
@@ -207,6 +207,7 @@ def lower_program(
             else cm.source_text,
             compiled.sites_by_module[mid],
             checked.resource_roots.get(mid),
+            has_std_env=STD_ENV_ID in checked.modules,
             contract_payloads=contract_payloads,
         )
         module_lowerers[mid] = lowerer

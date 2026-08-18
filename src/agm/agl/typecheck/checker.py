@@ -80,6 +80,7 @@ from agm.agl.semantics.type_table import (
 )
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
+    OPTION_TEXT_TYPE,
     ArrayType,
     BoolType,
     BottomType,
@@ -406,7 +407,12 @@ def _builtin_function_signature(name: str, *, is_method: bool = False) -> Functi
             )
         case "exec":
             return FunctionSignature(
-                params=(_std_param("command", TextType()),),
+                params=(
+                    _std_param("command", TextType()),
+                    _std_param("env", RecordType(name="Environ"), has_default=True),
+                    _std_param("cwd", OPTION_TEXT_TYPE, has_default=True),
+                    _std_param("timeout", OPTION_TEXT_TYPE, has_default=True),
+                ),
                 result=BUILTIN_PRELUDE_TYPES["ExecResult"],
             )
         case _:
@@ -423,6 +429,14 @@ def _builtin_function_signature_alternates(
         return (
             expected,
             FunctionSignature(params=(_std_param("prompt", TextType()),), result=TextType()),
+        )
+    if name == "exec":
+        return (
+            expected,
+            FunctionSignature(
+                params=(_std_param("command", TextType()),),
+                result=BUILTIN_PRELUDE_TYPES["ExecResult"],
+            ),
         )
     return (expected,)
 

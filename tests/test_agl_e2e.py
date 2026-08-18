@@ -101,11 +101,19 @@ def _agent_from_spec(name: str, spec: Any) -> ScriptedAgent:
     )
 
 
-def _run_prepared_entry(runtime: Any, prepared: Any, *, param_values: dict[str, Any]) -> Any:
+def _run_prepared_entry(
+    runtime: Any,
+    prepared: Any,
+    *,
+    param_values: dict[str, Any],
+    process_environment: dict[str, str] | None = None,
+) -> Any:
     """Run the sole selected file-style entry through the public pipeline seams."""
     discovery = runtime.discover_params(prepared)
     if discovery.checked is None:
-        return runtime.run_prepared(prepared, param_values=param_values)
+        return runtime.run_prepared(
+            prepared, param_values=param_values, process_environment=process_environment
+        )
     preflight = runtime.preflight_params(
         prepared,
         param_values=param_values,
@@ -122,6 +130,7 @@ def _run_prepared_entry(runtime: Any, prepared: Any, *, param_values: dict[str, 
         compiled=discovery.compiled,
         executable=preflight.executable,
         program_symbol=preflight.executable.program_symbols[entry_programs[0].node_id],
+        process_environment=process_environment,
     )
 
 
@@ -201,7 +210,12 @@ def _run_program(
             source, entry_path=entry_path, roots=roots, default_stdlib=default_stdlib
         )
 
-        result = _run_prepared_entry(runtime, prepared, param_values=scenario.get("params", {}))
+        result = _run_prepared_entry(
+            runtime,
+            prepared,
+            param_values=scenario.get("params", {}),
+            process_environment=scenario.get("process_environment"),
+        )
     return result, agents, shell
 
 
@@ -513,7 +527,17 @@ def _scoped_stdlib_root(tmp_path: Path) -> Path:
         (REPO_STDLIB_ROOT / "std" / "core.agl")
         .read_text(encoding="utf-8")
         .replace("import std/config\n", "")
+        .replace("open import std/env\n", "")
         .replace("std/config::default-agent", 'AgentClaude("sonnet", "medium")')
+        .replace(
+            "builtin def exec(\n"
+            "  command: text,\n"
+            "  env: Environ = std/env::environ,\n"
+            "  cwd: Option[text] = Option[text]::None,\n"
+            "  timeout: Option[text] = std/config::timeout,\n"
+            ") -> ExecResult\n",
+            "builtin def exec(command: text) -> ExecResult\n",
+        )
     )
     infix_declarations = "".join(
         line for line in core_source.splitlines(keepends=True) if line.startswith("infix")
@@ -534,6 +558,22 @@ def _scoped_stdlib_root(tmp_path: Path) -> Path:
             )
         (std_dir / name).write_text(source, encoding="utf-8")
     return scoped_stdlib_root
+
+
+def test_legacy_exec_signature_rejects_extended_options_with_a_diagnostic(tmp_path: Path) -> None:
+    """A custom old-style exec declaration must not trip an internal assertion."""
+    from agm.agl import PipelineDriver
+    from agm.agl.modules.roots import RootSet
+
+    scoped_stdlib_root = _scoped_stdlib_root(tmp_path)
+    result = _run_source_entry(
+        PipelineDriver(),
+        'program def main() -> unit = Std::exec("echo hi", env = ())\n',
+        roots=RootSet(roots=frozenset({scoped_stdlib_root})),
+    )
+
+    assert not result.ok
+    assert result.diagnostics
 
 
 def test_scoped_stdlib_arrangement_runs_end_to_end(

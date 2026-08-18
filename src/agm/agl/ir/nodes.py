@@ -1076,10 +1076,13 @@ class IrAskRequest:
 
 @dataclass(frozen=True, slots=True)
 class IrExec:
-    """IR host-op: exec(command, ...) builtin call."""
+    """IR host-op: exec(command, env:, cwd:, timeout:, ...) builtin call."""
 
     location: Location
     command: "IrExpr"
+    env: "IrExpr"
+    cwd: "IrExpr"
+    timeout: "IrExpr"
     contract_id: "ContractId"
     max_attempts: int
 

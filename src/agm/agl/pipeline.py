@@ -290,9 +290,9 @@ class PipelineDriver:
     agent_dispatcher : callable or None
         The callable used to dispatch a typed ``Agent`` value for ``ask``.
     shell_exec_timeout : float or None
-        Idle timeout (in seconds) applied to every ``exec`` shell call. ``None``
-        means no timeout (the shell command may run indefinitely). This is the
-        ``[exec] timeout`` config value, threaded in from the CLI.
+        Initial idle timeout (in seconds) for the ``std/config::timeout``
+        binding used by omitted ``exec`` timeout arguments. ``None`` means no
+        timeout; an explicit call argument takes precedence.
     default_call_depth_limit : int or None
         Maximum call depth for recursive functions.  Exceeding
         this limit raises a ``RecursionError`` in the AgL program.  ``None``
@@ -1402,39 +1402,42 @@ def _append_checker_warnings(
     warnings.extend(checked.warnings)
 
 
-def _module_id_segments(module_id: "ModuleId") -> tuple[str, ...]:
-    """Return the stable ordering key for a module id."""
-    return module_id.segments
-
-
-def _reachable_modules(module_id: "ModuleId", graph: "ModuleGraph") -> tuple[ModuleId, ...]:
-    """Return a selected module's dependencies plus ambient builtin-method modules."""
+def _reachable_modules(
+    module_id: "ModuleId", adjacency: "Mapping[ModuleId, tuple[ModuleId, ...]]"
+) -> tuple[ModuleId, ...]:
+    """Return a module and its dependencies in *adjacency* order."""
     reachable: list[ModuleId] = []
     seen: set[ModuleId] = set()
-    ambient_modules: frozenset[ModuleId] = graph.ambient_modules
-    pending = [module_id, *sorted(ambient_modules, key=_module_id_segments)]
+    pending = [module_id]
     while pending:
         current = pending.pop()
         if current in seen:
             continue
         seen.add(current)
         reachable.append(current)
-        pending.extend(reversed(graph.adjacency[current]))
+        pending.extend(reversed(adjacency[current]))
     return tuple(reachable)
 
 
 def _select_program_inventory(
     executable: "ExecutableProgram", graph: "ModuleGraph", module_id: "ModuleId"
 ) -> "ExecutableProgram":
-    """Restrict runtime metadata to a selected program's dependency graph."""
-    reachable = frozenset(_reachable_modules(module_id, graph))
+    """Restrict a selected program to its runtime modules and source inventories."""
+    source_reachable = frozenset(graph.source_reachable_modules(module_id))
+    runtime_reachable = (
+        frozenset(_reachable_modules(module_id, graph.adjacency)) | graph.ambient_modules
+    )
     return replace(
         executable,
         entry_module=module_id,
-        modules={mid: module for mid, module in executable.modules.items() if mid in reachable},
-        params=tuple(param for param in executable.params if param.module in reachable),
+        modules={
+            mid: module for mid, module in executable.modules.items() if mid in runtime_reachable
+        },
+        params=tuple(param for param in executable.params if param.module in source_reachable),
         dry_run_inventory=tuple(
-            call_site for call_site in executable.dry_run_inventory if call_site.module in reachable
+            call_site
+            for call_site in executable.dry_run_inventory
+            if call_site.module in source_reachable
         ),
     )
 
@@ -1451,7 +1454,7 @@ def _param_inventory(
     contribute their params to a program inventory.
     """
     return tuple(
-        info for mid in _reachable_modules(module_id, graph) for info in infos_by_module[mid]
+        info for mid in graph.source_reachable_modules(module_id) for info in infos_by_module[mid]
     )
 
 

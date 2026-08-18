@@ -34,8 +34,14 @@ _HELP_TEXTS: dict[str, str] = {
                          Open the tmux session for an existing branch workspace.
                          With --parent, this is an error.
           existing branch Check out BRANCH into a Git worktree, then open it as a workspace.
+                         A branch that exists only on a remote is checked out as a
+                         tracking branch of that remote; a branch carried by several
+                         remotes is ambiguous and is rejected.
                          With --parent, warn and ignore --parent.
           missing branch  Create BRANCH from PARENT/current branch, then open it.
+
+        A workspace whose tmux session is already running is reported as an error
+        instead of being opened again; attach to that session instead.
 
         Examples:
           agm open repo

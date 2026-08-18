@@ -35,6 +35,7 @@ import pytest
 from agm.packages.record import write_record
 from agm.project.workspace_shell import _sanitize_session_key
 from tests._agl_helpers import write_file_program
+from tests._git_helpers import clone_with_fork_remote
 from tests._proc_helpers import wait_for_path
 
 
@@ -132,6 +133,22 @@ _dispatch() {
         prev="$arg"
       done
       if $has_P; then echo "$session_name"; fi
+      # Record the session so has-session can report it as running, the way a
+      # real tmux server keeps its sessions.
+      echo "$session_name" >> "$log.sessions"
+      ;;
+    has-session)
+      # Real tmux exits 0 when the session exists and non-zero otherwise.
+      # The target may be given in tmux's exact-match form ("=name").
+      target=""
+      prev=""
+      for arg in "$@"; do
+        [[ "$prev" == "-t" ]] && target="${arg#=}"
+        prev="$arg"
+      done
+      if ! grep -qxF "$target" "$log.sessions" 2>/dev/null; then
+        _status=1
+      fi
       ;;
     display-message)
       # Real tmux expands #{var} in the format argument.
@@ -166,7 +183,20 @@ _dispatch() {
         ( eval "$command" ) >/dev/null 2>&1 &
       fi
       ;;
-    split-window|select-layout|select-pane|switch-client|attach-session|kill-session)
+    kill-session)
+      # Drop the session from the registry so a later open can recreate it.
+      target=""
+      prev=""
+      for arg in "$@"; do
+        [[ "$prev" == "-t" ]] && target="${arg#=}"
+        prev="$arg"
+      done
+      if [[ -f "$log.sessions" ]]; then
+        grep -vxF "$target" "$log.sessions" > "$log.sessions.tmp" || true
+        mv "$log.sessions.tmp" "$log.sessions"
+      fi
+      ;;
+    split-window|select-layout|select-pane|switch-client|attach-session)
       # These subcommands only need to be logged; the mock accepts and exits 0.
       ;;
   esac
@@ -211,7 +241,7 @@ for i in $(seq 0 $group_idx); do
 done
 
 rm -rf "$_dispatch_dir"
-exit 0
+exit "${_status:-0}"
 """
 
 
@@ -6851,6 +6881,78 @@ class TestOpen:
         log = tmux_log.read_text()
         assert "-dP" in log
         assert "myproj/feat/lifecycle" in log
+
+    def test_open_branch_carried_only_by_a_fork_remote(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """A branch published only on a second remote is checked out from it."""
+        project = tmp_path / "proj"
+        for directory in ("worktrees", "deps", "config", "notes"):
+            (project / directory).mkdir(parents=True)
+        clone_with_fork_remote(
+            tmp_path, env, branch="branch-x", repo_dir=project / "repo", marker="fork.txt"
+        )
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+
+        run_agm(["open", "-d", "branch-x"], env=env, cwd=str(project))
+
+        workspace = project / "worktrees" / "branch-x"
+        assert (workspace / "fork.txt").exists()
+        upstream = _git(
+            "rev-parse", "--abbrev-ref", "branch-x@{upstream}", cwd=str(project / "repo"), env=env
+        ).stdout.strip()
+        assert upstream == "fork/branch-x"
+
+    def test_open_branch_carried_by_two_remotes_is_rejected(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = tmp_path / "proj"
+        for directory in ("worktrees", "deps", "config", "notes"):
+            (project / directory).mkdir(parents=True)
+        clone_with_fork_remote(
+            tmp_path, env, branch="branch-x", on_origin=True, repo_dir=project / "repo"
+        )
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+
+        result = run_agm(["open", "-d", "branch-x"], env=env, cwd=str(project), check=False)
+
+        assert result.returncode == 1
+        assert "fork" in result.stderr
+        assert "origin" in result.stderr
+        assert not (project / "worktrees" / "branch-x").exists()
+
+    def test_open_reports_an_already_running_session(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """Reopening a workspace whose session runs reports it instead of duplicating it."""
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env, name="proj")
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+
+        run_agm(["open", "-d", "feat/reopen"], env=env, cwd=str(project))
+        result = run_agm(["open", "-d", "feat/reopen"], env=env, cwd=str(project), check=False)
+
+        assert result.returncode == 1
+        assert "proj/feat/reopen" in result.stderr
+        assert "duplicate session" not in result.stderr
+        assert tmux_log.read_text().count("-s proj/feat/reopen") == 1
+
+    def test_open_succeeds_again_after_the_session_is_closed(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env, name="proj")
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+
+        run_agm(["open", "-d", "feat/cycle"], env=env, cwd=str(project))
+        run_agm(["close", "--keep-workspace", "feat/cycle"], env=env, cwd=str(project))
+        run_agm(["open", "-d", "feat/cycle"], env=env, cwd=str(project))
+
+        assert tmux_log.read_text().count("-s proj/feat/cycle") == 2
 
 
 # ── agm tmux open/close ─────────────────────────────────────────────────────

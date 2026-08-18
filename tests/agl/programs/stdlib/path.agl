@@ -1,0 +1,17 @@
+import std/path
+
+param parts: array[text]
+param path: text
+param base: text
+
+program def main() -> unit =
+  print(path::join(parts))
+  print(path::dirname(path))
+  print(path::basename(path))
+  print(path::extension?(path))
+  print(path::with-extension(path, ".bak"))
+  print(path::normalize(path))
+  print(path::relative(path, base))
+  print(path::is-absolute(path))
+  print(path::is-absolute(path::absolute(path)))
+  print(path::parts(path))

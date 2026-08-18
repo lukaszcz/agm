@@ -564,18 +564,21 @@ program def main() -> unit =
 
 | Function | Result |
 | --- | --- |
-| `read(path: text)` | Reads and returns the file's text. |
+| `read(path: text)` / `read?(path: text)` | Reads valid UTF-8 text; `read?` returns `Option::None` when reading fails, including invalid UTF-8. |
 | `write(path: text, content: text)` | Replaces a file's text and returns `unit`. |
 | `append(path: text, content: text)` | Appends text to a file and returns `unit`. |
-| `exists(path: text)` | Returns whether the path exists. |
-| `list(path: text)` | Returns an `array[text]` of immediate child paths. |
+| `exists(path: text)`, `is-file(path: text)`, `is-dir(path: text)` | Inspect a path. |
+| `list(path: text)` / `glob(pattern: text)` | Return immediate children or pattern matches as `array[text]`. |
+| `mkdir(path: text)` | Creates a directory and missing parent directories. |
+| `remove(path: text)`, `copy(source: text, destination: text)`, `move(source: text, destination: text)` | Change filesystem entries. |
 
 Every relative path is resolved against the invocation working directory, not
-the importing module or a resource anchor. A relative `list` result remains
-relative; an absolute input yields absolute child paths. `read`, `write`,
-`append`, and `list` surface filesystem failures as `ExternError`; `exists`
-returns `false` for a missing path. Hosts may suppress filesystem mutations in
-dry-run mode.
+the importing module or a resource anchor. A relative `list` or `glob` result
+remains relative; an absolute input yields absolute paths. Failed filesystem
+operations raise `FsError`, carrying the requested `path` and `operation`;
+`read?` instead returns `Option::None`, including for invalid UTF-8 input.
+Predicates return `false` for missing paths. `remove` unlinks symbolic links rather
+than following them. Hosts may suppress filesystem mutations in dry-run mode.
 
 ## `copy` and `shallow_copy`
 

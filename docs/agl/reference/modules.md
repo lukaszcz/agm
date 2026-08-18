@@ -279,8 +279,10 @@ rules.
   lenient parsers; see [`std/json`](#stdjson).
 - `std/toml` converts TOML documents to and from `json`; see
   [`std/toml`](#stdtoml).
-- `std/fs` exposes explicit text filesystem operations: `read`, `write`,
-  `append`, `exists`, and `list`; see [`std/fs`](expressions.md#stdfs).
+- `std/path` provides lexical host-platform path manipulation; see
+  [Standard library](standard-library.md#stdpath).
+- `std/fs` exposes text filesystem and directory operations, including typed
+  `FsError` failures; see [Standard library](standard-library.md#stdfs).
 
 ## `std/env`
 

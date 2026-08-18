@@ -234,6 +234,11 @@ catch Exception as e =>
 `None`; `std/result` raises the same exception when `Result[T, E].unwrap()` is
 called on `Err`. It carries only the inherited `message` field.
 
+### `FsError`
+
+`std/fs` raises `FsError` for a failed filesystem operation. In addition to
+`message`, it carries `path: text` and `operation: text`.
+
 ## Built-in exception catalog
 
 Field lists below are in addition to the base `message`.

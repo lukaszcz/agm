@@ -359,6 +359,59 @@ def _assert_calls(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -> N
         _assert_schema_paths(schema, spec.get("schema_paths", []))
 
 
+def _prepare_temp_filesystem(scenario: dict[str, Any], tmp_path: Path) -> dict[str, Any]:
+    """Create a scenario's isolated filesystem fixture and bind its root parameter."""
+    fixture = scenario.get("filesystem")
+    if fixture is None:
+        return scenario
+
+    root = tmp_path / "filesystem"
+    root.mkdir()
+    for directory in fixture.get("directories", []):
+        (root / directory).mkdir(parents=True)
+    for relative_path, content in fixture.get("text_files", {}).items():
+        path = root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    for relative_path, content in fixture.get("hex_files", {}).items():
+        path = root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(bytes.fromhex(content))
+    for relative_path, target in fixture.get("directory_symlinks", {}).items():
+        try:
+            (root / relative_path).symlink_to(root / target, target_is_directory=True)
+        except OSError:
+            pytest.skip("symbolic links are unavailable")
+
+    params = {
+        name: str(root) if value == "$TEMP_ROOT" else value
+        for name, value in scenario.get("params", {}).items()
+    }
+    return {**scenario, "params": params}
+
+
+def test_filesystem_fixture_skips_symlink_scenarios_when_symlinks_are_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unavailable_symlink(
+        self: Path, target: str | Path, target_is_directory: bool = False
+    ) -> None:
+        raise OSError("symbolic links are unavailable")
+
+    monkeypatch.setattr(Path, "symlink_to", unavailable_symlink)
+
+    with pytest.raises(pytest.skip.Exception):
+        _prepare_temp_filesystem(
+            {
+                "filesystem": {
+                    "directories": ["target"],
+                    "directory_symlinks": {"link": "target"},
+                }
+            },
+            tmp_path,
+        )
+
+
 def _scenario_params() -> list[Any]:
     params: list[Any] = []
     for program in sorted(PROGRAMS_DIR.rglob("*.agl")):
@@ -378,8 +431,12 @@ def _rejection_params() -> list[Any]:
 
 @pytest.mark.parametrize(("program", "scenario"), _scenario_params())
 def test_program_scenario(
-    program: Path, scenario: dict[str, Any], capsys: pytest.CaptureFixture[str]
+    program: Path,
+    scenario: dict[str, Any],
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
 ) -> None:
+    scenario = _prepare_temp_filesystem(scenario, tmp_path)
     result, agents, shell = _run_program(program.read_text(encoding="utf-8"), scenario, program)
     out = capsys.readouterr().out
     expect = scenario["expect"]

@@ -1,5 +1,26 @@
+import std/option using Option
+
+exception FsError extends Exception
+  path: text
+  operation: text
+
 extern def read(path: text) -> text
 extern def write(path: text, content: text) -> unit
 extern def append(path: text, content: text) -> unit
 extern def exists(path: text) -> bool
 extern def list(path: text) -> array[text]
+extern def mkdir(path: text) -> unit
+extern def remove(path: text) -> unit
+extern def copy(source: text, destination: text) -> unit
+extern def move(source: text, destination: text) -> unit
+extern def glob(pattern: text) -> array[text]
+
+scope FsInternals
+extern def read_option(path: text) -> Option[text]
+extern def is_file(path: text) -> bool
+extern def is_dir(path: text) -> bool
+end FsInternals
+
+def read?(path: text) -> Option[text] = FsInternals::read_option(path)
+def is-file(path: text) -> bool = FsInternals::is_file(path)
+def is-dir(path: text) -> bool = FsInternals::is_dir(path)

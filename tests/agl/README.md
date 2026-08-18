@@ -53,6 +53,7 @@ Layout:
       },
       "shell": [{"command": "printf done", "stdout": "done"}],
       "runtime": {"default_call_depth_limit": 20, "default_strict_json": true},
+      "filesystem": {"directories": ["work"]},
       "expect": {
         "stdout": "exact full stdout",
         "stdout_contains": ["fragment"],
@@ -93,6 +94,9 @@ Field notes:
   so acceptance tests never execute a real shell command.
 - `runtime` — optional `PipelineDriver` constructor overrides
   (`default_call_depth_limit`, `default_strict_json`).
+- `filesystem` — optional fixture in a test-created temporary root. It may declare
+  `directories`, UTF-8 `text_files`, hexadecimal `hex_files`, and
+  `directory_symlinks`; a `"$TEMP_ROOT"` parameter value is replaced with that root.
 - `module_roots` — optional paths relative to `tests/agl/`. When present, the
   program runs through the multi-file module graph with these library roots.
 - `inline_entry` — the program declares no `program def`: it runs through the

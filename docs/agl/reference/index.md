@@ -90,6 +90,7 @@ program def main() -> unit =
 | [Agent calls](agent-calls.md) | `ask`, agents as values, call options, output contracts, the JSON wire format, parse policies and retries |
 | [Shell execution](shell-execution.md) | `exec`, the `ExecResult` structured form vs the parsed form, `ExecError` |
 | [Python FFI](ffi.md) | `extern def`, the companion Python file, value mapping across the boundary, `ExternError` |
+| [Standard library](standard-library.md) | The `std/path` path API and `std/fs` filesystem API |
 | [Exceptions](exceptions.md) | The exception model, `try`/`catch`/`raise`, the built-in exception catalog |
 | [Host environment](host-environment.md) | Agents, params, host defaults, capability checking, tracing |
 | [Grammar](grammar.md) | The collected grammar |

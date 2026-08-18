@@ -2857,7 +2857,7 @@ class _Lowerer:
             nominal: NominalId | None = None
             display_name: str | None = None
         else:
-            resolved = self._checked.type_env.resolve_named_type(exc_type)
+            resolved = self._checked.type_env.resolve_named_type(exc_type, span=clause.span)
             assert isinstance(resolved, ExceptionType), (
                 f"compiler bug: catch clause type {exc_type!r} did not resolve to an ExceptionType"
             )

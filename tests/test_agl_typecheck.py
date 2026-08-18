@@ -1007,9 +1007,9 @@ class TestTypeEnvironment:
         env = TypeEnvironment()
         assert env.resolve_named_type("Unknown") is None
 
-    def test_resolve_named_type_multiple_candidates_returns_none(self) -> None:
-        # Coverage: resolve_named_type returns None when multiple candidates exist.
-        # Two unqualified imports of the same name → ambiguous → return None.
+    def test_resolve_named_type_reports_multiple_candidates_as_ambiguous(self) -> None:
+        # Two unqualified imports of the same name are ambiguous: the complaint
+        # names the problem better than "unknown type" would.
         from agm.agl.modules.ids import ModuleId
         from agm.agl.scope.imports import ImportEnv
 
@@ -1017,9 +1017,9 @@ class TestTypeEnvironment:
         mod_b = ModuleId.from_path("modb")
         color_a = RecordType(name="Color")
         color_b = RecordType(name="Color")
-        graph_table: dict[tuple[ModuleId, str], RecordType] = {
-            (mod_a, "Color"): color_a,
-            (mod_b, "Color"): color_b,
+        graph_table: dict[tuple[ModuleId, tuple[str, ...], str], RecordType] = {
+            (mod_a, (), "Color"): color_a,
+            (mod_b, (), "Color"): color_b,
         }
         # Both modules expose "Color" unqualified.
         unqualified: dict[str, frozenset[tuple[ModuleId, str]]] = {
@@ -1027,9 +1027,8 @@ class TestTypeEnvironment:
         }
         import_env = ImportEnv(contributions={}, unqualified=unqualified)
         env = TypeEnvironment(program_type_table=graph_table, import_env=import_env)
-        # Both entries are in graph_table → type_candidates has 2 elements → False branch.
-        result = env.resolve_named_type("Color")
-        assert result is None
+        with pytest.raises(AglTypeError, match="[Aa]mbiguous"):
+            env.resolve_named_type("Color")
 
     def test_cross_module_constructible_lookup_rejects_missing_and_non_nominal_types(self) -> None:
         from agm.agl.modules.ids import ModuleId

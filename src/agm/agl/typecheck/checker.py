@@ -3491,7 +3491,7 @@ class _Checker:
         else:
             # resolve_named_type is used instead of get_type so exception types exposed
             # by import tails (in cross-module program context) are found as well.
-            resolved = self._env.resolve_named_type(clause.exc_type)
+            resolved = self._env.resolve_named_type(clause.exc_type, span=clause.span)
             if resolved is None or not isinstance(resolved, ExceptionType):
                 raise AglTypeError(
                     f"'{clause.exc_type}' is not a known exception type.",
@@ -4065,7 +4065,7 @@ class _Checker:
             return
         if qualifier.anchor is not QualifierAnchor.MODULE:
             local_owner = "::".join(segment.name for segment in qualifier.segments)
-            local_enum = self._env.resolve_named_type(local_owner)
+            local_enum = self._env.resolve_named_type(local_owner, span=span)
             if local_enum is not None:
                 if qualifier.anchor is None and self._env.has_qualified_import_member(
                     qualifier, variant
@@ -4871,7 +4871,8 @@ class _Checker:
                 and (
                     qualifier.anchor is not None
                     or self._env.resolve_named_type(
-                        "::".join(segment.name for segment in qualifier.segments)
+                        "::".join(segment.name for segment in qualifier.segments),
+                        span=pattern.span,
                     )
                     is not None
                     or self._env.has_qualified_import_member(qualifier, pattern.name)

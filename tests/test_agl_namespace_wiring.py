@@ -788,7 +788,48 @@ def test_resolve_named_type_rejects_root_use_and_import_tail_collision(tmp_path:
 
     checked = check_program(resolve_program(graph), base_caps())
 
-    assert checked.modules[graph.entry_id].type_env.resolve_named_type("R") is None
+    with pytest.raises(AglTypeError, match="[Aa]mbiguous"):
+        checked.modules[graph.entry_id].type_env.resolve_named_type("R")
+
+
+def test_ambiguous_caught_exception_is_reported_as_ambiguous(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import m/a\nimport m/b\nuse m/a::*\nuse m/b::*\n"
+                "let _ = try\n  ()\ncatch Boom as e =>\n  ()\n"
+            ),
+            "m/a": "exception Boom extends Exception()\n",
+            "m/b": "exception Boom extends Exception()\n",
+        },
+    )
+
+    with pytest.raises(AglTypeError, match="[Aa]mbiguous") as raised:
+        check_program(resolve_program(graph), base_caps())
+
+    assert "m/a::Boom" in str(raised.value)
+    assert "m/b::Boom" in str(raised.value)
+    assert raised.value.span is not None
+
+
+def test_ambiguous_exception_base_is_reported_as_ambiguous(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import m/a\nimport m/b\nuse m/a::*\nuse m/b::*\n"
+                "exception Local extends Boom()\n()\n"
+            ),
+            "m/a": "exception Boom extends Exception()\n",
+            "m/b": "exception Boom extends Exception()\n",
+        },
+    )
+
+    with pytest.raises(AglTypeError, match="[Aa]mbiguous") as raised:
+        check_program(resolve_program(graph), base_caps())
+
+    assert raised.value.span is not None
 
 
 def test_resolve_named_type_deduplicates_root_routes_to_same_origin(tmp_path: Path) -> None:

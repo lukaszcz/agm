@@ -1107,7 +1107,7 @@ class TypeEnvironment:
             return None
         return None
 
-    def resolve_named_type(self, name: str) -> Type | None:
+    def resolve_named_type(self, name: str, *, span: SourceSpan | None = None) -> Type | None:
         """Resolve a type *name* alias-transparently to a semantic ``Type``.
 
         Returns the resolved ``Type`` for a record/enum/exception name or an
@@ -1119,6 +1119,12 @@ class TypeEnvironment:
 
         In program context, also searches types exposed bare by ``use`` declarations
         and import tails when the name is not found locally.
+
+        An ambiguity complaint about a name contributed by several routes
+        propagates: it names the problem better than the "unknown type" the
+        caller would otherwise report, and callers pass *span* so it lands on
+        the reference. A name that resolves to something no bare reference can
+        denote -- a parameterized alias, say -- is still just ``None``.
         """
         local_name = self._lexical_type_name(name)
         if local_name in self._generic_types:
@@ -1126,7 +1132,7 @@ class TypeEnvironment:
         if local_name in self._types or local_name in self._alias_targets:
             try:
                 return self._resolve_name_type(
-                    local_name, span=None, _resolving=frozenset(), lexical=False
+                    local_name, span=span, _resolving=frozenset(), lexical=False
                 )
             except AglTypeError:
                 return None
@@ -1135,15 +1141,15 @@ class TypeEnvironment:
         # shadows the module-root rank. Generic templates remain useful to
         # alias-transparent qualifier checks even though ordinary bare type
         # expressions require arguments.
+        resolved = self._bare_type_key(name, span)
+        if resolved is None:
+            return None
+        key, from_region = resolved
+        generic = (self._program_generic_table or {}).get(key)
+        if generic is not None and from_region:
+            return generic.template
         try:
-            resolved = self._bare_type_key(name, None)
-            if resolved is None:
-                return None
-            key, from_region = resolved
-            generic = (self._program_generic_table or {}).get(key)
-            if generic is not None and from_region:
-                return generic.template
-            return self._resolve_type_key_as_bare(key, name, span=None)
+            return self._resolve_type_key_as_bare(key, name, span=span)
         except AglTypeError:
             return None
 

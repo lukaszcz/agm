@@ -210,12 +210,15 @@ def _run_program(
             source, entry_path=entry_path, roots=roots, default_stdlib=default_stdlib
         )
 
-        result = _run_prepared_entry(
-            runtime,
-            prepared,
-            param_values=scenario.get("params", {}),
-            process_environment=scenario.get("process_environment"),
-        )
+        try:
+            result = _run_prepared_entry(
+                runtime,
+                prepared,
+                param_values=scenario.get("params", {}),
+                process_environment=scenario.get("process_environment"),
+            )
+        except SystemExit as exc:
+            result = exc
     return result, agents, shell
 
 
@@ -382,6 +385,13 @@ def test_program_scenario(
     expect = scenario["expect"]
     if "host_error" in expect:
         _assert_host_error(result, agents, expect["host_error"])
+        shell.assert_complete()
+        return
+    if "exit_code" in expect:
+        assert isinstance(result, SystemExit)
+        assert result.code == expect["exit_code"]
+        _assert_output(out, expect)
+        _assert_calls(agents, expect)
         shell.assert_complete()
         return
     _assert_outcome(result, expect)

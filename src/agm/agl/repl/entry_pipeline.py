@@ -914,6 +914,9 @@ class EntryPipeline:
 
         try:
             interp.run()
+        except SystemExit as exc:
+            trace.run_end(ok=exc.code is None or exc.code == 0)
+            raise
         except AglRaise as exc:
             error = exception_value_to_run_error(exc.exc, span=exc.span)
             trace.exception(

@@ -70,6 +70,7 @@ Layout:
         "raises": {"type": "MaxIterationsExceeded",
                    "fields": {"limit": 3},
                    "message_contains": ["fragment"]},
+        "exit_code": 42,
         "host_error": {"message_contains": ["spec"]}
       }
     }
@@ -107,6 +108,8 @@ Field notes:
   same `$defs` entry.
 - `expect.raises` — the uncaught AgL exception ending the run: its type name, an
   exact-match subset of its fields, and substrings of its `message` field.
+- `expect.exit_code` — the program must terminate through `SystemExit` with this
+  status; it is used for host-termination workflows such as `std/process::exit`.
 - `expect.host_error` — the run must fail pre-execution (param validation): no agent
   is called, no AgL exception is raised, and the diagnostics mention the fragments.
 - Exact `stdout` is asserted only where rendering is pinned by the design (`text`

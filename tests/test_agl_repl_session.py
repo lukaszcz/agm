@@ -3990,6 +3990,27 @@ class TestTraceLogging:
         assert responses and responses[-1]["cancelled"] is True
         assert responses[-1]["reason"]
 
+    @pytest.mark.parametrize((("code", "trace_ok")), [(0, True), (255, False)])
+    def test_process_exit_finalizes_trace_and_propagates_status(
+        self, tmp_path: Path, code: int, trace_ok: bool
+    ) -> None:
+        import json
+
+        trace = tmp_path / "repl.log"
+        session = ReplSession(
+            trace_path=trace,
+            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+        )
+
+        with pytest.raises(SystemExit) as raised:
+            session.eval_entry(f"import std/process\nprocess::exit({code})")
+
+        assert raised.value.code == code
+        records = [json.loads(line) for line in trace.read_text().splitlines() if line]
+        assert records[0]["kind"] == "run_start"
+        assert records[-1]["kind"] == "run_end"
+        assert records[-1]["ok"] is trace_ok
+
     def test_write_failure_disables_logging_for_that_entry_only(self, tmp_path: Path) -> None:
         """A transient write failure must not kill logging for the whole session."""
         import json

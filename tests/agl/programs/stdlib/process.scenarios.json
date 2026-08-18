@@ -1,0 +1,24 @@
+{
+  "scenarios": [
+    {
+      "name": "process_metadata_has_sane_shapes",
+      "params": {"mode": 1},
+      "expect": {"stdout": "true\ntrue\ntrue\n", "calls": {}}
+    },
+    {
+      "name": "process_metadata_is_stable_within_a_run",
+      "params": {"mode": 2},
+      "expect": {"stdout": "true\ntrue\ntrue\n", "calls": {}}
+    },
+    {
+      "name": "process_exit_allows_the_portable_lower_bound",
+      "params": {"mode": 0},
+      "expect": {"exit_code": 0, "calls": {}}
+    },
+    {
+      "name": "process_exit_allows_the_portable_upper_bound",
+      "params": {"mode": 255},
+      "expect": {"exit_code": 255, "calls": {}}
+    }
+  ]
+}

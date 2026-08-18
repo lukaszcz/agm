@@ -257,6 +257,8 @@ rules.
 - `std/config` exposes the host engine settings as `builtin var` bindings.
 - `std/env` provides the ambient `Environ` snapshot and environment helpers; see
   [`std/env`](#stdenv).
+- `std/process` provides process metadata and controlled program termination; see
+  [`std/process`](#stdprocess).
 - `std/array` owns array methods and array utility functions; see
   [`std/array`](#stdarray).
 - `std/dict` owns dictionary methods and conversion from key/value pairs; see
@@ -298,6 +300,31 @@ let mode = getenv("MODE")
 let child_env = environ.extended({"DEBUG": "1"})
 let _ = unsetenv("MODE")
 ```
+
+## `std/process`
+
+`std/process` provides operations for the process executing an AgL program.
+Import it explicitly:
+
+```agl
+import std/process
+
+program def main() -> unit =
+  let directory = process::cwd()
+  let process_id = process::pid()
+  let host = process::hostname()
+  ()
+```
+
+`cwd() -> text` returns the current working directory, `pid() -> int` returns
+that process's identifier, and `hostname() -> text` returns the host name.
+
+`exit(code: int = 0) -> unit` terminates the program and its host process with
+`code`. It does not return to subsequent AgL expressions. `code` must be in the
+portable process-status range `0..255`, so the calling environment observes the
+same number on every supported host. Omitting `code` uses zero; a zero code
+indicates success and a nonzero code indicates failure. An out-of-range code is
+a normal runtime error and does not terminate the host.
 
 ## `std/array`
 

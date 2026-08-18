@@ -149,8 +149,10 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
 
 ### Exit codes
 
-The REPL itself only fails before the loop starts; per-entry errors are reported inline
-and never exit the process. A blank or non-string `--agent`/`[exec] default-agent`
+The REPL itself only fails before the loop starts; ordinary per-entry errors are
+reported inline and never exit the process. `std/process::exit(code)` is the
+exception: it terminates the REPL host with its portable `0..255` status after
+finalizing that entry's trace. A blank or non-string `--agent`/`[exec] default-agent`
 value is one such pre-loop failure. A syntactically present but malformed literal —
 unparseable, the wrong type, a non-constant expression, or an unknown engine key — is
 also a pre-loop failure: opening the session loads the standard library and splices the

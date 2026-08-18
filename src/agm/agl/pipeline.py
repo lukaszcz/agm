@@ -551,6 +551,9 @@ class PipelineDriver:
                 bindings={},
                 trace_path=trace.path,
             )
+        except SystemExit as exc:
+            trace.run_end(ok=exc.code is None or exc.code == 0)
+            raise
         except ParameterDefaultCycleError as exc:
             trace.run_end(ok=False)
             return RunResult(

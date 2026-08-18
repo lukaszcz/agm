@@ -26,7 +26,11 @@ A second sentinel, `AglNonDataValue` (`runtime/serialize.py`), covers the other 
 `ts`, `run_id`, and `kind`; the store records only run boundaries, `print`
 stdout, agent requests and responses, shell executions, and exceptions that
 escape uncaught. It deliberately does not trace ordinary expression evaluation
-or attach a `trace_id` to records or exception values.
+or attach a `trace_id` to records or exception values. `std/process::exit`
+accepts only the portable `0..255` process-status range, then propagates its
+`SystemExit` through the FFI; both `PipelineDriver` and `ReplSession` write the
+matching `run_end` record before re-raising it, so their host receives the
+requested status after trace finalization.
 
 `eval/effects.py` is the agent logging seam: it composes the prompt, records the
 request before dispatch, and records every response path, including unit calls,

@@ -298,9 +298,14 @@ disable tracing entirely.
 
 | Code | Meaning |
 |------|---------|
-| `0` | The workflow completed successfully |
-| `1` | Pre-execution failure: unreadable file, static language diagnostics (including invalid `case` coverage), host configuration error, or param validation failure |
-| `2` | The workflow executed but ended with an uncaught AgL exception |
+| `0` | The workflow completed successfully, or `std/process::exit(0)` requested success |
+| `1` | Pre-execution failure: unreadable file, static language diagnostics (including invalid `case` coverage), host configuration error, or param validation failure; it can also be requested with `std/process::exit(1)` |
+| `2` | The workflow executed but ended with an uncaught AgL exception; it can also be requested with `std/process::exit(2)` |
+| `3`–`255` | Requested by `std/process::exit(code)` |
+
+`std/process::exit` accepts only the portable process-status range `0..255`,
+so its documented status is preserved by every supported host. An out-of-range
+value is a runtime error, not a process termination.
 
 ### Diagnostics and warnings
 

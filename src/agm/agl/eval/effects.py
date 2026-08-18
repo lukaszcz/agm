@@ -20,7 +20,7 @@ from agm.agl.modules.ids import ModuleId
 from agm.agl.runtime.agents import AgentFn, dispatch_agent_value
 from agm.agl.runtime.codec import ParseResult
 from agm.agl.runtime.contract import OutputContract
-from agm.agl.runtime.externs import ExternRegistry
+from agm.agl.runtime.externs import ExternRegistry, ExternRuntimeState
 from agm.agl.runtime.option import none_value, option_text, some_value
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.request import (
@@ -65,6 +65,7 @@ class EffectCtx(Protocol):
     _strict_json: bool
     _host_contracts: Mapping[ContractId, OutputContract]
     _extern_registry: ExternRegistry
+    _extern_runtime_state: ExternRuntimeState
 
     def _eval(self, expr: IrExpr) -> Value: ...
 
@@ -133,6 +134,7 @@ class EffectHandlers:
                 args,
                 nominals=self._ctx._program.builtin_nominals,
                 function_encoder=self._ctx._encode_extern_value,
+                runtime_state=self._ctx._extern_runtime_state,
             )
 
     # ------------------------------------------------------------------

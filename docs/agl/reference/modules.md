@@ -261,6 +261,10 @@ rules.
   [`std/process`](#stdprocess).
 - `std/math` owns scalar numeric methods, aggregates, and mathematical constants; see
   [`std/math`](#stdmath).
+- `std/time` provides UTC clock, parsing, formatting, and sleep operations; see
+  [`std/time`](#stdtime).
+- `std/random` provides a seedable pseudo-random sequence, array selection and shuffling,
+  and UUID generation; see [`std/random`](#stdrandom).
 - `std/array` owns array methods and array utility functions; see
   [`std/array`](#stdarray).
 - `std/dict` owns dictionary methods and conversion from key/value pairs; see
@@ -350,6 +354,49 @@ import keeps them qualified, for example `math::sum([1, 2, 3])` and `math::pi`.
 `sum(values: array[int]) -> int` and
 `sum-decimal(values: array[decimal]) -> decimal` add their values using their
 respective numeric semantics. `pi` and `e` are `decimal` constants.
+
+## `std/time`
+
+`std/time` supplies clock and calendar conversion functions. Import it explicitly:
+
+```agl
+import std/time
+
+program def main() -> unit =
+  let epoch = time::parse-iso("2024-01-02T03:04:05+00:00")
+  print(time::format(epoch, "%Y-%m-%d"))
+```
+
+`now() -> decimal` returns Unix epoch seconds and `now-iso() -> text` returns the current
+UTC time as ISO-8601 text. `monotonic() -> decimal` returns a non-decreasing
+clock suitable for measuring elapsed time, not calendar timestamps. `sleep(seconds) -> unit`
+pauses for the requested number of seconds.
+
+`parse-iso(text) -> decimal` parses an ISO-8601 timestamp with or without an offset; `format-iso(epoch) ->
+text` emits the corresponding UTC timestamp. `parse(text, fmt) -> decimal` and `format(epoch,
+fmt) -> text` use Python-compatible `strptime` and `strftime` directives. A parsed timestamp
+without an offset is interpreted as UTC, as are all formatted epoch values. Invalid input or an
+out-of-range temporal conversion in either parser raises `TimeParseError(raw: text)`.
+
+## `std/random`
+
+`std/random` owns an independent pseudo-random sequence for each running interpreter. Import it
+explicitly and seed it when a reproducible sequence is needed:
+
+```agl
+import std/random
+
+program def main() -> unit =
+  random::seed(42)
+  print(random::between(1, 6))
+```
+
+`seed(n)` resets that sequence. `below(n) -> int` returns an integer in `0..n-1`,
+`between(lo, hi) -> int` includes both bounds, and `uniform() -> decimal` returns a decimal in
+`[0, 1)`. `choice(xs) -> T` selects an element and raises `IndexError` for an empty array;
+`choice?(xs) -> Option[T]` returns `Option::None` instead. `shuffle!(xs)` shuffles its array
+receiver in place through the normal live array view. `uuid() -> text` returns a fresh UUIDv4
+identifier and is intentionally independent of the seedable sequence.
 
 ## `std/array`
 

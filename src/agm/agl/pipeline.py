@@ -301,7 +301,8 @@ class PipelineDriver:
     extern_registry : ExternRegistry or None
         Optional shared Python FFI registry. Hosts that run several drivers
         across one program invocation pass the same registry to each so
-        companion module imports and module state are shared.
+        companion module imports and Python module globals are shared. Each
+        run still creates an interpreter with its own companion runtime state.
     """
 
     def __init__(

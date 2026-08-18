@@ -9,6 +9,7 @@ their underlying AgL containers.
 
 from __future__ import annotations
 
+import contextvars
 import decimal
 import importlib.machinery
 import importlib.util
@@ -42,7 +43,56 @@ from agm.agl.semantics.exceptions import AglRaise, make_builtin_exception
 from agm.agl.semantics.values import ArrayValue, DictValue, IrClosureValue, TextValue, Value
 
 # These companion module attributes are APIs, never synthesized nominal aliases.
-_COMPANION_API_NAMES = frozenset({"AglException", "array", "dict", "json", "nominals"})
+_COMPANION_API_NAMES = frozenset({"AglException", "array", "dict", "json", "nominals", "runtime"})
+
+
+class ExternRuntimeState:
+    """Mutable companion state belonging to one interpreter instance."""
+
+    __slots__ = ("_values",)
+
+    def __init__(self) -> None:
+        self._values: dict[str, object] = {}
+
+    def get_or_create(self, key: str, factory: Callable[[], object]) -> object:
+        """Return this state's value for *key*, creating it once when absent."""
+        if key not in self._values:
+            self._values[key] = factory()
+        return self._values[key]
+
+
+class _CompanionRuntime:
+    """Route companion state to the interpreter active in this call context."""
+
+    __slots__ = ("_active_state", "_detached_state")
+
+    def __init__(self) -> None:
+        self._active_state: contextvars.ContextVar[ExternRuntimeState | None] = (
+            contextvars.ContextVar("agl_extern_runtime_state", default=None)
+        )
+        # Direct companion use outside evaluation remains useful to host tests
+        # and tools, but evaluation always supplies its interpreter-owned state.
+        self._detached_state = ExternRuntimeState()
+
+    @contextmanager
+    def activate(self, state: ExternRuntimeState | None) -> Iterator[None]:
+        """Make *state* visible to a companion for the dynamic call extent."""
+        if state is None:
+            yield
+            return
+        token = self._active_state.set(state)
+        try:
+            yield
+        finally:
+            self._active_state.reset(token)
+
+    def state(self, key: str, factory: Callable[[], object]) -> object:
+        """Get companion-local state scoped to the active interpreter call."""
+        state = self._active_state.get()
+        return (state if state is not None else self._detached_state).get_or_create(key, factory)
+
+
+_COMPANION_RUNTIME = _CompanionRuntime()
 
 
 class ExternImportError(AglError):
@@ -276,6 +326,7 @@ class ExternRegistry:
         setattr(module, "dict", _dict)
         setattr(module, "json", AglJson)
         setattr(module, "AglException", AglException)
+        setattr(module, "runtime", _COMPANION_RUNTIME)
         nominals = ModuleType("agl.nominals")
         setattr(module, "nominals", nominals)
         leaves: dict[tuple[str, ...], type[object]] = {}
@@ -388,6 +439,7 @@ class ExternRegistry:
         *,
         nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS,
         function_encoder: Callable[[IrClosureValue], object] | None = None,
+        runtime_state: ExternRuntimeState | None = None,
     ) -> Value:
         """Cross the boundary for one extern call: encode, call, and decode.
 
@@ -405,6 +457,8 @@ class ExternRegistry:
         *nominals* resolves the ``ExternError``/``CyclicValueError`` nominal;
         it defaults to the shipped standard library's own identities for a
         caller (e.g. a direct unit test) that invokes without a program.
+        *runtime_state* is the evaluator-owned companion state activated for
+        this call; absent direct callers use detached host state instead.
         """
         try:
             encoded_args = [encode_boundary_value(arg, function_encoder) for arg in args]
@@ -417,7 +471,7 @@ class ExternRegistry:
             ) from exc
 
         try:
-            with decimal.localcontext():
+            with _COMPANION_RUNTIME.activate(runtime_state), decimal.localcontext():
                 result = fn(*encoded_args)
         except AglException as exc:
             raise AglRaise(exc.value) from exc

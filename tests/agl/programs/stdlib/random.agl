@@ -1,0 +1,48 @@
+import std/array
+import std/random
+
+param mode: int
+
+program def main() -> unit =
+  case mode of
+    | 1 =>
+        random::seed(713)
+        let first = [random::below(100), random::between(-10, 10), random::uniform()]
+        random::seed(713)
+        let second = [random::below(100), random::between(-10, 10), random::uniform()]
+        print(first == second)
+        print(first[0] >= 0 and first[0] < 100)
+        print(first[1] >= -10 and first[1] <= 10)
+        print(first[2] >= 0.0 and first[2] < 1.0)
+    | 2 =>
+        let values = ["one", "two", "three"]
+        random::seed(9)
+        let first = random::choice(values)
+        random::seed(9)
+        let second = random::choice(values)
+        let empty: array[text] = []
+        print(first == second)
+        print(values.contains(first))
+        print(random::choice?(values) != random::choice?(empty))
+        print(random::choice?(empty) == random::choice?(empty))
+    | 3 =>
+        var first = [1, 2, 2, 3, 4]
+        var second = [1, 2, 2, 3, 4]
+        random::seed(21)
+        random::shuffle!(first)
+        random::seed(21)
+        random::shuffle!(second)
+        print(first == second)
+        print(first.count(fn(value: int) => value == 1))
+        print(first.count(fn(value: int) => value == 2))
+        print(first.count(fn(value: int) => value == 3))
+        print(first.count(fn(value: int) => value == 4))
+    | 4 =>
+        let value = random::uuid()
+        print(value.size() == 36)
+        print(value[8] == "-")
+        print(value[14] == "4")
+    | _ =>
+        let empty: array[int] = []
+        let _ = random::choice(empty)
+        ()

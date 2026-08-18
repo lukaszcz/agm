@@ -131,7 +131,12 @@ from agm.agl.modules.ids import STD_CONFIG_ID, STD_ENV_ID, ModuleId
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.boundary import encode_boundary_value
 from agm.agl.runtime.codec import ParseResult, _parse_contract_output
-from agm.agl.runtime.externs import AglCallableProxy, ExternCallWindow, ExternRegistry
+from agm.agl.runtime.externs import (
+    AglCallableProxy,
+    ExternCallWindow,
+    ExternRegistry,
+    ExternRuntimeState,
+)
 from agm.agl.runtime.option import none_value, option_text, some_value
 from agm.agl.runtime.params import engine_default_settings
 from agm.agl.runtime.render import render_value
@@ -587,6 +592,7 @@ class IrInterpreter:
             extern_registry if extern_registry is not None else ExternRegistry()
         )
         self._extern_call_window_guard = ExternCallWindow()
+        self._extern_runtime_state = ExternRuntimeState()
         self._effects = EffectHandlers(self)
 
     def _parse_host_output(

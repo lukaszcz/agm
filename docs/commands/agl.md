@@ -37,11 +37,13 @@ Entering a bare type name displays the type; an unapplied generic type name such
 
 Importing a library module that declares `extern def` (see
 [Python FFI](../agl/reference/ffi.md)) works normally in the REPL; its companion
-Python file imports once for the session, not once per entry. A direct entry
-typed at the prompt (with no backing file of its own) may not declare
-`extern def` itself. `:reset` clears this session-held companion state along
-with everything else — a subsequent import resolves and imports the companion
-again as though the session were new.
+Python file imports once for the session, not once per entry. Its ordinary Python
+module globals therefore last for the session; `:reset` discards that cached
+companion and a later import creates new globals. A companion value obtained
+through `runtime.state(...)` is different: it belongs to the fresh interpreter
+that evaluates one entry and ends with that entry, even while the companion
+module remains cached. A direct entry typed at the prompt (with no backing file
+of its own) may not declare `extern def` itself.
 
 For the same reason, `resource` and `resource-dir` cannot be called from a direct
 entry: they anchor at the declaring module's file. An imported file-backed module

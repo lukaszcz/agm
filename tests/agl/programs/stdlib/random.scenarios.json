@@ -1,0 +1,29 @@
+{
+  "scenarios": [
+    {
+      "name": "seed_reproduces_bounded_inclusive_and_uniform_sequences",
+      "params": {"mode": 1},
+      "expect": {"stdout": "true\ntrue\ntrue\ntrue\n", "calls": {}}
+    },
+    {
+      "name": "choice_and_optional_choice_handle_populated_and_empty_arrays",
+      "params": {"mode": 2},
+      "expect": {"stdout": "true\ntrue\ntrue\ntrue\n", "calls": {}}
+    },
+    {
+      "name": "shuffle_mutates_the_live_array_and_preserves_its_multiset",
+      "params": {"mode": 3},
+      "expect": {"stdout": "true\n1\n2\n1\n1\n", "calls": {}}
+    },
+    {
+      "name": "uuid_is_a_version_four_text_identifier",
+      "params": {"mode": 4},
+      "expect": {"stdout": "true\ntrue\ntrue\n", "calls": {}}
+    },
+    {
+      "name": "choice_on_an_empty_array_raises_the_typed_index_error",
+      "params": {"mode": 5},
+      "expect": {"stdout": "", "raises": {"type": "IndexError", "fields": {"index": 0, "length": 0}}, "calls": {}}
+    }
+  ]
+}

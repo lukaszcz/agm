@@ -44,6 +44,35 @@ from agl import AglException, Box, Shape, array, dict, json
 constructors remain valid afterwards. The fixed module name means concurrent
 program loads in one Python process are not supported.
 
+### Interpreter-local companion state
+
+A companion that needs mutable state may retain `runtime` and allocate a value
+by a stable key. The value belongs to the interpreter making the active extern
+call, even when interpreters share an imported companion module:
+
+```python
+import random
+from typing import cast
+
+from agl import runtime
+
+
+def rng() -> random.Random:
+    return cast(random.Random, runtime.state("mylib/rng", random.Random))
+```
+
+`runtime.state(key, factory)` calls `factory` once for each interpreter state
+bag and returns that value on later calls. It must be called during an extern
+invocation; direct host calls outside evaluation use a separate detached state.
+
+This is distinct from ordinary Python module globals. A cached companion's
+globals are shared by every interpreter using that registry and last until its
+companion is re-imported. `runtime.state` instead uses the interpreter active
+for the current extern call: its bag lasts for that interpreter's run, not for
+the Python module. Thus a batch run gets a fresh bag, and every REPL entry gets
+a fresh bag even though its session keeps the companion module cached until
+`:reset`.
+
 ## Value mapping
 
 The mapping is injective, so conversion is directed by the actual value rather

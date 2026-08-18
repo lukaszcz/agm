@@ -1,0 +1,27 @@
+import std/time
+import std/time using TimeParseError
+
+param mode: int
+
+program def main() -> unit =
+  case mode of
+    | 1 =>
+        let epoch = time::parse-iso("2024-01-02T03:04:05.123456+00:00")
+        print(time::format-iso(epoch))
+        let parsed = time::parse("2024/01/02 03:04:05.123456 +0000", "%Y/%m/%d %H:%M:%S.%f %z")
+        print(time::format(parsed, "%Y/%m/%d %H:%M:%S.%f %z"))
+        print(parsed == epoch)
+    | 2 =>
+        try
+          let _ = time::parse-iso("not an instant")
+        catch TimeParseError as error => print(error.raw)
+        try
+          let _ = time::parse("not a date", "%Y-%m-%d")
+        catch TimeParseError as error => print(error.raw)
+    | _ =>
+        let epoch = time::now()
+        print(time::format-iso(epoch).contains("T"))
+        print(time::now-iso().contains("T"))
+        let earlier = time::monotonic()
+        print(time::monotonic() >= earlier)
+        time::sleep(0.0)

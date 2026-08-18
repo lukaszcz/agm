@@ -1,0 +1,21 @@
+import std/option using Option
+
+scope RandomInternals
+extern def seed(value: int) -> unit
+extern def below(upper: int) -> int
+extern def between(lower: int, upper: int) -> int
+extern def uniform() -> decimal
+extern def choice[T](values: array[T]) -> T
+extern def shuffle_in_place[T](values: array[T]) -> unit
+extern def uuid() -> text
+end RandomInternals
+
+def seed(value: int) -> unit = RandomInternals::seed(value)
+def below(upper: int) -> int = RandomInternals::below(upper)
+def between(lower: int, upper: int) -> int = RandomInternals::between(lower, upper)
+def uniform() -> decimal = RandomInternals::uniform()
+def choice[T](values: array[T]) -> T = RandomInternals::choice(values)
+def choice?[T](values: array[T]) -> Option[T] =
+  try Option::Some(value = choice(values)) catch IndexError as _ => Option::None
+def shuffle![T](values: array[T]) -> unit = RandomInternals::shuffle_in_place(values)
+def uuid() -> text = RandomInternals::uuid()

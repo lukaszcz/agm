@@ -76,7 +76,7 @@
 // ---------------------------------------------------------------------------
 
 %declare NAME OP_NAME
-%declare OPEN IMPORT USING HIDING EXPORT SCOPE END MODQUAL MODPATH WILDCARD
+%declare IMPORT USE HIDING EXPORT SCOPE END MODQUAL MODPATH WILDCARD
 %declare PLACEHOLDER PLACEHOLDER_NUM
 %declare AS_QUESTION
 // TO, DOWNTO, BY: declared so they can appear in `field_name` (a keyword
@@ -143,8 +143,8 @@ _sep: _NEWLINE | SEMICOLON
             | builtin_func_def
             | extern_func_def
             | import_decl
+            | use_decl
             | export_decl
-            | open_decl
 
 // ---------------------------------------------------------------------------
 // Scope regions
@@ -198,14 +198,8 @@ enum_body: enum_variant_seq
 
 enum_variant_seq: first_variant_def variant_tail*
 
-first_variant_def: PIPE? name variant_payload?               -> variant_def
-                 | PIPE? qual_ref_chain member_type_args?     -> variant_ref
-                 | PIPE? qual_ref_chain variant_payload       -> variant_ref_with_payload
-variant_tail: PIPE name variant_payload?                       -> variant_def
-            | PIPE qual_ref_chain member_type_args?           -> variant_ref
-            | PIPE qual_ref_chain variant_payload             -> variant_ref_with_payload
-
-member_type_args: type_lsqb type_arg_list RSQB
+first_variant_def: PIPE? name variant_payload? -> variant_def
+variant_tail: PIPE name variant_payload?       -> variant_def
 
 variant_payload: LPAR field_list? RPAR
 
@@ -854,29 +848,35 @@ pattern_field: field_name EQ pattern   -> pat_field_named
 // A byte-adjacent `/*` tail is pre-merged into WILDCARD on the same principle.
 // ---------------------------------------------------------------------------
 
-// import_decl: OPEN? IMPORT MODPATH WILDCARD? (as ref_name)? import_clause?
-import_decl : OPEN? IMPORT MODPATH WILDCARD import_alias? import_clause? -> import_decl_wildcard
-            | OPEN? IMPORT MODPATH import_alias? import_clause? -> import_decl_plain
+import_decl : IMPORT MODPATH WILDCARD? import_alias? import_tail_clause? hiding_clause?
+use_decl : USE MODPATH use_suffix hiding_clause?
+         | USE DCOLON use_anchored_suffix hiding_clause?
+use_suffix : use_alias                    -> use_suffix_alias
+           | DCOLON use_path_tail
+use_anchored_suffix : use_path_tail
+use_path_tail : MODQUAL* NAME use_alias   -> use_path_alias
+              | MODQUAL* NAME             -> use_path_single
+              | MODQUAL* STAR             -> use_path_glob
+              | MODQUAL* braces           -> use_path_braces
+export_decl : EXPORT MODPATH WILDCARD? export_tail_clause? hiding_clause?
 
-import_alias : "as" name
+import_alias : "as" NAME
+use_alias : "as" name
+import_tail_clause : DCOLON selection
+export_tail_clause : DCOLON braces -> export_braces_tail
+                   | DCOLON STAR   -> export_glob_tail
 
-import_clause : USING import_item (COMMA import_item)* -> import_clause_using
-              | HIDING path_atom (COMMA path_atom)*    -> import_clause_hiding
+selection : STAR           -> selection_glob
+          | braces         -> selection_braces
+          | selection_atom -> selection_single
+braces : LBRACE brace_entries? RBRACE
+brace_entries : brace_entry (COMMA brace_entry)* COMMA?
+brace_entry : selection_atom -> brace_atom
+            | STAR           -> brace_glob
+            | braces         -> brace_nested
+selection_atom : path_atom ("as" name)?
+hiding_clause : HIDING path_atom (COMMA path_atom)*
 
-import_item : path_atom "as" name -> import_item_rename
-            | path_atom           -> import_item_plain
-
-export_decl : EXPORT MODPATH WILDCARD export_clause? -> export_decl_wildcard
-            | EXPORT MODPATH export_clause?          -> export_decl_plain
-
-export_clause : USING export_item (COMMA export_item)* -> export_clause_using
-              | HIDING path_atom (COMMA path_atom)*    -> export_clause_hiding
-
-export_item : path_atom "as" name -> export_item_rename
-            | path_atom           -> export_item_plain
-
-open_decl : OPEN scope_ref import_clause?
-scope_ref : MODQUAL* NAME
 path_atom : MODQUAL* name
 decl_head : MODQUAL* name
 

@@ -10,8 +10,8 @@ and REPL display.  Callers choose two display options:
   when ``True``; leave top-level text verbatim when ``False``.
 
 Nested ``text`` values are always quoted so structured output remains parseable
-as AgL surface syntax.  Nominal values (record and exception) carry fields in declaration order
-already, so rendering walks ``value.fields`` directly.
+as AgL surface syntax.  Nominal values (record, enum, exception) carry fields in
+declaration order already, so rendering walks ``value.fields`` directly.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from agm.agl.semantics.values import (
     ConstructorValue,
     DecimalValue,
     DictValue,
+    EnumValue,
     ExceptionValue,
     IntValue,
     IrClosureValue,
@@ -144,6 +145,8 @@ def _render(
         return _scalar_text(value)
 
     if isinstance(value, ConstructorValue):
+        if value.variant is not None:
+            return f"<constructor {value.display_name}::{value.variant}>"
         return f"<constructor {value.display_name}>"
 
     if isinstance(value, IrClosureValue):
@@ -179,22 +182,25 @@ def _render(
         return _render_sequence("{", "}", items, level=level, pretty=pretty)
 
     if isinstance(value, RecordValue):
-        if not value.fields and "::" in value.display_name:
-            return value.display_name
         items = [
             f"{name} = {_render_child(child, pretty=pretty, level=level + 1, active=active)}"
             for name, child in value.fields.items()
         ]
         return _render_sequence(f"{value.display_name}(", ")", items, level=level, pretty=pretty)
 
-    if isinstance(value, ExceptionValue):
+    if isinstance(value, (EnumValue, ExceptionValue)):
+        prefix = (
+            f"{value.display_name}::{value.variant}"
+            if isinstance(value, EnumValue)
+            else value.display_name
+        )
         if not value.fields:
-            return f"{value.display_name}()"
+            return prefix if isinstance(value, EnumValue) else f"{prefix}()"
         items = [
             f"{name} = {_render_child(child, pretty=pretty, level=level + 1, active=active)}"
             for name, child in value.fields.items()
         ]
-        return _render_sequence(f"{value.display_name}(", ")", items, level=level, pretty=pretty)
+        return _render_sequence(f"{prefix}(", ")", items, level=level, pretty=pretty)
 
     raise RuntimeError(f"render: unhandled value type {type(value).__name__}")  # pragma: no cover
 

@@ -6,8 +6,8 @@ enum Turn
 param problem
 
 program def main() -> unit =
-  let researcher: Agent = AgentCommand("researcher")
-  let critic: Agent = AgentCommand("critic")
+  let researcher = AgentCommand("researcher")
+  let critic = AgentCommand("critic")
   var proposal: Turn = ask("Propose a solution for %{problem}.", agent = researcher, on_parse_error = Retry(n = 2))
   var final_answer: text = ""
 

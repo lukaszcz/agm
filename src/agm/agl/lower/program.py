@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from agm.agl.ir.contracts import ContractPayload, ExceptionFieldEncode
+from agm.agl.ir.contracts import ContractPayload
 from agm.agl.ir.ids import NominalId, SourceId
 from agm.agl.ir.program import (
     DryRunEntry,
@@ -31,36 +31,11 @@ from agm.agl.lower.lowerer import (
 from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
-from agm.agl.semantics.type_table import TypeTable, is_json_convertible
-from agm.agl.semantics.types import EnumType, ExceptionType, RecordType
+from agm.agl.semantics.types import ExceptionType, RecordType
 from agm.agl.syntax.nodes import BuiltinVarDecl, FuncDef, static_items
-from agm.agl.type_schema import build_dynamic_encode_plan, build_encode_plan
 from agm.util.text import normalize_newlines
 
 __all__ = ["lower_program"]
-
-
-def _exception_field_encodes(
-    type_table: TypeTable,
-) -> dict[NominalId, tuple[ExceptionFieldEncode, ...]]:
-    """Compile reporting provenance for every JSON-representable exception slot."""
-    result: dict[NominalId, tuple[ExceptionFieldEncode, ...]] = {}
-    for typedef in type_table.entries():
-        if typedef.kind != "exception":
-            continue
-        handle = typedef.handle()
-        assert isinstance(handle, ExceptionType)
-        result[NominalId(typedef.decl_node_id)] = tuple(
-            ExceptionFieldEncode(
-                field_name,
-                build_encode_plan(field_type, type_table)
-                if type_table.has_finite_schema(field_type)
-                else build_dynamic_encode_plan(field_type, type_table),
-            )
-            for field_name, field_type in type_table.exception_fields(handle).items()
-            if is_json_convertible(field_type, type_table)
-        )
-    return result
 
 
 def lower_program(
@@ -116,18 +91,6 @@ def lower_program(
         )
         module_source_ids[mid] = source_id
 
-    # Member records are semantic implementation details of their enclosing
-    # enum. They receive descriptors only so runtime identity remains complete,
-    # but must not be exposed as companion namespace leaves (where e.g.
-    # ``Step::Continue`` would overwrite ``Step.Continue``).
-    enum_member_ids = {
-        member.decl_id
-        for enum_def in type_table.entries()
-        if enum_def.kind == "enum"
-        for member in enum_def.members
-        if isinstance(member, RecordType)
-    }
-
     # Step 2: Build nominals from the authoritative TypeTable declarations.
     # Aliases do not have a TypeDef, so this also excludes their transparent
     # source spellings without comparing concatenated scope names. ``entries()``
@@ -140,9 +103,7 @@ def lower_program(
     # nominal lookup.
     for typedef in type_table.entries():
         nominal = NominalId(typedef.decl_node_id)
-        bears_name_path = (
-            type_table.is_current(typedef) and typedef.decl_node_id not in enum_member_ids
-        )
+        bears_name_path = type_table.is_current(typedef)
         if typedef.kind == "record":
             link.nominals[nominal] = NominalDescriptor(
                 nominal=nominal,
@@ -155,8 +116,6 @@ def lower_program(
                 bears_name_path=bears_name_path,
             )
         elif typedef.kind == "enum":
-            handle = typedef.handle()
-            assert isinstance(handle, EnumType)
             link.nominals[nominal] = NominalDescriptor(
                 nominal=nominal,
                 module_id=typedef.module_id,
@@ -165,10 +124,8 @@ def lower_program(
                 kind=NominalKind.ENUM,
                 fields=(),
                 variants=tuple(
-                    VariantDescriptor(
-                        name, tuple(type_table.record_fields(member)), NominalId(member.decl_id)
-                    )
-                    for name, member in type_table.enum_member_names(handle).items()
+                    VariantDescriptor(name, tuple(field for field, _ in fields))
+                    for name, fields in typedef.variants
                 ),
                 bears_name_path=bears_name_path,
             )
@@ -223,12 +180,8 @@ def lower_program(
                     declared_name=typ.name,
                     kind=NominalKind.ENUM,
                     variants=tuple(
-                        VariantDescriptor(
-                            vname,
-                            tuple(type_table.record_fields(member)),
-                            NominalId(member.decl_id),
-                        )
-                        for vname, member in type_table.enum_member_names(typ).items()
+                        VariantDescriptor(vname, tuple(fname for fname, _ in vfields))
+                        for vname, vfields in generic_typedef.variants
                     ),
                     bears_name_path=bears_name_path,
                 )
@@ -314,7 +267,6 @@ def lower_program(
                 )
             )
     dry_run_inventory = tuple(dry_run_entries)
-    exception_field_encodes = _exception_field_encodes(type_table)
     program = ExecutableProgram(
         entry_module=checked.entry_id,
         modules=executable_modules,
@@ -348,7 +300,6 @@ def lower_program(
         contracts=dict(link.contracts),
         dry_run_inventory=dry_run_inventory,
         builtin_nominals=link.builtin_nominals,
-        exception_field_encodes=exception_field_encodes,
         builtin_setting_defaults=builtin_setting_defaults,
     )
     if self_validation_enabled():

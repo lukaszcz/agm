@@ -172,7 +172,7 @@ def test_cross_module_and_builtin_fields_use_field_directed_classification(tmp_p
         {
             "library": "enum Flag\n  | on\n  | off",
             "entry": (
-                "open import library\n"
+                "import library::*\n"
                 "enum Packet\n  | packet(flag: library::Flag)\n"
                 "let on = 7\nlet item = packet(library::Flag::on)\n"
                 "case item of | packet(on) => on"

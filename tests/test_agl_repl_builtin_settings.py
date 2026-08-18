@@ -24,7 +24,7 @@ from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.agl.runtime.params import build_engine_config_seeds
 from agm.agl.runtime.request import AgentRequest, AgentResponse
-from agm.agl.semantics.values import BoolValue, IntValue, RecordValue, TextValue, Value
+from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, TextValue, Value
 from agm.agl.setting_overrides import SettingOverride
 from tests._agl_helpers import agent_value
 
@@ -101,8 +101,8 @@ class TestCrossEntryPersistence:
         _ok(s, 'std/config::timeout := Some("45s")')
         _ok(s, "let unrelated = 1")
         value = _read(s, "timeout")
-        assert isinstance(value, RecordValue)
-        assert value.display_name.rsplit("::", maxsplit=1)[-1] == "Some"
+        assert isinstance(value, EnumValue)
+        assert value.variant == "Some"
         assert value.fields["value"] == TextValue("45s")
         # The written timeout is retained as the live shell-exec timeout.
         assert s._shell_exec_timeout == 45.0
@@ -120,8 +120,8 @@ class TestCrossEntryPersistence:
         _ok(s, 'std/config::log-file := Some("trace.jsonl")')
         _ok(s, "let unrelated = 1")
         value = _read(s, "log-file")
-        assert isinstance(value, RecordValue)
-        assert value.display_name.rsplit("::", maxsplit=1)[-1] == "Some"
+        assert isinstance(value, EnumValue)
+        assert value.variant == "Some"
         assert value.fields["value"] == TextValue("trace.jsonl")
 
     def test_default_agent_write_persists_two_entries_later(self) -> None:
@@ -130,8 +130,8 @@ class TestCrossEntryPersistence:
         _ok(s, 'std/config::default-agent := AgentCommand("scripted")')
         _ok(s, "let unrelated = 1")
         value = _read(s, "default-agent")
-        assert isinstance(value, RecordValue)
-        assert value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
+        assert isinstance(value, EnumValue)
+        assert value.variant == "AgentCommand"
         assert value.fields["command"] == TextValue("scripted")
 
 
@@ -225,22 +225,22 @@ class TestDefaultsAndSeeding:
 
         value = _read(s, "default-agent")
 
-        assert isinstance(value, RecordValue)
-        assert value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentClaude"
+        assert isinstance(value, EnumValue)
+        assert value.variant == "AgentClaude"
 
     def test_host_timeout_seed_round_trips_without_disabling_live_timeout(self) -> None:
         s = ReplSession(stdlib_root=_STDLIB_ROOT, shell_exec_timeout=0.0000001)
         _ok(s, "import std/config")
 
         value = _read(s, "timeout")
-        assert isinstance(value, RecordValue)
+        assert isinstance(value, EnumValue)
         assert value.fields["value"] == TextValue("0.0000001s")
         _ok(s, "std/config::timeout := std/config::timeout")
         assert s._shell_exec_timeout == 0.0000001
 
         s.reset()
         value = _ok(s, "import std/config\nstd/config::timeout").value
-        assert isinstance(value, RecordValue)
+        assert isinstance(value, EnumValue)
         assert value.fields["value"] == TextValue("0.0000001s")
 
 
@@ -295,7 +295,7 @@ def _declared_defaults_session(tmp_path: Path) -> ReplSession:
     config_path = stdlib_root / "std" / "config.agl"
     config_path.parent.mkdir(parents=True)
     config_path.write_text(
-        "open import std/core\n"
+        "import std/core::*\n"
         'builtin var default-agent: Agent = AgentCommand("declared")\n'
         "builtin var strict-json: bool = true\n"
         "builtin var max-iters: int = 3\n"
@@ -335,7 +335,7 @@ class TestResetHostSeedPrecedence:
         s.reset()
         _ok(s, "import std/config")
         value = _read(s, "timeout")
-        assert isinstance(value, RecordValue)
+        assert isinstance(value, EnumValue)
         assert value.fields["value"] == TextValue("3s")
 
     def test_timeout_driver_synthesized_host_seed_survives_a_source_write(self) -> None:
@@ -347,7 +347,7 @@ class TestResetHostSeedPrecedence:
         s.reset()
         _ok(s, "import std/config")
         value = _read(s, "timeout")
-        assert isinstance(value, RecordValue)
+        assert isinstance(value, EnumValue)
         assert value.fields["value"] == TextValue("0.0000001s")
         assert s._shell_exec_timeout == 0.0000001
 
@@ -366,7 +366,7 @@ class TestResetHostSeedPrecedence:
         s.reset()
         _ok(s, "import std/config")
         value = _read(s, "log-file")
-        assert isinstance(value, RecordValue)
+        assert isinstance(value, EnumValue)
         assert value.fields["value"] == TextValue("host.jsonl")
 
     def test_default_agent_host_seed_survives_a_source_write(self) -> None:
@@ -376,7 +376,7 @@ class TestResetHostSeedPrecedence:
         s.reset()
         _ok(s, "import std/config")
         value = _read(s, "default-agent")
-        assert isinstance(value, RecordValue)
+        assert isinstance(value, EnumValue)
         assert value.fields["command"] == TextValue("host")
 
 
@@ -595,7 +595,7 @@ class TestResetDeclaredDefaultPrecedence:
         s.reset()
         _ok(s, "import std/config")
         value = _read(s, "timeout")
-        assert isinstance(value, RecordValue)
+        assert isinstance(value, EnumValue)
         assert value.fields["value"] == TextValue("2s")
 
     def test_log_declared_default_survives_a_source_write(self, tmp_path: Path) -> None:
@@ -613,7 +613,7 @@ class TestResetDeclaredDefaultPrecedence:
         s.reset()
         _ok(s, "import std/config")
         value = _read(s, "log-file")
-        assert isinstance(value, RecordValue)
+        assert isinstance(value, EnumValue)
         assert value.fields["value"] == TextValue("declared.jsonl")
 
     def test_default_agent_declared_default_survives_a_source_write(self, tmp_path: Path) -> None:
@@ -623,7 +623,7 @@ class TestResetDeclaredDefaultPrecedence:
         s.reset()
         _ok(s, "import std/config")
         value = _read(s, "default-agent")
-        assert isinstance(value, RecordValue)
+        assert isinstance(value, EnumValue)
         assert value.fields["command"] == TextValue("declared")
 
 
@@ -668,7 +668,7 @@ class TestResetSeedWinsOverDriverArgument:
         assert s._shell_exec_timeout == 5.0
         _ok(s, "import std/config")
         value = _read(s, "timeout")
-        assert isinstance(value, RecordValue)
+        assert isinstance(value, EnumValue)
         assert value.fields["value"] == TextValue("5s")
 
     def test_timeout_seeded_as_none_disables_the_timeout_across_reset(self) -> None:
@@ -686,8 +686,8 @@ class TestResetSeedWinsOverDriverArgument:
         assert s._shell_exec_timeout is None
         _ok(s, "import std/config")
         value = _read(s, "timeout")
-        assert isinstance(value, RecordValue)
-        assert value.display_name.rsplit("::", maxsplit=1)[-1] == "None"
+        assert isinstance(value, EnumValue)
+        assert value.variant == "None"
 
 
 class TestResetRestoresMixedSeedOrigins:
@@ -712,7 +712,7 @@ class TestResetRestoresMixedSeedOrigins:
         config_path = stdlib_root / "std" / "config.agl"
         config_path.parent.mkdir(parents=True)
         config_path.write_text(
-            "import std/core using Option, Agent\n"
+            "import std/core::{Option, Agent}\n"
             'builtin var default-agent: Agent = AgentCommand("declared")\n'
             "builtin var max-iters: int = 3\n"
             'builtin var log-file: Option[text] = Option[text]::Some("declared.jsonl")\n',
@@ -736,7 +736,7 @@ class TestResetRestoresMixedSeedOrigins:
         assert s._default_loop_limit == 5
         _ok(s, "import std/config")
         value = _read(s, "log-file")
-        assert isinstance(value, RecordValue)
+        assert isinstance(value, EnumValue)
         assert value.fields["value"] == TextValue("declared.jsonl")
 
 
@@ -838,7 +838,7 @@ def test_reset_uses_declared_live_engine_defaults(tmp_path: Path) -> None:
     config_path = stdlib_root / "std" / "config.agl"
     config_path.parent.mkdir(parents=True)
     config_path.write_text(
-        "open import std/core\n"
+        "import std/core::*\n"
         'builtin var default-agent: Agent = AgentCommand("declared")\n'
         "builtin var strict-json: bool = true\n"
         "builtin var max-iters: int = 3\n"
@@ -849,7 +849,7 @@ def test_reset_uses_declared_live_engine_defaults(tmp_path: Path) -> None:
     (config_path.parent / "core.agl").write_text((_STDLIB_ROOT / "std" / "core.agl").read_text())
     session = ReplSession(stdlib_root=stdlib_root, default_stdlib=False)
 
-    _ok(session, "open import std/core\nimport std/config\nstd/config::strict-json")
+    _ok(session, "import std/core::*\nimport std/config\nstd/config::strict-json")
     _ok(session, "std/config::strict-json := false\nstd/config::max-iters := 0")
     session.reset()
 
@@ -884,8 +884,8 @@ class TestSettingOverrideThreading:
         )
         _ok(s, "import std/config")
         value = _read(s, "default-agent")
-        assert isinstance(value, RecordValue)
-        assert value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
+        assert isinstance(value, EnumValue)
+        assert value.variant == "AgentCommand"
         assert value.fields["command"] == TextValue("overridden")
 
     def test_source_write_still_overrides_it_afterward(self) -> None:
@@ -897,11 +897,11 @@ class TestSettingOverrideThreading:
             }
         )
         _ok(s, "import std/config")
-        assert _read(s, "default-agent").display_name == "Agent::AgentCommand"
+        assert _read(s, "default-agent").variant == "AgentCommand"
         _ok(s, 'std/config::default-agent := AgentClaude("haiku", "low")')
         value = _read(s, "default-agent")
-        assert isinstance(value, RecordValue)
-        assert value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentClaude"
+        assert isinstance(value, EnumValue)
+        assert value.variant == "AgentClaude"
         assert value.fields["model"] == TextValue("haiku")
 
     def test_malformed_override_fails_only_the_entry_that_triggers_it(self) -> None:
@@ -1023,14 +1023,14 @@ class TestSettingOverrideThreading:
             }
         )
         _ok(s, "import std/config")
-        assert _read(s, "default-agent").display_name == "Agent::AgentCommand"
+        assert _read(s, "default-agent").variant == "AgentCommand"
         _ok(s, 'std/config::default-agent := AgentClaude("haiku", "low")')
         s.reset()
 
         _ok(s, "import std/config")
         value = _read(s, "default-agent")
-        assert isinstance(value, RecordValue)
-        assert value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
+        assert isinstance(value, EnumValue)
+        assert value.variant == "AgentCommand"
         assert value.fields["command"] == TextValue("overridden")
 
     def test_reimporting_std_config_does_not_resplice_the_override(
@@ -1066,14 +1066,14 @@ class TestSettingOverrideThreading:
             }
         )
         first = _ok(s, "import std/config\nstd/config::default-agent")
-        assert isinstance(first.value, RecordValue)
-        assert first.value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
+        assert isinstance(first.value, EnumValue)
+        assert first.value.variant == "AgentCommand"
         assert first.value.fields["command"] == TextValue("overridden")
         assert new_module_counts[0] > 0
 
         second = _ok(s, "import std/config\nstd/config::default-agent")
-        assert isinstance(second.value, RecordValue)
-        assert second.value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
+        assert isinstance(second.value, EnumValue)
+        assert second.value.variant == "AgentCommand"
         assert second.value.fields["command"] == TextValue("overridden")
 
         # The re-import found ``std/config`` already cached: nothing freshly

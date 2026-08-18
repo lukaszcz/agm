@@ -13,26 +13,31 @@ from typing import TypeAlias
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import TypeTable
-from agm.agl.semantics.types import Type
+from agm.agl.semantics.types import (
+    EnumType,
+    RecordType,
+    Type,
+)
 
 from .model import (
     BinderAssignment,
     BoolConstructor,
     Constructor,
     ConstructorCell,
+    EnumConstructor,
     FieldBearingConstructorKey,
     FieldBearingNominalConstructor,
     FieldOccurrenceProvenance,
     LiteralKind,
     MatchCaseContext,
     MatrixRow,
-    NominalConstructor,
     NormalizedMatchSite,
     Occurrence,
     OccurrenceId,
     PathDecomposition,
     PatternCell,
     PatternProvenance,
+    RecordConstructor,
     WildcardCell,
     field_bearing_constructor_key,
     field_bearing_constructor_sort_key,
@@ -40,6 +45,7 @@ from .model import (
 from .normalize import (
     MatchCompileInvariantError,
     constructor_inhabits_type,
+    enum_constructor,
     record_constructor,
 )
 
@@ -68,7 +74,7 @@ _ConstructorSortKey: TypeAlias = tuple[
 
 
 def _constructor_key(constructor: Constructor) -> _ConstructorKey:
-    if isinstance(constructor, NominalConstructor):
+    if isinstance(constructor, (EnumConstructor, RecordConstructor)):
         return field_bearing_constructor_key(constructor)
     if isinstance(constructor, BoolConstructor):
         return _BoolConstructorKey(constructor.value)
@@ -77,7 +83,7 @@ def _constructor_key(constructor: Constructor) -> _ConstructorKey:
 
 def _constructor_sort_key(constructor: Constructor) -> _ConstructorSortKey:
     """Return a total, stable ordering key for a constructor's semantic identity."""
-    if isinstance(constructor, NominalConstructor):
+    if isinstance(constructor, (EnumConstructor, RecordConstructor)):
         return field_bearing_constructor_sort_key(constructor)
     if isinstance(constructor, BoolConstructor):
         return (2, (), "", (), "true" if constructor.value else "false")
@@ -87,16 +93,21 @@ def _constructor_sort_key(constructor: Constructor) -> _ConstructorSortKey:
 def _canonical_constructor(
     constructor: Constructor, subject_type: Type, type_table: TypeTable
 ) -> Constructor:
-    if not constructor_inhabits_type(constructor, subject_type, type_table):
+    if not constructor_inhabits_type(constructor, subject_type):
         raise MatchCompileInvariantError(
             f"constructor is incompatible with or uninhabited by occurrence type {subject_type!r}"
         )
-    if not isinstance(constructor, NominalConstructor):
+    if not isinstance(constructor, (EnumConstructor, RecordConstructor)):
         return constructor
 
-    canonical: FieldBearingNominalConstructor = record_constructor(
-        constructor.record_type, type_table
-    )
+    if isinstance(constructor, EnumConstructor):
+        assert isinstance(subject_type, EnumType)
+        canonical: FieldBearingNominalConstructor = enum_constructor(
+            subject_type, constructor.variant, type_table
+        )
+    else:
+        assert isinstance(subject_type, RecordType)
+        canonical = record_constructor(subject_type, type_table)
     if canonical != constructor:
         raise MatchCompileInvariantError(
             "nominal constructor does not exactly match its checked signature"
@@ -373,7 +384,7 @@ def _allocate_children(
     constructor: Constructor,
     sources: tuple[PatternProvenance, ...],
 ) -> tuple[tuple[Occurrence, ...], OccurrenceAllocator]:
-    if not isinstance(constructor, NominalConstructor) or not constructor.fields:
+    if not isinstance(constructor, (EnumConstructor, RecordConstructor)) or not constructor.fields:
         return (), allocator
     group = (parent.id, _constructor_key(constructor))
     existing = allocator.index.children_by_group.get(group)
@@ -615,7 +626,7 @@ def _validate_cell(cell: PatternCell, subject_type: Type, type_table: TypeTable)
     if isinstance(cell, WildcardCell):
         return
     constructor = _canonical_constructor(cell.constructor, subject_type, type_table)
-    if isinstance(constructor, NominalConstructor):
+    if isinstance(constructor, (EnumConstructor, RecordConstructor)):
         for field, argument in zip(constructor.fields, cell.arguments, strict=True):
             _validate_cell(argument, field.type, type_table)
 
@@ -696,7 +707,7 @@ def _validate_path_decompositions(
 
         fields = (
             canonical_constructor.fields
-            if isinstance(canonical_constructor, NominalConstructor)
+            if isinstance(canonical_constructor, (EnumConstructor, RecordConstructor))
             else ()
         )
         if len(decomposition.children) != len(fields):

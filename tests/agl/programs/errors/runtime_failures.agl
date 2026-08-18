@@ -8,7 +8,7 @@ param d: int
 param mode
 
 program def main() -> unit =
-  let tosser: Agent = AgentCommand("tosser")
+  let tosser = AgentCommand("tosser")
   try
     let q = 10 / d
     print q

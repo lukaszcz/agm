@@ -1,4 +1,4 @@
-import std/core using Option, Agent
+import std/core::{Option, Agent}
 
 builtin var default-agent: Agent = AgentClaude("sonnet", "medium")
 builtin var log: bool = false

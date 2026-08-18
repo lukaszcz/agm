@@ -8,7 +8,7 @@ import pytest
 
 from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi, AgentSpec
 from agm.agl.runtime.agents import decode_agent_value
-from agm.agl.semantics.values import IntValue, RecordValue
+from agm.agl.semantics.values import EnumValue, IntValue
 from tests._agl_helpers import agent_value
 
 
@@ -30,7 +30,7 @@ from tests._agl_helpers import agent_value
         ),
     ],
 )
-def test_decode_round_trips_runtime_agent_enum(value: RecordValue, expected: AgentSpec) -> None:
+def test_decode_round_trips_runtime_agent_enum(value: EnumValue, expected: AgentSpec) -> None:
     assert decode_agent_value(value) == expected
 
 

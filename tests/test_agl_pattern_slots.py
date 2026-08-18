@@ -213,7 +213,7 @@ def test_top_level_let_nested_nullary_constructor_selects_its_slot() -> None:
     assert binding is not None
     assert binding.kind is BinderKind.constructor_binding
     assert constructor is not None
-    assert (constructor.owner_path, constructor.owner_name) == (("Flag",), "on")
+    assert (constructor.owner_name, constructor.variant) == ("Flag", "on")
 
 
 def test_top_level_let_rejects_an_ambiguous_constructor_slot_reference() -> None:

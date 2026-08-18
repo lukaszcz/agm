@@ -2,7 +2,8 @@
   "diagnostic": {
     "line": 4,
     "message_contains": [
-      "requires 0 type argument"
+      "type arguments",
+      "type name"
     ]
   }
 }

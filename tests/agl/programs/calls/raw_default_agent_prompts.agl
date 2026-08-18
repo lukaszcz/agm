@@ -6,7 +6,7 @@ record Review
 param document: text
 
 program def main() -> unit =
-  let reviewer: Agent = AgentCommand("reviewer")
+  let reviewer = AgentCommand("reviewer")
   let summary = ask! Summarize %{document} in one line.
   print summary
 

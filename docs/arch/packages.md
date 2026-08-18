@@ -3,9 +3,10 @@
 The package domain defines portable, versioned AgL module collections. A package has a
 `package.toml` manifest and a module tree named after the package, so its modules import
 under a stable package-qualified path. Package and dependency names must be AgL identifier
-segments and cannot be reserved AgL keywords. Packages may declare minimum-version dependencies,
+segments and cannot be reserved AgL keywords. Packages may declare version-floor dependencies,
 literal resources, and CLI commands backed by parameterless `program def` entries with explicit
-`unit` results.
+`unit` results. Ordinary dependencies are unbounded minimums; `std` is a minimum within the
+compatible AGM release line (the same minor before 1.0, the same major thereafter).
 
 ## Package Lifecycle
 
@@ -17,7 +18,8 @@ that name no valid entry, and literal resource targets that are absent. Every mo
 once, by that one graph load, and resource call sites come from the scope pass's own built-in
 classification rather than a separate name-resolution rule.
 Dependency checking retains one selected package per name across the closure, mirroring
-installation's path-source and minimum-version selection for diamond dependencies.
+installation's path-source and minimum-version selection for ordinary diamond dependencies, while
+validating `std` directly against the running AGM release line.
 `agm pkg create` resolves the dependency closure, validates both the source tree and
 selected archive contents with those dependency modules, and produces a deterministic `.agmpkg`
 archive. `agm pkg install` validates dependencies, records immutable installations in the AGM-home
@@ -80,7 +82,9 @@ dependency-aware discipline validation against that staging tree before atomic p
 the store root is relocated across filesystems; dry runs repeat in-archive discipline validation with the
 resolved dependency closure. The shipped
 `std` package is a managed store package whose
-version must exactly match the running AGM version. A shared locator finds its source at the
+version must exactly match the running AGM version. Package `std` requirements accept that version
+only when it meets their floor and compatible-line upper bound. Refreshing it after an AGM release-line
+upgrade deactivates incompatible packages and their dependents while retaining their installed trees. A shared locator finds its source at the
 repository root during development and inside the installed `agm` package in a wheel. It is
 refreshed by `just install`, not by the ordinary package-install paths, and cannot be uninstalled.
 Its package-domain refresh holds the store lock while staging and validating a complete replacement
@@ -113,8 +117,8 @@ selected manifest and module ownership before executing it.
 - `src/agm/packages/discipline.py` — source-free manifest and module-tree validation, plus the
   single graph load and scope pass whose resolution decides command program references and which
   call sites are resource built-ins, for both directory and archive packages.
-- `src/agm/packages/model.py` and `development.py` — package identity, MVS version selection, and
-  development-package discovery.
+- `src/agm/packages/model.py` and `development.py` — package identity, ordinary MVS version
+  selection, `std` compatibility bounds, and development-package discovery.
 - `src/agm/packages/layout.py` — pure store-directory and activation-index filename constants,
   taking an already-resolved AGM home so `config.general` can depend on it without a cycle back
   into the package domain.

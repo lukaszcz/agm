@@ -10,7 +10,7 @@ import pytest
 
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver, RunResult
-from agm.agl.semantics.values import RecordValue, TextValue, Value
+from agm.agl.semantics.values import EnumValue, TextValue, Value
 from agm.cli_support.args import ExecArgs
 from agm.commands import exec as exec_command
 from agm.commands import exec_program as exec_engine
@@ -24,7 +24,7 @@ def _file_program(body: str) -> str:
     """Build an explicit file entry while leaving import headers at the root."""
     lines = body.splitlines()
     headers: list[str] = []
-    while lines and (lines[0].startswith("import ") or lines[0].startswith("open import ")):
+    while lines and lines[0].startswith("import "):
         headers.append(lines.pop(0))
     return "\n".join(
         (*headers, "program def main() -> unit =", *(f"  {line}" for line in lines), "")
@@ -202,7 +202,7 @@ def test_exec_agent_source_cli_and_config_precedence(
     config_literal: str,
     cli_literal: str | None,
     source_literal: str | None,
-    expected: RecordValue,
+    expected: EnumValue,
 ) -> None:
     home = tmp_path / "home"
     config_dir = home / ".agm"
@@ -239,7 +239,7 @@ def test_exec_agent_source_cli_and_config_precedence(
     # ``run`` retains top-level bindings only internally; the observable output
     # confirms the selected constructor and each expected field.
     rendered = capsys.readouterr().out
-    assert expected.display_name.rsplit("::", maxsplit=1)[-1] in rendered
+    assert expected.variant in rendered
     for field in expected.fields.values():
         assert isinstance(field, TextValue)
         assert field.value in rendered
@@ -295,7 +295,7 @@ def test_exec_default_agent_beats_runner_precedence(
     capsys: pytest.CaptureFixture[str],
     default_agent_literal: str | None,
     runner: str,
-    expected: RecordValue,
+    expected: EnumValue,
 ) -> None:
     home = tmp_path / "home"
     config_dir = home / ".agm"
@@ -318,7 +318,7 @@ def test_exec_default_agent_beats_runner_precedence(
     )
 
     rendered = capsys.readouterr().out
-    assert expected.display_name.rsplit("::", maxsplit=1)[-1] in rendered
+    assert expected.variant in rendered
     for field in expected.fields.values():
         assert isinstance(field, TextValue)
         assert field.value in rendered

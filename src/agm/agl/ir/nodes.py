@@ -86,7 +86,7 @@ __all__ = [
     "IrIndex",
     "IrIndexSet",
     "IrIndirectCall",
-    "IrNominalCaseKey",
+    "IrEnumCaseKey",
     "IrLiteralCaseKey",
     "IrLiteralKind",
     "IrLiteralScalar",
@@ -95,6 +95,7 @@ __all__ = [
     "IrMakeConstructor",
     "IrMakeClosure",
     "IrMakeDict",
+    "IrMakeEnum",
     "IrMakeException",
     "IrMakeArray",
     "IrMakeJsonArray",
@@ -114,8 +115,7 @@ __all__ = [
     "IrTry",
     "IrUnary",
     "IrUpdateRecord",
-    "IrNominalCast",
-    "IrNominalIs",
+    "IrVariantIs",
     "UseDefault",
     "is_canonical_literal_scalar",
 ]
@@ -546,6 +546,24 @@ class IrMakeRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class IrMakeEnum:
+    """IR enum-variant construction: ``EnumName::Variant(field = expr, ...)``.
+
+    ``nominal`` — the ``NominalId`` of the owning enum type.
+    ``display_name`` — user-facing enum type name.
+    ``variant`` — the variant name.
+    ``fields`` — declaration-order tuple of ``(field_name, expr)`` pairs;
+        each ``expr`` is already coerced by the lowerer.
+    """
+
+    location: Location
+    nominal: NominalId
+    display_name: str
+    variant: str
+    fields: "tuple[tuple[str, IrExpr], ...]"
+
+
+@dataclass(frozen=True, slots=True)
 class IrMakeException:
     """IR exception construction: ``ExcName(field: expr, ...)``.
 
@@ -569,14 +587,18 @@ class IrMakeException:
 class IrMakeConstructor:
     """IR first-class constructor reference.
 
-    Evaluates to a ``ConstructorValue(nominal, display_name)`` without
-    constructing the record. Used when a constructor is referenced as a value
-    (non-call position).
+    Evaluates to a ``ConstructorValue(nominal, display_name, variant)`` without
+    constructing the record/enum.  Used when a constructor is referenced as a
+    value (non-call position).
+
+    ``variant`` is ``None`` for a record constructor; non-``None`` for an enum
+    variant constructor.
     """
 
     location: Location
     nominal: NominalId
     display_name: str
+    variant: "str | None"
 
 
 @dataclass(frozen=True, slots=True)
@@ -586,7 +608,9 @@ class IrConvert:
     Evaluates ``value`` once, then runs ``recipe`` (a typeless
     ``ConversionRecipe``).  ``failure_mode`` selects behavior on a fallible
     failure: ``RAISE_CAST_ERROR`` raises a ``CastError`` (the ``as`` operator);
-    ``RETURN_BOOL`` makes ``as?`` evaluate to whether the conversion succeeded.
+    ``RETURN_BOOL`` yields ``False`` (the fallible ``as?`` operator).  Total
+    ``as?`` is lowered to ``IrSequence((source, IrConstBool(True)))`` and never
+    reaches this node.
     """
 
     location: Location
@@ -596,28 +620,18 @@ class IrConvert:
 
 
 @dataclass(frozen=True, slots=True)
-class IrNominalCast:
-    """Identity cast from an enum value to one of its member records.
+class IrVariantIs:
+    """IR enum-variant membership test (``is`` / ``is not``).
 
-    ``test_only`` makes a nominal mismatch evaluate to ``false`` instead of
-    raising ``CastError``. The labels are statically selected source type names
-    for a failed ordinary cast.
+    Evaluates ``value`` (always an ``EnumValue`` in well-lowered IR) and yields
+    ``BoolValue((value.variant == variant) != negated)``. The boolean depends
+    only on the variant string and ``negated`` because the checker guarantees
+    the operand's enum type. ``nominal`` records the tested enum for validation.
     """
 
     location: Location
     nominal: NominalId
-    value: "IrExpr"
-    test_only: bool
-    source_label: str
-    target_label: str
-
-
-@dataclass(frozen=True, slots=True)
-class IrNominalIs:
-    """IR nominal-member test (``is`` / ``is not``)."""
-
-    location: Location
-    nominal: NominalId
+    variant: str
     value: "IrExpr"
     negated: bool
 
@@ -761,10 +775,11 @@ def is_canonical_literal_scalar(kind: IrLiteralKind, value: IrLiteralScalar) -> 
 
 
 @dataclass(frozen=True, slots=True)
-class IrNominalCaseKey:
-    """One record-member discriminant identified by nominal declaration."""
+class IrEnumCaseKey:
+    """One enum discriminant identified by nominal owner and variant."""
 
     nominal: NominalId
+    variant: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -792,7 +807,7 @@ class IrLiteralCaseKey:
             raise ValueError(f"invalid scalar {value!r} for literal case kind {self.kind.name!r}")
 
 
-IrCaseKey: TypeAlias = IrNominalCaseKey | IrLiteralCaseKey
+IrCaseKey: TypeAlias = IrEnumCaseKey | IrLiteralCaseKey
 
 
 @dataclass(frozen=True, slots=True)
@@ -1153,10 +1168,10 @@ IrExpr = (
     | IrIndexSet
     | IrRenderTemplate
     | IrMakeRecord
+    | IrMakeEnum
     | IrMakeException
     | IrMakeConstructor
-    | IrNominalCast
-    | IrNominalIs
+    | IrVariantIs
     | IrConvert
     | IrIf
     | IrRaise

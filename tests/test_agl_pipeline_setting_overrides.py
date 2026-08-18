@@ -20,7 +20,7 @@ from agm.agl.modules.loader import load_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import AglSyntaxError
 from agm.agl.pipeline import ParsedEntry, PipelineDriver, PreparedProgram
-from agm.agl.semantics.values import RecordValue, TextValue
+from agm.agl.semantics.values import EnumValue, TextValue
 from agm.agl.setting_overrides import SettingOverride
 from tests._agl_helpers import prepare_inline_command, run_inline_command
 
@@ -87,7 +87,7 @@ class TestParseEntry:
 
     def test_prepare_parsed_entry_matches_prepare_program(self) -> None:
         """``prepare_program`` is a thin wrapper: same result either way."""
-        source = "open import std/config\nprogram def main() -> unit = ()"
+        source = "import std/config::*\nprogram def main() -> unit = ()"
         parsed = PipelineDriver.parse_entry(source, entry_path=None)
         via_split = PipelineDriver.prepare_parsed_entry(parsed, roots=_roots(), default_stdlib=True)
         via_wrapper = prepare_inline_command(source, entry_path=None, roots=_roots())
@@ -104,15 +104,15 @@ class TestParseEntry:
 
 class TestNoOverridesRegression:
     def test_prepare_without_overrides_reads_the_declared_default(self) -> None:
-        driver, prepared = _prepare("open import std/config\nlet value = std/config::default-agent")
+        driver, prepared = _prepare("import std/config::*\nlet value = std/config::default-agent")
         assert prepared.diagnostics == ()
         result = run_inline_command(
-            driver, "open import std/config\nlet value = std/config::default-agent", roots=_roots()
+            driver, "import std/config::*\nlet value = std/config::default-agent", roots=_roots()
         )
         assert result.ok, f"expected success but got: {result.diagnostics or result.error!r}"
         value = result.bindings["value"]
-        assert isinstance(value, RecordValue)
-        assert value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentClaude"
+        assert isinstance(value, EnumValue)
+        assert value.variant == "AgentClaude"
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +123,7 @@ class TestNoOverridesRegression:
 class TestOverrideApplied:
     def test_default_agent_override_observed_by_the_program(self) -> None:
         driver, prepared = _prepare(
-            "open import std/config\nlet value = std/config::default-agent",
+            "import std/config::*\nlet value = std/config::default-agent",
             overrides={
                 "default-agent": SettingOverride(
                     source='AgentCommand("overridden")', origin="--agent"
@@ -133,7 +133,7 @@ class TestOverrideApplied:
         assert prepared.diagnostics == ()
         result = run_inline_command(
             driver,
-            "open import std/config\nlet value = std/config::default-agent",
+            "import std/config::*\nlet value = std/config::default-agent",
             roots=_roots(),
             setting_overrides={
                 "default-agent": SettingOverride(
@@ -143,8 +143,8 @@ class TestOverrideApplied:
         )
         assert result.ok, f"expected success but got: {result.diagnostics or result.error!r}"
         value = result.bindings["value"]
-        assert isinstance(value, RecordValue)
-        assert value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
+        assert isinstance(value, EnumValue)
+        assert value.variant == "AgentCommand"
         assert value.fields["command"] == TextValue("overridden")
 
     def test_program_module_graph_is_built_exactly_once(
@@ -167,7 +167,7 @@ class TestOverrideApplied:
         monkeypatch.setattr(loader_mod, "build_repl_graph", spy)
 
         _driver, prepared = _prepare(
-            "open import std/config\nlet value = std/config::default-agent\nvalue",
+            "import std/config::*\nlet value = std/config::default-agent\nvalue",
             overrides={
                 "default-agent": SettingOverride(
                     source='AgentCommand("overridden")', origin="--agent"
@@ -342,14 +342,14 @@ class TestMalformedAgentCommandAtConstruction:
 
     def test_well_formed_command_text_runs_normally(self) -> None:
         driver, prepared = _prepare(
-            "open import std/config\nlet value = std/config::default-agent",
+            "import std/config::*\nlet value = std/config::default-agent",
             overrides={
                 "default-agent": SettingOverride(source='AgentCommand("echo hi")', origin="--agent")
             },
         )
         result = run_inline_command(
             driver,
-            "open import std/config\nlet value = std/config::default-agent",
+            "import std/config::*\nlet value = std/config::default-agent",
             roots=_roots(),
             setting_overrides={
                 "default-agent": SettingOverride(source='AgentCommand("echo hi")', origin="--agent")
@@ -357,8 +357,8 @@ class TestMalformedAgentCommandAtConstruction:
         )
         assert result.ok, f"expected success but got: {result.diagnostics or result.error!r}"
         value = result.bindings["value"]
-        assert isinstance(value, RecordValue)
-        assert value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
+        assert isinstance(value, EnumValue)
+        assert value.variant == "AgentCommand"
         assert value.fields["command"] == TextValue("echo hi")
 
     def test_seeded_malformed_command_text_is_also_a_pre_execution_diagnostic(self) -> None:

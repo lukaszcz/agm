@@ -23,6 +23,7 @@ from agm.agl.semantics.values import (
     ConstructorValue,
     DecimalValue,
     DictValue,
+    EnumValue,
     ExceptionValue,
     IntValue,
     IrClosureValue,
@@ -69,11 +70,11 @@ class TestIdentityOnPrimitivesAndOpaqueValues:
             assert shallow_copy_value(value) is value
 
     def test_deep_copy_constructor_value_is_identity(self) -> None:
-        ctor = ConstructorValue(nominal=_NOMINAL, display_name="Box")
+        ctor = ConstructorValue(nominal=_NOMINAL, display_name="Box", variant=None)
         assert deep_copy_value(ctor) is ctor
 
     def test_shallow_copy_constructor_value_is_identity(self) -> None:
-        ctor = ConstructorValue(nominal=_NOMINAL, display_name="Box")
+        ctor = ConstructorValue(nominal=_NOMINAL, display_name="Box", variant=None)
         assert shallow_copy_value(ctor) is ctor
 
     def test_shallow_copy_json_value_is_identity(self) -> None:
@@ -135,18 +136,15 @@ class TestShallowCopyOneLevel:
 
     def test_enum_fields_shared(self) -> None:
         inner = ArrayValue(elements=[IntValue(1)])
-        original = RecordValue(
-            nominal=_NOMINAL, display_name=f"{'Choice'}::{'Some'}", fields={"value": inner}
+        original = EnumValue(
+            nominal=_NOMINAL, display_name="Choice", variant="Some", fields={"value": inner}
         )
         copied = shallow_copy_value(original)
-        assert isinstance(copied, RecordValue)
+        assert isinstance(copied, EnumValue)
         assert copied is not original
         assert copied.fields is not original.fields
         assert copied.fields["value"] is inner
-        assert (
-            copied.display_name.rsplit("::", maxsplit=1)[-1]
-            == original.display_name.rsplit("::", maxsplit=1)[-1]
-        )
+        assert copied.variant == original.variant
 
     def test_exception_fields_shared(self) -> None:
         inner = ArrayValue(elements=[IntValue(1)])
@@ -278,8 +276,8 @@ class TestDeepCopySharingAndCycles:
 
     def test_shared_enum_itself_is_deduplicated(self) -> None:
         """Two array slots holding the SAME enum value copy to the SAME new enum."""
-        shared_enum = RecordValue(
-            nominal=_NOMINAL, display_name=f"{'Choice'}::{'Some'}", fields={"value": IntValue(1)}
+        shared_enum = EnumValue(
+            nominal=_NOMINAL, display_name="Choice", variant="Some", fields={"value": IntValue(1)}
         )
         outer = ArrayValue(elements=[shared_enum, shared_enum])
         copied = deep_copy_value(outer)

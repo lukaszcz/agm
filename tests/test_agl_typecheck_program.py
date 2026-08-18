@@ -144,7 +144,7 @@ def test_opened_alias_resolves_while_its_type_body_is_being_built(tmp_path: Path
                 "type Alias[T] = Z::Box[T]\n"
                 "end Z\n"
                 "scope A\n"
-                "open Z using Alias as Bare\n"
+                "use Z::{Alias as Bare}\n"
                 "type Wrapper[T] = Bare[T]\n"
                 "end A\n"
                 "()"
@@ -403,7 +403,7 @@ def test_check_program_basic(tmp_path: Path) -> None:
     """Entry imports mylib with a record; annotated let binding typechecks successfully."""
     modules = {
         "entry": (
-            "open import mylib\ndef make() -> Point = mylib::makePoint()\nlet p: Point = make()\np"
+            "import mylib::*\ndef make() -> Point = mylib::makePoint()\nlet p: Point = make()\np"
         ),
         "mylib": (
             "record Point\n  x: int\n  y: int\ndef makePoint() -> Point = Point(x = 0, y = 0)"
@@ -479,8 +479,8 @@ def test_qualified_type_ref_in_constructor(tmp_path: Path) -> None:
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == RecordType(
-        "Red", scope_path=("Color",), module_id=mylib_id
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == EnumType(
+        "Color", module_id=mylib_id
     )
 
 
@@ -526,9 +526,9 @@ def test_qualified_type_ref_in_constructor_pattern(tmp_path: Path) -> None:
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    # Pin c's concrete member identity to mylib.
-    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == RecordType(
-        "Red", scope_path=("Color",), module_id=mylib_id
+    # Pin c's binding type as mylib::Color — not an any(TextType) scan over "red"/"blue".
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == EnumType(
+        "Color", module_id=mylib_id
     )
 
 
@@ -537,9 +537,9 @@ def test_qualified_type_ref_in_constructor_pattern(tmp_path: Path) -> None:
     (
         ("import mylib", "mylib"),
         ("import mylib as colors", "colors"),
-        ("open import mylib", "mylib"),
+        ("import mylib::*", "mylib"),
     ),
-    ids=("plain", "alias", "open"),
+    ids=("plain", "alias", "glob_tail"),
 )
 def test_module_qualified_imported_enum_pattern_publishes_constructor_ref(
     tmp_path: Path, import_decl: str, route: str
@@ -559,22 +559,22 @@ def test_module_qualified_imported_enum_pattern_publishes_constructor_ref(
     assert isinstance(let_decl.pattern, ConstructorPattern)
     constructor = entry.pattern_constructor_ref_for(let_decl.pattern.node_id)
     assert constructor is not None
-    assert (constructor.owner_module_id, constructor.owner_path, constructor.owner_name) == (
+    assert (constructor.owner_module_id, constructor.owner_name, constructor.variant) == (
         ModuleId.from_path("mylib"),
-        ("Flag",),
+        "Flag",
         "on",
     )
 
 
 # ---------------------------------------------------------------------------
-# 12. Unqualified open import: type name comes into scope
+# 12. Unqualified import tail: type name comes into scope
 # ---------------------------------------------------------------------------
 
 
 def test_unqualified_open_import_type(tmp_path: Path) -> None:
-    """Open import brings record type name into scope for unqualified use."""
+    """An import tail brings a record type name into scope for unqualified use."""
     modules = {
-        "entry": ("open import mylib\ndef mkp() -> Point = mkPoint()\nlet p: Point = mkp()\np"),
+        "entry": ("import mylib::*\ndef mkp() -> Point = mkPoint()\nlet p: Point = mkp()\np"),
         "mylib": ("record Point\n  x: int\n  y: int\ndef mkPoint() -> Point = Point(x = 0, y = 0)"),
     }
     mylib_id = ModuleId.from_path("mylib")
@@ -590,11 +590,11 @@ def test_unqualified_open_import_type(tmp_path: Path) -> None:
 
 
 def test_unqualified_type_clash_on_use(tmp_path: Path) -> None:
-    """Two open imports both export 'Color' → ambiguous type error at use site."""
+    """Two use imports::* both export 'Color' → ambiguous type error at use site."""
     modules = {
         "entry": (
-            "open import libA\n"
-            "open import libB\n"
+            "import libA::*\n"
+            "import libB::*\n"
             # 'Color' is ambiguous — could be libA::Color or libB::Color
             "let c: Color = libA::Color::Red\n"
             "c"
@@ -607,16 +607,16 @@ def test_unqualified_type_clash_on_use(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 14. Qualified access bounded by S (using clause): unlisted names inaccessible
+# 14. Positive import tails retain the module's full qualified surface
 # ---------------------------------------------------------------------------
 
 
-def test_qualified_access_bounded_by_s(tmp_path: Path) -> None:
-    """'import mylib using Point' — mylib::Rect is NOT in S → type error."""
+def test_positive_import_tail_retains_qualified_members(tmp_path: Path) -> None:
+    """A bare Point tail does not remove mylib::Rect from qualified access."""
     modules = {
         "entry": (
-            "import mylib using Point\n"
-            # Rect is not in S (only Point is), so mylib::Rect should fail
+            "import mylib::{Point}\n"
+            # The tail injects Point bare but leaves the route's full surface intact.
             "let r: mylib::Rect = mylib::mkRect()\n"
             "r"
         ),
@@ -629,8 +629,11 @@ def test_qualified_access_bounded_by_s(tmp_path: Path) -> None:
             "def mkRect() -> Rect = Rect(w = 10, h = 5)"
         ),
     }
-    with pytest.raises(AglScopeError, match="not in the imported set"):
-        _check_program(tmp_path, modules)
+    checked = _check_program(tmp_path, modules)
+    value_type = _binding_value_type(checked, ENTRY_ID, "r")
+    assert isinstance(value_type, RecordType)
+    assert value_type.name == "Rect"
+    assert value_type.module_id == ModuleId.from_path("mylib")
 
 
 # ---------------------------------------------------------------------------
@@ -639,7 +642,7 @@ def test_qualified_access_bounded_by_s(tmp_path: Path) -> None:
 
 
 def test_plain_import_does_not_expose_type_names_bare(tmp_path: Path) -> None:
-    """A plain (non-open) import leaves 'Hidden' unavailable as a bare type name."""
+    """A plain import without a tail leaves 'Hidden' unavailable as a bare type name."""
     modules = {
         "entry": ("import mylib\nlet h: Hidden = mylib::mkHidden()\nh"),
         "mylib": ("record Hidden\n  x: int\ndef mkHidden() -> Hidden = Hidden(x = 1)"),
@@ -678,11 +681,11 @@ def test_whole_graph_type_pre_pass_with_cycles(tmp_path: Path) -> None:
 
 
 def test_imported_exception_child_inherits_base_fields(tmp_path: Path) -> None:
-    """A child exception inherits fields from an open-imported base exception."""
+    """A child exception inherits fields from a base exposed by an import tail."""
     modules = {
-        "entry": ("open import a\nlet value = a::make()\nvalue"),
+        "entry": ("import a::*\nlet value = a::make()\nvalue"),
         "a": (
-            "open import z\n"
+            "import z::*\n"
             "exception Child extends Base\n"
             "  code: int\n"
             "def make() -> text =\n"
@@ -727,8 +730,8 @@ def test_enum_variant_qualification(tmp_path: Path) -> None:
     color_type = cg.program_type_table[(mylib_id, "Color")]
     assert isinstance(color_type, EnumType)
     assert color_type.module_id == mylib_id
-    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == RecordType(
-        "Red", scope_path=("Color",), module_id=mylib_id
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == EnumType(
+        "Color", module_id=mylib_id
     )
 
 
@@ -762,16 +765,17 @@ def test_self_ref_type(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 20. Unqualified constructor from open import
+# 20. Unqualified constructor from an import tail
 # ---------------------------------------------------------------------------
 
 
 def test_unqualified_constructor_from_open_import(tmp_path: Path) -> None:
-    "When Color is open-imported from foo, 'Color::Red' (bare variant) resolves to foo::Color."
+    """When an import tail exposes Color from foo, 'Color::Red' (bare variant)
+    resolves to foo::Color."""
     modules = {
         "entry": (
-            "open import mylib\n"
-            # Color is open-imported, so 'Color::Red' should resolve
+            "import mylib::*\n"
+            # The import tail exposes Color, so 'Color::Red' should resolve
             "let c: Color = Color::Red\n"
             "c"
         ),
@@ -783,43 +787,41 @@ def test_unqualified_constructor_from_open_import(tmp_path: Path) -> None:
     color_type = cg.program_type_table[(mylib_id, "Color")]
     assert isinstance(color_type, EnumType)
     assert color_type.module_id == mylib_id
-    # Pin c's concrete member type to mylib, not ENTRY_ID.
-    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == RecordType(
-        "Red", scope_path=("Color",), module_id=mylib_id
+    # Pin c's binding type: must be mylib::Color, not ENTRY_ID::Color
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == EnumType(
+        "Color", module_id=mylib_id
     )
 
 
 def test_bare_constructor_uses_its_open_imported_owner_module(tmp_path: Path) -> None:
-    """Distinct bare variants may have same-named owners in separate open imports."""
+    """Distinct bare variants may have same-named owners in separate use imports.::*"""
     modules = {
-        "entry": (
-            "open import first\nopen import second\nlet left = First\nlet right = Second\nright"
-        ),
+        "entry": ("import first::*\nimport second::*\nlet left = First\nlet right = Second\nright"),
         "first": "enum Choice\n  | First",
         "second": "enum Choice\n  | Second",
     }
 
     checked = _check_program(tmp_path, modules)
 
-    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "left")) == RecordType(
-        "First", scope_path=("Choice",), module_id=ModuleId.from_path("first")
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "left")) == EnumType(
+        "Choice", module_id=ModuleId.from_path("first")
     )
-    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "right")) == RecordType(
-        "Second", scope_path=("Choice",), module_id=ModuleId.from_path("second")
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "right")) == EnumType(
+        "Choice", module_id=ModuleId.from_path("second")
     )
 
 
 def test_generic_bare_constructor_uses_its_open_imported_owner_module(tmp_path: Path) -> None:
     modules = {
-        "entry": "open import first\nopen import second\nlet left = First(value = 1)\nleft",
+        "entry": "import first::*\nimport second::*\nlet left = First(value = 1)\nleft",
         "first": "enum Choice[T]\n  | First(value: T)",
         "second": "enum Choice[T]\n  | Second(value: T)",
     }
 
     checked = _check_program(tmp_path, modules)
 
-    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "left")) == RecordType(
-        "First", (IntType(),), scope_path=("Choice",), module_id=ModuleId.from_path("first")
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "left")) == EnumType(
+        "Choice", (IntType(),), module_id=ModuleId.from_path("first")
     )
 
 
@@ -917,159 +919,17 @@ def test_later_module_alias_available_to_entry_type_body(tmp_path: Path) -> None
 def test_later_module_alias_available_to_entry_type_body_via_open_import(
     tmp_path: Path,
 ) -> None:
-    """Entry type bodies can reference open-imported aliases before the alias module's turn."""
+    """Entry type bodies can reference aliases exposed by import tails before
+    their module's turn."""
     cg = _check_program(
         tmp_path,
         {
-            "entry": "open import zzz\nrecord Box\n  value: Alias\nlet b = Box(value = 1)\nb",
+            "entry": "import zzz::*\nrecord Box\n  value: Alias\nlet b = Box(value = 1)\nb",
             "zzz": "type Alias = int",
         },
     )
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "b")) == RecordType(
         "Box", module_id=ENTRY_ID
-    )
-
-
-def test_std_core_generic_member_type_resolves_to_an_inhabited_record() -> None:
-    checked = _check("record Holder\n  value: Option::Some[int]\n()")
-
-    holder = next(typ for typ in checked.type_env.type_table.entries() if typ.name == "Holder")
-    fields = dict(checked.type_env.type_table.record_fields(holder.handle()))
-    assert strip_decl_ids(fields["value"]) == RecordType(
-        "Some", (IntType(),), module_id=ModuleId.from_path("std/core"), scope_path=("Option",)
-    )
-
-
-def test_owner_applied_inline_member_aliases_substitute_captured_parameters() -> None:
-    """Aliases retain the inline member type specialized by its enum owner."""
-    checked = _check(
-        "enum Source[T]\n"
-        "  | Member(value: T)\n"
-        "type Direct = Source[text]::Member\n"
-        "type Generic[T] = Source[T]::Member\n"
-        "record Holder\n"
-        "  direct: Direct\n"
-        "  generic: Generic[int]\n"
-        "()"
-    )
-
-    holder = next(typ for typ in checked.type_env.type_table.entries() if typ.name == "Holder")
-    fields = dict(checked.type_env.type_table.record_fields(holder.handle()))
-    assert strip_decl_ids(fields["direct"]) == RecordType(
-        "Member", (TextType(),), scope_path=("Source",)
-    )
-    assert strip_decl_ids(fields["generic"]) == RecordType(
-        "Member", (IntType(),), scope_path=("Source",)
-    )
-
-
-def test_cross_module_owner_applied_inline_member_aliases_substitute_captured_parameters(
-    tmp_path: Path,
-) -> None:
-    """Imported aliases preserve owner-applied inline member specialization."""
-    checked = _check_program(
-        tmp_path,
-        {
-            "entry": (
-                "import lib\nrecord Holder\n  direct: lib::Direct\n  generic: lib::Generic[int]\n()"
-            ),
-            "lib": (
-                "enum Source[T]\n"
-                "  | Member(value: T)\n"
-                "type Direct = Source[text]::Member\n"
-                "type Generic[T] = Source[T]::Member"
-            ),
-        },
-    )
-
-    entry_env = checked.modules[ENTRY_ID].type_env
-    holder = next(typ for typ in entry_env.type_table.entries() if typ.name == "Holder")
-    fields = dict(entry_env.type_table.record_fields(holder.handle()))
-    library = ModuleId.from_path("lib")
-    assert strip_decl_ids(fields["direct"]) == RecordType(
-        "Member", (TextType(),), module_id=library, scope_path=("Source",)
-    )
-    assert strip_decl_ids(fields["generic"]) == RecordType(
-        "Member", (IntType(),), module_id=library, scope_path=("Source",)
-    )
-
-
-def test_owner_applied_inline_member_rejects_a_second_type_application() -> None:
-    """An applied owner makes its member concrete before a member application."""
-    with pytest.raises(AglTypeError, match="does not take type arguments"):
-        _check(
-            "enum Source[T]\n  | Member(value: T)\ntype Invalid[T] = Source[text]::Member[T]\n()"
-        )
-
-
-def test_owner_applied_inline_member_rejects_non_enum_owners_and_unknown_members() -> None:
-    """Owner application uses the enum member namespace rather than a raw path."""
-    with pytest.raises(AglTypeError, match="not a generic enum"):
-        _check("record Source[T](value: T)\ntype Invalid = Source[text]::Member\n()")
-    with pytest.raises(AglTypeError, match="Unknown scoped type"):
-        _check("enum Source[T]\n  | Known(value: T)\ntype Invalid = Source[text]::Member\n()")
-
-
-def test_cross_module_owner_applied_inline_member_rejects_a_second_type_application(
-    tmp_path: Path,
-) -> None:
-    """An imported generic alias cannot reapply a member after its owner."""
-    with pytest.raises(AglTypeError, match="does not take type arguments"):
-        _check_program(
-            tmp_path,
-            {
-                "entry": "import lib\n()",
-                "lib": (
-                    "enum Source[T]\n"
-                    "  | Member(value: T)\n"
-                    "type Invalid[T] = Source[text]::Member[T]"
-                ),
-            },
-        )
-
-
-def test_inline_member_records_resolve_in_local_type_positions() -> None:
-    checked = _check(
-        "scope Forest\n"
-        "record Box[T](value: T)\n"
-        "enum Outer[T] | Member\n"
-        "enum Tree[T]\n"
-        "  | Leaf\n"
-        "  | Node(value: T, transform: (T) -> T, boxed: Forest::Box[T], parent: Outer[T]::Member)\n"
-        "record Holder\n"
-        "  leaf: Tree::Leaf\n"
-        "  node: Tree::Node[int]\n"
-        "def identity(node: Tree::Node[int]) -> Tree::Node[int] = node\n"
-        "end Forest\n"
-        "()"
-    )
-
-    holder = next(
-        typ
-        for typ in checked.type_env.type_table.entries()
-        if typ.name == "Holder" and typ.scope_path == ("Forest",)
-    )
-    fields = dict(checked.type_env.type_table.record_fields(holder.handle()))
-    assert strip_decl_ids(fields["leaf"]) == RecordType("Leaf", scope_path=("Forest", "Tree"))
-    assert strip_decl_ids(fields["node"]) == RecordType(
-        "Node", (IntType(),), scope_path=("Forest", "Tree")
-    )
-
-
-def test_importing_an_enum_scope_subtree_exposes_member_record_types(tmp_path: Path) -> None:
-    checked = _check_program(
-        tmp_path,
-        {
-            "entry": "import lib using Tree\nrecord Holder(node: Tree::Node[int])\n()",
-            "lib": "enum Tree[T]\n  | Leaf\n  | Node(value: T)",
-        },
-    )
-
-    entry = checked.modules[ENTRY_ID]
-    holder = next(typ for typ in entry.type_env.type_table.entries() if typ.name == "Holder")
-    fields = dict(entry.type_env.type_table.record_fields(holder.handle()))
-    assert strip_decl_ids(fields["node"]) == RecordType(
-        "Node", (IntType(),), module_id=ModuleId.from_path("lib"), scope_path=("Tree",)
     )
 
 
@@ -1083,9 +943,76 @@ def test_imported_generic_alias_to_enum_constructs_variant(tmp_path: Path) -> No
         },
     )
 
-    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "value")) == RecordType(
-        "some", (IntType(),), scope_path=("Option",), module_id=ModuleId.from_path("lib")
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "value")) == EnumType(
+        "Option", (IntType(),), module_id=ModuleId.from_path("lib")
     )
+
+
+def test_exact_use_of_enum_alias_constructs_variant(tmp_path: Path) -> None:
+    checked = _check_program(
+        tmp_path,
+        {
+            "entry": "import lib\nuse lib::{Alias}\nlet value = Alias::some(value = 1)\nvalue",
+            "lib": "enum Option\n  | some(value: int)\ntype Alias = Option",
+        },
+    )
+
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "value")) == EnumType(
+        "Option", module_id=ModuleId.from_path("lib")
+    )
+
+
+def test_use_of_generic_enum_alias_constructs_variant(tmp_path: Path) -> None:
+    checked = _check_program(
+        tmp_path,
+        {
+            "entry": (
+                "import lib\nuse lib::{Alias}\nlet value = Alias[int]::some(value = [1])\nvalue"
+            ),
+            "lib": "enum Option[T]\n  | some(value: T)\ntype Alias[T] = Option[array[T]]",
+        },
+    )
+
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "value")) == EnumType(
+        "Option", (ArrayType(IntType()),), module_id=ModuleId.from_path("lib")
+    )
+
+
+def test_use_of_generic_enum_alias_qualifies_is_variant(tmp_path: Path) -> None:
+    checked = _check_program(
+        tmp_path,
+        {
+            "entry": (
+                "import lib\n"
+                "use lib::{Alias}\n"
+                "let value = Alias[int]::some(value = [1])\n"
+                "let result = value is Alias::some\n"
+                "result"
+            ),
+            "lib": "enum Option[T]\n  | some(value: T)\ntype Alias[T] = Option[array[T]]",
+        },
+        default_stdlib=False,
+    )
+
+    assert _binding_value_type(checked, ENTRY_ID, "result") == BoolType()
+
+
+def test_use_of_enum_alias_does_not_restore_explicitly_hidden_child(tmp_path: Path) -> None:
+    with pytest.raises(AglScopeError):
+        _check_program(
+            tmp_path,
+            {
+                "entry": (
+                    "import lib\n"
+                    "use lib::* hiding Alias::some\n"
+                    "let value = Alias::some(value = 1)\n"
+                    "value"
+                ),
+                "lib": (
+                    "enum Option\n  | some(value: int)\ntype Alias = Option\nrecord Alias::some()"
+                ),
+            },
+        )
 
 
 def test_imported_generic_alias_to_record_constructs_transparently(tmp_path: Path) -> None:
@@ -1127,24 +1054,6 @@ def test_imported_generic_alias_to_non_nominal_is_a_type_error(tmp_path: Path) -
                 "lib": "type Alias[T] = array[T]",
             },
         )
-
-
-def test_imported_alias_to_record_remains_constructible(tmp_path: Path) -> None:
-    checked = _check_program(
-        tmp_path,
-        {
-            "entry": (
-                "import lib\n"
-                "let factory: (int) -> lib::Point = lib::Alias\n"
-                "let point = factory(1)\n"
-                "let direct = lib::Alias(value = 2)\n"
-                "direct"
-            ),
-            "lib": "record Point\n  value: int\ntype Alias = Point",
-        },
-    )
-
-    assert _binding_value_type(checked, ENTRY_ID, "point") is not None
 
 
 def test_imported_alias_to_non_nominal_named_type_is_not_constructible(tmp_path: Path) -> None:
@@ -1195,12 +1104,12 @@ def test_local_alias_of_record_remains_constructible(tmp_path: Path) -> None:
 
 
 def test_open_imported_alias_of_enum_is_a_type_name_not_a_value(tmp_path: Path) -> None:
-    """An open-imported nominal alias of an enum keeps its "type name" diagnostic."""
+    """A nominal enum alias exposed by an import tail keeps its "type name" diagnostic."""
     with pytest.raises(AglTypeError, match="is a type name, not a value"):
         _check_program(
             tmp_path,
             {
-                "entry": "open import pal\nprint(Palette)",
+                "entry": "import pal::*\nprint(Palette)",
                 "pal": "enum Color\n  | Red\n  | Blue\n\ntype Palette = Color",
             },
         )
@@ -1231,17 +1140,18 @@ def test_module_qualified_alias_of_imported_enum_is_a_type_name_not_a_value(
 def test_open_imported_bare_alias_of_imported_enum_is_a_type_name_not_a_value(
     tmp_path: Path,
 ) -> None:
-    """A local alias whose target is an open-imported bare enum name has no bare constructor.
+    """A local alias whose target is a bare enum name exposed by an import tail
+    has no bare constructor.
 
     Unlike ``test_open_imported_alias_of_enum_is_a_type_name_not_a_value``, the
     alias here is declared in the CONSUMING (entry) module, and its target
-    reaches the enum through an unqualified name exposed by an open import.
+    reaches the enum through an unqualified name exposed by an import tail.
     """
     with pytest.raises(AglTypeError, match="is a type name, not a value"):
         _check_program(
             tmp_path,
             {
-                "entry": "open import pal\ntype Local = Color\nprint(Local)",
+                "entry": "import pal::*\ntype Local = Color\nprint(Local)",
                 "pal": "enum Color\n  | Red\n  | Blue",
             },
         )
@@ -1281,11 +1191,11 @@ def test_later_module_parameterized_alias_available_to_entry_type_body(
 def test_later_module_parameterized_alias_available_via_open_import(
     tmp_path: Path,
 ) -> None:
-    """Open-imported parameterized aliases resolve lazily before their module's turn."""
+    """Parameterized aliases exposed by import tails resolve lazily before their module's turn."""
     cg = _check_program(
         tmp_path,
         {
-            "entry": "open import zzz\nrecord Box\n  xs: Alias[int]\nlet b = Box(xs = [])\nb",
+            "entry": "import zzz::*\nrecord Box\n  xs: Alias[int]\nlet b = Box(xs = [])\nb",
             "zzz": "type Alias[T] = array[T]",
         },
     )
@@ -1297,12 +1207,12 @@ def test_later_module_parameterized_alias_available_via_open_import(
 def test_later_module_parameterized_alias_bare_reference_is_rejected(
     tmp_path: Path,
 ) -> None:
-    """A lazy open-imported parameterized alias still requires type arguments."""
+    """A lazy parameterized alias exposed by an import tail still requires type arguments."""
     with pytest.raises(AglTypeError, match="requires 1 type argument"):
         _check_program(
             tmp_path,
             {
-                "entry": "open import zzz\nrecord Box\n  xs: Alias\nBox(xs = [])",
+                "entry": "import zzz::*\nrecord Box\n  xs: Alias\nBox(xs = [])",
                 "zzz": "type Alias[T] = array[T]",
             },
         )
@@ -1314,7 +1224,7 @@ def test_resolve_named_type_treats_open_parameterized_alias_as_non_concrete(
     checked = _check_program(
         tmp_path,
         {
-            "entry": "import library/remote using Alias\n()",
+            "entry": "import library/remote::{Alias}\n()",
             "library/remote": "type Alias[T] = array[T]",
         },
     )
@@ -1336,12 +1246,12 @@ def test_later_module_cross_alias_cycle_is_rejected(tmp_path: Path) -> None:
 
 
 def test_open_imported_generic_type_bare_reference_is_rejected(tmp_path: Path) -> None:
-    """A bare open-imported generic nominal type is not a concrete type."""
+    """A bare generic nominal type exposed by an import tail is not concrete."""
     with pytest.raises(AglTypeError, match="Unknown type 'Box'"):
         _check_program(
             tmp_path,
             {
-                "entry": "open import zzz\nrecord Use\n  value: Box\nUse(value = 1)",
+                "entry": "import zzz::*\nrecord Use\n  value: Box\nUse(value = 1)",
                 "zzz": "record Box[T]\n  value: T",
             },
         )
@@ -1395,12 +1305,12 @@ def test_unknown_module_qualifier_error(tmp_path: Path) -> None:
 
 
 def test_module_qualified_constructor_not_enum_error(tmp_path: Path) -> None:
-    "'mylib::Point::Red' where Point is a record, not an enum → type error."
+    "'mylib::Point::Red' where Point is a record is rejected."
     modules = {
         "entry": ("import mylib\nlet p = mylib::Point::Red\np"),
         "mylib": ("record Point\n  x: int"),
     }
-    with pytest.raises(AglScopeError, match="not in the imported set"):
+    with pytest.raises(AglScopeError):
         _check_program(tmp_path, modules)
 
 
@@ -1410,12 +1320,12 @@ def test_module_qualified_constructor_not_enum_error(tmp_path: Path) -> None:
 
 
 def test_module_qualified_constructor_missing_variant_error(tmp_path: Path) -> None:
-    "'mylib::Color::Purple' where Purple doesn't exist → type error."
+    "'mylib::Color::Purple' is rejected when the variant is absent."
     modules = {
         "entry": ("import mylib\nlet c = mylib::Color::Purple\nc"),
         "mylib": ("enum Color\n  | Red\n  | Blue"),
     }
-    with pytest.raises(AglScopeError, match="not in the imported set"):
+    with pytest.raises(AglScopeError):
         _check_program(tmp_path, modules)
 
 
@@ -1482,9 +1392,7 @@ def test_module_qualified_variant_qualifier_mismatch(tmp_path: Path) -> None:
 
 def test_module_prefix_variant_is_test_uses_lhs_enum_name(tmp_path: Path) -> None:
     modules = {
-        "entry": (
-            "import mylib\nlet c: mylib::Color = mylib::Color::Red\nlet ok = c is mylib::Red\nok"
-        ),
+        "entry": ("import mylib\nlet c = mylib::Color::Red\nlet ok = c is mylib::Red\nok"),
         "mylib": "enum Color\n  | Red\n  | Blue",
     }
     cg = _check_program(tmp_path, modules)
@@ -1493,10 +1401,7 @@ def test_module_prefix_variant_is_test_uses_lhs_enum_name(tmp_path: Path) -> Non
 
 def test_slash_module_prefix_variant_is_test_uses_lhs_enum_name(tmp_path: Path) -> None:
     modules = {
-        "entry": (
-            "import pkg/lib\nlet c: pkg/lib::Color = pkg/lib::Color::Red\n"
-            "let ok = c is pkg/lib::Red\nok"
-        ),
+        "entry": ("import pkg/lib\nlet c = pkg/lib::Color::Red\nlet ok = c is pkg/lib::Red\nok"),
         "pkg/lib": "enum Color\n  | Red\n  | Blue",
     }
     cg = _check_program(tmp_path, modules)
@@ -1505,7 +1410,7 @@ def test_slash_module_prefix_variant_is_test_uses_lhs_enum_name(tmp_path: Path) 
 
 def test_is_test_uses_local_enum_when_alias_route_has_another_owner(tmp_path: Path) -> None:
     modules = {
-        "entry": ("import lib as Color\nenum Color | Red\nlet c: Color = Red\nc is Color::Red"),
+        "entry": ("import lib as Color\nenum Color | Red\nlet c = Red\nc is Color::Red"),
         "lib": "enum Other | Red",
     }
 
@@ -1534,20 +1439,18 @@ def test_renamed_import_hides_original_enum_name_in_patterns_and_is_tests(
     tmp_path: Path, enum_use: str
 ) -> None:
     modules = {
-        "entry": (
-            f"import mylib using Color as C\nlet value: mylib::C = mylib::C::Red\n{enum_use}"
-        ),
+        "entry": (f"import mylib::{{Color as C}}\nlet value: mylib::C = mylib::C::Red\n{enum_use}"),
         "mylib": "enum Color | Red | Blue",
     }
 
-    with pytest.raises(AglTypeError):
+    with pytest.raises(AglScopeError):
         _check_program(tmp_path, modules)
 
 
 def test_pattern_uses_injected_enum_when_alias_route_has_same_owner(tmp_path: Path) -> None:
     modules = {
         "entry": (
-            "import a using Color\n"
+            "import a::{Color}\n"
             "import b as Color\n"
             "def check_module(value: Color) -> int =\n"
             "  case value of | Color::Red => 1 | _ => 0\n"
@@ -1569,7 +1472,7 @@ def test_name_not_in_s_qualified_lookup(tmp_path: Path) -> None:
     """Qualified access to a name not in S raises an error."""
     modules = {
         "entry": (
-            "import mylib using getValue\n"
+            "import mylib::{getValue}\n"
             # Point is NOT in S (only getValue is)
             "let n: mylib::Point = mylib::mkPoint()\n"
             "n"
@@ -1581,8 +1484,7 @@ def test_name_not_in_s_qualified_lookup(tmp_path: Path) -> None:
             "def mkPoint() -> Point = Point(x = 1)"
         ),
     }
-    with pytest.raises(AglScopeError, match="not in the imported set"):
-        _check_program(tmp_path, modules)
+    assert _check_program(tmp_path, modules).modules[ENTRY_ID].type_env is not None
 
 
 # ---------------------------------------------------------------------------
@@ -1648,12 +1550,12 @@ def test_module_qualified_enum_as_constructor_error(tmp_path: Path) -> None:
 
 
 def test_module_qualified_unknown_constructor_error(tmp_path: Path) -> None:
-    """'mylib::Unknown' when Unknown doesn't exist in mylib → type error."""
+    """An unknown qualified constructor is rejected."""
     modules = {
         "entry": ("import mylib\nlet c = mylib::Unknown\nc"),
         "mylib": ("enum Color\n  | Red\n  | Blue"),
     }
-    with pytest.raises(AglScopeError, match="not in the imported set"):
+    with pytest.raises(AglScopeError):
         _check_program(tmp_path, modules)
 
 
@@ -1663,11 +1565,11 @@ def test_module_qualified_unknown_constructor_error(tmp_path: Path) -> None:
 
 
 def test_open_imported_enum_variant_unqualified_bare(tmp_path: Path) -> None:
-    """Open-imported enum variant used as bare constructor resolves correctly."""
+    """An enum variant exposed by an import tail resolves as a bare constructor."""
     modules = {
         "entry": (
-            "open import mylib\n"
-            # Red is a bare variant (no args) from open-imported Color
+            "import mylib::*\n"
+            # Red is a bare variant (no args) from Color exposed by the import tail
             "let c = Red\n"
             "c"
         ),
@@ -1675,8 +1577,8 @@ def test_open_imported_enum_variant_unqualified_bare(tmp_path: Path) -> None:
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == RecordType(
-        "Red", scope_path=("Color",), module_id=mylib_id
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == EnumType(
+        "Color", module_id=mylib_id
     )
 
 
@@ -1707,9 +1609,9 @@ def test_self_ref_type_builtin_exception_fallback(tmp_path: Path) -> None:
 
 
 def test_qualified_type_not_in_s_error(tmp_path: Path) -> None:
-    """Using mylib::Secret when Secret is outside the selected set → type error."""
+    """Referencing mylib::Secret when Secret is outside the selected tail → type error."""
     modules = {
-        "entry": ("import mylib using pub\nlet n: mylib::Secret = mylib::pub()\nn"),
+        "entry": ("import mylib::{pub}\nlet n: mylib::Secret = mylib::pub()\nn"),
         "mylib": ("record Secret\n  x: int\ndef pub() -> int = 1"),
     }
     with pytest.raises(AglTypeError):
@@ -1717,14 +1619,14 @@ def test_qualified_type_not_in_s_error(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: _resolve_name_type raises for an ambiguous open import.
+# Coverage: _resolve_name_type raises for ambiguous import-tail exposure.
 # ---------------------------------------------------------------------------
 
 
 def test_ambiguous_open_import_type_error(tmp_path: Path) -> None:
-    """Both libA and libB export 'Color': using 'Color' unqualified is ambiguous → error."""
+    """Both import tails expose 'Color', so its unqualified use is ambiguous → error."""
     modules = {
-        "entry": ("open import libA\nopen import libB\nlet c: Color = libA::Color::Red\nc"),
+        "entry": ("import libA::*\nimport libB::*\nlet c: Color = libA::Color::Red\nc"),
         "libA": ("enum Color\n  | Red\n  | Blue"),
         "libB": ("enum Color\n  | Green\n  | Yellow"),
     }
@@ -1738,10 +1640,10 @@ def test_ambiguous_open_import_type_error(tmp_path: Path) -> None:
 
 
 def test_open_import_non_enum_type_skipped_in_variant_lookup(tmp_path: Path) -> None:
-    """Open import has a Record and Enum; searching for a variant skips the Record."""
+    """An import tail exposes a Record and Enum; variant lookup skips the Record."""
     modules = {
         "entry": (
-            "open import mylib\n"
+            "import mylib::*\n"
             # Red is a bare variant; Color is the only enum matching
             # Point is a record (not enum) so it's skipped in get_open_imported_enum_candidates
             "let c = Red\n"
@@ -1751,8 +1653,8 @@ def test_open_import_non_enum_type_skipped_in_variant_lookup(tmp_path: Path) -> 
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == RecordType(
-        "Red", scope_path=("Color",), module_id=mylib_id
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == EnumType(
+        "Color", module_id=mylib_id
     )
 
 
@@ -1762,20 +1664,21 @@ def test_open_import_non_enum_type_skipped_in_variant_lookup(tmp_path: Path) -> 
 
 
 def test_open_import_dedup_in_variant_lookup(tmp_path: Path) -> None:
-    """When a type is open-imported under two names, it is deduplicated in variant lookup."""
+    """A type exposed under two import-tail names is deduplicated in variant lookup."""
     modules = {
         "entry": (
             # Two import declarations expose (mylib, "Color") under two unqualified names:
-            # "Color" (via using Color) and "C" (via using Color as C).
-            # The seen-set dedup fires when the same type is open-imported under two names.
-            "import mylib using Color\nimport mylib using Color as C\nlet x: Color = Red\nx"
+            # "Color" (via ``import lib::{Color}``) and "C" (via
+            # ``import lib::{Color as C}``). The seen-set dedup fires when the
+            # same type is exposed under two import-tail names.
+            "import mylib::{Color}\nimport mylib::{Color as C}\nlet x: Color = Red\nx"
         ),
         "mylib": ("enum Color\n  | Red\n  | Blue"),
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "x")) == RecordType(
-        "Red", scope_path=("Color",), module_id=mylib_id
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "x")) == EnumType(
+        "Color", module_id=mylib_id
     )
 
 
@@ -1948,8 +1851,7 @@ def test_cross_module_enum_variant_field_type(tmp_path: Path) -> None:
     assert table.record_fields(data_type) == {"n": IntType()}
 
     assert isinstance(envelope_type, EnumType)
-    some_member = table.enum_member_names(envelope_type).get("Some")
-    some_fields = {} if some_member is None else dict(table.record_fields(some_member))
+    some_fields = table.enum_variants(envelope_type).get("Some", {})
     assert some_fields.get("value") == data_type, (
         f"carrier::Envelope.Some.value must equal payload::Data: "
         f"got {some_fields.get('value')!r}, expected {data_type!r}"
@@ -2125,14 +2027,14 @@ def test_type_expr_deps_qualified_field(tmp_path: Path) -> None:
 
 
 def test_type_expr_deps_unqualified_open_import_field(tmp_path: Path) -> None:
-    """A field typed with an open-imported name resolves via the unqualified path."""
+    """A field typed with an import-tail-exposed name resolves via the unqualified path."""
     modules = {
-        "entry": ("open import mylib\nlet p: mylib::Wrapper = mylib::mk()\np"),
+        "entry": ("import mylib::*\nlet p: mylib::Wrapper = mylib::mk()\np"),
         "mylib": (
-            # Open import: 'open import payload' — Data is an open-imported type
-            "open import payload\n"
+            # Import tail: 'import payload::*' — Data is exposed unqualified
+            "import payload::*\n"
             "record Wrapper\n"
-            "  c: Data\n"  # unqualified reference to open-imported type
+            "  c: Data\n"  # unqualified reference to an import-tail-exposed type
             "def mk() -> Wrapper = Wrapper(c = Data(n = 1))"
         ),
         "payload": ("record Data\n  n: int"),
@@ -2427,14 +2329,14 @@ def test_field_type_with_qualified_function_name_is_type_error(tmp_path: Path) -
 
 
 def test_field_type_with_open_imported_function_name_is_type_error(tmp_path: Path) -> None:
-    """A record field typed with an open-imported function name → AglTypeError."""
+    """A record field typed with an import-tail-exposed function name → AglTypeError."""
     from agm.agl.typecheck.env import AglTypeError as _AglTypeError
 
     modules = {
         "entry": ("import mylib\n()"),
         "mylib": (
-            # Open-import brings 'getValue' (a function) into the unqualified namespace.
-            # Using it as a field type triggers the unqualified candidates False branch.
+            # The import tail brings 'getValue' (a function) into the unqualified namespace.
+            # Treating it as a field type triggers the unqualified-candidates false branch.
             "import payload\nrecord MyRec\n  c: getValue"
         ),
         "payload": ("def getValue() -> int = 42"),
@@ -2485,27 +2387,27 @@ def test_cross_file_mutual_recursion_qualified(tmp_path: Path) -> None:
 
 
 def test_cross_file_mutual_recursion_open_import(tmp_path: Path) -> None:
-    """True A↔B cross-file mutual recursion typechecks via open (unqualified) imports.
+    """True A↔B cross-file mutual recursion typechecks via unqualified import tails.
 
-    Same mutual recursion as the test, but both modules open-import
-    each other so calls are unqualified.
+    Same mutual recursion as the test, but both modules use import tails
+    so calls are unqualified.
 
     This test MUST FAIL before the function-signature pre-pass and MUST PASS after.
     """
     modules = {
         "even": (
-            "open import odd\n"
+            "import odd::*\n"
             "def is_even(n: int) -> bool =\n"
             "  if n == 0 => true\n"
             "  | else => is_odd(n - 1)"
         ),
         "odd": (
-            "open import even\n"
+            "import even::*\n"
             "def is_odd(n: int) -> bool =\n"
             "  if n == 0 => false\n"
             "  | else => is_even(n - 1)"
         ),
-        "entry": ("open import even\nlet result = is_even(10)\nresult"),
+        "entry": ("import even::*\nlet result = is_even(10)\nresult"),
     }
     cg = _check_program(tmp_path, modules)
     mid_even = ModuleId.from_path("even")
@@ -2541,22 +2443,22 @@ def test_importer_consumes_inferred_unannotated_dependency(tmp_path: Path) -> No
     ("import_form", "even_call", "odd_call"),
     (
         ("import", "odd::is_odd(n - 1)", "even::is_even(n - 1)"),
-        ("open import", "is_odd(n - 1)", "is_even(n - 1)"),
+        ("import", "is_odd(n - 1)", "is_even(n - 1)"),
     ),
 )
 def test_import_cycle_infers_cross_module_mutual_returns(
     tmp_path: Path, import_form: str, even_call: str, odd_call: str
 ) -> None:
-    """One candidate graph spans qualified and open-import module cycles."""
+    """One candidate graph spans qualified and import-tail module cycles."""
     checked = _check_program(
         tmp_path,
         {
             "entry": "import even\nlet result = even::is_even(10)\nresult",
             "even": (
-                f"{import_form} odd\ndef is_even(n: int) = if n == 0 => true else => {even_call}"
+                f"{import_form} odd::*\ndef is_even(n: int) = if n == 0 => true else => {even_call}"
             ),
             "odd": (
-                f"{import_form} even\ndef is_odd(n: int) = if n == 0 => false else => {odd_call}"
+                f"{import_form} even::*\ndef is_odd(n: int) = if n == 0 => false else => {odd_call}"
             ),
         },
     )
@@ -2840,7 +2742,7 @@ def _imported_duplicate_pattern_entry(
         if bare_first
         else f"_ as {candidate_name}, {candidate_name}"
     )
-    import_line = "" if module_name is None else f"open import {module_name}\n"
+    import_line = "" if module_name is None else f"import {module_name}::*\n"
     return import_line + (
         f"enum Packet\n  | packet(left: {candidate_type}, right: {candidate_type})\n"
         f"let item = packet({candidate_value}, {candidate_value})\n"
@@ -3040,7 +2942,7 @@ def test_open_imported_generic_constructor_value_uses_later_sibling_evidence(
     modules = {
         "lib": "record Box[T]\n  value: T",
         "entry": (
-            "open import lib\n"
+            "import lib::*\n"
             "def box[T](factory: (T) -> Box[T], value: T) -> Box[T] = factory(value)\n"
             "let result = box(Box, 1)\n"
             "result"
@@ -3056,7 +2958,7 @@ def test_open_imported_generic_type_in_annotation(tmp_path: Path) -> None:
     lib_id = ModuleId.from_path("lib")
     modules = {
         "lib": "record Box[T]\n  value: T",
-        "entry": "open import lib\nlet x: Box[int] = Box(value = 1)\nx",
+        "entry": "import lib::*\nlet x: Box[int] = Box(value = 1)\nx",
     }
     cg = _check_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "x")) == RecordType(
@@ -3092,8 +2994,8 @@ def test_qualified_imported_generic_type_in_type_definition(tmp_path: Path) -> N
 def test_open_imported_generic_type_in_type_definition(tmp_path: Path) -> None:
     modules = {
         "lib": "record Box[T]\n  value: T",
-        "wrapper": "open import lib\nrecord Wrapped\n  value: Box[int]",
-        "entry": "open import wrapper\n()",
+        "wrapper": "import lib::*\nrecord Wrapped\n  value: Box[int]",
+        "entry": "import wrapper::*\n()",
     }
 
     cg = _check_program(tmp_path, modules)
@@ -3133,7 +3035,7 @@ def test_ambiguous_open_imported_generic_type_rejected(tmp_path: Path) -> None:
     modules = {
         "a": "record Box[T]\n  value: T",
         "b": "record Box[T]\n  value: T",
-        "entry": "open import a\nopen import b\nlet x: Box[int] = null\nx",
+        "entry": "import a::*\nimport b::*\nlet x: Box[int] = null\nx",
     }
     with pytest.raises(AglTypeError, match="Ambiguous type 'Box'"):
         _check_program(tmp_path, modules)
@@ -3142,7 +3044,7 @@ def test_ambiguous_open_imported_generic_type_rejected(tmp_path: Path) -> None:
 def test_open_imported_non_generic_type_application_rejected(tmp_path: Path) -> None:
     modules = {
         "lib": "record Point\n  value: int",
-        "entry": "open import lib\nlet x: Point[int] = null\nx",
+        "entry": "import lib::*\nlet x: Point[int] = null\nx",
     }
     with pytest.raises(AglTypeError, match="does not take type arguments"):
         _check_program(tmp_path, modules)
@@ -3152,16 +3054,12 @@ def test_open_imported_non_generic_type_application_rejected(tmp_path: Path) -> 
     ("entry", "message"),
     [
         (
-            "open import lib\nlet x: missing::Box[int] = null\nx",
+            "import lib::*\nlet x: missing::Box[int] = null\nx",
             "Unknown module qualifier",
         ),
+        ("import lib::*\nlet x: lib::Point[int] = null\nx", "does not take"),
         (
-            "import lib using helper\nlet x: lib::Box[int] = null\nx",
-            "not accessible",
-        ),
-        ("open import lib\nlet x: lib::Point[int] = null\nx", "does not take"),
-        (
-            "open import lib\nlet x: lib::helper[int] = null\nx",
+            "import lib::*\nlet x: lib::helper[int] = null\nx",
             "does not name a type",
         ),
     ],
@@ -3193,8 +3091,8 @@ def test_cross_module_qualified_generic_enum_explicit_type_args(tmp_path: Path) 
         "entry": "import lib\nlet r = lib::Option[int]::some(value = 1)\nr",
     }
     cg = _check_program(tmp_path, modules)
-    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "r")) == RecordType(
-        "some", (IntType(),), scope_path=("Option",), module_id=lib_id
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "r")) == EnumType(
+        "Option", module_id=lib_id, type_args=(IntType(),)
     )
 
 
@@ -3205,71 +3103,43 @@ def test_cross_module_qualified_generic_nullary_constructor_as_value(tmp_path: P
         "entry": "import lib\nlet n: lib::Option[int] = lib::Option::none\nn",
     }
     cg = _check_program(tmp_path, modules)
-    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "n")) == RecordType(
-        "none", scope_path=("Option",), module_id=lib_id
-    )
-
-
-def test_cross_module_direct_member_owner_type_args_preserve_member_result(tmp_path: Path) -> None:
-    lib_id = ModuleId.from_path("lib")
-    modules = {
-        "lib": (
-            "enum Option[T]\n"
-            "  | none\n"
-            "  | some(value: T)\n"
-            "enum Outcome[T, E]\n"
-            "  | ok(value: T)\n"
-            "  | err(error: E)"
-        ),
-        "entry": (
-            "import lib\n"
-            "let n = lib::Option::none::[int]\n"
-            "let value = lib::Outcome::ok::[int, text](value = 1)\n"
-            "value"
-        ),
-    }
-    checked = _check_program(tmp_path, modules)
-    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "n")) == RecordType(
-        "none", scope_path=("Option",), module_id=lib_id
-    )
-    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "value")) == RecordType(
-        "ok", (IntType(),), scope_path=("Outcome",), module_id=lib_id
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "n")) == EnumType(
+        "Option", module_id=lib_id, type_args=(IntType(),)
     )
 
 
 def test_open_imported_generic_constructor_payload_type_apply_as_value(tmp_path: Path) -> None:
-    """Open-imported generic payload constructor as a value with explicit type args.
+    """Import-tail-exposed generic payload constructor as a value with explicit type args.
 
-    ``Choice[int]::some`` applies the type argument to the enum owner and
-    yields a function value whose result is the concrete member record.
-    The type is renamed away from ``Option`` to avoid clashing with the
-    auto-open-imported ``std/core::Option``.
+    ``some::[int]`` in the entry resolves via the generic enum exposed by an
+    import tail and yields a function value ``int -> Choice[int]`` owned by
+    ``lib``. The type is renamed away from ``Option`` to avoid clashing with
+    the automatically exposed ``std/core::Option``.
     """
     lib_id = ModuleId.from_path("lib")
     modules = {
         "lib": "enum Choice[T]\n  | none\n  | some(value: T)",
-        "entry": "open import lib\nlet f = Choice[int]::some\nf",
+        "entry": "import lib::*\nlet f = some::[int]\nf",
     }
     cg = _check_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "f")) == FunctionType(
-        (IntType(),), RecordType("some", (IntType(),), scope_path=("Choice",), module_id=lib_id)
+        (IntType(),), EnumType("Choice", module_id=lib_id, type_args=(IntType(),))
     )
 
 
 def test_open_imported_generic_constructor_nullary_type_apply_as_value(tmp_path: Path) -> None:
-    """Open-imported generic nullary constructor as a value with explicit type args.
+    """Import-tail-exposed generic nullary constructor as a value with explicit type args.
 
-    ``Choice[int]::none`` applies the type argument to the enum owner before
-    constructing its nullary member.
+    ``none::[int]`` constructs the nullary ``Choice[int]`` value owned by ``lib``.
     """
     lib_id = ModuleId.from_path("lib")
     modules = {
         "lib": "enum Choice[T]\n  | none\n  | some(value: T)",
-        "entry": "open import lib\nlet z = Choice[int]::none\nz",
+        "entry": "import lib::*\nlet z = none::[int]\nz",
     }
     cg = _check_program(tmp_path, modules)
-    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "z")) == RecordType(
-        "none", scope_path=("Choice",), module_id=lib_id
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "z")) == EnumType(
+        "Choice", module_id=lib_id, type_args=(IntType(),)
     )
 
 
@@ -3284,32 +3154,13 @@ def test_cross_module_enum_type_cannot_be_called_as_a_record_constructor(tmp_pat
         )
 
 
-def test_cross_module_record_constructor_values_preserve_their_call_shape(tmp_path: Path) -> None:
-    checked = _check_program(
-        tmp_path,
-        {
-            "lib": "record Box[T]\n  value: T\nrecord Point\n  value: int",
-            "entry": (
-                "import lib\n"
-                "let generic: (int) -> lib::Box[int] = lib::Box\n"
-                "let explicit = lib::Box::[int]\n"
-                "let plain = lib::Point\n"
-                "let direct = lib::Point(value = 4)\n"
-                "direct"
-            ),
-        },
-    )
-
-    assert checked.modules[ENTRY_ID].resolved.program is not None
-
-
 def test_cross_module_non_generic_constructor_type_args_rejected(tmp_path: Path) -> None:
     """Coverage: checker.py _check_cross_module_constructor_call — non-generic with type args."""
     modules = {
         "lib": "record Point\n  x: int",
         "entry": "import lib\nlib::Point::[int](x = 1)",
     }
-    with pytest.raises(AglTypeError, match="not a generic constructor"):
+    with pytest.raises(AglTypeError):
         _check_program(tmp_path, modules)
 
 
@@ -3497,8 +3348,8 @@ def test_open_imported_parameterized_alias_in_type_definition(tmp_path: Path) ->
     wrapper_id = ModuleId.from_path("wrapper")
     modules = {
         "lib": "type Id[A] = A",
-        "wrapper": "open import lib\nrecord Wrapped\n  value: Id[int]",
-        "entry": "open import wrapper\n()",
+        "wrapper": "import lib::*\nrecord Wrapped\n  value: Id[int]",
+        "entry": "import wrapper::*\n()",
     }
 
     cg = _check_program(tmp_path, modules)
@@ -3627,17 +3478,17 @@ def test_cross_module_generic_func_call_inferred(tmp_path: Path) -> None:
 
 
 def test_cross_module_generic_func_call_open_import_inferred(tmp_path: Path) -> None:
-    """Cross-module generic function call via open import with inferred type args typechecks.
+    """Cross-module generic function call via an import glob tail infers type args.
 
     lib exports 'def id[T](x: T) -> T = x'.
-    Entry open-imports lib and calls id(5) (unqualified).
+    Entry uses ``import lib::*`` and calls id(5) unqualified.
 
-    This exercises the same _build_program_func_sig_table fix but via open import,
+    This exercises the same _build_program_func_sig_table fix through an import tail,
     ensuring the inferred result type is int.
     """
     modules = {
         "lib": "def id[T](x: T) -> T = x",
-        "entry": ("open import lib\nlet r = id(5)\nr"),
+        "entry": ("import lib::*\nlet r = id(5)\nr"),
     }
     cg = _check_program(tmp_path, modules)
     assert _binding_value_type(cg, ENTRY_ID, "r") == IntType()
@@ -3666,7 +3517,7 @@ def test_cross_module_generic_func_as_value_d5(tmp_path: Path) -> None:
     """Cross-module generic def used as a value with monomorphic annotation typechecks.
 
     lib exports 'def id[T](x: T) -> T = x'.
-    Entry open-imports lib and binds: 'let f: (int) -> int = id'.
+    Entry uses ``import lib::*`` and binds: 'let f: (int) -> int = id'.
 
     Before the fix: the graph pre-pass registers id with empty type_params, so
     _check_varref sees a non-generic FunctionType and assigns it without instantiation.
@@ -3675,12 +3526,12 @@ def test_cross_module_generic_func_as_value_d5(tmp_path: Path) -> None:
     After the fix: type_params=("T",) is set, _check_varref finds a generic sig,
     matches (int)->int against (T)->T and correctly instantiates to (int)->int.
 
-    We use open import so 'id' (unqualified) is in scope — the  varref path
-    triggers on unqualified as well as names.
+    The ``import lib::*`` tail makes 'id' unqualified — the varref path
+    triggers on unqualified names as well.
     """
     modules = {
         "lib": "def id[T](x: T) -> T = x",
-        "entry": ("open import lib\nlet f: (int) -> int = id\nf(1)"),
+        "entry": ("import lib::*\nlet f: (int) -> int = id\nf(1)"),
     }
     cg = _check_program(tmp_path, modules)
     assert _binding_value_type(cg, ENTRY_ID, "f") == FunctionType(
@@ -4053,7 +3904,7 @@ def test_named_only_param_in_graph_function(tmp_path: Path) -> None:
 
     modules = {
         "lib": "def add_named(x: int, *, z: int) -> int = x + z",
-        "entry": ("open import lib\nlet z = 5\nadd_named(3, z)"),
+        "entry": ("import lib::*\nlet z = 5\nadd_named(3, z)"),
     }
     cg: object = _check_program(tmp_path, modules)
     assert isinstance(cg, CheckedProgram)

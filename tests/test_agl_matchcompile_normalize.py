@@ -24,21 +24,21 @@ from agm.agl.matchcompile.model import (
     DecisionFail,
     DecisionLeaf,
     DecisionSwitch,
+    EnumConstructor,
     FieldOccurrenceProvenance,
     LetSite,
     LiteralConstructor,
     LiteralKind,
-    NominalConstructor,
     Occurrence,
     OccurrenceId,
     OmittedFieldProvenance,
+    RecordConstructor,
     SourcePatternProvenance,
     WildcardCell,
 )
 from agm.agl.matchcompile.normalize import (
     MatchCompileInvariantError,
     constructor_inhabits_type,
-    enum_constructor,
     normalize_case,
     normalize_let,
     normalize_pattern,
@@ -60,7 +60,7 @@ from agm.agl.semantics.types import (
     Type,
     TypeVarType,
 )
-from agm.agl.semantics.values import DecimalValue, RecordValue, TextValue
+from agm.agl.semantics.values import DecimalValue, EnumValue, TextValue
 from agm.agl.syntax.nodes import AsPattern, Case, ConstructorPattern, LetDecl, Pattern
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.visitor import walk
@@ -100,16 +100,24 @@ def _stripped_signature(signature: ClosedSignature) -> ClosedSignature:
 
     ``strip_decl_ids`` only walks a single ``Type``'s structural children, so
     it cannot reach the ``RecordType``/``EnumType`` handles nested inside a
-    ``NominalConstructor``/``NominalConstructor`` (and its ``ConstructorField``s)
+    ``RecordConstructor``/``EnumConstructor`` (and its ``ConstructorField``s)
     directly; this reapplies it field-by-field across the closed signature
     the match compiler returns.
     """
 
     def strip(constructor: Constructor) -> Constructor:
-        if isinstance(constructor, NominalConstructor):
+        if isinstance(constructor, RecordConstructor):
             return replace(
                 constructor,
                 record_type=cast(RecordType, strip_decl_ids(constructor.record_type)),
+                fields=tuple(
+                    replace(field, type=strip_decl_ids(field.type)) for field in constructor.fields
+                ),
+            )
+        if isinstance(constructor, EnumConstructor):
+            return replace(
+                constructor,
+                enum_type=cast(EnumType, strip_decl_ids(constructor.enum_type)),
                 fields=tuple(
                     replace(field, type=strip_decl_ids(field.type)) for field in constructor.fields
                 ),
@@ -165,13 +173,13 @@ def test_signatures_are_closed_for_boolean_and_enum_in_declaration_order() -> No
     assert isinstance(enum_type, EnumType)
     enum_signature = signature_for_type(enum_type, table)
     assert isinstance(enum_signature, ClosedSignature)
-    assert [constructor.terminal_name for constructor in enum_signature.constructors] == [
+    assert [constructor.variant for constructor in enum_signature.constructors] == [
         "Empty",
         "Value",
     ]
     value = enum_signature.constructors[1]
-    assert isinstance(value, NominalConstructor)
-    assert strip_decl_ids(value.record_type) == strip_decl_ids(table.enum_members(enum_type)[1])
+    assert isinstance(value, EnumConstructor)
+    assert strip_decl_ids(value.enum_type) == EnumType("Result", (IntType(),), ENTRY_ID)
     assert [(field.name, field.type) for field in value.fields] == [
         ("item", IntType()),
         ("note", TextType()),
@@ -199,7 +207,7 @@ def test_record_signature_and_pattern_normalization_use_canonical_nominal_identi
 
     assert _stripped_signature(signature) == ClosedSignature(
         (
-            NominalConstructor(
+            RecordConstructor(
                 RecordType("Outer", (IntType(),), ENTRY_ID),
                 (
                     ConstructorField("first", IntType()),
@@ -211,7 +219,7 @@ def test_record_signature_and_pattern_normalization_use_canonical_nominal_identi
     )
     outer = normalize_case(case, checked).rows[0].cells[0]
     assert isinstance(outer, ConstructorCell)
-    assert isinstance(outer.constructor, NominalConstructor)
+    assert isinstance(outer.constructor, RecordConstructor)
     assert strip_decl_ids(outer.constructor.record_type) == RecordType(
         "Outer", (IntType(),), ENTRY_ID
     )
@@ -219,7 +227,7 @@ def test_record_signature_and_pattern_normalization_use_canonical_nominal_identi
     assert isinstance(outer.arguments[0], WildcardCell)
     inner = outer.arguments[1]
     assert isinstance(inner, ConstructorCell)
-    assert isinstance(inner.constructor, NominalConstructor)
+    assert isinstance(inner.constructor, RecordConstructor)
     assert [binder.name for binder in inner.arguments[0].binders] == ["captured"]
     assert isinstance(outer.arguments[2], WildcardCell)
     assert [binder.name for binder in outer.binders] == ["whole"]
@@ -282,7 +290,7 @@ def test_record_signatures_keep_modules_and_generic_instantiations_distinct() ->
     assert left_int != right_int
     assert _stripped_signature(left_int) == ClosedSignature(
         (
-            NominalConstructor(
+            RecordConstructor(
                 RecordType("Box", (IntType(),), left_module),
                 (ConstructorField("value", IntType()),),
             ),
@@ -324,7 +332,7 @@ def test_record_signature_cache_preserves_identity_and_invalidates_redeclaration
 
     assert redeclared is not original
     assert _stripped_signature(redeclared) == ClosedSignature(
-        (NominalConstructor(RecordType("Box"), (ConstructorField("label", TextType()),)),)
+        (RecordConstructor(RecordType("Box"), (ConstructorField("label", TextType()),)),)
     )
 
 
@@ -371,7 +379,7 @@ def test_scoped_record_signature_cache_invalidates_on_its_own_redeclaration() ->
     assert redeclared is not original
     assert _stripped_signature(redeclared) == ClosedSignature(
         (
-            NominalConstructor(
+            RecordConstructor(
                 RecordType("Box", scope_path=("A",)),
                 (ConstructorField("label", TextType()),),
             ),
@@ -434,7 +442,7 @@ def test_normalize_case_preserves_priority_actions_and_binder_provenance() -> No
 
 def test_as_patterns_preserve_all_current_occurrence_binders() -> None:
     checked = _check(
-        "enum E\n  | A(value: int)\n  | B\nlet value: E = A(1)\n"
+        "enum E\n  | A(value: int)\n  | B\nlet value = A(1)\n"
         "case value of | A(value = _ as inner) as whole as same => inner | B => 0"
     )
     normalized = normalize_case(_only_case(checked.resolved.program), checked)
@@ -555,7 +563,7 @@ def test_constructor_normalization_expands_omitted_generic_fields_in_declaration
 
     outer = normalized.rows[0].cells[0]
     assert isinstance(outer, ConstructorCell)
-    assert isinstance(outer.constructor, NominalConstructor)
+    assert isinstance(outer.constructor, EnumConstructor)
     assert [field.name for field in outer.constructor.fields] == [
         "first",
         "second",
@@ -589,8 +597,8 @@ def test_bare_nullary_variant_uses_resolver_classification() -> None:
 
     first = normalized.rows[0].cells[0]
     assert isinstance(first, ConstructorCell)
-    assert isinstance(first.constructor, NominalConstructor)
-    assert first.constructor.terminal_name == "none"
+    assert isinstance(first.constructor, EnumConstructor)
+    assert first.constructor.variant == "none"
     assert first.arguments == ()
     assert isinstance(normalized.rows[1].cells[0], ConstructorCell)
 
@@ -601,7 +609,7 @@ def test_imported_generic_enum_normalizes_from_checked_metadata(tmp_path: Path) 
         {
             "lib": "enum Choice[T]\n  | absent\n  | present(value: T, note: text)",
             "entry": (
-                "open import lib\n"
+                "import lib::*\n"
                 'let value: Choice[int] = present(value = 1, note = "x")\n'
                 "case value of\n"
                 "  | present(value = _ as captured) => captured\n"
@@ -618,11 +626,9 @@ def test_imported_generic_enum_normalizes_from_checked_metadata(tmp_path: Path) 
     constructor_cell = normalized.rows[0].cells[0]
     assert isinstance(constructor_cell, ConstructorCell)
     constructor = constructor_cell.constructor
-    assert isinstance(constructor, NominalConstructor)
-    assert strip_decl_ids(constructor.record_type) == strip_decl_ids(
-        checked.type_env.type_table.enum_members(
-            cast(EnumType, checked.node_types[case.subject.node_id])
-        )[1]
+    assert isinstance(constructor, EnumConstructor)
+    assert strip_decl_ids(constructor.enum_type) == EnumType(
+        "Choice", (IntType(),), ModuleId.from_path("lib")
     )
     assert [(field.name, field.type) for field in constructor.fields] == [
         ("value", IntType()),
@@ -771,27 +777,11 @@ def test_signature_and_pattern_dispatch_reject_unknown_future_members() -> None:
 
 
 def test_missing_enum_and_subject_metadata_raise_compiler_invariants() -> None:
-    checked = _check(
-        "enum E\n  | A(value: int)\nlet value: E = A(value = 1)\ncase value of | A(_) => 0"
-    )
+    checked = _check("let value = 1\ncase value of | _ => 0")
     case = _only_case(checked.resolved.program)
 
     with pytest.raises(MatchCompileInvariantError, match="cannot resolve enum signature"):
-        enum_constructor(EnumType("Missing"), "missing", checked.type_env.type_table)
-    with pytest.raises(MatchCompileInvariantError, match="cannot resolve enum signature"):
         signature_for_type(EnumType("Missing"), checked.type_env.type_table)
-    checked.type_env.type_table.register(
-        TypeDef(kind="record", name="E", module_id=ENTRY_ID, decl_node_id=999)
-    )
-    wrong_kind = replace(
-        checked,
-        node_types={
-            **checked.node_types,
-            case.subject.node_id: EnumType("E", decl_id=999),
-        },
-    )
-    with pytest.raises(MatchCompileInvariantError, match="cannot resolve enum signature"):
-        normalize_case(case, wrong_kind)
     with pytest.raises(MatchCompileInvariantError, match="cannot resolve record signature"):
         signature_for_type(RecordType("Missing"), checked.type_env.type_table)
     without_subject = replace(
@@ -832,7 +822,7 @@ def test_malformed_checked_literal_and_bare_variant_metadata_raise_invariants() 
     bare_some = replace(bare_none, name="some")
     bare_none_ref = enum_checked.pattern_classifications[bare_none.node_id]
     assert bare_none_ref is not None
-    some_ref = replace(bare_none_ref, owner_name="some", owner_decl_node_id=-1)
+    some_ref = replace(bare_none_ref, variant="some")
     malformed_checked = replace(enum_checked, pattern_classifications={bare_none.node_id: some_ref})
     with pytest.raises(MatchCompileInvariantError, match="invalid final"):
         normalize_case(_replace_case_pattern(enum_case, bare_some), malformed_checked)
@@ -855,7 +845,7 @@ def test_bare_variant_normalization_rejects_missing_and_wrong_owner_metadata() -
             kind="enum",
             name="Other",
             module_id=ENTRY_ID,
-            members=(("none", ()),),
+            variants=(("none", ()),),
             decl_node_id=next_decl_id(),
         )
     )
@@ -868,7 +858,7 @@ def test_bare_variant_normalization_rejects_missing_and_wrong_owner_metadata() -
 
 def test_malformed_checked_constructor_metadata_raise_invariants() -> None:
     checked = _check(
-        "enum Choice\n  | some(value: int)\n"
+        "enum Choice\n  | some(value: int)\n  | other(value: int)\n"
         "let value: Choice = some(value = 1)\n"
         "case value of | some(value = _ as captured) => captured | _ => 0"
     )
@@ -896,24 +886,23 @@ def test_malformed_checked_constructor_metadata_raise_invariants() -> None:
     unknown_variant = replace(pattern, name="missing")
     with pytest.raises(MatchCompileInvariantError, match="unknown variant"):
         normalize_case(_replace_case_pattern(case, unknown_variant), checked)
-    choice_type = checked.node_types[case.subject.node_id]
-    assert isinstance(choice_type, EnumType)
-    with pytest.raises(MatchCompileInvariantError, match="unknown variant"):
-        enum_constructor(choice_type, "missing", checked.type_env.type_table)
+
+    different_variant = replace(pattern, name="other")
+    with pytest.raises(MatchCompileInvariantError, match="invalid final constructor"):
+        normalize_case(_replace_case_pattern(case, different_variant), checked)
 
     choice_type = checked.node_types[case.subject.node_id]
     assert isinstance(choice_type, EnumType)
     constructor_ref = checked.pattern_constructor_ref_for(pattern.node_id)
     assert constructor_ref is not None
-    member = checked.type_env.type_table.enum_member_names(choice_type)[pattern.name]
-    assert checked.pattern_constructor_owner_for(pattern.node_id) == NominalId(member.decl_id)
+    assert checked.pattern_constructor_owner_for(pattern.node_id) == NominalId(choice_type.decl_id)
     with pytest.raises(MatchCompileInvariantError, match="invalid final constructor"):
         normalize_case(
             case,
             replace(
                 checked,
                 pattern_constructor_refs={
-                    pattern.node_id: replace(constructor_ref, owner_name="not-the-pattern-member")
+                    pattern.node_id: replace(constructor_ref, variant="not-the-pattern-variant")
                 },
             ),
         )
@@ -959,6 +948,33 @@ def test_malformed_checked_constructor_metadata_raise_invariants() -> None:
         normalize_case(case, replace(checked, argument_bindings=unknown))
 
 
+def test_renamed_constructor_rejects_unknown_canonical_variant_metadata() -> None:
+    checked = _check(
+        "use S::{E::some as X}\n"
+        "scope S\n"
+        "enum E | some(value: int)\n"
+        "end S\n"
+        "let value = X(value = 1)\n"
+        "case value of | X(value = _ as captured) => captured | _ => 0"
+    )
+    case = _only_case(checked.resolved.program)
+    pattern = case.branches[0].pattern
+    assert isinstance(pattern, ConstructorPattern)
+    constructor_ref = checked.pattern_constructor_ref_for(pattern.node_id)
+    assert constructor_ref is not None
+
+    with pytest.raises(MatchCompileInvariantError, match="invalid final constructor"):
+        normalize_case(
+            case,
+            replace(
+                checked,
+                pattern_constructor_refs={
+                    pattern.node_id: replace(constructor_ref, variant="missing")
+                },
+            ),
+        )
+
+
 def test_source_reference_matcher_preserves_priority_and_partial_constructor_fields() -> None:
     checked = _check(
         "enum Choice\n  | absent\n  | present(value: decimal, note: text)\n"
@@ -972,16 +988,17 @@ def test_source_reference_matcher_preserves_priority_and_partial_constructor_fie
     case = _only_case(checked.resolved.program)
     enum_type = checked.node_types[case.subject.node_id]
     assert isinstance(enum_type, EnumType)
-    nominal = NominalId(checked.type_env.type_table.enum_member_names(enum_type)["present"].decl_id)
+    nominal = NominalId(enum_type.decl_id)
 
     assert (
         reference_action(
             case,
             checked,
-            RecordValue(
-                nominal=nominal,
-                display_name=f"{'Choice'}::{'present'}",
-                fields={"value": DecimalValue(decimal.Decimal("1.0")), "note": TextValue("x")},
+            EnumValue(
+                nominal,
+                "Choice",
+                "present",
+                {"value": DecimalValue(decimal.Decimal("1.0")), "note": TextValue("x")},
             ),
         )
         == case.branches[0].node_id
@@ -990,10 +1007,11 @@ def test_source_reference_matcher_preserves_priority_and_partial_constructor_fie
         reference_action(
             case,
             checked,
-            RecordValue(
-                nominal=nominal,
-                display_name=f"{'Choice'}::{'present'}",
-                fields={"value": DecimalValue(decimal.Decimal("2")), "note": TextValue("x")},
+            EnumValue(
+                nominal,
+                "Choice",
+                "present",
+                {"value": DecimalValue(decimal.Decimal("2")), "note": TextValue("x")},
             ),
         )
         == case.branches[1].node_id
@@ -1002,13 +1020,7 @@ def test_source_reference_matcher_preserves_priority_and_partial_constructor_fie
         reference_action(
             case,
             checked,
-            RecordValue(
-                nominal=NominalId(
-                    checked.type_env.type_table.enum_member_names(enum_type)["absent"].decl_id
-                ),
-                display_name="Choice::absent",
-                fields={},
-            ),
+            EnumValue(nominal, "Choice", "absent", {}),
         )
         == case.branches[2].node_id
     )

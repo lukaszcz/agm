@@ -29,7 +29,11 @@ prevent execution.
 
 ## Agents
 
-Each `ask` evaluates an `Agent` member `RecordValue` that selects the backend command; an `Agent`-typed value is that member record, not an enum wrapper. The record may be passed explicitly or supplied by the `std/config::default-agent` setting. `AgentCommand` carries a command string; the provider member records carry their provider-specific fields. The host dispatches the selected member record and does not contribute agent names or reconcile a registry.
+Each `ask` evaluates an `Agent` enum value that selects the backend command.
+The value may be passed explicitly or supplied by the
+`std/config::default-agent` setting. `AgentCommand` carries a command string;
+the provider variants carry their provider-specific fields. The host dispatches
+the selected value and does not contribute agent names or reconcile a registry.
 
 Per dispatch, an agent receives the rendered prompt, the output contract
 (format instructions plus derived JSON Schema, so schema-capable backends
@@ -113,7 +117,8 @@ key:
 
 Import `std/config` and read or write a setting through a qualified target
 (`std/config::max-iters`); writing zero disables that safety valve.
-`default-agent` is a typed `Agent` value — its selected member `RecordValue` at runtime — used by `ask` when its `agent` option is omitted. The `Option[text]` settings (`log-file`, `timeout`) take a
+`default-agent` is a typed `Agent` value used by `ask` when its `agent` option
+is omitted. The `Option[text]` settings (`log-file`, `timeout`) take a
 `Some("…")` or `None` value.
 
 ### Precedence

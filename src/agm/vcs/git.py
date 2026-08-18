@@ -180,8 +180,9 @@ def _worktree_create_start_point(
 
     if local_branch_exists(repo_dir, start_point, env=env):
         return start_point
-    if remote_branch_exists(repo_dir, start_point, env=env):
-        return f"origin/{start_point}"
+    remote_ref = unique_remote_branch_ref(repo_dir, start_point, env=env)
+    if remote_ref is not None:
+        return remote_ref
     return start_point
 
 
@@ -191,17 +192,27 @@ def worktree_add(
     branch: str,
     *,
     create: bool = False,
+    track: bool = False,
     start_point: str | None = None,
     env: dict[str, str] | None = None,
 ) -> None:
-    """Add a git worktree."""
+    """Add a git worktree.
+
+    With *track* the new branch tracks *start_point*, which is then used as
+    given; this is how a branch published on a remote is checked out.  Without
+    it a created branch tracks nothing and a start point naming a branch is
+    resolved locally first, then across the remotes.
+    """
 
     args = [*_git_args(repo_dir), "worktree", "add"]
     if create:
-        args.extend(["-b", branch, "--no-track"])
+        args.extend(["-b", branch, "--track" if track else "--no-track"])
     args.append(str(path))
     if create and start_point is not None:
-        args.append(_worktree_create_start_point(repo_dir, start_point, env=env))
+        resolved = (
+            start_point if track else _worktree_create_start_point(repo_dir, start_point, env=env)
+        )
+        args.append(resolved)
     elif not create:
         args.append(branch)
     require_success(args, env=env)
@@ -334,22 +345,65 @@ def local_branch_exists(repo_dir: Path, branch: str, *, env: dict[str, str] | No
     )
 
 
-def remote_branch_exists(repo_dir: Path, branch: str, *, env: dict[str, str] | None = None) -> bool:
-    """Return whether *origin/branch* exists locally."""
+def remote_names(repo_dir: Path, *, env: dict[str, str] | None = None) -> list[str]:
+    """Return the remotes configured for *repo_dir*, in git's own order."""
 
-    return (
-        run_foreground(
+    output = require_capture([*_git_args(repo_dir), "remote"], env=env)
+    return [line.strip() for line in output.splitlines() if line.strip()]
+
+
+def remotes_with_branch(
+    repo_dir: Path, branch: str, *, env: dict[str, str] | None = None
+) -> list[str]:
+    """Return the remotes whose remote-tracking refs carry *branch*."""
+
+    return [
+        remote
+        for remote in remote_names(repo_dir, env=env)
+        if run_foreground(
             [
                 *_git_args(repo_dir),
                 "show-ref",
                 "--verify",
                 "--quiet",
-                f"refs/remotes/origin/{branch}",
+                f"refs/remotes/{remote}/{branch}",
             ],
             env=env,
         )
         == 0
-    )
+    ]
+
+
+def remote_branch_exists(repo_dir: Path, branch: str, *, env: dict[str, str] | None = None) -> bool:
+    """Return whether any remote carries *branch*."""
+
+    return bool(remotes_with_branch(repo_dir, branch, env=env))
+
+
+def unique_remote_branch_ref(
+    repo_dir: Path, branch: str, *, env: dict[str, str] | None = None
+) -> str | None:
+    """Return the remote-tracking ref for *branch*, or None when no remote has it.
+
+    This mirrors git's own resolution of a branch name that is not checked out
+    locally: exactly one remote carrying the branch identifies it, while several
+    remotes make the name ambiguous and are rejected rather than guessed.
+    """
+
+    remotes = remotes_with_branch(repo_dir, branch, env=env)
+    if not remotes:
+        return None
+    if len(remotes) > 1:
+        print(
+            f"error: branch '{branch}' exists on several remotes: {', '.join(remotes)}",
+            file=sys.stderr,
+        )
+        print(
+            f"hint: pick one first, e.g. git branch --track {branch} {remotes[0]}/{branch}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    return f"{remotes[0]}/{branch}"
 
 
 def default_remote_branch_ref(repo_dir: Path, *, env: dict[str, str] | None = None) -> str:

@@ -45,6 +45,7 @@ from agm.agl.ir import (
     IrConstText,
     IrConstUnit,
     IrDirectCall,
+    IrEnumCaseKey,
     IrField,
     IrFieldMode,
     IrFunctionBody,
@@ -60,7 +61,6 @@ from agm.agl.ir import (
     IrMakeDict,
     IrMakeJsonArray,
     IrMakeJsonObject,
-    IrNominalCaseKey,
     IrRenderTemplate,
     IrSequence,
     IrTemplateText,
@@ -224,7 +224,7 @@ def test_case_arm_cannot_bind_multiple_fields_to_one_symbol() -> None:
                 subject=IrConstInt(location=LOC, value=1),
                 arms=(
                     IrCaseArm(
-                        key=IrNominalCaseKey(nominal=enum_nominal),
+                        key=IrEnumCaseKey(nominal=enum_nominal, variant="Both"),
                         field_bindings=(("left", SYM1), ("right", SYM1)),
                         body=IrConstUnit(location=LOC),
                     ),
@@ -243,8 +243,8 @@ def test_case_arm_cannot_bind_multiple_fields_to_one_symbol() -> None:
                 module_id=MOD_A,
                 scope_path=(),
                 declared_name="Pair",
-                kind=NominalKind.RECORD,
-                fields=("left", "right"),
+                kind=NominalKind.ENUM,
+                variants=(VariantDescriptor("Both", ("left", "right")),),
             )
         },
     )
@@ -263,12 +263,12 @@ def test_case_rejects_closure_capture_outside_payload_dominance() -> None:
                 subject=IrConstInt(location=LOC, value=1),
                 arms=(
                     IrCaseArm(
-                        key=IrNominalCaseKey(nominal=enum_nominal),
+                        key=IrEnumCaseKey(nominal=enum_nominal, variant="Empty"),
                         field_bindings=(),
                         body=closure,
                     ),
                     IrCaseArm(
-                        key=IrNominalCaseKey(nominal=NominalId(13)),
+                        key=IrEnumCaseKey(nominal=enum_nominal, variant="Full"),
                         field_bindings=(("value", SYM1),),
                         body=closure,
                     ),
@@ -288,16 +288,9 @@ def test_case_rejects_closure_capture_outside_payload_dominance() -> None:
                 module_id=MOD_A,
                 scope_path=(),
                 declared_name="Payload",
-                kind=NominalKind.RECORD,
-            ),
-            NominalId(13): NominalDescriptor(
-                nominal=NominalId(13),
-                module_id=MOD_A,
-                scope_path=(),
-                declared_name="PayloadMember",
-                kind=NominalKind.RECORD,
-                fields=("value",),
-            ),
+                kind=NominalKind.ENUM,
+                variants=(VariantDescriptor("Empty", ()), VariantDescriptor("Full", ("value",))),
+            )
         },
         functions={FN0: _make_fn_desc(fn_sym=SYM0)},
     )
@@ -334,7 +327,7 @@ def test_case_arm_cannot_bind_a_private_source_symbol() -> None:
                 subject=IrConstInt(location=LOC, value=1),
                 arms=(
                     IrCaseArm(
-                        key=IrNominalCaseKey(nominal=enum_nominal),
+                        key=IrEnumCaseKey(nominal=enum_nominal, variant="Box"),
                         field_bindings=(("value", SYM1),),
                         body=IrConstUnit(location=LOC),
                     ),
@@ -349,8 +342,8 @@ def test_case_arm_cannot_bind_a_private_source_symbol() -> None:
                 module_id=MOD_A,
                 scope_path=(),
                 declared_name="Box",
-                kind=NominalKind.RECORD,
-                fields=("value",),
+                kind=NominalKind.ENUM,
+                variants=(VariantDescriptor("Box", ("value",)),),
             )
         },
     )
@@ -403,7 +396,7 @@ def test_case_without_default_requires_default_for_open_literal_domain() -> None
         validate_ir(program)
 
 
-def test_case_without_default_allows_nominal_member_keys() -> None:
+def test_case_without_default_requires_complete_enum_domain() -> None:
     enum_nominal = NominalId(14)
     program = _make_program(
         initializers=(
@@ -412,7 +405,7 @@ def test_case_without_default_allows_nominal_member_keys() -> None:
                 subject=IrConstInt(location=LOC, value=1),
                 arms=(
                     IrCaseArm(
-                        key=IrNominalCaseKey(nominal=enum_nominal),
+                        key=IrEnumCaseKey(nominal=enum_nominal, variant="Ok"),
                         field_bindings=(),
                         body=IrConstUnit(location=LOC),
                     ),
@@ -421,14 +414,22 @@ def test_case_without_default_allows_nominal_member_keys() -> None:
             ),
         ),
         nominals={
-            enum_nominal: NominalDescriptor(enum_nominal, MOD_A, (), "Result", NominalKind.RECORD)
+            enum_nominal: NominalDescriptor(
+                nominal=enum_nominal,
+                module_id=MOD_A,
+                scope_path=(),
+                declared_name="Result",
+                kind=NominalKind.ENUM,
+                variants=(VariantDescriptor("Ok", ()), VariantDescriptor("Error", ())),
+            )
         },
     )
 
-    validate_ir(program)
+    with pytest.raises(InvalidIrError, match="default"):
+        validate_ir(program)
 
 
-def test_case_without_default_allows_nominal_member_domain() -> None:
+def test_case_without_default_allows_complete_enum_domain() -> None:
     enum_nominal = NominalId(15)
     program = _make_program(
         initializers=(
@@ -437,7 +438,12 @@ def test_case_without_default_allows_nominal_member_domain() -> None:
                 subject=IrConstInt(location=LOC, value=1),
                 arms=(
                     IrCaseArm(
-                        key=IrNominalCaseKey(nominal=enum_nominal),
+                        key=IrEnumCaseKey(nominal=enum_nominal, variant="Ok"),
+                        field_bindings=(),
+                        body=IrConstUnit(location=LOC),
+                    ),
+                    IrCaseArm(
+                        key=IrEnumCaseKey(nominal=enum_nominal, variant="Error"),
                         field_bindings=(),
                         body=IrConstUnit(location=LOC),
                     ),
@@ -446,7 +452,14 @@ def test_case_without_default_allows_nominal_member_domain() -> None:
             ),
         ),
         nominals={
-            enum_nominal: NominalDescriptor(enum_nominal, MOD_A, (), "Result", NominalKind.RECORD)
+            enum_nominal: NominalDescriptor(
+                nominal=enum_nominal,
+                module_id=MOD_A,
+                scope_path=(),
+                declared_name="Result",
+                kind=NominalKind.ENUM,
+                variants=(VariantDescriptor("Ok", ()), VariantDescriptor("Error", ())),
+            )
         },
     )
 
@@ -1225,7 +1238,7 @@ class TestIrFieldValidation:
                 scope_path=(),
                 declared_name="Foo",
                 kind=NominalKind.ENUM,
-                variants=(VariantDescriptor("some", ("x",), NominalId(100)),),
+                variants=(VariantDescriptor("some", ("x",)),),
             ),
         ),
     )
@@ -1234,12 +1247,7 @@ class TestIrFieldValidation:
     ) -> None:
         prog = _make_program(
             initializers=(IrBind(LOC, SYM0, IrField(LOC, IrConstInt(LOC, 1), NOM0, "x")),),
-            nominals={
-                NOM0: descriptor,
-                NominalId(100): NominalDescriptor(
-                    NominalId(100), MOD_A, (), "some", NominalKind.RECORD, ("x",)
-                ),
-            },
+            nominals={NOM0: descriptor},
         )
         validate_ir(prog, deep=True)
 
@@ -1260,7 +1268,7 @@ class TestIrFieldValidation:
                 scope_path=(),
                 declared_name="Foo",
                 kind=NominalKind.ENUM,
-                variants=(VariantDescriptor("some", ("x",), NominalId(100)),),
+                variants=(VariantDescriptor("some", ("x",)),),
             ),
         ),
     )
@@ -1282,12 +1290,7 @@ class TestIrFieldValidation:
                     ),
                 ),
             ),
-            nominals={
-                NOM0: descriptor,
-                NominalId(100): NominalDescriptor(
-                    NominalId(100), MOD_A, (), "some", NominalKind.RECORD, ("x",)
-                ),
-            },
+            nominals={NOM0: descriptor},
         )
         with pytest.raises(InvalidIrError, match="unknown field"):
             validate_ir(prog, deep=True)

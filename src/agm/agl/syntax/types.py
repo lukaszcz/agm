@@ -8,8 +8,6 @@ appear in the source.
 
 from __future__ import annotations
 
-import enum
-from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -73,14 +71,6 @@ class DecimalT:
 
     span: SourceSpan = field(compare=False)
     node_id: int = field(compare=False)
-
-
-class ImportMode(enum.Enum):
-    """Determines which names are imported from the module."""
-
-    ALL = "ALL"
-    USING = "USING"
-    HIDING = "HIDING"
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,44 +139,6 @@ class AppliedT:
 TypeExpr = (
     TextT | JsonT | BoolT | IntT | DecimalT | NameT | ArrayT | DictT | UnitT | FuncT | AppliedT
 )
-
-
-def member_type_params(
-    field_types: Iterable[TypeExpr], enum_params: tuple[str, ...]
-) -> tuple[str, ...]:
-    """Return the enum parameters captured by an inline member record.
-
-    Inline enum members are record declarations in their own right, so they
-    carry only the owner parameters their field syntax mentions.
-    """
-    used: set[str] = set()
-
-    def visit(expr: TypeExpr) -> None:
-        if isinstance(expr, NameT):
-            if expr.qualifier is None:
-                used.add(expr.name)
-        elif isinstance(expr, AppliedT):
-            if expr.qualifier is None:
-                used.add(expr.name)
-            for arg in expr.args:
-                visit(arg)
-        elif isinstance(expr, ArrayT):
-            visit(expr.elem)
-        elif isinstance(expr, DictT):
-            visit(expr.value)
-        elif isinstance(expr, FuncT):
-            for param in expr.params:
-                visit(param)
-            visit(expr.result)
-        qualifier = expr.qualifier if isinstance(expr, (NameT, AppliedT)) else None
-        if qualifier is not None:
-            for segment in qualifier.segments:
-                for arg in segment.type_args or ():
-                    visit(arg)
-
-    for field_type in field_types:
-        visit(field_type)
-    return tuple(param for param in enum_params if param in used)
 
 
 def render_type_expr(type_expr: TypeExpr, *, parenthesize_function: bool = False) -> str:

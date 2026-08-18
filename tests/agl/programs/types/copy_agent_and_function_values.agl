@@ -4,7 +4,7 @@ program def main() -> unit =
   # copy/shallow_copy are identity on opaque values -- an agent handle and a
   # first-class function value are returned as-is, and remain fully usable
   # through the copy.
-  let impl: Agent = AgentCommand("impl")
+  let impl = AgentCommand("impl")
   let copied_agent = copy(impl)
   let copied_fn = shallow_copy(inc)
 

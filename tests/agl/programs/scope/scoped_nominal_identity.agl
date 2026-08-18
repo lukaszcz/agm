@@ -24,7 +24,7 @@ program def main() -> unit =
   let right = Right::Token(value = 3)
 
   let decoded: Left::Tree[int] = ask("Return a tree.")
-  let flag: Left::Flag = Left::Flag::on
+  let flag = Left::Flag::on
   let matched = case flag of
     | Left::Flag::on => "on"
     | Left::Flag::off => "off"

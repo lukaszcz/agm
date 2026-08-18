@@ -19,6 +19,7 @@ from agm.agl.semantics.values import (
     ConstructorValue,
     DecimalValue,
     DictValue,
+    EnumValue,
     ExceptionValue,
     IntValue,
     IteratorValue,
@@ -53,9 +54,7 @@ def test_runtime_value_notimplemented_and_unhashable_edges() -> None:
         ArrayValue([IntValue(1)]),
         DictValue({"x": IntValue(1)}),
         RecordValue(nominal, "Thing", {"x": IntValue(1)}),
-        RecordValue(
-            nominal=nominal, display_name=f"{'Thing'}::{'Case'}", fields={"x": IntValue(1)}
-        ),
+        EnumValue(nominal, "Thing", "Case", {"x": IntValue(1)}),
         ExceptionValue(nominal, "Thing", {"x": IntValue(1)}),
     ]
     for value in values:
@@ -73,8 +72,8 @@ def test_json_value_helper_edges() -> None:
 
 def test_constructor_render_and_serialization_edges() -> None:
     nominal = NominalId(1)
-    record = ConstructorValue(nominal, "Thing")
-    variant = ConstructorValue(nominal, "Thing::Case")
+    record = ConstructorValue(nominal, "Thing", None)
+    variant = ConstructorValue(nominal, "Thing", "Case")
     assert render_value(record) == "<constructor Thing>"
     assert render_value(variant) == "<constructor Thing::Case>"
     with pytest.raises(AglNonDataValue, match="constructor"):

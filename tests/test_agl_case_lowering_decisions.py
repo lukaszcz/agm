@@ -104,8 +104,8 @@ def test_lowering_rejects_a_forged_failed_decision(self_validation_disabled: Non
         lower_compiled_module(forged, source_text=source)
 
 
-def test_lowering_accepts_a_record_nominal_switch(self_validation_disabled: None) -> None:
-    """Record keys share nominal switch lowering with enum member records."""
+def test_lowering_rejects_a_forged_record_switch(self_validation_disabled: None) -> None:
+    """Records are decomposition-only and cannot acquire a runtime case key."""
     source = (
         "record Box\n  value: int\nlet value = Box(value = 1)\n"
         "case value of | Box(value = _) => 1\n"
@@ -129,7 +129,8 @@ def test_lowering_accepts_a_record_nominal_switch(self_validation_disabled: None
             ),
         },
     )
-    lower_compiled_module(forged, source_text=source)
+    with pytest.raises(AssertionError):
+        lower_compiled_module(forged, source_text=source)
 
 
 def test_wildcard_case_still_binds_root_subject_before_leaf() -> None:

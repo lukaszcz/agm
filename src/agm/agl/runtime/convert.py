@@ -51,6 +51,7 @@ from agm.agl.semantics.values import (
     BoolValue,
     DecimalValue,
     DictValue,
+    EnumValue,
     IntValue,
     JsonValue,
     RecordValue,
@@ -257,7 +258,7 @@ def decode_value(
                     raise ValueError(f"Missing field {fname!r}")
                 record_fields[fname] = decode_value(fschema, obj[fname], defs)
             return RecordValue(nominal=nominal, display_name=display_name, fields=record_fields)
-        case EnumDecode(display_name=display_name, variants=variants):
+        case EnumDecode(nominal=nominal, display_name=display_name, variants=variants):
             if not isinstance(obj, dict):
                 raise ValueError(f"Expected object for enum, got {type(obj).__name__}")
             case_val = obj.get("$case")
@@ -274,9 +275,10 @@ def decode_value(
                 if fname not in obj:
                     raise ValueError(f"Enum variant {case_val!r} is missing field {fname!r}")
                 payload[fname] = decode_value(fschema, obj[fname], defs)
-            return RecordValue(
-                nominal=variant.nominal,
-                display_name=variant.display_name,
+            return EnumValue(
+                nominal=nominal,
+                display_name=display_name,
+                variant=case_val,
                 fields=payload,
             )
         case _ as unreachable:  # pragma: no cover

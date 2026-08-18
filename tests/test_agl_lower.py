@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.ir.contracts import ConversionFailureMode, ConversionStrategy, RecordEncode
+from agm.agl.ir.contracts import ConversionFailureMode, ConversionStrategy
 from agm.agl.ir.ids import NominalId, SymbolId
 from agm.agl.ir.nodes import (
     IrArith,
@@ -42,6 +42,7 @@ from agm.agl.ir.nodes import (
     IrContains,
     IrConvert,
     IrDirectCall,
+    IrEnumCaseKey,
     IrField,
     IrFieldMode,
     IrIf,
@@ -59,7 +60,6 @@ from agm.agl.ir.nodes import (
     IrMakeJsonArray,
     IrMakeJsonObject,
     IrMakeRecord,
-    IrNominalCaseKey,
     IrRaise,
     IrRenderTemplate,
     IrSequence,
@@ -1471,13 +1471,13 @@ class TestUnsupportedNodes:
         assert isinstance(indirect.value.callee, IrMakeClosure)
 
     def test_qualified_enum_constructor_lowers_correctly(self) -> None:
-        """Qualified constructor (e.g. Color::Red) lowers to IrMakeRecord/IrMakeConstructor.
+        """Qualified constructor (e.g. Color::Red) lowers to IrMakeEnum/IrMakeConstructor.
 
         Qualified constructor lowering supports a nullary variant (no fields)
-        lowers to IrMakeRecord (eagerly constructed).  A variant with fields lowers to
-        IrMakeConstructor.  Here Red is nullary, so the binding value must be IrMakeRecord.
+        lowers to IrMakeEnum (eagerly constructed).  A variant with fields lowers to
+        IrMakeConstructor.  Here Red is nullary, so the binding value must be IrMakeEnum.
         """
-        from agm.agl.ir.nodes import IrMakeRecord
+        from agm.agl.ir.nodes import IrMakeEnum
 
         source = """\
 enum Color
@@ -1490,8 +1490,8 @@ let c = Color::Red
         prog = _lower(source)
         entry = prog.modules[prog.entry_module]
         root_capture = _let_root_capture(entry.initializers[0])
-        assert isinstance(root_capture.value, IrMakeRecord)
-        assert root_capture.value.display_name == "Color::Red"
+        assert isinstance(root_capture.value, IrMakeEnum)
+        assert root_capture.value.variant == "Red"
 
     def test_lambda_lowers_to_make_closure_in_unsupported_class(self) -> None:
         """Lambda expressions now lower to IrMakeClosure."""
@@ -2034,7 +2034,7 @@ class TestBuiltinMethodLowering:
 
     def test_agent_method_call_lowers_to_ask_with_receiver_operand(self) -> None:
         source = """\
-let agents: array[Agent] = [AgentCommand("worker")]
+let agents = [AgentCommand("worker")]
 let result: text = agents[0].ask("Summarize")
 ()\
 """
@@ -2747,8 +2747,7 @@ class TestHostOpLowering:
         from agm.agl.ir.nodes import IrAskRequest
 
         source = (
-            'let worker: Agent = AgentCommand("worker")\n'
-            'let req = worker.ask-request("my prompt")\n()'
+            'let worker = AgentCommand("worker")\nlet req = worker.ask-request("my prompt")\n()'
         )
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
@@ -3022,7 +3021,7 @@ class TestOneLevelCaseLowering:
             "  | Active\n"
             "  | Inactive\n"
             "\n"
-            "let s: Status = Status::Active\n"
+            "let s = Status::Active\n"
             "let r = case s of\n"
             "  | Active => 1\n"
             "  | _ => 0\n"
@@ -3036,14 +3035,8 @@ class TestOneLevelCaseLowering:
         assert prog.symbols[sequence.items[0].symbol].public_name is None
         switch = sequence.items[1]
         assert isinstance(switch, IrCase)
-        assert isinstance(switch.arms[0].key, IrNominalCaseKey)
-        enum = next(
-            descriptor
-            for descriptor in prog.nominals.values()
-            if descriptor.declared_name == "Status"
-        )
-        active = next(variant for variant in enum.variants if variant.name == "Active")
-        assert switch.arms[0].key.nominal == active.member
+        assert isinstance(switch.arms[0].key, IrEnumCaseKey)
+        assert switch.arms[0].key.variant == "Active"
 
     def test_binder_pattern_lowers_in_default_leaf(self) -> None:
         source = (
@@ -3051,7 +3044,7 @@ class TestOneLevelCaseLowering:
             "  | Active\n"
             "  | Inactive\n"
             "\n"
-            "let s: Status = Status::Active\n"
+            "let s = Status::Active\n"
             "let r = case s of\n"
             "  | Active => 1\n"
             "  | _ as x => 0\n"
@@ -3074,7 +3067,7 @@ class TestOneLevelCaseLowering:
             "  | Active\n"
             "  | Inactive\n"
             "\n"
-            "let s: Status = Status::Inactive\n"
+            "let s = Status::Inactive\n"
             "let r = case s of\n"
             "  | Active => 1\n"
             "  | _ as x => 2\n"
@@ -3085,20 +3078,22 @@ class TestOneLevelCaseLowering:
         assert isinstance(case_bind.value, IrSequence)
         switch = case_bind.value.items[1]
         assert isinstance(switch, IrCase)
-        assert isinstance(switch.arms[0].key, IrNominalCaseKey)
+        assert isinstance(switch.arms[0].key, IrEnumCaseKey)
         assert switch.default is not None
 
 
 # ---------------------------------------------------------------------------
-# Structural lowering: IrConvert boolean `as?` failure modes
+# Structural lowering: IrConvert / total-cast as? failure modes
 # ---------------------------------------------------------------------------
 
 
 class TestIrConvertLowering:
-    """Structural tests for cast lowering and conversion recipe selection.
+    """Structural tests for Cast lowering: IrConvert node and recipe selection.
 
-    Ordinary casts and boolean ``as?`` convertibility tests share an ``IrConvert``
-    recipe while selecting their respective failure modes.
+    The lowerer emits IrConvert for 'as' (always) and fallible 'as?'; for
+    total 'as?' it emits IrSequence instead.  These tests pin the
+    decision-bearing fields so a wrong failure_mode or strategy selection
+    fails the test.
     """
 
     def test_total_as_lowers_to_ir_convert_raise_cast_error(self) -> None:
@@ -3115,6 +3110,11 @@ class TestIrConvertLowering:
         assert conv.recipe.strategy is ConversionStrategy.WIDEN_INT_TO_DECIMAL
 
     def test_fallible_as_test_lowers_to_ir_convert_return_bool(self) -> None:
+        """Fallible 'as?' emits IrConvert with failure_mode=RETURN_BOOL.
+
+        decimal as? int: fallible cast → strategy=NARROW_DECIMAL_TO_INT,
+        failure_mode=RETURN_BOOL.
+        """
         prog = _lower("let r = 1.5 as? int\n()")
         bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
         conv = bind.value
@@ -3122,13 +3122,22 @@ class TestIrConvertLowering:
         assert conv.failure_mode is ConversionFailureMode.RETURN_BOOL
         assert conv.recipe.strategy is ConversionStrategy.NARROW_DECIMAL_TO_INT
 
-    def test_total_as_test_lowers_to_ir_convert_return_bool(self) -> None:
+    def test_total_as_test_lowers_to_ir_sequence_not_ir_convert(self) -> None:
+        """Total 'as?' emits IrSequence((source, IrConstBool(True))), NOT IrConvert.
+
+        int as? decimal is a total noop; the lowerer sequences the source
+        expression for side-effects and then yields True — no IrConvert.
+        """
         prog = _lower("let r = 1 as? decimal\n()")
         bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
-        conv = bind.value
-        assert isinstance(conv, IrConvert)
-        assert conv.failure_mode is ConversionFailureMode.RETURN_BOOL
-        assert conv.recipe.strategy is ConversionStrategy.WIDEN_INT_TO_DECIMAL
+        seq = bind.value
+        assert isinstance(seq, IrSequence), (
+            f"Total 'as?' must emit IrSequence, not {type(seq).__name__}"
+        )
+        assert len(seq.items) == 2
+        last = seq.items[1]
+        assert isinstance(last, IrConstBool)
+        assert last.value is True
 
     def test_render_to_text_as_lowers_to_ir_convert_render_strategy(self) -> None:
         """'as text' (total render cast) → IrConvert with strategy=RENDER_TO_TEXT."""
@@ -3139,8 +3148,12 @@ class TestIrConvertLowering:
         assert conv.failure_mode is ConversionFailureMode.RAISE_CAST_ERROR
         assert conv.recipe.strategy is ConversionStrategy.RENDER_TO_TEXT
 
-    def test_render_as_test_lowers_to_ir_convert_return_bool(self) -> None:
-        """`as? text` returns whether its conversion trial succeeds."""
+    def test_render_as_test_lowers_to_ir_convert_return_bool_not_sequence(self) -> None:
+        """'as? text' (TOTAL_RENDER) emits IrConvert(RETURN_BOOL), NOT IrSequence.
+
+        Rendering can raise CyclicValueError on a cyclic value, so `as?` must
+        trial-convert rather than short-circuit to True (unlike TOTAL_NOOP).
+        """
         prog = _lower("let r = 42 as? text\n()")
         bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
         conv = bind.value
@@ -3150,16 +3163,12 @@ class TestIrConvertLowering:
         assert conv.failure_mode is ConversionFailureMode.RETURN_BOOL
         assert conv.recipe.strategy is ConversionStrategy.RENDER_TO_TEXT
 
-    def test_member_record_json_cast_uses_its_exact_record_encode_plan(self) -> None:
-        """A member-record value serializes as its record, not its enum owner."""
-        prog = _lower("enum Color | Red | Blue\nlet r = Red() as json\n()")
-        bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
-        conv = bind.value
-        assert isinstance(conv, IrConvert)
-        assert isinstance(conv.recipe.encode, RecordEncode)
+    def test_json_as_test_lowers_to_ir_convert_return_bool_not_sequence(self) -> None:
+        """'as? json' (TOTAL_JSON) emits IrConvert(RETURN_BOOL), NOT IrSequence.
 
-    def test_json_as_test_lowers_to_ir_convert_return_bool(self) -> None:
-        """`as? json` returns whether its conversion trial succeeds."""
+        JSON serialization can raise CyclicValueError on a cyclic value, so
+        `as?` must trial-convert rather than short-circuit to True.
+        """
         prog = _lower("let r = 42 as? json\n()")
         bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
         conv = bind.value

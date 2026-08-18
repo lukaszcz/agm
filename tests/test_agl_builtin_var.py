@@ -16,7 +16,7 @@ from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program
 from agm.agl.pipeline import PipelineDriver, RunResult
 from agm.agl.runtime.option import some_value
-from agm.agl.semantics.values import BoolValue, IntValue, RecordValue, TextValue, Value
+from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, TextValue, Value
 from agm.agl.syntax import BuiltinVarDecl, Call, Expr, VarRef, walk
 from agm.agl.syntax.constants import is_constant_expression
 from tests._agl_helpers import agent_value, run_inline_command
@@ -94,7 +94,7 @@ class TestBuiltinVarRegisters:
 
     def test_strict_json_write_then_read(self) -> None:
         result = _run_program(
-            "open import std/config\n"
+            "import std/config::*\n"
             "std/config::strict-json := true\n"
             "let b = std/config::strict-json\n"
             "print b"
@@ -103,14 +103,14 @@ class TestBuiltinVarRegisters:
         assert result.bindings["b"] == BoolValue(True)
 
     def test_log_default_reads_false(self) -> None:
-        result = _run_program("open import std/config\nlet l = std/config::log\nprint l")
+        result = _run_program("import std/config::*\nlet l = std/config::log\nprint l")
         assert result.ok
         assert result.bindings["l"] == BoolValue(False)
 
     def test_max_iters_default_reads_disabled_state(self) -> None:
         """A read reports zero when the host safety valve is off."""
         result = _run_program(
-            "open import std/config\nlet n = std/config::max-iters\nprint n",
+            "import std/config::*\nlet n = std/config::max-iters\nprint n",
             default_loop_limit=None,
         )
         assert result.ok
@@ -162,20 +162,20 @@ def test_constant_expression_validation(source: str, expected: bool) -> None:
 class TestBuiltinVarDefaults:
     def test_initializer_is_the_engine_default_without_a_host_seed(self, tmp_path: Path) -> None:
         result = _run_with_std_config(
-            "open import std/config\nlet value = std/config::default-agent\nvalue",
+            "import std/config::*\nlet value = std/config::default-agent\nvalue",
             'builtin var default-agent: Agent = AgentCommand("declared")',
             tmp_path,
         )
 
         assert result.ok, f"expected success but got: {result.error!r}"
         value = result.bindings["value"]
-        assert isinstance(value, RecordValue)
-        assert value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
+        assert isinstance(value, EnumValue)
+        assert value.variant == "AgentCommand"
         assert value.fields["command"] == TextValue("declared")
 
     def test_host_seed_overrides_the_declared_default(self, tmp_path: Path) -> None:
         result = _run_with_std_config(
-            "open import std/config\nlet value = std/config::default-agent\nvalue",
+            "import std/config::*\nlet value = std/config::default-agent\nvalue",
             'builtin var default-agent: Agent = AgentCommand("declared")',
             tmp_path,
             builtin_host_settings={
@@ -185,12 +185,12 @@ class TestBuiltinVarDefaults:
 
         assert result.ok, f"expected success but got: {result.error!r}"
         value = result.bindings["value"]
-        assert isinstance(value, RecordValue)
+        assert isinstance(value, EnumValue)
         assert value.fields["command"] == TextValue("seeded")
 
     def test_initializer_must_match_the_declared_type(self, tmp_path: Path) -> None:
         result = _run_with_std_config(
-            "open import std/config\n()",
+            "import std/config::*\n()",
             "builtin var default-agent: Agent = false",
             tmp_path,
         )
@@ -205,7 +205,7 @@ class TestBuiltinVarDefaults:
         assert isinstance(declaration.default, Call)
 
         result = _run_with_std_config(
-            "open import std/config\n()",
+            "import std/config::*\n()",
             declaration_source,
             tmp_path,
         )
@@ -223,7 +223,7 @@ class TestBuiltinVarGate:
     def test_unknown_key_rejected(self, tmp_path: Path) -> None:
         """The canonical module may declare only registered engine keys."""
         result = _run_with_std_config(
-            "open import std/config\n()",
+            "import std/config::*\n()",
             "builtin var bogus: int",
             tmp_path,
         )
@@ -232,7 +232,7 @@ class TestBuiltinVarGate:
 
     def test_wrong_type_rejected(self, tmp_path: Path) -> None:
         result = _run_with_std_config(
-            "open import std/config\n()",
+            "import std/config::*\n()",
             "builtin var max-iters: bool",
             tmp_path,
         )
@@ -266,7 +266,7 @@ class TestScopedBuiltinVar:
         """A ``builtin var`` declared inside a region in ``std/config`` is
         written and read through its full ``std/config::Region::name`` path."""
         result = _run_with_std_config(
-            "open import std/config\n"
+            "import std/config::*\n"
             "std/config::Region::max-iters := 3\n"
             "let n = std/config::Region::max-iters\n"
             "n",
@@ -276,9 +276,9 @@ class TestScopedBuiltinVar:
         assert result.ok, f"expected success but got: {result.error!r}"
         assert result.bindings["n"] == IntValue(3)
 
-    def test_scoped_engine_setting_bare_after_open(self, tmp_path: Path) -> None:
+    def test_scoped_engine_setting_bare_after_use(self, tmp_path: Path) -> None:
         result = _run_with_std_config(
-            "open import std/config\nopen std/config::Region\nmax-iters := 4\nlet n = max-iters\nn",
+            "import std/config::*\nuse std/config::Region::*\nmax-iters := 4\nlet n = max-iters\nn",
             "scope Region\nbuiltin var max-iters: int\nend Region",
             tmp_path,
         )
@@ -321,7 +321,7 @@ class TestStdConfigQualified:
 
     def test_qualified_strict_json(self) -> None:
         result = _run_program(
-            "open import std/config\n"
+            "import std/config::*\n"
             "std/config::strict-json := true\n"
             "let b = std/config::strict-json\n"
             "print b"
@@ -331,7 +331,7 @@ class TestStdConfigQualified:
 
     def test_max_iters_zero_disables_valve(self) -> None:
         result = _run_program(
-            "open import std/config\n"
+            "import std/config::*\n"
             "std/config::max-iters := 0\n"
             "var i = 0\n"
             "do\n"
@@ -351,13 +351,13 @@ class TestStdConfigQualified:
         exception), which went unnoticed because nothing validated the name.
         The declared ``TypeError`` is what must be raised.
         """
-        result = _run_program("open import std/config\nstd/config::max-iters := -1\nprint 1")
+        result = _run_program("import std/config::*\nstd/config::max-iters := -1\nprint 1")
         assert not result.ok
         assert result.error is not None
         assert result.error.type_name == "TypeError"
 
         caught = _run_program(
-            "open import std/config\n"
+            "import std/config::*\n"
             "let caught = try\n"
             "    std/config::max-iters := -1\n"
             "    false\n"
@@ -373,14 +373,14 @@ class TestStdConfigQualified:
         Regression test: see ``test_negative_max_iters_raises_catchable_type_error``.
         """
         result = _run_program(
-            'open import std/config\nstd/config::timeout := Some("not-a-timeout")\nprint 1'
+            'import std/config::*\nstd/config::timeout := Some("not-a-timeout")\nprint 1'
         )
         assert not result.ok
         assert result.error is not None
         assert result.error.type_name == "TypeError"
 
         caught = _run_program(
-            "open import std/config\n"
+            "import std/config::*\n"
             "let caught = try\n"
             '    std/config::timeout := Some("not-a-timeout")\n'
             "    false\n"
@@ -392,20 +392,20 @@ class TestStdConfigQualified:
 
     def test_log_file_some_round_trips(self) -> None:
         result = _run_program(
-            "open import std/config\n"
+            "import std/config::*\n"
             'std/config::log-file := Some("x")\n'
             "let f = std/config::log-file\n"
             "print f"
         )
         assert result.ok, f"expected success but got: {result.error!r}"
         bound = result.bindings["f"]
-        assert isinstance(bound, RecordValue)
-        assert bound.display_name.rsplit("::", maxsplit=1)[-1] == "Some"
+        assert isinstance(bound, EnumValue)
+        assert bound.variant == "Some"
         assert bound.fields["value"] == TextValue("x")
 
     def test_clearing_log_file_does_not_enable_logging(self) -> None:
         result = _run_program(
-            "open import std/config\n"
+            "import std/config::*\n"
             "std/config::log := false\n"
             "std/config::log-file := None\n"
             "let enabled = std/config::log\n"
@@ -416,28 +416,28 @@ class TestStdConfigQualified:
         assert result.bindings["enabled"] == BoolValue(False)
 
     def test_timeout_default_reads_none(self) -> None:
-        result = _run_program("open import std/config\nlet t = std/config::timeout\nprint t")
+        result = _run_program("import std/config::*\nlet t = std/config::timeout\nprint t")
         assert result.ok
         bound = result.bindings["t"]
-        assert isinstance(bound, RecordValue)
-        assert bound.display_name.rsplit("::", maxsplit=1)[-1] == "None"
+        assert isinstance(bound, EnumValue)
+        assert bound.variant == "None"
 
     def test_timeout_write_then_read_is_some(self) -> None:
         result = _run_program(
-            "open import std/config\n"
+            "import std/config::*\n"
             'std/config::timeout := Some("2m")\n'
             "let t = std/config::timeout\n"
             "print t"
         )
         assert result.ok, f"expected success but got: {result.error!r}"
         bound = result.bindings["t"]
-        assert isinstance(bound, RecordValue)
-        assert bound.display_name.rsplit("::", maxsplit=1)[-1] == "Some"
+        assert isinstance(bound, EnumValue)
+        assert bound.variant == "Some"
         assert isinstance(bound.fields["value"], TextValue)
 
     def test_timeout_write_none_clears_the_shell_timeout(self) -> None:
         result = _run_program(
-            "open import std/config\n"
+            "import std/config::*\n"
             'std/config::timeout := Some("2m")\n'
             "std/config::timeout := None\n"
             "let t = std/config::timeout\n"
@@ -445,12 +445,12 @@ class TestStdConfigQualified:
         )
         assert result.ok, f"expected success but got: {result.error!r}"
         bound = result.bindings["t"]
-        assert isinstance(bound, RecordValue)
-        assert bound.display_name.rsplit("::", maxsplit=1)[-1] == "None"
+        assert isinstance(bound, EnumValue)
+        assert bound.variant == "None"
 
     def test_timeout_preserves_raw_text_through_tiny_self_assignment(self) -> None:
         result = _run_program(
-            "open import std/config\n"
+            "import std/config::*\n"
             'std/config::timeout := Some("0.0001s")\n'
             "std/config::timeout := std/config::timeout\n"
             "let t = std/config::timeout\n"
@@ -459,24 +459,24 @@ class TestStdConfigQualified:
 
         assert result.ok, f"expected success but got: {result.error!r}"
         bound = result.bindings["t"]
-        assert isinstance(bound, RecordValue)
+        assert isinstance(bound, EnumValue)
         assert bound.fields["value"] == TextValue("0.0001s")
 
     def test_explicit_timeout_seed_overrides_shell_timeout(self) -> None:
         result = _run_program(
-            "open import std/config\nlet t = std/config::timeout\nt\n",
+            "import std/config::*\nlet t = std/config::timeout\nt\n",
             shell_exec_timeout=2.0,
             builtin_host_settings={"timeout": some_value(TextValue("45s"))},
         )
 
         assert result.ok, f"expected success but got: {result.error!r}"
         bound = result.bindings["t"]
-        assert isinstance(bound, RecordValue)
+        assert isinstance(bound, EnumValue)
         assert bound.fields["value"] == TextValue("45s")
 
     def test_tiny_host_timeout_can_be_assigned_back(self) -> None:
         result = _run_program(
-            "open import std/config\n"
+            "import std/config::*\n"
             "std/config::timeout := std/config::timeout\n"
             "let t = std/config::timeout\n"
             "t\n",
@@ -485,12 +485,12 @@ class TestStdConfigQualified:
 
         assert result.ok, f"expected success but got: {result.error!r}"
         bound = result.bindings["t"]
-        assert isinstance(bound, RecordValue)
+        assert isinstance(bound, EnumValue)
         assert bound.fields["value"] == TextValue("0.0000001s")
 
     def test_disabled_max_iters_round_trips_without_enabling_valve(self) -> None:
         result = _run_program(
-            "open import std/config\n"
+            "import std/config::*\n"
             "std/config::max-iters := std/config::max-iters\n"
             "var i = 0\n"
             "do\n"
@@ -512,7 +512,7 @@ class TestEffectAtBinding:
     def test_loop_after_write_uses_new_limit(self) -> None:
         """A ``max-iters := 3`` before an unguarded loop raises the effective cap."""
         source = (
-            "open import std/config\n"
+            "import std/config::*\n"
             "var i: int = 0\n"
             "std/config::max-iters := 3\n"
             "do\n"
@@ -525,7 +525,7 @@ class TestEffectAtBinding:
     def test_loop_before_write_uses_initial_limit(self) -> None:
         """A loop before the write uses the initial (small) cap and overflows."""
         source = (
-            "open import std/config\n"
+            "import std/config::*\n"
             "var i: int = 0\n"
             "do\n"
             "  i := i + 1\n"
@@ -539,21 +539,21 @@ class TestEffectAtBinding:
 
 
 # ---------------------------------------------------------------------------
-# Bare (unqualified) assignment through an open import
+# Bare (unqualified) assignment through an import tail
 # ---------------------------------------------------------------------------
 
 
 class TestBareCrossModuleAssign:
     def test_bare_write_reflected_by_bare_read(self) -> None:
-        """An open import makes a setting assignable and readable without a qualifier."""
-        result = _run_program("open import std/config\nmax-iters := 3\nlet n = max-iters\nprint n")
+        """An import makes::* a setting assignable and readable without a qualifier."""
+        result = _run_program("import std/config::*\nmax-iters := 3\nlet n = max-iters\nprint n")
         assert result.ok, f"expected success but got: {result.error!r}"
         assert result.bindings["n"] == IntValue(3)
 
     def test_bare_write_reflected_by_qualified_read(self) -> None:
         """Bare and qualified targets denote the same binding."""
         result = _run_program(
-            "open import std/config\nmax-iters := 4\nlet n = std/config::max-iters\nprint n"
+            "import std/config::*\nmax-iters := 4\nlet n = std/config::max-iters\nprint n"
         )
         assert result.ok, f"expected success but got: {result.error!r}"
         assert result.bindings["n"] == IntValue(4)
@@ -561,7 +561,7 @@ class TestBareCrossModuleAssign:
     def test_bare_write_takes_effect_on_loop_limit(self) -> None:
         """A bare write changes engine behavior, not just the readable value."""
         result = _run_program(
-            "open import std/config\n"
+            "import std/config::*\n"
             "var i: int = 0\n"
             "max-iters := 3\n"
             "do\n"
@@ -578,7 +578,7 @@ class TestBareCrossModuleAssign:
         assert result.diagnostics
 
     def test_bare_write_to_immutable_import_rejected(self, tmp_path: Path) -> None:
-        """An open-imported ``def`` is still not a valid assignment target."""
+        """A ``def`` exposed by an import tail is still not a valid assignment target."""
         (tmp_path / "mylib.agl").write_text("def foo() -> int = 1\n", encoding="utf-8")
         result = _run_program(
             "import mylib\nfoo := 3\nprint 1",
@@ -602,7 +602,7 @@ class TestQualifiedAssignRejections:
 
     def test_self_ref_qualified_assign_rejected(self) -> None:
         """``::name := expr`` is not a valid mutable target."""
-        result = _run_program("open import std/config\n::x := 1\nprint 1")
+        result = _run_program("import std/config::*\n::x := 1\nprint 1")
         assert not result.ok
         assert result.diagnostics
 

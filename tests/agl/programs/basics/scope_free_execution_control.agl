@@ -14,7 +14,7 @@ def label(status: Status) -> text =
     | Status::completed => "completed"
 
 program def main() -> unit =
-  let reviewer: Agent = AgentCommand("reviewer")
+  let reviewer = AgentCommand("reviewer")
   let task: Task = ask("Return a recursive task.", agent = reviewer)
   let status: Status = ask("Return a workflow status.", agent = reviewer)
   print(score(task))

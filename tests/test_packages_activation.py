@@ -964,7 +964,7 @@ def test_effective_exec_roots_treats_stdlib_override_as_exclusive(
     """An override must not also mount the active managed std package."""
     home = tmp_path / "agm-home"
     active_std = _write_package(home, "std", AGM_VERSION)
-    _write_package(home, "alpha", "1.0.0", '\n[dependencies]\nstd = "0.1"\n')
+    _write_package(home, "alpha", "1.0.0", f'\n[dependencies]\nstd = "{AGM_VERSION}"\n')
     override = tmp_path / "override"
     (override / "std").mkdir(parents=True)
     write_activation_index(

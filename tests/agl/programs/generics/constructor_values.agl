@@ -1,15 +1,10 @@
 # Bare constructors as function values with explicit type arguments.
-# `some::[int]` is a function value equivalent to `fn (x: int) => some(x)`.
-# Direct member applications accept either the member's captured parameters or
-# the owning enum's parameters; the latter preserves legacy spellings.
-# The qualified `Option[int]::some` / `Option[int]::none` forms supply owner arguments.
+# `some::[int]` is a function value equivalent to `fn (x: int) => some(x)`;
+# `none::[int]` constructs the nullary value directly, with no parentheses.
+# The qualified `Option[int]::some` / `Option[int]::none` forms behave the same.
 enum Option[T]
   | none
   | some(value: T)
-
-enum Outcome[T, E]
-  | ok(value: T)
-  | err(error: E)
 
 # A payload constructor pinned with `::[int]` is a positional function value.
 
@@ -17,10 +12,8 @@ program def main() -> unit =
   let mk: int -> Option[int] = some::[int]
   let v = mk(7)
 
-  # Both owner-applied and legacy direct spellings construct precise member records.
-  let z: Option[int] = Option[int]::none
-  let legacy_none: Option[int] = none::[int]
-  let legacy_ok: Outcome[int, text] = ok::[int, text](value = 3)
+  # A nullary constructor pinned with `::[int]` constructs directly.
+  let z: Option[int] = none::[int]
 
   # The qualified forms work the same way.
   let qmk: int -> Option[int] = Option[int]::some
@@ -29,7 +22,5 @@ program def main() -> unit =
 
   print(v is Option::some)
   print(z is Option::none)
-  print(legacy_none is Option::none)
-  print(legacy_ok is Outcome::ok)
   print(qv is Option::some)
   print(qz is Option::none)

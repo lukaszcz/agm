@@ -1,0 +1,19 @@
+# The parser keeps every use spelling unresolved until scope chooses its target.
+use A::B as Whole
+use A::B::value as selected
+use ::A::B as Anchored
+use A::B::* hiding hidden
+
+scope A
+scope B
+def value() -> int = 1
+def other() -> int = 2
+def hidden() -> int = 99
+end B
+end A
+
+program def main() -> unit =
+  print Whole::value()
+  print selected()
+  print Anchored::other()
+  print (value() + other())

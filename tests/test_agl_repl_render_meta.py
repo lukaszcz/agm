@@ -830,7 +830,7 @@ class TestNominalRenderingEcho:
 
         assert r.ok
         assert render_mod.render_entry_result(r, echo=True) == (
-            "o : Outcome::Partial = Outcome::Partial(\n  left = 7\n)"
+            "o : Outcome = Outcome::Partial(\n  left = 7\n)"
         )
         outcome = meta_mod.dispatch_meta(":bindings", _session_ctx(s))
         assert outcome.text is not None
@@ -941,10 +941,10 @@ class TestScopedDeclarationEcho:
         assert r.ok, r.diagnostics
         assert render_mod.render_entry_result(r, echo=True) == "Boom declared"
 
-    def test_open_declaration_entry_echoes_nothing(self) -> None:
+    def test_use_declaration_entry_echoes_nothing(self) -> None:
         s = ReplSession()
         assert s.eval_entry("def Tools::twice(x: int) -> int = x * 2").ok
-        r = s.eval_entry("open Tools")
+        r = s.eval_entry("use Tools::*")
 
         assert r.ok, r.diagnostics
         assert render_mod.render_entry_result(r, echo=True) is None

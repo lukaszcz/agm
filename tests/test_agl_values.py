@@ -301,26 +301,26 @@ def test_record_value_eq() -> None:
 
 
 def test_constructor_value_eq_and_hash() -> None:
-    """ConstructorValue equality considers its record nominal; display_name is excluded."""
+    """ConstructorValue equality considers nominal+variant; display_name excluded."""
     from agm.agl.semantics.values import ConstructorValue, NominalId
 
     nom_a = NominalId(1)
     nom_b = NominalId(2)
 
-    c1 = ConstructorValue(nominal=nom_a, display_name="Box")
-    c2 = ConstructorValue(nominal=nom_a, display_name="Box")
-    # Same nominal, different display_name → still equal.
-    c_diff_display = ConstructorValue(nominal=nom_a, display_name="Alias")
+    c1 = ConstructorValue(nominal=nom_a, display_name="Box", variant=None)
+    c2 = ConstructorValue(nominal=nom_a, display_name="Box", variant=None)
+    # Same nominal + variant, different display_name → still equal.
+    c_diff_display = ConstructorValue(nominal=nom_a, display_name="Alias", variant=None)
     # Another declaration displayed under the same spelling → not equal.
-    c3 = ConstructorValue(nominal=nom_b, display_name="Box")
-    # A repeated value with the same identity remains equal.
-    c4 = ConstructorValue(nominal=nom_a, display_name="Box")
+    c3 = ConstructorValue(nominal=nom_b, display_name="Box", variant=None)
+    # Different variant → not equal.
+    c4 = ConstructorValue(nominal=nom_a, display_name="Box", variant="Wrap")
 
     assert c1 == c2
     assert hash(c1) == hash(c2)
     assert c1 == c_diff_display  # display_name excluded from eq
     assert c1 != c3  # different declaration
-    assert c1 == c4
+    assert c1 != c4  # different variant
 
 
 def test_record_value_eq_with_json_payload() -> None:
@@ -335,37 +335,37 @@ def test_record_value_eq_with_json_payload() -> None:
 
 
 # ---------------------------------------------------------------------------
-# RecordValue eq/hash (type lives in agm.agl.semantics.values)
+# EnumValue eq/hash (type lives in agm.agl.semantics.values)
 # ---------------------------------------------------------------------------
 
 
 def test_enum_value_eq() -> None:
-    """RecordValue equality considers member nominal identity and fields.
+    """EnumValue equality considers nominal identity, variant, and fields.
 
     display_name is excluded from eq.
     """
-    from agm.agl.semantics.values import NominalId, RecordValue
+    from agm.agl.semantics.values import EnumValue, NominalId
 
     nom_color = NominalId(1)
     nom_shape = NominalId(2)
     nom_color_other = NominalId(3)
 
-    e1 = RecordValue(nominal=nom_color, display_name=f"{'Color'}::{'Red'}", fields={})
-    e2 = RecordValue(nominal=nom_color, display_name=f"{'Color'}::{'Red'}", fields={})
-    # Same member nominal and fields, different display_name → equal.
-    e_diff_disp = RecordValue(nominal=nom_color, display_name=f"{'MyColor'}::{'Red'}", fields={})
-    # Distinct member nominals are not equal.
-    e3 = RecordValue(nominal=nom_shape, display_name=f"{'Color'}::{'Blue'}", fields={})
+    e1 = EnumValue(nominal=nom_color, display_name="Color", variant="Red", fields={})
+    e2 = EnumValue(nominal=nom_color, display_name="Color", variant="Red", fields={})
+    # Same nominal+variant+fields, different display_name → equal.
+    e_diff_disp = EnumValue(nominal=nom_color, display_name="MyColor", variant="Red", fields={})
+    # Different variant → not equal.
+    e3 = EnumValue(nominal=nom_color, display_name="Color", variant="Blue", fields={})
     # Another declaration displayed under a different spelling → not equal.
-    e4 = RecordValue(nominal=nom_color_other, display_name=f"{'Shape'}::{'Red'}", fields={})
-    # A repeated member nominal with a different display spelling remains equal.
-    e5 = RecordValue(nominal=nom_color, display_name=f"{'Color'}::{'Red'}", fields={})
+    e4 = EnumValue(nominal=nom_shape, display_name="Shape", variant="Red", fields={})
+    # Another declaration displayed under the same spelling → not equal.
+    e5 = EnumValue(nominal=nom_color_other, display_name="Color", variant="Red", fields={})
 
     assert e1 == e2
     assert e1 == e_diff_disp
     assert e1 != e3
     assert e1 != e4
-    assert e1 == e5
+    assert e1 != e5
 
 
 # ---------------------------------------------------------------------------
@@ -449,7 +449,7 @@ def test_array_value_mutation_visible_through_alias() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Unhashability: ArrayValue, DictValue, RecordValue, ExceptionValue
+# Unhashability: ArrayValue, DictValue, RecordValue, EnumValue, ExceptionValue
 # ---------------------------------------------------------------------------
 
 
@@ -463,6 +463,7 @@ def test_array_dict_record_enum_exception_are_genuinely_unhashable() -> None:
     from agm.agl.semantics.values import (
         ArrayValue,
         DictValue,
+        EnumValue,
         ExceptionValue,
         RecordValue,
     )
@@ -470,7 +471,7 @@ def test_array_dict_record_enum_exception_are_genuinely_unhashable() -> None:
     assert ArrayValue.__hash__ is None
     assert DictValue.__hash__ is None
     assert RecordValue.__hash__ is None
-    assert RecordValue.__hash__ is None
+    assert EnumValue.__hash__ is None
     assert ExceptionValue.__hash__ is None
 
 
@@ -479,6 +480,7 @@ def test_array_dict_record_enum_exception_hash_raises() -> None:
     from agm.agl.semantics.values import (
         ArrayValue,
         DictValue,
+        EnumValue,
         ExceptionValue,
         IntValue,
         NominalId,
@@ -491,7 +493,7 @@ def test_array_dict_record_enum_exception_hash_raises() -> None:
         ArrayValue(elements=[IntValue(1)]),
         DictValue(entries={"a": IntValue(1)}),
         RecordValue(nominal=nom, display_name="Foo", fields={"x": IntValue(1)}),
-        RecordValue(nominal=nom, display_name=f"{'Foo'}::{'Bar'}", fields={}),
+        EnumValue(nominal=nom, display_name="Foo", variant="Bar", fields={}),
         ExceptionValue(
             nominal=NominalId(2),
             display_name="Err",
@@ -520,7 +522,7 @@ def test_semantics_values_includes_container_types() -> None:
     """The single Value union in agm.agl.semantics.values includes all container/nominal types."""
     import agm.agl.semantics.values as vals
 
-    for name in ("ArrayValue", "DictValue", "RecordValue", "RecordValue", "ExceptionValue"):
+    for name in ("ArrayValue", "DictValue", "RecordValue", "EnumValue", "ExceptionValue"):
         assert hasattr(vals, name), f"agm.agl.semantics.values missing {name!r}"
 
 

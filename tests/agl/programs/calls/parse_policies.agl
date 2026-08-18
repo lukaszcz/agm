@@ -5,7 +5,7 @@ enum Review
   | Fail(issues: array[text])
 
 program def main() -> unit =
-  let reviewer: Agent = AgentCommand("reviewer")
+  let reviewer = AgentCommand("reviewer")
   let strict_default: Review = ask("First review.", agent = reviewer)
   print "first ok"
 

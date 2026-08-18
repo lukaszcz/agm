@@ -27,8 +27,8 @@ closes it.
 The layout rules:
 
 1. **Indentation width.** Leading spaces count 1 column each; a tab advances
-   to the next multiple of 4 columns. A dedent must return to an active prior
-   indentation level — a misaligned dedent is a lexical error.
+   to the next multiple of 4 columns. A dedent must return to a level
+   previously in effect — a misaligned dedent is a lexical error.
 2. **Blank lines and comment-only lines** are ignored for layout purposes.
 3. **Implicit continuation inside brackets.** While any `(`, `[`, `{`, or
    `%{` interpolation is open, newlines do not terminate the item; the
@@ -39,7 +39,7 @@ The layout rules:
    `else`, `catch`, `until`, or `done`, the line continues the enclosing
    construct instead of starting a new item, and may align with the enclosing
    keyword without opening a new block. This is what lets `if`/`case` branches,
-   `else` branches, `catch` clauses, enum members, and the `until`/`done`
+   `else` branches, `catch` clauses, enum variants, and the `until`/`done`
    terminator of a loop sit at the same indentation as the construct that owns
    them:
 
@@ -109,17 +109,16 @@ reserved for standard-library declarations that are implemented by the host.
 `extern` is reserved for declarations implemented by a companion Python file
 (see [Python FFI](ffi.md)).
 
-**Module and scope soft keywords** — `open`, `import`, `export`, `using`,
-`hiding`, `scope`, and `end` are **not reserved**. They remain valid
-identifiers in all positions except:
+**Module and scope soft keywords** — `import`, `use`, `export`, `hiding`,
+`scope`, and `end` are **not reserved**. They remain valid identifiers in all
+positions except:
 
 | Keyword | Promoted to | Window |
 |---------|-------------|--------|
-| `open` | `OPEN` | At item-start, before an import or scope reference |
-| `import` | `IMPORT` | At item-start, or directly after `open` |
+| `import` | `IMPORT` | At item-start |
+| `use` | `USE` | At item-start when followed by a use declaration form |
 | `export` | `EXPORT` | At item-start |
-| `using` | `USING` | Within an import, export, or open declaration |
-| `hiding` | `HIDING` | Within an import, export, or open declaration |
+| `hiding` | `HIDING` | Within an import, use, or export declaration |
 | `scope` | `SCOPE` | At item-start, before a complete `NAME (:: NAME)*` scope path |
 | `end` | `END` | At a region's layout level, while that region is open, before a complete closer path ending the item |
 
@@ -133,7 +132,7 @@ Examples where they remain plain identifiers:
 ```agl
 let import = 1          # 'import' not at item-start → VAR_NAME
 let export = "hello"    # 'export' not at item-start → VAR_NAME
-let using = "hello"     # 'using' not in an import/export declaration → VAR_NAME
+let use = "hello"       # 'use' without a declaration form → VAR_NAME
 record R(end: int)            # 'end' is a field name, not a closer
 ```
 
@@ -141,7 +140,7 @@ record R(end: int)            # 'end' is a field name, not a closer
 
 `::` separates qualifier-chain segments from the member they select. A chain
 can begin with a module route, continue through named scopes or types, and end
-at a value, type, or enum member:
+at a value, type, or enum variant:
 
 <!-- agl-check: fragment -->
 ```agl

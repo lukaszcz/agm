@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import Literal, Protocol
 
-from agm.agl.scope.symbols import BindingRef, ConstructorRef, ModuleResolution
+from agm.agl.scope.symbols import BindingRef, ConstructorRef, ModuleResolution, ScopePath
 from agm.agl.semantics.types import (
     EnumType,
     ExceptionType,
@@ -20,7 +20,6 @@ from agm.agl.semantics.types import (
     RecordType,
     Type,
     TypeTemplate,
-    TypeVarType,
     substitute,
 )
 from agm.agl.syntax.nodes import Call, Expr, NamedArg, ParamKind, Placeholder, VarRef
@@ -128,6 +127,7 @@ class ConstructorChecker:
         source: TypeTemplate,
         base_sig: ConstructorSignature,
         owner_name: str,
+        variant: str | None,
     ) -> ConstructorSignature:
         """Re-express a constructor signature seen through a transparent alias.
 
@@ -143,6 +143,7 @@ class ConstructorChecker:
         target_subst = dict(target_match.bindings)
         return ConstructorSignature(
             owner_name=owner_name,
+            variant=variant,
             field_names=base_sig.field_names,
             field_templates=tuple(
                 substitute(field, target_subst) for field in base_sig.field_templates
@@ -161,6 +162,7 @@ class ConstructorChecker:
         expected: Type | None,
         sig: ConstructorSignature | None = None,
         gdef: GenericTypeDef | None = None,
+        source_name: str | None = None,
     ) -> Type:
         """Handle a generic constructor used as a bare value (not in direct call position).
 
@@ -171,7 +173,7 @@ class ConstructorChecker:
             ctor_ref, sig, _resolved_gdef = self._generic_constructor_data(ctor_ref)
         assert sig is not None
 
-        result = self._ctx._instantiate_generic_constructor_value(
+        return self._ctx._instantiate_generic_constructor_value(
             type_params=ctor_ref.type_params,
             field_templates=sig.field_templates,
             result_template=sig.result_template,
@@ -179,31 +181,6 @@ class ConstructorChecker:
             expected=expected,
             subject=ctor_ref.owner_name,
         )
-        if (
-            isinstance(result, FunctionType)
-            and isinstance(expected, FunctionType)
-            and isinstance(result.result, RecordType)
-            and isinstance(expected.result, EnumType)
-        ):
-            expected_member = next(
-                (
-                    member
-                    for member in self._ctx._env.type_table.enum_members(expected.result)
-                    if member.decl_id == result.result.decl_id
-                ),
-                None,
-            )
-            if expected_member is not None:
-                engine = self._ctx._active_inference_engine()
-                engine.unify(
-                    result.result,
-                    expected_member,
-                    engine.origin(
-                        span, role=ConstraintRole.EXPECTED_RESULT, subject=ctor_ref.owner_name
-                    ),
-                )
-                return replace(result, result=expected.result)
-        return result
 
     # --- Generic constructor type-apply as value (explicit type args) ---
 
@@ -217,42 +194,20 @@ class ConstructorChecker:
         it never performs name resolution.
         """
         owner_name = ctor_ref.owner_name
-        direct_sig = self._ctx._env.get_ctor_sig_from_module(
-            ctor_ref.owner_module_id, owner_name, scope_path=ctor_ref.owner_path
-        )
+        variant = ctor_ref.variant
         gdef = self._ctx._env.get_generic_type_from_module(
             ctor_ref.owner_module_id, owner_name, scope_path=ctor_ref.owner_path
         )
         if gdef is not None:
             sig = self._ctx._env.get_ctor_sig_from_module(
-                ctor_ref.owner_module_id, owner_name, scope_path=ctor_ref.owner_path
+                ctor_ref.owner_module_id, owner_name, variant, scope_path=ctor_ref.owner_path
             )
             if sig is None:
                 sig = self._ctx._env.get_constructor_signature(
-                    owner_name, scope_path=ctor_ref.owner_path
+                    owner_name, variant, scope_path=ctor_ref.owner_path
                 )
-            assert sig is not None, f"No constructor signature for {owner_name}"
+            assert sig is not None, f"No constructor signature for {owner_name}.{variant}"
             return ctor_ref, sig, gdef
-
-        inline_member = self._inline_enum_member_data(ctor_ref)
-        if inline_member is not None:
-            _enum_gdef, member_type = inline_member
-            fields = self._ctx._env.type_table.record_fields(member_type)
-            return (
-                ctor_ref,
-                ConstructorSignature(
-                    owner_name=owner_name,
-                    field_names=tuple(fields),
-                    field_templates=tuple(fields.values()),
-                    result_template=member_type,
-                    type_params=tuple(
-                        argument.name
-                        for argument in member_type.type_args
-                        if isinstance(argument, TypeVarType)
-                    ),
-                ),
-                None,
-            )
 
         source = self._ctx._env.source_type_template_qname(
             ctor_ref.owner_module_id, owner_name, scope_path=ctor_ref.owner_path
@@ -265,16 +220,16 @@ class ConstructorChecker:
             if target_gdef is None:
                 target_gdef = self._ctx._env.get_generic_type(target.name)
             if target_gdef is not None:
-                if isinstance(direct_sig, ConstructorSignature):
-                    return ctor_ref, direct_sig, target_gdef
                 target_sig = self._ctx._env.get_ctor_sig_from_module(
-                    target.module_id, target.name, scope_path=target.scope_path
+                    target.module_id, target.name, variant, scope_path=target.scope_path
                 )
                 if target_sig is None:
                     target_sig = self._ctx._env.get_constructor_signature(
-                        target.name, scope_path=target.scope_path
+                        target.name, variant, scope_path=target.scope_path
                     )
-                assert target_sig is not None, f"No constructor signature for {owner_name}"
+                assert target_sig is not None, (
+                    f"No constructor signature for {owner_name}.{variant}"
+                )
                 return (
                     replace(ctor_ref, type_params=source.type_params),
                     self._alias_constructor_signature(
@@ -282,97 +237,59 @@ class ConstructorChecker:
                         source=source,
                         base_sig=target_sig,
                         owner_name=owner_name,
+                        variant=variant,
                     ),
                     target_gdef,
                 )
 
-        sig = self._ctx._env.get_constructor_signature(owner_name, scope_path=ctor_ref.owner_path)
-        assert sig is not None, f"No constructor signature for {owner_name}"
+        sig = self._ctx._env.get_constructor_signature(
+            owner_name, variant, scope_path=ctor_ref.owner_path
+        )
+        assert sig is not None, f"No constructor signature for {owner_name}.{variant}"
         return ctor_ref, sig, None
 
     def _instantiate_constructor_value(
         self,
         *,
+        owner_name: str,
+        variant: str | None,
         type_params: tuple[str, ...],
         type_args: tuple[TypeExpr, ...],
         sig: ConstructorSignature,
+        gdef: GenericTypeDef | None,
+        source_name: str,
         span: SourceSpan,
     ) -> Type:
         """Instantiate a generic constructor value from explicit type arguments.
 
         Shared core of the bare and qualified type-apply-as-value paths. A
-        field-bearing constructor yields a ``FunctionType`` from its field
-        types to its concrete member record; a fieldless one constructs that
-        record immediately.
+        payload variant yields a ``FunctionType`` (field types → owner type);
+        a nullary variant yields the constructed nominal value. *gdef* is the
+        owning ``GenericTypeDef`` (own-module or cross-module); when ``None``
+        the own-module nominal registry is used via *owner_name*.
         """
+        if len(type_args) != len(type_params):
+            raise AglTypeError(
+                f"'{owner_name}' requires {len(type_params)} type argument(s), "
+                f"but {len(type_args)} were supplied.",
+                span=span,
+            )
         subst = {
             p: self._ctx._env.resolve_type_expr(
                 ta, span=span, type_vars=self._ctx._current_type_vars
             )
             for p, ta in zip(type_params, type_args)
         }
+        if not sig.field_names:
+            # Nullary variant: instantiate the nominal type and construct it.
+            concrete_type = substitute(sig.result_template, subst)
+            assert isinstance(concrete_type, (RecordType, EnumType, ExceptionType))
+            return self._check_constructor_call(
+                owner=concrete_type, variant=variant, positional=(), named=(), span=span
+            )
         concrete_params = tuple(substitute(ft, subst) for ft in sig.field_templates)
         concrete_result = substitute(sig.result_template, subst)
-        if not concrete_params:
-            return concrete_result
         return FunctionType(params=concrete_params, result=concrete_result)
-
-    def _inline_enum_member_data(
-        self, ctor_ref: ConstructorRef
-    ) -> tuple[GenericTypeDef, RecordType] | None:
-        """Return a direct inline member's generic enum and record template."""
-        if not ctor_ref.owner_path:
-            return None
-        enum_name = ctor_ref.owner_path[-1]
-        enum_path = ctor_ref.owner_path[:-1]
-        enum_gdef = self._ctx._env.get_generic_type_from_module(
-            ctor_ref.owner_module_id, enum_name, scope_path=enum_path
-        )
-        if enum_gdef is None:
-            scoped_name = "::".join((*enum_path, enum_name))
-            enum_gdef = self._ctx._env.get_generic_type(scoped_name)
-        if enum_gdef is None or enum_gdef.kind != "enum":
-            return None
-        assert isinstance(enum_gdef.template, EnumType)
-        member = next(
-            (
-                candidate
-                for candidate in self._ctx._env.type_table.enum_members(enum_gdef.template)
-                if candidate.decl_id == ctor_ref.owner_decl_node_id
-            ),
-            None,
-        )
-        if member is None:
-            return None
-        captured = tuple(
-            argument.name for argument in member.type_args if isinstance(argument, TypeVarType)
-        )
-        return (enum_gdef, member) if captured == ctor_ref.type_params else None
-
-    def _inline_enum_owner_type_params(self, ctor_ref: ConstructorRef) -> tuple[str, ...] | None:
-        """Return the generic owner parameters for an inline member constructor.
-
-        A direct member reference normally applies just the parameters captured
-        by that member record. Its enclosing enum is a second, unambiguous
-        application target only when the member's captured parameters agree
-        with the selected constructor metadata.
-        """
-        member_data = self._inline_enum_member_data(ctor_ref)
-        if member_data is None:
-            return None
-        enum_gdef, _member = member_data
-        return enum_gdef.type_params
-
-    def _explicit_constructor_type_params(
-        self, ctor_ref: ConstructorRef, type_args: tuple[TypeExpr, ...]
-    ) -> tuple[str, ...] | None:
-        """Select direct-member or owner parameters for explicit type arguments."""
-        if len(type_args) == len(ctor_ref.type_params):
-            return ctor_ref.type_params
-        owner_type_params = self._inline_enum_owner_type_params(ctor_ref)
-        if owner_type_params is not None and len(type_args) == len(owner_type_params):
-            return owner_type_params
-        return None
 
     def check_constructor_type_apply(
         self,
@@ -381,30 +298,26 @@ class ConstructorChecker:
         type_args: tuple[TypeExpr, ...],
         span: SourceSpan,
     ) -> Type:
-        """Type an explicitly instantiated constructor used as a value.
+        """Type a generic constructor with explicit type args used as a value.
 
-        Direct members accept their captured parameters.  An inline generic
-        enum member also accepts its owner's complete parameter list, which is
-        substituted through the member's captured result and field templates.
+        ``some::[int]``  → ``FunctionType((int,), Option[int])`` (payload variant).
+        ``none::[int]``  → the constructed ``Option[int]`` value (nullary variant).
         """
-        type_params = self._explicit_constructor_type_params(ctor_ref, type_args)
-        if type_params is None:
-            if not ctor_ref.type_params and self._inline_enum_owner_type_params(ctor_ref) is None:
-                raise AglTypeError(
-                    f"'{ctor_ref.owner_name}' is not a generic constructor and does not accept "
-                    "type arguments.",
-                    span=span,
-                )
+        if not ctor_ref.type_params:
             raise AglTypeError(
-                f"'{ctor_ref.owner_name}' requires {len(ctor_ref.type_params)} type argument(s), "
-                f"but {len(type_args)} were supplied.",
+                f"'{ctor_ref.owner_name}' is not a generic constructor and does not accept "
+                "type arguments.",
                 span=span,
             )
-        ctor_ref, sig, _gdef = self._generic_constructor_data(ctor_ref)
+        ctor_ref, sig, gdef = self._generic_constructor_data(ctor_ref)
         return self._instantiate_constructor_value(
-            type_params=type_params,
+            owner_name=ctor_ref.owner_name,
+            variant=ctor_ref.variant,
+            type_params=ctor_ref.type_params,
             type_args=type_args,
             sig=sig,
+            gdef=gdef,
+            source_name=ctor_ref.owner_name,
             span=span,
         )
 
@@ -414,14 +327,15 @@ class ConstructorChecker:
         self,
         *,
         owner_name: str,
+        variant: str | None,
         gdef: GenericTypeDef | None,
-        signature: ConstructorSignature,
+        owner_path: ScopePath = (),
     ) -> tuple[tuple[str, ParamKind], ...]:
         field_kinds = (
-            self._ctx._env.get_constructor_field_kinds_for_type(gdef.template, owner_name)
+            self._ctx._env.get_constructor_field_kinds_for_type(gdef.template, owner_name, variant)
             if gdef is not None
-            else self._ctx._env.get_constructor_field_kinds_for_type(
-                signature.result_template, owner_name
+            else self._ctx._env.get_constructor_field_kinds(
+                owner_name, variant, scope_path=owner_path
             )
         )
         assert field_kinds is not None, (
@@ -445,9 +359,10 @@ class ConstructorChecker:
     ) -> Type:
         """Check a generic constructor through the expression-region solver."""
         owner_name = ctor_ref.owner_name
+        variant = ctor_ref.variant
         type_params = ctor_ref.type_params
         field_kinds = self._generic_constructor_field_kinds(
-            owner_name=owner_name, gdef=gdef, signature=sig
+            owner_name=owner_name, variant=variant, gdef=gdef, owner_path=ctor_ref.owner_path
         )
         bound_exprs = bind_constructor_args(
             field_kinds,
@@ -458,6 +373,12 @@ class ConstructorChecker:
         )
 
         if node_type_args:
+            if len(node_type_args) != len(type_params):
+                raise AglTypeError(
+                    f"'{owner_name}' requires {len(type_params)} type argument(s), "
+                    f"but {len(node_type_args)} were supplied.",
+                    span=span,
+                )
             subst = {
                 type_param: self._ctx._env.resolve_type_expr(
                     type_arg, span=span, type_vars=self._ctx._current_type_vars
@@ -541,11 +462,15 @@ class ConstructorChecker:
     # --- Constructor call helpers ---
 
     def _constructor_fields_and_context(
-        self, owner: RecordType | ExceptionType
+        self, owner: RecordType | EnumType | ExceptionType, variant: str | None
     ) -> tuple[Mapping[str, Type], str]:
-        zonked_owner = self._ctx._zonk_constructor_owner(owner)
-        assert isinstance(zonked_owner, (RecordType, ExceptionType))
-        owner = zonked_owner
+        owner = self._ctx._zonk_constructor_owner(owner)
+        if isinstance(owner, EnumType):
+            assert variant is not None, "variant is required for EnumType"
+            return (
+                self._ctx._env.type_table.enum_variants(owner)[variant],
+                f"variant '{owner.name}.{variant}'",
+            )
         if isinstance(owner, RecordType):
             return self._ctx._env.type_table.record_fields(owner), f"constructor '{owner.name}'"
         return self._ctx._env.type_table.exception_fields(owner), f"exception '{owner.name}'"
@@ -576,16 +501,15 @@ class ConstructorChecker:
     def _finish_constructor_call(
         self,
         *,
-        owner: RecordType | ExceptionType,
+        owner: RecordType | EnumType | ExceptionType,
+        variant: str | None,
         field_kinds: tuple[tuple[str, ParamKind], ...],
         bound_exprs: Mapping[str, Expr],
         node: Call | None,
         hole_indices: Mapping[int, int],
     ) -> Type:
-        zonked_owner = self._ctx._zonk_constructor_owner(owner)
-        assert isinstance(zonked_owner, (RecordType, ExceptionType))
-        owner = zonked_owner
-        fields, _context_desc = self._constructor_fields_and_context(owner)
+        owner = self._ctx._zonk_constructor_owner(owner)
+        fields, _context_desc = self._constructor_fields_and_context(owner, variant)
 
         if node is not None:
             self._ctx._record_constructor_call_binding(node.node_id, dict(bound_exprs))
@@ -622,6 +546,11 @@ class ConstructorChecker:
         """Attach generic metadata discovered from the resolved owner identity."""
         if ref.type_params:
             return ref
+        gdef = self._ctx._env.get_generic_type_from_module(
+            ref.owner_module_id, ref.owner_name, scope_path=ref.owner_path
+        )
+        if gdef is not None:
+            return replace(ref, type_params=gdef.type_params)
         source = self._ctx._env.source_type_template_qname(
             ref.owner_module_id, ref.owner_name, scope_path=ref.owner_path
         )
@@ -631,30 +560,51 @@ class ConstructorChecker:
 
     def resolve_constructor_owner(
         self, ref: ConstructorRef, span: SourceSpan
-    ) -> RecordType | ExceptionType:
-        """Resolve the record declaration selected by scope."""
+    ) -> RecordType | EnumType | ExceptionType:
+        """Resolve the owner type for a constructor ref.
+
+        The whole-program type pre-pass registers every module's own
+        declarations into the shared program type table before any body is
+        checked, so a resolved ``ConstructorRef`` usually finds its owner
+        there. Falls back to the unqualified local registry for cross-module
+        types exposed by import tails but not registered in the shared table
+        — including a host builtin (e.g. an exception like ``Abort``) whose
+        constructor candidate is ambiently seeded under ``std/core``'s module
+        id even when the standard library is not loaded, so the shared table
+        never gained an entry for it. Raises a proper diagnostic, rather than
+        returning ``None``, when neither lookup finds a constructible owner.
+        """
         owner = self._ctx._env.resolve_constructible_type_by_module_id(
             ref.owner_module_id, ref.owner_name, scope_path=ref.owner_path
         )
         if owner is None:
-            # Scoped member records of seeded builtins are present in the shared
-            # type table but intentionally absent from a module's public source
-            # type inventory. Their declaration identity from scope still names
-            # the authoritative record shape.
-            typedef = self._ctx._env.type_table.get_by_id(ref.owner_decl_node_id)
-            if typedef is not None and typedef.kind == "record":
-                table_owner = typedef.handle()
-                assert isinstance(table_owner, RecordType)
-                owner = table_owner
-        if owner is None:
             candidate = self._ctx._env.get_type(ref.owner_name)
-            if not isinstance(candidate, (RecordType, ExceptionType)):
+            if not isinstance(candidate, (RecordType, EnumType, ExceptionType)):
                 raise AglTypeError(
-                    f"'{ref.owner_name}' is not a known record constructor.", span=span
+                    f"'{ref.owner_name}' is not a known constructible type.", span=span
                 )
             owner = candidate
-        if not isinstance(owner, (RecordType, ExceptionType)):
-            raise AglTypeError(f"'{ref.owner_name}' is not a known record constructor.", span=span)
+        if ref.variant is None:
+            if isinstance(owner, EnumType):
+                # An enum is constructed through a variant, so a bare-name
+                # constructor spelling never denotes one. The two can meet
+                # when a name is redeclared under a different kind and a
+                # constructor reference to the record or exception it used to
+                # name is still reachable.
+                raise AglTypeError(
+                    f"'{ref.owner_name}' is an enum type; name one of its variants to "
+                    "construct it.",
+                    span=span,
+                )
+            return owner
+        if not isinstance(owner, EnumType):
+            if isinstance(owner, (RecordType, ExceptionType)) and ref.variant == ref.owner_name:
+                return owner
+            raise AglTypeError(f"'{ref.owner_name}' is not a known enum type.", span=span)
+        if ref.variant not in self._ctx._env.type_table.enum_variants(owner):
+            raise AglTypeError(
+                f"Variant '{ref.variant}' does not exist in enum '{ref.owner_name}'.", span=span
+            )
         return owner
 
     # --- Constructor as value (public entry point) ---
@@ -662,7 +612,8 @@ class ConstructorChecker:
     def check_constructor_as_value(
         self,
         *,
-        owner: RecordType | ExceptionType,
+        owner: RecordType | EnumType | ExceptionType,
+        variant: str | None,
         span: SourceSpan,
     ) -> Type:
         """Type a non-generic constructor used in value position (not directly called).
@@ -674,20 +625,24 @@ class ConstructorChecker:
         construction has special trace-id semantics and is out of scope as a
         first-class value.
         """
-        zonked_owner = self._ctx._zonk_constructor_owner(owner)
-        assert isinstance(zonked_owner, (RecordType, ExceptionType))
-        owner = zonked_owner
+        owner = self._ctx._zonk_constructor_owner(owner)
         if isinstance(owner, ExceptionType):
             raise AglTypeError(
                 "Exception constructors cannot be used as a first-class value; "
                 "construct the exception directly (e.g. `Abort(message: ...)`).",
                 span=span,
             )
-        fields = self._ctx._env.type_table.record_fields(owner)
+        if isinstance(owner, EnumType):
+            assert variant is not None, "variant is required for EnumType"
+            fields = self._ctx._env.type_table.enum_variants(owner)[variant]
+        else:
+            fields = self._ctx._env.type_table.record_fields(owner)
         if fields:
             params = tuple(fields.values())
             return FunctionType(params=params, result=owner)
-        return self._check_constructor_call(owner=owner, positional=(), named=(), span=span)
+        return self._check_constructor_call(
+            owner=owner, variant=variant, positional=(), named=(), span=span
+        )
 
     # --- Cross-module constructor value/call (public entry points) ---
 
@@ -700,7 +655,8 @@ class ConstructorChecker:
         )
         if owner is None:
             raise AglTypeError(
-                f"'{callee_ref.name}' is a type name, not a constructible nominal type.", span=span
+                f"'{callee_ref.name}' is a type name, not a constructible nominal type.",
+                span=span,
             )
         return owner, self._ctx._env.get_generic_type_from_module(
             owner.module_id, owner.name, scope_path=owner.scope_path
@@ -715,47 +671,109 @@ class ConstructorChecker:
         owner, target_gdef = self._resolve_cross_module_nominal_constructor(callee_ref, span)
         assert target_gdef is not None
         signature = self._ctx._env.get_ctor_sig_from_module(
-            owner.module_id, owner.name, scope_path=owner.scope_path
+            owner.module_id, owner.name, None, scope_path=owner.scope_path
         )
         assert signature is not None
         source = self._ctx._env.source_type_template_qname(
             callee_ref.module_id, callee_ref.name, scope_path=callee_ref.scope_path
         )
         assert source is not None
-        return (
-            owner,
-            target_gdef,
-            self._alias_constructor_signature(
-                target_gdef=target_gdef,
-                source=source,
-                base_sig=signature,
-                owner_name=callee_ref.name,
-            ),
-            source.type_params,
+        effective_signature = self._alias_constructor_signature(
+            target_gdef=target_gdef,
+            source=source,
+            base_sig=signature,
+            owner_name=callee_ref.name,
+            variant=None,
         )
+        return owner, target_gdef, effective_signature, source.type_params
 
     def check_cross_module_constructor_as_value(
         self, callee_ref: BindingRef, *, span: SourceSpan, expected: Type | None
     ) -> Type:
         """Type a module-qualified record constructor used as a value."""
+        gdef = self._ctx._env.get_generic_type_from_module(
+            callee_ref.module_id, callee_ref.name, scope_path=callee_ref.scope_path
+        )
+        if gdef is not None:
+            if not isinstance(gdef.template, RecordType):
+                raise AglTypeError(
+                    f"'{callee_ref.name}' is a type name, not a value; "
+                    "use it with a constructor call "
+                    "(e.g. 'EnumName::Variant' or 'RecordName(...)').",
+                    span=span,
+                )
+            sig = self._ctx._env.get_ctor_sig_from_module(
+                callee_ref.module_id, callee_ref.name, None, scope_path=gdef.template.scope_path
+            )
+            assert sig is not None, (
+                f"GenericTypeDef '{callee_ref.name}' in '{callee_ref.module_id.display()}' "
+                "has no constructor signature in the program table"
+            )
+            return self.check_generic_constructor_as_value(
+                ctor_ref=ConstructorRef(
+                    owner_name=callee_ref.name,
+                    variant=None,
+                    owner_decl_node_id=callee_ref.decl_node_id,
+                    type_params=gdef.type_params,
+                ),
+                span=span,
+                expected=expected,
+                sig=sig,
+                gdef=gdef,
+                source_name=callee_ref.name,
+            )
         owner, target_gdef = self._resolve_cross_module_nominal_constructor(callee_ref, span)
         if target_gdef is not None:
-            _, _target_gdef, sig, type_params = self._resolve_cross_module_generic_constructor(
+            _, target_gdef, sig, type_params = self._resolve_cross_module_generic_constructor(
                 callee_ref, span
             )
             return self.check_generic_constructor_as_value(
                 ctor_ref=ConstructorRef(
                     owner_name=callee_ref.name,
+                    variant=None,
                     owner_decl_node_id=callee_ref.decl_node_id,
                     type_params=type_params,
                 ),
                 span=span,
                 expected=expected,
                 sig=sig,
+                gdef=target_gdef,
+                source_name=callee_ref.name,
             )
         if isinstance(owner, RecordType):
-            return self.check_constructor_as_value(owner=owner, span=span)
-        raise AglTypeError(f"'{callee_ref.name}' is a type name, not a value; ", span=span)
+            return self.check_constructor_as_value(owner=owner, variant=None, span=span)
+        raise AglTypeError(
+            f"'{callee_ref.name}' is a type name, not a value; "
+            "use it with a constructor call (e.g. 'EnumName::Variant' or 'RecordName(...)').",
+            span=span,
+        )
+
+    def check_cross_module_constructor_type_apply(
+        self,
+        callee_ref: BindingRef,
+        *,
+        type_args: tuple[TypeExpr, ...],
+        span: SourceSpan,
+    ) -> Type:
+        """Instantiate a module-qualified generic record constructor value."""
+        owner, gdef = self._resolve_cross_module_nominal_constructor(callee_ref, span)
+        if gdef is None or not isinstance(gdef.template, RecordType):
+            raise AglTypeError(
+                f"'{callee_ref.name}' is not a generic constructor and does not accept "
+                "type arguments.",
+                span=span,
+            )
+        _, gdef, sig, type_params = self._resolve_cross_module_generic_constructor(callee_ref, span)
+        return self._instantiate_constructor_value(
+            owner_name=callee_ref.name,
+            variant=None,
+            type_params=type_params,
+            type_args=type_args,
+            sig=sig,
+            gdef=gdef,
+            source_name=callee_ref.name,
+            span=span,
+        )
 
     def check_cross_module_constructor_call(
         self,
@@ -765,17 +783,22 @@ class ConstructorChecker:
         expected: Type | None = None,
         hole_indices: Mapping[int, int] | None = None,
     ) -> Type:
-        """Handle a call whose callee is a cross-module constructor binding."""
+        """Handle a Call whose callee is a cross-module constructor VarRef.
+
+        Used when the callee is a qualified VarRef like ``modA::Foo`` that
+        resolved to a ``constructor_binding`` in a non-entry module.
+        """
         assert isinstance(node.callee, VarRef)
         owner_type, gdef = self._resolve_cross_module_nominal_constructor(callee_ref, node.span)
         if gdef is not None:
-            _, _gdef, ctor_sig, type_params = self._resolve_cross_module_generic_constructor(
+            _, gdef, ctor_sig, type_params = self._resolve_cross_module_generic_constructor(
                 callee_ref, node.span
             )
             return self._check_generic_constructor_call(
                 node_type_args=node.type_args,
                 ctor_ref=ConstructorRef(
                     owner_name=callee_ref.name,
+                    variant=None,
                     owner_decl_node_id=callee_ref.decl_node_id,
                     type_params=type_params,
                 ),
@@ -788,13 +811,20 @@ class ConstructorChecker:
                 sig=ctor_sig,
                 gdef=gdef,
             )
+        if node.type_args:
+            raise AglTypeError(
+                f"'{callee_ref.name}' is not a generic type and does not accept type arguments.",
+                span=node.span,
+            )
         if isinstance(owner_type, EnumType):
             raise AglTypeError(
-                f"'{callee_ref.name}' is an enum type, not a record constructor.", span=node.span
+                f"'{callee_ref.name}' is an enum type, not a record constructor.",
+                span=node.span,
             )
         self._reject_abstract_exception_constructor(owner_type, node.span)
         return self._check_constructor_call(
             owner=owner_type,
+            variant=None,
             positional=node.args,
             named=node.named_args,
             span=node.span,
@@ -802,24 +832,7 @@ class ConstructorChecker:
             hole_indices=hole_indices,
         )
 
-    # --- Constructor callee calls (public entry points) ---
-
-    def check_concrete_constructor_callee_call(
-        self,
-        node: Call,
-        *,
-        owner: RecordType,
-        hole_indices: Mapping[int, int] | None = None,
-    ) -> Type:
-        """Call a member whose enum owner already supplied every type argument."""
-        return self._check_constructor_call(
-            owner=owner,
-            positional=node.args,
-            named=node.named_args,
-            span=node.span,
-            node=node,
-            hole_indices=hole_indices,
-        )
+    # --- Unqualified constructor callee call (public entry point) ---
 
     def check_constructor_callee_call(
         self,
@@ -833,20 +846,8 @@ class ConstructorChecker:
         """Handle a Call whose callee is an unqualified constructor VarRef."""
         assert isinstance(node.callee, VarRef)
         type_args = () if constructor_type_args is None else constructor_type_args
-        explicit_type_params = (
-            self._explicit_constructor_type_params(ctor_ref, type_args) if type_args else None
-        )
-        if ctor_ref.type_params or explicit_type_params:
-            if type_args and explicit_type_params is None:
-                raise AglTypeError(
-                    f"'{ctor_ref.owner_name}' requires "
-                    f"{len(ctor_ref.type_params)} type argument(s), "
-                    f"but {len(type_args)} were supplied.",
-                    span=node.span,
-                )
+        if ctor_ref.type_params:
             ctor_ref, sig, gdef = self._generic_constructor_data(ctor_ref)
-            if explicit_type_params is not None:
-                ctor_ref = replace(ctor_ref, type_params=explicit_type_params)
             return self._check_generic_constructor_call(
                 node_type_args=type_args,
                 ctor_ref=ctor_ref,
@@ -869,6 +870,7 @@ class ConstructorChecker:
         self._reject_abstract_exception_constructor(owner, node.span)
         return self._check_constructor_call(
             owner=owner,
+            variant=ctor_ref.variant,
             positional=node.args,
             named=node.named_args,
             span=node.span,
@@ -895,22 +897,23 @@ class ConstructorChecker:
     def _check_constructor_call(
         self,
         *,
-        owner: RecordType | ExceptionType,
+        owner: RecordType | EnumType | ExceptionType,
+        variant: str | None,
         positional: tuple[Expr, ...],
         named: tuple[NamedArg, ...],
         span: SourceSpan,
         node: Call | None = None,
         hole_indices: Mapping[int, int] | None = None,
     ) -> Type:
-        zonked_owner = self._ctx._zonk_constructor_owner(owner)
-        assert isinstance(zonked_owner, (RecordType, ExceptionType))
-        owner = zonked_owner
-        fields, context_desc = self._constructor_fields_and_context(owner)
+        owner = self._ctx._zonk_constructor_owner(owner)
+        fields, context_desc = self._constructor_fields_and_context(owner, variant)
 
         # Get field kinds. The env helper
         # owns the lookup convention (registered table for records/enums,
         # derived from exception_fields for exceptions).
-        field_kinds = self._ctx._env.get_constructor_field_kinds_for_type(owner, owner.name)
+        field_kinds = self._ctx._env.get_constructor_field_kinds_for_type(
+            owner, owner.name, variant
+        )
         assert field_kinds is not None, (
             f"compiler bug: no field-kinds registered for {context_desc}"
         )
@@ -923,6 +926,7 @@ class ConstructorChecker:
         )
         return self._finish_constructor_call(
             owner=owner,
+            variant=variant,
             field_kinds=field_kinds,
             bound_exprs=bound_exprs,
             node=node,

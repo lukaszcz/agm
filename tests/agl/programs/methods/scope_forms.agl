@@ -80,7 +80,7 @@ program def main() -> unit =
         print(box.region_size())
         print(entry.value)
     | mode == "variants" =>
-        let signal: Signal = Signal::ready(value = base)
+        let signal = Signal::ready(value = base)
         let notice = Notice(message = "notice", code = base)
         print(signal.path_text())
         print(signal.region_text())

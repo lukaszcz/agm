@@ -46,6 +46,24 @@ def reject_graph(tmp_path: Path, modules: dict[str, str]) -> None:
         accept_graph(tmp_path, modules)
 
 
+def test_additive_import_rename_preserves_both_constructor_pattern_spellings(
+    tmp_path: Path,
+) -> None:
+    accept_graph(
+        tmp_path,
+        {
+            "entry": (
+                "import library::{Token as T}\n"
+                "let item = T(value = 1)\n"
+                "let Token(value = _ as original) = item\n"
+                "let T(value = _ as renamed) = item\n"
+                "original + renamed"
+            ),
+            "library": "record Token\n  value: int",
+        },
+    )
+
+
 def test_record_patterns_bind_positional_named_named_only_nested_and_as_in_case_and_let() -> None:
     checked = accept(
         "record Inner\n"
@@ -145,6 +163,31 @@ def test_simple_let_name_binds_even_when_it_matches_a_nullary_constructor() -> N
     assert strip_decl_ids(checked.type_env.get_binding_type(let.pattern.node_id)) == EnumType("Opt")
 
 
+@pytest.mark.parametrize(
+    "entry",
+    [
+        ("import lib\nuse lib::*\nlet instance = R(value = 1)\nlet R(value) = instance\n"),
+        (
+            "scope Region\n"
+            "import lib::*\n"
+            "let instance = R(value = 1)\n"
+            "let R(value) = instance\n"
+            "end Region\n"
+        ),
+    ],
+)
+def test_root_record_patterns_work_through_use_and_regional_import_tails(
+    tmp_path: Path, entry: str
+) -> None:
+    accept_graph(
+        tmp_path,
+        {
+            "lib": "record R\n  value: int\n",
+            "entry": entry,
+        },
+    )
+
+
 def test_record_patterns_support_imported_and_qualified_alias_spellings(tmp_path: Path) -> None:
     checked = accept_graph(
         tmp_path,
@@ -153,7 +196,7 @@ def test_record_patterns_support_imported_and_qualified_alias_spellings(tmp_path
             "entry": (
                 "import lib\n"
                 "import lib as L\n"
-                "open import lib\n"
+                "import lib::*\n"
                 "record Local\n  value: int\n"
                 "let local = Local(value = 1)\n"
                 "let ::Local(value) = local\n"
@@ -189,7 +232,7 @@ def test_local_record_owner_qualifier_selects_only_the_local_same_named_record(
     modules = {
         "lib": "record R\n  value: int\n",
         "entry": (
-            "open import lib\n"
+            "import lib::*\n"
             "record R\n  value: int\n"
             "type Alias = R\n"
             "enum Signal\n  | yes(value: int)\n"
@@ -206,7 +249,7 @@ def test_local_record_owner_qualifier_selects_only_the_local_same_named_record(
         {
             "lib": modules["lib"],
             "entry": (
-                "open import lib\n"
+                "import lib::*\n"
                 "record R\n  value: int\n"
                 "def select_imported(r: lib::R) -> int = "
                 "case r of | R::R(value) => value\n"
@@ -237,7 +280,7 @@ def test_self_qualified_record_pattern_rejects_an_absent_current_owner(tmp_path:
         tmp_path,
         {
             "lib": "record Point\n  x: int\n",
-            "entry": ("open import lib\nlet point = Point(x = 1)\nlet ::Point(x) = point\nx\n"),
+            "entry": ("import lib::*\nlet point = Point(x = 1)\nlet ::Point(x) = point\nx\n"),
         },
     )
 
@@ -259,7 +302,7 @@ def test_record_and_enum_constructor_spelling_collision_is_scrutinee_directed() 
     assert isinstance(pattern, ConstructorPattern)
     selected = checked.pattern_constructor_ref_for(pattern.node_id)
     assert selected is not None
-    assert selected.owner_name == "Token"
+    assert selected.variant is None
 
 
 @pytest.mark.parametrize(
@@ -389,7 +432,7 @@ def test_self_qualified_pattern_reaches_a_prelude_constructor() -> None:
     assert isinstance(pattern, ConstructorPattern)
     selected = checked.pattern_constructor_ref_for(pattern.node_id)
     assert selected is not None
-    assert selected.owner_name == "Retry"
+    assert selected.variant == "Retry"
 
 
 def test_route_qualified_pattern_naming_a_non_constructor_is_rejected(tmp_path: Path) -> None:

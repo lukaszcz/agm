@@ -23,7 +23,7 @@ module_item   ::= scope_region | item
 block         ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 
 item       ::= import_decl                  (* header position only; scope_item also permits it *)
-             | open_decl                    (* module-root or scope-region header only *)
+             | use_decl                     (* module-root or scope-region header only *)
              | builtin_var_def              (* root only; standard library only *)
              | builtin_modifier? record_def (* root only *)
              | builtin_modifier? enum_def   (* root only *)
@@ -54,7 +54,7 @@ scope_region ::= "scope" scope_path (NEWLINE | ";")
                  [scope_item ((NEWLINE | ";") scope_item)* (NEWLINE | ";")?]
                  "end" scope_path
 scope_path   ::= NAME ("::" NAME)*
-scope_item   ::= scope_region | open_decl
+scope_item   ::= scope_region | use_decl
                | import_decl                  (* header position only *)
                | export_decl
                | record_def | enum_def | exception_def | type_alias
@@ -70,7 +70,7 @@ A scope region has a mandatory matching closer: `scope A::B` closes with
 `end A::B`. Regions may appear only as module-root items or as items of another
 scope region. They may nest, and a multi-segment header is equivalent to
 nested single-segment regions. Scope
-regions contain nested regions, header `open` and `import` declarations,
+regions contain nested regions, header `use` and `import` declarations,
 `export` declarations, static declarations (including every `builtin` form),
 `param` declarations, `program def` declarations, and `let`/`var` bindings;
 bare expressions, `:=` assignments, and infix declarations are not permitted. `scope` is contextual at item start before a scope path, and `end`
@@ -90,43 +90,48 @@ the line directly above it.
 ## Import and export declarations
 
 ```ebnf
-import_decl ::= ["open"] "import" module_path ["/*"]
-                ["as" ref_name]
-                [using_clause | hiding_clause]
+import_decl ::= "import" module_path ["/*"]
+                ("as" NAME | "::" tail)? [hiding_clause]
+use_decl    ::= "use" use_target ("::" tail | "as" ref_name) [hiding_clause]
+export_decl ::= "export" module_path ["/*"] ["::" braces] [hiding_clause]
 
-export_decl ::= "export" module_path ["/*"]
-                [using_clause | hiding_clause]
-
-module_path ::= NAME ("/" NAME)*    (* byte-adjacent, as is a trailing "/*" *)
-ref_name    ::= name
-
-open_decl   ::= "open" scope_ref [using_clause | hiding_clause]
-scope_ref    ::= [module_path "::"] scope_path
-scope_path   ::= NAME ("::" NAME)*
-using_clause ::= "using" path_atom ("as" ref_name)? ("," path_atom ("as" ref_name)?)*
+tail          ::= "*" | braces | path_atom ["as" ref_name]
+braces        ::= "{" brace_item ("," brace_item)* ","? "}"
+brace_item    ::= path_atom ["as" ref_name]
+use_target    ::= "/" qualifier_path | "::" scope_path | qualifier_path
+module_path   ::= NAME ("/" NAME)*    (* byte-adjacent, as is a trailing "/*" *)
+qualifier_path ::= NAME ("/" NAME)* ("::" NAME)*
+ref_name      ::= name
 hiding_clause ::= "hiding" path_atom ("," path_atom)*
-path_atom    ::= [scope_path "::"] name
+path_atom     ::= (NAME "::")* name
 ```
 
-`"open"` is a contextual soft keyword at item start before an import or scope
-reference. `"import"` and `"export"` are contextual at item-start; `"using"`
-and `"hiding"` are contextual within import, export, and `open` declarations.
-They remain valid identifiers elsewhere.
+`"import"`, `"use"`, and `"export"` are contextual at item start when they
+begin their declaration form. `"hiding"` is contextual within those headers.
+They remain valid identifiers elsewhere. An import alias is an identifier
+because it becomes a qualifier segment. An import alias and a tail are
+exclusive. Braces cannot be empty or nested, cannot contain `*`, and cannot
+be combined with `hiding`. `hiding` is valid on a plain import, an import glob,
+a module wildcard import, or a use glob. An export accepts brace tails but not
+`::*`. A `use` alias for a complete scope or module target must be a `NAME`,
+because it becomes a qualifier segment; selected member renames may use any
+`name`.
 
 Examples:
 
 <!-- agl-check: fragment -->
 ```agl
 import foo/bar
-open import foo/bar as A
-import foo/bar using x, y
-import foo/bar hiding x, y
-import foo/bar using x as X, y
-import foo/*
+import foo/bar as A
+import foo/bar::{x, y}
+import foo/bar::x as X
+import foo/bar::* hiding internal
+import foo/*::*
 import foo/bar/* as A
-export foo/bar using x as X, y
+export foo/bar::{x as X, y}
 export foo/bar/* hiding internal
-open Point using distance as d
+use Point::{distance as d}
+use ::Scope::*
 ```
 
 ### Suites (indented blocks)
@@ -186,7 +191,7 @@ parenthesized — `try (fn(x: int) -> int => x) catch _ => 0` — which restores
 the marker.
 
 A `=>` body holds a single `closed_item` — no `;`, no binder, and none of the
-open forms whose own branch lists would swallow the enclosing form's
+right-extending forms whose own branch lists would swallow the enclosing form's
 continuation.
 
 This is not a special restriction on `;`. Within a block, `;` and a newline
@@ -218,13 +223,12 @@ block_entry      ::= field_def | param_marker
 field_def        ::= field_name ":" type_expr
 
 enum_def         ::= "enum" decl_head type_params? "="? enum_body
-enum_body        ::= enum_member_seq
-                   | NEWLINE INDENT enum_member_seq NEWLINE? DEDENT
-enum_member_seq  ::= first_enum_member ("|" enum_member)*
-first_enum_member ::= "|"? enum_member
-enum_member      ::= name member_payload? | qualifier_chain name member_type_args?
-member_type_args ::= "[" type_expr ("," type_expr)* "]"
-member_payload   ::= "(" field_list? ")"
+enum_body        ::= enum_variant_seq
+                   | NEWLINE INDENT enum_variant_seq NEWLINE? DEDENT
+enum_variant_seq ::= first_variant_def ("|" variant_def)*
+first_variant_def ::= "|"? name variant_payload?
+variant_def      ::= name variant_payload?
+variant_payload  ::= "(" field_list? ")"
 field_list       ::= field_entry ("," field_entry)* ","?
 field_entry      ::= field_inline | param_marker
 field_inline     ::= field_name ":" type_expr
@@ -258,12 +262,6 @@ A `type_params` list declares the declaration's type parameters; each named
 entry is an ordinary name in scope as a type throughout the declaration's body.
 `_` is an unused positional slot and introduces no type name. See
 [Generics](generics.md).
-
-An enum member written as a bare `name` declares a record in the enum's scope;
-its optional field list is that record's field list. A qualified member is a
-reference to an existing record, so it has no field list. Qualification is the
-declare/reference discriminator: `Entry(x: int)` declares `Enum::Entry`, while
-`::Entry` references the current module's `Entry`. See [Enums](types.md#enum-types).
 
 ## Type expressions
 
@@ -348,7 +346,8 @@ infix_op        ::= "or" | "and" | "in"
 
 `infixl` and `infixr` declare a symbolic operator's associativity and optional
 integer priority. Larger priorities bind tighter; omitted priority defaults to
-the `+`/`-` level. `prio <op> +/- <int>` is resolved from an existing builtin or user-declared operator.
+the `+`/`-` level. `prio <op> +/- <int>` is resolved from an existing builtin or
+previously declared user operator.
 
 ## Bindings and mutation
 
@@ -381,8 +380,8 @@ for the full disambiguation.
 Assignment has type `unit` and returns `void`. `assign_target`'s qualifier
 accepts any number of segments: a local scope path (`A::B::count`) reaches a
 scoped `var` exactly as a qualified read does, while a bare (non-indexed)
-cross-module target — written with a qualifier, or bare when an open import
-puts the name in scope — is valid only when it resolves to a `builtin var`;
+cross-module target — written with a qualifier, or bare when an import tail or
+`use` puts the name in scope — is valid only when it resolves to a `builtin var`;
 type-qualified constructor forms are not assignment targets. An indexed
 assignment target's object expression is evaluated like any other read, so
 `assign_target` accepts any array- or dict-typed expression there — see
@@ -501,18 +500,18 @@ pattern_field  ::= pattern              (* positional sub-pattern *)
 It has the lowest pattern precedence, may be chained, and cannot use `_` as
 its binder name. The binder is always a variable binder.
 
-A qualified member pattern (`Option::some(value)`,
-`module::Option::some(value)`, or `/module::Option::some(value)`) names a
-member record with `::`. A leading `/` is an anchored qualifier; without it,
-the qualifier is resolved as a suffix. The complete qualifier through `::` is
-byte-adjacent. A qualified pattern's argument list is optional
-(`Option::none` and `Option::none()` are both nullary matches) except at the
-root of a `let` pattern, where writing it or not distinguishes a match from a
-scoped binding — see [Bindings and scope](bindings-and-scope.md). Unqualified
-constructor ownership is selected by the scrutinee's static nominal type, even
-when multiple enums contribute the same member name or a record constructor
-spelling collides with an injected member name; a qualifier is optional and
-must agree with that type when present ([Generics](generics.md),
+A qualified variant pattern (`Option::some(value)`,
+`module::Option::some(value)`, or `/module::Option::some(value)`) names the
+owning enum and variant with `::`. A leading `/` is an anchored qualifier;
+without it, the qualifier is resolved as a suffix. The complete qualifier
+through `::` is byte-adjacent. A qualified pattern's argument list is
+optional (`Option::none` and `Option::none()` are both nullary matches) except
+at the root of a `let` pattern, where writing it or not distinguishes a match
+from a scoped binding — see [Bindings and scope](bindings-and-scope.md).
+Unqualified constructor ownership is selected by the scrutinee's static nominal
+type, even when multiple enums share a variant name or a record constructor
+spelling collides with an enum variant; a qualifier is optional and must agree
+with that type when present ([Generics](generics.md),
 [Pattern matching](pattern-matching.md)). Type arguments are carried by the
 scrutinee type rather than written in a pattern.
 
@@ -643,13 +642,12 @@ continue_expr  ::= "continue"
 ```
 
 A bare name atom is resolved by scope and position: it may name a variable, a
-record constructor, an injected enum-member constructor, or a generic
-`def`/constructor used as a first-class value. The typed postfix form carries
-explicit type arguments to a generic `def` or bare constructor
-(`id::[int](5)`, `some::[int](value = 1)`, `apply::[int, int](…)`), or
-instantiates a generic function value (`id::[int]`). A member selected through
-its owning generic enum puts the type arguments on the type side
-(`Option[int]::some(value = 1)`).
+record constructor, an enum variant, or a generic `def`/constructor
+used as a first-class value. The typed postfix form carries explicit type
+arguments to a generic `def` or bare constructor (`id::[int](5)`,
+`some::[int](value = 1)`, `apply::[int, int](…)`), or instantiate a generic
+function value (`id::[int]`). An enum variant qualified by its owning generic
+type puts the type arguments on the type side (`Option[int]::some(value = 1)`).
 A qualifier that is a scope or module route rather than an owning type leaves
 the constructor's own spelling intact, so it carries type arguments exactly as
 the unqualified form does (`A::Pair::[int]`, `boxes::A::Box::[int]`). In that explicit
@@ -748,14 +746,14 @@ not permitted inside `%{…}`.
   call — the two are syntactically unified.
 - Inline branch and `catch` bodies hold a single *closed* item — `or_expr`,
   `:=`, `raise`, or `return`. They admit neither a `;` sequence nor a binder,
-  nor the *open* forms (`case`, `if`, `try`, a loop) or a lambda, whose body is
+  nor the *right-extending* forms (`case`, `if`, `try`, a loop) or a lambda, whose body is
   itself an `expr`: those would extend rightwards into the enclosing branch
   list's `|` / `else` / `catch`. Write them as a suite or parenthesize them
   (see [Inline bodies](#inline-bodies)).
-- `until` conditions reference `or_expr` directly, so an open form there must
+- `until` conditions reference `or_expr` directly, so a right-extending form there must
   be parenthesized.
 - Bodies whose end is marked by a token — a parenthesized block, a loop body,
   a `try` body — take a full `;` sequence; loop bodies additionally admit the
-  open forms, because the loop terminator closes the body.
+  right-extending forms, because the loop terminator closes the body.
 - A `return` followed by a newline is a bare `return`; its operand does not
   continue onto the next line.

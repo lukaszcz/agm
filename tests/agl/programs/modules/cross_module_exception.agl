@@ -1,10 +1,10 @@
-# Cross-module exception construction: open-import and forms.
+# Cross-module exception construction: import-tail and qualified forms.
 # Regression for the bug where ExceptionType has no module_id, causing the
 # field-kinds lookup to use module_id=None and fail for cross-module exceptions.
-open import exc
+import exc::*
 param mode: text
 
-# Open-import form: Boom and BoomDetail visible by unqualified name.
+# Glob import-tail form: Boom and BoomDetail are visible by unqualified name.
 
 program def main() -> unit =
   try

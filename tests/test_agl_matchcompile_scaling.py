@@ -52,7 +52,7 @@ def test_specializing_many_heads_only_classifies_source_rows_once(
     variants = "\n".join(f"  | v{index}" for index in range(head_count))
     branches = "\n".join(f"  | v{index}() => {index}" for index in range(head_count))
     checked, case = _normalized(
-        f"enum Wide\n{variants}\nlet subject: Wide = v0()\ncase subject of\n{branches}"
+        f"enum Wide\n{variants}\nlet subject = v0()\ncase subject of\n{branches}"
     )
     normalized = normalize_case(case, checked)
     matrix = matrix_from_normalized(normalized)

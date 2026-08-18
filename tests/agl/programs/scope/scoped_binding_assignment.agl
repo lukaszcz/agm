@@ -1,7 +1,7 @@
 # Scoped static bindings: qualified and bare assignment, a bare reference
-# reaching a var opened before its own scope declares it, and visibility from
+# reaching a var made bare by `use` before its source scope declares it, and visibility from
 # nested and qualified paths.
-open Config
+use Config::*
 
 param increment: int
 
@@ -21,7 +21,7 @@ program def main() -> unit =
   var extra: int = 1
 
   Config::bump()
-  attempts := attempts + 1
+  Config::attempts := Config::attempts + 1
   extra := extra + increment
   Config::bump()
 

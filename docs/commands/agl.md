@@ -23,15 +23,17 @@ call-depth limit, JSON strictness, and timeout. Imported-module params resolve f
 their qualified config tables; params declared directly at the prompt use only source
 defaults (or are required). Like `agm exec`, each typed
 `Agent` value selects its own backend command; settings do not select it. Like
-`agm exec`, `--agent` combined with `--no-stdlib` still fails — at session-open
-time, before the prompt appears — if the session never loads `std/config`;
+`agm exec`, `--agent` combined with `--no-stdlib` still fails — during session
+initialization, before the prompt appears — if the session never loads `std/config`;
 `[exec] default-agent` is simply inert in that same situation.
 
-Like `agm exec`, the REPL automatically opens `std/core` throughout each loaded
-program, so standard-library names such as `Option`, `Some`, and `None` are available
-unqualified from a fresh prompt. Pass `--no-stdlib` to disable that automatic opening
-for each entry and its library modules; explicit imports still work, including after
-`:reset`.
+Like `agm exec`, the REPL supplies an automatic `import std/core::*` prelude to
+each loaded program, so standard-library names such as `Option`, `Some`, and
+`None` are available unqualified from a fresh prompt. An explicit import whose
+expansion includes `std/core` supplies that contribution instead, so plain
+`import std/core` leaves core names qualified-only. Pass `--no-stdlib` to disable
+the prelude for each entry and its library modules; explicit imports still work,
+including after `:reset`.
 Entering a bare type name displays the type; an unapplied generic type name such as
 `Option` displays its generic definition instead of being evaluated as a value.
 
@@ -82,14 +84,14 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
 |---------|--------|
 | `:help` | List the available meta-commands |
 | `:quit` / `:exit` (or Ctrl-D) | Exit the REPL |
-| `:reset` | Clear the whole session (bindings, types, declarations, params) |
+| `:reset` | Clear the whole session (bindings, types, declarations, params, imports, and uses) |
 | `:type EXPR` | Type-check `EXPR` against the session and print its type (no eval) |
 | `:bindings` / `:env` | List current bindings as `name : Type = value` |
 | `:params` | List declared params and their resolved values |
 | `:set echo on\|off` | Toggle result echoing |
 | `:agent confirm\|auto` | Switch the agent-call mode (or report it with no argument) |
-| `:load FILE` | Run an `.agl` file's items into the session, one per entry |
-| `:save FILE` | Write the accumulated session source to a file |
+| `:load FILE` | Load a saved transcript by its original entries, or an ordinary `.agl` file one item per entry |
+| `:save FILE` | Write the accumulated session source and entry boundaries to a transcript |
 | `:theme [dark\|light\|auto]` | Show or switch the syntax-highlighting theme; saves to `~/.agm/config.toml` |
 
 ### Agent-call confirmation
@@ -111,8 +113,8 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
 - `--confirm-agents`: Start in confirm mode, asking before each agent call (the default
   is auto; see [Agent-call confirmation](#agent-call-confirmation)).
 - `--quiet`: Suppress the automatic echoing of entry results.
-- `--no-stdlib`: Disable automatic `std/core` opening for each loaded REPL program
-  (its entry and library modules). Explicit standard-library imports remain available;
+- `--no-stdlib`: Disable the automatic `import std/core::*` prelude for each
+  loaded REPL program (its entry and library modules). Explicit standard-library imports remain available;
   `:reset` retains this launch-time choice.
 - `--log` / `--log-file PATH` / `--no-log`: Control trace logging (off by default), as
   for `agm exec`. With `--log-file` each evaluated entry appends its JSONL trace records
@@ -131,7 +133,7 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
   error.
 - **Declaration entries** echo the declared name followed by `declared`. A scoped
   declaration path echoes the full path (`Tools::twice declared`), and a `scope … end`
-  region echoes the scope it opened (`Tools declared`). `import`, `export`, `open`, and
+  region echoes its path (`Tools declared`). `import`, `use`, `export`, and
   fixity declarations echo nothing.
 - **Bare type expressions** typed at the prompt are recognized as types rather than
   value expressions: entering `int`, a declared `enum`/`record`/`type` name, or a
@@ -153,14 +155,15 @@ The REPL itself only fails before the loop starts; per-entry errors are reported
 and never exit the process. A blank or non-string `--agent`/`[exec] default-agent`
 value is one such pre-loop failure. A syntactically present but malformed literal —
 unparseable, the wrong type, a non-constant expression, or an unknown engine key — is
-also a pre-loop failure: opening the session loads the standard library and splices the
+also a pre-loop failure: session initialization loads the standard library and splices the
 literal into `std/config` before the console starts, so it is resolved, type-checked,
 and constant-checked (and any rejection reported, naming the flag or config key) before
 the banner appears, with nothing printed and no entry accepted. An `AgentCommand(...)`
-whose command text does not shell-split is the one case still deferred to the first
-entry that actually dispatches it, since that check runs only when the interpreter
-evaluates the winning value, not while opening the session; it is reported inline like
-any other per-entry error, without exiting the process.
+whose command text does not shell-split is deferred until the first entry reaches
+interpreter construction, because session initialization does not construct an
+interpreter. Construction validates the winning value before any statement executes, so
+even an entry that performs no agent dispatch reports the error inline without exiting
+the REPL.
 
 | Code | Meaning |
 |------|---------|

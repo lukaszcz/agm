@@ -16,7 +16,7 @@ oriented orchestration language whose core ideas are:
   and validation of its raw output, and the retry-or-abort behavior on
   malformed output.
 - **Structured outputs have one canonical wire format** — JSON, with a
-  reserved `"$case"` tag for enum terminal member names — parsed leniently by default and
+  reserved `"$case"` tag for enum variants — parsed leniently by default and
   validated strictly, always.
 - **Everything is an expression.** There is no statement category: binders
   (`let`/`var`) scope over a continuation, side-effecting forms have type
@@ -78,7 +78,7 @@ program def main() -> unit =
 | [Lexical structure](lexical-structure.md) | Source text, comments, indentation and layout, keywords, tokens, operator precedence |
 | [Program structure](program-structure.md) | Programs, blocks, items, binders, inline forms |
 | [Modules](modules.md) | File-based module system: module identity, import forms, qualified access, visibility, cyclic imports, REPL imports |
-| [Named scopes](scopes.md) | Nestable declaration namespaces, qualifier paths, visibility, and `open` |
+| [Named scopes](scopes.md) | Nestable declaration namespaces, qualifier paths, visibility, and `use` |
 | [Types](types.md) | Built-in types (`unit`, `text`, `int`, `decimal`, `bool`, `json`, function types), `record`/`enum`/`type` declarations, standard core types (`Option`, `ExecResult`, `ParsePolicy`, `Agent`), assignability, casts and convertibility (`as`/`as?`), reference semantics, cycles, and copying (`copy`/`shallow_copy`) |
 | [Bindings and scope](bindings-and-scope.md) | `let`, `var`, `:=`, `param`, `builtin var`, `def`, lexical scoping, shadowing |
 | [Expressions](expressions.md) | Literals, constructors, calls, operators, `as`/`as?` cast operators, `render`, `parse_json`, `case`/`if` expressions, `unit`-typed forms, expected-type propagation |

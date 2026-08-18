@@ -41,11 +41,12 @@ from agm.agl.scope.symbols import (
     ModuleResolution,
     ScopeNode,
     ScopePath,
-    resolve_bare_contribution,
+    resolve_bare_contribution_layer,
 )
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.persistent import PersistentDict
 from agm.agl.semantics.type_table import (
+    BUILTIN_PRELUDE_TYPE_DEFS,
     DeclKey,
     MethodDef,
     TypeTable,
@@ -76,7 +77,6 @@ from agm.agl.semantics.types import (
     UnitType,
     contains_inference_var,
     match_nominal_owner_template,
-    substitute,
 )
 from agm.agl.syntax.nodes import Expr, ParamKind, Pattern, QualifierAnchor, QualifierChain
 from agm.agl.syntax.spans import SourceSpan
@@ -197,9 +197,11 @@ class GenericAliasDef:
 
 @dataclass(frozen=True, slots=True)
 class ConstructorSignature:
-    """Signature for one record constructor.
+    """Signature for a record constructor or enum variant constructor.
 
-    ``owner_name``      — name of the record declaration.
+    ``owner_name``      — name of the owning record or enum type.
+    ``variant``         — variant name for enum constructors; ``None`` for
+                          record constructors.
     ``field_names``     — ordered field names accepted by the constructor.
     ``field_templates`` — field types (may contain ``TypeVarType`` nodes for
                           generic types).
@@ -208,6 +210,7 @@ class ConstructorSignature:
     """
 
     owner_name: str
+    variant: str | None
     field_names: tuple[str, ...]
     field_templates: tuple[Type, ...]
     result_template: Type
@@ -431,6 +434,10 @@ class CheckedModule:
         ``binding_for`` and ``constructor_ref_for`` apply them to scope-created
         slot references; consumers must use these accessors for references that
         may be slots.
+    ``is_test_constructor_refs``
+        Checker-selected constructors for bare ``is`` tests whose scope result
+        retained multiple candidates. ``constructor_ref_for`` exposes the
+        selection to lowering without rewriting scope's resolution table.
     ``let_matched_types``
         Complete concrete matched type for every immutable ``let`` site. This
         is distinct from each binder's type, which is keyed by its pattern node
@@ -476,6 +483,7 @@ class CheckedModule:
     source_text: str = ""
     slot_resolution: dict[int, BindingRef] = field(default_factory=dict)
     slot_constructor_refs: dict[int, ConstructorRef] = field(default_factory=dict)
+    is_test_constructor_refs: dict[int, ConstructorRef] = field(default_factory=dict)
     let_matched_types: dict[int, Type] = field(default_factory=dict)
     pattern_binding_refs: dict[int, BindingRef] = field(default_factory=dict)
     pattern_constructor_refs: dict[int, ConstructorRef] = field(default_factory=dict)
@@ -492,7 +500,10 @@ class CheckedModule:
         )
 
     def constructor_ref_for(self, node_id: int) -> ConstructorRef | None:
-        """Return *node_id*'s checked constructor reference through a slot."""
+        """Return *node_id*'s scope or checker-selected constructor reference."""
+        selected = self.is_test_constructor_refs.get(node_id)
+        if selected is not None:
+            return selected
         return dereference_slot_constructor_ref(
             node_id,
             resolution=self.resolved.resolution,
@@ -620,7 +631,8 @@ class TypeEnvironment:
       ``program_alias_resolver`` let transparent cross-module aliases resolve
       lazily before their sorted body-resolution turn.
     - ``import_env`` is the per-module :class:`~agm.agl.scope.imports.ImportEnv`
-      produced by program scope resolution. Used to resolve qualified and open-imported type names.
+      produced by program scope resolution. Used to resolve qualified and
+      import-tail-exposed type names.
     - ``module_id`` is the owning module of the current env.  ``::Name``
       (empty-segment qualifier) resolves against this module's own types.
 
@@ -640,8 +652,11 @@ class TypeEnvironment:
         program_alias_table: Mapping[DeclKey, GenericAliasDef] | None = None,
         program_alias_keys: frozenset[DeclKey] | None = None,
         program_alias_resolver: Callable[[DeclKey, SourceSpan | None], Type | None] | None = None,
-        program_ctor_sig_table: Mapping[DeclKey, ConstructorSignature] | None = None,
-        program_ctor_field_kinds_table: Mapping[DeclKey, tuple[tuple[str, ParamKind], ...]]
+        program_ctor_sig_table: Mapping[tuple[DeclKey, str | None], ConstructorSignature]
+        | None = None,
+        program_ctor_field_kinds_table: Mapping[
+            tuple[DeclKey, str | None], tuple[tuple[str, ParamKind], ...]
+        ]
         | None = None,
         import_env: ImportEnv | None = None,
         local_scope_paths: frozenset[ScopePath] = frozenset(),
@@ -657,11 +672,8 @@ class TypeEnvironment:
         )
         # user-declared types (records, enums) — name → Type
         self._types: dict[str, Type] = {}
-        # Alias syntax is retained for diagnostics and cycle detection, while the
-        # resolved template preserves the nominal identities selected when the
-        # alias was declared (including across REPL supersession).
-        self._alias_targets: dict[str, object] = {}
-        self._resolved_aliases: dict[str, GenericAliasDef] = {}
+        # alias targets — name → resolved Type (cycle detection uses seen set)
+        self._alias_targets: dict[str, object] = {}  # stores raw TypeExpr until resolved
         # Binding node_id → Type (populated as declarations are checked).
         self._binding_types: PersistentDict[int, Type] = PersistentDict()
         # Function signatures indexed by their owner path and member name. The
@@ -672,7 +684,7 @@ class TypeEnvironment:
         # Generic type definitions — name → GenericTypeDef.
         self._generic_types: dict[str, GenericTypeDef] = {}
         # Constructor signatures — ((module, scope path, owner), variant) → signature.
-        self._constructor_sigs: dict[DeclKey, ConstructorSignature] = {}
+        self._constructor_sigs: dict[tuple[DeclKey, str | None], ConstructorSignature] = {}
         # Alias type-params — name → tuple of type-param names.
         self._alias_type_params: dict[str, tuple[str, ...]] = {}
         # Node-id-keyed function signatures — decl_node_id → FunctionSignature.
@@ -692,11 +704,12 @@ class TypeEnvironment:
         # Constructor field-kinds registry — ((module, scope path, owner), variant)
         # → ordered (field_name, ParamKind) pairs. Populated by _TypeBuilder
         # and consumed without encoding declaration paths into strings.
-        self._constructor_field_kinds: dict[DeclKey, tuple[tuple[str, ParamKind], ...]] = {}
-        self._constructor_field_kinds_by_decl_id: dict[int, tuple[tuple[str, ParamKind], ...]] = {}
+        self._constructor_field_kinds: dict[
+            tuple[DeclKey, str | None], tuple[tuple[str, ParamKind], ...]
+        ] = {}
         # Cross-module constructor field-kinds table keyed by declaration identity.
         self._program_ctor_field_kinds_table: (
-            Mapping[DeclKey, tuple[tuple[str, ParamKind], ...]] | None
+            Mapping[tuple[DeclKey, str | None], tuple[tuple[str, ParamKind], ...]] | None
         ) = program_ctor_field_kinds_table
         # Program context: None in module path.
         self._program_type_table: Mapping[DeclKey, Type] | None = program_type_table
@@ -734,9 +747,9 @@ class TypeEnvironment:
             program_alias_resolver
         )
         # Cross-module constructor signatures keyed by declaration identity.
-        self._program_ctor_sig_table: Mapping[DeclKey, ConstructorSignature] | None = (
-            program_ctor_sig_table
-        )
+        self._program_ctor_sig_table: (
+            Mapping[tuple[DeclKey, str | None], ConstructorSignature] | None
+        ) = program_ctor_sig_table
         self._import_env: ImportEnv | None = import_env
         self._module_id: ModuleId = module_id
         # Scope resolution supplies every local path, including regions with no
@@ -772,21 +785,16 @@ class TypeEnvironment:
         # themselves carry no shape data.
         for prelude_name, prelude_type in BUILTIN_PRELUDE_TYPES.items():
             self._types[prelude_name] = prelude_type
-            if isinstance(prelude_type, RecordType):
-                fields = tuple(
-                    (fname, ParamKind.STANDARD)
-                    for fname in self._type_table.record_fields(prelude_type)
+            typedef = BUILTIN_PRELUDE_TYPE_DEFS[prelude_name]
+            if typedef.kind == "record":
+                self._constructor_field_kinds[((STD_CORE_ID, (), prelude_name), None)] = tuple(
+                    (fname, ParamKind.STANDARD) for fname, _ in typedef.fields
                 )
-                self._constructor_field_kinds[(STD_CORE_ID, (), prelude_name)] = fields
-                self._constructor_field_kinds_by_decl_id[prelude_type.decl_id] = fields
                 continue
-            assert isinstance(prelude_type, EnumType)
-            for member in self._type_table.enum_members(prelude_type):
-                fields = tuple(
-                    (fname, ParamKind.STANDARD) for fname in self._type_table.record_fields(member)
+            for variant, vfields in typedef.variants:
+                self._constructor_field_kinds[((STD_CORE_ID, (), prelude_name), variant)] = tuple(
+                    (fname, ParamKind.STANDARD) for fname, _ in vfields
                 )
-                self._constructor_field_kinds[(STD_CORE_ID, (prelude_name,), member.name)] = fields
-                self._constructor_field_kinds_by_decl_id[member.decl_id] = fields
         # Exception constructor field kinds are NOT pre-registered here: each
         # exception's own fields honor their declared @pos/@std/@named marker
         # (stored on its TypeDef as ``field_kinds``, alongside ``fields``),
@@ -837,6 +845,27 @@ class TypeEnvironment:
         atom: NameAtom = atom_path[0] if len(atom_path) == 1 else atom_path
         return qualifier_contributes(self._import_env, route, atom, anchored=qualifier.anchored)
 
+    def _ensure_qualified_type_route_unambiguous(
+        self,
+        qualifier: QualifierChain,
+        name: str,
+        selected_key: DeclKey,
+        *,
+        selected_route: Literal["type name", "use route"],
+        span: SourceSpan | None,
+    ) -> None:
+        """Reject a qualified local/import collision unless both routes select one declaration."""
+        if qualifier.anchor is not None or not self.has_qualified_import_member(qualifier, name):
+            return
+        imported_qname = self._resolve_import_qname(qualifier, name, span=span, required=False)
+        if imported_qname is not None and self._qname_decl_key(imported_qname) == selected_key:
+            return
+        raise AglTypeError(
+            f"Qualifier '{qualifier.render()}' is both a {selected_route} and a module route "
+            f"for '{name}'. {qualification_repair_guidance()}",
+            span=span,
+        )
+
     def _resolve_import_qname(
         self,
         qualifier: QualifierChain,
@@ -867,69 +896,6 @@ class TypeEnvironment:
             ),
             ambiguous=lambda message: AglTypeError(message, span=span),
         )
-
-    def resolve_owner_applied_inline_member_type(
-        self,
-        qualifier: QualifierChain,
-        member: str,
-        *,
-        type_vars: frozenset[str],
-        span: SourceSpan | None,
-    ) -> RecordType | None:
-        """Resolve an inline enum member after applying its owner type.
-
-        ``Source[T]::Member`` applies ``T`` to ``Source``.  An inline member
-        captures only the owner parameters used by its fields, so selecting it
-        from the instantiated enum yields its concrete record handle directly.
-        """
-        if not qualifier.segments:
-            return None
-        owner_segment = qualifier.segments[-1]
-        if owner_segment.type_args is None:
-            return None
-        from agm.agl.syntax.types import AppliedT
-
-        prefix_segments = qualifier.segments[:-1]
-        owner_qualifier = (
-            None
-            if not prefix_segments and qualifier.anchor is None
-            else QualifierChain(
-                anchor=qualifier.anchor,
-                segments=prefix_segments,
-                member=owner_segment.name,
-                span=qualifier.span,
-                node_id=qualifier.node_id,
-            )
-        )
-        owner = self.resolve_type_expr(
-            AppliedT(
-                name=owner_segment.name,
-                args=owner_segment.type_args,
-                qualifier=owner_qualifier,
-                span=owner_segment.span,
-                node_id=owner_segment.node_id,
-            ),
-            span=span,
-            type_vars=type_vars,
-        )
-        if not isinstance(owner, EnumType):
-            raise AglTypeError(f"'{owner_segment.name}' is not a generic enum type.", span=span)
-        owner_template = self.source_type_template_qname(
-            owner.module_id, owner.name, scope_path=owner.scope_path
-        )
-        assert owner_template is not None
-        member_template = self.source_type_template_qname(
-            owner.module_id,
-            member,
-            scope_path=(*owner.scope_path, owner.name),
-        )
-        if member_template is None:
-            return None
-        resolved = substitute(
-            member_template.template,
-            dict(zip(owner_template.type_params, owner.type_args, strict=True)),
-        )
-        return resolved if isinstance(resolved, RecordType) else None
 
     def register_type(self, name: str, typ: Type) -> None:
         self._assert_mutable()
@@ -984,7 +950,6 @@ class TypeEnvironment:
             return
         self._types.pop(name, None)
         self._alias_targets.pop(name, None)
-        self._resolved_aliases.pop(name, None)
         self._generic_types.pop(name, None)
         self._alias_type_params.pop(name, None)
 
@@ -998,13 +963,7 @@ class TypeEnvironment:
         """
         self._assert_mutable()
         self._alias_targets[name] = target_expr
-        self._resolved_aliases.pop(name, None)
         self._alias_type_params[name] = type_params
-
-    def freeze_alias(self, name: str, template: Type, *, type_params: tuple[str, ...] = ()) -> None:
-        """Preserve an alias's resolved template under its declaring identities."""
-        self._assert_mutable()
-        self._resolved_aliases[name] = GenericAliasDef(type_params=type_params, template=template)
 
     def get_alias_type_params(self, name: str) -> tuple[str, ...]:
         """Return the type-parameter names for a parameterized alias, or ``()``."""
@@ -1106,28 +1065,30 @@ class TypeEnvironment:
     # --- Constructor signature registry ---
 
     @staticmethod
-    def _constructor_key(module_id: ModuleId, owner_name: str, scope_path: ScopePath) -> DeclKey:
+    def _constructor_key(
+        module_id: ModuleId, owner_name: str, scope_path: ScopePath, variant: str | None
+    ) -> tuple[DeclKey, str | None]:
         """Build a constructor key from structured owner identity.
 
         Every caller supplies the owner's bare name and its scope path
         separately, so no display spelling is ever parsed back into identity.
         """
-        return (module_id, scope_path, owner_name)
+        return ((module_id, scope_path, owner_name), variant)
 
     def register_constructor_signature(self, sig: ConstructorSignature) -> None:
         """Register a constructor signature under its result type's identity."""
         self._assert_mutable()
         result = sig.result_template
         assert isinstance(result, (RecordType, EnumType))
-        key = self._constructor_key(result.module_id, result.name, result.scope_path)
+        key = self._constructor_key(result.module_id, result.name, result.scope_path, sig.variant)
         self._constructor_sigs[key] = sig
 
     def get_constructor_signature(
-        self, owner_name: str, *, scope_path: ScopePath = ()
+        self, owner_name: str, variant: str | None, *, scope_path: ScopePath = ()
     ) -> ConstructorSignature | None:
         """Return a local constructor signature by structured owner identity."""
         return self._constructor_sigs.get(
-            self._constructor_key(self._module_id, owner_name, scope_path)
+            self._constructor_key(self._module_id, owner_name, scope_path, variant)
         )
 
     def resolve_constructor_owner_name(self, name: str) -> str | None:
@@ -1146,7 +1107,7 @@ class TypeEnvironment:
             return None
         return None
 
-    def resolve_named_type(self, name: str) -> Type | None:
+    def resolve_named_type(self, name: str, *, span: SourceSpan | None = None) -> Type | None:
         """Resolve a type *name* alias-transparently to a semantic ``Type``.
 
         Returns the resolved ``Type`` for a record/enum/exception name or an
@@ -1156,8 +1117,14 @@ class TypeEnvironment:
         Used for alias-transparent qualifier resolution in qualified
         constructors and ``is`` tests.
 
-        In program context, also searches open-imported types when the name is not
-        found locally.
+        In program context, also searches types exposed bare by ``use`` declarations
+        and import tails when the name is not found locally.
+
+        An ambiguity complaint about a name contributed by several routes
+        propagates: it names the problem better than the "unknown type" the
+        caller would otherwise report, and callers pass *span* so it lands on
+        the reference. A name that resolves to something no bare reference can
+        denote -- a parameterized alias, say -- is still just ``None``.
         """
         local_name = self._lexical_type_name(name)
         if local_name in self._generic_types:
@@ -1165,31 +1132,26 @@ class TypeEnvironment:
         if local_name in self._types or local_name in self._alias_targets:
             try:
                 return self._resolve_name_type(
-                    local_name, span=None, _resolving=frozenset(), lexical=False
+                    local_name, span=span, _resolving=frozenset(), lexical=False
                 )
             except AglTypeError:
                 return None
-        # Opened-scope contributions: a bare name opened into the current
-        # region (``open A``) resolves here too, before falling through to
-        # module-level open imports.  An arity complaint about an opened
-        # generic propagates: it names the problem better than "unknown type".
-        opened = self._resolve_opened_type(name, None)
-        if opened is not None:
-            return opened
-        # Program context: look up via open imports. A bare ``TypeEnvironment``
-        # (no import environment / program type table -- e.g. one constructed
-        # directly by a unit test, independent of any module graph) has
-        # nothing further to search here.
-        if self._import_env is None or self._program_type_table is None:
+        # Bare contributions from a root ``use`` and import tails share one
+        # resolution rank. A contribution from a nearer named region still
+        # shadows the module-root rank. Generic templates remain useful to
+        # alias-transparent qualifier checks even though ordinary bare type
+        # expressions require arguments.
+        resolved = self._bare_type_key(name, span)
+        if resolved is None:
             return None
-        candidates = self._import_env.unqualified.get(name, frozenset())
-        type_candidates = [qn for qn in candidates if self._is_program_type_candidate(qn)]
-        if len(type_candidates) == 1:
-            try:
-                return self._resolve_program_qname_as_bare_type(type_candidates[0], name, span=None)
-            except AglTypeError:
-                return None
-        return None
+        key, from_region = resolved
+        generic = (self._program_generic_table or {}).get(key)
+        if generic is not None and from_region:
+            return generic.template
+        try:
+            return self._resolve_type_key_as_bare(key, name, span=span)
+        except AglTypeError:
+            return None
 
     @staticmethod
     def _qname_decl_key(qname: QName) -> DeclKey:
@@ -1414,6 +1376,12 @@ class TypeEnvironment:
                 for typedef in self._type_table.entries()
                 for _, field_type in typedef.fields
             ),
+            *(
+                field_type
+                for typedef in self._type_table.entries()
+                for _, fields in typedef.variants
+                for _, field_type in fields
+            ),
         ]
         if any(contains_inference_var(typ) for typ in types):
             raise AssertionError("inference variable leaked into a persistent type environment")
@@ -1434,17 +1402,10 @@ class TypeEnvironment:
         finally:
             self._type_scope = previous
 
-    def _opened_type_key(self, name: NameAtom, span: SourceSpan | None) -> DeclKey | None:
-        """Return the unique type declaration contributed to this type region."""
-        scope = self._scope_nodes.get(self._type_scope)
-        candidates = (
-            () if scope is None else resolve_bare_contribution(scope, name, self._scope_nodes) or ()
-        )
-        keys = {
-            (ref.module_id, ref.scope_path, ref.name)
-            for ref in candidates
-            if self._is_type_contribution(ref)
-        }
+    def _unique_bare_type_key(
+        self, name: NameAtom, keys: set[DeclKey], span: SourceSpan | None
+    ) -> DeclKey | None:
+        """Select one declaration identity after deduplicating contribution routes."""
         if not keys:
             return None
         if len(keys) == 1:
@@ -1456,10 +1417,51 @@ class TypeEnvironment:
             )
         )
         raise AglTypeError(
-            f"Ambiguous type '{_render_type_atom(name)}': contributed by multiple opened scopes "
+            f"Ambiguous type '{_render_type_atom(name)}': contributed by multiple routes "
             f"({labels}). Use a qualified reference to disambiguate.",
             span=span,
         )
+
+    def _opened_type_layer_keys(self, name: NameAtom) -> tuple[ScopeNode, set[DeclKey]] | None:
+        """Return the nearest region and type identities contributed there."""
+        scope = self._scope_nodes.get(self._type_scope)
+        if scope is None:
+            return None
+        resolved = resolve_bare_contribution_layer(
+            scope, name, predicate=self._is_type_contribution
+        )
+        if resolved is None:
+            return None
+        layer, candidates = resolved
+        return layer, {(ref.module_id, ref.scope_path, ref.name) for ref in candidates}
+
+    def _opened_type_key(self, name: NameAtom, span: SourceSpan | None) -> DeclKey | None:
+        """Return the unique type declaration contributed to this type region."""
+        resolved = self._opened_type_layer_keys(name)
+        keys = set() if resolved is None else resolved[1]
+        return self._unique_bare_type_key(name, keys, span)
+
+    def _bare_type_key(self, name: str, span: SourceSpan | None) -> tuple[DeclKey, bool] | None:
+        """Resolve a bare type across equally ranked root use and import routes.
+
+        Reports alongside the identity whether it came from the nearest
+        region's own contributions, which callers need to choose between an
+        unapplied and a bare resolution. One layer walk answers both.
+        """
+        opened = self._opened_type_layer_keys(name)
+        opened_keys = set() if opened is None else opened[1]
+        keys = set(opened_keys)
+        if opened is None or not opened[0].scope_path:
+            if self._import_env is not None and (
+                self._program_type_table is not None or self._program_generic_table is not None
+            ):
+                keys.update(
+                    self._qname_decl_key(qname)
+                    for qname in self._import_env.unqualified.get(name, frozenset())
+                    if self._is_program_type_candidate(qname)
+                )
+        key = self._unique_bare_type_key(name, keys, span)
+        return None if key is None else (key, key in opened_keys)
 
     def _is_type_contribution(self, ref: BindingRef) -> bool:
         """Whether a shared bare contribution refers to a type declaration."""
@@ -1477,42 +1479,66 @@ class TypeEnvironment:
             or local_name in self._alias_targets
         )
 
-    def _resolve_opened_type(self, name: NameAtom, span: SourceSpan | None) -> Type | None:
-        """Resolve an opened relative type path through shared contributions.
+    def _own_alias_name_for_key(self, key: DeclKey) -> str | None:
+        """Return the root-stored name for an own-module alias identity."""
+        module, path, source_name = key
+        local_name = "::".join((*path, source_name))
+        if module == self._module_id and local_name in self._alias_targets:
+            return local_name
+        return None
 
-        Only ever called against a fully-seeded program environment (never
-        the transient shell-collection env the type pre-pass uses), so the
-        program type table is always present once *key* resolves.
-        """
-        key = self._opened_type_key(name, span)
-        if key is None:
-            return None
+    def _resolve_type_key_as_bare(
+        self, key: DeclKey, exposed_name: str, *, span: SourceSpan | None
+    ) -> Type | None:
+        """Resolve one deduplicated declaration identity as a bare type."""
         module, path, source_name = key
         assert self._program_type_table is not None
         qname: QName = (module, source_name if not path else (*path, source_name))
+        resolved = self._resolve_program_qname_as_bare_type(qname, exposed_name, span=span)
+        if resolved is not None:
+            return resolved
+        alias_name = self._own_alias_name_for_key(key)
+        if alias_name is None:
+            return None
+        return self._resolve_name_type(alias_name, span=span, _resolving=frozenset(), lexical=False)
+
+    def _resolve_type_key_unapplied(
+        self, key: DeclKey, name: NameAtom, span: SourceSpan | None
+    ) -> Type | None:
+        """Resolve one declaration identity while rejecting a bare generic."""
         generic = (self._program_generic_table or {}).get(key)
         if generic is not None:
+            rendered = _render_type_atom(name)
             raise AglTypeError(
-                f"Generic type '{_render_type_atom(name)}' requires "
-                f"{len(generic.type_params)} type argument(s); "
-                f"use '{_render_type_atom(name)}[...]' to apply it.",
+                f"Generic type '{rendered}' requires {len(generic.type_params)} type argument(s); "
+                f"use '{rendered}[...]' to apply it.",
                 span=span,
             )
-        return self._resolve_program_qname_as_bare_type(qname, _render_type_atom(name), span=span)
+        return self._resolve_type_key_as_bare(key, _render_type_atom(name), span=span)
 
-    def _resolve_opened_applied_type(
-        self, name: NameAtom, args: tuple[Type, ...], span: SourceSpan | None
-    ) -> Type | None:
-        """Resolve an opened relative generic path through shared contributions.
-
-        A same-module opened generic is always reachable through
-        ``program_generic_table`` (the whole-program type pre-pass registers
-        every module's own generics there before any module's body is
-        checked), so no separate local-table fallback is needed.
-        """
+    def _resolve_opened_type(self, name: NameAtom, span: SourceSpan | None) -> Type | None:
+        """Resolve a relative type path through scope-use contributions."""
         key = self._opened_type_key(name, span)
-        if key is None:
+        return None if key is None else self._resolve_type_key_unapplied(key, name, span)
+
+    def _resolve_bare_type(self, name: str, span: SourceSpan | None) -> Type | None:
+        """Resolve a bare type across root uses and import tails at the same rank."""
+        resolved = self._bare_type_key(name, span)
+        if resolved is None:
             return None
+        key, from_region = resolved
+        if from_region:
+            return self._resolve_type_key_unapplied(key, name, span)
+        return self._resolve_type_key_as_bare(key, name, span=span)
+
+    def _resolve_applied_type_key(
+        self,
+        key: DeclKey,
+        name: NameAtom,
+        args: tuple[Type, ...],
+        span: SourceSpan | None,
+    ) -> Type:
+        """Apply arguments to one deduplicated bare type declaration identity."""
         generic = (self._program_generic_table or {}).get(key)
         if generic is not None:
             return self.instantiate_from_gdef(key[2], generic, args, span=span)
@@ -1520,9 +1546,66 @@ class TypeEnvironment:
         alias = self._program_alias_table.get(key)
         if alias is not None:
             return self.instantiate_alias(key[2], alias, args, span=span)
+        alias_name = self._own_alias_name_for_key(key)
+        if alias_name is not None:
+            resolved = self._resolve_local_applied_alias(alias_name, args, span)
+            assert resolved is not None
+            return resolved
         raise AglTypeError(
             f"Type '{_render_type_atom(name)}' does not take type arguments.", span=span
         )
+
+    def _resolve_local_applied_alias(
+        self,
+        name: str,
+        args: tuple[Type, ...],
+        span: SourceSpan | None,
+        *,
+        body_span: SourceSpan | None = None,
+        resolving: frozenset[str] = frozenset(),
+        type_vars: frozenset[str] = frozenset(),
+    ) -> Type | None:
+        """Resolve and instantiate an alias stored in the root type environment."""
+        alias_expr = self._alias_targets.get(name)
+        if alias_expr is None:
+            return None
+        if name in resolving:
+            raise AglTypeError(f"Type alias '{name}' is part of a cycle.", span=span)
+        alias_params = self._alias_type_params.get(name, ())
+        if len(args) != len(alias_params):
+            raise AglTypeError(
+                f"Alias '{name}' requires {len(alias_params)} type argument(s), got {len(args)}.",
+                span=span,
+            )
+        with self.type_scope(_split_scoped_type_name(name)[0]):
+            body_type = self.resolve_type_expr(
+                alias_expr,
+                span=body_span,
+                _resolving=resolving | {name},
+                type_vars=type_vars | frozenset(alias_params),
+            )
+        return self.instantiate_alias(
+            name,
+            GenericAliasDef(type_params=alias_params, template=body_type),
+            args,
+            span=span,
+        )
+
+    def _resolve_opened_applied_type(
+        self, name: NameAtom, args: tuple[Type, ...], span: SourceSpan | None
+    ) -> Type | None:
+        """Resolve a relative generic path through scope-use contributions."""
+        key = self._opened_type_key(name, span)
+        return None if key is None else self._resolve_applied_type_key(key, name, args, span)
+
+    def _resolve_bare_applied_type(
+        self, name: str, args: tuple[Type, ...], span: SourceSpan | None
+    ) -> Type | None:
+        """Resolve a bare generic across root uses and import tails at the same rank."""
+        resolved = self._bare_type_key(name, span)
+        if resolved is None:
+            return None
+        return self._resolve_applied_type_key(resolved[0], name, args, span)
 
     def _lexical_type_name(self, name: str) -> str:
         """Return the nearest scoped spelling of an unqualified type name."""
@@ -1663,11 +1746,6 @@ class TypeEnvironment:
         if _resolving is None:
             _resolving = frozenset()
 
-        if isinstance(type_expr, (NameT, AppliedT)) and type_expr.qualifier is not None:
-            for segment in type_expr.qualifier.segments:
-                for type_arg in segment.type_args or ():
-                    self.resolve_type_expr(type_arg, _resolving=_resolving, type_vars=type_vars)
-
         if isinstance(type_expr, TextT):
             return TextType()
         if isinstance(type_expr, JsonT):
@@ -1702,14 +1780,6 @@ class TypeEnvironment:
         if isinstance(type_expr, NameT):
             eff_span = span if span is not None else type_expr.span
             if type_expr.qualifier is not None:
-                owner_member = self.resolve_owner_applied_inline_member_type(
-                    type_expr.qualifier,
-                    type_expr.name,
-                    type_vars=type_vars,
-                    span=eff_span,
-                )
-                if owner_member is not None:
-                    return owner_member
                 return self._resolve_qualified_name_type(
                     type_expr.qualifier, type_expr.name, span=eff_span
                 )
@@ -1727,45 +1797,42 @@ class TypeEnvironment:
             )
             eff_span = span if span is not None else type_expr.span
             qualifier = type_expr.qualifier
-            rendered_owner = "" if qualifier is None else qualifier.render()
-            owner_member = (
-                None
-                if qualifier is None
-                else self.resolve_owner_applied_inline_member_type(
-                    qualifier, name, type_vars=type_vars, span=eff_span
-                )
-            )
             if qualifier is not None:
                 local_name = self._local_qualified_type_name(qualifier, name)
                 if local_name is not None:
-                    if qualifier.anchor is None and self.has_qualified_import_member(
-                        qualifier, name
-                    ):
-                        raise AglTypeError(
-                            f"Qualifier '{qualifier.render()}' is both a type name and a module "
-                            f"route for '{name}'. {qualification_repair_guidance()}",
-                            span=eff_span,
-                        )
+                    local_path, declared_name = _split_scoped_type_name(local_name)
+                    self._ensure_qualified_type_route_unambiguous(
+                        qualifier,
+                        name,
+                        (self._module_id, local_path, declared_name),
+                        selected_route="type name",
+                        span=eff_span,
+                    )
                     name = local_name
                     qualifier = None
             resolved_args = tuple(
                 self.resolve_type_expr(a, span=None, _resolving=_resolving, type_vars=type_vars)
                 for a in type_expr.args
             )
-            if owner_member is not None:
-                raise AglTypeError(
-                    f"Type '{rendered_owner}::{type_expr.name}' does not take type arguments.",
-                    span=eff_span,
-                )
             if qualifier is not None and qualifier.anchor is None:
+                opened_atom = _type_path_atom(
+                    (*tuple(segment.name for segment in qualifier.segments), type_expr.name)
+                )
                 opened = self._resolve_opened_applied_type(
-                    _type_path_atom(
-                        (*tuple(segment.name for segment in qualifier.segments), type_expr.name)
-                    ),
+                    opened_atom,
                     resolved_args,
                     span=eff_span,
                 )
                 if opened is not None:
+                    opened_key = self._opened_type_key(opened_atom, eff_span)
+                    assert opened_key is not None
+                    self._ensure_qualified_type_route_unambiguous(
+                        qualifier,
+                        name,
+                        opened_key,
+                        selected_route="use route",
+                        span=eff_span,
+                    )
                     return opened
             if qualifier is not None and qualifier.route_segments:
                 return self._resolve_qualified_applied_type(
@@ -1774,33 +1841,16 @@ class TypeEnvironment:
             gdef = self._generic_types.get(name)
             if gdef is not None:
                 return self.instantiate_nominal(name, resolved_args, span=eff_span)
-            alias_def = self._resolved_aliases.get(name)
-            if alias_def is not None:
-                return self.instantiate_alias(name, alias_def, resolved_args, span=eff_span)
-            alias_expr = self._alias_targets.get(name)
-            if alias_expr is not None:
-                if name in _resolving:
-                    raise AglTypeError(
-                        f"Type alias '{name}' is part of a cycle.",
-                        span=eff_span,
-                    )
-                alias_params = self._alias_type_params.get(name, ())
-                if len(resolved_args) != len(alias_params):
-                    raise AglTypeError(
-                        f"Alias '{name}' requires {len(alias_params)} type argument(s), "
-                        f"got {len(resolved_args)}.",
-                        span=eff_span,
-                    )
-                with self.type_scope(_split_scoped_type_name(name)[0]):
-                    body_type = self.resolve_type_expr(
-                        alias_expr,
-                        span=span,
-                        _resolving=_resolving | {name},
-                        type_vars=type_vars | frozenset(alias_params),
-                    )
-                alias_def = GenericAliasDef(type_params=alias_params, template=body_type)
-                self._resolved_aliases[name] = alias_def
-                return self.instantiate_alias(name, alias_def, resolved_args, span=eff_span)
+            local_alias = self._resolve_local_applied_alias(
+                name,
+                resolved_args,
+                eff_span,
+                body_span=span,
+                resolving=_resolving,
+                type_vars=type_vars,
+            )
+            if local_alias is not None:
+                return local_alias
             program_alias_def = self._program_alias_table.get((self._module_id, (), name))
             if program_alias_def is not None:
                 return self.instantiate_alias(name, program_alias_def, resolved_args, span=eff_span)
@@ -1810,60 +1860,15 @@ class TypeEnvironment:
                     span=eff_span,
                 )
             if qualifier is None:
-                opened = self._resolve_opened_applied_type(
-                    type_expr.name, resolved_args, span=eff_span
-                )
-                if opened is not None:
-                    return opened
-                imported = self._resolve_open_imported_applied_type(
-                    name, resolved_args, span=eff_span
-                )
-                if imported is not None:
-                    return imported
+                bare = self._resolve_bare_applied_type(type_expr.name, resolved_args, span=eff_span)
+                if bare is not None:
+                    return bare
             raise AglTypeError(
                 f"Unknown type '{name}'.",
                 span=eff_span,
             )
         raise AglTypeError(
             f"Unknown type expression: {type_expr!r}",
-            span=span,
-        )
-
-    def _resolve_open_imported_applied_type(
-        self,
-        name: str,
-        args: tuple[Type, ...],
-        *,
-        span: SourceSpan | None,
-    ) -> Type | None:
-        """Resolve an unqualified generic application through open imports."""
-        if self._import_env is None or self._program_generic_table is None:
-            return None
-        candidates = self._import_env.unqualified.get(name, frozenset())
-        type_candidates = [qname for qname in candidates if self._is_program_type_candidate(qname)]
-        if len(type_candidates) > 1:
-            labels = sorted(f"{qname[0].display()}::{qname[1]}" for qname in type_candidates)
-            raise AglTypeError(
-                f"Ambiguous type '{name}': it is exported by multiple modules "
-                f"({', '.join(labels)}). Use a qualified reference to disambiguate.",
-                span=span,
-            )
-        if not type_candidates:
-            return None
-        qname = type_candidates[0]
-        key = self._qname_decl_key(qname)
-        source_name = key[2]
-        gdef = self._program_generic_table.get(key)
-        if gdef is not None:
-            return self.instantiate_from_gdef(source_name, gdef, args, span=span)
-        alias_def = self._program_alias_table.get(key)
-        if alias_def is None and key in self._program_alias_keys:
-            self._ensure_program_alias_resolved(key, span)
-            alias_def = self._program_alias_table.get(key)
-        if alias_def is not None:
-            return self.instantiate_alias(source_name, alias_def, args, span=span)
-        raise AglTypeError(
-            f"Type '{name}' does not take type arguments.",
             span=span,
         )
 
@@ -1934,10 +1939,7 @@ class TypeEnvironment:
                 f"use '{name}[...]' to apply it.",
                 span=span,
             )
-        # Check aliases through their declaration-time resolved templates.
-        alias_def = self._resolved_aliases.get(name)
-        if alias_def is not None:
-            return self.instantiate_alias(name, alias_def, (), span=span)
+        # Check alias table (aliases are raw TypeExpr, resolved on demand).
         if name in self._alias_targets:
             if name in _resolving:
                 raise AglTypeError(
@@ -1946,14 +1948,12 @@ class TypeEnvironment:
                 )
             target_expr = self._alias_targets[name]
             with self.type_scope(_split_scoped_type_name(name)[0]):
-                target = self.resolve_type_expr(
+                return self.resolve_type_expr(
                     target_expr,
                     span=span,
                     _resolving=_resolving | {name},
                     type_vars=type_vars,
                 )
-            self._resolved_aliases[name] = GenericAliasDef(type_params=(), template=target)
-            return target
         program_alias_def = self._program_alias_table.get((self._module_id, (), name))
         if program_alias_def is not None:
             raise AglTypeError(
@@ -1966,30 +1966,9 @@ class TypeEnvironment:
         typ = self._types.get(name)
         if typ is not None:
             return typ
-        opened = self._resolve_opened_type(name, span)
-        if opened is not None:
-            return opened
-        # Program context: unqualified lookup through open-imported names.
-        if self._import_env is not None and self._program_type_table is not None:
-            candidates = self._import_env.unqualified.get(name, frozenset())
-            # Filter to candidates that are type names in the program type namespace.
-            type_candidates: list[QName] = [
-                qn for qn in candidates if self._is_program_type_candidate(qn)
-            ]
-            if len(type_candidates) == 1:
-                qn = type_candidates[0]
-                typ = self._resolve_program_qname_as_bare_type(qn, name, span=span)
-                if typ is not None:
-                    return typ
-            elif len(type_candidates) > 1:
-                # Ambiguous: multiple modules export this type name.
-                sorted_candidates = sorted(f"{qn[0].display()}::{qn[1]}" for qn in type_candidates)
-                raise AglTypeError(
-                    f"Ambiguous type '{name}': it is exported by multiple modules "
-                    f"({', '.join(sorted_candidates)}). "
-                    f"Use a qualified reference to disambiguate.",
-                    span=span,
-                )
+        bare = self._resolve_bare_type(name, span)
+        if bare is not None:
+            return bare
         raise AglTypeError(
             f"Unknown type '{name}'.",
             span=span,
@@ -2011,22 +1990,33 @@ class TypeEnvironment:
         rendered = qualifier.render()
         local_name = self._local_qualified_type_name(qualifier, name)
         if local_name is not None:
-            if qualifier.anchor is None and self.has_qualified_import_member(qualifier, name):
-                raise AglTypeError(
-                    f"Qualifier '{rendered}' is both a type name and a module route for "
-                    f"'{name}'. {qualification_repair_guidance()}",
-                    span=span,
-                )
+            local_path, declared_name = _split_scoped_type_name(local_name)
+            self._ensure_qualified_type_route_unambiguous(
+                qualifier,
+                name,
+                (self._module_id, local_path, declared_name),
+                selected_route="type name",
+                span=span,
+            )
             return self._resolve_name_type(
                 local_name, span=span, _resolving=frozenset(), lexical=False
             )
 
         if qualifier.anchor is None:
-            opened = self._resolve_opened_type(
-                _type_path_atom((*tuple(segment.name for segment in qualifier.segments), name)),
-                span,
+            opened_atom = _type_path_atom(
+                (*tuple(segment.name for segment in qualifier.segments), name)
             )
+            opened = self._resolve_opened_type(opened_atom, span)
             if opened is not None:
+                opened_key = self._opened_type_key(opened_atom, span)
+                assert opened_key is not None
+                self._ensure_qualified_type_route_unambiguous(
+                    qualifier,
+                    name,
+                    opened_key,
+                    selected_route="use route",
+                    span=span,
+                )
                 return opened
         if self._is_missing_local_scoped_type(qualifier):
             raise AglTypeError(self._unknown_scoped_type_message(qualifier, name), span=span)
@@ -2059,14 +2049,11 @@ class TypeEnvironment:
         """Return the full declared type-name set for type-namespace enumeration.
 
         Combines registered nominal types (records, enums, exceptions, and
-        built-ins) with registered alias names and generic templates. Retained
-        for generic type resolution in future work, where the complete
-        type-namespace must be enumerable to validate applied-type names (e.g.
-        ``Pair[int, text]``), and for REPL rollback of a type-owned subtree.
+        built-ins) with registered alias names.  Retained for generic type
+        resolution in future work, where the complete type-namespace must
+        be enumerable to validate applied-type names (e.g. ``Pair[int, text]``).
         """
-        return (
-            frozenset(self._types) | frozenset(self._alias_targets) | frozenset(self._generic_types)
-        )
+        return frozenset(self._types) | frozenset(self._alias_targets)
 
     def resolve_constructible_type_by_module_id(
         self, module_id: ModuleId, name: str, *, scope_path: ScopePath = ()
@@ -2127,9 +2114,6 @@ class TypeEnvironment:
         local_generic = self._generic_types.get(local_name)
         if local_generic is not None:
             return TypeTemplate(local_generic.template, local_generic.type_params)
-        alias_def = self._resolved_aliases.get(local_name)
-        if alias_def is not None:
-            return TypeTemplate(alias_def.template, alias_def.type_params)
         alias_expr = self._alias_targets.get(local_name)
         if alias_expr is not None:
             type_params = self._alias_type_params.get(local_name, ())
@@ -2235,11 +2219,6 @@ class TypeEnvironment:
             ),
         )
 
-    def resolve_unqualified_enum_owner_form(self, owner_name: str) -> EnumOwnerForm | None:
-        """Resolve ``Owner::variant`` with local-before-open precedence."""
-        local = self.resolve_enum_owner_form(EnumOwnerFormKind.LOCAL, owner_name)
-        return local or self.resolve_enum_owner_form(EnumOwnerFormKind.OPEN_IMPORT, owner_name)
-
     def _blocked_short_variants(self, form: EnumOwnerForm) -> frozenset[str]:
         """Return variants whose short owner spelling is occupied by a module route.
 
@@ -2258,7 +2237,7 @@ class TypeEnvironment:
         owner_qualifier = (form.owner_name or "",)
         return frozenset(
             variant
-            for variant in self.type_table.enum_member_names(template.template)
+            for variant in self.type_table.enum_variants(template.template)
             if qualifier_contributes(self._import_env, owner_qualifier, variant)
         )
 
@@ -2302,7 +2281,7 @@ class TypeEnvironment:
                         resolved = resolve_qualified(
                             self._import_env, qualifier, exposed_name, anchored=anchored
                         )
-                        if not isinstance(resolved, QualResolutionFound):
+                        if not isinstance(resolved, QualResolutionFound) or resolved.qname != qname:
                             continue
                         forms.add(
                             EnumOwnerForm(
@@ -2366,15 +2345,6 @@ class TypeEnvironment:
             return None
         return self._program_generic_table.get((module_id, scope_path, name))
 
-    def get_open_imported_generic_type(
-        self, exposed_name: str
-    ) -> tuple[ModuleId, str, GenericTypeDef] | None:
-        """Return the unique generic type exposed by an open-imported name."""
-        matches = self._open_imported_generic_type_matches(exposed_name)
-        if len(matches) == 1:
-            return matches[0]
-        return None
-
     def resolve_unapplied_generic_type(
         self,
         name: str,
@@ -2390,19 +2360,11 @@ class TypeEnvironment:
         gdef = self._generic_types.get(name)
         if gdef is not None:
             return name, gdef
-        matches = self._open_imported_generic_type_matches(name)
-        if len(matches) > 1:
-            labels = sorted(
-                f"{module_id.display()}::{source_name}" for module_id, source_name, _ in matches
-            )
-            raise AglTypeError(
-                f"Ambiguous generic type '{name}': it is exported by multiple modules "
-                f"({', '.join(labels)}). Use a qualified reference to disambiguate.",
-                span=span,
-            )
-        if len(matches) == 1:
-            return name, matches[0][2]
-        return None
+        resolved = self._bare_type_key(name, span)
+        if resolved is None or self._program_generic_table is None:
+            return None
+        gdef = self._program_generic_table.get(resolved[0])
+        return None if gdef is None else (name, gdef)
 
     def resolve_qualified_unapplied_generic_type(
         self,
@@ -2430,7 +2392,34 @@ class TypeEnvironment:
             local_name is not None
             and (local_gdef := self._generic_types.get(local_name)) is not None
         ):
+            local_path, declared_name = _split_scoped_type_name(local_name)
+            self._ensure_qualified_type_route_unambiguous(
+                qualifier,
+                name,
+                (self._module_id, local_path, declared_name),
+                selected_route="type name",
+                span=span,
+            )
             return local_name, local_gdef
+        if qualifier.anchor is None:
+            opened_atom = _type_path_atom(
+                (*tuple(segment.name for segment in qualifier.segments), name)
+            )
+            opened_key = self._opened_type_key(opened_atom, span)
+            if opened_key is not None:
+                assert self._program_generic_table is not None
+                opened_gdef = self._program_generic_table.get(opened_key)
+                if opened_gdef is None:
+                    return None
+                self._ensure_qualified_type_route_unambiguous(
+                    qualifier,
+                    name,
+                    opened_key,
+                    selected_route="use route",
+                    span=span,
+                )
+                rendered = qualifier.render()
+                return f"{rendered}::{name}", opened_gdef
         if self._import_env is None or self._program_generic_table is None:
             return None
         qname = self._resolve_import_qname(qualifier, name, span=span, required=False)
@@ -2443,23 +2432,11 @@ class TypeEnvironment:
         qualified_name = f"{rendered}::{name}"
         return qualified_name, gdef
 
-    def _open_imported_generic_type_matches(
-        self, exposed_name: str
-    ) -> list[tuple[ModuleId, str, GenericTypeDef]]:
-        if self._import_env is None or self._program_generic_table is None:
-            return []
-        matches: list[tuple[ModuleId, str, GenericTypeDef]] = []
-        for module_id, source_name in self._import_env.unqualified.get(exposed_name, frozenset()):
-            source_path = (source_name,) if isinstance(source_name, str) else source_name
-            gdef = self._program_generic_table.get((module_id, source_path[:-1], source_path[-1]))
-            if gdef is not None:
-                matches.append((module_id, source_path[-1], gdef))
-        return matches
-
     def get_ctor_sig_from_module(
         self,
         module_id: ModuleId,
         owner_name: str,
+        variant: str | None,
         *,
         scope_path: ScopePath = (),
     ) -> ConstructorSignature | None:
@@ -2467,17 +2444,17 @@ class TypeEnvironment:
         if self._program_ctor_sig_table is None:
             return None
         return self._program_ctor_sig_table.get(
-            self._constructor_key(module_id, owner_name, scope_path)
+            self._constructor_key(module_id, owner_name, scope_path, variant)
         )
 
     def register_constructor_field_kinds(
         self,
         owner_name: str,
+        variant: str | None,
         fields: tuple[tuple[str, ParamKind], ...],
         *,
         scope_path: ScopePath = (),
         module_id: ModuleId | None = None,
-        decl_id: int | None = None,
     ) -> None:
         """Register ordered field kinds under structured owner identity.
 
@@ -2490,14 +2467,13 @@ class TypeEnvironment:
         """
         self._assert_mutable()
         owner_module_id = self._module_id if module_id is None else module_id
-        key = self._constructor_key(owner_module_id, owner_name, scope_path)
+        key = self._constructor_key(owner_module_id, owner_name, scope_path, variant)
         self._constructor_field_kinds[key] = fields
-        if decl_id is not None:
-            self._constructor_field_kinds_by_decl_id[decl_id] = fields
 
     def get_constructor_field_kinds(
         self,
         owner_name: str,
+        variant: str | None,
         *,
         module_id: ModuleId | None = None,
         scope_path: ScopePath = (),
@@ -2510,7 +2486,7 @@ class TypeEnvironment:
         scope is supplied structurally, exactly as for constructor signatures.
         """
         owner_module_id = self._module_id if module_id is None else module_id
-        key = self._constructor_key(owner_module_id, owner_name, scope_path)
+        key = self._constructor_key(owner_module_id, owner_name, scope_path, variant)
         result = self._constructor_field_kinds.get(key)
         if result is not None:
             return result
@@ -2519,7 +2495,10 @@ class TypeEnvironment:
         return None
 
     def get_constructor_field_kinds_for_type(
-        self, typ: Type | None, owner_name: str
+        self,
+        typ: Type | None,
+        owner_name: str,
+        variant: str | None,
     ) -> tuple[tuple[str, ParamKind], ...] | None:
         """Return field-kinds for a constructor identified by its resolved owner *typ*.
 
@@ -2535,24 +2514,25 @@ class TypeEnvironment:
         __init__``).  ``exception_field_kinds`` returns ``ParamKind.value``
         strings rather than the enum (``semantics`` may not import
         ``syntax.nodes``), so each is converted back with ``ParamKind(...)``
-        here, in the ``typecheck`` layer.
+        here, in the ``typecheck`` layer.  Enum variants are keyed by
+        *variant*; records are keyed under ``variant=None``.
         """
         if isinstance(typ, ExceptionType):
             return tuple(
                 (fname, ParamKind(kind_value))
                 for fname, kind_value in self._type_table.exception_field_kinds(typ)
             )
-        assert isinstance(typ, RecordType), f"unexpected constructor owner type {typ!r}"
-        by_identity = self._constructor_field_kinds_by_decl_id.get(typ.decl_id)
-        if by_identity is not None:
-            return by_identity
+        assert isinstance(typ, (RecordType, EnumType)), f"unexpected constructor owner type {typ!r}"
         return self.get_constructor_field_kinds(
-            typ.name, module_id=typ.module_id, scope_path=typ.scope_path
+            typ.name,
+            variant if isinstance(typ, EnumType) else None,
+            module_id=typ.module_id,
+            scope_path=typ.scope_path,
         )
 
     def all_constructor_field_kinds(
         self,
-    ) -> list[tuple[DeclKey, tuple[tuple[str, ParamKind], ...]]]:
+    ) -> list[tuple[tuple[DeclKey, str | None], tuple[tuple[str, ParamKind], ...]]]:
         """Return all own-module constructor field-kind entries as (key, kinds) pairs."""
         return list(self._constructor_field_kinds.items())
 
@@ -2560,7 +2540,7 @@ class TypeEnvironment:
         """Return the own-module generic type map (name → GenericTypeDef)."""
         return self._generic_types
 
-    def all_constructor_sigs(self) -> list[tuple[DeclKey, ConstructorSignature]]:
+    def all_constructor_sigs(self) -> list[tuple[tuple[DeclKey, str | None], ConstructorSignature]]:
         """Return all own-module constructor signatures as (key, sig) pairs."""
         return list(self._constructor_sigs.items())
 
@@ -2612,12 +2592,12 @@ class TypeEnvironment:
         )
         incoming_type_names |= {
             "::".join((*scope_path, owner_name))
-            for (module_id, scope_path, owner_name) in other._constructor_sigs
+            for ((module_id, scope_path, owner_name), _variant) in other._constructor_sigs
             if module_id == self._module_id
         }
         incoming_type_names |= {
             "::".join((*scope_path, owner_name))
-            for (module_id, scope_path, owner_name) in other._constructor_field_kinds
+            for ((module_id, scope_path, owner_name), _variant) in other._constructor_field_kinds
             if module_id == self._module_id
         }
         for name in incoming_type_names:
@@ -2628,14 +2608,12 @@ class TypeEnvironment:
             if name not in builtin or _is_own_builtin_declaration(name, typ):
                 self._types[name] = typ
         self._alias_targets.update(other._alias_targets)
-        self._resolved_aliases.update(other._resolved_aliases)
         self._binding_types = other._binding_types.fork()
         self._function_signatures.update(other._function_signatures)
         self._function_signatures_by_path.update(other._function_signatures_by_path)
         self._generic_types.update(other._generic_types)
         self._constructor_sigs.update(other._constructor_sigs)
         self._constructor_field_kinds.update(other._constructor_field_kinds)
-        self._constructor_field_kinds_by_decl_id.update(other._constructor_field_kinds_by_decl_id)
         self._alias_type_params.update(other._alias_type_params)
         self._function_signatures_by_node_id.update(other._function_signatures_by_node_id)
         self._extern_node_ids.update(other._extern_node_ids)
@@ -2649,17 +2627,15 @@ class TypeEnvironment:
         checked-entry metadata and restore the previous session definition when
         one existed.
 
-        *names* normally comes from this entry's OWN declarations (see the
-        REPL's promotion bookkeeping). A failed enum redeclaration also adds
-        previously retained inline-member names whose namespace metadata the
-        new enum cleared, so those survivors are restored in the same staged
-        pass. A reserved built-in exception/prelude name can appear only when
-        this entry itself wrote a ``builtin`` declaration of that name — the
-        reserved names are non-shadowable other than by one. That declaration
-        is rolled back exactly like any other unpromoted one below: no
-        special-casing is needed, and none is applied, unlike :meth:`seed_from`,
-        which instead has to tell a program's own carried-forward declaration
-        apart from the canonical default it must not clobber.
+        *names* comes from this entry's OWN declarations (see the REPL's
+        promotion bookkeeping), so a reserved built-in exception/prelude name
+        can appear in it only when this entry itself wrote a ``builtin``
+        declaration of that name — the reserved names are non-shadowable
+        other than by one. That declaration is rolled back exactly like any
+        other unpromoted one below: no special-casing is needed, and none is
+        applied, unlike :meth:`seed_from`, which instead has to tell a
+        program's own carried-forward declaration apart from the canonical
+        default it must not clobber.
 
         The shared ``type_table`` is keyed by declaration identity, not name,
         so the unpromoted declaration stays registered under its own identity
@@ -2686,27 +2662,19 @@ class TypeEnvironment:
             typedef = other._type_table.get(other._module_id, declared_name, scope_path)
             if typedef is not None:
                 self._type_table.register(typedef)
-            # A failed enum redeclaration can clear a prior inline member's
-            # namespace metadata without registering a replacement member.
-            # In that case both lookups name the same survivor, which must be
-            # restored rather than orphaned.
-            if unpromoted is not None and (
-                typedef is None or unpromoted.decl_node_id != typedef.decl_node_id
-            ):
+            if unpromoted is not None:
                 self._type_table.orphan(unpromoted.decl_node_id)
             if name in other._types:
                 self._types[name] = other._types[name]
             if name in other._alias_targets:
                 self._alias_targets[name] = other._alias_targets[name]
-            if name in other._resolved_aliases:
-                self._resolved_aliases[name] = other._resolved_aliases[name]
             if name in other._generic_types:
                 self._generic_types[name] = other._generic_types[name]
             if name in other._alias_type_params:
                 self._alias_type_params[name] = other._alias_type_params[name]
             for key, sig in other._constructor_sigs.items():
-                if key == (other._module_id, scope_path, declared_name):
+                if key[0] == (other._module_id, scope_path, declared_name):
                     self._constructor_sigs[key] = sig
             for key, kinds in other._constructor_field_kinds.items():
-                if key == (other._module_id, scope_path, declared_name):
+                if key[0] == (other._module_id, scope_path, declared_name):
                     self._constructor_field_kinds[key] = kinds

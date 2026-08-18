@@ -21,7 +21,7 @@ program def main() -> unit =
   let from_dict_sibling = choose({}, {answer: 8})
   let from_result: array[int] = id([])
   let from_fields = Bundle(values = [], metadata = {}, value = 9)
-  let options: array[Option[int]] = [none, some(value = 10)]
+  let options = [none, some(value = 10)]
   let selected = if prefer_empty => [] else => [11]
 
   print from_array_sibling

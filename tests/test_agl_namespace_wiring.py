@@ -8,6 +8,7 @@ import pytest
 
 from agm.agl.matchcompile.diagnostics import qualified_owner_name
 from agm.agl.modules.ids import ModuleId
+from agm.agl.modules.loader import ModuleGraph
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import AglScopeError
 from agm.agl.semantics.types import EnumOwnerFormKind
@@ -22,18 +23,18 @@ from tests.agl.ir_harness import (
 )
 
 
-def _make_graph_without_prelude(tmp_path: Path, modules: dict[str, str]) -> object:
+def _make_graph_without_prelude(tmp_path: Path, modules: dict[str, str]) -> ModuleGraph:
     return make_inline_graph_from_files(tmp_path, modules, default_stdlib=False)
 
 
-def test_scope_resolves_suffix_anchor_and_using_contributions(tmp_path: Path) -> None:
+def test_scope_resolves_suffix_anchor_and_tail_contributions(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,
         {
             "entry": (
                 "import services/primary/config\n"
                 "import services/secondary/config\n"
-                "import services/primary/config using primary\n"
+                "import services/primary/config::primary\n"
                 "let first = /services/primary/config::primary()\n"
                 "let second = config::secondary()\n"
                 "let third = primary()\n"
@@ -53,6 +54,1002 @@ def test_scope_resolves_suffix_anchor_and_using_contributions(tmp_path: Path) ->
     resolved_modules = {ref.module_id for ref in entry.resolved.resolution.values()}
     assert primary in resolved_modules
     assert secondary in resolved_modules
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "case value of | X::E::A(_ as item) => item | _ => 0",
+        "value is X::E::A",
+    ],
+)
+def test_constructor_consumers_resolve_whole_use_aliases(tmp_path: Path, expression: str) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use S as X\n"
+                "scope S\n"
+                "enum E\n  | A(value: int)\n  | B\n"
+                "end S\n"
+                "let value = X::E::A(1)\n"
+                f"{expression}\n"
+            ),
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_bare_renamed_constructor_must_belong_to_matched_enum(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use S::{A::X as Renamed}\n"
+                "scope S\n"
+                "enum A | X\n"
+                "enum B | Y\n"
+                "end S\n"
+                "let value = S::B::Y\n"
+                "case value of | Renamed => 1 | _ => 0\n"
+            ),
+        },
+    )
+
+    with pytest.raises(AglTypeError):
+        check_program(resolve_program(graph), base_caps())
+
+
+def test_bare_renamed_fieldful_constructor_must_use_a_constructor_pattern(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use S::{E::A as X}\n"
+                "scope S\n"
+                "enum E | A(value: int)\n"
+                "end S\n"
+                "let value = X(1)\n"
+                "case value of | X => 1 | _ => 0\n"
+            ),
+        },
+    )
+
+    with pytest.raises(AglTypeError):
+        check_program(resolve_program(graph), base_caps())
+
+
+def test_constructor_consumers_honor_use_tail_renames(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use S::{E::A as X}\n"
+                "scope S\n"
+                "enum E\n  | A(value: int)\n  | B\n"
+                "end S\n"
+                "let value = X(1)\n"
+                "let selected = case value of | X(_ as item) => item | _ => 0\n"
+                "let matches = value is X\n"
+                "selected\n"
+            ),
+        },
+    )
+
+    checked = check_program(resolve_program(graph), base_caps())
+    constructors = tuple(checked.modules[graph.entry_id].resolved.constructor_refs.values())
+    assert any(constructor.variant == "A" for constructor in constructors)
+
+
+def test_ambiguous_whole_use_alias_constructor_qualifier_is_rejected(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use First as X\n"
+                "use Second as X\n"
+                "scope First\n"
+                "enum E | A\n"
+                "end First\n"
+                "scope Second\n"
+                "enum E | A\n"
+                "end Second\n"
+                "let value = First::E::A\n"
+                "value is X::E::A\n"
+            ),
+        },
+    )
+
+    with pytest.raises((AglScopeError, AglTypeError)):
+        check_program(resolve_program(graph), base_caps())
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "case value of | E::A(_ as item) => item | _ => 0",
+        "value is E::A",
+    ],
+)
+def test_constructor_consumers_honor_use_hiding(tmp_path: Path, expression: str) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use S::* hiding E::A\n"
+                "scope S\n"
+                "enum E\n  | A(value: int)\n  | B\n"
+                "end S\n"
+                "let value = S::E::A(1)\n"
+                f"{expression}\n"
+            ),
+        },
+    )
+
+    with pytest.raises((AglScopeError, AglTypeError)):
+        check_program(resolve_program(graph), base_caps())
+
+
+def test_use_contributions_keep_type_and_value_namespaces_separate(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use Types::*\n"
+                "use Values::*\n"
+                "scope Types\n"
+                "enum T\n  | member\n"
+                "end Types\n"
+                "scope Values\n"
+                "def T() -> int = 7\n"
+                "end Values\n"
+                "T()\n"
+            ),
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_import_tails_keep_type_and_value_namespaces_separate(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import types::*\nimport values::*\nT()\n",
+            "types": "enum T\n  | member\n",
+            "values": "def T() -> int = 7\n",
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_root_use_value_ignores_same_named_imported_type(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import types::*\n"
+                "use Values::*\n"
+                "scope Values\n"
+                "record T\n"
+                "  value: int\n"
+                "end Values\n"
+                "T(7)\n"
+            ),
+            "types": "enum T | member\n",
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_imported_value_ignores_same_named_root_use_type(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import values::*\nuse Types::*\nscope Types\nenum T | member\nend Types\nT()\n"
+            ),
+            "values": "def T() -> int = 7\n",
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_inner_type_only_use_does_not_hide_root_imported_value(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import values::{x}\n"
+                "scope Inner\n"
+                "use Types::{x}\n"
+                "def call() -> int = x()\n"
+                "end Inner\n"
+                "scope Types\n"
+                "enum x | member\n"
+                "end Types\n"
+                "Inner::call()\n"
+            ),
+            "values": "def x() -> int = 7\n",
+        },
+    )
+
+    resolved = resolve_program(graph)
+
+    x_refs = [
+        ref
+        for ref in resolved.modules[graph.entry_id].resolved.resolution.values()
+        if ref.name == "x"
+    ]
+    assert {ref.module_id for ref in x_refs} == {ModuleId.from_path("values")}
+    check_program(resolved, base_caps())
+
+
+def test_inner_type_only_use_preserves_outer_value_ambiguity(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import left::{x}\n"
+                "import right::{x}\n"
+                "scope Inner\n"
+                "use Types::{x}\n"
+                "def call() -> int = x()\n"
+                "end Inner\n"
+                "scope Types\n"
+                "enum x | member\n"
+                "end Types\n"
+                "Inner::call()\n"
+            ),
+            "left": "def x() -> int = 1\n",
+            "right": "def x() -> int = 2\n",
+        },
+    )
+
+    with pytest.raises(AglScopeError, match="ambiguous"):
+        resolve_program(graph)
+
+
+def test_type_use_lookup_continues_past_inner_value_contribution(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use Types::*\n"
+                "scope Inner\n"
+                "use Values::*\n"
+                "def identity(value: T) -> T = value\n"
+                "end Inner\n"
+                "scope Types\n"
+                "enum T\n  | member\n"
+                "end Types\n"
+                "scope Values\n"
+                "def T() -> int = 7\n"
+                "end Values\n"
+                "Inner::identity(Types::T::member)\n"
+            ),
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_constructor_lookup_continues_past_inner_value_contribution(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use Types::{E::A as X}\n"
+                "scope Inner\n"
+                "use Values::{X}\n"
+                "def selected(value: Types::E) -> int =\n"
+                "  case value of | X => 1 | _ => 0\n"
+                "def matches(value: Types::E) -> bool = value is X\n"
+                "def call() -> int = X()\n"
+                "end Inner\n"
+                "scope Types\n"
+                "enum E | A\n"
+                "end Types\n"
+                "scope Values\n"
+                "def X() -> int = 7\n"
+                "end Values\n"
+                "Inner::selected(Types::E::A)\n"
+            ),
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_unbraced_single_member_use_tail_can_be_renamed(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use Scope::member as Alias\n"
+                "scope Scope\n"
+                "def member() -> int = 1\n"
+                "end Scope\n"
+                "Alias()\n"
+            ),
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_whole_target_alias_preserves_an_empty_local_scope(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": ("use Empty as Alias\nuse Alias::*\nscope Empty\nend Empty\n()\n"),
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_local_use_can_expose_empty_nested_scope(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use Outer::{Empty}\n"
+                "use Empty::*\n"
+                "scope Outer\n"
+                "scope Empty\n"
+                "end Empty\n"
+                "end Outer\n"
+                "()\n"
+            ),
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_local_use_can_rename_empty_nested_scope(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use Outer::{Empty as E}\n"
+                "use E::*\n"
+                "scope Outer\n"
+                "scope Empty\n"
+                "end Empty\n"
+                "end Outer\n"
+                "()\n"
+            ),
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_single_member_alias_can_follow_local_scope_alias(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use Outer as O\n"
+                "use O::member as Alias\n"
+                "scope Outer\n"
+                "def member() -> int = 1\n"
+                "end Outer\n"
+                "Alias()\n"
+            ),
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_single_member_alias_can_follow_imported_scope_alias(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import lib\nuse lib::Outer as O\nuse O::member as Alias\nAlias()\n",
+            "lib": "scope Outer\ndef member() -> int = 1\nend Outer\n",
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_unbraced_ordered_binding_use_tail_can_be_renamed(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use Scope::member as Alias\nscope Scope\nvar member = 1\nend Scope\nAlias\n"
+            ),
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+@pytest.mark.parametrize(
+    "use_decl",
+    (
+        "import lib\nuse /lib::Scope::member as Alias\n",
+        "import lib::{Scope::member}\nuse Scope::member as Alias\n",
+    ),
+)
+def test_unbraced_imported_member_use_tail_can_be_renamed(tmp_path: Path, use_decl: str) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": f"{use_decl}Alias()\n",
+            "lib": "scope Scope\ndef member() -> int = 1\nend Scope\n",
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_root_local_use_and_import_tail_collision_is_ambiguous(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": ("import lib::{x}\nuse S::*\nscope S\ndef x() -> int = 2\nend S\nx()\n"),
+            "lib": "def x() -> int = 1\n",
+        },
+    )
+
+    with pytest.raises(AglScopeError, match="ambiguous"):
+        resolve_program(graph)
+
+
+def test_qualified_use_and_import_route_collision_is_ambiguous(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": ("import lib\nuse S as lib\nscope S\ndef x() -> int = 2\nend S\nlib::x()\n"),
+            "lib": "def x() -> int = 1\n",
+        },
+    )
+
+    with pytest.raises(AglScopeError, match="ambiguous"):
+        resolve_program(graph)
+
+
+def test_qualified_use_collision_preserves_ambiguous_import_verdict(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import a/lib\n"
+                "import b/lib\n"
+                "use S as lib\n"
+                "scope S\n"
+                "def x() -> int = 3\n"
+                "end S\n"
+                "lib::x()\n"
+            ),
+            "a/lib": "def x() -> int = 1\n",
+            "b/lib": "def x() -> int = 2\n",
+        },
+    )
+
+    with pytest.raises(AglScopeError, match="ambiguous"):
+        resolve_program(graph)
+
+
+def test_qualified_use_and_import_route_deduplicate_the_same_origin(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import lib\nuse /lib as lib\nlib::x()\n",
+            "lib": "def x() -> int = 1\n",
+        },
+    )
+
+    resolve_program(graph)
+
+
+def test_qualified_constructor_use_and_import_route_collision_is_ambiguous(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import lib\n"
+                "use S as lib\n"
+                "scope S\n"
+                "record X(value: int)\n"
+                "end S\n"
+                "let item = S::X(value = 1)\n"
+                "case item of\n"
+                "  | lib::X(value) => value\n"
+            ),
+            "lib": "record X(value: int)\n",
+        },
+    )
+
+    with pytest.raises(AglScopeError, match="ambiguous"):
+        resolve_program(graph)
+
+
+def test_nested_constructor_use_and_import_route_collision_is_ambiguous(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": ("import lib\nuse S as lib\nscope S\nenum E | A\nend S\nlib::E::A\n"),
+            "lib": "enum E | A\n",
+        },
+    )
+
+    with pytest.raises(AglScopeError, match="ambiguous"):
+        resolve_program(graph)
+
+
+def test_qualified_pattern_with_colliding_use_routes_is_ambiguous(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use First as X\n"
+                "use Second as X\n"
+                "scope First\n"
+                "enum E | A\n"
+                "end First\n"
+                "scope Second\n"
+                "enum E | A\n"
+                "end Second\n"
+                "let value = First::E::A\n"
+                "case value of | X::E::A => 1 | _ => 0\n"
+            ),
+        },
+    )
+
+    with pytest.raises(AglScopeError, match="ambiguous"):
+        resolve_program(graph)
+
+
+def test_qualified_type_use_and_import_route_collision_is_ambiguous(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import lib\n"
+                "use S as lib\n"
+                "scope S\n"
+                "type T = int\n"
+                "end S\n"
+                "def identity(value: lib::T) -> lib::T = value\n"
+            ),
+            "lib": "type T = text\n",
+        },
+    )
+
+    with pytest.raises(AglTypeError, match="both"):
+        check_program(resolve_program(graph), base_caps())
+
+
+def test_qualified_applied_type_use_and_import_route_collision_is_ambiguous(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import lib\n"
+                "use S as lib\n"
+                "scope S\n"
+                "record T[A](value: A)\n"
+                "end S\n"
+                "def identity(value: lib::T[int]) -> lib::T[int] = value\n"
+            ),
+            "lib": "record T[A](value: A)\n",
+        },
+    )
+
+    with pytest.raises(AglTypeError, match="both"):
+        check_program(resolve_program(graph), base_caps())
+
+
+def test_qualified_type_use_and_import_routes_deduplicate_same_origin(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import lib\nuse /lib as lib\ndef identity(value: lib::T) -> lib::T = value\n",
+            "lib": "record T(value: int)\n",
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_qualified_applied_type_routes_deduplicate_same_origin(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import lib\n"
+                "use /lib as lib\n"
+                "def identity(value: lib::T[int]) -> lib::T[int] = value\n"
+            ),
+            "lib": "record T[A](value: A)\n",
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_inner_use_shadows_root_import_and_use_contributions(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import a::{x}\n"
+                "use a::*\n"
+                "import b\n"
+                "scope Inner\n"
+                "use b::*\n"
+                "def selected() -> int = x()\n"
+                "end Inner\n"
+                "Inner::selected()\n"
+            ),
+            "a": "def x() -> int = 1\n",
+            "b": "def x() -> int = 2\n",
+        },
+    )
+
+    resolved = resolve_program(graph)
+
+    x_refs = [
+        ref
+        for ref in resolved.modules[graph.entry_id].resolved.resolution.values()
+        if ref.name == "x"
+    ]
+    assert {ref.module_id for ref in x_refs} == {ModuleId.from_path("b")}
+    check_program(resolved, base_caps())
+
+
+_BARE_TYPE_USES = [
+    ("record R(value: text)\n", "def identity(value: R) -> R = value\n"),
+    ("record R(value: text)\n", 'let decoded = "{\\"value\\":\\"ok\\"}" as R\n'),
+    ("record R[A](value: A)\n", "def identity(value: R[int]) -> R[int] = value\n"),
+    ("record R[A](value: A)\n", 'let decoded = "{\\"value\\":1}" as R[int]\n'),
+]
+
+
+@pytest.mark.parametrize(("declaration", "type_use"), _BARE_TYPE_USES)
+def test_root_use_and_import_tail_type_collision_is_ambiguous(
+    tmp_path: Path, declaration: str, type_use: str
+) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": ("import lib::*\nuse S::*\nscope S\n" + declaration + "end S\n" + type_use),
+            "lib": declaration,
+        },
+    )
+
+    with pytest.raises(AglTypeError, match="Ambiguous type"):
+        check_program(resolve_program(graph), base_caps())
+
+
+@pytest.mark.parametrize(("declaration", "type_use"), _BARE_TYPE_USES)
+def test_root_use_and_import_tail_type_routes_deduplicate_same_origin(
+    tmp_path: Path, declaration: str, type_use: str
+) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import lib::*\nuse lib::*\n" + type_use,
+            "lib": declaration,
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+@pytest.mark.parametrize(("declaration", "type_use"), _BARE_TYPE_USES)
+def test_regional_use_type_shadows_root_import_tail(
+    tmp_path: Path, declaration: str, type_use: str
+) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import lib::*\n"
+                "import selected\n"
+                "scope Inner\n"
+                "use selected::*\n" + type_use + "end Inner\n"
+            ),
+            "lib": declaration,
+            "selected": declaration,
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_resolve_named_type_rejects_root_use_and_import_tail_collision(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": ("import lib::*\nuse S::*\nscope S\nrecord R(value: text)\nend S\n"),
+            "lib": "record R(value: int)\n",
+        },
+    )
+
+    checked = check_program(resolve_program(graph), base_caps())
+
+    with pytest.raises(AglTypeError, match="[Aa]mbiguous"):
+        checked.modules[graph.entry_id].type_env.resolve_named_type("R")
+
+
+def test_ambiguous_caught_exception_is_reported_as_ambiguous(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import m/a\nimport m/b\nuse m/a::*\nuse m/b::*\n"
+                "let _ = try\n  ()\ncatch Boom as e =>\n  ()\n"
+            ),
+            "m/a": "exception Boom extends Exception()\n",
+            "m/b": "exception Boom extends Exception()\n",
+        },
+    )
+
+    with pytest.raises(AglTypeError, match="[Aa]mbiguous") as raised:
+        check_program(resolve_program(graph), base_caps())
+
+    assert "m/a::Boom" in str(raised.value)
+    assert "m/b::Boom" in str(raised.value)
+    assert raised.value.span is not None
+
+
+def test_ambiguous_exception_base_is_reported_as_ambiguous(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import m/a\nimport m/b\nuse m/a::*\nuse m/b::*\n"
+                "exception Local extends Boom()\n()\n"
+            ),
+            "m/a": "exception Boom extends Exception()\n",
+            "m/b": "exception Boom extends Exception()\n",
+        },
+    )
+
+    with pytest.raises(AglTypeError, match="[Aa]mbiguous") as raised:
+        check_program(resolve_program(graph), base_caps())
+
+    assert raised.value.span is not None
+
+
+def test_resolve_named_type_deduplicates_root_routes_to_same_origin(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import lib::*\nuse lib::*\n",
+            "lib": "record R(value: int)\n",
+        },
+    )
+
+    checked = check_program(resolve_program(graph), base_caps())
+
+    assert checked.modules[graph.entry_id].type_env.resolve_named_type("R") is not None
+
+
+def test_use_can_target_local_scope_exposed_by_an_earlier_use(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use Outer::*\n"
+                "use Inner::*\n"
+                "scope Outer\n"
+                "def unrelated() -> int = 0\n"
+                "scope Inner\n"
+                "def value() -> int = 1\n"
+                "end Inner\n"
+                "end Outer\n"
+                "value()\n"
+            ),
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_use_can_target_type_scope_exposed_by_an_earlier_use(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": ("use Outer::*\nuse R::*\nscope Outer\nrecord R(value: int)\nend Outer\n"),
+        },
+    )
+
+    resolve_program(graph)
+
+
+def test_use_rejects_an_ordinary_member_exposed_by_an_earlier_use(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use Outer::*\nuse value::*\nscope Outer\ndef value() -> int = 1\nend Outer\n"
+            ),
+        },
+    )
+
+    with pytest.raises(AglScopeError, match="not nameable"):
+        resolve_program(graph)
+
+
+def test_use_rejects_ambiguous_scopes_exposed_by_earlier_uses(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "use First::*\n"
+                "use Second::*\n"
+                "use Shared::*\n"
+                "scope First\n"
+                "scope Shared\n"
+                "def first() -> int = 1\n"
+                "end Shared\n"
+                "end First\n"
+                "scope Second\n"
+                "scope Shared\n"
+                "def second() -> int = 2\n"
+                "end Shared\n"
+                "end Second\n"
+            ),
+        },
+    )
+
+    with pytest.raises(AglScopeError, match="ambiguous across local scopes"):
+        resolve_program(graph)
+
+
+def test_use_can_target_imported_scope_exposed_by_an_earlier_use(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": ("import library\nuse library::Outer::*\nuse Inner::*\nmember()\n"),
+            "library": (
+                "scope Outer\nscope Inner\ndef member() -> int = 1\nend Inner\nend Outer\n"
+            ),
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_use_can_target_renamed_nested_imported_scope_exposed_by_an_earlier_use(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import library\n"
+                "use library::Outer::{Inner::Nested as Selected}\n"
+                "use Selected::*\n"
+                "member()\n"
+            ),
+            "library": (
+                "scope Outer\n"
+                "scope Inner\n"
+                "scope Nested\n"
+                "def member() -> int = 1\n"
+                "end Nested\n"
+                "end Inner\n"
+                "end Outer\n"
+            ),
+        },
+    )
+
+    check_program(resolve_program(graph), base_caps())
+
+
+def test_use_cannot_target_imported_scope_hidden_by_an_earlier_use(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": ("import library\nuse library::Outer::* hiding Inner\nuse Inner::*\n"),
+            "library": (
+                "scope Outer\nscope Inner\ndef member() -> int = 1\nend Inner\nend Outer\n"
+            ),
+        },
+    )
+
+    with pytest.raises(AglScopeError, match="not nameable"):
+        resolve_program(graph)
+
+
+def test_use_rejects_ambiguous_imported_scopes_exposed_by_earlier_uses(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import left\n"
+                "import right\n"
+                "use left::Outer::*\n"
+                "use right::Outer::*\n"
+                "use Shared::*\n"
+            ),
+            "left": ("scope Outer\nscope Shared\ndef left() -> int = 1\nend Shared\nend Outer\n"),
+            "right": ("scope Outer\nscope Shared\ndef right() -> int = 2\nend Shared\nend Outer\n"),
+        },
+    )
+
+    with pytest.raises(AglScopeError, match="ambiguous across imported modules"):
+        resolve_program(graph)
+
+
+def test_use_rejects_ordinary_imported_member_exposed_by_an_earlier_use(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": ("import library\nuse library::Outer::*\nuse member::*\n"),
+            "library": "scope Outer\ndef member() -> int = 1\nend Outer\n",
+        },
+    )
+
+    with pytest.raises(AglScopeError, match="not nameable"):
+        resolve_program(graph)
+
+
+def test_use_imported_nested_scope_selects_its_relative_public_subtree(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import library\n"
+                "use library::Scope::* hiding hidden\n"
+                "use library::Scope::{Nested::member as chosen}\n"
+                "use library::Scope as Selected\n"
+                "def selected() -> int = visible() + Nested::member() + chosen()\n"
+                "Selected::Nested::member()"
+            ),
+            "library": (
+                "def leaked() -> int = 0\n"
+                "scope Scope\n"
+                "def visible() -> int = 1\n"
+                "def hidden() -> int = 2\n"
+                "scope Nested\n"
+                "def member() -> int = 3\n"
+                "end Nested\n"
+                "end Scope\n"
+            ),
+        },
+    )
+
+    assert resolve_program(graph).entry_id == graph.entry_id
+
+    for blocked in ("hidden", "leaked"):
+        blocked_graph = make_graph_from_files(
+            tmp_path,
+            {
+                "entry": f"import library\nuse library::Scope::* hiding hidden\n{blocked}()",
+                "library": (
+                    "def leaked() -> int = 0\nscope Scope\ndef hidden() -> int = 2\nend Scope"
+                ),
+            },
+        )
+        with pytest.raises(AglScopeError):
+            resolve_program(blocked_graph)
 
 
 def test_scope_rejects_an_ambiguous_suffix_at_the_use_site(tmp_path: Path) -> None:
@@ -189,7 +1186,7 @@ def test_type_qualifier_beats_route_without_the_requested_member(tmp_path: Path)
             "entry": (
                 "import support/config\n"
                 "enum config | On | Off\n"
-                "let flag: config = config::On\n"
+                "let flag = config::On\n"
                 "let result = case flag of\n"
                 "  | config::On => 1\n"
                 "  | config::Off => 2\n"
@@ -211,7 +1208,7 @@ def test_generic_is_test_type_and_module_constructor_member_collision_is_ambiguo
             "entry": (
                 "import support/Owner\n"
                 "enum Owner[T] | On\n"
-                "let flag: Owner[int] = ::Owner[int]::On\n"
+                "let flag = ::Owner[int]::On\n"
                 "flag is Owner::On"
             ),
             "support/Owner": "def On() -> int = 1",
@@ -232,7 +1229,7 @@ def test_is_test_type_and_module_constructor_member_collision_is_ambiguous(
             "entry": (
                 "import support/config\n"
                 "enum config | On\n"
-                "let flag: config = ::config::On\n"
+                "let flag = ::config::On\n"
                 "flag is config::On"
             ),
             "support/config": "def On() -> int = 1",
@@ -249,10 +1246,10 @@ def test_is_test_type_and_module_constructor_member_collision_is_ambiguous(
         assert repair in diagnostic
 
 
-def test_nonconstructible_open_import_is_not_a_constructor_owner(tmp_path: Path) -> None:
+def test_nonconstructible_tailed_import_is_not_a_constructor_owner(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,
-        {"entry": "import lib using Alias\nAlias::value", "lib": "type Alias = int"},
+        {"entry": "import lib::Alias\nAlias::value", "lib": "type Alias = int"},
     )
 
     with pytest.raises(AglScopeError):
@@ -264,7 +1261,7 @@ def test_current_module_anchor_does_not_resolve_an_imported_constructor_owner(
 ) -> None:
     graph = make_graph_from_files(
         tmp_path,
-        {"entry": "open import library\n::Unknown::On", "library": "enum Unknown | On"},
+        {"entry": "import library::*\n::Unknown::On", "library": "enum Unknown | On"},
     )
 
     with pytest.raises(AglScopeError) as exc_info:
@@ -281,7 +1278,7 @@ def test_invalid_qualified_pattern_and_is_routes_reach_typecheck(tmp_path: Path)
     ):
         graph = make_graph_from_files(
             tmp_path,
-            {"entry": f"enum Flag | On | Off\nlet flag: Flag = Flag::On\n{use}"},
+            {"entry": f"enum Flag | On | Off\nlet flag = Flag::On\n{use}"},
         )
         with pytest.raises(AglTypeError):
             check_program(resolve_program(graph), base_caps())
@@ -294,8 +1291,7 @@ def test_is_test_does_not_treat_an_imported_enum_owner_as_its_variant_route(
         tmp_path,
         {
             "entry": (
-                "import support/config\nenum config | On\n"
-                "let flag: config = config::On\nflag is config::On"
+                "import support/config\nenum config | On\nlet flag = config::On\nflag is config::On"
             ),
             "support/config": "enum config | On",
         },
@@ -308,13 +1304,13 @@ def test_is_test_does_not_treat_an_imported_enum_owner_as_its_variant_route(
     ("source", "modules", "expected"),
     [
         (
-            "enum Flag | On | Off\nlet flag: Flag = Flag::On\nflag is unknown::Flag::On",
+            "enum Flag | On | Off\nlet flag = Flag::On\nflag is unknown::Flag::On",
             {},
             "Unknown module qualifier",
         ),
         (
             "import remote/config hiding Flag\nenum Flag | On | Off\n"
-            "let flag: Flag = Flag::On\n"
+            "let flag = Flag::On\n"
             "let result = case flag of\n"
             "  | config::Flag::On => 1\n"
             "  | _ => 2\n"
@@ -324,7 +1320,7 @@ def test_is_test_does_not_treat_an_imported_enum_owner_as_its_variant_route(
         ),
         (
             "import one/config\nimport two/config\nenum Local | On\n"
-            "let flag: Local = Local::On\nflag is config::Flag::On",
+            "let flag = Local::On\nflag is config::Flag::On",
             {"one/config": "enum Flag | On", "two/config": "enum Flag | On"},
             "ambiguous",
         ),
@@ -344,38 +1340,33 @@ def test_qualified_enum_patterns_and_is_tests_keep_resolution_verdicts(
     assert expected in str(exc_info.value)
 
 
-def test_qualified_unselected_type_keeps_its_inaccessible_diagnostic(tmp_path: Path) -> None:
+def test_qualified_import_tail_keeps_the_full_type_surface(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,
         {
             "entry": (
-                "import remote/config using read\nlet value: /remote/config::Flag = 1\nvalue"
+                "import remote/config::read\n"
+                "let value: remote/config::Flag = remote/config::Flag::On\n"
+                "value"
             ),
             "remote/config": "def read() -> int = 1\nenum Flag | On",
         },
     )
 
-    with pytest.raises(AglTypeError) as exc_info:
-        check_program(resolve_program(graph), base_caps())
-
-    assert "accessible" in str(exc_info.value)
+    assert check_program(resolve_program(graph), base_caps()).entry_id == graph.entry_id
 
 
 @pytest.mark.parametrize(
     "entry",
     [
-        ("import remote/config using read\nrecord Wrapper\n  flag: /remote/config::Flag\nWrapper"),
-        (
-            "import remote/config using read\n"
-            "def inspect(flag: /remote/config::Flag) -> int = 1\n"
-            "inspect"
-        ),
+        ("import remote/config::read\nrecord Wrapper\n  flag: remote/config::Flag\nWrapper"),
+        ("import remote/config::read\ndef inspect(flag: remote/config::Flag) -> int = 1\ninspect"),
     ],
 )
-def test_qualified_unselected_type_keeps_its_diagnostic_during_prepasses(
+def test_qualified_import_tail_keeps_the_full_type_surface_during_prepasses(
     tmp_path: Path, entry: str
 ) -> None:
-    """Type-body and signature pre-passes retain the import's selected set."""
+    """Type-body and signature pre-passes retain the full qualified surface."""
     graph = make_graph_from_files(
         tmp_path,
         {
@@ -384,8 +1375,7 @@ def test_qualified_unselected_type_keeps_its_diagnostic_during_prepasses(
         },
     )
 
-    with pytest.raises(AglTypeError, match="accessible"):
-        check_program(resolve_program(graph), base_caps())
+    assert check_program(resolve_program(graph), base_caps()).entry_id == graph.entry_id
 
 
 def test_anchored_enum_owner_form_preserves_its_route(tmp_path: Path) -> None:
@@ -455,7 +1445,7 @@ def test_pattern_and_is_filter_type_module_routes_by_the_referenced_variant(tmp_
             "entry": (
                 "import support/config\n"
                 "enum config | On | Off\n"
-                "let flag: config = config::On\n"
+                "let flag = config::On\n"
                 "let result = case flag of\n"
                 "  | config::On => 1\n"
                 "  | config::Off => 2\n"
@@ -494,6 +1484,31 @@ def test_enum_owner_forms_exclude_ambiguous_suffix_routes(tmp_path: Path) -> Non
     } >= {("one", "config"), ("two", "config")}
 
 
+def test_enum_owner_forms_do_not_cross_repeated_import_routes(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import alpha as X hiding E\n"
+                "import alpha\n"
+                "import beta as X\n"
+                "let value = alpha::E::One\n"
+                "case value of | alpha::E::One => 1 | _ => 0\n"
+            ),
+            "alpha": "enum E | One | Two\n",
+            "beta": "enum E | Other\n",
+        },
+    )
+
+    checked = check_program(resolve_program(graph), base_caps())
+    forms = checked.modules[graph.entry_id].type_env.enum_owner_forms()
+    alias_forms = [
+        form for form in forms if form.owner_name == "E" and form.module_qualifier == ("X",)
+    ]
+
+    assert {form.source_module_id for form in alias_forms} == {ModuleId.from_path("beta")}
+
+
 def test_anchored_constructor_route_never_falls_back_to_a_local_type(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,
@@ -517,7 +1532,7 @@ def test_spec_suffixes_anchor_and_two_line_bare_full_idiom(tmp_path: Path) -> No
                 "import std/list/config\n"
                 "import extra/config hiding retries\n"
                 "import utils/api\n"
-                "import utils/api using bare\n"
+                "import utils/api::bare\n"
                 "let a = config::retries()\n"
                 "let b = list/config::opt()\n"
                 "let c = /std/config::opt()\n"
@@ -569,3 +1584,52 @@ def test_wildcard_alias_is_a_member_filtered_facade(tmp_path: Path) -> None:
     )
 
     assert resolve_program(graph).entry_id == graph.entry_id
+
+
+def test_wildcard_facade_use_hiding_stays_hidden(tmp_path: Path) -> None:
+    modules = {
+        "facade/one": "def first() -> int = 1",
+        "facade/two": "def second() -> int = 2",
+    }
+    visible = make_graph_from_files(
+        tmp_path,
+        {"entry": "import facade/* as api\nuse api::* hiding first\nsecond()", **modules},
+    )
+    assert resolve_program(visible).entry_id == visible.entry_id
+
+    hidden = make_graph_from_files(
+        tmp_path,
+        {"entry": "import facade/* as api\nuse api::* hiding first\nfirst()", **modules},
+    )
+    with pytest.raises(AglScopeError):
+        resolve_program(hidden)
+
+
+def test_wildcard_facade_use_hiding_keeps_a_variant_constructor_hidden(tmp_path: Path) -> None:
+    modules = {"facade/one": "enum E\n  | A(value: int)\n  | B\n"}
+    visible = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import facade/* as api\n"
+                "use api::* hiding E::A\n"
+                "let value = E::B\n"
+                "case value of | E::B => 1 | _ => 0\n"
+            ),
+            **modules,
+        },
+    )
+    checked = check_program(resolve_program(visible), base_caps())
+    assert checked.modules[visible.entry_id] is not None
+
+    hidden = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import facade/* as api\nuse api::* hiding E::A\nlet value = E::A(1)\nvalue\n"
+            ),
+            **modules,
+        },
+    )
+    with pytest.raises((AglScopeError, AglTypeError)):
+        check_program(resolve_program(hidden), base_caps())

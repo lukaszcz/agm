@@ -25,7 +25,6 @@ from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.repl.entry import EntryKind, EntryResult
 from agm.agl.repl.entry_pipeline import EntryPipeline
 from agm.agl.runtime.types import public_param_spelling
-from agm.agl.scope.symbols import dedupe_constructor_candidates
 from agm.agl.self_validation import self_validation_enabled
 from agm.config.engine_keys import HOST_CONSUMED_ENGINE_KEYS
 
@@ -44,12 +43,11 @@ if TYPE_CHECKING:
     from agm.agl.runtime.host_settings import HostSettingsPolicy
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
-    from agm.agl.semantics.values import Frame, RecordValue, Value
+    from agm.agl.semantics.values import EnumValue, Frame, Value
     from agm.agl.setting_overrides import SettingOverride
     from agm.agl.syntax.nodes import (
         ImportDecl,
         InfixAssoc,
-        OpenDecl,
         Program,
         ScopeRegion,
         TypeAlias,
@@ -61,6 +59,32 @@ if TYPE_CHECKING:
 
 # Layout-only token types that carry no statement to evaluate.
 _TRIVIAL_TOKENS: frozenset[str] = frozenset({"_NEWLINE", "_INDENT", "_DEDENT"})
+_TRANSCRIPT_HEADER = "# agm:repl-transcript:v1\n"
+_TRANSCRIPT_ENTRY_PREFIX = "# agm:entry:"
+
+
+def _decode_transcript(text: str) -> tuple[str, ...] | None:
+    """Decode a framed ``:save`` transcript, or return ``None`` for an ordinary file."""
+    if not text.startswith(_TRANSCRIPT_HEADER):
+        return None
+    entries: list[str] = []
+    offset = len(_TRANSCRIPT_HEADER)
+    while offset < len(text):
+        if not text.startswith(_TRANSCRIPT_ENTRY_PREFIX, offset):
+            return None
+        length_end = text.find("\n", offset)
+        if length_end < 0:
+            return None
+        rendered_length = text[offset + len(_TRANSCRIPT_ENTRY_PREFIX) : length_end]
+        if not rendered_length.isdecimal():
+            return None
+        entry_start = length_end + 1
+        entry_end = entry_start + int(rendered_length)
+        if entry_end >= len(text) or text[entry_end] != "\n":
+            return None
+        entries.append(text[entry_start:entry_end])
+        offset = entry_end + 1
+    return tuple(entries)
 
 
 def _no_params_config_loader(_params: tuple["IrParam", ...]) -> Mapping[str, object]:
@@ -290,9 +314,9 @@ class ReplSession:
         # one retained generation per entry, kept as written so a wildcard keeps
         # tracking the module set. Declarations for a module named in a later
         # generation replace earlier ones; the rest are prepended in program
-        # context for reuse. Scope opens use the same entry retention model.
+        # context for reuse. Resolved ``use`` contributions live in scope nodes.
         self._accumulated_imports: list[tuple["ImportDecl", ...]] = []
-        self._accumulated_opens: list[tuple["OpenDecl | ImportDecl | ScopeRegion", ...]] = []
+        self._accumulated_scoped_imports: list[tuple["ImportDecl | ScopeRegion", ...]] = []
         # Resolved user infix fixity declared in prior promoted entries
         # (operator name → ``(priority, associativity)``). Passed to the parser
         # as ambient fixity so an ``infixl``/``infixr`` declaration made in one
@@ -607,7 +631,7 @@ class ReplSession:
 
         # [1d] REPL entries use the program pipeline by default because that
         # is where the synthetic ``import std/core`` prelude is injected.  This
-        # keeps the REPL aligned with ``agm exec``: stdlib names are open unless
+        # keeps the REPL aligned with ``agm exec``: stdlib names are bare unless
         # a host explicitly opts out.
         return self._entry_pipeline.eval_entry(
             text=text,
@@ -665,7 +689,7 @@ class ReplSession:
         }
 
     @staticmethod
-    def _resolve_timeout_seconds(seed: "RecordValue | None") -> float | None:
+    def _resolve_timeout_seconds(seed: "EnumValue | None") -> float | None:
         """Unwrap a ``timeout`` register value (``Option[text]``) into seconds, or ``None``.
 
         ``None`` covers both an absent register and an explicit ``None``
@@ -712,10 +736,10 @@ class ReplSession:
         completed entry instead overwrites the field with the interpreter's
         own already-parsed value (:meth:`_update_engine_settings`).
         """
-        from agm.agl.semantics.values import RecordValue
+        from agm.agl.semantics.values import EnumValue
 
         seed = self._engine_seed.get("timeout")
-        assert seed is None or isinstance(seed, RecordValue)
+        assert seed is None or isinstance(seed, EnumValue)
         return self._resolve_timeout_seconds(seed)
 
     @staticmethod
@@ -908,6 +932,8 @@ class ReplSession:
         promoted_declaration_ids: frozenset[int],
     ) -> tuple[str, ...]:
         """Promote declarations whose IR initialization completed in this entry."""
+        from dataclasses import replace
+
         from agm.agl.parser import resolve_infix_fixity
         from agm.agl.scope.symbols import ScopeNode
         from agm.agl.syntax.nodes import (
@@ -920,7 +946,6 @@ class ReplSession:
             RecordDef,
             TypeAlias,
             VarDecl,
-            VariantDef,
             pattern_binder_candidates,
             resolved_public_name,
             scoped_public_name,
@@ -1003,61 +1028,12 @@ class ReplSession:
             for item in entry_type_items
             if item.node_id in promoted_declaration_ids
         )
-        replaced_type_name_paths = promoted_type_name_paths if partial else entry_type_name_paths
         unpromoted_type_name_paths = entry_type_name_paths - promoted_type_name_paths
-        unpromoted_type_scope_paths = frozenset(
-            (*path, name) for path, name in unpromoted_type_name_paths
-        )
-
-        def is_unpromoted_type_scope(path: tuple[str, ...]) -> bool:
-            return any(
-                path[: len(type_path)] == type_path for type_path in unpromoted_type_scope_paths
-            )
-
         unpromoted_type_names = {
             "::".join((*path, name)) for path, name in unpromoted_type_name_paths
         }
-        unpromoted_type_names.update(
-            "::".join((*tuple(segment.name for segment in item.scope_path), item.name, member.name))
-            for item in entry_type_items
-            if isinstance(item, EnumDef) and item.node_id not in promoted_declaration_ids
-            for member in item.members
-            if isinstance(member, VariantDef)
-        )
-        # Redeclaring an enum clears every prior inline member from the fresh
-        # environment before it registers the new members. Roll back the full
-        # type-owned subtree, not only names the failed declaration introduced,
-        # so an earlier ``Tree::Leaf`` remains a resolvable type after a failed
-        # ``Tree`` redeclaration that declares only ``Tree::Node``.
-        unpromoted_type_names.update(
-            name
-            for name in self._type_env.all_declared_type_names()
-            if is_unpromoted_type_scope(tuple(name.split("::")))
-        )
-        replaced_enum_type_scopes = frozenset(
-            (*tuple(segment.name for segment in item.scope_path), item.name)
-            for item in entry_type_items
-            if isinstance(item, EnumDef) and type_name_path(item) in replaced_type_name_paths
-        )
-        if replaced_enum_type_scopes:
-            # An enum replacement owns fresh member scopes. Remove its old
-            # subtree so retained local opens cannot inject a superseded
-            # member by its bare name.
-            for scope_path in tuple(self._session_scope_nodes):
-                if any(
-                    scope_path[: len(type_scope)] == type_scope
-                    for type_scope in replaced_enum_type_scopes
-                ):
-                    del self._session_scope_nodes[scope_path]
-            for type_path in tuple(self._session_type_paths):
-                if any(
-                    type_path[: len(type_scope)] == type_scope
-                    for type_scope in replaced_enum_type_scopes
-                ):
-                    del self._session_type_paths[type_path]
-
-        if replaced_type_name_paths:
-            # A replacement type declaration supersedes any earlier ambient
+        if promoted_type_name_paths:
+            # A promoted type declaration supersedes any earlier ambient
             # constructor candidate sharing its name path: retained bindings
             # and scope members keep resolving through their own (possibly
             # superseded) declaration identity, so only the ambient bare-name
@@ -1067,11 +1043,7 @@ class ReplSession:
                 cname: tuple(
                     ref
                     for ref in crefs
-                    if (ref.owner_path, ref.owner_name) not in replaced_type_name_paths
-                    and not any(
-                        ref.owner_path[: len(type_scope)] == type_scope
-                        for type_scope in replaced_enum_type_scopes
-                    )
+                    if (ref.owner_path, ref.owner_name) not in promoted_type_name_paths
                 )
                 for cname, crefs in self._ambient_constructor_candidates.items()
             }
@@ -1108,28 +1080,101 @@ class ReplSession:
         )
 
         # Named scope paths are namespaces: a region's path is retained whenever
-        # it is not part of an unpromoted type's scope subtree, and its members
-        # are promoted individually below. Inline enum members establish nested
-        # type scopes, so skipping only the enum's own path would both try to
-        # install a child below a missing parent and rewrite a prior enum's
-        # members after a failed redeclaration.
+        # it is not a demoted type's own path, and its members are promoted
+        # individually below.
         for path, node in checked.resolved.scope_nodes.items():
-            if not path or path in self._session_scope_nodes or is_unpromoted_type_scope(path):
+            if not path or path in self._session_scope_nodes:
+                continue
+            if path in {(*scope_path, name) for scope_path, name in unpromoted_type_name_paths}:
                 continue
             self._session_scope_nodes[path] = ScopeNode(
                 node_id=node.node_id,
                 parent=self._session_scope_nodes[path[:-1]],
                 scope_path=path,
             )
+        promoted_type_paths = {(*path, name) for path, name in promoted_type_name_paths}
+        for path in promoted_type_paths:
+            nested_scope_names = frozenset(
+                nested_path[-1]
+                for nested_path in self._session_scope_nodes
+                if nested_path[:-1] == path
+            )
+            self._session_scope_nodes[path].clear_owned_constructor_members(nested_scope_names)
+
         for path, node in checked.resolved.scope_nodes.items():
             session_node = self._session_scope_nodes.get(path)
             if session_node is None:
                 continue
             for name, ref in node.members.items():
-                if not is_unpromoted_type_scope(ref.scope_path) and _is_promoted(ref.decl_node_id):
+                if (ref.scope_path, ref.name) not in unpromoted_type_name_paths and _is_promoted(
+                    ref.decl_node_id
+                ):
                     if ref.decl_node_id in entry_declaration_node_ids:
                         displaced_param_keys.add(resolved_public_name(path, name))
                     session_node.register_member(name, ref)
+            current_targets = {
+                contribution.target for contribution in node.imported_use_contributions
+            }
+            for contribution in session_node.imported_use_contributions:
+                for atom, refs in contribution.bindings.items():
+                    retained = session_node.bare_contributions.get(atom)
+                    if retained is not None:
+                        retained.difference_update(refs)
+                        if not retained:
+                            del session_node.bare_contributions[atom]
+                for atom, constructor_refs in contribution.constructors.items():
+                    constructor_retained = session_node.bare_constructor_contributions.get(atom)
+                    if constructor_retained is not None:
+                        constructor_retained.difference_update(constructor_refs)
+                        if not constructor_retained:
+                            del session_node.bare_constructor_contributions[atom]
+            session_node.imported_use_contributions = [
+                contribution
+                for contribution in session_node.imported_use_contributions
+                if contribution.target not in current_targets
+            ]
+            session_node.imported_use_contributions.extend(node.imported_use_contributions)
+            for contribution in session_node.imported_use_contributions:
+                for atom, refs in contribution.bindings.items():
+                    session_node.bare_contributions.setdefault(atom, set()).update(refs)
+                for atom, constructor_refs in contribution.constructors.items():
+                    session_node.bare_constructor_contributions.setdefault(atom, set()).update(
+                        constructor_refs
+                    )
+            current_local_targets = {
+                local_contribution.target for local_contribution in node.local_use_contributions
+            }
+            for local_contribution in session_node.local_use_contributions:
+                for atom, refs in local_contribution.bindings.items():
+                    retained_local = session_node.bare_contributions.get(atom)
+                    if retained_local is not None:
+                        retained_local.difference_update(refs)
+                        if not retained_local:
+                            del session_node.bare_contributions[atom]
+                for atom, constructor_refs in local_contribution.constructors.items():
+                    constructor_retained_local = session_node.bare_constructor_contributions.get(
+                        atom
+                    )
+                    if constructor_retained_local is not None:
+                        constructor_retained_local.difference_update(constructor_refs)
+                        if not constructor_retained_local:
+                            del session_node.bare_constructor_contributions[atom]
+            session_node.local_use_contributions = [
+                local_contribution
+                for local_contribution in session_node.local_use_contributions
+                if local_contribution.target not in current_local_targets
+            ]
+            for local_contribution in node.local_use_contributions:
+                source = self._session_scope_nodes.get(local_contribution.source.scope_path)
+                if source is not None:
+                    session_node.contribute_local_use(replace(local_contribution, source=source))
+            for local_contribution in session_node.local_use_contributions:
+                for atom, refs in local_contribution.bindings.items():
+                    session_node.bare_contributions.setdefault(atom, set()).update(refs)
+                for atom, constructor_refs in local_contribution.constructors.items():
+                    session_node.bare_constructor_contributions.setdefault(atom, set()).update(
+                        constructor_refs
+                    )
         alias_targets = {
             type_name_path(item): render_type_expr(item.type_expr)
             for item in entry_type_items
@@ -1167,20 +1212,20 @@ class ReplSession:
             new_type_env.seal()
             self._type_env = new_type_env
 
-        if replaced_type_name_paths:
+        if promoted_type_name_paths:
             promoted_candidates: dict[str, tuple[ConstructorRef, ...]] = {}
             for (_path, cname), crefs in checked.resolved.constructor_candidates_by_path.items():
                 selected = tuple(
                     ref
                     for ref in crefs
-                    if (ref.owner_path, ref.owner_name) in replaced_type_name_paths
-                    or ref.owner_path in replaced_enum_type_scopes
+                    if (ref.owner_path, ref.owner_name) in promoted_type_name_paths
                 )
                 if selected:
                     promoted_candidates[cname] = (*promoted_candidates.get(cname, ()), *selected)
             for cname, crefs in promoted_candidates.items():
-                self._ambient_constructor_candidates[cname] = dedupe_constructor_candidates(
-                    (*self._ambient_constructor_candidates.get(cname, ()), *crefs)
+                self._ambient_constructor_candidates[cname] = (
+                    *self._ambient_constructor_candidates.get(cname, ()),
+                    *crefs,
                 )
             self._ambient_type_names |= frozenset(
                 name for path, name in promoted_type_name_paths if not path
@@ -1349,7 +1394,7 @@ class ReplSession:
         # AssignStmt → "statement"
         if isinstance(last, AssignStmt):
             return "statement", None
-        # Import, export, open, infix, and builtin declarations name nothing the
+        # Import, export, use, infix, and builtin declarations name nothing the
         # echo can confirm, so they read as statements.
         return "statement", None
 
@@ -1546,7 +1591,7 @@ class ReplSession:
         self._loaded_lib_modules = {}
         self._active_imported_params = {}
         self._accumulated_imports = []
-        self._accumulated_opens = []
+        self._accumulated_scoped_imports = []
         self._accumulated_infix = {}
         # Discard the session's extern (Python FFI) registry like every other
         # session-scoped binding: a companion resolves and imports again on
@@ -1554,12 +1599,13 @@ class ReplSession:
         self._runtime.reset_extern_registry()
 
     def load_file(self, path: "Path") -> list[EntryResult]:
-        """Evaluate the contents of *path* INCREMENTALLY, one item per entry.
+        """Evaluate the contents of *path* incrementally.
 
-        Each top-level item is fed to :meth:`eval_entry` in order, exactly as
-        if the user had typed it at the prompt.  This makes redefinition/shadowing
-        work on load (within a single entry it would be a duplicate-declaration
-        error) so a ``:save`` transcript reliably round-trips through ``:load``.
+        Saved REPL transcripts retain their original entry boundaries. Other
+        files feed each top-level item to :meth:`eval_entry` in order. This
+        preserves both declaration-wide forward resolution and redefinition
+        across entries, so a ``:save`` transcript reliably round-trips through
+        ``:load``.
 
         The load halts at the FIRST non-``ok`` result (like running a script);
         the returned list holds the results collected so far, including the
@@ -1569,13 +1615,23 @@ class ReplSession:
         the parse diagnostic.  An empty or comment-only file has no items to
         run and yields an empty list (a benign no-op).
         """
-        from agm.agl.parser import AglSyntaxError, parse_program
+        from agm.agl.parser import AglSyntaxError, parse_repl_transcript
         from agm.core.fs import read_text
         from agm.util.text import normalize_newlines
 
         # Normalize newlines with the SAME helper the lexer/interpreter use so the
         # item-span char offsets align with the text we slice below.
         normalized = normalize_newlines(read_text(path))
+
+        saved_entries = _decode_transcript(normalized)
+        if saved_entries is not None:
+            saved_results: list[EntryResult] = []
+            for entry in saved_entries:
+                result = self.eval_entry(entry)
+                saved_results.append(result)
+                if not result.ok:
+                    break
+            return saved_results
 
         # A blank / comment-only file has nothing to run — load it as a no-op
         # rather than surfacing the parser's "Unexpected end of input" error.
@@ -1586,7 +1642,7 @@ class ReplSession:
         # this parse is never promoted (each slice is re-parsed by eval_entry with
         # the session's continuing node-id counter).  start_id=0 is fine here.
         try:
-            program = parse_program(normalized)
+            program = parse_repl_transcript(normalized)
         except AglSyntaxError as exc:
             return [self._fail([exc.to_diagnostic()], [])]
 
@@ -1600,5 +1656,12 @@ class ReplSession:
         return results
 
     def dump_source(self) -> str:
-        """Return the accumulated successfully-promoted entry sources (newline-joined)."""
-        return "\n".join(self._source_log)
+        """Serialize successfully promoted sources with their entry boundaries."""
+        if not self._source_log:
+            return ""
+        from agm.util.text import normalize_newlines
+
+        entries = tuple(normalize_newlines(source) for source in self._source_log)
+        return _TRANSCRIPT_HEADER + "".join(
+            f"{_TRANSCRIPT_ENTRY_PREFIX}{len(entry)}\n{entry}\n" for entry in entries
+        )

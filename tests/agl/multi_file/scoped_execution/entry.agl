@@ -1,8 +1,8 @@
 import scoped_execution/workflow
-import scoped_execution/workflow using Workflow::Task
-open import scoped_execution/workflow
-open scoped_execution/workflow::Workflow
-open scoped_execution/workflow::Workflow::Status
+import scoped_execution/workflow::{Workflow::Task}
+import scoped_execution/workflow::*
+use scoped_execution/workflow::Workflow::*
+use scoped_execution/workflow::Workflow::Status::*
 
 scope Dispatch
 let reviewer = AgentCommand("reviewer")

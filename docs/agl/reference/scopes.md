@@ -43,7 +43,7 @@ program def main() -> unit =
   let _ = print(Text::display("ready"))
 ```
 
-A region contains nested regions, header `open` and `import` declarations,
+A region contains nested regions, header `use` and `import` declarations,
 `export` declarations, static declarations (`def`, `program def`, `extern def`,
 `record`, `enum`, `exception`, `type`, every `builtin` form), `param`
 declarations, and `let`/`var` bindings. Bare expressions, `:=` assignments, and infix declarations are not allowed there.
@@ -124,7 +124,7 @@ program def main() -> unit =
 
 A scoped parameter follows the same member and duplicate rules as every other
 member: visible bare inside its region, by its exact path from outside, and
-through `open`. A parameter's **short external spelling** — the CLI flag name when it is
+through `use`. A parameter's **short external spelling** — the CLI flag name when it is
 unambiguous — is its full path spelling (`Deploy::region`), which is what makes
 grouping related parameters under one scope useful. A module-qualified spelling
 identifies the declaration when another inventory param shares that short name.
@@ -134,12 +134,11 @@ external param value.
 ## Import and export
 
 A region also admits `import` and `export` declarations. Both are header
-items, like `open`: they must precede the region's other items. A scoped
-import's bare contribution —
-`open import` or `import … using` — narrows to its own region; its qualifier
+items, like `use`: they must precede the region's other items. A scoped
+import tail's bare contribution narrows to its own region; its qualifier
 route stays available module-wide, like any other import. A scoped export
 re-roots every atom it forwards under the region's own path. See
-[Modules](modules.md#import-and-export-inside-a-scope-region) for the
+[Modules](modules.md#imports-and-use-inside-a-scope-region) for the
 complete semantics.
 
 Scoped bindings are never exported. Library modules may use root or scoped
@@ -158,7 +157,7 @@ functions](functions.md#built-in-functions). This allows a receiver method
 such as `Agent::ask` to coexist with root `ask`. The example below therefore
 presumes a program started with `--no-stdlib` ([Modules](modules.md#prelude)),
 since `ExecResult` and `print` are otherwise already declared at those paths
-by the automatically-opened `std/core`:
+by the automatically injected `std/core` prelude:
 
 ```agl
 scope Host
@@ -178,7 +177,7 @@ program def main() -> unit =
 A scoped `builtin record`/`enum`/`exception` carries its declared scope path
 as part of its nominal identity, exactly like an ordinary scoped type; a
 scoped `builtin def` dispatches to the same host implementation as a root
-one, reached bare inside its region or after `open`, and by its exact path
+one, reached bare inside its region or after `use`, and by its exact path
 outside. A `builtin def` with first parameter `self` in a type scope is a
 builtin method: `Agent::ask` and `Agent::ask-request` use ordinary method
 selection and their receiver supplies the agent. `builtin var` keeps its separate restriction to the canonical
@@ -200,14 +199,14 @@ textually, in its own region or elsewhere in the module — exactly like a
 root-level `let` or `param`. This holds across separate blocks of the same
 scope: a member declared in an earlier `scope A` block cannot see a binding a
 later `scope A` block introduces, while the reverse order works. The same
-textual rule governs a binding reached through `open` — plain, `using`, or
-`hiding` alike: a reference sees the binding once the reference itself
-follows the binding's own declaration, regardless of where the `open`
-appears — an `open` written before the scope that declares the binding still
+textual rule governs a binding reached through `use`: a reference sees the
+binding once the reference itself follows the binding's own declaration,
+regardless of where the `use` appears — a `use` written before the scope that
+declares the binding still
 exposes it to a later reference, just not to an earlier one.
 
 A scoped `var` is assigned through its path (`A::count := 1`) or, inside its
-region or after an `open`, through its bare name. A scoped `let` is not
+region or after a `use`, through its bare name. A scoped `let` is not
 assignable: `:=` on it is the same immutable-binder error a root-level `let`
 raises. Assigning to a path that names a `def` or a type is
 likewise rejected as immutable, and a path with no such member is a focused
@@ -219,14 +218,12 @@ the module root. The leading `::` form makes an in-module path absolute, as in
 `::Outer::Inner::work`. Module routes and scope paths share qualifier-chain
 syntax; see [Lexical structure](lexical-structure.md#qualifier-chains).
 
-Types establish same-named scopes. An inline enum member declares a record in
-the enum's scope, so `Review::Pass` is an ordinary scoped record type and
-constructor. Referenced members remain at their own declaration paths rather
-than appearing in the referencing enum's scope. A `def` whose first parameter
-is `self` is a method when its enclosing scope is a record, enum, or exception.
-It is called through a receiver value with `.`; a `def` in the same scope with
-an ordinary first parameter remains a scoped function and is called by its
-qualified path.
+Types establish same-named scopes. Enum variants are members of the enum's
+scope, so `Review::Pass` is an ordinary scoped member. A `def` whose first
+parameter is `self` is a method when its enclosing scope is a record, enum, or
+exception. It is called through a receiver value with `.`; a `def` in the same
+scope with an ordinary first parameter remains a scoped function and is called
+by its qualified path.
 
 A declaration-path method and a method written in a `scope Type` region declare
 members of the same type scope. The two spellings can be mixed when extending a
@@ -255,30 +252,25 @@ takes the value as an ordinary parameter and call that function directly. A
 type alias may be used as its target type, but its scope cannot declare methods;
 methods are declared only on records, enums, and exceptions.
 
-An enum member's terminal name is an injected bare constructor candidate. In
-ordinary value position, scope resolution requires it to be the only visible
-constructor candidate with that name: several candidates are a static scope
-ambiguity, even when an expected enum type contains one of them. The expected
-type checks the constructor after scope has selected it; it does not select a
-same-named member. Enum-member patterns and `is` tests are different: their
-scrutinee's static enum type selects the member. Module-root record and
-exception construction keeps its bare type spelling (`Point(...)`); a scoped
-type is constructed through its full path or after opening its enclosing
-scope. A scope path is a route, not a type qualifier, so a scoped generic
-constructor takes explicit type arguments after its name just as an
-unqualified one does (`A::Pair::[int]`). An inline member may instead be
-selected from an applied enum owner (`Option[int]::some`); type arguments
-applied directly to a generic member follow that member (`Option::some::[int]`).
+The familiar bare-variant spelling remains available when it is unambiguous or
+selected by the expected enum type. Module-root record and exception
+construction keeps its bare type spelling (`Point(...)`); a scoped type is
+constructed through its full path or after a `use` declaration selects its
+containing scope. A scope path is a route, not a type qualifier, so a scoped
+generic constructor takes
+explicit type arguments on the constructor just as an unqualified one does
+(`A::Pair::[int]`); only a variant qualified by its owning enum puts them on the
+type (`Option[int]::some`).
 
-## Opening a scope
+## Using a scope
 
-`open` contributes selected members of a local scope, or of a scope in an
+`use` contributes selected members of a local scope, or of a scope in an
 imported module, as bare names in its enclosing module or scope region. It is
 a header declaration, so it appears before the region's other items.
 
 ```agl
-open Math
-open Text using show as format
+use Math::*
+use Text::{show as format}
 scope Math
 def add(left: int, right: int) -> int = left + right
 scope Metrics
@@ -293,21 +285,20 @@ program def main() -> unit =
   let _ = print(format(result))
 ```
 
-A plain `open` selects every member. `using` selects listed relative paths, and
-`hiding` selects every member except those paths. `using name as replacement`
-renames the selected path: a direct member becomes `replacement`, while a
-selected nested scope retains its path below the replacement. An open in a
-scope region contributes only to that region and its nested regions.
+`::*` selects every member. Brace tails select relative paths, and `hiding`
+removes members from a glob. `as` adds a renamed bare route while leaving the
+original path reachable. A use in a scope region contributes only to that
+region and its nested regions.
 
-An open reaches a scope in another module through its import route:
+A use reaches a scope in another module through an existing import route:
 
 <!-- agl-check: fragment -->
 ```agl
 import geo/shapes
-open geo/shapes::Point hiding internal-distance
+use geo/shapes::Point::* hiding internal-distance
 ```
 
-An open neither exports its contributions nor makes another module's opens
+A use neither exports its contributions nor makes another module's uses
 transitive. If several contributions provide the same bare name, the ambiguity
 is reported when that name is used. Import selection and cross-module reach
 are described in [Modules](modules.md).

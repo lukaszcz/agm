@@ -9,7 +9,7 @@ Allowed imports:
 - ``agm.agl.semantics.exceptions`` (AglRaise, make_builtin_exception)
 - ``agm.agl.semantics.copying`` (deep_copy_value, shallow_copy_value)
 - ``agm.agl.eval._decimal`` (shared pinned decimal context)
-- ``agm.agl.runtime.serialize`` (untyped coercion and static direct JSON
+- ``agm.agl.runtime.serialize`` (value_to_json_obj for ToJson and direct JSON
   construction)
 - ``agm.config.engine_keys`` (the canonical engine-key catalog data leaf)
 
@@ -40,12 +40,7 @@ from agm.agl.eval.arith import (
 from agm.agl.eval.conversions import AglCastConversion, run_recipe
 from agm.agl.eval.effects import EffectHandlers
 from agm.agl.eval.indexing import AglIndexOutOfRange, AglMissingKey, index_get, index_set
-from agm.agl.ir.contracts import (
-    ContractRequest,
-    ConversionFailureMode,
-    EncodePlan,
-    ScalarEncode,
-)
+from agm.agl.ir.contracts import ContractRequest, ConversionFailureMode
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SymbolId
 from agm.agl.ir.nodes import (
     IrAnd,
@@ -72,6 +67,7 @@ from agm.agl.ir.nodes import (
     IrConvert,
     IrCopyValue,
     IrDirectCall,
+    IrEnumCaseKey,
     IrExec,
     IrExpr,
     IrField,
@@ -92,13 +88,11 @@ from agm.agl.ir.nodes import (
     IrMakeClosure,
     IrMakeConstructor,
     IrMakeDict,
+    IrMakeEnum,
     IrMakeException,
     IrMakeJsonArray,
     IrMakeJsonObject,
     IrMakeRecord,
-    IrNominalCaseKey,
-    IrNominalCast,
-    IrNominalIs,
     IrOr,
     IrParseJson,
     IrPrint,
@@ -113,6 +107,7 @@ from agm.agl.ir.nodes import (
     IrTry,
     IrUnary,
     IrUpdateRecord,
+    IrVariantIs,
     UseDefault,
 )
 from agm.agl.ir.operations import (
@@ -140,7 +135,7 @@ from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.runtime.option import none_value, option_text, some_value
 from agm.agl.runtime.params import engine_default_settings
 from agm.agl.runtime.render import render_value
-from agm.agl.runtime.serialize import encode_value
+from agm.agl.runtime.serialize import value_to_json_obj
 from agm.agl.runtime.trace import TraceStore, noop_trace
 from agm.agl.semantics.copying import deep_copy_value, shallow_copy_value
 from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise
@@ -155,6 +150,7 @@ from agm.agl.semantics.values import (
     ConstructorValue,
     DecimalValue,
     DictValue,
+    EnumValue,
     ExceptionValue,
     Frame,
     IntValue,
@@ -185,9 +181,6 @@ __all__ = [
     "_apply_coercion",
     "_make_exc_value",
 ]
-
-
-_SCALAR_ENCODE_PLAN = EncodePlan(ScalarEncode())
 
 
 class ParameterDefaultCycleError(Exception):
@@ -310,11 +303,7 @@ def _make_literal_key_value(key: IrLiteralCaseKey) -> Value:
 
 
 def _project_nominal_field(
-    value: Value,
-    nominal: NominalId,
-    field: str,
-    mode: IrFieldMode,
-    actual_nominal: NominalId | None,
+    value: Value, nominal: NominalId, field: str, mode: IrFieldMode
 ) -> Value:
     """Read one declared field from a nominal runtime value.
 
@@ -324,15 +313,16 @@ def _project_nominal_field(
     check identity because the static layer already proved the field exists on
     every value admitted by the bound.
     """
-    if not isinstance(value, (RecordValue, ExceptionValue)):
+    if not isinstance(value, (RecordValue, EnumValue, ExceptionValue)):
         raise InvalidIrError(
-            f"IrField: expected RecordValue or ExceptionValue, got {type(value).__name__}"
+            "IrField: expected RecordValue, EnumValue, or ExceptionValue, "
+            f"got {type(value).__name__}"
         )
     match mode:
         case IrFieldMode.EXACT:
-            if actual_nominal != nominal:
+            if value.nominal != nominal:
                 raise InvalidIrError(
-                    f"IrField: expected nominal {nominal!r}, got {actual_nominal!r}"
+                    f"IrField: expected nominal {nominal!r}, got {value.nominal!r}"
                 )
         case IrFieldMode.UPPER_BOUND:
             pass
@@ -417,7 +407,7 @@ def _apply_coercion(value: Value, coercion: Coercion) -> Value:
             return DecimalValue(decimal.Decimal(value.value))
 
         case ToJson():
-            return JsonValue(encode_value(_SCALAR_ENCODE_PLAN, value))
+            return JsonValue(value_to_json_obj(value))
 
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
@@ -548,7 +538,7 @@ class IrInterpreter:
                 if shell_exec_timeout is not None
                 else defaults["timeout"]
             )
-        assert isinstance(timeout_setting, RecordValue)
+        assert isinstance(timeout_setting, EnumValue)
         self._timeout_setting = timeout_setting
         self._apply_config_effect("timeout", timeout_setting)
 
@@ -561,7 +551,7 @@ class IrInterpreter:
             key: effective[key] for key in HOST_CONSUMED_ENGINE_KEYS if key in effective
         }
         default_agent = self._builtin_host_settings.get("default-agent")
-        if isinstance(default_agent, RecordValue):
+        if isinstance(default_agent, EnumValue):
             self._check_default_agent_dispatchable(default_agent)
         if self._host_reconfigurer is not None:
             self._reconfigure_host_service()
@@ -609,7 +599,7 @@ class IrInterpreter:
         return self._loop_limit
 
     @property
-    def timeout_setting(self) -> RecordValue:
+    def timeout_setting(self) -> EnumValue:
         """Current raw ``Option[text]`` timeout value."""
         return self._timeout_setting
 
@@ -694,8 +684,12 @@ class IrInterpreter:
 
     def _on_cast_failure(
         self, failure_mode: ConversionFailureMode, exc: AglCastConversion
-    ) -> Value:
-        """Handle a fallible-cast failure per the conversion failure mode."""
+    ) -> BoolValue:
+        """Handle a fallible-cast failure per the conversion failure mode.
+
+        ``RAISE_CAST_ERROR`` (``as``) raises a ``CastError`` matching the legacy
+        field shapes; ``RETURN_BOOL`` (``as?``) yields ``BoolValue(False)``.
+        """
         match failure_mode:
             case ConversionFailureMode.RAISE_CAST_ERROR:
                 raise AglRaise(
@@ -712,14 +706,6 @@ class IrInterpreter:
                 return BoolValue(False)
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
-
-    @staticmethod
-    def _cast_raw(value: Value) -> str:
-        """Render a failed nominal cast without letting a cycle mask CastError."""
-        try:
-            return render_value(value)
-        except AglCyclicValue:
-            return "<cyclic value>"
 
     def _get_closure_for(self, fn_id: FunctionId) -> IrClosureValue:
         """Look up a direct-call closure in its lexical evaluation frame."""
@@ -909,13 +895,27 @@ class IrInterpreter:
         callee_val = self._eval(callee_expr)
         if isinstance(callee_val, ConstructorValue):
             constructor_desc = self._program.nominals[callee_val.nominal]
+            field_names = (
+                constructor_desc.fields
+                if callee_val.variant is None
+                else next(
+                    v.fields for v in constructor_desc.variants if v.name == callee_val.variant
+                )
+            )
             fields = {
                 name: self._eval(argument)
-                for name, argument in zip(constructor_desc.fields, arguments, strict=True)
+                for name, argument in zip(field_names, arguments, strict=True)
             }
-            return RecordValue(
+            if callee_val.variant is None:
+                return RecordValue(
+                    nominal=callee_val.nominal,
+                    display_name=callee_val.display_name,
+                    fields=fields,
+                )
+            return EnumValue(
                 nominal=callee_val.nominal,
                 display_name=callee_val.display_name,
+                variant=callee_val.variant,
                 fields=fields,
             )
         if not isinstance(callee_val, IrClosureValue):
@@ -1110,11 +1110,6 @@ class IrInterpreter:
     # Expression evaluator (closed IrExpr dispatch)
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _dispatch_nominal(value: RecordValue | ExceptionValue) -> NominalId:
-        """Return a nominal value's declaration identity for dispatch."""
-        return value.nominal
-
     def _eval(self, node: IrExpr) -> Value:
         """Evaluate *node* in the current frame and return its value.
 
@@ -1163,12 +1158,10 @@ class IrInterpreter:
             # scalar or `JsonValue` (never a raw array/dict): the checker requires an
             # explicit `as json` cast to embed a container in a json literal, and that
             # cast's own `IrConvert` handling is what detects a cyclic source. So
-            # The scalar encode plan in both arms below is a leaf conversion, never a
-            # walk that could re-enter a container — no cycle guard needed in either.
+            # `value_to_json_obj` in both arms below is a leaf conversion, never a walk
+            # that could re-enter a container — no cycle guard needed in either.
             case IrMakeJsonArray(items=json_items):
-                return JsonValue(
-                    [encode_value(_SCALAR_ENCODE_PLAN, self._eval(item)) for item in json_items]
-                )
+                return JsonValue([value_to_json_obj(self._eval(item)) for item in json_items])
 
             case IrMakeJsonObject(entries=json_entries):
                 json_result: dict[str, object] = {}
@@ -1179,9 +1172,7 @@ class IrInterpreter:
                             f"IrMakeJsonObject key must evaluate to TextValue,"
                             f" got {type(key_val).__name__}"
                         )
-                    json_result[key_val.value] = encode_value(
-                        _SCALAR_ENCODE_PLAN, self._eval(val_expr)
-                    )
+                    json_result[key_val.value] = value_to_json_obj(self._eval(val_expr))
                 return JsonValue(json_result)
 
             case IrLoad(symbol=sym):
@@ -1358,13 +1349,7 @@ class IrInterpreter:
                         assert_never(_unreachable_unary)
 
             case IrField(value=val_expr, nominal=nominal, field=field_name, mode=mode):
-                value = self._eval(val_expr)
-                member = (
-                    self._dispatch_nominal(value)
-                    if isinstance(value, (RecordValue, ExceptionValue))
-                    else None
-                )
-                return _project_nominal_field(value, nominal, field_name, mode, member)
+                return _project_nominal_field(self._eval(val_expr), nominal, field_name, mode)
 
             case IrUpdateRecord(value=val_expr, updates=updates):
                 target = self._eval(val_expr)
@@ -1420,6 +1405,19 @@ class IrInterpreter:
                     fields=record_fields,
                 )
 
+            case IrMakeEnum(
+                nominal=nominal, display_name=display_name, variant=variant, fields=fields
+            ):
+                enum_fields: dict[str, Value] = {
+                    fname: self._eval(fexpr) for fname, fexpr in fields
+                }
+                return EnumValue(
+                    nominal=nominal,
+                    display_name=display_name,
+                    variant=variant,
+                    fields=enum_fields,
+                )
+
             case IrMakeException(nominal=nominal, display_name=display_name, fields=fields):
                 exc_fields: dict[str, Value] = {
                     fname: self._eval(field_expr) for fname, field_expr in fields
@@ -1430,43 +1428,20 @@ class IrInterpreter:
                     fields=exc_fields,
                 )
 
-            case IrMakeConstructor(nominal=nominal, display_name=display_name):
-                return ConstructorValue(nominal=nominal, display_name=display_name)
-
-            case IrNominalCast(
-                nominal=nominal,
-                value=val_expr,
-                test_only=test_only,
-                source_label=source_label,
-                target_label=target_label,
-            ):
-                value = self._eval(val_expr)
-                if not isinstance(value, RecordValue):
-                    raise InvalidIrError(
-                        f"IrNominalCast: value is not a record, got {type(value).__name__}"
-                    )
-                if value.nominal == nominal:
-                    return BoolValue(True) if test_only else value
-                if test_only:
-                    return BoolValue(False)
-                raise AglRaise(
-                    _make_exc_value(
-                        "CastError",
-                        f"cannot cast '{source_label}' to '{target_label}'",
-                        nominals=self._program.builtin_nominals,
-                        source_type=TextValue(source_label),
-                        target_type=TextValue(target_label),
-                        raw=TextValue(self._cast_raw(value)),
-                    )
+            case IrMakeConstructor(nominal=nominal, display_name=display_name, variant=variant):
+                return ConstructorValue(
+                    nominal=nominal,
+                    display_name=display_name,
+                    variant=variant,
                 )
 
-            case IrNominalIs(nominal=nominal, value=val_expr, negated=negated):
+            case IrVariantIs(variant=variant, value=val_expr, negated=negated):
                 value = self._eval(val_expr)
-                if not isinstance(value, (RecordValue, ExceptionValue)):
+                if not isinstance(value, EnumValue):
                     raise InvalidIrError(
-                        f"IrNominalIs: value is not nominal, got {type(value).__name__}"
+                        f"IrVariantIs: value is not EnumValue, got {type(value).__name__}"
                     )
-                return BoolValue((self._dispatch_nominal(value) == nominal) != negated)
+                return BoolValue((value.variant == variant) != negated)
 
             case IrConvert(value=val_expr, recipe=recipe, failure_mode=failure_mode):
                 source_value = self._eval(val_expr)
@@ -1475,8 +1450,12 @@ class IrInterpreter:
                 except AglCastConversion as exc:
                     return self._on_cast_failure(failure_mode, exc)
                 except AglCyclicValue:
-                    # A conversion test reports a cycle as failure; ordinary
-                    # `as` still reports the catchable CyclicValueError.
+                    # `as` (RAISE_CAST_ERROR) raises the catchable CyclicValueError.
+                    # `as?` (RETURN_BOOL) is a trial conversion: a cyclic value fails
+                    # the same as any other unconvertible source, so it yields False
+                    # rather than raising — see the lowerer's `as?` short-circuit
+                    # comment for why RENDER/JSON casts reach here instead of
+                    # skipping straight to True.
                     if failure_mode is ConversionFailureMode.RETURN_BOOL:
                         return BoolValue(False)
                     raise self._cyclic_failure()
@@ -1535,27 +1514,28 @@ class IrInterpreter:
                 subject_val = self._eval(subject_expr)
                 for arm in arms:
                     key = arm.key
-                    if isinstance(key, IrNominalCaseKey):
-                        selected = isinstance(subject_val, (RecordValue, ExceptionValue)) and (
-                            self._dispatch_nominal(subject_val) == key.nominal
+                    if isinstance(key, IrEnumCaseKey):
+                        selected = (
+                            isinstance(subject_val, EnumValue)
+                            and subject_val.nominal == key.nominal
+                            and subject_val.variant == key.variant
                         )
                     else:
                         selected = value_eq(subject_val, _literal_key_value(key))
                     if not selected:
                         continue
                     if arm.field_bindings:
-                        if not isinstance(subject_val, (RecordValue, ExceptionValue)):
+                        if not isinstance(subject_val, EnumValue):
                             raise InvalidIrError(
-                                "IrCase: selected payload arm for a non-nominal subject"
+                                "IrCase: selected payload arm for a non-enum subject"
                             )
-                        assert isinstance(key, IrNominalCaseKey)
+                        assert isinstance(key, IrEnumCaseKey)
                         for field_name, symbol in arm.field_bindings:
                             self._frame[symbol] = _project_nominal_field(
                                 subject_val,
                                 key.nominal,
                                 field_name,
                                 IrFieldMode.EXACT,
-                                self._dispatch_nominal(subject_val),
                             )
                     return self._eval(arm.body)
                 if default is not None:
@@ -1782,7 +1762,7 @@ class IrInterpreter:
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
 
-    def _check_default_agent_dispatchable(self, value: RecordValue) -> None:
+    def _check_default_agent_dispatchable(self, value: EnumValue) -> None:
         """Eagerly validate a materialized ``default-agent`` value's command shape.
 
         Only the ``AgentCommand`` variant needs this: its command text is
@@ -1841,14 +1821,14 @@ class IrInterpreter:
         if key in RUNTIME_LIVE_ENGINE_KEYS:
             self._apply_config_effect(key, value)
             if key == "timeout":
-                assert isinstance(value, RecordValue)
+                assert isinstance(value, EnumValue)
                 self._timeout_setting = value
             return
 
         previous = dict(self._builtin_host_settings)
         self._builtin_host_settings[key] = value
         if trace_write_implies_enabled(
-            key, isinstance(value, RecordValue) and option_text(value) is not None
+            key, isinstance(value, EnumValue) and value.variant == "Some"
         ):
             self._builtin_host_settings["log"] = BoolValue(True)
         if self._host_reconfigurer is None or key not in TRACE_ENGINE_KEYS:
@@ -1869,7 +1849,7 @@ class IrInterpreter:
         log = self._builtin_host_settings["log"]
         assert isinstance(log, BoolValue)
         log_file_reg = self._builtin_host_settings["log-file"]
-        assert isinstance(log_file_reg, RecordValue)
+        assert isinstance(log_file_reg, EnumValue)
         self._host_reconfigurer.reconfigure_trace(
             enabled=log.value, log_file=option_text(log_file_reg)
         )
@@ -1900,7 +1880,7 @@ class IrInterpreter:
             self._loop_limit = config_value.value or None
         else:
             assert public_name == "timeout"
-            assert isinstance(config_value, RecordValue)
+            assert isinstance(config_value, EnumValue)
             raw = option_text(config_value)
             if raw is None:
                 self._shell_exec_timeout = None

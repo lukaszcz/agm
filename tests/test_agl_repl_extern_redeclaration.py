@@ -22,6 +22,7 @@ from pathlib import Path
 from agm.agl.repl import ReplSession
 from agm.agl.semantics.values import (
     ArrayValue,
+    EnumValue,
     ExceptionValue,
     IntValue,
     RecordValue,
@@ -76,7 +77,7 @@ class TestCapturedClassSurvivesRedeclaration:
         )
         s = _make_session_with_root(tmp_path)
         assert s.eval_entry("record Box\n  value: int").ok
-        assert s.eval_entry("open import capture_default_arg").ok
+        assert s.eval_entry("import capture_default_arg::*").ok
 
         assert s.eval_entry("record Box\n  value: int\n  extra: int").ok
 
@@ -99,7 +100,7 @@ class TestCapturedClassSurvivesRedeclaration:
         )
         s = _make_session_with_root(tmp_path)
         assert s.eval_entry("record Box\n  value: int").ok
-        assert s.eval_entry("open import capture_global").ok
+        assert s.eval_entry("import capture_global::*").ok
 
         assert s.eval_entry("record Box\n  value: int\n  extra: int").ok
 
@@ -124,7 +125,7 @@ class TestCapturedClassSurvivesRedeclaration:
         )
         s = _make_session_with_root(tmp_path)
         assert s.eval_entry("record Box\n  value: int").ok
-        assert s.eval_entry("open import capture_closure").ok
+        assert s.eval_entry("import capture_closure::*").ok
 
         assert s.eval_entry("record Box\n  value: int\n  extra: int").ok
 
@@ -147,7 +148,7 @@ class TestCapturedClassSurvivesRedeclaration:
         )
         s = _make_session_with_root(tmp_path)
         assert s.eval_entry("exception Problem extends Exception\n  detail: text").ok
-        assert s.eval_entry("open import capture_exception").ok
+        assert s.eval_entry("import capture_exception::*").ok
 
         assert s.eval_entry("exception Problem extends Exception\n  detail: text\n  code: int").ok
 
@@ -173,7 +174,7 @@ class TestCapturedClassSurvivesRedeclaration:
         )
         s = _make_session_with_root(tmp_path)
         assert s.eval_entry("enum Choice\n  | Some(value: int)\n  | Gone").ok
-        assert s.eval_entry("open import capture_enum").ok
+        assert s.eval_entry("import capture_enum::*").ok
         before = s.eval_entry("variant_report()")
 
         # Drops ``Gone`` and adds ``Other``.
@@ -212,7 +213,7 @@ class TestFreshImportSeesTheCurrentDeclaration:
         assert s.eval_entry("record Box\n  value: int").ok
         assert s.eval_entry("record Box\n  value: int\n  extra: int").ok
 
-        assert s.eval_entry("open import capture_after").ok
+        assert s.eval_entry("import capture_after::*").ok
         r = s.eval_entry("make_and_report(1)")
 
         assert r.ok, r.diagnostics
@@ -248,13 +249,13 @@ class TestFreshImportSeesTheCurrentDeclaration:
         )
         assert not failed.ok
 
-        assert s.eval_entry("open import capture_after_failure").ok
+        assert s.eval_entry("import capture_after_failure::*").ok
         r = s.eval_entry("make_and_report(1)")
 
         assert r.ok, r.diagnostics
         assert r.value == TextValue("extra,value")
 
-    def test_fresh_import_sees_the_new_enum_members_not_the_old_ones(self, tmp_path: Path) -> None:
+    def test_fresh_import_sees_the_new_enum_variants_not_the_old_ones(self, tmp_path: Path) -> None:
         _write_extern_lib(
             tmp_path,
             "capture_enum_after",
@@ -271,7 +272,7 @@ class TestFreshImportSeesTheCurrentDeclaration:
         assert s.eval_entry("enum Choice\n  | Some(value: int)\n  | Gone").ok
         assert s.eval_entry("enum Choice\n  | Some(value: int)\n  | Other").ok
 
-        assert s.eval_entry("open import capture_enum_after").ok
+        assert s.eval_entry("import capture_enum_after::*").ok
         r = s.eval_entry("variant_report()")
 
         assert r.ok, r.diagnostics
@@ -302,7 +303,7 @@ class TestFreshImportSeesTheCurrentDeclaration:
         )
         assert not failed.ok
 
-        assert s.eval_entry("open import visible_nominals").ok
+        assert s.eval_entry("import visible_nominals::*").ok
         r = s.eval_entry("visible()")
 
         assert r.ok, r.diagnostics
@@ -322,7 +323,7 @@ class TestBoundaryRoundTripAcrossRedeclaration:
         assert s.eval_entry("record Box\n  value: int").ok
         assert s.eval_entry("let old = Box(value = 1)").ok
         assert s.eval_entry("record Box\n  value: int\n  extra: int").ok
-        assert s.eval_entry("open import identity_lib").ok
+        assert s.eval_entry("import identity_lib::*").ok
 
         old_round_trip = s.eval_entry("identity(old)")
         new_round_trip = s.eval_entry("let new = Box(value = 2, extra = 3)\nidentity(new)")
@@ -341,17 +342,17 @@ class TestBoundaryRoundTripAcrossRedeclaration:
         assert s.eval_entry("enum Choice\n  | Some(value: int)\n  | Gone").ok
         assert s.eval_entry("let old = Choice::Gone").ok
         assert s.eval_entry("enum Choice\n  | Some(value: int)\n  | Other").ok
-        assert s.eval_entry("open import identity_lib").ok
+        assert s.eval_entry("import identity_lib::*").ok
 
         old_round_trip = s.eval_entry("identity(old)")
         new_round_trip = s.eval_entry("let new = Choice::Other\nidentity(new)")
 
         assert old_round_trip.ok, old_round_trip.diagnostics
         assert new_round_trip.ok, new_round_trip.diagnostics
-        assert isinstance(old_round_trip.value, RecordValue)
-        assert isinstance(new_round_trip.value, RecordValue)
-        assert old_round_trip.value.display_name.rsplit("::", maxsplit=1)[-1] == "Gone"
-        assert new_round_trip.value.display_name.rsplit("::", maxsplit=1)[-1] == "Other"
+        assert isinstance(old_round_trip.value, EnumValue)
+        assert isinstance(new_round_trip.value, EnumValue)
+        assert old_round_trip.value.variant == "Gone"
+        assert new_round_trip.value.variant == "Other"
         assert old_round_trip.value.nominal != new_round_trip.value.nominal
 
     def test_exception_values_round_trip_for_both_old_and_new_identities(
@@ -362,7 +363,7 @@ class TestBoundaryRoundTripAcrossRedeclaration:
         assert s.eval_entry("exception Problem extends Exception\n  detail: text").ok
         assert s.eval_entry('let old = Problem(message = "old", detail = "x")').ok
         assert s.eval_entry("exception Problem extends Exception\n  detail: text\n  code: int").ok
-        assert s.eval_entry("open import identity_lib").ok
+        assert s.eval_entry("import identity_lib::*").ok
 
         old_round_trip = s.eval_entry("identity(old)")
         new_round_trip = s.eval_entry(
@@ -396,7 +397,7 @@ class TestLiveViewsUnaffectedByNominalRedeclaration:
         )
         s = _make_session_with_root(tmp_path)
         assert s.eval_entry("record Box\n  value: int").ok
-        assert s.eval_entry("open import touch_array").ok
+        assert s.eval_entry("import touch_array::*").ok
         assert s.eval_entry("record Box\n  value: int\n  extra: int").ok
 
         r = s.eval_entry("let xs: array[int] = [1, 2]\ntouch(xs)\nxs")
@@ -438,10 +439,10 @@ class TestRejectedCompanionImportReleasesNoStaleIdentity:
         )
         s = _make_session_with_root(tmp_path)
 
-        rejected = s.eval_entry("open import broken_companion\nrecord R\n  a: int")
+        rejected = s.eval_entry("import broken_companion::*\nrecord R\n  a: int")
         assert not rejected.ok
 
-        redeclared = s.eval_entry("open import report_shape\nrecord R\n  b: text")
+        redeclared = s.eval_entry("import report_shape::*\nrecord R\n  b: text")
         assert redeclared.ok, redeclared.diagnostics
 
         r = s.eval_entry('make_and_report("x")')

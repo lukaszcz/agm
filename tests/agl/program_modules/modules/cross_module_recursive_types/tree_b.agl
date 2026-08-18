@@ -2,7 +2,7 @@
 # an array[NodeA] (defined in tree_a), which in turn can hold a NodeB again via
 # BranchA. The array guards the recursion, exactly like a same-module
 # array-guarded record would.
-open import tree_a
+import tree_a::*
 record NodeB
   tag: text
   children: array[NodeA]

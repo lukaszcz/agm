@@ -16,7 +16,7 @@ param n: int
 # Positional sub-pattern: 'x' binds the standard 'value' field positionally.
 
 program def main() -> unit =
-  let src: Agent = AgentCommand("src")
+  let src = AgentCommand("src")
   let opt: Opt[int] = ask("Give opt.", agent = src)
   let from_pos = case opt of
     | Some(_ as x) => x

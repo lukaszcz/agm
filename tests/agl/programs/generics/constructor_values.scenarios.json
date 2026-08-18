@@ -4,7 +4,7 @@
       "name": "constructor_values",
       "agents": {},
       "expect": {
-        "stdout": "true\ntrue\ntrue\ntrue\ntrue\ntrue\n",
+        "stdout": "true\ntrue\ntrue\ntrue\n",
         "calls": {}
       }
     }

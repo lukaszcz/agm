@@ -13,7 +13,7 @@ param code: int
 param who
 
 program def main() -> unit =
-  let picker: Agent = AgentCommand("picker")
+  let picker = AgentCommand("picker")
   let shape: Shape = ask("Pick a shape.", agent = picker)
 
   case shape of

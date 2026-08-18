@@ -15,7 +15,7 @@ record Issue
 param min_severity: int
 
 program def main() -> unit =
-  let tracker: Agent = AgentCommand("tracker")
+  let tracker = AgentCommand("tracker")
   let issue = Issue(
     title = "Missing tests",
     severity = 3,

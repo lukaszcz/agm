@@ -1,8 +1,11 @@
-# Library module (slash path num/arith) imported open by the entry. Includes a
-# helper reached through its wrapper `via_secret`.
+# Arithmetic library with a named scope for use-over-scope coverage.
 def add(a: int, b: int) -> int = a + b
 def mul(a: int, b: int) -> int = a * b
 
 def _secret(n: int) -> int = n * n
 
 def via_secret(n: int) -> int = _secret(n)
+
+scope Operations
+def difference(left: int, right: int) -> int = left - right
+end Operations

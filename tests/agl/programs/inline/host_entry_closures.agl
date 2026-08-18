@@ -21,7 +21,7 @@ enum Mood
   | Calm
   | Tense(level: int)
 
-let mood: Mood = if start < 0 => Tense(-start) else => Calm
+let mood = if start < 0 => Tense(-start) else => Calm
 
 var audits = 0
 
@@ -36,7 +36,7 @@ def temper() -> int =
     | Calm => 0
     | Tense(level) => level
 
-let reviewer: Agent = AgentCommand("reviewer")
+let reviewer = AgentCommand("reviewer")
 
 print(describe())
 print(temper())

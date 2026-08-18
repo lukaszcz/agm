@@ -9,7 +9,7 @@ enum Verdict
   | Rejected(notes: array[text])
 
 program def main() -> unit =
-  let judge: Agent = AgentCommand("judge")
+  let judge = AgentCommand("judge")
   let initial: Status = verdict
 
   if initial is Status::Approved => print "approved input" else => print "not approved"

@@ -83,7 +83,7 @@ class NominalId:
     module of its own: a nominal's declaring module, scope path, and declared
     name live on its ``NominalDescriptor`` (``ir.program``), and a runtime
     value carries its own display spelling directly (``RecordValue``/
-    ``ExceptionValue.display_name``) rather than deriving it
+    ``EnumValue``/``ExceptionValue.display_name``) rather than deriving it
     from this id.
     """
 

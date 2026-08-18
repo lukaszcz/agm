@@ -11,7 +11,7 @@
       }
     },
     {
-      "name": "enum_members_and_qualified_constructor",
+      "name": "enum_variants_and_qualified_constructor",
       "params": {
         "mode": "enum",
         "base": 12

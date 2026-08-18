@@ -2,7 +2,7 @@
 param start
 
 program def main() -> unit =
-  let impl: Agent = AgentCommand("impl")
+  let impl = AgentCommand("impl")
   let greeting = "hello"
   let count = 2
   let exact = 1.5

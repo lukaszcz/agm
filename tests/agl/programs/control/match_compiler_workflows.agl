@@ -10,7 +10,7 @@ enum Pair
 
 param integer: int
 param decimal_number: decimal
-let picker: Agent = AgentCommand("picker")
+let picker = AgentCommand("picker")
 
 def pick() -> Pair = ask("Pick a pair.", agent = picker)
 

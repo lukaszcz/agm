@@ -265,6 +265,8 @@ rules.
   [`std/time`](#stdtime).
 - `std/random` provides a seedable pseudo-random sequence, array selection and shuffling,
   and UUID generation; see [`std/random`](#stdrandom).
+- `std/regex` provides Python-compatible regular-expression searching, rewriting, and
+  splitting; see [`std/regex`](#stdregex).
 - `std/array` owns array methods and array utility functions; see
   [`std/array`](#stdarray).
 - `std/dict` owns dictionary methods and conversion from key/value pairs; see
@@ -397,6 +399,38 @@ program def main() -> unit =
 `choice?(xs) -> Option[T]` returns `Option::None` instead. `shuffle!(xs)` shuffles its array
 receiver in place through the normal live array view. `uuid() -> text` returns a fresh UUIDv4
 identifier and is intentionally independent of the seedable sequence.
+
+## `std/regex`
+
+`std/regex` provides regular-expression operations using Python's
+[`re`](https://docs.python.org/3/library/re.html) pattern and replacement syntax. Import it
+explicitly:
+
+```agl
+import std/regex
+
+program def main() -> unit =
+  case regex::find?("(?P<word>[A-Za-z]+)-([0-9]+)", "item-42") of
+    | Option::Some(value = _ as found) => print(found.named-groups["word"])
+    | Option::None => ()
+```
+
+`test(pattern, s) -> bool` reports whether the pattern occurs anywhere in `s`.
+`find?(pattern, s) -> Option[Match]` returns the first occurrence, while
+`find-all(pattern, s) -> array[Match]` returns non-overlapping occurrences from left to right.
+Each `Match` has `matched`, zero-based half-open `start` and `end`, and `groups` in
+numbered-group order. A group that did not participate is `Option::None`; a participating one
+is `Option::Some(text)`. `named-groups` contains the participating named groups by name.
+
+`replace(pattern, s, replacement) -> text` replaces every match and supports Python replacement
+backreferences such as `\\1` and `\\g<name>`. `split(pattern, s) -> array[text]` uses Python
+`re.split` behavior: boundary empty strings and captured separators are retained; an unmatched
+captured separator is represented as the empty text because split results are text.
+`escape(s) -> text` returns a pattern that matches `s` literally.
+
+Every operation that accepts a pattern raises `RegexError(pattern: text)` when Python cannot
+compile it. Compiled patterns are reused by an internal bounded companion cache; the cache has
+no AgL-visible state.
 
 ## `std/array`
 

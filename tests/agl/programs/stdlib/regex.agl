@@ -1,0 +1,47 @@
+# Python-compatible regular-expression searching, extraction, and rewriting.
+import std/regex
+import std/regex using RegexError
+
+param mode: int
+
+program def main() -> unit =
+  case mode of
+    | 1 =>
+        print(regex::test("[0-9]+", "letters"))
+        print(regex::test("[0-9]+", "item-42"))
+        print(regex::find?("[0-9]+", "letters"))
+    | 2 =>
+        case regex::find?("(?P<word>[A-Za-z]+)-([0-9]+)(?:-([A-Z]+))?", "ref-42") of
+          | Option::Some(value = _ as found) =>
+              print(found.matched)
+              print(found.start)
+              print(found.end)
+              print(found.groups)
+              print(found.named-groups)
+          | Option::None => print("missing")
+    | 3 =>
+        let matches = regex::find-all("[A-Za-z]+", "one 22 two")
+        print(matches.size())
+        print(matches[0].matched)
+        print(matches[1].start)
+        print(regex::replace("(?P<word>[A-Za-z]+)-([0-9]+)", "item-42", "\\g<word>[\\2]"))
+    | 4 =>
+        print(regex::split(",", ",a,,b,"))
+        print(regex::split("([,;])", "a,b;c,"))
+    | 5 =>
+        let literal = "a+b?."
+        print(regex::test(regex::escape(literal), literal))
+    | 6 =>
+        try
+          let _ = regex::test("[", "anything")
+        catch RegexError as error => print(error.pattern)
+    | 8 =>
+        print(regex::test(pattern = "[0-9]+", s = "item-42"))
+        print(regex::find?(pattern = "[0-9]+", s = "item-42"))
+        print(regex::find-all(pattern = "[A-Za-z]+", s = "one 22 two").size())
+        print(regex::replace(pattern = "[0-9]+", s = "item-42", replacement = "#"))
+        print(regex::split(pattern = ",", s = "a,b").size())
+        print(regex::escape(s = "a+b?."))
+    | _ =>
+        let _ = regex::test("[", "anything")
+        ()

@@ -433,6 +433,15 @@ fields.
 (base fields only)
 ```
 
+### `RegexError`
+
+A `std/regex` operation received a pattern that Python `re` cannot compile
+([Modules](modules.md#stdregex)).
+
+```text
+pattern: text   # the pattern that failed to compile
+```
+
 ### `RangeError`
 
 Raised when `int.pow` receives a negative exponent or a range `for` step
@@ -486,6 +495,7 @@ a cycle arises, which operations raise this and which tolerate a cycle instead
 | `std/json` parsing — input is not well-formed JSON | `JsonParseError` |
 | `std/toml` parsing — input is not well-formed TOML | `TomlParseError` |
 | `std/toml` rendering — root is not an object, a value is `null`, an integer is outside signed 64-bit range, or a `decimal` NaN is signaling/payload | `TomlRenderError` |
+| `std/regex` pattern compilation — Python `re` rejects the pattern | `RegexError` |
 | Rendering, `as text`, or `as json` encounters a reference cycle; or an extern companion `repr()`s the corresponding cyclic view | `CyclicValueError` |
 | `raise` of a constructed or re-raised value | any concrete type |
 

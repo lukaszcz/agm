@@ -491,10 +491,12 @@ class TestPersistence:
         s = ReplSession()
         assert s.eval_entry("let Widget = 1").ok
 
-        result = s.eval_entry("record Widget\n  x: int")
+        result = s.eval_entry("let other = 2\nrecord Widget\n  x: int")
 
         assert not result.ok
         assert "already declared" in result.diagnostics[0].message.lower()
+        # The complaint locates the colliding declaration, not a placeholder line.
+        assert result.diagnostics[0].line == 2
 
     def test_selected_pattern_slots_lower_in_repl_entries(self) -> None:
         s = ReplSession()
@@ -4963,10 +4965,12 @@ class TestImports:
         session = self._make_session_with_root(tmp_path)
         assert session.eval_entry("import lib\nuse lib::S::*").ok
 
-        replacement = session.eval_entry("import lib hiding S")
+        replacement = session.eval_entry("let other = 2\nimport lib hiding S")
 
         assert not replacement.ok
         assert replacement.diagnostics[0].message
+        # The complaint locates the import that hid the route, not a placeholder line.
+        assert replacement.diagnostics[0].line == 2
 
     def test_retained_imported_use_keeps_nested_scope_routes_after_alias_change(
         self, tmp_path: Path

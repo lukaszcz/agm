@@ -1315,6 +1315,15 @@ class _Resolver:
             if cref.variant is None and cref.owner_module_id == self._module_id
         )
 
+    def _root_declaring_span(self, cref: ConstructorRef) -> SourceSpan:
+        """The source span of the declaration *cref* was collected from.
+
+        Every same-module constructor candidate is built from a declaration
+        this pass registered, so its binding -- and with it the span to blame
+        for a collision -- is always on hand.
+        """
+        return self._declarations[(self._module_id, cref.owner_path, cref.owner_name)].decl_span
+
     def _define_constructor_bindings(self) -> None:
         """Define each constructor name as a value binding in the current (root) scope.
 
@@ -1338,10 +1347,11 @@ class _Resolver:
                 continue
             parent_ref = scope.parent.lookup(name) if scope.parent is not None else None
             if parent_ref is not None and parent_ref.kind is not BinderKind.constructor_binding:
-                if self._root_declaring_candidates(name):
+                declaring = self._root_declaring_candidates(name)
+                if declaring:
                     raise AglScopeError(
                         f"Name '{name}' is already declared in this scope.",
-                        span=None,
+                        span=self._root_declaring_span(declaring[0]),
                     )
                 # A REPL entry's new variants remain available to pattern
                 # classification, but an ordinary session binding retains its
@@ -1816,7 +1826,7 @@ class _Resolver:
                         rendered = "::".join(path)
                         raise AglScopeError(
                             f"use target '{module.display()}::{rendered}' is not nameable.",
-                            span=None,
+                            span=self._import_env.decl_spans[module],
                         )
             scope = scope.parent
 

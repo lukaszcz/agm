@@ -210,6 +210,9 @@ class ImportEnv:
     )
     facade_aliases: Mapping[str, Mapping[int, frozenset[ModuleId]]] = field(default_factory=dict)
     scope_origins_by_route: Mapping[BareRoute, ScopeOrigins] = field(default_factory=dict)
+    # Where each imported module was first named in this module's source, so a
+    # complaint about what an import no longer provides can point at it.
+    decl_spans: Mapping[ModuleId, SourceSpan] = field(default_factory=dict)
     suffix_routes: Mapping[tuple[str, ...], tuple[ModuleId, ...]] = field(
         init=False, repr=False, compare=False
     )
@@ -264,6 +267,8 @@ class ImportEnv:
             dict(self.scope_origins_by_route)
         )
         object.__setattr__(self, "scope_origins_by_route", scope_origins_by_route)
+        decl_spans: Mapping[ModuleId, SourceSpan] = MappingProxyType(dict(self.decl_spans))
+        object.__setattr__(self, "decl_spans", decl_spans)
         facade_aliases: Mapping[str, Mapping[int, frozenset[ModuleId]]] = MappingProxyType(
             {
                 alias: MappingProxyType(dict(sorted(self.facade_aliases[alias].items())))
@@ -422,6 +427,7 @@ def build_import_env(
     facade_aliases: dict[str, dict[int, set[ModuleId]]] = {}
     canonical_wildcard_node_ids: dict[ImportDecl, int] = {}
     scope_origins_by_route: dict[BareRoute, ScopeOrigins] = {}
+    decl_spans: dict[ModuleId, SourceSpan] = {}
     public_scopes = scope_exports or {}
     for decl in decls:
         target = targets[decl.node_id]
@@ -436,6 +442,7 @@ def build_import_env(
                 wildcard_origin_node_id, set()
             ).update(modules)
         for module in modules:
+            decl_spans.setdefault(module, decl.span)
             module_exports = exports.get(module, {})
             module_scopes = public_scopes.get(module, {})
             hidden_exports, hidden_scopes = _selected_public_atoms(
@@ -534,6 +541,7 @@ def build_import_env(
             for alias, declarations in facade_aliases.items()
         },
         scope_origins_by_route=scope_origins_by_route,
+        decl_spans=decl_spans,
     )
 
 

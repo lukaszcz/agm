@@ -1,6 +1,6 @@
 # Exception members follow the exception hierarchy. Calls in catches use the
 # caught exception's static type, and a scoped exception owns methods too.
-open Scoped
+use Scoped::*
 
 param mode: text
 param code: int

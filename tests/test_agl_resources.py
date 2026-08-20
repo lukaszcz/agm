@@ -64,7 +64,8 @@ def test_renamed_resource_builtin_runs_through_its_original_declaration(tmp_path
     entry = tmp_path / "main.agl"
     resource = tmp_path / "prompt.md"
     resource.write_text("prompt", encoding="utf-8")
-    source = """import std/core using resource as asset
+    source = """import std/core::*
+import std/core::{resource as asset}
 let prompt = asset("prompt.md")
 program def main() -> unit =
   print prompt
@@ -247,10 +248,10 @@ def test_package_validation_rejects_missing_resource_reached_through_a_reexport(
     module_root = root / "package"
     module_root.mkdir(parents=True)
     (module_root / "resources.agl").write_text(
-        "export std/core using resource as asset\n", encoding="utf-8"
+        "export std/core::{resource as asset}\n", encoding="utf-8"
     )
     (module_root / "main.agl").write_text(
-        """import package/resources using asset
+        """import package/resources::{asset}
 program def main() -> unit =
   print asset("prompts/missing.md")
 """,
@@ -262,18 +263,18 @@ program def main() -> unit =
         validate_package(package)
 
 
-def test_package_validation_rejects_missing_resource_exposed_by_open_import_scoped_alias(
+def test_package_validation_rejects_missing_resource_exposed_by_import_tail_scoped_alias(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "package"
     module_root = root / "package"
     module_root.mkdir(parents=True)
     (module_root / "resources.agl").write_text(
-        "scope Assets\nexport std/core using resource as asset\nend Assets\n",
+        "scope Assets\nexport std/core::{resource as asset}\nend Assets\n",
         encoding="utf-8",
     )
     (module_root / "main.agl").write_text(
-        "open import package/resources\n"
+        "import package/resources::*\n"
         'let prompt = Assets::asset("prompts/missing.md")\n'
         "program def main() -> unit = ()\n",
         encoding="utf-8",
@@ -292,7 +293,7 @@ def test_package_validation_rejects_missing_resource_through_an_ancestor_scoped_
     module_root.mkdir(parents=True)
     (module_root / "main.agl").write_text(
         "scope Assets\n"
-        "import std/core using resource as asset\n"
+        "import std/core::{resource as asset}\n"
         "scope Templates\n"
         'let prompt = asset("prompts/missing.md")\n'
         "end Templates\n"
@@ -313,9 +314,9 @@ def test_scoped_function_blocks_scoped_resource_alias_during_nested_lookup(
     module_root = root / "package"
     module_root.mkdir(parents=True)
     (module_root / "main.agl").write_text(
-        "import std/core using resource as asset\n"
+        "import std/core::{resource as asset}\n"
         "scope Assets\n"
-        "import std/core using resource as asset\n"
+        "import std/core::{resource as asset}\n"
         "def asset(path: text) -> text = path\n"
         "scope Templates\n"
         'let prompt = asset("prompts/missing.md")\n'
@@ -337,7 +338,7 @@ def test_package_validation_rejects_missing_resource_through_a_scoped_import_rou
     module_root.mkdir(parents=True)
     (module_root / "main.agl").write_text(
         "scope Assets\n"
-        "import std/core using resource as asset\n"
+        "import std/core::{resource as asset}\n"
         "end Assets\n"
         'let prompt = core::asset("prompts/missing.md")\n'
         "program def main() -> unit = ()\n",
@@ -354,7 +355,7 @@ def test_package_validation_uses_the_resolved_resource_declaration(tmp_path: Pat
     module_root = root / "package"
     module_root.mkdir(parents=True)
     (module_root / "main.agl").write_text(
-        """import std/core using resource as asset
+        """import std/core::{resource as asset}
 def asset(path: text) -> text = path
 let local = asset("prompts/missing.md")
 program def main() -> unit = ()

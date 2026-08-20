@@ -15,7 +15,7 @@ The layout module detects which layout is in use from the directory structure an
 
 A *workspace* is either the main repository or a linked git worktree for a branch, interpreted with AGM's project config, dependency environment, setup scripts, and tmux lifecycle. Opening a branch that has no worktree checks it out into one; opening a missing branch creates it first. Branch workspaces map to a predictable worktree path derived from the branch name.
 
-Worktree orchestration coordinates git operations with dependency setup: creating a worktree, ensuring tracking branches exist, and syncing remote-tracking branches. The `worktree` and `workspace` command groups expose creation, removal, listing, and opening; only branch workspaces can be closed (the main workspace and its branch are protected), and close can optionally retain the branch or the whole workspace while still closing the session.
+Worktree orchestration coordinates git operations with dependency setup: creating a worktree, ensuring tracking branches exist, and syncing remote-tracking branches. A branch name that is not checked out locally is resolved across every remote the way git resolves it: exactly one remote carrying the name identifies the branch and the worktree tracks it, while several carrying it is ambiguous and rejected. The `worktree` and `workspace` command groups expose creation, removal, listing, and opening; only branch workspaces can be closed (the main workspace and its branch are protected), and close can optionally retain the branch or the whole workspace while still closing the session.
 
 ## Dependencies
 
@@ -35,7 +35,7 @@ All git work goes through one VCS module that wraps git as subprocess calls: rep
 
 ## Tmux
 
-Workspace sessions are realized as tmux sessions. The tmux module creates a session with a filtered environment (dropping terminal- and SSH-specific variables and unsafe names), handles attached vs. detached creation and nested-tmux detection, and applies a tiled pane layout. The `tmux` command group exposes session open/close and layout directly.
+Workspace sessions are realized as tmux sessions. The tmux module creates a session with a filtered environment (dropping terminal- and SSH-specific variables and unsafe names), handles attached vs. detached creation and nested-tmux detection, and applies a tiled pane layout. Session names are unique per workspace, so opening a workspace first requires its session name to be free and stops before any git work when it is not. The `tmux` command group exposes session open/close and layout directly.
 
 ## Code Entry Points
 

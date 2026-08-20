@@ -1,5 +1,5 @@
-open import inference/recursive_even
-open import inference/recursive_odd
+import inference/recursive_even::*
+import inference/recursive_odd::*
 program def main() -> unit =
   print is_even(8)
   print is_odd(7)

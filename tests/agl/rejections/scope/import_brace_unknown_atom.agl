@@ -1,0 +1,2 @@
+import std/core::{missing}
+program def main() -> unit = ()

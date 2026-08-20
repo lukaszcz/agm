@@ -62,7 +62,7 @@ def test_no_stdlib_reports_bare_print_as_undefined() -> None:
 
 def test_no_stdlib_still_allows_explicit_std_core_import() -> None:
     _check(
-        "open import std/core\nlet x: Option[int] = Some(value = 1)\nx\n",
+        "import std/core::*\nlet x: Option[int] = Some(value = 1)\nx\n",
         default_stdlib=False,
     )
 

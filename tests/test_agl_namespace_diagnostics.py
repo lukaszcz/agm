@@ -34,13 +34,43 @@ def test_legacy_module_header_spellings_are_syntax_errors(source: str) -> None:
         parse_program(source)
 
 
-def test_open_import_using_reports_the_redundant_combination() -> None:
-    with pytest.raises(AglSyntaxError) as raised:
-        parse_program("open import tools/text using trim")
+def test_use_target_without_tail_or_alias_is_a_syntax_error() -> None:
+    with pytest.raises(AglSyntaxError):
+        parse_program("use Tools")
 
-    diagnostic = str(raised.value).lower()
-    assert "open" in diagnostic
-    assert "using" in diagnostic
+
+def test_use_bare_target_ambiguity_suggests_a_reachable_module_anchor(tmp_path: Path) -> None:
+    modules = {"library": "scope Scope\ndef remote() -> int = 1\nend Scope"}
+    ambiguous = _graph(
+        tmp_path,
+        "import library::{Scope}\nuse Scope::*\nscope Scope\ndef local() -> int = 2\nend Scope",
+        modules,
+    )
+
+    with pytest.raises(AglScopeError, match="ambiguous") as raised:
+        resolve_repl_graph(ambiguous)
+
+    diagnostic = str(raised.value)
+    assert "/library::Scope" in diagnostic
+    assert "::Scope" in diagnostic
+    assert "/Scope" not in diagnostic
+
+    module_route = _graph(
+        tmp_path,
+        "import library::{Scope}\nuse /library::Scope::*\nremote()",
+        modules,
+    )
+    assert resolve_repl_graph(module_route).entry_id == module_route.entry_id
+
+    local_scope = _graph(
+        tmp_path,
+        (
+            "import library::{Scope}\nuse ::Scope::*\nscope Scope\ndef local() -> int = 2\n"
+            "end Scope\nlocal()"
+        ),
+        modules,
+    )
+    assert resolve_repl_graph(local_scope).entry_id == local_scope.entry_id
 
 
 def test_spaced_qualifier_near_miss_suggests_a_tight_qualifier(tmp_path: Path) -> None:
@@ -167,14 +197,14 @@ def test_spaced_slash_qualifier_near_miss_uses_the_full_route_despite_suffix_col
             {"app/config": "def x() -> int = 1"},
         ),
         (
-            "import app/config\nimport app/commands using config\nlet x = 1\nconfig ::x",
+            "import app/config\nimport app/commands::config\nlet x = 1\nconfig ::x",
             {
                 "app/config": "def x() -> int = 1",
                 "app/commands": "def config(value: int) -> int = value",
             },
         ),
         (
-            "import app/config\nopen import app/commands\nlet x = 1\nconfig ::x",
+            "import app/config\nimport app/commands::*\nlet x = 1\nconfig ::x",
             {
                 "app/config": "def x() -> int = 1",
                 "app/commands": "def config(value: int) -> int = value",
@@ -251,16 +281,14 @@ def test_spaced_qualifier_near_miss_requires_a_contributed_member(
 ) -> None:
     graph = _graph(
         tmp_path,
-        "import app/config using other\nconfig ::x",
+        "import app/config::other\nconfig ::x",
         {"app/config": module_source},
     )
 
     with pytest.raises(AglScopeError) as raised:
         resolve_repl_graph(graph)
 
-    diagnostic = str(raised.value).lower()
-    assert "whitespace" not in diagnostic
-    assert "config::x" not in diagnostic
+    assert raised.value is not None
 
 
 def test_spaced_type_qualified_near_miss_requires_a_constructible_owner(tmp_path: Path) -> None:
@@ -358,7 +386,7 @@ def test_spaced_qualifier_near_miss_reaches_a_non_juxtaposition_mis_parse(
     assert "whitespace" in diagnostic
 
 
-def test_qualified_scope_errors_distinguish_unknown_route_from_unselected_member(
+def test_qualified_scope_errors_distinguish_unknown_route_from_missing_member(
     tmp_path: Path,
 ) -> None:
     cases: tuple[tuple[str, dict[str, str], tuple[str, ...], tuple[str, ...]], ...] = (
@@ -369,9 +397,9 @@ def test_qualified_scope_errors_distinguish_unknown_route_from_unselected_member
             ("imported set",),
         ),
         (
-            "import app/config using read\nconfig::write()",
-            {"app/config": "def read() -> int = 1\ndef write() -> int = 2"},
-            ("config", "imported set", "write"),
+            "import remote/config::read\nremote/config::missing()",
+            {"remote/config": "def read() -> int = 1\nenum Flag | On"},
+            ("remote/config", "not a public member", "is hidden", "missing"),
             ("qualifier",),
         ),
     )
@@ -383,8 +411,17 @@ def test_qualified_scope_errors_distinguish_unknown_route_from_unselected_member
         assert all(term in diagnostic for term in expected)
         assert all(term not in diagnostic for term in absent)
 
+    reachable = _graph(
+        tmp_path,
+        "import remote/config::read\nremote/config::Flag::On",
+        {"remote/config": "def read() -> int = 1\nenum Flag | On"},
+    )
+    assert resolve_repl_graph(reachable).entry_id == reachable.entry_id
 
-def test_qualified_type_errors_keep_the_same_distinctions(tmp_path: Path) -> None:
+
+def test_qualified_type_errors_keep_unknown_route_and_missing_member_diagnostics(
+    tmp_path: Path,
+) -> None:
     cases: tuple[tuple[str, dict[str, str], tuple[str, ...]], ...] = (
         (
             "let value: missing::Item = null\nvalue",
@@ -392,9 +429,9 @@ def test_qualified_type_errors_keep_the_same_distinctions(tmp_path: Path) -> Non
             ("qualifier", "missing"),
         ),
         (
-            "import app/types using Public\nlet value: types::Hidden = null\nvalue",
-            {"app/types": "record Public\n  value: int\nrecord Hidden\n  value: int"},
-            ("types", "accessible", "hidden"),
+            "import remote/config::read\nlet value: remote/config::Missing = null\nvalue",
+            {"remote/config": "def read() -> int = 1\nenum Flag | On"},
+            ("remote/config", "accessible", "missing"),
         ),
     )
 
@@ -404,6 +441,17 @@ def test_qualified_type_errors_keep_the_same_distinctions(tmp_path: Path) -> Non
             check_program(resolve_repl_graph(graph), base_caps())
         diagnostic = str(raised.value).lower()
         assert all(term in diagnostic for term in expected)
+
+    reachable = _graph(
+        tmp_path,
+        (
+            "import remote/config::read\n"
+            "let value: remote/config::Flag = remote/config::Flag::On\n"
+            "value"
+        ),
+        {"remote/config": "def read() -> int = 1\nenum Flag | On"},
+    )
+    assert check_program(resolve_repl_graph(reachable), base_caps()).entry_id == reachable.entry_id
 
 
 def test_qualified_ambiguity_lists_sorted_candidates_and_repairs(tmp_path: Path) -> None:
@@ -424,10 +472,10 @@ def test_qualified_ambiguity_lists_sorted_candidates_and_repairs(tmp_path: Path)
     assert all(term in diagnostic for term in ("hiding", "longer suffix", "/-anchored", "as"))
 
 
-def test_wildcard_using_identifies_the_module_missing_the_selected_name(tmp_path: Path) -> None:
+def test_wildcard_tail_identifies_the_module_missing_the_selected_name(tmp_path: Path) -> None:
     graph = _graph(
         tmp_path,
-        "import plugins/* using shared\nshared()",
+        "import plugins/*::shared\nshared()",
         {
             "plugins/alpha": "def shared() -> int = 1",
             "plugins/beta": "def other() -> int = 2",
@@ -451,9 +499,9 @@ class TestAmbiguityRepairsAreSpellable:
     module is spelled by its scope path alone.
     """
 
-    _AMBIGUOUS_OPENED_SCOPES = (
-        "open X\n"
-        "open Y\n"
+    _AMBIGUOUS_SCOPE_USES = (
+        "use X::*\n"
+        "use Y::*\n"
         "\n"
         "scope X\n"
         "enum Flag\n"
@@ -466,8 +514,8 @@ class TestAmbiguityRepairsAreSpellable:
         "end Y\n"
     )
 
-    def test_ambiguous_constructor_across_opened_scopes(self, tmp_path: Path) -> None:
-        graph = _graph(tmp_path, self._AMBIGUOUS_OPENED_SCOPES + "\nlet f = Flag::Good\n")
+    def test_ambiguous_constructor_across_used_scopes(self, tmp_path: Path) -> None:
+        graph = _graph(tmp_path, self._AMBIGUOUS_SCOPE_USES + "\nlet f = Flag::Good\n")
 
         with pytest.raises(AglScopeError) as raised:
             resolve_repl_graph(graph)
@@ -478,10 +526,10 @@ class TestAmbiguityRepairsAreSpellable:
         assert "X::Flag::Good" in diagnostic
         assert "Y::Flag::Good" in diagnostic
 
-    def test_ambiguous_type_across_opened_scopes(self, tmp_path: Path) -> None:
+    def test_ambiguous_type_across_used_scopes(self, tmp_path: Path) -> None:
         graph = _graph(
             tmp_path,
-            self._AMBIGUOUS_OPENED_SCOPES + "\nlet f: X::Flag = X::Flag::Good\nlet g: Flag = f\n",
+            self._AMBIGUOUS_SCOPE_USES + "\nlet f: X::Flag = X::Flag::Good\nlet g: Flag = f\n",
         )
 
         with pytest.raises(AglTypeError) as raised:

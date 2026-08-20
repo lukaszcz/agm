@@ -33,6 +33,7 @@ from agm.tmux.session import (
     create_tmux_session,
     focus_tmux_session,
     queue_command_in_session,
+    require_session_absent,
 )
 from agm.tmux.session import validate_pane_count as validate_tmux_pane_count
 
@@ -140,8 +141,9 @@ def open_workspace(
             print(f"error: branch '{branch}' is not checked out at {path}", file=sys.stderr)
             raise SystemExit(1)
         session_name = branch_session_name(proj_dir, branch)
-        ensure_dependency_configs_for_branch(project_dir=proj_dir, branch=branch)
+    require_session_absent(session_name=session_name, cwd=current)
     if branch is not None:
+        ensure_dependency_configs_for_branch(project_dir=proj_dir, branch=branch)
         env = load_workspace_env(proj_dir, branch, workspace_dir=repo_path)
         commit_config_dir_changes(
             proj_dir,
@@ -274,6 +276,10 @@ def open_or_create_workspace(
             raise SystemExit(1)
         open_workspace(detached=detached, pane_count=pane_count, branch=branch, cwd=current)
         return
+    # The remaining paths check out or create a workspace; refuse a session name
+    # that is already taken first, so a running session never leaves a
+    # half-opened workspace behind.
+    require_session_absent(session_name=branch_session_name(proj_dir, branch), cwd=current)
     if branch_exists(repo_dir, branch):
         if parent is not None:
             warn_parent_ignored_for_existing_branch(branch)

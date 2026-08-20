@@ -132,18 +132,13 @@
   (agl-flt--with-buffer "let import = 1\n"
     (should-not (eq (agl-flt--face-of "import") 'font-lock-keyword-face))))
 
-(ert-deftest agl-flt-open-at-item-start-is-keyword-face ()
-  (agl-flt--with-buffer "open Geometry\n"
-    (should (eq (agl-flt--face-of "open") 'font-lock-keyword-face))))
+(ert-deftest agl-flt-use-at-item-start-is-keyword-face ()
+  (agl-flt--with-buffer "use Geometry::*\n"
+    (should (eq (agl-flt--face-of "use") 'font-lock-keyword-face))))
 
-(ert-deftest agl-flt-open-not-at-item-start-is-unfaced ()
-  (agl-flt--with-buffer "let open = 1\n"
-    (should-not (eq (agl-flt--face-of "open") 'font-lock-keyword-face))))
-
-(ert-deftest agl-flt-import-directly-after-open-is-keyword-face ()
-  (agl-flt--with-buffer "open import foo/bar\n"
-    (should (eq (agl-flt--face-of "open") 'font-lock-keyword-face))
-    (should (eq (agl-flt--face-of "import") 'font-lock-keyword-face))))
+(ert-deftest agl-flt-use-not-at-item-start-is-unfaced ()
+  (agl-flt--with-buffer "let use = 1\n"
+    (should-not (eq (agl-flt--face-of "use") 'font-lock-keyword-face))))
 
 (ert-deftest agl-flt-export-at-item-start-is-keyword-face ()
   (agl-flt--with-buffer "export foo\n"
@@ -153,16 +148,12 @@
   (agl-flt--with-buffer "let export = \"hello\"\n"
     (should-not (eq (agl-flt--face-of "export") 'font-lock-keyword-face))))
 
-(ert-deftest agl-flt-using-within-import-line-is-keyword-face ()
-  (agl-flt--with-buffer "import foo/bar using thing\n"
-    (should (eq (agl-flt--face-of "using") 'font-lock-keyword-face))))
+(ert-deftest agl-flt-hiding-within-import-line-is-keyword-face ()
+  (agl-flt--with-buffer "import foo/bar::* hiding thing\n"
+    (should (eq (agl-flt--face-of "hiding") 'font-lock-keyword-face))))
 
-(ert-deftest agl-flt-using-not-in-declaration-line-is-unfaced ()
-  (agl-flt--with-buffer "let using = \"hello\"\n"
-    (should-not (eq (agl-flt--face-of "using") 'font-lock-keyword-face))))
-
-(ert-deftest agl-flt-hiding-within-open-line-is-keyword-face ()
-  (agl-flt--with-buffer "open Geometry hiding origin\n"
+(ert-deftest agl-flt-hiding-within-use-line-is-keyword-face ()
+  (agl-flt--with-buffer "use Geometry::* hiding origin\n"
     (should (eq (agl-flt--face-of "hiding") 'font-lock-keyword-face))))
 
 (ert-deftest agl-flt-hiding-not-in-declaration-line-is-unfaced ()

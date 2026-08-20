@@ -1,8 +1,8 @@
 # Scoped `param` declarations: region-form only, external key is the full
 # path, a default is used when a param is left unsupplied, nested regions
 # accumulate their path, and a scoped param is visible bare inside its own
-# region and after `open`.
-open Deploy
+# region and after `use Deploy::*`.
+use Deploy::*
 
 param increment: int
 
@@ -16,5 +16,5 @@ end Deploy
 
 program def main() -> unit =
   print("%{Deploy::region} x %{Deploy::replicas}")
-  print("%{region}")
+  print("%{Deploy::region}")
   print(Deploy::Retry::attempts + increment)

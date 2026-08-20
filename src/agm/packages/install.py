@@ -235,7 +235,7 @@ def refresh_managed_stdlib(
     with _package_operation_lock(home=home, env=env):
         package = _validated_directory_package(source)
         _validate_managed_stdlib_install(package.manifest, source=package.root, editable=False)
-        _validate_minimum_agm(package.manifest)
+        _validate_agm_compatibility(package.manifest)
         validate_package(package)
         try:
             destination = canonical_package_store_path(
@@ -259,6 +259,7 @@ def refresh_managed_stdlib(
                 env=env,
                 index=_load_install_index(home=home, env=env),
             )
+            _deactivate_release_incompatible_packages(state)
             _resolve_dependencies(package, state)
             _activate_package(installed, state, editable_root=None, shadow=False)
             _commit_activation(state.index, home=home, env=env)
@@ -522,7 +523,7 @@ def _install_directory(
     root = package.root
 
     _validate_managed_stdlib_install(package.manifest, source=root, editable=editable)
-    _validate_minimum_agm(package.manifest)
+    _validate_agm_compatibility(package.manifest)
     _resolve_dependencies(package, state)
     dependency_packages = tuple(state.resource_packages.values())
     try:
@@ -612,7 +613,7 @@ def _install_archive(archive: Path, *, state: _InstallState, shadow: bool) -> Pa
         try:
             metadata = verify_archive_discipline(archive_path)
             _validate_managed_stdlib_install(metadata.manifest, source=None, editable=False)
-            _validate_minimum_agm(metadata.manifest)
+            _validate_agm_compatibility(metadata.manifest)
             destination = canonical_package_store_path(
                 metadata.manifest.name, metadata.manifest.version, home=state.home, env=state.env
             )
@@ -629,7 +630,7 @@ def _install_archive(archive: Path, *, state: _InstallState, shadow: bool) -> Pa
             """Create staging beside the canonical destination once identity is verified."""
 
             _validate_managed_stdlib_install(metadata.manifest, source=None, editable=False)
-            _validate_minimum_agm(metadata.manifest)
+            _validate_agm_compatibility(metadata.manifest)
             destination = canonical_package_store_path(
                 metadata.manifest.name, metadata.manifest.version, home=state.home, env=state.env
             )
@@ -685,8 +686,8 @@ def _install_archive(archive: Path, *, state: _InstallState, shadow: bool) -> Pa
         raise PackageInstallError(f"cannot install package archive {archive}: {exc}") from exc
 
 
-def _validate_minimum_agm(manifest: PackageManifest) -> None:
-    """Reject packages whose ``std`` requirement needs a newer AGM binary."""
+def _validate_agm_compatibility(manifest: PackageManifest) -> None:
+    """Reject packages outside their ``std`` requirement's AGM release line."""
     requirement = manifest.dependencies.get(STD_PACKAGE_NAME)
     if requirement is None:
         return
@@ -739,6 +740,39 @@ def _set_transaction_index(state: _InstallState, index: ActivationIndex) -> None
     state.resolved_active = None
 
 
+def _deactivate_release_incompatible_packages(state: _InstallState) -> None:
+    """Drop selections that cannot remain active after an AGM release-line change."""
+
+    packages = _transaction_resolved_packages(state)
+    deactivated = {
+        package.manifest.name
+        for package in packages
+        if (requirement := package.manifest.dependencies.get(STD_PACKAGE_NAME)) is not None
+        and unmet_std_requirement(requirement) is not None
+    }
+    while True:
+        dependents = {
+            package.manifest.name
+            for package in packages
+            if package.manifest.name not in deactivated
+            and any(name in deactivated for name in package.manifest.dependencies)
+        }
+        if not dependents:
+            break
+        deactivated.update(dependents)
+    if deactivated:
+        _set_transaction_index(
+            state,
+            ActivationIndex(
+                {
+                    name: active
+                    for name, active in state.index.packages.items()
+                    if name not in deactivated
+                }
+            ),
+        )
+
+
 def _record_transient_package(state: _InstallState, name: str, package: PackageInfo) -> None:
     """Register a transient package selection, invalidating the resolved-package cache."""
 
@@ -765,7 +799,7 @@ def _resolve_dependencies(package: PackageInfo, state: _InstallState) -> None:
 
 def _resolve_dependency_requirements(package: PackageInfo, state: _InstallState) -> None:
     for name, requirement in package.manifest.dependencies.items():
-        # ``std`` is a minimum AGM-version contract, already checked before
+        # ``std`` is an AGM compatibility contract, already checked before
         # dependency resolution. It is not a package-store dependency.
         if is_std_package_name(name):
             continue

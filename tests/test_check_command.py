@@ -245,7 +245,7 @@ class TestCheckCommand:
     ) -> None:
         (tmp_path / "broken.agl").write_text("def f() -> int = undeclared_name\n")
         entry = tmp_path / "entry.agl"
-        entry.write_text("open import broken\ndef g() -> int = f()\n")
+        entry.write_text("import broken::*\ndef g() -> int = f()\n")
 
         with pytest.raises(SystemExit) as exc_info:
             check_command.run(CheckArgs(files=[str(entry)]))
@@ -283,7 +283,7 @@ class TestCheckCommand:
         work = tmp_path / "work"
         work.mkdir()
         entry = work / "entry.agl"
-        entry.write_text("open import helper\ndef g() -> int = answer()\n")
+        entry.write_text("import helper::*\ndef g() -> int = answer()\n")
 
         # Without -I, the library is unreachable: a static module-not-found error.
         with pytest.raises(SystemExit) as exc_info:

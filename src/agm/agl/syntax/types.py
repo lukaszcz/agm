@@ -8,7 +8,6 @@ appear in the source.
 
 from __future__ import annotations
 
-import enum
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -72,14 +71,6 @@ class DecimalT:
 
     span: SourceSpan = field(compare=False)
     node_id: int = field(compare=False)
-
-
-class ImportMode(enum.Enum):
-    """Determines which names are imported from the module."""
-
-    ALL = "ALL"
-    USING = "USING"
-    HIDING = "HIDING"
 
 
 @dataclass(frozen=True, slots=True)

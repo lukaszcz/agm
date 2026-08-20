@@ -1,7 +1,6 @@
-# Opening a re-exported scope keeps its declaration origins and nested type paths.
+# A `use` of a re-exported scope keeps its declaration origins and nested type paths.
 import facade
-open facade::Shapes
-open facade::Empty
+use facade::Shapes::*
 
 def inspect(point: Nested::Point) -> int = point.x + measure()
 def unpack(box: Nested::Box[int]) -> int = box.value

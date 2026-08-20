@@ -21,6 +21,7 @@ from agm.agl.parser.parser import (
     is_incomplete_source,
     parse_program,
     parse_program_seeded,
+    parse_repl_transcript,
     parse_type_expr,
 )
 from agm.agl.parser.transform import resolve_infix_fixity
@@ -33,6 +34,7 @@ __all__ = [
     "is_incomplete_source",
     "parse_program",
     "parse_program_seeded",
+    "parse_repl_transcript",
     "parse_type_expr",
     "resolve_infix_fixity",
     "wrap_inline_program",

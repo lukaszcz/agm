@@ -1,7 +1,7 @@
 # Scoped declarations cross the complete execution boundary: linked calls,
-# opened members, recursive agent decoding, and enum variants.
-open Workflow
-open Workflow::Status
+# members selected with `use`, recursive agent decoding, and enum variants.
+use Workflow::*
+use Workflow::Status::*
 
 scope Workflow
 record Task
@@ -21,8 +21,8 @@ def Workflow::Status::label(status: Workflow::Status) -> text =
     | Workflow::Status::completed => "completed"
 
 program def main() -> unit =
-  let task: Task = ask("Return a recursive task.", agent = reviewer)
-  let status: Status = ask("Return a workflow status.", agent = reviewer)
-  print(score(task))
-  print(label(status))
-  print(status is completed)
+  let task: Workflow::Task = ask("Return a recursive task.", agent = Workflow::reviewer)
+  let status: Workflow::Status = ask("Return a workflow status.", agent = Workflow::reviewer)
+  print(Workflow::score(task))
+  print(Workflow::Status::label(status))
+  print(status is Workflow::Status::completed)

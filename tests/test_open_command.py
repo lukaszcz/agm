@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import agm.commands.workspace.open as open_module
+import agm.tmux.session as session_module
 from agm.cli_support.args import OpenArgs
 from agm.commands.workspace.open import (
     checkout_workspace,
@@ -22,6 +23,7 @@ from agm.commands.workspace.open import (
 from agm.core import dry_run
 from agm.project import workspace_shell
 from agm.project.workspace_shell import ensure_workspace_shell
+from tests._git_helpers import clone_with_fork_remote
 
 
 def _make_git_project(tmp_path: Path, env: dict[str, str]) -> Path:
@@ -743,3 +745,105 @@ class TestOpenRun:
         assert "tmux new-session -dP" in out
         assert f"-c {repo_dir}" in out
         assert "Detached tmux session proj created" in out
+
+
+# ===========================================================================
+# open_or_create_workspace — remotes and running sessions
+# ===========================================================================
+
+
+class TestOpenWorkspaceRemoteBranches:
+    """Opening branches carried by a remote other than origin."""
+
+    def _project(self, tmp_path: Path, env: dict[str, str], *, on_origin: bool = False) -> Path:
+        project = tmp_path / "proj"
+        (project / "config").mkdir(parents=True)
+        (project / "worktrees").mkdir(parents=True)
+        clone_with_fork_remote(
+            tmp_path,
+            env,
+            branch="branch-x",
+            on_origin=on_origin,
+            on_fork=True,
+            repo_dir=project / "repo",
+        )
+        return project
+
+    def _silence_session(self, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+        opened: list[str] = []
+
+        def _record_session(
+            *,
+            detached: bool,
+            pane_count: str | None,
+            session_name: str,
+            repo_path: Path,
+            run_setup: bool,
+        ) -> None:
+            opened.append(session_name)
+
+        monkeypatch.setattr(open_module, "create_configured_workspace_session", _record_session)
+        return opened
+
+    def test_checks_out_the_fork_branch_instead_of_creating_a_new_one(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, env: dict[str, str]
+    ) -> None:
+        project = self._project(tmp_path, env)
+        opened = self._silence_session(monkeypatch)
+        for name, value in env.items():
+            monkeypatch.setenv(name, value)
+
+        open_or_create_workspace(
+            detached=True, pane_count=None, parent=None, branch="branch-x", cwd=project
+        )
+
+        workspace = project / "worktrees" / "branch-x"
+        assert (workspace / "fork.txt").exists()
+        assert opened == ["proj/branch-x"]
+
+    def test_exits_when_the_branch_lives_on_several_remotes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, env: dict[str, str]
+    ) -> None:
+        project = self._project(tmp_path, env, on_origin=True)
+        self._silence_session(monkeypatch)
+        for name, value in env.items():
+            monkeypatch.setenv(name, value)
+
+        with pytest.raises(SystemExit) as exc_info:
+            open_or_create_workspace(
+                detached=True, pane_count=None, parent=None, branch="branch-x", cwd=project
+            )
+
+        assert exc_info.value.code == 1
+        assert not (project / "worktrees" / "branch-x" / ".git").exists()
+
+
+class TestOpenWorkspaceRunningSession:
+    """A workspace whose tmux session is already running is not reopened."""
+
+    def test_running_session_is_reported_before_any_workspace_is_created(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        env: dict[str, str],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        project = _make_git_project(tmp_path, env)
+        for name, value in env.items():
+            monkeypatch.setenv(name, value)
+
+        def _session_running(cmd: list[str], **_kwargs: object) -> tuple[int, str, str]:
+            assert cmd[:2] == ["tmux", "has-session"]
+            return 0, "", ""
+
+        monkeypatch.setattr(session_module, "run_capture", _session_running)
+
+        with pytest.raises(SystemExit) as exc_info:
+            open_or_create_workspace(
+                detached=True, pane_count=None, parent=None, branch="feature", cwd=project
+            )
+
+        assert exc_info.value.code == 1
+        assert "proj/feature" in capsys.readouterr().err
+        # Nothing was created for the branch: the check runs before any git work.
+        assert not (project / "worktrees" / "feature").exists()

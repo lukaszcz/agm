@@ -31,7 +31,7 @@ class EntryResult:
         (``value``/``value_type`` set); ``let``/``var`` → ``"binding"``
         (``name``/``value_type``/``value``); ``record``/``enum``/``exception``/
         ``type``/``param``/``def``/``agent`` and a ``scope … end`` region →
-        ``"declaration"``; ``:=``, an ``import``/``export``/``open``/fixity
+        ``"declaration"``; ``:=``, an ``import``/``export``/``use``/fixity
         declaration, or a side-effecting expr (``print``, etc.) →
         ``"statement"``; a REPL-only bare type expression (``int``, a declared
         type name, ``array[T]``) → ``"type"`` (``value_type`` set, no value, no

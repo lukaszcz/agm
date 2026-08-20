@@ -1,0 +1,10 @@
+# A module facade exposes one renamed formatter through an export brace tail.
+# The entry imports the facade's qualified surface, then uses its public name
+# under a local spelling before calling it.
+import workshop/facade
+use workshop/facade::{format as display}
+
+param title: text
+
+program def main() -> unit =
+  print(display(title))

@@ -1,0 +1,2 @@
+# The implementation remains behind the facade's exported name.
+def format_text(title: text) -> text = "report: " + title

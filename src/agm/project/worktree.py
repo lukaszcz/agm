@@ -56,11 +56,15 @@ def has_expected_worktree(
 
 
 def branch_exists(repo_dir: Path, branch: str, *, env: dict[str, str] | None = None) -> bool:
-    """Return whether *branch* exists locally or on origin."""
+    """Return whether *branch* exists locally or on exactly one remote.
 
-    return git_helpers.local_branch_exists(
-        repo_dir, branch, env=env
-    ) or git_helpers.remote_branch_exists(repo_dir, branch, env=env)
+    A branch name carried by several remotes identifies no single branch, so it
+    is rejected here rather than resolved to one of them.
+    """
+
+    if git_helpers.local_branch_exists(repo_dir, branch, env=env):
+        return True
+    return git_helpers.unique_remote_branch_ref(repo_dir, branch, env=env) is not None
 
 
 def ensure_worktree(
@@ -119,11 +123,22 @@ def ensure_worktree(
                 raise SystemExit(1)
             return dirname
 
+    track_remote = False
+    if not create_branch and not git_helpers.local_branch_exists(repo_dir, branch_name, env=env):
+        # The branch only exists on a remote: create it as a tracking branch of
+        # that remote, whichever remote that is.
+        remote_ref = git_helpers.unique_remote_branch_ref(repo_dir, branch_name, env=env)
+        if remote_ref is not None:
+            create_branch = True
+            track_remote = True
+            start_point = remote_ref
+
     git_helpers.worktree_add(
         repo_dir,
         dirname,
         branch_name,
         create=create_branch,
+        track=track_remote,
         start_point=start_point,
         env=env,
     )

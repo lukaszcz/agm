@@ -1,8 +1,8 @@
-# `import ... using A` also contributes scope A's members bare; a later
-# `open A` (no module route) must reach the source scope those came from.
-import facade using Shapes
+# A brace-tail import contributes scope A's members bare; a later scope use
+# (with no module route) reaches the source scope those came from.
+import facade::{Shapes}
 
-open Shapes
+use Shapes::*
 
 program def main() -> unit =
   print(measure())

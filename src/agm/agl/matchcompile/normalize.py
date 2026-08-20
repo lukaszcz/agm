@@ -8,6 +8,7 @@ from dataclasses import replace
 from typing import Never, NoReturn, assert_never
 
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.scope.symbols import ConstructorRef
 from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
     ArrayType,
@@ -332,6 +333,28 @@ def _add_as_binder(cell: PatternCell, binder: BinderProvenance) -> PatternCell:
     return replace(cell, binders=(*cell.binders, binder))
 
 
+def _canonical_enum_pattern_variant(
+    source_name: str,
+    node_id: int,
+    constructor_ref: ConstructorRef,
+    subject_type: EnumType,
+    checked: CheckedPatternOwner,
+) -> str:
+    """Return the declared variant behind a canonical or aliased pattern spelling."""
+    try:
+        variants = checked.type_env.type_table.enum_variants(subject_type)
+    except (KeyError, AssertionError):
+        return enum_constructor(subject_type, source_name, checked.type_env.type_table).variant
+    recorded_spelling = checked.resolved.pattern_constructor_spellings.get(node_id)
+    if recorded_spelling is not None and recorded_spelling != source_name:
+        enum_constructor(subject_type, source_name, checked.type_env.type_table)
+        raise MatchCompileInvariantError("invalid final constructor classification")
+    canonical_variant = constructor_ref.variant
+    if canonical_variant is None or canonical_variant not in variants:
+        raise MatchCompileInvariantError("invalid final constructor classification")
+    return canonical_variant
+
+
 def normalize_pattern(
     pattern: Pattern,
     subject_type: Type,
@@ -355,7 +378,7 @@ def normalize_pattern(
                     binders=(BinderProvenance(node_id=node_id, name=name, span=pattern.span),),
                 )
             constructor_ref = classifications.get(node_id)
-            if constructor_ref is None or constructor_ref.variant != name:
+            if constructor_ref is None:
                 raise MatchCompileInvariantError(
                     "missing final constructor classification for bare pattern"
                 )
@@ -363,6 +386,9 @@ def normalize_pattern(
                 raise MatchCompileInvariantError(
                     "final bare constructor has a non-enum checked type"
                 )
+            canonical_variant = _canonical_enum_pattern_variant(
+                name, node_id, constructor_ref, subject_type, checked
+            )
             constructor = enum_constructor(
                 EnumType(
                     constructor_ref.owner_name,
@@ -371,7 +397,7 @@ def normalize_pattern(
                     constructor_ref.owner_path,
                     decl_id=subject_type.decl_id,
                 ),
-                name,
+                canonical_variant,
                 checked.type_env.type_table,
             )
             if constructor.enum_type != subject_type or constructor.arity != 0:
@@ -383,7 +409,7 @@ def normalize_pattern(
                 arguments=(),
                 provenance=provenance,
             )
-        case ConstructorPattern(name=variant):
+        case ConstructorPattern():
             constructor_ref = checked.pattern_constructor_ref_for(pattern.node_id)
             if constructor_ref is None:
                 raise MatchCompileInvariantError(
@@ -402,11 +428,12 @@ def normalize_pattern(
                     "with the checked occurrence type"
                 )
             if isinstance(subject_type, EnumType):
-                nominal_constructor: FieldBearingNominalConstructor = enum_constructor(
-                    subject_type, variant, checked.type_env.type_table
+                canonical_variant = _canonical_enum_pattern_variant(
+                    pattern.name, pattern.node_id, constructor_ref, subject_type, checked
                 )
-                if constructor_ref.variant != variant:
-                    raise MatchCompileInvariantError("invalid final constructor classification")
+                nominal_constructor: FieldBearingNominalConstructor = enum_constructor(
+                    subject_type, canonical_variant, checked.type_env.type_table
+                )
             else:
                 nominal_constructor = record_constructor(subject_type, checked.type_env.type_table)
             supplied_pairs = checked.argument_bindings.constructor_patterns.get(pattern.node_id)

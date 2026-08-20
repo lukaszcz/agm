@@ -298,8 +298,10 @@ See [Functions](functions.md) for the declaration and call syntax.
 
 ## Standard core types
 
-The following types are defined by `std/core`, which the automatic prelude
-opens in every loaded entry and library module except `std/core` itself.
+The following types are defined by `std/core`. Every loaded entry and library
+module except `std/core` itself receives an automatic `import std/core::*`, unless
+`--no-stdlib` disables it or an explicit import whose expansion includes `std/core`
+supplies the core contribution instead.
 
 ### `Option[T]`
 
@@ -686,15 +688,15 @@ let token: A::Token = A::Token()
 
 A plain import provides suffix routes; `as` provides its alias route. Qualified
 type references work in annotations, cast targets, and constructor expressions.
-An open import also brings the type name into bare scope, so `Point` resolves
-to `mylib::Point` if `mylib` is open-imported and no other open import clashes.
+An import tail or `use` declaration also brings the selected type name into bare
+scope, so `Point` resolves to `mylib::Point` when it has one bare contribution.
 
 Generic imported types retain the same qualification rules. Apply type
 arguments after the complete qualified name:
 
 <!-- agl-check: fragment -->
 ```agl
-open import mylib
+import mylib::*
 
 let p1: Box[int] = Box(value = 1)
 let p2: mylib::Box[int] = mylib::Box(value = 2)
@@ -704,7 +706,7 @@ let p2: mylib::Box[int] = mylib::Box(value = 2)
 
 Inside a module, `::TypeName` refers to the **current module's own** type
 named `TypeName`. This resolves directly in the module root, bypassing any
-shadow introduced by an open import:
+shadow introduced by a bare import contribution:
 
 ```agl
 # In mylib.agl

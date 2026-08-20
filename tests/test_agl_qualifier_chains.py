@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TypeVar
 
 import pytest
 
-from agm.agl.modules.ids import ENTRY_ID
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.parser import parse_program
 from agm.agl.scope import AglScopeError, ModuleResolution
+from agm.agl.scope.imports import (
+    QualResolutionFound,
+    SingleTarget,
+    build_import_env,
+    resolve_qualified,
+)
 from agm.agl.scope.program import resolve_program
 from agm.agl.syntax import (
     AssignStmt,
@@ -25,10 +32,9 @@ from agm.agl.syntax import (
     ScopeRegion,
     VarRef,
 )
-from agm.agl.syntax.nodes import ConstructorPattern
+from agm.agl.syntax.nodes import ConstructorPattern, ImportDecl, static_items
+from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
 from agm.agl.syntax.visitor import walk
-from tests.agl.ir_harness import make_graph_from_files
-from tests.agl.module_graph import resolve_inline_entry
 
 
 def _ref(source: str) -> VarRef:
@@ -49,10 +55,56 @@ def _find_nodes(program: object, node_type: type[_NodeT]) -> list[_NodeT]:
     return found
 
 
+def resolve_inline_entry(source: str) -> ModuleResolution:
+    """Resolve inline source through the program-level test helper lazily."""
+    from tests.agl.module_graph import resolve_inline_entry as resolve
+
+    return resolve(source)
+
+
 def _entry_resolution(tmp_path: Path, modules: dict[str, str]) -> ModuleResolution:
     """Resolve a multi-module program and return the entry module's resolution."""
+    from tests.agl.ir_harness import make_graph_from_files
+
     resolved = resolve_program(make_graph_from_files(tmp_path, modules))
     return resolved.modules[resolved.entry_id].resolved
+
+
+def _resolve_without_loader(modules: dict[str, str]) -> ModuleResolution:
+    """Resolve a parsed graph without exercising module loading behavior."""
+    loaded: dict[ModuleId, object] = {}
+    for path, source in modules.items():
+        module_id = ENTRY_ID if path == "entry" else ModuleId.from_path(path)
+        program = parse_program(source)
+        loaded[module_id] = SimpleNamespace(
+            program=program,
+            imports=tuple(
+                item for item in static_items(program.body.items) if isinstance(item, ImportDecl)
+            ),
+            export_decls=(),
+            path=None,
+            spaced_qualifiers=(),
+            source_text=source,
+        )
+    graph = SimpleNamespace(modules=loaded, entry_id=ENTRY_ID, sccs=())
+    return resolve_program(graph).modules[ENTRY_ID].resolved
+
+
+def test_generic_enum_constructor_resolves_through_a_reexport_facade(tmp_path: Path) -> None:
+    resolved = _entry_resolution(
+        tmp_path,
+        {
+            "entry": "import facade\nfacade::Option[int]::some(value = 1)",
+            "facade": "export lib::{Option}",
+            "lib": "enum Option[T]\n  | some(value: T)",
+        },
+    )
+
+    (call,) = _find_nodes(resolved.program, Call)
+    constructor = resolved.constructor_refs[call.callee.node_id]
+    assert constructor.owner_module_id == ModuleId.from_path("lib")
+    assert constructor.owner_name == "Option"
+    assert constructor.variant == "some"
 
 
 def test_qualified_expression_keeps_segment_spans_and_type_arguments() -> None:
@@ -369,24 +421,21 @@ def test_imported_scoped_enum_owner_retains_its_scope_path_for_is_and_case(
     )
 
 
-def test_explicit_module_route_open_is_not_masked_by_a_same_named_local_scope(
-    tmp_path: Path,
-) -> None:
-    """``open geo/shapes::Point`` reaches the routed scope over a same-named local one."""
-    resolution = _entry_resolution(
-        tmp_path,
+def test_explicit_module_route_use_is_not_masked_by_a_same_named_local_scope() -> None:
+    """``use /geo/shapes::Point::*`` reaches the routed scope over a same-named local one."""
+    resolution = _resolve_without_loader(
         {
             "entry": (
                 "import geo/shapes\n"
-                "open geo/shapes::Point\n"
+                "use /geo/shapes::Point::*\n"
                 "scope Point\n"
                 "def area() -> int = 1\n"
                 "end Point\n"
-                "print(describe())\n"
-                "print(Point::area())\n"
+                "def foreign() -> text = describe()\n"
+                "def local() -> int = Point::area()\n"
             ),
             "geo/shapes": 'scope Point\ndef describe() -> text = "point"\nend Point\n',
-        },
+        }
     )
 
     var_refs = _find_nodes(resolution.program, VarRef)
@@ -395,6 +444,326 @@ def test_explicit_module_route_open_is_not_masked_by_a_same_named_local_scope(
 
     (area_ref,) = [node for node in var_refs if node.name == "area"]
     assert resolution.resolution[area_ref.node_id].module_id == ENTRY_ID
+
+
+def test_use_resolves_aliases_suffixes_anchored_routes_and_nested_scopes(tmp_path: Path) -> None:
+    del tmp_path
+    _resolve_without_loader(
+        {
+            "entry": (
+                "import pkg/tools\n"
+                "import pkg/tools as Alias\n"
+                "use tools::{ping as probe, Nested}\n"
+                "use Alias::Nested::*\n"
+                "use /pkg/tools as P\n"
+                "def selected() -> int = probe()\n"
+                "def retained_path() -> int = Nested::child()\n"
+                "def nested() -> int = child()\n"
+                "def renamed_route() -> int = P::ping()\n"
+            ),
+            "pkg/tools": (
+                "def ping() -> int = 1\nscope Nested\ndef child() -> int = 2\nend Nested\n"
+            ),
+        },
+    )
+
+
+def test_use_wildcard_alias_facade_combines_module_members(tmp_path: Path) -> None:
+    _entry_resolution(
+        tmp_path,
+        {
+            "entry": "import pkg/* as Facade\nuse Facade::*\nfirst() + second()\n",
+            "pkg/a": "def first() -> int = 1\n",
+            "pkg/b": "def second() -> int = 2\n",
+        },
+    )
+
+
+def test_use_wildcard_alias_facade_preserves_member_ambiguity(tmp_path: Path) -> None:
+    modules = {
+        "entry": "import pkg/* as Facade\nuse Facade::*\ncommon()\n",
+        "pkg/a": "def common() -> int = 1\n",
+        "pkg/b": "def common() -> int = 2\n",
+    }
+
+    with pytest.raises(AglScopeError, match="ambiguous"):
+        _entry_resolution(tmp_path, modules)
+
+
+def test_use_target_local_module_ambiguity_requires_an_anchor(tmp_path: Path) -> None:
+    modules = {
+        "Point": "def remote() -> int = 1\n",
+        "entry": ("import Point\nuse Point::*\nscope Point\ndef local() -> int = 2\nend Point\n"),
+    }
+
+    del tmp_path
+    with pytest.raises(AglScopeError, match="ambiguous") as raised:
+        _resolve_without_loader(modules)
+
+    diagnostic = str(raised.value)
+    assert "Point" in diagnostic
+    assert "/Point" in diagnostic
+    assert "::Point" in diagnostic
+
+    _resolve_without_loader(
+        {**modules, "entry": modules["entry"].replace("use Point::*", "use /Point::*")}
+    )
+    _resolve_without_loader(
+        {**modules, "entry": modules["entry"].replace("use Point::*", "use ::Point::*")}
+    )
+
+
+@pytest.mark.parametrize(
+    "use_decl",
+    ("use lib as L", "use lib::* hiding Flag::Ready"),
+)
+def test_use_aliases_and_hiding_do_not_leak_enum_variants(tmp_path: Path, use_decl: str) -> None:
+    with pytest.raises(AglScopeError):
+        _entry_resolution(
+            tmp_path,
+            {
+                "entry": f"import lib\n{use_decl}\ndef selected() -> Flag = Ready",
+                "lib": "enum Flag\n  | Ready\n  | Waiting",
+            },
+        )
+
+
+def test_import_hiding_does_not_reintroduce_bare_enum_variant(tmp_path: Path) -> None:
+    with pytest.raises(AglScopeError):
+        _entry_resolution(
+            tmp_path,
+            {
+                "entry": "import lib::* hiding Flag::Ready\ndef selected() -> Flag = Ready",
+                "lib": "enum Flag\n  | Ready\n  | Waiting",
+            },
+        )
+
+
+def test_selective_import_does_not_expose_unselected_nested_scope_to_later_use(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(AglScopeError, match="not nameable"):
+        _entry_resolution(
+            tmp_path,
+            {
+                "entry": "import lib::{A::ok}\nuse A::*\nuse Secret::*",
+                "lib": (
+                    "scope A\n"
+                    "def ok() -> int = 1\n"
+                    "scope Secret\n"
+                    "def hidden() -> int = 2\n"
+                    "end Secret\n"
+                    "end A"
+                ),
+            },
+        )
+
+
+def test_selective_import_keeps_unselected_nested_scope_qualified_use_route(
+    tmp_path: Path,
+) -> None:
+    _entry_resolution(
+        tmp_path,
+        {
+            "entry": ("import lib::{A::ok}\nuse A::*\nuse lib::A::Secret::*\nhidden()"),
+            "lib": (
+                "scope A\n"
+                "def ok() -> int = 1\n"
+                "scope Secret\n"
+                "def hidden() -> int = 2\n"
+                "end Secret\n"
+                "end A"
+            ),
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "entry",
+    (
+        "import lib\nuse lib::f::*",
+        "import lib::{f}\nuse f::*",
+    ),
+)
+def test_use_rejects_ordinary_function_targets(tmp_path: Path, entry: str) -> None:
+    with pytest.raises(AglScopeError):
+        _entry_resolution(
+            tmp_path,
+            {
+                "entry": entry,
+                "lib": "def f() -> int = 1",
+            },
+        )
+
+
+def test_use_accepts_one_facade_scope_with_multiple_defining_modules(tmp_path: Path) -> None:
+    _entry_resolution(
+        tmp_path,
+        {
+            "entry": (
+                "import facade::{Scope}\nuse Scope::*\ndef selected() -> int = alpha() + beta()"
+            ),
+            "facade": "export source/a::{Scope}\nexport source/b::{Scope}",
+            "source/a": "scope Scope\ndef alpha() -> int = 1\nend Scope",
+            "source/b": "scope Scope\ndef beta() -> int = 2\nend Scope",
+        },
+    )
+
+
+def test_use_keeps_distinct_targets_from_one_module_ambiguous() -> None:
+    with pytest.raises(AglScopeError, match="ambiguous"):
+        _resolve_without_loader(
+            {
+                "entry": (
+                    "import lib as Scope\n"
+                    "import lib::{Scope}\n"
+                    "use Scope::*\n"
+                    "def selected() -> int = member()"
+                ),
+                "lib": ("def member() -> int = 1\nscope Scope\ndef member() -> int = 2\nend Scope"),
+            }
+        )
+
+
+def test_use_target_suffix_ambiguity_has_no_preferred_module_route() -> None:
+    modules = {
+        "entry": "import one/Target\nimport two/Target\nuse Target::*\n",
+        "one/Target": "def first() -> int = 1\n",
+        "two/Target": "def second() -> int = 2\n",
+    }
+
+    with pytest.raises(AglScopeError, match="ambiguous"):
+        _resolve_without_loader(modules)
+
+    _resolve_without_loader(
+        {**modules, "entry": modules["entry"].replace("use Target::*", "use /one/Target::*")}
+    )
+
+
+def test_use_bare_contributions_narrow_to_their_scope_region(tmp_path: Path) -> None:
+    modules = {
+        "lib": "def value() -> int = 1\n",
+        "entry": ("import lib\nscope A\nuse lib::*\ndef available() -> int = value()\nend A\n"),
+    }
+    del tmp_path
+    _resolve_without_loader(modules)
+
+    with pytest.raises(AglScopeError):
+        _resolve_without_loader(
+            {**modules, "entry": modules["entry"] + "def unavailable() -> int = value()\n"}
+        )
+
+
+def test_use_selection_hiding_and_renames_are_additive() -> None:
+    _resolve_without_loader(
+        {
+            "entry": (
+                "use Local::* hiding hidden\n"
+                "use Local::{Nested::member as renamed}\n"
+                "use Local::shown\n"
+                "use Local as L\n"
+                "scope Local\n"
+                "def shown() -> int = 1\n"
+                "def hidden() -> int = 2\n"
+                "scope Nested\n"
+                "def member() -> int = 3\n"
+                "end Nested\n"
+                "end Local\n"
+                "def all_members() -> int = Nested::member()\n"
+                "def selected_member() -> int = renamed()\n"
+                "def single_member() -> int = shown()\n"
+                "def aliased_scope() -> int = L::shown()\n"
+            )
+        }
+    )
+
+    with pytest.raises(AglScopeError, match="not declared"):
+        _resolve_without_loader(
+            {
+                "entry": (
+                    "use Local::* hiding missing\nscope Local\ndef shown() -> int = 1\nend Local\n"
+                )
+            }
+        )
+
+
+def test_local_use_rename_collision_is_ambiguous_when_used() -> None:
+    with pytest.raises(AglScopeError, match="ambiguous"):
+        _resolve_without_loader(
+            {
+                "entry": (
+                    "use S::{first as chosen, second as chosen}\n"
+                    "scope S\n"
+                    "def first() -> int = 1\n"
+                    "def second() -> int = 2\n"
+                    "end S\n"
+                    "def selected() -> int = chosen()"
+                )
+            }
+        )
+
+
+def test_region_tailed_import_keeps_routes_global_and_bare_names_regional() -> None:
+    modules = {
+        "lib": "def value() -> int = 1\n",
+        "entry": (
+            "scope A\n"
+            "import lib::*\n"
+            "def bare() -> int = value()\n"
+            "end A\n"
+            "scope B\n"
+            "def routed() -> int = lib::value()\n"
+            "end B\n"
+        ),
+    }
+    _resolve_without_loader(modules)
+
+    with pytest.raises(AglScopeError):
+        _resolve_without_loader(
+            {
+                **modules,
+                "entry": modules["entry"].replace(
+                    "def routed() -> int = lib::value()", "def routed() -> int = value()"
+                ),
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "modules",
+    (
+        {
+            "entry": "import empty\nuse empty::*",
+            "empty": "import dependency",
+            "dependency": "def value() -> int = 1",
+        },
+        {
+            "entry": "import lib\nuse lib::Empty::*",
+            "lib": "record Empty\n  value: int",
+        },
+        {
+            "entry": "import lib\nuse /lib::Empty::*",
+            "lib": "scope Empty\nend Empty",
+        },
+        {
+            "entry": "import lib::{Empty}\nuse Empty::*",
+            "lib": "record Empty\n  value: int",
+        },
+        {
+            "entry": "import lib hiding only\nuse lib::*",
+            "lib": "def only() -> int = 1",
+        },
+    ),
+)
+def test_use_accepts_nameable_targets_with_no_visible_members(
+    tmp_path: Path, modules: dict[str, str]
+) -> None:
+    _entry_resolution(tmp_path, modules)
+
+
+def test_unnameable_use_target_suggests_importing_its_module() -> None:
+    with pytest.raises(AglScopeError, match="Import"):
+        _resolve_without_loader({"entry": "use Missing::*\n"})
 
 
 def test_unrelated_nested_scope_does_not_mask_a_root_import_route(tmp_path: Path) -> None:
@@ -429,11 +798,27 @@ def test_unrelated_nested_scope_does_not_mask_a_root_import_route(tmp_path: Path
 def test_type_arguments_are_rejected_on_imported_route_and_scope_segments(
     tmp_path: Path, entry_source: str
 ) -> None:
+    from tests.agl.ir_harness import make_graph_from_files
+
     with pytest.raises(AglScopeError, match="Type arguments cannot be applied"):
         resolve_program(
             make_graph_from_files(
                 tmp_path, {"entry": entry_source, "lib": "scope A\ndef f() -> int = 7\nend A\n"}
             )
+        )
+
+
+def test_hidden_generic_does_not_validate_an_unrelated_plain_scope(tmp_path: Path) -> None:
+    with pytest.raises(AglScopeError, match="Type arguments cannot be applied"):
+        _entry_resolution(
+            tmp_path,
+            {
+                "entry": (
+                    "import one/shared\nimport two/shared hiding Box\nshared::Box[int]::describe()"
+                ),
+                "one/shared": "scope Box\ndef describe() -> int = 7\nend Box",
+                "two/shared": "record Box[T](value: T)",
+            },
         )
 
 
@@ -455,20 +840,26 @@ def test_type_arguments_on_an_imported_generic_type_scope_still_resolve(tmp_path
     assert resolution.resolution[describe_call.callee.node_id].module_id != ENTRY_ID
 
 
-def test_open_imported_enum_owner_qualifies_its_variant(tmp_path: Path) -> None:
-    """``Color::Red`` reaches an open-imported enum owner in expression position."""
-    resolution = _entry_resolution(
-        tmp_path,
-        {
-            "entry": "open import lib\nlet c = Color::Red\nprint(c is Color::Red)\n",
-            "lib": "enum Color\n  | Red\n  | Blue\n",
-        },
+def test_wildcard_import_tail_keeps_the_qualified_enum_owner_reachable() -> None:
+    """``import lib::*`` contributes bare owners without narrowing routes."""
+    span = SourceSpan(1, 1, 1, 1, 0, 0, UNKNOWN_SOURCE)
+    module = ModuleId.from_path("lib")
+    declaration = ImportDecl(
+        module_path=module.segments,
+        wildcard=False,
+        alias=None,
+        tail=(),
+        hidden=(),
+        span=span,
+        node_id=1,
+    )
+    env = build_import_env(
+        (declaration,),
+        {declaration.node_id: SingleTarget(module)},
+        {module: {"Color": (module, "Color"), ("Color", "Red"): (module, ("Color", "Red"))}},
     )
 
-    (variant_ref,) = (
-        node
-        for node in _find_nodes(resolution.program, VarRef)
-        if node.qualifier is not None and node.name == "Red"
+    assert env.unqualified["Color"] == frozenset({(module, "Color")})
+    assert resolve_qualified(env, ("lib",), ("Color", "Red")) == QualResolutionFound(
+        module, (module, ("Color", "Red"))
     )
-    cref = resolution.constructor_refs[variant_ref.node_id]
-    assert (cref.owner_name, cref.variant) == ("Color", "Red")

@@ -1,3 +1,3 @@
 scope Geo
-export libf using greet
+export libf::{greet}
 end Geo

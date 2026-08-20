@@ -466,7 +466,7 @@ class _TypeBuilder:
         """
         base_type: ExceptionType | None = None
         if stmt.base is not None:
-            resolved_base = self._env.resolve_named_type(stmt.base)
+            resolved_base = self._env.resolve_named_type(stmt.base, span=stmt.span)
             if not isinstance(resolved_base, ExceptionType):
                 raise AglTypeError(
                     f"Exception '{stmt.name}' extends unknown exception '{stmt.base}'.",

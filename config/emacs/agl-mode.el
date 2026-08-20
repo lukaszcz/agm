@@ -67,14 +67,14 @@ Canonical source: `src/agm/agl/keywords.py' (the `KEYWORDS' frozenset).")
   "AgL literal keywords, a subset of `agl-keywords'.")
 
 (defconst agl-soft-keywords
-  '("open" "import" "export" "using" "hiding" "scope" "end")
+  '("import" "use" "export" "hiding" "scope" "end")
   "AgL soft (contextually promoted) keywords.
 
 Ordinary identifiers outside their promotion window.  Canonical
 source: the module/scope soft-keyword table in
 `docs/agl/reference/lexical-structure.md', mirrored by
-`src/agm/agl/lexer/tokens.py' (OPEN, IMPORT, USING, HIDING, EXPORT,
-SCOPE, END).")
+`src/agm/agl/lexer/tokens.py' (IMPORT, USE, HIDING, EXPORT, SCOPE,
+END).")
 
 (defconst agl-contextual-builtins
   '("print" "ask" "exec")
@@ -557,11 +557,8 @@ The subset that gets `font-lock-keyword-face' rather than
 (defconst agl--raw-tail-name-re (regexp-opt agl-raw-tail-names)
   "Regexp matching one of `agl-raw-tail-names'.")
 
-(defconst agl--import-export-open-re (regexp-opt '("import" "export" "open"))
-  "Regexp matching one of the import/export/open soft keywords.")
-
-(defconst agl--using-hiding-re (regexp-opt '("using" "hiding"))
-  "Regexp matching one of the `using'/`hiding' soft keywords.")
+(defconst agl--import-export-use-re (regexp-opt '("import" "export" "use"))
+  "Regexp matching one of the import/export/use soft keywords.")
 
 (defconst agl--type-annotation-anchor-re "\\(?::\\|->\\)"
   "Regexp matching the `:' or `->' that opens a type-annotation position.
@@ -642,33 +639,17 @@ docs/agl/reference/lexical-structure.md).  Inherits `agl--escape-face'
     (skip-chars-backward " \t")
     (bolp)))
 
-(defun agl--preceded-by-open-p (pos)
-  "Return non-nil if POS is immediately preceded, modulo whitespace, by `open'."
-  (save-excursion
-    (goto-char pos)
-    (skip-chars-backward " \t")
-    (let ((end (point)))
-      (and (>= (- end 4) (point-min))
-           (string= "open" (buffer-substring-no-properties (- end 4) end))
-           (agl--ident-boundary-before-p (- end 4))))))
-
-(defun agl--import-promoted-p (pos)
-  "Return non-nil if the `import' match at POS is in its promotion window.
-
-The window is item-start, or directly after `open'."
-  (or (agl--item-start-p pos) (agl--preceded-by-open-p pos)))
-
-(defun agl--on-import-export-open-line-p (pos)
+(defun agl--on-import-export-use-line-p (pos)
   "Return non-nil if POS's line begins, at item-start, with a soft keyword.
 
-The soft keyword is `import', `export', or `open'.  This approximates
-the `using'/`hiding' promotion window (\"within an import, export, or
-open declaration\") as the physical line the keyword is written on."
+The soft keyword is `import', `export', or `use'.  This approximates
+the `hiding' promotion window (\"within an import, use, or export
+declaration\") as the physical line the keyword is written on."
   (save-excursion
     (goto-char pos)
     (beginning-of-line)
     (skip-chars-forward " \t")
-    (and (looking-at agl--import-export-open-re)
+    (and (looking-at agl--import-export-use-re)
          (agl--ident-boundary-after-p (match-end 0)))))
 
 (defun agl--end-promoted-p (pos)
@@ -697,9 +678,9 @@ The window is item-start, followed by a `NAME (:: NAME)*' closer path."
   "`font-lock-keywords' MATCHER for `exec!'/`ask!', up to LIMIT."
   (agl--search-ident-forward agl--raw-tail-name-re limit))
 
-(defun agl--match-open-keyword (limit)
-  "`font-lock-keywords' MATCHER for item-start `open', up to LIMIT."
-  (agl--search-ident-forward "open" limit #'agl--item-start-p))
+(defun agl--match-use-keyword (limit)
+  "`font-lock-keywords' MATCHER for item-start `use', up to LIMIT."
+  (agl--search-ident-forward "use" limit #'agl--item-start-p))
 
 (defun agl--match-export-keyword (limit)
   "`font-lock-keywords' MATCHER for item-start `export', up to LIMIT."
@@ -710,12 +691,12 @@ The window is item-start, followed by a `NAME (:: NAME)*' closer path."
   (agl--search-ident-forward "scope" limit #'agl--item-start-p))
 
 (defun agl--match-import-keyword (limit)
-  "`font-lock-keywords' MATCHER for promoted `import', up to LIMIT."
-  (agl--search-ident-forward "import" limit #'agl--import-promoted-p))
+  "`font-lock-keywords' MATCHER for item-start `import', up to LIMIT."
+  (agl--search-ident-forward "import" limit #'agl--item-start-p))
 
-(defun agl--match-using-hiding-keyword (limit)
-  "`font-lock-keywords' MATCHER for promoted `using'/`hiding', up to LIMIT."
-  (agl--search-ident-forward agl--using-hiding-re limit #'agl--on-import-export-open-line-p))
+(defun agl--match-hiding-keyword (limit)
+  "`font-lock-keywords' MATCHER for promoted `hiding', up to LIMIT."
+  (agl--search-ident-forward "hiding" limit #'agl--on-import-export-use-line-p))
 
 (defun agl--match-end-keyword (limit)
   "`font-lock-keywords' MATCHER for promoted `end', up to LIMIT."
@@ -1042,10 +1023,10 @@ success."
   (list
    (cons #'agl--match-reserved-keyword ''font-lock-keyword-face)
    (cons #'agl--match-constant-keyword ''font-lock-constant-face)
-   (cons #'agl--match-open-keyword ''font-lock-keyword-face)
    (cons #'agl--match-import-keyword ''font-lock-keyword-face)
+   (cons #'agl--match-use-keyword ''font-lock-keyword-face)
    (cons #'agl--match-export-keyword ''font-lock-keyword-face)
-   (cons #'agl--match-using-hiding-keyword ''font-lock-keyword-face)
+   (cons #'agl--match-hiding-keyword ''font-lock-keyword-face)
    (cons #'agl--match-scope-soft-keyword ''font-lock-keyword-face)
    (cons #'agl--match-end-keyword ''font-lock-keyword-face)
    (cons #'agl--match-contextual-builtin ''font-lock-builtin-face)

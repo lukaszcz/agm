@@ -1,8 +1,8 @@
-# `open import` contributes an imported scope's members bare; a later `open`
-# of that scope's own name (with no module route) must reach them too.
-open import facade
+# A glob import contributes an imported scope's members bare; a later use of
+# that scope's own name (with no module route) reaches them too.
+import facade::*
 
-open Shapes
+use Shapes::*
 
 program def main() -> unit =
   print(measure())

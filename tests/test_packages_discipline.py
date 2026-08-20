@@ -327,9 +327,7 @@ class TestPackageDiscipline:
 
     def test_accepts_nonexpanding_resource_reexport_cycle(self, tmp_path: Path) -> None:
         package = _custom_package(tmp_path)
-        (package.module_root / "a.agl").write_text(
-            "export std/core using resource\nexport custom/b\n"
-        )
+        (package.module_root / "a.agl").write_text("export std/core::{resource}\nexport custom/b\n")
         (package.module_root / "b.agl").write_text("export custom/a\n")
 
         validate_package(package)
@@ -337,7 +335,7 @@ class TestPackageDiscipline:
     def test_rejects_cyclic_scoped_resource_reexports_without_hanging(self, tmp_path: Path) -> None:
         package = _custom_package(tmp_path)
         (package.module_root / "a.agl").write_text(
-            "export std/core using resource\nscope Loop\nexport custom/b\nend Loop\n"
+            "export std/core::{resource}\nscope Loop\nexport custom/b\nend Loop\n"
         )
         (package.module_root / "b.agl").write_text("scope Loop\nexport custom/a\nend Loop\n")
 
@@ -351,7 +349,7 @@ class TestPackageDiscipline:
         package = _custom_package(tmp_path)
         (package.module_root / "main.agl").write_text(
             "scope Assets\n"
-            "import std/core using resource as asset, resource-dir as assets\n"
+            "import std/core::{resource as asset, resource-dir as assets}\n"
             "let root = assets()\n"
             'let prompt = asset("prompts/missing.md")\n'
             "end Assets\n"
@@ -364,9 +362,9 @@ class TestPackageDiscipline:
     def test_rejects_missing_resource_through_an_open_alias(self, tmp_path: Path) -> None:
         package = _custom_package(tmp_path)
         (package.module_root / "main.agl").write_text(
-            "open Assets using asset as load\n"
+            "use Assets::asset as load\n"
             "scope Assets\n"
-            "import std/core using resource as asset\n"
+            "import std/core::{resource as asset}\n"
             "end Assets\n"
             'let prompt = load("prompts/missing.md")\n'
         )
@@ -375,24 +373,22 @@ class TestPackageDiscipline:
             validate_package(package)
 
     @pytest.mark.parametrize(
-        "open_declaration",
+        "use_declaration",
         (
-            "open Assets",
-            "open Assets hiding directories",
-            "open Assets using absent, asset as load",
+            "use Assets::*",
+            "use Assets::* hiding directories",
+            "use Assets::{absent, asset as load}",
         ),
     )
-    def test_resource_open_selection_modes_are_tracked(
-        self, tmp_path: Path, open_declaration: str
+    def test_resource_use_selection_modes_are_tracked(
+        self, tmp_path: Path, use_declaration: str
     ) -> None:
         package = _custom_package(tmp_path)
-        called = (
-            "asset" if open_declaration != "open Assets using absent, asset as load" else "load"
-        )
+        called = "asset" if use_declaration != "use Assets::{absent, asset as load}" else "load"
         (package.module_root / "main.agl").write_text(
-            f"{open_declaration}\n"
+            f"{use_declaration}\n"
             "scope Assets\n"
-            "import std/core using resource as asset, resource-dir as directories\n"
+            "import std/core::{resource as asset, resource-dir as directories}\n"
             "end Assets\n"
             f'let prompt = {called}("prompts/missing.md")\n'
         )
@@ -403,7 +399,7 @@ class TestPackageDiscipline:
     def test_resource_open_without_resource_members_is_ignored(self, tmp_path: Path) -> None:
         package = _custom_package(tmp_path)
         (package.module_root / "main.agl").write_text(
-            "open Empty\nscope Empty\ndef value() -> unit = ()\nend Empty\n"
+            "use Empty::*\nscope Empty\ndef value() -> unit = ()\nend Empty\n"
         )
 
         validate_package(package)
@@ -432,7 +428,7 @@ class TestPackageDiscipline:
     def test_accepts_resource_alias_shadowed_by_a_function_parameter(self, tmp_path: Path) -> None:
         package = _custom_package(tmp_path)
         (package.module_root / "main.agl").write_text(
-            "import std/core using resource as asset\n"
+            "import std/core::{resource as asset}\n"
             'def use(asset: (text) -> text) -> text = asset("not/a/resource")\n'
         )
 
@@ -444,7 +440,7 @@ class TestPackageDiscipline:
     ) -> None:
         package = _custom_package(tmp_path)
         (package.module_root / "main.agl").write_text(
-            "import std/core using resource as asset\n"
+            "import std/core::{resource as asset}\n"
             "program def main() -> text =\n"
             f"  {binding} asset = fn(path: text) => path\n"
             '  asset("not/a/resource")\n'
@@ -455,12 +451,12 @@ class TestPackageDiscipline:
     def test_accepts_resource_alias_shadowed_inside_a_nested_block(self, tmp_path: Path) -> None:
         package = _custom_package(tmp_path)
         (package.module_root / "main.agl").write_text(
-            "import std/core using resource as asset\n"
+            "import std/core::{resource as asset}\n"
             "def load(path: text) -> text = path\n"
             "program def main() -> unit =\n"
             "  if true =>\n"
             "    let asset = load\n"
-            '    print (asset("not/a/resource"))\n'
+            '    std/core::print(asset("not/a/resource"))\n'
             "  else => ()\n"
         )
 
@@ -480,7 +476,7 @@ class TestPackageDiscipline:
         (package.module_root / "main.agl").write_text(
             "scope Types\n"
             "scope Value\n"
-            "import std/core using resource\n"
+            "import std/core::{resource}\n"
             "end Value\n"
             "enum Value | resource(value: text)\n"
             "end Types\n"
@@ -496,15 +492,13 @@ class TestPackageDiscipline:
             dependency_root,
             PackageManifest("helpers", semver.Version.parse("1.0.0")),
         )
-        (dependency.module_root / "assets.agl").write_text(
-            "export std/core using resource as asset\n"
-        )
+        (dependency.module_root / "assets.agl").write_text("export std/core::{resource as asset}\n")
         consumer = _custom_package(
             tmp_path / "consumer",
             dependencies={"helpers": DependencySpec(semver.Version.parse("1.0.0"))},
         )
         (consumer.module_root / "main.agl").write_text(
-            'import helpers/assets using asset as load\nlet prompt = load("prompts/missing.md")\n'
+            'import helpers/assets::{asset as load}\nlet prompt = load("prompts/missing.md")\n'
         )
 
         with pytest.raises(DisciplineError, match="missing.md"):
@@ -534,13 +528,13 @@ class TestPackageDiscipline:
     ) -> None:
         package = _custom_package(tmp_path)
         (package.module_root / "resources.agl").write_text(
-            "scope Assets\nexport std/core using resource as asset\nend Assets\n"
+            "scope Assets\nexport std/core::{resource as asset}\nend Assets\n"
         )
         (package.module_root / "facade.agl").write_text(
-            "export custom/resources using Assets::asset\n"
+            "export custom/resources::{Assets::asset}\n"
         )
         (package.module_root / "main.agl").write_text(
-            "import custom/facade using Assets::asset as load\n"
+            "import custom/facade::{Assets::asset as load}\n"
             'let prompt = load("prompts/missing.md")\n'
         )
 

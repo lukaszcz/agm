@@ -1,0 +1,14 @@
+# Imported target spellings preserve aliases and selections until scope resolves them.
+import num/arith
+use num/arith as Whole
+use num/arith::add as selected
+use /num/arith::Operations as Anchored
+use num/arith::Operations::{difference as delta}
+use num/arith::* hiding mul
+
+program def main() -> unit =
+  print Whole::add(1, 2)
+  print selected(2, 3)
+  print Anchored::difference(8, 3)
+  print delta(9, 4)
+  print add(3, 4)

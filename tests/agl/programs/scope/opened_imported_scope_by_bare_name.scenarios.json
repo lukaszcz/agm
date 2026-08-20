@@ -1,7 +1,7 @@
 {
   "scenarios": [
     {
-      "name": "opens_a_scope_contributed_bare_by_open_import",
+      "name": "uses_a_scope_contributed_bare_by_import_tail",
       "module_roots": [
         "program_modules/scoped_open"
       ],

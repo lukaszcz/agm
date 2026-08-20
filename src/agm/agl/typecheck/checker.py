@@ -3313,9 +3313,8 @@ class _Checker:
             bt = self._check_expr(branch.body, expected=body_expected)
             if not has_else:
                 self._assert_assignable_from(bt, UnitType(), branch.body.span, branch.body)
-            if has_else and body_expected is not None:
-                self._assert_assignable_from(bt, body_expected, branch.body.span, branch.body)
-                branch_types.append(body_expected)
+            if has_else:
+                branch_types.append(self._branch_result(bt, body_expected, branch.body))
             else:
                 branch_types.append(bt)
 
@@ -3355,11 +3354,7 @@ class _Checker:
             except AglTypeError as exc:
                 raise self._frame_inferred_return_error(exc, exprs=(node.subject,)) from exc
             bt = self._check_expr(branch.body, expected=expected)
-            if expected is not None:
-                self._assert_assignable_from(bt, expected, branch.body.span, branch.body)
-                branch_types.append(expected)
-            else:
-                branch_types.append(bt)
+            branch_types.append(self._branch_result(bt, expected, branch.body))
         try:
             result = self._unify_branch_types(branch_types, node.span, "Case expression")
         except AglTypeError as exc:
@@ -3463,18 +3458,14 @@ class _Checker:
     # --- try ---
 
     def _check_try(self, node: Try, *, expected: Type | None) -> Type:
-        body_type = self._check_expr(node.body, expected=expected)
-        if expected is not None:
-            self._assert_assignable_from(body_type, expected, node.body.span, node.body)
-            body_type = expected
+        body_type = self._branch_result(
+            self._check_expr(node.body, expected=expected), expected, node.body
+        )
         handler_types: list[Type] = [body_type]
         handler_bodies: list[Expr] = []
         for clause in node.handlers:
             ht = self._check_catch_clause(clause, expected=expected)
-            if expected is not None:
-                self._assert_assignable_from(ht, expected, clause.body.span, clause.body)
-                ht = expected
-            handler_types.append(ht)
+            handler_types.append(self._branch_result(ht, expected, clause.body))
             handler_bodies.append(clause.body)
         try:
             result = self._unify_branch_types(handler_types, node.span, "Try expression")
@@ -5210,6 +5201,17 @@ class _Checker:
     # ------------------------------------------------------------------
     # Branch unification
     # ------------------------------------------------------------------
+
+    def _branch_result(self, actual: Type, expected: Type | None, body: Expr) -> Type:
+        """Fold one branch's checked type into the unification input.
+
+        An explicit expectation is what an assignable branch contributes, so
+        unification never sees an incidentally narrower branch type.
+        """
+        if expected is None:
+            return actual
+        self._assert_assignable_from(actual, expected, body.span, body)
+        return expected
 
     def _unify_branch_types(
         self,

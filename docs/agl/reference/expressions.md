@@ -768,7 +768,7 @@ For scalar types (`bool`, `int`, `decimal`) it produces the plain scalar text.
 **Recursive cast targets.** A [recursive record or enum](types.md#recursive-types)
 works as a `text`/`json` cast target exactly like any other: the value is
 validated and decoded through the same JSON Schema (`$defs`/`$ref` for the
-recursive parts) used at the agent-call boundary, and `as`/`as?` behave
+hoisted parts) used at the agent-call boundary, and `as`/`as?` behave
 normally, including inside a container target such as `array[Tree]`. The same
 finite-schema restriction applies as for an agent output type: a
 [polymorphically recursive](generics.md#recursive-generic-types) generic type

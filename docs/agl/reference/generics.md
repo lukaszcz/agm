@@ -484,9 +484,8 @@ uses the expression's static type, so enum-typed positions retain their member
 or a generic recursive type whose reachable instantiations close, crosses
 these boundaries normally. The [derived JSON
 Schema](agent-calls.md#derived-json-schema) for a recursive type uses
-`$defs`/`$ref`, with one entry per recursive schema-relevant instantiation
-reachable from the target (`Tree[int]` and `Tree[text]` are distinct concrete
-shapes).
+`$defs`/`$ref`, with one entry per schema-relevant instantiation it hoists
+(`Tree[int]` and `Tree[text]` are distinct concrete shapes).
 
 ## Unqualified member ambiguity
 

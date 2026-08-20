@@ -93,6 +93,22 @@ def test_owning_stdlib_modules_accept_builtin_method_declarations(
     assert discovery.checked is not None, discovery.diagnostics
 
 
+def test_builtin_receiver_declaration_rejects_a_wrong_owning_stdlib_module(tmp_path: Path) -> None:
+    """A valid array receiver remains restricted to ``std/array``."""
+    prepared = _prepare_stdlib_module(
+        tmp_path,
+        "std/math",
+        "def array[E]::wrong_owner(self) -> array[E] = self\n",
+    )
+
+    assert prepared.resolved is not None, prepared.diagnostics
+
+    discovery = PipelineDriver().discover_params(prepared)
+
+    assert discovery.checked is None
+    assert any("std/array" in diagnostic.message for diagnostic in discovery.diagnostics)
+
+
 def test_builtin_receiver_host_declaration_requires_a_supported_route(tmp_path: Path) -> None:
     prepared = _prepare_stdlib_module(
         tmp_path,

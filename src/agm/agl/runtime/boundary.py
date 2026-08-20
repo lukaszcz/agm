@@ -149,7 +149,9 @@ def _create_nominal(descriptor: NominalDescriptor, name: str) -> type[object]:
     )
 
 
-def _create_enum(descriptor: NominalDescriptor, name: str) -> type[object]:
+def _create_enum(
+    descriptor: NominalDescriptor, name: str, variant_classes: dict[NominalId, type[object]]
+) -> type[object]:
     """Create the synthesized enum class and its nested variant classes.
 
     Called at most once per identity, for the same reason as :func:`_create_nominal`.
@@ -163,16 +165,22 @@ def _create_enum(descriptor: NominalDescriptor, name: str) -> type[object]:
         ),
     )
     for variant in descriptor.variants:
-        attrs = {
-            **_nominal_attrs(descriptor, variant.fields),
-            "_agl_nominal": variant.member,
-            "_agl_variant": variant.name,
-        }
-        variant_cls = type(
-            variant.name,
-            (cast(type[object], _AglNominal), enum_cls),
-            _class_namespace(attrs),
-        )
+        variant_cls = variant_classes.get(variant.member)
+        if variant_cls is None:
+            attrs = {
+                **_nominal_attrs(descriptor, variant.fields),
+                "_agl_nominal": variant.member,
+                "_agl_variant": variant.name,
+            }
+            variant_cls = cast(
+                type[object],
+                type(
+                    variant.name,
+                    (cast(type[object], _AglNominal), enum_cls),
+                    _class_namespace(attrs),
+                ),
+            )
+            variant_classes[variant.member] = variant_cls
         setattr(enum_cls, variant.name, variant_cls)
     return enum_cls
 
@@ -207,21 +215,39 @@ def synthesize_nominal_classes(
     :func:`encode_boundary_value` consults for the encode direction; see
     :data:`_NOMINAL_CLASSES` for its lifetime.
     """
+    all_descriptors = tuple(descriptors)
     current = existing if existing is not None else {}
     result: dict[NominalId, type[object]] = {}
-    for descriptor in descriptors:
+    pending_enums: list[NominalDescriptor] = []
+    descriptors_by_nominal = {descriptor.nominal: descriptor for descriptor in all_descriptors}
+    inline_members = {
+        variant.member
+        for enum in all_descriptors
+        if enum.kind is NominalKind.ENUM
+        for variant in enum.variants
+        if (
+            (member := descriptors_by_nominal.get(variant.member)) is not None
+            and member.scope_path == (*enum.scope_path, enum.declared_name)
+        )
+    }
+    for descriptor in all_descriptors:
         reused = result.get(descriptor.nominal) or current.get(descriptor.nominal)
         if reused is not None:
             result[descriptor.nominal] = reused
             continue
         name = _nominal_class_name(descriptor)
-        if descriptor.kind is not NominalKind.ENUM:
-            result[descriptor.nominal] = _create_nominal(descriptor, name)
+        if descriptor.kind is NominalKind.ENUM:
+            pending_enums.append(descriptor)
+        elif descriptor.nominal in inline_members:
             continue
-        enum_cls = _create_enum(descriptor, name)
+        else:
+            result[descriptor.nominal] = _create_nominal(descriptor, name)
+    for descriptor in pending_enums:
+        variant_classes = {**current, **result}
+        enum_cls = _create_enum(descriptor, _nominal_class_name(descriptor), variant_classes)
         result[descriptor.nominal] = enum_cls
         for variant in descriptor.variants:
-            result[variant.member] = cast(type[object], getattr(enum_cls, variant.name))
+            result.setdefault(variant.member, cast(type[object], getattr(enum_cls, variant.name)))
     _NOMINAL_CLASSES.update(result)
     return result
 

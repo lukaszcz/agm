@@ -1589,7 +1589,7 @@ class _Checker:
         if isinstance(expr, VarRef):
             return self._check_varref(expr, expected=expected)
         if isinstance(expr, TypeApply):
-            return self._check_type_apply(expr)
+            return self._check_type_apply(expr, expected=expected)
         if isinstance(expr, Call):
             return self._check_call(expr, expected=expected)
         if isinstance(expr, Placeholder):
@@ -1687,14 +1687,16 @@ class _Checker:
         if (ctor_ref := self._constructor_ref_for(node.node_id)) is not None:
             if (member_type := self._owner_applied_member_type(node, ctor_ref)) is not None:
                 return self._constructors.check_constructor_as_value(
-                    owner=member_type, span=node.span
+                    owner=member_type, span=node.span, expected=expected
                 )
             if ctor_ref.type_params:
                 return self._constructors.check_generic_constructor_as_value(
                     ctor_ref=ctor_ref, span=node.span, expected=expected
                 )
             owner = self._constructors.resolve_constructor_owner(ctor_ref, node.span)
-            return self._constructors.check_constructor_as_value(owner=owner, span=node.span)
+            return self._constructors.check_constructor_as_value(
+                owner=owner, span=node.span, expected=expected
+            )
         ref = self._binding_for(node.node_id)
         if ref.kind is BinderKind.constructor_binding:
             if not ref.module_id.is_entry:
@@ -1925,7 +1927,7 @@ class _Checker:
             for p, ta in zip(type_params, type_args)
         }
 
-    def _check_type_apply(self, node: TypeApply) -> Type:
+    def _check_type_apply(self, node: TypeApply, *, expected: Type | None) -> Type:
         # A constructor used as a value with explicit type arguments
         # (e.g. ``some::[int]``; qualified refs use ``Option[int]::none``): delegate to the
         # constructor checker, which instantiates the constructor with the
@@ -1940,7 +1942,7 @@ class _Checker:
             and (ctor_ref := self._constructor_ref_for(node.expr.node_id)) is not None
         ):
             typ = self._constructors.check_constructor_type_apply(
-                ctor_ref=ctor_ref, type_args=node.type_args, span=node.span
+                ctor_ref=ctor_ref, type_args=node.type_args, span=node.span, expected=expected
             )
             self._record_node_type(node.expr.node_id, typ)
             return typ

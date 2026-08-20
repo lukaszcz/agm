@@ -1435,12 +1435,7 @@ def is_assignable_in(table: TypeTable, value_type: Type, target_type: Type) -> b
         and value_type in table.enum_members(target_type)
     ):
         return True
-    return (
-        isinstance(value_type, FunctionType)
-        and isinstance(target_type, FunctionType)
-        and value_type.params == target_type.params
-        and is_assignable_in(table, value_type.result, target_type.result)
-    )
+    return False
 
 
 def json_cast_hint(value_type: Type, target_type: Type, table: TypeTable) -> str:

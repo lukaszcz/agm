@@ -873,6 +873,36 @@ def test_synthesizing_an_already_present_identity_reuses_its_class_unchanged() -
     assert hasattr(enum_cls, "Gone")
 
 
+def test_referenced_record_keeps_one_class_across_multiple_enums() -> None:
+    record = _fresh_nominal()
+    left = _fresh_nominal()
+    right = _fresh_nominal()
+    descriptors = (
+        NominalDescriptor(record, ENTRY_ID, (), "Shared", NominalKind.RECORD, ("value",)),
+        NominalDescriptor(
+            left,
+            ENTRY_ID,
+            (),
+            "Left",
+            NominalKind.ENUM,
+            variants=(VariantDescriptor("Shared", ("value",), record),),
+        ),
+        NominalDescriptor(
+            right,
+            ENTRY_ID,
+            (),
+            "Right",
+            NominalKind.ENUM,
+            variants=(VariantDescriptor("Shared", ("value",), record),),
+        ),
+    )
+
+    classes = synthesize_nominal_classes(descriptors)
+
+    assert classes[record] is classes[left].Shared
+    assert classes[record] is classes[right].Shared
+
+
 def test_companion_namespace_keeps_same_named_nominals_distinct() -> None:
     left = _fresh_nominal()
     right = _fresh_nominal()

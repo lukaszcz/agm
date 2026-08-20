@@ -2566,6 +2566,16 @@ class _Lowerer:
         partial_type = self._node_type(call_node.node_id)
         assert isinstance(partial_type, FunctionType)
         result_type = partial_type.result
+        if isinstance(result_type, EnumType):
+            constructor_ref = self._checked.constructor_ref_for(call_node.callee.node_id)
+            assert constructor_ref is not None, (
+                "compiler bug: partial constructor lost its selection"
+            )
+            result_type = next(
+                member
+                for member in self._checked.type_env.type_table.enum_members(result_type)
+                if member.decl_id == constructor_ref.owner_decl_node_id
+            )
         field_types = self._constructor_field_types(result_type)
         binding_by_name = self._checked.argument_bindings.constructor_calls[call_node.node_id]
         field_order = tuple(binding_by_name)

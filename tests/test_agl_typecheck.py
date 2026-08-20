@@ -4480,7 +4480,7 @@ class TestPartialConstructorAndValueCalls:
         option = checked.type_env.instantiate_nominal("Option", (IntType(),))
         assert checked.node_types[call.node_id] == FunctionType(
             params=(IntType(),),
-            result=checked.type_env.type_table.enum_member_names(option)["some"],
+            result=option,
         )
         assert checked.partial_calls[call.node_id].callee_kind == "constructor"
 

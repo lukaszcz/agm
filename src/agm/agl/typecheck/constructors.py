@@ -179,6 +179,12 @@ class ConstructorChecker:
             expected=expected,
             subject=ctor_ref.owner_name,
         )
+        return self._contextualize_member_result(result, expected, span, ctor_ref.owner_name)
+
+    def _contextualize_member_result(
+        self, result: Type, expected: Type | None, span: SourceSpan, owner_name: str
+    ) -> Type:
+        """Apply an enum result context to a constructor function value only."""
         if (
             isinstance(result, FunctionType)
             and isinstance(expected, FunctionType)
@@ -198,9 +204,7 @@ class ConstructorChecker:
                 engine.unify(
                     result.result,
                     expected_member,
-                    engine.origin(
-                        span, role=ConstraintRole.EXPECTED_RESULT, subject=ctor_ref.owner_name
-                    ),
+                    engine.origin(span, role=ConstraintRole.EXPECTED_RESULT, subject=owner_name),
                 )
                 return replace(result, result=expected.result)
         return result
@@ -220,20 +224,6 @@ class ConstructorChecker:
         direct_sig = self._ctx._env.get_ctor_sig_from_module(
             ctor_ref.owner_module_id, owner_name, scope_path=ctor_ref.owner_path
         )
-        gdef = self._ctx._env.get_generic_type_from_module(
-            ctor_ref.owner_module_id, owner_name, scope_path=ctor_ref.owner_path
-        )
-        if gdef is not None:
-            sig = self._ctx._env.get_ctor_sig_from_module(
-                ctor_ref.owner_module_id, owner_name, scope_path=ctor_ref.owner_path
-            )
-            if sig is None:
-                sig = self._ctx._env.get_constructor_signature(
-                    owner_name, scope_path=ctor_ref.owner_path
-                )
-            assert sig is not None, f"No constructor signature for {owner_name}"
-            return ctor_ref, sig, gdef
-
         inline_member = self._inline_enum_member_data(ctor_ref)
         if inline_member is not None:
             _enum_gdef, member_type = inline_member
@@ -253,6 +243,19 @@ class ConstructorChecker:
                 ),
                 None,
             )
+        gdef = self._ctx._env.get_generic_type_from_module(
+            ctor_ref.owner_module_id, owner_name, scope_path=ctor_ref.owner_path
+        )
+        if gdef is not None:
+            sig = self._ctx._env.get_ctor_sig_from_module(
+                ctor_ref.owner_module_id, owner_name, scope_path=ctor_ref.owner_path
+            )
+            if sig is None:
+                sig = self._ctx._env.get_constructor_signature(
+                    owner_name, scope_path=ctor_ref.owner_path
+                )
+            assert sig is not None, f"No constructor signature for {owner_name}"
+            return ctor_ref, sig, gdef
 
         source = self._ctx._env.source_type_template_qname(
             ctor_ref.owner_module_id, owner_name, scope_path=ctor_ref.owner_path
@@ -380,6 +383,7 @@ class ConstructorChecker:
         ctor_ref: ConstructorRef,
         type_args: tuple[TypeExpr, ...],
         span: SourceSpan,
+        expected: Type | None,
     ) -> Type:
         """Type an explicitly instantiated constructor used as a value.
 
@@ -401,12 +405,13 @@ class ConstructorChecker:
                 span=span,
             )
         ctor_ref, sig, _gdef = self._generic_constructor_data(ctor_ref)
-        return self._instantiate_constructor_value(
+        result = self._instantiate_constructor_value(
             type_params=type_params,
             type_args=type_args,
             sig=sig,
             span=span,
         )
+        return self._contextualize_member_result(result, expected, span, ctor_ref.owner_name)
 
     # --- Generic constructor call (private helper) ---
 
@@ -510,13 +515,15 @@ class ConstructorChecker:
         produced = self._constructor_call_result_type(
             field_kinds, fields_by_name, result, bound_exprs, hole_indices
         )
+        contextualized = self._contextualize_member_result(produced, expected, span, owner_name)
         if expected is not None and not node_type_args:
             engine = self._inference_engine()
-            engine.complete_from_context(
-                produced,
-                expected,
-                engine.origin(span, role=ConstraintRole.EXPECTED_RESULT, subject=owner_name),
-            )
+            if contextualized is produced:
+                engine.complete_from_context(
+                    produced,
+                    expected,
+                    engine.origin(span, role=ConstraintRole.EXPECTED_RESULT, subject=owner_name),
+                )
         self._ctx._record_constructor_call_binding(node.node_id, dict(bound_exprs))
         if hole_indices:
             self._ctx._record_partial_call(
@@ -532,7 +539,7 @@ class ConstructorChecker:
                 dict(zip(sig.field_names, sig.field_templates, strict=True)),
                 bound_exprs,
             )
-        return produced
+        return contextualized
 
     def _inference_engine(self) -> InferenceEngine:
         """Return the active shared solver for a generic constructor occurrence."""
@@ -619,14 +626,16 @@ class ConstructorChecker:
     # --- Resolve constructor owner (public entry point) ---
 
     def normalize_constructor_ref(self, ref: ConstructorRef) -> ConstructorRef:
-        """Attach generic metadata discovered from the resolved owner identity."""
-        if ref.type_params:
-            return ref
-        source = self._ctx._env.source_type_template_qname(
-            ref.owner_module_id, ref.owner_name, scope_path=ref.owner_path
-        )
-        if source is not None and isinstance(source.template, (RecordType, EnumType)):
-            return replace(ref, type_params=source.type_params)
+        """Use generic metadata from the resolved owner identity.
+
+        Scope records inline-member parameters from syntax so it can publish
+        constructor candidates before types are built. Transparent aliases can
+        erase such a parameter, however, so the completed record template is
+        authoritative once checking begins.
+        """
+        typedef = self._ctx._env.type_table.get_by_id(ref.owner_decl_node_id)
+        if typedef is not None and typedef.kind in {"record", "enum"}:
+            return replace(ref, type_params=typedef.type_params)
         return ref
 
     def resolve_constructor_owner(
@@ -676,6 +685,7 @@ class ConstructorChecker:
         *,
         owner: RecordType | ExceptionType,
         span: SourceSpan,
+        expected: Type | None,
     ) -> Type:
         """Type a non-generic constructor used in value position (not directly called).
 
@@ -698,7 +708,9 @@ class ConstructorChecker:
         fields = self._ctx._env.type_table.record_fields(owner)
         if fields:
             params = tuple(fields.values())
-            return FunctionType(params=params, result=owner)
+            return self._contextualize_member_result(
+                FunctionType(params=params, result=owner), expected, span, owner.name
+            )
         return self._check_constructor_call(owner=owner, positional=(), named=(), span=span)
 
     # --- Cross-module constructor value/call (public entry points) ---
@@ -766,7 +778,7 @@ class ConstructorChecker:
                 sig=sig,
             )
         if isinstance(owner, RecordType):
-            return self.check_constructor_as_value(owner=owner, span=span)
+            return self.check_constructor_as_value(owner=owner, span=span, expected=expected)
         raise AglTypeError(f"'{callee_ref.name}' is a type name, not a value; ", span=span)
 
     def check_cross_module_constructor_call(
@@ -848,7 +860,7 @@ class ConstructorChecker:
         explicit_type_params = (
             self._explicit_constructor_type_params(ctor_ref, type_args) if type_args else None
         )
-        if ctor_ref.type_params or explicit_type_params:
+        if ctor_ref.type_params or explicit_type_params or self._inline_enum_member_data(ctor_ref):
             if type_args and explicit_type_params is None:
                 raise AglTypeError(
                     f"'{ctor_ref.owner_name}' requires "

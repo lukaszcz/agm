@@ -135,6 +135,16 @@ class TestMembershipAssignable:
         assert not is_assignable_in(table, target, EnumType("Other", decl_id=5))
         assert not is_assignable_in(table, ExceptionType("Oops", decl_id=6), target)
 
+    def test_preserves_function_result_invariance(self) -> None:
+        table, _node, leaf, _other, _tree = _member_assignability_table()
+        target = EnumType("Tree", (IntType(),), decl_id=4)
+
+        assert not is_assignable_in(
+            table,
+            FunctionType(params=(), result=leaf),
+            FunctionType(params=(), result=target),
+        )
+
 
 # ---------------------------------------------------------------------------
 # UnitType

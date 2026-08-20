@@ -1,6 +1,6 @@
 # TOML parsing and rendering preserve AgL's json representation.
 import std/toml
-import std/toml using TomlParseError
+import std/toml::TomlParseError
 
 param mode: int
 

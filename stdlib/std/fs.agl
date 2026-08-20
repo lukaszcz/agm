@@ -1,4 +1,4 @@
-import std/option using Option
+import std/option::Option
 
 exception FsError extends Exception
   path: text

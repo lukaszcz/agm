@@ -1007,9 +1007,9 @@ class TestTypeEnvironment:
         env = TypeEnvironment()
         assert env.resolve_named_type("Unknown") is None
 
-    def test_resolve_named_type_multiple_candidates_returns_none(self) -> None:
-        # Coverage: resolve_named_type returns None when multiple candidates exist.
-        # Two unqualified imports of the same name → ambiguous → return None.
+    def test_resolve_named_type_reports_multiple_candidates_as_ambiguous(self) -> None:
+        # Two unqualified imports of the same name are ambiguous: the complaint
+        # names the problem better than "unknown type" would.
         from agm.agl.modules.ids import ModuleId
         from agm.agl.scope.imports import ImportEnv
 
@@ -1017,9 +1017,9 @@ class TestTypeEnvironment:
         mod_b = ModuleId.from_path("modb")
         color_a = RecordType(name="Color")
         color_b = RecordType(name="Color")
-        graph_table: dict[tuple[ModuleId, str], RecordType] = {
-            (mod_a, "Color"): color_a,
-            (mod_b, "Color"): color_b,
+        graph_table: dict[tuple[ModuleId, tuple[str, ...], str], RecordType] = {
+            (mod_a, (), "Color"): color_a,
+            (mod_b, (), "Color"): color_b,
         }
         # Both modules expose "Color" unqualified.
         unqualified: dict[str, frozenset[tuple[ModuleId, str]]] = {
@@ -1027,9 +1027,8 @@ class TestTypeEnvironment:
         }
         import_env = ImportEnv(contributions={}, unqualified=unqualified)
         env = TypeEnvironment(program_type_table=graph_table, import_env=import_env)
-        # Both entries are in graph_table → type_candidates has 2 elements → False branch.
-        result = env.resolve_named_type("Color")
-        assert result is None
+        with pytest.raises(AglTypeError, match="[Aa]mbiguous"):
+            env.resolve_named_type("Color")
 
     def test_cross_module_constructible_lookup_rejects_missing_and_non_nominal_types(self) -> None:
         from agm.agl.modules.ids import ModuleId
@@ -1075,7 +1074,7 @@ class TestTypeEnvironment:
     def test_renamed_scoped_enum_import_owner_form_resolves(self, tmp_path: object) -> None:
         """Owner-form construction must keep a renamed import's scope path.
 
-        A ``using A::Status as S`` import selects a QName whose declaration
+        An ``import lib::{A::Status as S}`` tail selects a QName whose declaration
         path is ``("A",)``; enum-owner-form construction used to discard that
         path before asking the shared type table for the source template,
         so it asked for a root ``lib::Status`` template instead and hit an
@@ -1092,7 +1091,7 @@ class TestTypeEnvironment:
         lib_source = "scope A\nenum Status\n  | Good\n  | Bad\nend A\n"
 
         unused_modules = {
-            "entry": "import lib using A::Status as S\nprint(3)",
+            "entry": "import lib::{A::Status as S}\nprint(3)",
             "lib": lib_source,
         }
         unused_checked = check_program(
@@ -1108,7 +1107,7 @@ class TestTypeEnvironment:
 
         used_modules = {
             "entry": (
-                "import lib using A::Status as S\n"
+                "import lib::{A::Status as S}\n"
                 "let s: S = S::Good\n"
                 "print(case s of\n"
                 "  | S::Good => 1\n"
@@ -1274,7 +1273,7 @@ class TestScopedBindingTypes:
     """A scoped ``let``/``var``'s type is inferred from its initializer,
     exactly as at the root, and checked against an explicit annotation on
     either spelling. Visibility from inside the region, a nested region, a
-    qualified path outside, and after an ``open`` all resolve to the same
+    qualified path outside, and after a ``use`` all resolve to the same
     binding type via the node-id-keyed binding environment.
     """
 
@@ -1313,7 +1312,7 @@ class TestScopedBindingTypes:
 
     def test_visible_from_nested_region_qualified_path_and_after_open(self) -> None:
         r = accept_type(
-            "open Config\n"
+            "use Config::*\n"
             "scope Config\n"
             "let retries = 3\n"
             "scope Inner\n"
@@ -1433,7 +1432,7 @@ class TestQualifiedGenericFunctionBuiltinCollisions:
 
         modules = {
             "entry": (
-                "open import codec\nlet values = codec::render(1)\nlet text = render(1)\nvalues"
+                "import codec::*\nlet values = codec::render(1)\nlet text = render(1)\nvalues"
             ),
             "codec": "def render[T](value: T) -> array[T] = [value]\n",
         }
@@ -4499,7 +4498,7 @@ class TestPartialConstructorAndValueCalls:
 
         modules = {
             "entry": (
-                "open import mylib\n"
+                "import mylib::*\n"
                 "program def main() -> unit =\n"
                 "  let make: (int) -> mylib::Point = mylib::Point(x = ?)\n"
                 "  let make_open: (int) -> Point = Point(x = ?)\n"
@@ -5718,6 +5717,34 @@ class TestIsTest:
         err = reject_type("enum A\n  | X\nenum B\n  | X\nlet a = A::X()\na is B::X")
         assert "qualifier" in str(err).lower() or "enum" in str(err).lower()
 
+    def test_is_test_rejects_variant_alias_owned_by_another_enum(self) -> None:
+        reject_type(
+            "use First::F::A as AliasForFirstA\n"
+            "scope First\n"
+            "enum F | A\n"
+            "end First\n"
+            "scope Second\n"
+            "enum E | A\n"
+            "end Second\n"
+            "let value = Second::E::A\n"
+            "value is AliasForFirstA",
+            default_stdlib=False,
+        )
+
+    def test_is_test_rejects_ambiguous_alias_set_owned_by_other_enums(self) -> None:
+        err = reject_type(
+            "use S::{First::A as X, Second::B as X}\n"
+            "scope S\n"
+            "enum First | A\n"
+            "enum Second | B\n"
+            "enum Third | C\n"
+            "end S\n"
+            "let value = S::Third::C\n"
+            "value is X",
+            default_stdlib=False,
+        )
+        assert "does not belong" in str(err)
+
     def test_is_test_self_qualified_enum_variant(self) -> None:
         r = accept_type("enum Status\n  | Pass\n  | Fail\nlet s = Pass()\ns is ::Status::Pass")
         assert r.resolved.program is not None
@@ -5926,6 +5953,42 @@ class TestConstructorRefDispatch:
             "case c of | Red => 1 | Blue => 2"
         )
         assert r.resolved.program is not None
+
+    def test_bare_variant_pattern_aliasing_distinct_variants_of_owner_is_ambiguous(self) -> None:
+        err = reject_type(
+            "use S::{E::A as X, E::B as X}\n"
+            "scope S\n"
+            "enum E | A | B\n"
+            "end S\n"
+            "let value = S::E::A\n"
+            "case value of | X => 1 | _ => 0"
+        )
+        assert "ambiguous" in str(err).lower()
+
+    def test_applied_variant_pattern_aliasing_distinct_variants_of_owner_is_ambiguous(
+        self,
+    ) -> None:
+        err = reject_type(
+            "use S::{E::A as X, E::B as X}\n"
+            "scope S\n"
+            "enum E | A(value: int) | B(value: int)\n"
+            "end S\n"
+            "let value = S::E::A(value = 1)\n"
+            "case value of | X(value = _) => 1 | _ => 0"
+        )
+        assert "ambiguous" in str(err).lower()
+
+    def test_applied_variant_pattern_alias_is_disambiguated_by_enum_owner(self) -> None:
+        result = accept_type(
+            "use S::{First::A as X, Second::B as X}\n"
+            "scope S\n"
+            "enum First | A(value: int)\n"
+            "enum Second | B(value: int)\n"
+            "end S\n"
+            "let value = S::First::A(value = 1)\n"
+            "case value of | X(value = _) => 1"
+        )
+        assert result.resolved.program is not None
 
     def test_bare_variant_pattern_wrong_enum_rejected(self) -> None:
         # 'Green' is only a Shade variant; on a Color scrutinee no candidate
@@ -9201,39 +9264,6 @@ class TestResolveTypeExprTypeVars:
         err = reject_type("let x: ::Missing[int] = null\nx")
         assert "Unknown type 'Missing'" in str(err)
 
-    def test_open_imported_generic_lookup_edge_cases(self) -> None:
-        from agm.agl.modules.ids import ModuleId
-        from agm.agl.scope.imports import ImportEnv
-        from agm.agl.typecheck.env import GenericTypeDef
-
-        lib_a = ModuleId.from_path("a")
-        lib_b = ModuleId.from_path("b")
-        gdef = GenericTypeDef(
-            kind="record",
-            type_params=("T",),
-            template=RecordType("Box"),
-        )
-        assert TypeEnvironment().get_open_imported_generic_type("Box") is None
-        env = TypeEnvironment(
-            import_env=ImportEnv(
-                unqualified={
-                    "Point": frozenset({(lib_a, "Point")}),
-                    "Box": frozenset({(lib_a, "Box"), (lib_b, "Box")}),
-                },
-                contributions={},
-            ),
-            program_generic_table={(lib_a, "Box"): gdef, (lib_b, "Box"): gdef},
-        )
-        assert env.get_open_imported_generic_type("Point") is None
-        assert env.get_open_imported_generic_type("Box") is None
-        env = TypeEnvironment(
-            import_env=ImportEnv(
-                unqualified={"Box": frozenset({(lib_a, "Box")})}, contributions={}
-            ),
-            program_generic_table={(lib_a, "Box"): gdef},
-        )
-        assert env.get_open_imported_generic_type("Box") == (lib_a, "Box", gdef)
-
     def test_name_in_type_vars_resolves_to_typevar(self) -> None:
         from agm.agl.syntax.types import NameT
 
@@ -11781,7 +11811,7 @@ class TestImportDeclTypecheck:
 
     def test_import_decl_does_not_raise(self) -> None:
         """A bare import declaration type-checks as unit."""
-        r = accept_type("open import std/core\n1")
+        r = accept_type("import std/core::*\n1")
         assert r  # no exception
 
     def test_import_with_alias_does_not_raise(self) -> None:
@@ -11793,7 +11823,7 @@ class TestImportDeclTypecheck:
         assert r
 
     def test_import_using_does_not_raise(self) -> None:
-        r = accept_type("import std/core using ExecResult\n1")
+        r = accept_type("import std/core::{ExecResult}\n1")
         assert r
 
     def test_import_hiding_does_not_raise(self) -> None:

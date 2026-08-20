@@ -1,5 +1,5 @@
 # exec accepts a complete child environment, working directory, and timeout.
-import std/env using Environ
+import std/env::Environ
 
 program def main() -> unit =
   let child = Environ(vars = {"ONLY": "child"})

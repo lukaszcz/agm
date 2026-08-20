@@ -4,7 +4,7 @@ This module provides :func:`load_graph`, which drives the full load-and-graph
 phase of the AgL module system:
 
 1. Parse the entry source (inline ``-c`` or a file on disk).
-2. Extract top-level import/export declarations.
+2. Extract import and export declarations from the module and its named scope regions.
 3. BFS over transitive import and export declarations, resolving each module id
    to its canonical file via :func:`~agm.agl.modules.resolver.resolve_module` (or
    :func:`~agm.agl.modules.resolver.expand_wildcard` for ``/*`` imports),
@@ -49,12 +49,11 @@ from agm.agl.syntax.nodes import (
     ImportDecl,
     ImportItem,
     InfixDecl,
-    OpenDecl,
     ScopeRegion,
+    UseDecl,
     static_items,
 )
 from agm.agl.syntax.spans import SourceId, SourceSpan
-from agm.agl.syntax.types import ImportMode
 from agm.core import fs
 from agm.packages.model import owning_package
 from agm.util.graph import sccs as _compute_sccs
@@ -78,11 +77,11 @@ class LoadedModule:
         The :class:`~agm.agl.syntax.spans.SourceId` stamped on every span in
         ``program``.
     imports:
-        Top-level :class:`~agm.agl.syntax.nodes.ImportDecl` nodes extracted
-        from ``program.body.items``.
+        :class:`~agm.agl.syntax.nodes.ImportDecl` nodes extracted from the
+        module root and named scope regions.
     export_decls:
-        Top-level :class:`~agm.agl.syntax.nodes.ExportDecl` nodes extracted
-        from ``program.body.items``.
+        :class:`~agm.agl.syntax.nodes.ExportDecl` nodes extracted from the
+        module root and named scope regions.
     spaced_qualifiers:
         Lexical advisories for qualifier runs this module's source separated
         from their ``::`` by whitespace — see
@@ -146,9 +145,9 @@ class ModuleGraph:
         Tarjan's algorithm. Each SCC is a tuple of :class:`ModuleId` values;
         the outer tuple is in **reverse topological order**.
     adjacency:
-        Direct dependency edges for every loaded module. This includes both
-        imports and exports, after wildcard expansion, and is the authoritative
-        reachability relation for graph consumers.
+        Direct dependency edges for every loaded module. This includes imports
+        and exports after wildcard expansion; uses do not create edges. It is
+        the authoritative reachability relation for graph consumers.
     source_adjacency:
         The subset of direct dependency edges authored in source. Loader
         injections are absent, retaining provenance for runtime inventories.
@@ -238,12 +237,12 @@ class ModuleGraph:
 
 
 def _extract_imports(program: syntax.Program) -> tuple[ImportDecl, ...]:
-    """Return the module's ImportDecl nodes, including region-nested ones.
+    """Return a module's imports, including region-nested declarations.
 
-    Named scope regions are transparent to this walk, so a scoped ``import``
-    is discovered as a module-graph edge exactly like a root one. Imports
-    inside an ordinary nested block are not valid and are ignored here (the
-    scope pass enforces the restriction).
+    Named scope regions are transparent to this walk. Imports create
+    module-graph edges; ``use`` declarations do not, and the scope pass reads
+    them straight from the AST. Declarations inside ordinary nested blocks are
+    not valid and are ignored here (the scope pass enforces the restriction).
     """
     return tuple(item for item in static_items(program.body.items) if isinstance(item, ImportDecl))
 
@@ -304,10 +303,9 @@ def _synthetic_stdlib_import(node_id: int) -> ImportDecl:
     return ImportDecl(
         module_path=STD_CORE_ID.segments,
         wildcard=False,
-        is_open=True,
         alias=None,
-        mode=ImportMode.ALL,
-        items=(),
+        tail=(),
+        hidden=(),
         span=span,
         node_id=node_id,
     )
@@ -327,10 +325,9 @@ def _ambient_builtin_methods_import() -> ImportDecl:
     return ImportDecl(
         module_path=STD_BUILTIN_METHODS_ID.segments,
         wildcard=False,
-        is_open=False,
         alias=None,
-        mode=ImportMode.ALL,
-        items=(),
+        tail=None,
+        hidden=(),
         span=span,
         node_id=-1,
     )
@@ -341,6 +338,13 @@ def _with_default_stdlib_import(
     *,
     import_node_id: int,
 ) -> syntax.Program:
+    imports = _extract_imports(program)
+    if any(
+        decl.module_path == STD_CORE_ID.segments
+        or (decl.wildcard and STD_CORE_ID.segments[: len(decl.module_path)] == decl.module_path)
+        for decl in imports
+    ):
+        return program
     std_import = _synthetic_stdlib_import(import_node_id)
     body = syntax.Block(
         items=(std_import, *program.body.items),
@@ -393,36 +397,78 @@ def _operator_decl_scope_path(decl: ImportDecl | ExportDecl) -> _OperatorPath:
     return tuple(segment.name for segment in decl.scope_path)
 
 
-def _selected_operator_exports(
-    decl: ImportDecl | ExportDecl, exports: _OperatorExports
-) -> dict[_OperatorPath, set[_OperatorOrigin]]:
-    """Apply selection, renaming, and scoped re-exporting to operator paths."""
-    selected: dict[_OperatorPath, set[_OperatorOrigin]]
-    if decl.mode is ImportMode.ALL:
-        selected = dict(exports)
-    else:
-        selected = {}
-        for item in decl.items:
-            prefix = _operator_item_path(item)
-            for path, origins in exports.items():
-                if path[: len(prefix)] == prefix:
-                    selected[path] = origins
-        if decl.mode is ImportMode.HIDING:
-            selected = {path: origins for path, origins in exports.items() if path not in selected}
+def _matched_operator_paths(
+    items: tuple[ImportItem, ...] | tuple[ExportItem, ...], exports: _OperatorExports
+) -> set[_OperatorPath]:
+    """Return the operator paths one selection list reaches."""
+    matched: set[_OperatorPath] = set()
+    for item in items:
+        prefix = _operator_item_path(item)
+        matched.update(path for path in exports if path[: len(prefix)] == prefix)
+    return matched
 
+
+def _forwarded_operator_exports(
+    decl: ExportDecl, exports: _OperatorExports
+) -> dict[_OperatorPath, set[_OperatorOrigin]]:
+    """Apply one export's selection, renaming, hiding, and regional re-rooting."""
+    hidden = _matched_operator_paths(decl.hidden, exports)
+    region = _operator_decl_scope_path(decl)
     result: dict[_OperatorPath, set[_OperatorOrigin]] = {}
-    for path, origins in selected.items():
-        exposed = path
-        if decl.mode is ImportMode.USING:
-            for item in decl.items:
-                prefix = _operator_item_path(item)
-                if item.rename is not None and path[: len(prefix)] == prefix:
-                    exposed = (item.rename, *path[len(prefix) :])
-                    break
-        if isinstance(decl, ExportDecl):
-            exposed = (*_operator_decl_scope_path(decl), *exposed)
-        result.setdefault(exposed, set()).update(origins)
+    if not decl.items:
+        for path, origins in exports.items():
+            if path not in hidden:
+                result.setdefault((*region, *path), set()).update(origins)
+        return result
+    for item in decl.items:
+        prefix = _operator_item_path(item)
+        for path, origins in exports.items():
+            if path[: len(prefix)] != prefix or path in hidden:
+                continue
+            exposed = (item.rename, *path[len(prefix) :]) if item.rename is not None else path
+            result.setdefault((*region, *exposed), set()).update(origins)
     return result
+
+
+def _imported_operator_surface(
+    decl: ImportDecl, exports: _OperatorExports
+) -> dict[_OperatorPath, set[_OperatorOrigin]]:
+    """Return the qualified operator surface one import declaration reaches."""
+    hidden = _matched_operator_paths(decl.hidden, exports)
+    return {path: set(origins) for path, origins in exports.items() if path not in hidden}
+
+
+def _bare_operator_members(
+    tail: tuple[ImportItem, ...], surface: _OperatorExports
+) -> dict[_OperatorPath, set[_OperatorOrigin]]:
+    """Return the operator paths one import or ``use`` tail makes bare.
+
+    An empty tail contributes the whole surface; a selection contributes each
+    matched path under both its source spelling and its rename.
+    """
+    if not tail:
+        return {path: set(origins) for path, origins in surface.items()}
+    result: dict[_OperatorPath, set[_OperatorOrigin]] = {}
+    for item in tail:
+        prefix = _operator_item_path(item)
+        for path, origins in surface.items():
+            if path[: len(prefix)] != prefix:
+                continue
+            result.setdefault(path, set()).update(origins)
+            if item.rename is not None:
+                result.setdefault((item.rename, *path[len(prefix) :]), set()).update(origins)
+    return result
+
+
+def _relative_operator_members(
+    exports: _OperatorExports, target_path: _OperatorPath
+) -> dict[_OperatorPath, set[_OperatorOrigin]]:
+    """Return operator paths nested beneath *target_path*, relative to it."""
+    members: dict[_OperatorPath, set[_OperatorOrigin]] = {}
+    for path, origins in exports.items():
+        if path[: len(target_path)] == target_path and len(path) > len(target_path):
+            members.setdefault(path[len(target_path) :], set()).update(origins)
+    return members
 
 
 def _operator_export_maps(
@@ -439,7 +485,7 @@ def _operator_export_maps(
         for mid, loaded in graph.modules.items():
             for decl in loaded.export_decls:
                 for target in _dependency_targets(decl, graph.modules):
-                    for path, origins in _selected_operator_exports(
+                    for path, origins in _forwarded_operator_exports(
                         decl, exports.get(target, {})
                     ).items():
                         before = len(exports[mid].setdefault(path, set()))
@@ -464,21 +510,21 @@ def _operator_export_maps(
     )
 
 
-def _operator_open_declarations(
+def _operator_use_declarations(
     program: syntax.Program,
-) -> tuple[tuple[OpenDecl, _OperatorPath], ...]:
-    """Return each ``open`` declaration with its enclosing lexical scope path."""
-    opens: list[tuple[OpenDecl, _OperatorPath]] = []
+) -> tuple[tuple[UseDecl, _OperatorPath], ...]:
+    """Return each ``use`` declaration with its enclosing lexical scope path."""
+    uses: list[tuple[UseDecl, _OperatorPath]] = []
 
     def collect(items: tuple[syntax.Item, ...], scope_path: _OperatorPath) -> None:
         for item in items:
             if isinstance(item, ScopeRegion):
                 collect(item.items, (*scope_path, item.segment.name))
-            elif isinstance(item, OpenDecl):
-                opens.append((item, scope_path))
+            elif isinstance(item, UseDecl):
+                uses.append((item, scope_path))
 
     collect(program.body.items, ())
-    return tuple(opens)
+    return tuple(uses)
 
 
 def _local_scope_paths(program: syntax.Program) -> set[_OperatorPath]:
@@ -503,39 +549,12 @@ def _operator_import_routes(decl: ImportDecl, target: ModuleId) -> tuple[_Operat
     return tuple(target.segments[index:] for index in range(len(target.segments)))
 
 
-def _select_opened_operator_members(
-    decl: OpenDecl, members: Mapping[_OperatorPath, set[_OperatorOrigin]]
-) -> dict[_OperatorPath, set[_OperatorOrigin]]:
-    """Apply an ``open`` declaration's selection to relative operator members."""
-    if decl.mode is ImportMode.ALL:
-        return {path: set(origins) for path, origins in members.items()}
-
-    selected: dict[_OperatorPath, set[_OperatorOrigin]] = {}
-    for item in decl.items:
-        prefix = _operator_item_path(item)
-        for path, origins in members.items():
-            if path[: len(prefix)] != prefix:
-                continue
-            exposed = (item.rename, *path[len(prefix) :]) if item.rename is not None else path
-            selected.setdefault(exposed, set()).update(origins)
-    if decl.mode is ImportMode.USING:
-        return selected
-    return {
-        path: set(origins)
-        for path, origins in members.items()
-        if not any(
-            path[: len(_operator_item_path(item))] == _operator_item_path(item)
-            for item in decl.items
-        )
-    }
-
-
-def _has_local_open_target(
+def _has_local_use_target(
     scope_paths: set[_OperatorPath],
     scope_path: _OperatorPath,
     requested_path: _OperatorPath,
 ) -> bool:
-    """Whether an unrouted ``open`` resolves to a local scope first."""
+    """Whether an unanchored ``use`` resolves to a local scope first."""
     current = scope_path
     while True:
         if (*current, *requested_path) in scope_paths:
@@ -545,44 +564,61 @@ def _has_local_open_target(
         current = current[:-1]
 
 
-def _operator_open_members(
+def _used_operator_surface(
     module_id: ModuleId,
-    decl: OpenDecl,
+    decl: UseDecl,
     scope_path: _OperatorPath,
     graph: ModuleGraph,
     exports: Mapping[ModuleId, _OperatorExports],
     local_scopes: set[_OperatorPath],
 ) -> dict[_OperatorPath, set[_OperatorOrigin]]:
-    """Return relative operator members made bare by one scope ``open``."""
-    requested_path = tuple(segment.name for segment in decl.scope_ref.scope_path)
-    if not decl.scope_ref.module_route and _has_local_open_target(
-        local_scopes, scope_path, requested_path
-    ):
-        return {}
+    """Return the operator members nested beneath one ``use`` target.
 
-    route = decl.scope_ref.module_route
-    target_path = requested_path
-    if not route and len(requested_path) > 1:
-        route, target_path = (requested_path[0],), requested_path[1:]
+    A target is reached either through an import's qualifier route or, without
+    a route, through a scope an enclosing import tail already named bare.
+    """
+    requested_path = tuple(segment.name for segment in decl.target)
+    if decl.anchored or _has_local_use_target(local_scopes, scope_path, requested_path):
+        return _relative_operator_members(exports.get(module_id, {}), requested_path)
 
     members: dict[_OperatorPath, set[_OperatorOrigin]] = {}
+
+    def absorb(surface: _OperatorExports, target_path: _OperatorPath) -> None:
+        for path, origins in _relative_operator_members(surface, target_path).items():
+            members.setdefault(path, set()).update(origins)
+
+    route = tuple(requested_path[0].split("/"))
+    routed_path = requested_path[1:]
     for import_decl in graph.modules[module_id].imports:
-        if not (import_decl.is_open or import_decl.mode is ImportMode.USING) and not route:
-            continue
-        if not route and scope_path[
-            : len(_operator_decl_scope_path(import_decl))
-        ] != _operator_decl_scope_path(import_decl):
-            continue
+        decl_scope = _operator_decl_scope_path(import_decl)
+        tail = import_decl.tail
+        bare_here = tail is not None and scope_path[: len(decl_scope)] == decl_scope
         for target in _dependency_targets(import_decl, graph.modules):
-            if route and route not in _operator_import_routes(import_decl, target):
-                continue
-            for path, origins in _selected_operator_exports(
-                import_decl, exports.get(target, {})
-            ).items():
-                if path[: len(target_path)] == target_path and len(path) > len(target_path):
-                    relative = path[len(target_path) :]
-                    members.setdefault(relative, set()).update(origins)
-    return _select_opened_operator_members(decl, members)
+            surface = _imported_operator_surface(import_decl, exports.get(target, {}))
+            if route in _operator_import_routes(import_decl, target):
+                absorb(surface, routed_path)
+            if tail is not None and bare_here:
+                absorb(_bare_operator_members(tail, surface), requested_path)
+    return members
+
+
+def _operator_use_members(
+    module_id: ModuleId,
+    decl: UseDecl,
+    scope_path: _OperatorPath,
+    graph: ModuleGraph,
+    exports: Mapping[ModuleId, _OperatorExports],
+    local_scopes: set[_OperatorPath],
+) -> dict[_OperatorPath, set[_OperatorOrigin]]:
+    """Return relative operator members made bare by one ``use`` declaration."""
+    if decl.tail is None:
+        # ``use TARGET as ALIAS`` names one qualifier route rather than
+        # selecting from it, so it contributes no bare operator.
+        return {}
+    members = _used_operator_surface(module_id, decl, scope_path, graph, exports, local_scopes)
+    hidden = _matched_operator_paths(decl.hidden, members)
+    visible = {path: origins for path, origins in members.items() if path not in hidden}
+    return _bare_operator_members(decl.tail, visible)
 
 
 def _operator_bare_layers(
@@ -603,19 +639,21 @@ def _operator_bare_layers(
                 layer.setdefault(path[0], set()).update(origins)
 
     for decl in loaded.imports:
-        if not (decl.is_open or decl.mode is ImportMode.USING):
+        tail = decl.tail
+        if tail is None:
             continue
         members: dict[_OperatorPath, set[_OperatorOrigin]] = {}
         for target in _dependency_targets(decl, graph.modules):
-            for path, origins in _selected_operator_exports(decl, exports.get(target, {})).items():
+            surface = _imported_operator_surface(decl, exports.get(target, {}))
+            for path, origins in _bare_operator_members(tail, surface).items():
                 members.setdefault(path, set()).update(origins)
         contribute(_operator_decl_scope_path(decl), members)
 
     local_scopes = _local_scope_paths(loaded.program)
-    for open_decl, scope_path in _operator_open_declarations(loaded.program):
+    for use_decl, scope_path in _operator_use_declarations(loaded.program):
         contribute(
             scope_path,
-            _operator_open_members(module_id, open_decl, scope_path, graph, exports, local_scopes),
+            _operator_use_members(module_id, use_decl, scope_path, graph, exports, local_scopes),
         )
     return layers
 
@@ -968,12 +1006,13 @@ def _load_into_graph(
         if default_stdlib and mid != STD_CORE_ID:
             program = _with_default_stdlib_import(program, import_node_id=next_id)
             next_id += 1
+        imports = _extract_imports(program)
         loaded = LoadedModule(
             module_id=mid,
             program=program,
             path=canon_path,
             source=file_source_id,
-            imports=_extract_imports(program),
+            imports=imports,
             export_decls=_extract_exports(program),
             source_text=source_text,
             spaced_qualifiers=tuple(spaced_sink),
@@ -1079,12 +1118,13 @@ def _build_entry_loaded_module(
     if default_stdlib:
         program = _with_default_stdlib_import(program, import_node_id=next_id)
         next_id += 1
+    imports = _extract_imports(program)
     entry_loaded = LoadedModule(
         module_id=ENTRY_ID,
         program=program,
         path=canonical_entry_path,
         source=entry_source_id,
-        imports=_extract_imports(program),
+        imports=imports,
         export_decls=_extract_exports(program),
         source_text=source_text,
         spaced_qualifiers=spaced_qualifiers,

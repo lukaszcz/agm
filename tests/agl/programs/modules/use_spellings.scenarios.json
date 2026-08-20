@@ -1,0 +1,13 @@
+{
+  "scenarios": [
+    {
+      "name": "slash_and_selected_imported_targets",
+      "module_roots": [
+        "program_modules/modules/import_forms"
+      ],
+      "expect": {
+        "stdout": "3\n5\n5\n5\n7\n"
+      }
+    }
+  ]
+}

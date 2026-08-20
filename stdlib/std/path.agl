@@ -1,4 +1,4 @@
-import std/option using Option
+import std/option::Option
 
 scope PathInternals
 extern def join(parts: array[text]) -> text

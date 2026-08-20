@@ -44,7 +44,7 @@ def _check(source: str, *, default_stdlib: bool = True) -> None:
     resolve_and_check_inline_entry(source, _CAPS, default_stdlib=default_stdlib)
 
 
-def test_core_stdlib_is_opened_unqualified_by_default() -> None:
+def test_core_stdlib_is_bare_by_default() -> None:
     _check("let x: Option[int] = Some(value = 1)\nprint(x)\n")
 
 
@@ -63,7 +63,7 @@ def test_no_stdlib_reports_bare_print_as_undefined() -> None:
 
 def test_no_stdlib_still_allows_explicit_std_core_import() -> None:
     _check(
-        "open import std/core\nlet x: Option[int] = Some(value = 1)\nx\n",
+        "import std/core::*\nlet x: Option[int] = Some(value = 1)\nx\n",
         default_stdlib=False,
     )
 

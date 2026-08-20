@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
-from typing import TypeVar, cast
+from typing import TypeVar
 
 from agm.agl.diagnostics import AglError
 from agm.agl.modules.ids import ModuleId
@@ -113,7 +113,7 @@ def _package_graph_entry(package_name: str) -> tuple[Program, int]:
 
     program, next_id = parse_program_seeded("import package_root/*\n", start_id=0)
     declaration = replace(
-        cast(ImportDecl, program.body.items[0]),
+        next(item for item in program.body.items if isinstance(item, ImportDecl)),
         module_path=(package_name,),
     )
     return replace(program, body=replace(program.body, items=(declaration,))), next_id

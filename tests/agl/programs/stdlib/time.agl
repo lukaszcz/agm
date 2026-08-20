@@ -1,5 +1,5 @@
 import std/time
-import std/time using TimeParseError
+import std/time::TimeParseError
 
 param mode: int
 

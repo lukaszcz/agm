@@ -3,9 +3,66 @@
 from __future__ import annotations
 
 from agm.agl.eval.ir_interpreter import IrInterpreter
-from agm.agl.semantics.values import IntValue, TextValue
+from agm.agl.semantics.values import BoolValue, IntValue, TextValue
 from tests._agl_helpers import run_inline_command
 from tests.agl.ir_harness import evaluate_ir, lower_inline_ir
+
+
+def test_is_test_lowers_renamed_use_variant() -> None:
+    values = evaluate_ir(
+        "use S::{E::A as X}\n"
+        "scope S\n"
+        "enum E | A | B\n"
+        "end S\n"
+        "let value = X\n"
+        "let matches = value is X\n"
+        "matches\n"
+    )
+
+    assert values["matches"] == BoolValue(True)
+
+
+def test_case_lowers_renamed_nullary_use_variant() -> None:
+    values = evaluate_ir(
+        "use S::{E::A as X}\n"
+        "scope S\n"
+        "enum E | A | B\n"
+        "end S\n"
+        "let value = X\n"
+        "let result = case value of | X => 1 | _ => 0\n"
+        "result\n"
+    )
+
+    assert values["result"] == IntValue(1)
+
+
+def test_case_lowers_variant_renamed_to_another_canonical_spelling() -> None:
+    values = evaluate_ir(
+        "use S::{E::B as A}\n"
+        "scope S\n"
+        "enum E | A | B\n"
+        "end S\n"
+        "let value = S::E::B\n"
+        "let result = case value of | A => 1 | _ => 0\n"
+        "result\n"
+    )
+
+    assert values["result"] == IntValue(1)
+
+
+def test_case_lowers_renamed_applied_use_variant() -> None:
+    values = evaluate_ir(
+        "use S::{E::A as X}\n"
+        "scope S\n"
+        "enum E | A(value: int) | B\n"
+        "end S\n"
+        "let value = X(4)\n"
+        "let result = case value of | X(value = _ as n) => n | _ => 0\n"
+        "result\n"
+    )
+
+    assert values["result"] == IntValue(4)
+
 
 # ---------------------------------------------------------------------------
 # IR evaluation tests — literal patterns

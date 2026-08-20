@@ -76,8 +76,7 @@ def _write_command_stdlib(root: Path, config: str) -> Path:
     config_path = stdlib_root / "std" / "config.agl"
     config_path.parent.mkdir(parents=True)
     config_path.write_text(
-        "import std/core using Agent\n"
-        'builtin var default-agent: Agent = AgentCommand("echo")\n' + config,
+        'import std/core::*\nbuiltin var default-agent: Agent = AgentCommand("echo")\n' + config,
         encoding="utf-8",
     )
     for source in (_STDLIB / "std").iterdir():
@@ -150,7 +149,7 @@ class TestDefaultAgentReconfiguration:
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            "open import std/config\n"
+            "import std/config::*\n"
             'std/config::default-agent := AgentCommand("codex-runner")\n'
             'ask("hi")\n',
         )
@@ -178,7 +177,7 @@ class TestDefaultAgentReconfiguration:
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            "open import std/config\n"
+            "import std/config::*\n"
             'let fixed = AgentCommand("fixed-runner")\n'
             'std/config::default-agent := AgentCommand("new-runner")\n'
             'ask("one", agent = fixed)\n'
@@ -200,7 +199,7 @@ class TestTraceReconfiguration:
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            "open import std/config\n"
+            "import std/config::*\n"
             'print "before"\n'
             f'std/config::log-file := Some("{trace_path}")\n'
             'print "after"\n'
@@ -229,7 +228,7 @@ class TestTraceReconfiguration:
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            "open import std/config\n"
+            "import std/config::*\n"
             "std/config::log := true\n"
             'print "first"\n'
             "std/config::log := false\n"
@@ -257,7 +256,7 @@ class TestTraceReconfiguration:
         """``--log`` seeds the ``log`` register so a read before any write sees True."""
         monkeypatch.setattr("agm.core.log.default_agent_files_dir", lambda: tmp_path)
         agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "open import std/config\nlet l = std/config::log\nprint l\n")
+        write_file_program(agl_file, "import std/config::*\nlet l = std/config::log\nprint l\n")
 
         exec_command.run(_exec_args(agl_file, no_log=False, log=True))
 
@@ -289,7 +288,7 @@ class TestTraceReconfiguration:
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            'open import std/config\nprint "before"\nstd/config::log := true\nprint "after"\n',
+            'import std/config::*\nprint "before"\nstd/config::log := true\nprint "after"\n',
         )
 
         with patch("agm.core.log.datetime", _StepClock()):
@@ -310,7 +309,7 @@ class TestTraceReconfiguration:
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            "open import std/config\n"
+            "import std/config::*\n"
             "std/config::log := true\n"
             'print "first"\n'
             "std/config::log := false\n"
@@ -338,7 +337,7 @@ class TestTraceReconfiguration:
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            'open import std/config\nprint "before"\nstd/config::log := true\nprint "after"\n',
+            'import std/config::*\nprint "before"\nstd/config::log := true\nprint "after"\n',
         )
 
         with patch("agm.core.log.datetime", _StepClock()):

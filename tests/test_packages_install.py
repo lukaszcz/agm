@@ -12,6 +12,7 @@ import semver
 
 import agm.packages.archive as package_archive
 import agm.packages.install as package_install
+import agm.packages.model as package_model
 import agm.stdlib_locator as stdlib_locator
 from agm.core import dry_run
 from agm.packages.activation import (
@@ -37,6 +38,7 @@ from agm.packages.manifest import PackageManifest
 from agm.packages.model import PackageInfo
 from agm.packages.record import content_hash, read_record, verify_record, write_record
 from agm.version import AGM_VERSION
+from tests._package_helpers import older_incompatible_std_requirement
 
 
 @pytest.fixture(autouse=True)
@@ -48,7 +50,7 @@ def _restore_dry_run() -> Generator[None, None, None]:
 
 
 def _newer_agm_requirement() -> str:
-    """Return a valid minimum version no running AGM release can satisfy."""
+    """Return a valid std requirement no running AGM release can satisfy."""
     return str(semver.Version.parse(AGM_VERSION).bump_major())
 
 
@@ -79,6 +81,41 @@ def test_refresh_registers_stdlib_package_under_an_isolated_agm_home(tmp_path: P
     assert verify_record(installed.root)
     index = load_activation_index(home=tmp_path / "ignored-home", env={"AGM_HOME": str(agm_home)})
     assert index.packages["std"].version == installed.manifest.version
+
+
+def test_managed_stdlib_refresh_deactivates_packages_from_an_incompatible_release_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = Path(__file__).resolve().parent.parent / "stdlib"
+    home = tmp_path / "home"
+    dependency = f'\n[dependencies]\nstd = "{AGM_VERSION}"\n'
+    alpha = install_directory(
+        _package(tmp_path / "alpha", "alpha", "1.0.0", dependency), home=home, env={}
+    )
+    bravo = install_directory(
+        _package(tmp_path / "bravo", "bravo", "1.0.0", dependency), home=home, env={}
+    )
+    dependent = install_directory(
+        _package(
+            tmp_path / "dependent",
+            "dependent",
+            "1.0.0",
+            '\n[dependencies]\nalpha = "1.0.0"\n',
+        ),
+        home=home,
+        env={},
+    )
+    monkeypatch.setattr(
+        package_model, "AGM_VERSION", str(semver.Version.parse(AGM_VERSION).bump_major())
+    )
+
+    refresh_managed_stdlib(source, home=home, env={})
+
+    active = load_activation_index(home=home, env={}).packages
+    assert set(active) == {"std"}
+    assert alpha.root.is_dir()
+    assert bravo.root.is_dir()
+    assert dependent.root.is_dir()
 
 
 def test_managed_stdlib_refresh_stages_under_the_store_lock(
@@ -438,6 +475,22 @@ def test_install_refuses_a_package_requiring_a_newer_agm(tmp_path: Path) -> None
         install_directory(source, home=home, env={})
 
     assert not (home / ".agm" / "packages" / "alpha").exists()
+
+
+def test_install_rejects_an_older_incompatible_std_before_publication(tmp_path: Path) -> None:
+    source = _package(
+        tmp_path / "source",
+        "alpha",
+        "1.0.0",
+        f'\n[dependencies]\nstd = "{older_incompatible_std_requirement()}"\n',
+    )
+    home = tmp_path / "home"
+
+    with pytest.raises(PackageInstallError, match="AGM"):
+        install_directory(source, home=home, env={})
+
+    assert not (home / ".agm" / "packages" / "alpha").exists()
+    assert load_activation_index(home=home, env={}) == ActivationIndex()
 
 
 def test_install_accepts_a_package_requiring_the_running_agm_without_active_stdlib(
@@ -1095,7 +1148,7 @@ def test_install_validates_resource_aliases_from_an_installed_satisfying_depende
     home = tmp_path / "home"
     dependency = _package(tmp_path / "bravo", "bravo", "1.0.0")
     (dependency / "bravo" / "assets.agl").write_text(
-        "export std/core using resource as asset\n",
+        "export std/core::{resource as asset}\n",
         encoding="utf-8",
     )
     install_directory(dependency, home=home, env={})
@@ -1106,7 +1159,7 @@ def test_install_validates_resource_aliases_from_an_installed_satisfying_depende
         '\n[dependencies]\nbravo = "1"\n',
     )
     (package / "alpha" / "main.agl").write_text(
-        'import bravo/assets using asset as load\nlet prompt = load("prompts/missing.md")\n',
+        'import bravo/assets::{asset as load}\nlet prompt = load("prompts/missing.md")\n',
         encoding="utf-8",
     )
 
@@ -2391,7 +2444,7 @@ def test_directory_install_rolls_back_new_dependency_after_discipline_failure(
     home = tmp_path / "home"
     dependency = _package(tmp_path / "bravo", "bravo", "1.0.0")
     (dependency / "bravo" / "assets.agl").write_text(
-        "export std/core using resource as asset\n", encoding="utf-8"
+        "export std/core::{resource as asset}\n", encoding="utf-8"
     )
     source = _package(
         tmp_path / "alpha",
@@ -2400,7 +2453,7 @@ def test_directory_install_rolls_back_new_dependency_after_discipline_failure(
         '\n[dependencies]\nbravo = { version = "1", path = "../bravo" }\n',
     )
     (source / "alpha" / "main.agl").write_text(
-        'import bravo/assets using asset as load\nlet prompt = load("prompts/missing.md")\n',
+        'import bravo/assets::{asset as load}\nlet prompt = load("prompts/missing.md")\n',
         encoding="utf-8",
     )
 

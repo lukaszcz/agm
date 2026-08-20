@@ -24,7 +24,7 @@ def _file_program(body: str) -> str:
     """Build an explicit file entry while leaving import headers at the root."""
     lines = body.splitlines()
     headers: list[str] = []
-    while lines and (lines[0].startswith("import ") or lines[0].startswith("open import ")):
+    while lines and lines[0].startswith("import "):
         headers.append(lines.pop(0))
     return "\n".join(
         (*headers, "program def main() -> unit =", *(f"  {line}" for line in lines), "")

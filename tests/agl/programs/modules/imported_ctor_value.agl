@@ -3,8 +3,8 @@
 # definition from the merged runtime type environment, which must carry the
 # library module's generic/record definitions (not just the entry module's).
 # A payload enum constructor (`some`) and a record constructor (`Pair`), both
-# open-imported from `collections`, are bound as values and called positionally.
-open import collections
+# exposed by `collections`' glob import tail, are bound as values and called positionally.
+import collections::*
 param n: int
 
 # Imported generic ENUM payload constructor as a value, called positionally.
@@ -12,7 +12,7 @@ param n: int
 program def main() -> unit =
   let mk: int -> Maybe[int] = some
   let o: Maybe[int] = mk(n)
-  # Bare `none` is an open-imported nullary variant → a constructor pattern.
+  # Bare `none` is a nullary variant exposed by the import tail → a constructor pattern.
   case o of
     | none => print "none"
     | some(value) => print "value %{value}"

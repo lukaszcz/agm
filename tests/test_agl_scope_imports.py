@@ -1,22 +1,25 @@
-"""Unit tests for contribution-based slash import resolution."""
+"""Unit tests for import contributions and qualified routes."""
 
 from __future__ import annotations
+
+import pytest
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import (
     ImportEnv,
-    QualResolutionAmbiguous,
+    ModuleContribution,
+    NameAtom,
+    QName,
     QualResolutionFound,
     QualResolutionMissingMember,
-    QualResolutionUnknownQualifier,
     SingleTarget,
-    WildcardTarget,
     build_import_env,
+    qualifier_members,
     resolve_qualified,
 )
+from agm.agl.scope.symbols import AglScopeError
 from agm.agl.syntax.nodes import ImportDecl, ImportItem
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
-from agm.agl.syntax.types import ImportMode
 
 
 def _span() -> SourceSpan:
@@ -36,18 +39,15 @@ def _decl(
     path: str,
     *,
     alias: str | None = None,
-    wildcard: bool = False,
-    is_open: bool = False,
-    mode: ImportMode = ImportMode.ALL,
-    items: tuple[ImportItem, ...] = (),
+    tail: tuple[ImportItem, ...] | None = None,
+    hidden: tuple[ImportItem, ...] = (),
 ) -> ImportDecl:
     return ImportDecl(
         module_path=tuple(path.split("/")),
-        wildcard=wildcard,
-        is_open=is_open,
+        wildcard=False,
         alias=alias,
-        mode=mode,
-        items=items,
+        tail=tail,
+        hidden=hidden,
         span=_span(),
         node_id=_node_id(),
     )
@@ -61,190 +61,148 @@ def _module(path: str) -> ModuleId:
     return ModuleId.from_path(path)
 
 
-def _exports(path: str, *names: str) -> dict[str, tuple[ModuleId, str]]:
+def _exports(path: str, *names: str) -> dict[NameAtom, QName]:
     module = _module(path)
     return {name: (module, name) for name in names}
 
 
-def _build(
-    decls: list[ImportDecl],
-    targets: dict[int, SingleTarget | WildcardTarget],
-    exports: dict[ModuleId, dict[str, tuple[ModuleId, str]]],
-):
-    return build_import_env(tuple(decls), targets, exports)
+def _build(decls: list[ImportDecl], exports: dict[ModuleId, dict[NameAtom, QName]]) -> ImportEnv:
+    return build_import_env(
+        tuple(decls),
+        {decl.node_id: SingleTarget(_module("/".join(decl.module_path))) for decl in decls},
+        exports,
+    )
 
 
-def test_plain_import_contributes_only_qualified_members() -> None:
+def test_alias_route_without_members_is_not_a_use_target() -> None:
+    module = _module("tools/text")
+    env = ImportEnv(
+        contributions={module: ModuleContribution(module, {}, False, frozenset({"text"}))},
+        unqualified={},
+    )
+
+    assert qualifier_members(env, ("text",), anchored=False) == ()
+
+
+def test_plain_import_contributes_the_full_qualified_surface_without_bare_names() -> None:
     decl = _decl("tools/text")
     module = _module("tools/text")
 
-    env = _build(
-        [decl],
-        {decl.node_id: SingleTarget(module)},
-        {module: _exports("tools/text", "trim")},
-    )
+    env = _build([decl], {module: _exports("tools/text", "trim", "split")})
 
     assert env.unqualified == {}
     assert resolve_qualified(env, ("text",), "trim") == QualResolutionFound(
         module, (module, "trim")
     )
+    assert resolve_qualified(env, ("text",), "split") == QualResolutionFound(
+        module, (module, "split")
+    )
 
 
-def test_open_import_injects_selected_members() -> None:
-    decl = _decl("tools/text", is_open=True, mode=ImportMode.HIDING, items=(_item("debug"),))
+def test_positive_tail_injects_bare_names_without_narrowing_qualified_access() -> None:
+    decl = _decl("tools/text", tail=(_item("trim"),))
     module = _module("tools/text")
 
-    env = _build(
-        [decl],
-        {decl.node_id: SingleTarget(module)},
-        {module: _exports("tools/text", "trim", "debug")},
-    )
+    env = _build([decl], {module: _exports("tools/text", "trim", "split")})
 
     assert env.unqualified == {"trim": frozenset({(module, "trim")})}
-    assert isinstance(resolve_qualified(env, ("text",), "debug"), QualResolutionMissingMember)
-
-
-def test_using_injects_only_its_renamed_members() -> None:
-    decl = _decl(
-        "tools/text",
-        mode=ImportMode.USING,
-        items=(_item("trim", "clean"),),
+    assert resolve_qualified(env, ("text",), "split") == QualResolutionFound(
+        module, (module, "split")
     )
+
+
+def test_tail_rename_is_additive_for_bare_spelling() -> None:
+    decl = _decl("tools/text", tail=(_item("trim", "clean"),))
     module = _module("tools/text")
 
-    env = _build(
-        [decl],
-        {decl.node_id: SingleTarget(module)},
-        {module: _exports("tools/text", "trim", "split")},
-    )
+    env = _build([decl], {module: _exports("tools/text", "trim", "split")})
 
-    assert env.unqualified == {"clean": frozenset({(module, "trim")})}
-    assert resolve_qualified(env, ("text",), "clean") == QualResolutionFound(
+    assert env.unqualified == {
+        "clean": frozenset({(module, "trim")}),
+        "trim": frozenset({(module, "trim")}),
+    }
+    assert resolve_qualified(env, ("text",), "trim") == QualResolutionFound(
         module, (module, "trim")
     )
-    assert isinstance(resolve_qualified(env, ("text",), "trim"), QualResolutionMissingMember)
 
 
-def test_alias_is_a_route_but_not_a_suffix_or_anchor() -> None:
-    decl = _decl("std/config", alias="settings")
-    module = _module("std/config")
-    env = _build(
-        [decl],
-        {decl.node_id: SingleTarget(module)},
-        {module: _exports("std/config", "timeout")},
+def test_shared_route_resolves_duplicate_contributions_to_the_same_origin() -> None:
+    left = _module("pkg/left")
+    right = _module("pkg/right")
+    origin = _module("core")
+    qname = (origin, "shared")
+    env = ImportEnv(
+        contributions={
+            left: ModuleContribution(
+                left,
+                {"shared": qname},
+                False,
+                frozenset({"Facade"}),
+                alias_members={"Facade": {"shared": qname}},
+            ),
+            right: ModuleContribution(
+                right,
+                {"shared": qname},
+                False,
+                frozenset({"Facade"}),
+                alias_members={"Facade": {"shared": qname}},
+            ),
+        },
+        unqualified={},
     )
 
-    assert resolve_qualified(env, ("settings",), "timeout") == QualResolutionFound(
-        module, (module, "timeout")
-    )
-    assert isinstance(
-        resolve_qualified(env, ("config",), "timeout"), QualResolutionUnknownQualifier
-    )
-    assert isinstance(
-        resolve_qualified(env, ("std", "config"), "timeout", anchored=True),
-        QualResolutionUnknownQualifier,
-    )
+    result = resolve_qualified(env, ("Facade",), "shared")
+    assert isinstance(result, QualResolutionFound)
+    assert result.qname == qname
 
 
-def test_suffix_resolution_filters_members_before_reporting_ambiguity() -> None:
-    left_decl = _decl("one/config")
+def test_plain_hiding_repairs_a_shared_suffix_route() -> None:
+    left_decl = _decl("one/config", hidden=(_item("shared"),))
     right_decl = _decl("two/config")
     left = _module("one/config")
     right = _module("two/config")
+
     env = _build(
         [left_decl, right_decl],
         {
-            left_decl.node_id: SingleTarget(left),
-            right_decl.node_id: SingleTarget(right),
-        },
-        {
-            left: _exports("one/config", "timeout", "shared"),
-            right: _exports("two/config", "retries", "shared"),
+            left: _exports("one/config", "shared"),
+            right: _exports("two/config", "shared"),
         },
     )
 
-    assert resolve_qualified(env, ("config",), "timeout") == QualResolutionFound(
-        left, (left, "timeout")
-    )
-    assert resolve_qualified(env, ("config",), "shared") == QualResolutionAmbiguous(
-        ("config",), "shared", (left, right)
+    assert resolve_qualified(env, ("config",), "shared") == QualResolutionFound(
+        right, (right, "shared")
     )
 
 
-def test_anchored_route_requires_the_exact_plain_path() -> None:
-    base_decl = _decl("std/config")
-    nested_decl = _decl("extra/std/config")
-    base = _module("std/config")
-    nested = _module("extra/std/config")
-    env = _build(
-        [base_decl, nested_decl],
-        {
-            base_decl.node_id: SingleTarget(base),
-            nested_decl.node_id: SingleTarget(nested),
-        },
-        {
-            base: _exports("std/config", "timeout"),
-            nested: _exports("extra/std/config", "timeout"),
-        },
-    )
-
-    assert resolve_qualified(env, ("std", "config"), "timeout", anchored=True) == (
-        QualResolutionFound(base, (base, "timeout"))
-    )
-
-
-def test_wildcard_distributes_contributions_and_open_names() -> None:
-    decl = _decl("plugins", wildcard=True, is_open=True)
-    alpha = _module("plugins/alpha")
-    beta = _module("plugins/beta")
-    env = _build(
-        [decl],
-        {decl.node_id: WildcardTarget(frozenset({alpha, beta}))},
-        {
-            alpha: _exports("plugins/alpha", "alpha"),
-            beta: _exports("plugins/beta", "beta"),
-        },
-    )
-
-    assert env.unqualified == {
-        "alpha": frozenset({(alpha, "alpha")}),
-        "beta": frozenset({(beta, "beta")}),
-    }
-    assert resolve_qualified(env, ("alpha",), "alpha") == QualResolutionFound(
-        alpha, (alpha, "alpha")
-    )
-
-
-def test_bare_scoped_paths_clash_at_use() -> None:
-    left = _module("left")
-    right = _module("right")
-    atom = ("Point", "distance")
-    env = ImportEnv(
-        {},
-        {
-            atom: frozenset(
-                {
-                    (left, atom),
-                    (right, atom),
-                }
-            )
-        },
-    )
-
-    assert resolve_qualified(env, ("Point",), "distance") == QualResolutionAmbiguous(
-        ("Point",), "distance", (left, right)
-    )
-
-
-def test_repeated_contributions_union_members_and_open_names() -> None:
-    plain = _decl("tools/text", mode=ImportMode.HIDING, items=(_item("debug"),))
-    selected = _decl("tools/text", mode=ImportMode.USING, items=(_item("debug"),))
+def test_wildcard_tail_distributes_hiding_to_routes_and_bare_names() -> None:
+    decl = _decl("tools/text", tail=(), hidden=(_item("debug"),))
     module = _module("tools/text")
-    env = _build(
-        [plain, selected],
-        {plain.node_id: SingleTarget(module), selected.node_id: SingleTarget(module)},
-        {module: _exports("tools/text", "trim", "debug")},
-    )
 
-    assert set(env.contributions[module].members) == {"trim", "debug"}
-    assert env.unqualified == {"debug": frozenset({(module, "debug")})}
+    env = _build([decl], {module: _exports("tools/text", "trim", "debug")})
+
+    assert env.unqualified == {"trim": frozenset({(module, "trim")})}
+    assert resolve_qualified(env, ("text",), "trim") == QualResolutionFound(
+        module, (module, "trim")
+    )
+    assert isinstance(resolve_qualified(env, ("text",), "debug"), QualResolutionMissingMember)
+
+
+def test_repeated_imports_union_each_declarations_unhidden_routes() -> None:
+    first = _decl("tools/text", hidden=(_item("trim"),))
+    second = _decl("tools/text", hidden=(_item("split"),))
+    module = _module("tools/text")
+
+    env = _build([first, second], {module: _exports("tools/text", "trim", "split")})
+
+    assert set(env.contributions[module].members) == {"trim", "split"}
+
+
+def test_hiding_and_tail_atoms_must_name_public_members() -> None:
+    tail = _decl("tools/text", tail=(_item("unknown"),))
+    hidden = _decl("tools/text", hidden=(_item("unknown"),))
+    module = _module("tools/text")
+
+    for decl in (tail, hidden):
+        with pytest.raises(AglScopeError):
+            _build([decl], {module: _exports("tools/text", "trim")})

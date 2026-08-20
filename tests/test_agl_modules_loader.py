@@ -174,6 +174,8 @@ class TestGraphBuild:
         assert STD_CORE_ID in graph.modules
         assert STD_OPTION_ID in graph.modules
         assert ModuleId.from_path("std/config") in graph.modules
+        assert graph.modules[ENTRY_ID].imports[0].module_path == STD_CORE_ID.segments
+        assert graph.modules[ENTRY_ID].imports[0].tail == ()
         assert graph.modules[STD_CORE_ID].path == (_REPO_STDLIB_ROOT / "std" / "core.agl").resolve()
         assert {registry_id, array_id, text_id}.issubset(graph.ambient_modules)
         assert graph.adjacency[ENTRY_ID] == (STD_CORE_ID,)
@@ -258,7 +260,7 @@ class TestGraphBuild:
             for item in entry_mod.imports
         )
 
-    def test_open_import_resolves_an_exported_operator_fixity(self, tmp_path: Path) -> None:
+    def test_wildcard_import_resolves_an_exported_operator_fixity(self, tmp_path: Path) -> None:
         from agm.agl.syntax.nodes import Call, VarRef
 
         root = tmp_path / "r"
@@ -270,7 +272,7 @@ class TestGraphBuild:
         )
 
         graph = load_graph(
-            "open import operators\n1 %% 2",
+            "import operators::*\n1 %% 2",
             entry_path=None,
             roots=_roots(root),
             default_stdlib=False,
@@ -287,10 +289,10 @@ class TestGraphBuild:
         root = tmp_path / "r"
         root.mkdir()
         _write_module(root, "operators", "infixl %% at 5\n")
-        _write_module(root, "facade", "export operators using %% as ~~\n")
+        _write_module(root, "facade", "export operators::{%% as ~~}\n")
 
         graph = load_graph(
-            "open import facade\n1 ~~ 2",
+            "import facade::*\n1 ~~ 2",
             entry_path=None,
             roots=_roots(root),
             default_stdlib=False,
@@ -301,7 +303,7 @@ class TestGraphBuild:
         assert isinstance(expression.callee, VarRef)
         assert expression.callee.name == "~~"
 
-    def test_scoped_open_import_makes_operator_visible_only_inside_its_region(
+    def test_scoped_wildcard_import_makes_operator_visible_only_inside_its_region(
         self, tmp_path: Path
     ) -> None:
         from agm.agl.syntax.nodes import Call, FuncDef, ScopeRegion, VarRef
@@ -311,7 +313,7 @@ class TestGraphBuild:
         _write_module(root, "operators", "infixl %% at 5\n")
 
         graph = load_graph(
-            "scope Local\nopen import operators\ndef apply(x: int, y: int) -> int = x %% y\n"
+            "scope Local\nimport operators::*\ndef apply(x: int, y: int) -> int = x %% y\n"
             "end Local\n",
             entry_path=None,
             roots=_roots(root),
@@ -326,7 +328,7 @@ class TestGraphBuild:
         assert isinstance(function.body.callee, VarRef)
         assert function.body.callee.name == "%%"
 
-    def test_opened_scoped_facade_export_makes_operator_fixity_bare_visible(
+    def test_used_scoped_facade_export_makes_operator_fixity_bare_visible(
         self, tmp_path: Path
     ) -> None:
         from agm.agl.syntax.nodes import Call, VarRef
@@ -334,10 +336,10 @@ class TestGraphBuild:
         root = tmp_path / "r"
         root.mkdir()
         _write_module(root, "operators", "infixl %% at 5\n")
-        _write_module(root, "facade", "scope Public\nexport operators using %%\nend Public\n")
+        _write_module(root, "facade", "scope Public\nexport operators::{%%}\nend Public\n")
 
         graph = load_graph(
-            "open import facade\nopen Public\n1 %% 2",
+            "import facade::*\nuse Public::*\n1 %% 2",
             entry_path=None,
             roots=_roots(root),
             default_stdlib=False,
@@ -348,7 +350,63 @@ class TestGraphBuild:
         assert isinstance(expression.callee, VarRef)
         assert expression.callee.name == "%%"
 
-    def test_opened_scoped_facade_operator_selection_honors_alias_and_rename(
+    def test_reexport_hiding_drops_only_the_named_operator(self, tmp_path: Path) -> None:
+        from agm.agl.parser import AglSyntaxError
+        from agm.agl.syntax.nodes import Call, VarRef
+
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(root, "operators", "infixl %% at 5\ninfixl ^^ at 6\n")
+        _write_module(root, "facade", "export operators hiding %%\n")
+
+        graph = load_graph(
+            "import facade::*\n1 ^^ 2",
+            entry_path=None,
+            roots=_roots(root),
+            default_stdlib=False,
+        )
+
+        expression = graph.modules[ENTRY_ID].program.body.items[-1]
+        assert isinstance(expression, Call)
+        assert isinstance(expression.callee, VarRef)
+        assert expression.callee.name == "^^"
+
+        with pytest.raises(AglSyntaxError):
+            load_graph(
+                "import facade::*\n1 %% 2",
+                entry_path=None,
+                roots=_roots(root),
+                default_stdlib=False,
+            )
+
+    def test_untailed_scoped_reexport_forwards_every_exported_operator(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.syntax.nodes import Call, VarRef
+
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(root, "operators", "infixl %% at 5\ninfixl ^^ at 6\n")
+        _write_module(root, "facade", "scope Public\nexport operators\nend Public\n")
+
+        graph = load_graph(
+            "import facade::*\nuse Public::*\n1 %% 2 ^^ 3",
+            entry_path=None,
+            roots=_roots(root),
+            default_stdlib=False,
+        )
+
+        expression = graph.modules[ENTRY_ID].program.body.items[-1]
+        assert isinstance(expression, Call)
+        assert isinstance(expression.callee, VarRef)
+        # ^^ binds tighter, so the outer application is %%.
+        assert expression.callee.name == "%%"
+        inner = expression.args[-1]
+        assert isinstance(inner, Call)
+        assert isinstance(inner.callee, VarRef)
+        assert inner.callee.name == "^^"
+
+    def test_used_scoped_facade_operator_selection_honors_alias_and_rename(
         self, tmp_path: Path
     ) -> None:
         from agm.agl.syntax.nodes import Call, VarRef
@@ -364,7 +422,7 @@ class TestGraphBuild:
         )
 
         graph = load_graph(
-            "import facade as API\nopen API::Public using %% as ~~\n1 ~~ 2",
+            "import facade as API\nuse API::Public::{%% as ~~}\n1 ~~ 2",
             entry_path=None,
             roots=_roots(root),
             default_stdlib=False,
@@ -375,7 +433,7 @@ class TestGraphBuild:
         assert isinstance(expression.callee, VarRef)
         assert expression.callee.name == "~~"
 
-    def test_opened_scoped_facade_exports_with_conflicting_fixities_are_rejected(
+    def test_used_scoped_facade_exports_with_conflicting_fixities_are_rejected(
         self, tmp_path: Path
     ) -> None:
         from agm.agl.parser import AglSyntaxError
@@ -384,13 +442,13 @@ class TestGraphBuild:
         root.mkdir()
         _write_module(root, "left", "infixl %% at 5\n")
         _write_module(root, "right", "infixr %% at 5\n")
-        _write_module(root, "left_facade", "scope Public\nexport left using %%\nend Public\n")
-        _write_module(root, "right_facade", "scope Public\nexport right using %%\nend Public\n")
+        _write_module(root, "left_facade", "scope Public\nexport left::{%%}\nend Public\n")
+        _write_module(root, "right_facade", "scope Public\nexport right::{%%}\nend Public\n")
 
         with pytest.raises(AglSyntaxError):
             load_graph(
                 "import left_facade\nimport right_facade\n"
-                "open left_facade::Public\nopen right_facade::Public\n1 %% 2",
+                "use left_facade::Public::*\nuse right_facade::Public::*\n1 %% 2",
                 entry_path=None,
                 roots=_roots(root),
                 default_stdlib=False,
@@ -430,10 +488,10 @@ class TestGraphBuild:
         root = tmp_path / "r"
         root.mkdir()
         _write_module(root, "operators", "infixl %% at 5\n")
-        _write_module(root, "facade", "scope Public\nexport operators using %%\nend Public\n")
+        _write_module(root, "facade", "scope Public\nexport operators::{%%}\nend Public\n")
 
         graph = load_graph(
-            "scope Local\nimport facade using Public::%% as %%\n"
+            "scope Local\nimport facade::{Public::%% as %%}\n"
             "def apply(x: int, y: int) -> int = x %% y\nend Local\n",
             entry_path=None,
             roots=_roots(root),
@@ -448,7 +506,7 @@ class TestGraphBuild:
         assert isinstance(function.body.callee, VarRef)
         assert function.body.callee.name == "%%"
 
-    def test_package_reexported_operator_is_bare_visible_through_open_import(
+    def test_package_reexported_operator_is_bare_visible_through_wildcard_import(
         self, tmp_path: Path
     ) -> None:
         from agm.agl.syntax.nodes import Call, VarRef
@@ -458,7 +516,7 @@ class TestGraphBuild:
         _write_module(operators.root, "operators/public", "export operators/ops\n")
 
         graph = load_graph(
-            "open import operators/public\n1 %% 2",
+            "import operators/public::*\n1 %% 2",
             entry_path=None,
             roots=_package_roots(tmp_path, operators),
             default_stdlib=False,
@@ -663,7 +721,7 @@ class TestCanonicalDedup:
         link.symlink_to(root)
         # Both roots would resolve 'shared.util' to the same canonical file
         graph = load_graph(
-            "open import shared/util",
+            "import shared/util::*",
             entry_path=None,
             roots=_roots(root, link),
         )
@@ -912,7 +970,7 @@ class TestWildcardImportInLoader:
         # Entry imports pkg.a non-wildcard first, triggering the load of pkg.a,
         # whose wildcard import pkg/* then encounters pkg.a as already-loaded.
         graph = load_graph(
-            "open import pkg/a",
+            "import pkg/a::*",
             entry_path=None,
             roots=_roots(root),
         )
@@ -937,7 +995,7 @@ class TestDeterminism:
         _write_module(root_b, "y/two")
         _write_module(root_a, "z/three")
 
-        entry = "open import x/one\nopen import y/two\nopen import z/three"
+        entry = "import x/one::*\nimport y/two::*\nimport z/three::*"
 
         graph1 = load_graph(entry, entry_path=None, roots=_roots(root_a, root_b))
         graph2 = load_graph(entry, entry_path=None, roots=_roots(root_b, root_a))
@@ -1044,7 +1102,7 @@ class TestFileBasedEntry:
         root = tmp_path / "r"
         root.mkdir()
         mod_path = _write_module(root, "deps/lib")
-        graph = load_graph("open import deps/lib", entry_path=None, roots=_roots(root))
+        graph = load_graph("import deps/lib::*", entry_path=None, roots=_roots(root))
         lib_mod = graph.modules[ModuleId.from_path("deps/lib")]
         assert lib_mod.source.label == str(mod_path.resolve())
         assert lib_mod.path == mod_path.resolve()
@@ -1264,7 +1322,7 @@ class TestBuildReplGraph:
         mid_a = ModuleId(segments=("pkg", "a"))
 
         # First build: load pkg.a via explicit import to pre-cache it.
-        program1 = _parse_for_repl("open import pkg/a\n()")
+        program1 = _parse_for_repl("import pkg/a::*\n()")
         _, next_id, new1 = build_repl_graph(
             program1, 0, path=None, cached={}, roots=_roots(tmp_path)
         )
@@ -1294,15 +1352,147 @@ class TestBuildReplGraph:
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         (pkg / "shared.agl").write_text("def f() -> int = 1\n")
-        (pkg / "other.agl").write_text("open import pkg/shared\ndef g() -> int = f()\n")
+        (pkg / "other.agl").write_text("import pkg/shared::*\ndef g() -> int = f()\n")
         # entry imports pkg.shared directly AND pkg.* (which includes pkg.shared)
         # so pkg.shared would be queued twice: once for direct import and once
         # via wildcard; BFS should handle the dedup via the 'if mid in modules'
         # check.
-        program = _parse_for_repl("open import pkg/shared\nimport pkg/*\n()")
+        program = _parse_for_repl("import pkg/shared::*\nimport pkg/*\n()")
         graph, _next_id, new_modules = build_repl_graph(
             program, 0, path=None, cached={}, roots=_roots(tmp_path)
         )
         mid_shared = ModuleId(segments=("pkg", "shared"))
         # pkg.shared should appear exactly once in the graph
         assert mid_shared in graph.modules
+
+
+class TestUseDeclarationLoading:
+    def test_standalone_use_does_not_create_a_module_graph_edge(self, tmp_path: Path) -> None:
+        from agm.agl.scope import AglScopeError, resolve_program
+
+        graph = load_graph(
+            "use missing::*",
+            entry_path=None,
+            roots=_roots(tmp_path),
+            default_stdlib=False,
+        )
+
+        assert set(graph.modules) == {ENTRY_ID}
+        assert graph.adjacency[ENTRY_ID] == ()
+        with pytest.raises(AglScopeError):
+            resolve_program(graph)
+
+
+class TestPreludeSupersession:
+    def test_explicit_core_wildcard_import_suppresses_the_default_prelude(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.scope import resolve_program
+
+        graph = load_graph(
+            "import std/core::* hiding ask",
+            entry_path=None,
+            roots=_roots(tmp_path),
+        )
+
+        entry = graph.modules[ENTRY_ID]
+        core_imports = [decl for decl in entry.imports if decl.module_path == STD_CORE_ID.segments]
+        assert len(core_imports) == 1
+        resolution = resolve_program(graph).modules[ENTRY_ID]
+        assert "ask" not in resolution.import_env.unqualified
+        assert "print" in resolution.import_env.unqualified
+
+    def test_scoped_explicit_core_import_suppresses_the_default_prelude(
+        self, tmp_path: Path
+    ) -> None:
+        graph = load_graph(
+            "scope Local\nimport std/core\nend Local",
+            entry_path=None,
+            roots=_roots(tmp_path),
+        )
+
+        core_imports = [
+            decl
+            for decl in graph.modules[ENTRY_ID].imports
+            if decl.module_path == STD_CORE_ID.segments
+        ]
+        assert len(core_imports) == 1
+        assert core_imports[0].scope_path[0].name == "Local"
+
+    def test_bare_core_import_is_qualified_only(self, tmp_path: Path) -> None:
+        from agm.agl.scope import resolve_program
+
+        graph = load_graph(
+            "import std/core",
+            entry_path=None,
+            roots=_roots(tmp_path),
+        )
+
+        resolution = resolve_program(graph).modules[ENTRY_ID]
+        assert "Option" not in resolution.import_env.unqualified
+        assert resolution.import_env.contributions[STD_CORE_ID].path_enabled
+
+    def test_wildcard_import_including_core_suppresses_the_default_prelude(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.scope import resolve_program
+
+        graph = load_graph(
+            "import std/*",
+            entry_path=None,
+            roots=_roots(tmp_path),
+        )
+
+        resolution = resolve_program(graph).modules[ENTRY_ID]
+        assert "Option" not in resolution.import_env.unqualified
+
+    def test_no_stdlib_does_not_add_a_prelude_but_keeps_explicit_core_import(
+        self, tmp_path: Path
+    ) -> None:
+        no_prelude = load_graph("()", entry_path=None, roots=_roots(tmp_path), default_stdlib=False)
+        explicit_core = load_graph(
+            "import std/core::*\n()",
+            entry_path=None,
+            roots=_roots(tmp_path),
+            default_stdlib=False,
+        )
+
+        assert STD_CORE_ID not in no_prelude.modules
+        assert STD_CORE_ID in explicit_core.modules
+        assert len(explicit_core.modules[ENTRY_ID].imports) == 1
+
+
+class TestWildcardTailDistribution:
+    @pytest.mark.parametrize(
+        "declaration",
+        (
+            "import package/*::*",
+            "import package/*::{shared}",
+            "import package/*::* hiding private",
+            "import package/* as packages",
+        ),
+    )
+    def test_wildcard_clauses_load_every_matched_module(
+        self, tmp_path: Path, declaration: str
+    ) -> None:
+        root = tmp_path / "modules"
+        root.mkdir()
+        _write_module(root, "package/one", "def shared() -> int = 1\ndef private() -> int = 2\n")
+        _write_module(root, "package/two", "def shared() -> int = 3\ndef private() -> int = 4\n")
+
+        graph = load_graph(declaration, entry_path=None, roots=_roots(root))
+
+        assert ModuleId.from_path("package/one") in graph.modules
+        assert ModuleId.from_path("package/two") in graph.modules
+
+    def test_wildcard_tail_is_checked_against_each_matched_module(self, tmp_path: Path) -> None:
+        from agm.agl.scope import AglScopeError, resolve_program
+
+        root = tmp_path / "modules"
+        root.mkdir()
+        _write_module(root, "package/one", "def shared() -> int = 1\n")
+        _write_module(root, "package/two", "def other() -> int = 2\n")
+        graph = load_graph("import package/*::{shared}\n()", entry_path=None, roots=_roots(root))
+
+        with pytest.raises(AglScopeError):
+            resolve_program(graph)

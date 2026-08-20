@@ -149,7 +149,6 @@ from agm.agl.syntax.nodes import (
     Loop,
     NameTarget,
     NullLit,
-    OpenDecl,
     ParamDecl,
     ParamKind,
     Pattern,
@@ -170,6 +169,7 @@ from agm.agl.syntax.nodes import (
     UnaryNeg,
     UnaryNot,
     UnitLit,
+    UseDecl,
     VarDecl,
     VarPattern,
     VarRef,
@@ -599,6 +599,10 @@ class _Checker:
         # values are fully dereferenced ordinary binders or constructors.
         self._slot_resolution: dict[int, BindingRef] = {}
         self._slot_constructor_refs: dict[int, ConstructorRef] = {}
+        # Scrutinee-directed selections for ambiguous bare ``is`` spellings.
+        # Scope's candidate table remains immutable; lowering reads this map
+        # through CheckedModule.constructor_ref_for.
+        self._is_test_constructor_refs: dict[int, ConstructorRef] = {}
         # Complete matched types and selected meanings for immutable let
         # patterns. These are checked artifacts; inference-region rollback
         # prevents candidate-session state from publishing through them.
@@ -908,7 +912,7 @@ class _Checker:
             with self._own_type_scope(item):
                 self._check_param(item)
             return UnitType()
-        if isinstance(item, (ImportDecl, ExportDecl, OpenDecl, InfixDecl)):
+        if isinstance(item, (ImportDecl, ExportDecl, UseDecl, InfixDecl)):
             return UnitType()  # The program module-system pass processes imports/exports.
         # --- Binders ---
         if isinstance(item, (LetDecl, VarDecl)):
@@ -2086,6 +2090,7 @@ class _Checker:
             ("pattern_classifications", self._pattern_classifications),
             ("slot_resolution", self._slot_resolution),
             ("slot_constructor_refs", self._slot_constructor_refs),
+            ("is_test_constructor_refs", self._is_test_constructor_refs),
             ("let_matched_types", self._let_matched_types),
             ("pattern_binding_refs", self._pattern_binding_refs),
             ("pattern_constructor_refs", self._pattern_constructor_refs),
@@ -2150,6 +2155,13 @@ class _Checker:
         self._pattern_classifications[node_id] = constructor
         if constructor is not None:
             self._record_pattern_constructor_ref(node_id, constructor)
+
+    def _record_is_test_constructor_ref(self, node_id: int, constructor: ConstructorRef) -> None:
+        """Publish the enum constructor selected for one ambiguous bare ``is`` test."""
+        self._record_side_table_addition(
+            "is_test_constructor_refs", self._is_test_constructor_refs, node_id
+        )
+        self._is_test_constructor_refs[node_id] = constructor
 
     def _record_let_matched_type(self, node_id: int, typ: Type) -> None:
         """Publish one concrete complete-value type for an immutable let site."""
@@ -3450,9 +3462,9 @@ class _Checker:
 
             exc_type: ExceptionType = EXCEPTION_BASE
         else:
-            # resolve_named_type is used instead of get_type so that open-imported
-            # exception types (cross-module program context) are found as well.
-            resolved = self._env.resolve_named_type(clause.exc_type)
+            # resolve_named_type is used instead of get_type so exception types exposed
+            # by import tails (in cross-module program context) are found as well.
+            resolved = self._env.resolve_named_type(clause.exc_type, span=clause.span)
             if resolved is None or not isinstance(resolved, ExceptionType):
                 raise AglTypeError(
                     f"'{clause.exc_type}' is not a known exception type.",
@@ -3948,15 +3960,62 @@ class _Checker:
                     span=node.span,
                 )
             constructor = self._constructor_ref_for(node.node_id)
-            if constructor is None or not constructor.matches(expr_type, node.variant):
+            selected_from_candidates = False
+            if constructor is None and node.qualifier is None:
+                candidates = self._resolved.is_test_constructor_candidates.get(node.node_id, ())
+                matching = tuple(
+                    candidate
+                    for candidate in candidates
+                    if candidate.matches(
+                        expr_type,
+                        candidate.variant if candidate.variant is not None else node.variant,
+                    )
+                )
+                constructor = self._unique_constructor_candidate(
+                    node.variant,
+                    node.span,
+                    expr_type,
+                    matching,
+                    subject="'is' variant",
+                )
+                if constructor is not None:
+                    constructor = self._constructors.normalize_constructor_ref(constructor)
+                    self._record_is_test_constructor_ref(node.node_id, constructor)
+                    selected_from_candidates = True
+            variant = (
+                constructor.variant
+                if constructor is not None and constructor.variant is not None
+                else node.variant
+            )
+            if constructor is None:
                 self._check_variant_qualification(
                     qualifier=node.qualifier,
                     variant=node.variant,
                     enum_type=expr_type,
                     span=node.span,
                 )
-            if node.variant not in self._env.type_table.enum_variants(expr_type):
-                raise _variant_not_in_enum(node.variant, expr_type, node.span)
+            elif not selected_from_candidates:
+                # Resolving the owner's source template is the expensive half,
+                # so let the cheap direct match short-circuit it.
+                if not constructor.matches(expr_type, variant) and (
+                    self._env.match_source_type_qname(
+                        constructor.owner_module_id,
+                        constructor.owner_name,
+                        expr_type,
+                        scope_path=constructor.owner_path,
+                    )
+                    is None
+                ):
+                    if node.qualifier is None:
+                        raise _variant_not_in_enum(variant, expr_type, node.span)
+                    self._check_variant_qualification(
+                        qualifier=node.qualifier,
+                        variant=node.variant,
+                        enum_type=expr_type,
+                        span=node.span,
+                    )
+            if variant not in self._env.type_table.enum_variants(expr_type):
+                raise _variant_not_in_enum(variant, expr_type, node.span)
             return BoolType()
 
     def _qualified_constructor_typed_call_error(self, span: SourceSpan) -> AglTypeError:
@@ -3979,7 +4038,7 @@ class _Checker:
             return
         if qualifier.anchor is not QualifierAnchor.MODULE:
             local_owner = "::".join(segment.name for segment in qualifier.segments)
-            local_enum = self._env.resolve_named_type(local_owner)
+            local_enum = self._env.resolve_named_type(local_owner, span=span)
             if local_enum is not None:
                 if qualifier.anchor is None and self._env.has_qualified_import_member(
                     qualifier, variant
@@ -4033,9 +4092,7 @@ class _Checker:
                 span,
             )
         else:
-            self._check_qualified_variant_prefix(
-                qualifier, enum_type.name, variant, enum_type, span
-            )
+            self._check_module_qualified_variant(qualifier, enum_type.name, enum_type, span)
 
     def _require_enum_owner_match(
         self,
@@ -4058,24 +4115,6 @@ class _Checker:
                 f"but the value has enum type '{enum_type.name}'.",
                 span=span,
             )
-
-    def _check_qualified_variant_prefix(
-        self,
-        module_qualifier: QualifierChain,
-        enum_name: str,
-        variant: str,
-        enum_type: EnumType,
-        span: SourceSpan,
-    ) -> None:
-        """Validate a lone ``prefix::Variant`` qualifier."""
-        if not module_qualifier.anchored and len(module_qualifier.route_segments) == 1:
-            qualifier = module_qualifier.route_segments[0]
-            form = self._env.resolve_unqualified_enum_owner_form(qualifier)
-            if form is not None:
-                self._require_enum_owner_match(form, enum_type, qualifier, span)
-                return
-
-        self._check_module_qualified_variant(module_qualifier, enum_name, enum_type, span)
 
     def _check_module_qualified_variant(
         self,
@@ -4801,32 +4840,48 @@ class _Checker:
         variant_name: str | None
         fields: Mapping[str, Type]
         context_desc: str
-        if isinstance(subj_type, EnumType):
-            self._check_variant_qualification(
-                qualifier=pattern.qualifier,
-                variant=pattern.name,
-                enum_type=subj_type,
-                span=pattern.span,
-            )
-            variants = self._env.type_table.enum_variants(subj_type)
-            if pattern.name not in variants:
-                raise _variant_not_in_enum(pattern.name, subj_type, pattern.span)
-            owner_type = subj_type
-            variant_name = pattern.name
-            fields = variants[variant_name]
-            context_desc = f"variant '{owner_type.name}.{variant_name}'"
-        elif isinstance(subj_type, RecordType):
-            owner_type = subj_type
-            variant_name = None
-            fields = self._env.type_table.record_fields(owner_type)
-            context_desc = f"constructor '{owner_type.name}'"
-        else:
+        if not isinstance(subj_type, (RecordType, EnumType)):
             raise AglTypeError(
                 f"Cannot match constructor pattern '{pattern.name}' against non-record or non-enum "
                 f"type '{subj_type!r}'.",
                 span=pattern.span,
             )
+        owner_type = subj_type
         constructor_ref = self._constructor_pattern_ref(pattern, owner_type)
+        if isinstance(owner_type, EnumType):
+            variant_name = (
+                constructor_ref.variant
+                if constructor_ref is not None and constructor_ref.variant is not None
+                else pattern.name
+            )
+            qualifier = pattern.qualifier
+            if constructor_ref is None or (
+                qualifier is not None
+                and (
+                    qualifier.anchor is not None
+                    or self._env.resolve_named_type(
+                        "::".join(segment.name for segment in qualifier.segments),
+                        span=pattern.span,
+                    )
+                    is not None
+                    or self._env.has_qualified_import_member(qualifier, pattern.name)
+                )
+            ):
+                self._check_variant_qualification(
+                    qualifier=qualifier,
+                    variant=pattern.name,
+                    enum_type=owner_type,
+                    span=pattern.span,
+                )
+            variants = self._env.type_table.enum_variants(owner_type)
+            if variant_name not in variants:
+                raise _variant_not_in_enum(variant_name, owner_type, pattern.span)
+            fields = variants[variant_name]
+            context_desc = f"variant '{owner_type.name}.{variant_name}'"
+        else:
+            variant_name = None
+            fields = self._env.type_table.record_fields(owner_type)
+            context_desc = f"constructor '{owner_type.name}'"
         if constructor_ref is None and isinstance(owner_type, EnumType) and pattern.qualifier:
             typedef = self._env.type_table.get(
                 owner_type.module_id, owner_type.name, owner_type.scope_path
@@ -4852,43 +4907,76 @@ class _Checker:
         pattern: ConstructorPattern,
         owner_type: RecordType | EnumType,
     ) -> ConstructorRef | None:
-        """Select the scope-published candidate matching this exact nominal constructor.
+        """Select the unique scope-published constructor for this exact nominal owner.
 
         Candidate owner names retain the spelling written by the user, including
         aliases. ``match_source_type_qname`` resolves that spelling transparently
-        and matches its full nominal template against the concrete scrutinee, so
-        the first owner match is the selection. Every published candidate
-        carries the exact variant it was declared for — a nominal alias whose
-        chain resolves to an enum publishes no candidate of its own (see
-        ``alias_denotes_constructible_type``) — so an owner match is also a
-        variant match.
+        and matches its full nominal template against the concrete scrutinee.
+        Owner matching disambiguates same-spelled constructors from different
+        enums, but distinct variants of that owner cannot share one pattern alias.
         """
         candidates = self._resolved.pattern_constructor_candidates.get(
             pattern.node_id, self._resolved.constructor_candidates.get(pattern.name, ())
         )
-        for candidate in candidates:
-            if (
-                self._env.match_source_type_qname(
-                    candidate.owner_module_id,
-                    candidate.owner_name,
-                    owner_type,
-                    scope_path=candidate.owner_path,
-                )
-                is not None
-            ):
-                return candidate
-        return None
+        matching = tuple(
+            candidate
+            for candidate in candidates
+            if self._env.match_source_type_qname(
+                candidate.owner_module_id,
+                candidate.owner_name,
+                owner_type,
+                scope_path=candidate.owner_path,
+            )
+            is not None
+        )
+        return self._unique_constructor_candidate(
+            pattern.name,
+            pattern.span,
+            owner_type,
+            matching,
+            subject="Constructor pattern",
+        )
+
+    @staticmethod
+    def _unique_constructor_candidate(
+        name: str,
+        span: SourceSpan,
+        owner_type: RecordType | EnumType,
+        candidates: tuple[ConstructorRef, ...],
+        *,
+        subject: str,
+    ) -> ConstructorRef | None:
+        """Return one owner-matched candidate unless distinct variants remain."""
+        if len({candidate.variant for candidate in candidates}) > 1:
+            raise AglTypeError(
+                f"{subject} '{name}' is ambiguous for '{owner_type!r}'.",
+                span=span,
+            )
+        return candidates[0] if candidates else None
 
     def _candidate_for_field_type(
         self, pattern: VarPattern, field_type: Type
     ) -> ConstructorRef | None:
-        """Return the candidate spelling that belongs to this enum field, if any."""
+        """Return the unique candidate spelling that belongs to this enum field, if any."""
         if not isinstance(field_type, EnumType):
             return None
-        for candidate in self._resolved.pattern_constructor_candidates.get(pattern.node_id, ()):
-            if candidate.matches(field_type, pattern.name):
-                return candidate
-        return None
+        if self._resolved.pattern_constructor_spellings.get(pattern.node_id) != pattern.name:
+            return None
+        matching = tuple(
+            candidate
+            for candidate in self._resolved.pattern_constructor_candidates.get(pattern.node_id, ())
+            if candidate.matches(
+                field_type,
+                candidate.variant if candidate.variant is not None else pattern.name,
+            )
+        )
+        return self._unique_constructor_candidate(
+            pattern.name,
+            pattern.span,
+            field_type,
+            matching,
+            subject="Constructor pattern",
+        )
 
     def _check_top_level_bare_constructor(self, pattern: VarPattern, subj_type: Type) -> None:
         """Finalize a top-level bare pattern as a nullary enum constructor."""
@@ -4899,7 +4987,7 @@ class _Checker:
             # enum; the bare name then names no constructor of this enum, even
             # when this enum happens to declare a same-named variant.
             raise _variant_not_in_enum(pattern.name, enum_type, pattern.span)
-        self._require_nullary_bare_constructor(pattern, enum_type)
+        self._require_nullary_bare_constructor(pattern, enum_type, candidate)
         self._record_pattern_classification(pattern.node_id, candidate)
 
     def _check_field_bare_pattern(
@@ -4927,7 +5015,7 @@ class _Checker:
             self._record_pattern_classification(pattern.node_id, None)
             return
         if candidate is not None:
-            self._require_nullary_bare_constructor(pattern, field_type)
+            self._require_nullary_bare_constructor(pattern, field_type, candidate)
             self._record_pattern_classification(pattern.node_id, candidate)
             return
         if pattern.name in field_names:
@@ -4941,12 +5029,13 @@ class _Checker:
             span=pattern.span,
         )
 
-    def _require_nullary_bare_constructor(self, pattern: VarPattern, enum_type: Type) -> None:
+    def _require_nullary_bare_constructor(
+        self, pattern: VarPattern, enum_type: Type, candidate: ConstructorRef
+    ) -> None:
         """Require a bare constructor spelling to be a nullary matched enum variant."""
         assert isinstance(enum_type, EnumType)
-        fields = self._env.type_table.enum_variants(enum_type).get(pattern.name)
-        if fields is None:
-            raise _variant_not_in_enum(pattern.name, enum_type, pattern.span)
+        variant = candidate.variant if candidate.variant is not None else pattern.name
+        fields = self._env.type_table.enum_variants(enum_type)[variant]
         if fields:
             raise AglTypeError(
                 f"'{pattern.name}' has fields; write '{pattern.name}(...)' to match it.",
@@ -5191,6 +5280,7 @@ class _Checker:
             partial_calls=self._partial_calls,
             slot_resolution=self._slot_resolution,
             slot_constructor_refs=self._slot_constructor_refs,
+            is_test_constructor_refs=self._is_test_constructor_refs,
             let_matched_types=self._let_matched_types,
             pattern_binding_refs=self._pattern_binding_refs,
             pattern_constructor_refs=self._pattern_constructor_refs,

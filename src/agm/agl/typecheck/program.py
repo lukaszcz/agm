@@ -521,7 +521,7 @@ def _build_program_type_table(
 
     # Build per-module cross-module-aware environments and builders for
     # body resolution.  Each env knows the full program_type_table and its own
-    # module's ImportEnv so qualified and open-imported type refs resolve.
+    # module's ImportEnv so qualified and import-tail-exposed type refs resolve.
     cross_envs: dict[ModuleId, TypeEnvironment] = {}
     cross_builders: dict[ModuleId, _TypeBuilder] = {}
     resolving_aliases: set[DeclKey] = set()

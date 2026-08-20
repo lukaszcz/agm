@@ -525,8 +525,8 @@ def test_direct_std_option_import_runs_without_the_automatic_prelude(
     roots = RootSet(roots=frozenset({REPO_STDLIB_ROOT}))
     result = _run_source_entry(
         PipelineDriver(),
-        "import std/core using print\n"
-        "import std/option using Option\n"
+        "import std/core::print\n"
+        "import std/option::Option\n"
         "program def main() -> unit = print(Option::Some(value = 2).map(fn(x: int) => x + 1))\n",
         roots=roots,
         default_stdlib=False,
@@ -547,8 +547,8 @@ def test_std_core_option_reexport_preserves_nominal_identity(
     roots = RootSet(roots=frozenset({REPO_STDLIB_ROOT}))
     result = _run_source_entry(
         PipelineDriver(),
-        "import std/core using Option as CoreOption, print\n"
-        "import std/option using Option\n"
+        "import std/core::{Option as CoreOption, print}\n"
+        "import std/option::Option\n"
         "program def main() -> unit =\n"
         "  let value: CoreOption[int] = Option::Some(value = 3)\n"
         "  print(value.with-default(0))\n",
@@ -594,7 +594,7 @@ def _scoped_stdlib_root(tmp_path: Path) -> Path:
         (REPO_STDLIB_ROOT / "std" / "core.agl")
         .read_text(encoding="utf-8")
         .replace("import std/config\n", "")
-        .replace("open import std/env\n", "")
+        .replace("import std/env::*\n", "")
         .replace("std/config::default-agent", 'AgentClaude("sonnet", "medium")')
         .replace(
             "builtin def exec(\n"

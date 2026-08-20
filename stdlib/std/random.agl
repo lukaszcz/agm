@@ -1,4 +1,4 @@
-import std/option using Option
+import std/option::Option
 
 scope RandomInternals
 extern def seed(value: int) -> unit

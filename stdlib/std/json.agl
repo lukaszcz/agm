@@ -1,4 +1,4 @@
-import std/option using Option
+import std/option::Option
 
 scope JsonInternals
 extern def parse_strict(value: text) -> json

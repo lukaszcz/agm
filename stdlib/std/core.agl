@@ -1,6 +1,6 @@
 import std/config
-open import std/env
-import std/option using Option
+import std/env::*
+import std/option::Option
 import std/pair
 import std/either
 import std/result

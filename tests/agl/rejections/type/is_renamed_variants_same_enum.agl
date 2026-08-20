@@ -1,0 +1,11 @@
+use Variants::{E::A as X, E::B as X}
+
+scope Variants
+enum E
+  | A
+  | B
+end Variants
+
+program def main() -> unit =
+  let value: Variants::E = Variants::E::A
+  print(value is X)

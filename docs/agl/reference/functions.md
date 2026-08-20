@@ -385,12 +385,12 @@ def fst[A, B](a: A, b: B) -> A = a
 
 An ordinary function in a named scope or imported module may use the same name
 as a built-in function because it is reached through its own qualified
-namespace. The bare built-in spelling remains reserved, even after opening
-that scope or module:
+namespace. The bare built-in spelling remains reserved, even after a `use`
+declaration makes that scope's or module's members bare:
 
 <!-- agl-check: fragment -->
 ```agl
-open Codec
+use Codec::*
 scope Codec
 def render[T](value: T) -> array[T] = [value]
 end Codec

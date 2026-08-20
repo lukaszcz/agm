@@ -1,4 +1,4 @@
-open import utils/*
+import utils/*::*
 program def main() -> unit =
   let n = add(3, 4)
   let msg = greet("World")

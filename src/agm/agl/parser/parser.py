@@ -17,7 +17,6 @@ must resolve that result before passing it to scope. All Lark exceptions and
 
 from __future__ import annotations
 
-import importlib.resources
 import re
 from dataclasses import replace as dc_replace
 from typing import Mapping, NoReturn
@@ -34,7 +33,7 @@ from lark.exceptions import (
 import agm.agl.syntax as syntax
 from agm.agl.lexer import tokenize
 from agm.agl.lexer.errors import LexError
-from agm.agl.lexer.lexer import AglLexer
+from agm.agl.lexer.lexer import build_parser
 from agm.agl.lexer.tokens import RAW_TAIL_END, RAW_TAIL_START
 from agm.agl.parser.errors import AglSyntaxError, syntax_error_from_lark
 from agm.agl.parser.transform import AstBuilder, resolve_program_infix
@@ -56,24 +55,8 @@ def _reraise_stamped(err: AglSyntaxError, source: SourceId | None) -> NoReturn:
     raise err
 
 
-def _load_grammar() -> str:
-    """Load the grammar file via importlib.resources (package-anchored)."""
-    return (
-        importlib.resources.files("agm.agl")
-        .joinpath("grammar/agl.lark")
-        .read_text(encoding="utf-8")
-    )
-
-
 # Module-level parser instance — built once, reused for every parse call.
-_PARSER: Lark = Lark(
-    _load_grammar(),
-    parser="lalr",
-    lexer=AglLexer,
-    propagate_positions=True,
-    maybe_placeholders=True,
-    cache=True,
-)
+_PARSER: Lark = build_parser()
 
 _TYPED_CALL_WITHOUT_CALL_RE = re.compile(r"::\s*\[.*\]\s*$", re.DOTALL)
 
@@ -89,15 +72,7 @@ def _type_parser() -> Lark:
     """Return the lazily-built ``type_expr``-rooted Lark instance."""
     global _TYPE_PARSER
     if _TYPE_PARSER is None:
-        _TYPE_PARSER = Lark(
-            _load_grammar(),
-            parser="lalr",
-            lexer=AglLexer,
-            propagate_positions=True,
-            maybe_placeholders=True,
-            start="type_expr",
-            cache=True,
-        )
+        _TYPE_PARSER = build_parser("type_expr")
     return _TYPE_PARSER
 
 
@@ -169,13 +144,14 @@ def _transform_tree(
     start_id: int,
     filename: str,
     source: SourceId | None,
+    allow_late_uses: bool = False,
 ) -> tuple[object, int]:
     """Transform a Lark tree via ``AstBuilder``, unwrapping ``VisitError``.
 
     Returns ``(result, next_node_id)`` where ``next_node_id`` is the first id NOT
     consumed by the builder's counter (the seed for the next incremental parse).
     """
-    builder = AstBuilder(start_id=start_id, source=source)
+    builder = AstBuilder(start_id=start_id, source=source, allow_late_uses=allow_late_uses)
     try:
         result = builder.transform(tree)
     except VisitError as exc:
@@ -194,6 +170,7 @@ def _parse_to_unresolved_program(
     filename: str,
     start_id: int,
     source: SourceId | None = None,
+    allow_late_uses: bool = False,
 ) -> tuple[syntax.Program, int]:
     """Build a raw ``Program`` from *text* and report the next unused node id.
 
@@ -202,7 +179,13 @@ def _parse_to_unresolved_program(
     passed to scope until ``resolve_infix_chains`` has rewritten them.
     """
     tree = _parse_tree(_PARSER, text, filename=filename, source=source)
-    result, next_id = _transform_tree(tree, start_id=start_id, filename=filename, source=source)
+    result, next_id = _transform_tree(
+        tree,
+        start_id=start_id,
+        filename=filename,
+        source=source,
+        allow_late_uses=allow_late_uses,
+    )
     assert isinstance(result, syntax.Program)
     return result, next_id
 
@@ -374,6 +357,20 @@ def parse_program(
     """
     program, _next_id = _parse_to_program(
         text, filename=filename, start_id=start_id, source=source, ambient_infix=ambient_infix
+    )
+    return program
+
+
+def parse_repl_transcript(text: str, *, filename: str = "<agl>") -> syntax.Program:
+    """Parse a saved REPL transcript for top-level entry boundary discovery.
+
+    Header ordering is deferred because each top-level item is subsequently
+    parsed as an independent REPL entry before it can be evaluated. The result
+    is unresolved for the same reason: only the item spans are consumed.
+    """
+
+    program, _next_id = _parse_to_unresolved_program(
+        text, filename=filename, start_id=0, allow_late_uses=True
     )
     return program
 

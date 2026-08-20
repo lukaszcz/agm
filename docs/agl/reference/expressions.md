@@ -550,7 +550,7 @@ let package_root = resource-dir()
 ## `std/fs`
 
 `std/fs` provides explicit UTF-8 filesystem effects. Import it and call its
-functions through the module route or an `open import`:
+functions through the module route or an import tail:
 
 <!-- agl-check: fragment -->
 ```agl
@@ -702,7 +702,7 @@ review is Pass
 status is Status::Blocked     # qualified; aliases resolve transparently
 ```
 
-The left operand must have enum type; the variant must belong to that enum.
+The left operand must have enum type; the variant must belong to that enum. When one bare spelling exposes variants from multiple enums, the left operand's nominal enum type selects the variant. If the spelling exposes multiple distinct variants of that same enum, the test is ambiguous and must use an unambiguous spelling.
 
 ## `case` expressions
 

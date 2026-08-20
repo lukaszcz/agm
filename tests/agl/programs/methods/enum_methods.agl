@@ -1,6 +1,6 @@
-# Enum methods share the enum scope with variants. Opening that scope supplies
+# Enum methods share the enum scope with variants. A `use` of that scope supplies
 # bare variants whose resulting values can immediately use their methods.
-open Signal
+use Signal::*
 
 param mode: text
 param value: int

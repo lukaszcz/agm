@@ -259,7 +259,7 @@ def test_t7_retry_forwards_spawn_settings_on_every_attempt() -> None:
         return _ok("not-an-int\n" if len(calls) == 1 else "9\n")
 
     source = (
-        "import std/env using Environ\n"
+        "import std/env::Environ\n"
         'let child = Environ(vars = {"ONLY": "child"})\n'
         'let n: int = exec("cmd", env = child, '
         'cwd = Option[text]::Some(value = "/work"), '
@@ -454,7 +454,7 @@ def test_exec_with_an_extended_environment_reaches_the_process_boundary() -> Non
         return _ok("ok\\n")
 
     source = (
-        "open import std/env\n"
+        "import std/env::*\n"
         'let child = environ.extended({"base": "override", "extra": "value"})\n'
         'let output: text = exec("child", env = child)\n'
         "output"
@@ -523,7 +523,7 @@ def test_t13_exec_spawn_parameters_and_defaults() -> None:
         return _ok("ok\\n")
 
     source = (
-        "import std/env using Environ\n"
+        "import std/env::Environ\n"
         'let child = Environ(vars = {"ONLY": "child"})\n'
         'let explicit: text = exec("explicit", env = child, '
         'cwd = Option[text]::Some(value = "/work"), '

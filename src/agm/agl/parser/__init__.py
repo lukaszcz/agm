@@ -23,6 +23,7 @@ from agm.agl.parser.parser import (
     parse_program,
     parse_program_seeded,
     parse_program_unresolved,
+    parse_repl_transcript,
     parse_type_expr,
 )
 from agm.agl.parser.transform import (
@@ -40,6 +41,7 @@ __all__ = [
     "parse_program",
     "parse_program_seeded",
     "parse_program_unresolved",
+    "parse_repl_transcript",
     "parse_type_expr",
     "build_infix_operator_table",
     "resolve_infix_chains",

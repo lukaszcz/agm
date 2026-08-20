@@ -1,4 +1,4 @@
-import std/result using Result
+import std/result::Result
 
 builtin
 enum Option[T] =

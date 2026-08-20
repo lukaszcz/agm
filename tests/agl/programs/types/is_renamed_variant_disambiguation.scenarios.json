@@ -1,0 +1,11 @@
+{
+  "scenarios": [
+    {
+      "name": "scrutinee_nominal_selects_real_variant",
+      "expect": {
+        "stdout": "true\ntrue\n",
+        "calls": {}
+      }
+    }
+  ]
+}

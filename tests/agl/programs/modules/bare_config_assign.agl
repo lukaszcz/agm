@@ -1,19 +1,19 @@
-# Modules: an open import exposes a mutable engine setting for bare assignment.
+# Modules: a glob import exposes a mutable engine setting for bare assignment.
 # Exercises a bare write cross-checked through a qualified read, a bare write
-# whose value comes from an open-imported function, a differently-typed setting
+# whose value comes from a function exposed by an import tail, a differently-typed setting
 # on the same import, and the write actually raising the cap that bounds an
 # unbounded `do` loop. A param drives the numbers.
-open import std/config
-open import tuning
+import std/config::*
+import tuning::*
 param budget: int
 
-# Bare write through the open import; the qualified read sees the same binding.
+# Bare write through the glob import; the qualified read sees the same binding.
 
 program def main() -> unit =
   max-iters := budget
   print std/config::max-iters
 
-  # The written value may come from an open-imported function, read back bare.
+  # The written value may come from a function exposed by an import tail, read back bare.
   max-iters := scaled(budget)
   print max-iters
 

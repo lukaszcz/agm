@@ -36,7 +36,7 @@ from dataclasses import field as dc_field
 from typing import TypeGuard
 
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import TYPE_PARAMETER_WILDCARD, ImportMode, TypeExpr
+from agm.agl.syntax.types import TYPE_PARAMETER_WILDCARD, TypeExpr
 
 # ---------------------------------------------------------------------------
 # Sentinel for the else-branch of If
@@ -103,22 +103,24 @@ class ImportItem:
 
 @dataclass(frozen=True, slots=True)
 class ImportDecl:
-    """``[open] import MODPATH[/*] [as ALIAS] [using…|hiding…]`` declaration.
+    """``import MODPATH[/*] [as ALIAS | ::TAIL] [hiding …]`` declaration.
 
-    ``scope_path`` is non-empty when the declaration is a region item: the
-    region's own path, not to be confused with an ``ImportItem``'s
-    ``scope_path``, which selects a member inside the *imported* module.
+    ``tail`` is ``None`` for no tail, empty for ``::*``, or contains the
+    selected atoms. ``scope_path`` is non-empty when the declaration is a
+    region item. ``wildcard_origin_node_id`` preserves the source wildcard's
+    declaration identity when an incremental host expands it into exact
+    module declarations.
     """
 
     module_path: tuple[str, ...]
     wildcard: bool
-    is_open: bool
     alias: str | None
-    mode: ImportMode
-    items: tuple[ImportItem, ...]
+    tail: tuple[ImportItem, ...] | None
+    hidden: tuple[ImportItem, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     scope_path: tuple[ScopeSegment, ...] = ()
+    wildcard_origin_node_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,18 +136,16 @@ class ExportItem:
 
 @dataclass(frozen=True, slots=True)
 class ExportDecl:
-    """``export MODPATH[/*] [using…|hiding…]`` declaration.
+    """``export MODPATH[/*] [::{ITEMS}] [hiding …]`` declaration.
 
     ``scope_path`` is non-empty when the declaration is a region item: the
-    forwarded atoms are re-rooted under it. Not to be confused with an
-    ``ExportItem``'s ``scope_path``, which selects a member inside the
-    *forwarded* module.
+    forwarded atoms are re-rooted under it.
     """
 
     module_path: tuple[str, ...]
     wildcard: bool
-    mode: ImportMode
     items: tuple[ExportItem, ...]
+    hidden: tuple[ExportItem, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     scope_path: tuple[ScopeSegment, ...] = ()
@@ -161,24 +161,18 @@ class ScopeSegment:
 
 
 @dataclass(frozen=True, slots=True)
-class ScopeRef:
-    """A scope reference, with an optional unambiguous slash module route."""
+class UseDecl:
+    """``use TARGET [::TAIL | as ALIAS] [hiding …]`` declaration."""
 
-    module_route: tuple[str, ...]
-    scope_path: tuple[ScopeSegment, ...]
+    anchored: bool
+    target: tuple[ScopeSegment, ...]
+    tail: tuple[ImportItem, ...] | None
+    hidden: tuple[ImportItem, ...]
+    alias: str | None
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
-
-
-@dataclass(frozen=True, slots=True)
-class OpenDecl:
-    """``open scope_ref [using…|hiding…]`` declaration."""
-
-    scope_ref: ScopeRef
-    mode: ImportMode
-    items: tuple[ImportItem, ...]
-    span: SourceSpan = dc_field(compare=False)
-    node_id: int = dc_field(compare=False)
+    scope_path: tuple[ScopeSegment, ...] = ()
+    current_module: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -1419,7 +1413,7 @@ Declaration = (
     | InfixDecl
     | ImportDecl
     | ExportDecl
-    | OpenDecl
+    | UseDecl
 )
 
 
@@ -1432,7 +1426,7 @@ Declaration = (
 # before it crosses the AST firewall.
 ScopeItem = (
     ScopeRegion
-    | OpenDecl
+    | UseDecl
     | ImportDecl
     | ExportDecl
     | FuncDef

@@ -1,5 +1,5 @@
-# An `open`ed scope makes its exceptions available for `extends` and `catch`.
-open A
+# A scope use makes its exceptions available for `extends` and `catch`.
+use A::*
 scope A
 exception Base extends Exception
   code: int

@@ -1,0 +1,30 @@
+{
+  "scenarios": [
+    {
+      "name": "short_title",
+      "module_roots": [
+        "program_modules/modules/export_brace_tails"
+      ],
+      "params": {
+        "title": "build"
+      },
+      "expect": {
+        "stdout": "report: build\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "long_title",
+      "module_roots": [
+        "program_modules/modules/export_brace_tails"
+      ],
+      "params": {
+        "title": "release candidate"
+      },
+      "expect": {
+        "stdout": "report: release candidate\n",
+        "calls": {}
+      }
+    }
+  ]
+}

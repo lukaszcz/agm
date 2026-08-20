@@ -1,12 +1,12 @@
 # Cross-module workflows exercise the standard library through mocked shell
 # calls and isolated filesystem fixtures.
 import std/array
-open import std/env
+import std/env::*
 import std/fs
 import std/json
 import std/path
 import std/regex
-import std/regex using Match
+import std/regex::Match
 import std/time
 import std/toml
 

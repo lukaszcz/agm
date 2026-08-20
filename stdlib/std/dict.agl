@@ -1,5 +1,5 @@
-import std/option using Option
-import std/pair using Pair
+import std/option::Option
+import std/pair::Pair
 
 scope DictInternals
 extern def size[V](self: dict[text, V]) -> int

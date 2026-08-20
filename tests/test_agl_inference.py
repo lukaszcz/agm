@@ -426,7 +426,7 @@ def test_bound_generic_method_accepts_explicit_own_type_parameter() -> None:
 def test_qualified_generic_member_infers_without_shadowing_a_bare_builtin() -> None:
     """A qualified generic function owns its spelling, while bare ``render`` stays builtin."""
     checked = resolve_and_check_inline_entry(
-        "open Codec\n"
+        "use Codec::*\n"
         "scope Codec\n"
         "def render[T](value: T) -> array[T] = [value]\n"
         "end Codec\n"

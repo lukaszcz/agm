@@ -12,9 +12,12 @@
 A package directory contains `package.toml` and a module tree whose directory matches
 `[package] name`. Package and dependency names must each be one AgL identifier segment and cannot
 be reserved AgL keywords. The manifest requires a complete semantic `version`; optional
-`[dependencies]` entries state minimum versions and may provide a local `path` or a URL with
-its SHA-256 hash. `[commands]` maps a one- or multi-word command path to a package-owned
-`MODULE::PROGRAM` reference, where `PROGRAM` is a `program def` declaration with no value or type parameters and an explicit `-> unit` result. For example:
+`[dependencies]` entries state version floors and may provide a local `path` or a URL with
+its SHA-256 hash. Ordinary package dependencies have no upper bound. A `std` dependency instead
+requires that minimum within one compatible AGM release line: the same minor line for `0.x`, or
+the same major line for `1.x` and later. `[commands]` maps a one- or multi-word command path to a
+package-owned `MODULE::PROGRAM` reference, where `PROGRAM` is a `program def` declaration with no
+value or type parameters and an explicit `-> unit` result. For example:
 
 ```toml
 [package]
@@ -49,11 +52,12 @@ ZIP64 archives are not supported.
 
 `agm pkg check` validates the `package.toml` manifest, module-tree naming discipline, program
 references used by manifest command registrations, and literal resource targets reached through
-imports, opens, or resolved dependency re-exports (rejecting scoped resource re-export cycles that
+imports, uses, or resolved dependency re-exports (rejecting scoped resource re-export cycles that
 keep expanding their paths). It also checks
-dependencies without modifying packages: a `std` requirement is checked against the running AGM
-version; a matching stored version is used first for other packages, then a declared local `path`;
-a URL with its required hash is a deferred satisfiable source and is not fetched.
+dependencies without modifying packages: a `std` requirement is checked for release-line
+compatibility with the running AGM version; a matching stored version is used first for other
+packages, then a declared local `path`; a URL with its required hash is a deferred satisfiable
+source and is not fetched.
 `DIR` defaults to the current directory.
 
 `agm pkg create` validates the selected portable archive contents, including literal resource
@@ -80,9 +84,10 @@ store, without creating archive, package-store, or activation-index files. It ne
 dependencies, so an installation that needs one fails in dry-run mode.
 Versions are retained side by side. A package identity includes the complete canonical version,
 including build metadata, so versions such as `1.0.0+linux` and `1.0.0+macos` are distinct store
-entries and activation selections. Dependencies use semantic-version precedence for minimum-version
-resolution, where build metadata does not affect whether a version satisfies a range: a satisfying
-stored version is selected first, otherwise a declared local `path` source is installed. URL
+entries and activation selections. Ordinary package dependencies use semantic-version precedence
+for minimum-version resolution, where build metadata does not affect whether a version satisfies a
+range: a satisfying stored version is selected first, otherwise a declared local `path` source is
+installed. URL
 dependencies are fetched with a required SHA-256 hash, then the downloaded archive's normalized
 manifest and `RECORD` are verified before atomic extraction and activation. Downloads have a 128 MiB
 size limit and a 30-second inactivity timeout, including blocked connection and body reads; each
@@ -145,8 +150,11 @@ tree, never in the `RECORD`-covered payload, so rebuilding a lost activation ind
 The built-in `std` package is installed and activated with AGM itself at the same version as the
 running binary. Its managed store tree is refreshed only from AGM's shipped `stdlib/` directory
 by `just install`; editable and archive installs are rejected, and `agm pkg uninstall std` always
-refuses. A package's `std` minimum-version requirement is also its minimum AGM version, so
-installation refuses a package that requires a newer AGM binary.
+refuses. When an AGM upgrade crosses a compatibility line, that refresh deactivates packages requiring
+the previous line and packages that depend on them, while retaining their immutable store trees. A
+package's `std` requirement is an AGM compatibility contract: the running AGM must be
+at least the declared version and remain in its compatible release line. Installation therefore
+refuses both newer requirements and older requirements from an incompatible line.
 
 `agm pkg uninstall` verifies the active immutable package's `RECORD`, validates the remaining
 activation selection, then clears activation before removing every recorded file, along with any
@@ -156,5 +164,5 @@ whose resolved ancestors leave the canonical store root. For an editable package
 activation. `agm pkg list` shows every immutable installed version as `active` or `installed`,
 plus active editable packages and commands only beneath their active owner, annotating commands
 that shadow another active package; `agm pkg info` shows package design metadata, command registrations, and whether each direct requirement is active,
-unsatisfied, or missing; `std` is reported against the running AGM version rather than the active
-package store.
+unsatisfied, or missing. It displays the inferred exclusive upper bound for `std`, which is reported
+against the running AGM version rather than the active package store.

@@ -109,17 +109,16 @@ reserved for standard-library declarations that are implemented by the host.
 `extern` is reserved for declarations implemented by a companion Python file
 (see [Python FFI](ffi.md)).
 
-**Module and scope soft keywords** — `open`, `import`, `export`, `using`,
-`hiding`, `scope`, and `end` are **not reserved**. They remain valid
-identifiers in all positions except:
+**Module and scope soft keywords** — `import`, `use`, `export`, `hiding`,
+`scope`, and `end` are **not reserved**. They remain valid identifiers in all
+positions except:
 
 | Keyword | Promoted to | Window |
 |---------|-------------|--------|
-| `open` | `OPEN` | At item-start, before an import or scope reference |
-| `import` | `IMPORT` | At item-start, or directly after `open` |
+| `import` | `IMPORT` | At item-start |
+| `use` | `USE` | At item-start when followed by a use declaration form |
 | `export` | `EXPORT` | At item-start |
-| `using` | `USING` | Within an import, export, or open declaration |
-| `hiding` | `HIDING` | Within an import, export, or open declaration |
+| `hiding` | `HIDING` | Within an import, use, or export declaration |
 | `scope` | `SCOPE` | At item-start, before a complete `NAME (:: NAME)*` scope path |
 | `end` | `END` | At a region's layout level, while that region is open, before a complete closer path ending the item |
 
@@ -133,7 +132,7 @@ Examples where they remain plain identifiers:
 ```agl
 let import = 1          # 'import' not at item-start → VAR_NAME
 let export = "hello"    # 'export' not at item-start → VAR_NAME
-let using = "hello"     # 'using' not in an import/export declaration → VAR_NAME
+let use = "hello"       # 'use' without a declaration form → VAR_NAME
 record R(end: int)            # 'end' is a field name, not a closer
 ```
 
@@ -439,8 +438,8 @@ infixr << at prio > + 1
 
 Priorities are integers where lower numbers bind looser and higher numbers bind
 tighter. A priority can be a literal integer or relative to an existing builtin,
-local operator, operator made bare-visible by `open import` or `import … using`,
-or an operator member made bare by `open` (with the `std/core` prelude included);
+local operator, operator made bare-visible by an import wildcard or tail, or an
+operator member made bare by `use` (with the `std/core` prelude included);
 omitted priority uses the `+`/`-` level. A plain qualified import does not make
 an operator's fixity available. User infix
 use lowers to a normal two-argument function call, so the operator must also be

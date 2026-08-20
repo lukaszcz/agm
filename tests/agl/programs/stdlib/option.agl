@@ -1,7 +1,7 @@
-# Option is available from the std/core prelude and can also be selected through
-# std/core's re-export. The scenarios exercise both variants, chained methods,
-# callbacks, and the raising unwrap path.
-import std/core using Option, UnwrapError
+# An explicit std/core import replaces the prelude, so this program selects the
+# names it needs through std/core's re-export. The scenarios exercise chained
+# methods, callbacks, and the raising unwrap path.
+import std/core::{Option, UnwrapError, print}
 
 param input: int
 

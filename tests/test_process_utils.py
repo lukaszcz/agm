@@ -400,6 +400,28 @@ class TestKillProcessGroup:
         monkeypatch.setattr(os, "killpg", fake_killpg)
         _kill_process_group(cast(subprocess.Popen[bytes], FakeProcess()))
 
+    def test_handles_vanished_group_after_process_already_exited(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A group that dies from the SIGTERM leaves nothing for the follow-up SIGKILL."""
+        signals_sent: list[signal.Signals] = []
+
+        class FakeProcess:
+            pid = 99999
+
+            def poll(self) -> int | None:
+                return -15
+
+        def fake_killpg(pgid: int, sig: signal.Signals) -> None:
+            signals_sent.append(sig)
+            if sig != signal.SIGTERM:
+                raise ProcessLookupError
+
+        monkeypatch.setattr(os, "killpg", fake_killpg)
+        _kill_process_group(cast(subprocess.Popen[bytes], FakeProcess()))
+
+        assert signals_sent == [signal.SIGTERM, 0, signal.SIGKILL]
+
     def test_sends_sigkill_to_group_when_process_already_exited(self, tmp_path: Path) -> None:
         """When the main process has already exited, still kill orphaned group members."""
         child_pid_file = tmp_path / "child.pid"

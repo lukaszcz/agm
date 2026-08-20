@@ -1,7 +1,7 @@
 {
   "scenarios": [
     {
-      "name": "opened_scope_nullary_variant",
+      "name": "used_scope_nullary_variant",
       "params": {
         "mode": "idle",
         "value": 0
@@ -12,7 +12,7 @@
       }
     },
     {
-      "name": "opened_scope_payload_variant",
+      "name": "used_scope_payload_variant",
       "params": {
         "mode": "number",
         "value": 12
@@ -23,7 +23,7 @@
       }
     },
     {
-      "name": "opened_scope_terminal_variant",
+      "name": "used_scope_terminal_variant",
       "params": {
         "mode": "stopped",
         "value": 99

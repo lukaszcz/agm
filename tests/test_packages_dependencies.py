@@ -8,9 +8,10 @@ from pathlib import Path
 import pytest
 import semver
 
+import agm.packages.model as package_model
 from agm.packages.dependencies import DependencyError, validate_dependencies
 from agm.packages.install import install_directory
-from agm.packages.manifest import distribution_manifest, load_manifest
+from agm.packages.manifest import DependencySpec, distribution_manifest, load_manifest
 from agm.packages.model import PackageInfo
 from agm.version import AGM_VERSION
 
@@ -76,6 +77,29 @@ def test_dependency_check_rejects_an_unsatisfied_store_requirement(tmp_path: Pat
 
     with pytest.raises(DependencyError, match="bravo"):
         validate_dependencies(package, home=tmp_path / "home", env={})
+
+
+@pytest.mark.parametrize(
+    ("running", "required", "satisfied"),
+    (
+        ("0.2.0", "0.2.0", True),
+        ("0.2.3", "0.2.1", True),
+        ("0.2.0", "0.1.0", False),
+        ("0.2.0", "0.2.1", False),
+        ("0.2.0", "0.3.0", False),
+        ("1.4.0", "1.2.0", True),
+        ("1.4.0", "1.4.1", False),
+        ("1.4.0", "1.5.0", False),
+        ("2.0.0", "1.9.0", False),
+    ),
+)
+def test_std_requirement_is_a_minimum_within_the_compatible_release_line(
+    monkeypatch: pytest.MonkeyPatch, running: str, required: str, satisfied: bool
+) -> None:
+    monkeypatch.setattr(package_model, "AGM_VERSION", running)
+    requirement = DependencySpec(semver.Version.parse(required))
+
+    assert (package_model.unmet_std_requirement(requirement) is None) is satisfied
 
 
 def test_dependency_check_validates_std_against_the_running_agm(tmp_path: Path) -> None:

@@ -153,7 +153,7 @@ def test_repl_unseeded_non_engine_builtin_var_is_a_diagnostic(tmp_path: Path) ->
 
 def test_std_env_uses_a_controlled_process_snapshot_without_mutating_os_environ() -> None:
     result = _run(
-        "open import std/env\n"
+        "import std/env::*\n"
         'let before = getenv("SNAPSHOT_ONLY")\n'
         'setenv("SNAPSHOT_ONLY", "changed")\n'
         'let after = getenv("SNAPSHOT_ONLY")\n'
@@ -174,7 +174,7 @@ def test_std_env_and_core_work_without_the_optional_method_registry(tmp_path: Pa
 
     result = run_inline_command(
         PipelineDriver(),
-        "open import std/env\n"
+        "import std/env::*\n"
         'let extended = environ.extended({"added": "value"})\n'
         'extended.get("added")',
         roots=RootSet(roots=frozenset({stdlib})),
@@ -189,7 +189,7 @@ def test_std_env_and_core_work_without_the_optional_method_registry(tmp_path: Pa
 
 
 def test_std_env_default_is_empty_when_no_process_snapshot_is_supplied() -> None:
-    result = _run("open import std/env\nlet env = environ\nenv")
+    result = _run("import std/env::*\nlet env = environ\nenv")
 
     assert result.ok, result.diagnostics
     environ = _environment_value(result, "env")
@@ -202,7 +202,7 @@ def test_repl_reuses_its_startup_environment_snapshot() -> None:
     session = ReplSession(stdlib_root=_STDLIB, process_environment={"REPL_ONLY": "seeded"})
 
     assert session.open() == ()
-    result = session.eval_entry('open import std/env\ngetenv("REPL_ONLY")')
+    result = session.eval_entry('import std/env::*\ngetenv("REPL_ONLY")')
 
     assert result.ok, result.diagnostics
     assert result.value == TextValue("seeded")

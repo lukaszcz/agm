@@ -1,10 +1,10 @@
 # Modules × generics × enums/records × pattern matching × casts: a library
 # module (`collections`) exports a generic `Maybe[T]`, a generic `Pair[A, B]`,
-# and generic functions over them. The entry imports it open and exercises the
+# and generic functions over them. The entry uses a glob import tail and exercises the
 # imported generics at int AND text (erasure across the module boundary),
 # qualified type annotations and constructors, pattern matching on imported
 # variants, and `as text` rendering. A param drives the payload and the branch.
-open import collections
+import collections::*
 param seed: int
 param empty: bool
 
@@ -14,8 +14,8 @@ program def main() -> unit =
   let maybe: Maybe[int] = if empty => none else => some(value = seed)
   print(or_else(maybe, 0) as text)
 
-  # Pattern matching on the imported variant (brought in unqualified by the open
-  # import); the bare `none` is a nullary constructor pattern, not a binder.
+  # Pattern matching on the imported variant (brought in unqualified by the glob
+  # import tail); the bare `none` is a nullary constructor pattern, not a binder.
   case maybe of
     | none => print "empty"
     | some(value) => print "value %{value}"

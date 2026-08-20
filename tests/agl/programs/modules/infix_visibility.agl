@@ -1,7 +1,7 @@
 # Cross-module fixity follows bare visibility: the prelude supplies |>, an
-# open import supplies %>, and a using import supplies ~>.
-open import flow/pipe
-import flow/compose using ~>
+# A wildcard import supplies %>, and a selective import tail supplies ~>.
+import flow/pipe::*
+import flow/compose::~>
 
 param value: int
 

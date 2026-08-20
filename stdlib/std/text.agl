@@ -1,4 +1,4 @@
-import std/option using Option
+import std/option::Option
 
 extern def interp(template: text, vars: dict[text, text]) -> text
 

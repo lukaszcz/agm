@@ -71,7 +71,6 @@ from agm.agl.syntax.nodes import (
     NamedArg,
     NameTarget,
     NullLit,
-    OpenDecl,
     Param,
     ParamDecl,
     PatternField,
@@ -87,7 +86,6 @@ from agm.agl.syntax.nodes import (
     RecordDef,
     RecordUpdate,
     Return,
-    ScopeRef,
     ScopeRegion,
     ScopeSegment,
     StringLit,
@@ -99,6 +97,7 @@ from agm.agl.syntax.nodes import (
     UnaryNeg,
     UnaryNot,
     UnitLit,
+    UseDecl,
     VarDecl,
     VariantDef,
     VarPattern,
@@ -178,8 +177,7 @@ class Visitor:
     def visit_ImportDecl(self, node: ImportDecl) -> None: ...
     def visit_ExportItem(self, node: ExportItem) -> None: ...
     def visit_ExportDecl(self, node: ExportDecl) -> None: ...
-    def visit_OpenDecl(self, node: OpenDecl) -> None: ...
-    def visit_ScopeRef(self, node: ScopeRef) -> None: ...
+    def visit_UseDecl(self, node: UseDecl) -> None: ...
     def visit_ScopeSegment(self, node: ScopeSegment) -> None: ...
 
     # Declaration nodes
@@ -291,8 +289,7 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         ImportDecl,
         ExportItem,
         ExportDecl,
-        OpenDecl,
-        ScopeRef,
+        UseDecl,
         ScopeSegment,
         # declaration nodes
         RecordDef,
@@ -437,7 +434,9 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
             walk(scope_segment, callback)
 
     elif isinstance(node, ImportDecl):
-        for import_item in node.items:
+        for scope_segment in node.scope_path:
+            walk(scope_segment, callback)
+        for import_item in (*(node.tail or ()), *node.hidden):
             walk(import_item, callback)
 
     elif isinstance(node, ExportItem):
@@ -445,17 +444,16 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
             walk(scope_segment, callback)
 
     elif isinstance(node, ExportDecl):
-        for export_item in node.items:
-            walk(export_item, callback)
-
-    elif isinstance(node, OpenDecl):
-        walk(node.scope_ref, callback)
-        for import_item in node.items:
-            walk(import_item, callback)
-
-    elif isinstance(node, ScopeRef):
         for scope_segment in node.scope_path:
             walk(scope_segment, callback)
+        for export_item in (*node.items, *node.hidden):
+            walk(export_item, callback)
+
+    elif isinstance(node, UseDecl):
+        for scope_segment in (*node.scope_path, *node.target):
+            walk(scope_segment, callback)
+        for import_item in (*(node.tail or ()), *node.hidden):
+            walk(import_item, callback)
 
     elif isinstance(node, ScopeSegment):
         pass  # leaf — name is a plain string

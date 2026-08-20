@@ -134,7 +134,7 @@ def test_dry_run_keeps_source_reachable_ambient_registry_modules() -> None:
     """An explicit import remains runtime-reachable even when the registry also loads it."""
     stdlib_root = Path(__file__).resolve().parents[1] / "stdlib"
     prepared = PipelineDriver.prepare_program(
-        'import std/array using join\nprogram def main() -> unit = print(join(["a"], ","))\n',
+        'import std/array::join\nprogram def main() -> unit = print(join(["a"], ","))\n',
         roots=RootSet(roots=frozenset({stdlib_root})),
     )
     discovery = PipelineDriver().discover_params(prepared)

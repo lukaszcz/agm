@@ -1,4 +1,4 @@
-import std/option using Option, UnwrapError
+import std/option::{Option, UnwrapError}
 
 enum Result[T, E] =
   | Ok(value: T)

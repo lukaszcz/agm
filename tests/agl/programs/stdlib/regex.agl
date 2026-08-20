@@ -1,6 +1,6 @@
 # Python-compatible regular-expression searching, extraction, and rewriting.
 import std/regex
-import std/regex using RegexError
+import std/regex::RegexError
 
 param mode: int
 

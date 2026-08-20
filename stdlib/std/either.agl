@@ -1,4 +1,4 @@
-import std/option using Option
+import std/option::Option
 
 enum Either[A, B] =
   | Left(value: A)

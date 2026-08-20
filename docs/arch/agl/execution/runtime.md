@@ -38,7 +38,7 @@ The trace destination is the sole live host service configured by an AgL `builti
 
 ## Sessions
 
-`runtime/sessions.py` defines the AgL-neutral `SessionHost` firewall, opaque handles and errors, and ephemeral lifecycle seam. AGM supplies the host adapter in `agent/session/service.py`, which owns backend selection and session lifetime; CLI is the normal continuation transport and Pi defaults to RPC. Free asks use the default session, `Agent::ask` uses one ephemeral continuation session for its retry loop, and explicit handles preserve their conversation. `exec` owns a host per run; the REPL owns one for its lifetime. See [agents.md](../../agents.md) and the session modules for backend details.
+`runtime/sessions.py` defines the AgL-neutral `SessionHost` firewall, opaque handles and errors, and ephemeral lifecycle seam. AGM supplies the host adapter in `agent/session/service.py`, which owns backend selection and session lifetime; CLI is the normal continuation transport and Pi defaults to RPC. Free asks use the default session, `Agent::ask` uses one ephemeral continuation session for its retry loop, and explicit handles preserve their conversation. `AgentRequest` is a payload-only first-attempt value; session and agent operations own routing separately. `exec` owns a host per run; the REPL owns one for its lifetime. See [agents.md](../../agents.md) and the session modules for backend details.
 
 ## Pipeline Orchestrator
 

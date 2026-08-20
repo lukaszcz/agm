@@ -1037,9 +1037,8 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             if arg_expr is not None:
                 _validate_expr(arg_expr, ctx)
 
-        case IrAskRequest(agent=agent_expr, prompt=prompt_expr):
+        case IrAskRequest(prompt=prompt_expr):
             _validate_location(node.location, ctx)
-            _validate_expr(agent_expr, ctx)
             _validate_expr(prompt_expr, ctx)
 
         case IrExec(command=command_expr, contract_id=contract_id):

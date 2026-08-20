@@ -546,25 +546,21 @@ See [Host environment](host-environment.md).
 
 ## `ask-request` — the request builder
 
-`ask-request` is the side-effect-free twin of `ask`: it builds the
-`AgentRequest` that a text-target `ask` call would dispatch on its first
-attempt, **without invoking an agent**. Its direct and method forms are:
+`ask-request` is the side-effect-free twin of `ask`: it builds an
+agent-independent, first-attempt text `AgentRequest` **without invoking an
+agent**. Its direct form is:
 
 ```text
-ask-request(prompt: text, agent: Agent = std/config::default-agent) -> AgentRequest
-Agent::ask-request(self, prompt: text) -> AgentRequest
+ask-request(prompt: text) -> AgentRequest
 ```
 
-The direct form accepts an explicit `agent`; the method receiver supplies it.
-Neither form accepts output-parsing options or type arguments. Both only
-assemble the selected `Agent` value and its text-output contract: they never
-dispatch, retry, parse, or emit trace events.
+It accepts neither an agent nor output-parsing options or type arguments. It
+only assembles the text-output request contract; it never dispatches, retries,
+parses, or emits trace events.
 
 <!-- agl-check: fragment -->
 ```agl
 let r = ask-request("Summarize %{topic}")
-let review_request = ask-request("Review %{artifact}", agent = reviewer)
-let same_request = reviewer.ask-request("Review %{artifact}")
 ```
 
 The result is an `AgentRequest` record (see [Types](types.md)) with `attempt`

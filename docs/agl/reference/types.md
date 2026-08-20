@@ -349,18 +349,17 @@ corrective retries after the initial attempt.
 `AgentCommand(command)`, `AgentClaude(model, thinking)`,
 `AgentCodex(model, thinking)`, and `AgentPi(provider, model, thinking)`.
 Like every enum, `Agent` values have fields, equality, rendering, and JSON
-casts. Its standard-core `ask` and `ask-request` members are call-only builtin
-methods, so `agent.ask(...)` and `agent.ask-request(...)` select that agent
-for the operation; see [Agent calls](agent-calls.md) for dispatch behavior.
+casts. Its standard-core `ask` member is a call-only builtin method, so
+`agent.ask(...)` selects that agent for the operation; see [Agent
+calls](agent-calls.md) for dispatch behavior.
 
 ### `AgentRequest`
 
-`AgentRequest` is the first-attempt text request that `ask-request` builds
-without dispatching an agent (see [Agent calls](agent-calls.md)):
+`AgentRequest` is the agent-independent, first-attempt text request that
+`ask-request` builds without dispatching (see [Agent calls](agent-calls.md)):
 
 ```text
 record AgentRequest
-  agent:               Agent
   prompt:              text
   target_type:         Option[text]
   format_instructions: Option[text]

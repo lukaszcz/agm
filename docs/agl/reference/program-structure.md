@@ -103,7 +103,7 @@ region.
   module root or in a named scope region; a scoped `builtin def` still
   dispatches to the same host implementation as a root one. A `builtin def`
   with first parameter `self` in a type scope is a builtin method when it
-  matches a supported host contract (`Agent::ask` and `Agent::ask-request` in
+  matches a supported host contract (`Agent::ask` in
   the standard core); it is selected by ordinary member syntax and is
   call-only. Its complete scoped name is subject to the same whole-program
   uniqueness as a `builtin` type (see [Built-in functions](functions.md#built-in-functions)).

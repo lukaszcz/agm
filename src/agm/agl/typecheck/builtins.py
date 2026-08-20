@@ -164,9 +164,7 @@ class BuiltinCallChecker:
     All built-in dispatch in ``_check_call`` is delegated here.
     """
 
-    _ASK_ALLOWED_NAMED_ARGS: frozenset[str] = frozenset(
-        {"agent", "format", "strict_json", "on_parse_error"}
-    )
+    _ASK_ALLOWED_NAMED_ARGS: frozenset[str] = frozenset({"format", "strict_json", "on_parse_error"})
 
     _EXEC_ALLOWED_NAMED_ARGS: frozenset[str] = frozenset(
         {"format", "strict_json", "on_parse_error"}
@@ -294,7 +292,7 @@ class BuiltinCallChecker:
 
     def check_session_ask(self, node: Call, *, expected: Type | None, receiver_type: Type) -> Type:
         """Type-check ``Session.ask`` with its receiver-owned agent selection."""
-        return self.check_ask(node, expected=expected, allows_agent=False)
+        return self.check_ask(node, expected=expected)
 
     def check_session_compact(
         self, node: Call, *, expected: Type | None, receiver_type: Type
@@ -405,12 +403,9 @@ class BuiltinCallChecker:
         *,
         expected: Type | None,
         receiver_type: Type | None = None,
-        allows_agent: bool | None = None,
     ) -> Type:
         """Type-check ``ask``. *receiver_type* is set for an ``Agent`` receiver."""
         # Target type: explicit type argument overrides context.
-        if allows_agent is None:
-            allows_agent = receiver_type is None
         explicit = self._resolve_explicit_target(node, "ask")
         target_type: Type = (
             explicit if explicit is not None else (expected if expected is not None else TextType())
@@ -422,7 +417,6 @@ class BuiltinCallChecker:
             result_type=target_type,
             kind=BuiltinObligationKind.ASK,
             receiver_type=receiver_type,
-            allows_agent=allows_agent,
         )
         return target_type
 
@@ -433,7 +427,6 @@ class BuiltinCallChecker:
         node: Call,
         *,
         expected: Type | None = None,
-        receiver_type: Type | None = None,
     ) -> Type:
         """Type-check the fixed-text, side-effect-free ``ask-request`` builder."""
         agent_request_type = self._resolve_host_record_contract("AgentRequest", span=node.span)
@@ -443,8 +436,8 @@ class BuiltinCallChecker:
                 "ask-request does not accept type arguments; it always builds a text request.",
                 span=node.span,
             )
-        # This reuses prompt and Agent argument type validation, without exposing
-        # ask's parse-shaping options. The obligation still records the fixed text
+        # This reuses prompt validation without exposing ask's parse-shaping
+        # options. The obligation still records the fixed text
         # target so the call site is reported like any other agent call site;
         # lowering builds the request record itself and allocates no contract.
         # The contract resolved above is threaded through so the coherence walk
@@ -452,9 +445,7 @@ class BuiltinCallChecker:
         self._validate_ask_like_arguments(
             node,
             "ask-request",
-            allowed_named=frozenset() if receiver_type is not None else frozenset({"agent"}),
-            receiver_type=receiver_type,
-            agent_request_type=agent_request_type,
+            allowed_named=frozenset(),
         )
         self._ctx._register_builtin_obligation(
             PendingBuiltinObligation(
@@ -479,15 +470,13 @@ class BuiltinCallChecker:
         result_type: Type,
         kind: BuiltinObligationKind,
         receiver_type: Type | None,
-        allows_agent: bool,
     ) -> None:
         """Check target-independent syntax, then queue contract materialization."""
         callee = kind.value
         named = self._validate_ask_like_arguments(
             node,
             callee,
-            allowed_named=self._ASK_ALLOWED_NAMED_ARGS - (set() if allows_agent else {"agent"}),
-            receiver_type=receiver_type,
+            allowed_named=self._ASK_ALLOWED_NAMED_ARGS,
         )
         format_name, strict_json, parse_policy = self._parse_options(named)
         self._ctx._register_builtin_obligation(
@@ -510,34 +499,11 @@ class BuiltinCallChecker:
         callee: str,
         *,
         allowed_named: frozenset[str],
-        receiver_type: Type | None = None,
-        agent_request_type: RecordType | None = None,
     ) -> dict[str, NamedArg]:
         """Check syntax and value arguments that do not need the target type.
 
         *allowed_named* is the caller's permitted named-argument set: ``ask``
-        offers its parse-shaping options, ``ask-request`` only ``agent``, and a
-        receiver call drops ``agent`` because the receiver already supplies it.
-
-        Every ``ask``/``ask-request`` call resolves the ``AgentRequest``
-        contract unconditionally: the host builds an ``AgentRequest`` directly
-        for ``ask-request`` and through its retry machinery for ``ask``. A
-        free ``ask`` has no agent operand; it obtains its runtime agent through
-        the default session, so the contract must be host-coherent
-        (:meth:`_resolve_host_record_contract`) regardless.
-        *agent_request_type* lets a caller that already resolved the contract
-        itself (``check_ask_request``, which needs it before this method runs
-        anyway) pass the resolved handle through instead of paying the
-        coherence walk a second time; when omitted (``ask``'s path), this
-        method resolves it itself, at this same point in the check order.
-
-        The agent the request is built with is that resolved contract's own
-        ``agent`` FIELD type -- the type the value is actually stored as --
-        rather than an independently resolved ``Agent`` type, so the two can
-        never name different declarations of the same bare name. That single
-        expected type governs both ways of supplying the agent: the
-        ``ask-request`` ``agent`` named argument, and *receiver_type* for a
-        receiver call (``x.ask(...)``), whose receiver IS the agent.
+        offers its parse-shaping options and ``ask-request`` has none.
         """
         named = {na.name: na for na in node.named_args}
         for arg_name, na in named.items():
@@ -551,20 +517,6 @@ class BuiltinCallChecker:
             )
         prompt_type = self._ctx._check_expr(node.args[0], expected=TextType())
         self._ctx._assert_assignable_from(prompt_type, TextType(), node.args[0].span, node.args[0])
-        if agent_request_type is None:
-            agent_request_type = self._resolve_host_record_contract("AgentRequest", span=node.span)
-        expected_agent_type = self._ctx._env.type_table.record_fields(agent_request_type)["agent"]
-        if receiver_type is not None:
-            self._ctx._assert_assignable_from(receiver_type, expected_agent_type, node.span, node)
-        if "agent" in named:
-            agent_na = named["agent"]
-            agent_type = self._ctx._check_expr(agent_na.value, expected=expected_agent_type)
-            self._ctx._assert_assignable_from(
-                agent_type,
-                expected_agent_type,
-                agent_na.value.span,
-                agent_na.value,
-            )
         return named
 
     def finalize(self, obligation: PendingBuiltinObligation) -> None:
@@ -789,7 +741,7 @@ class BuiltinCallChecker:
         built-in call mints (``ask-request``, ``ask``, ``exec``) or an
         exception it raises — filling every nominal-typed field with a value
         that carries a fixed, host-known identity (the canonical ``Agent`` for
-        ``AgentRequest.agent`` and ``AgentCallError.agent``, the canonical
+        ``AgentCallError.agent``, the canonical
         ``Option`` for ``AgentRequest``'s ``Option``-typed fields — see
         ``eval/effects.py``, ``runtime/agents.py`` and ``runtime/option.py``)
         — never whatever declaration *contract_type*'s own field type happens

@@ -1130,19 +1130,15 @@ class IrSessionOp:
 
 @dataclass(frozen=True, slots=True)
 class IrAskRequest:
-    """IR host-op: ``ask-request(prompt, agent:)`` builtin call.
+    """IR host-op: ``ask-request(prompt)`` builtin call.
 
-    Builds the AgentRequest record value WITHOUT dispatching the agent. Only
-    ``agent`` and ``prompt`` are evaluated; an omitted direct agent is an
-    ``IrBuiltinLoad("default-agent")`` at this node's evaluation time. The
-    record's contract fields are fixed constants describing a text request. So,
-    unlike ``IrAsk`` and
+    Builds the agent-independent AgentRequest record value. The record's
+    contract fields are fixed constants describing a text request. Unlike ``IrAsk`` and
     ``IrExec``, this node carries no contract id and no retry count — there is
     nothing to dispatch and no output to parse.
     """
 
     location: Location
-    agent: "IrExpr"
     prompt: "IrExpr"
 
 

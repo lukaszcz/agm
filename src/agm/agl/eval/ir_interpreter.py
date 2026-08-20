@@ -1789,8 +1789,8 @@ class IrInterpreter:
                     exc.span = node.location
                     raise
 
-            case IrAskRequest(agent=agent_expr, prompt=prompt_expr):
-                return self._effects.eval_ir_ask_request(node, agent_expr, prompt_expr)
+            case IrAskRequest(prompt=prompt_expr):
+                return self._effects.eval_ir_ask_request(node, prompt_expr)
 
             case IrExec(
                 command=command_expr,

@@ -271,7 +271,7 @@ The `self` spelling is special only in this receiver position. An annotated
 `self` elsewhere is an ordinary parameter. `def` and `extern def` may declare
 methods. A `builtin def` may also declare a host method when its signature is a
 recognized host contract: the standard core declares `Agent::ask` and
-`Agent::ask-request`. These methods use the same selection and receiver rules,
+`Agent::ask`. This method uses the same selection and receiver rules,
 but are call-only rather than bound function values; see [Agent calls](agent-calls.md).
 
 ### Scope and forward references

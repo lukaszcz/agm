@@ -42,7 +42,6 @@ builtin exception SessionError extends Exception(operation: text)
 
 builtin
 record AgentRequest
-  agent: Agent
   prompt: text
   target_type: Option[text]
   format_instructions: Option[text]
@@ -182,9 +181,7 @@ builtin def Agent::ask[T](
 ) -> T
 builtin def ask-request(
   prompt: text,
-  agent: Agent = std/config::default-agent,
 ) -> AgentRequest
-builtin def Agent::ask-request(self, prompt: text) -> AgentRequest
 builtin def Session::open(
   agent: Agent,
   transport: Option[SessionTransport] = Option[SessionTransport]::None,

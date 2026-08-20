@@ -2720,10 +2720,7 @@ class TestHostOpLowering:
         """ask-request lowers to IrAskRequest and allocates nothing in program.contracts."""
         from agm.agl.ir.nodes import IrAskRequest
 
-        source = (
-            'let worker = AgentCommand("worker")\n'
-            'let req = ask-request("my prompt", agent = worker)\n()'
-        )
+        source = 'let req = ask-request("my prompt")\n()'
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
         # The let site's private root captures the IrAskRequest result.
@@ -2742,31 +2739,12 @@ class TestHostOpLowering:
         # parses nothing, so lowering it must allocate no ContractRequest at all.
         assert prog.contracts == {}, f"Expected no allocated contracts, got {prog.contracts!r}"
 
-    def test_ask_request_method_form_allocates_no_contract(self) -> None:
-        """Agent::ask-request(...) goes through the same contract-free lowering path."""
-        from agm.agl.ir.nodes import IrAskRequest
-
-        source = (
-            'let worker = AgentCommand("worker")\nlet req = worker.ask-request("my prompt")\n()'
-        )
-        prog = _lower(source)
-        inits = prog.modules[prog.entry_module].initializers
-        assert any(
-            isinstance(n, (IrSequence, IrBind))
-            and isinstance(_let_root_capture(n).value, IrAskRequest)
-            for n in inits
-        ), "Expected the method form to lower to an IrAskRequest"
-        assert prog.contracts == {}, f"Expected no allocated contracts, got {prog.contracts!r}"
-
     def test_ask_request_does_not_shift_the_contracts_of_other_host_calls(self) -> None:
         """Mixing ask-request with ask/exec leaves every allocated contract resolvable."""
-        from agm.agl.ir.nodes import IrAsk, IrAskRequest, IrExec
+        from agm.agl.ir.nodes import IrAskRequest, IrExec, IrSessionAsk
 
         source = (
-            'let worker = AgentCommand("worker")\n'
-            'let req = ask-request("my prompt", agent = worker)\n'
-            'let answer: text = worker.ask("question")\n'
-            'exec("ls")\n()'
+            'let req = ask-request("my prompt")\nlet answer: text = ask("question")\nexec("ls")\n()'
         )
         prog = _lower(source)
         nodes = [
@@ -2774,8 +2752,10 @@ class TestHostOpLowering:
             for n in prog.modules[prog.entry_module].initializers
         ]
         assert any(isinstance(n, IrAskRequest) for n in nodes)
-        parsing_nodes = [n for n in nodes if isinstance(n, (IrAsk, IrExec))]
-        assert len(parsing_nodes) == 2, f"Expected one IrAsk and one IrExec, got {parsing_nodes!r}"
+        parsing_nodes = [n for n in nodes if isinstance(n, (IrSessionAsk, IrExec))]
+        assert len(parsing_nodes) == 2, (
+            f"Expected one IrSessionAsk and one IrExec, got {parsing_nodes!r}"
+        )
         # Only the dispatching host ops allocate, and each still resolves.
         assert len(prog.contracts) == 2, f"Expected exactly 2 contracts, got {prog.contracts!r}"
         for node in parsing_nodes:

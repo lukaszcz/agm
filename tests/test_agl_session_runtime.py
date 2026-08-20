@@ -250,7 +250,7 @@ def test_free_ask_uses_the_default_session_and_snapshots_its_agent() -> None:
     assert host.prompts["s1"] == ["one", "two", "three"]
 
 
-def test_default_session_stays_snapshotted_while_ask_request_reads_the_live_default(
+def test_default_session_stays_snapshotted_while_ask_request_is_agent_independent(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     host = _Host()
@@ -262,14 +262,14 @@ def test_default_session_stays_snapshotted_while_ask_request_reads_the_live_defa
         '  std/config::default-agent := AgentCommand("second")\n'
         '  let request = ask-request("inspect")\n'
         '  let second: text = ask("two")\n'
-        '  print (request.agent == AgentCommand("second"))\n',
+        "  print request.prompt\n",
         host,
     )
 
     assert result.ok
     assert host.handles["s1"][0].fields["command"].value == "first"
     assert host.prompts["s1"] == ["one", "two"]
-    assert capsys.readouterr().out == "true\n"
+    assert capsys.readouterr().out == "inspect\n"
 
 
 def test_free_ask_retries_in_the_default_session() -> None:

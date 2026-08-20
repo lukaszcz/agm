@@ -95,10 +95,10 @@ class TestSeededTypeDefsCarryReservedIds:
     def test_option_typedef_carries_its_reserved_decl_node_id(self) -> None:
         assert OPTION_TYPE_DEF.decl_node_id == reserved_nominal_id("Option")
 
-    def test_agent_request_embedded_agent_field_carries_agent_reserved_id(self) -> None:
+    def test_agent_request_has_no_agent_field(self) -> None:
         agent_request = BUILTIN_PRELUDE_TYPE_DEFS["AgentRequest"]
         fields = dict(agent_request.fields)
-        assert _decl_id(fields["agent"]) == reserved_nominal_id("Agent")
+        assert "agent" not in fields
 
     def test_agent_request_embedded_option_fields_carry_option_reserved_id(self) -> None:
         agent_request = BUILTIN_PRELUDE_TYPE_DEFS["AgentRequest"]

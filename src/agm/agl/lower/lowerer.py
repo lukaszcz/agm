@@ -3289,8 +3289,6 @@ class _Lowerer:
     ) -> IrExpr:
         """Lower an ask() or ask-request() builtin call to its host-operation node."""
         loc = self._loc(span)
-        named_map: dict[str, "NamedArg"] = {na.name: na for na in call_node.named_args}
-
         # 1. Evaluate the prompt (first positional arg).
         prompt_ir = self.lower_expr(call_node.args[0])
 
@@ -3300,13 +3298,8 @@ class _Lowerer:
         # apply to ``ask`` alone.
         if is_request:
             assert session is None, "compiler bug: Session ask cannot build an agent request"
-            if agent is not None:
-                agent_ir = agent
-            elif "agent" in named_map:
-                agent_ir = self.lower_expr(named_map["agent"].value)
-            else:
-                agent_ir = IrBuiltinLoad(location=loc, key="default-agent")
-            return IrAskRequest(location=loc, agent=agent_ir, prompt=prompt_ir)
+            assert agent is None, "compiler bug: Agent ask cannot build an agent request"
+            return IrAskRequest(location=loc, prompt=prompt_ir)
 
         # 3. Determine max_attempts from the on_parse_error named arg.
         max_attempts = self._extract_max_attempts(call_node)

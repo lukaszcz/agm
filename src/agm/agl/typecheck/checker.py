@@ -436,7 +436,7 @@ def _builtin_function_signature(
     if static_kind is not None:
         return _session_static_signature(static_kind)
     if is_method:
-        if method_receiver_name == "Agent" and name in ("ask", "ask-request"):
+        if method_receiver_name == "Agent" and name == "ask":
             root = _builtin_function_signature(name)
             assert root is not None
             return _as_builtin_method(root, _AGENT_PRELUDE_TYPE)
@@ -503,10 +503,7 @@ def _builtin_function_signature(
             )
         case "ask-request":
             return FunctionSignature(
-                params=(
-                    _std_param("prompt", TextType()),
-                    _std_param("agent", BUILTIN_PRELUDE_TYPES["Agent"], has_default=True),
-                ),
+                params=(_std_param("prompt", TextType()),),
                 result=BUILTIN_PRELUDE_TYPES["AgentRequest"],
             )
         case "exec":
@@ -802,7 +799,6 @@ class _Checker:
         # only on the canonical prelude nominal below.
         self._agent_builtin_method_checkers: dict[str, _BuiltinMethodChecker] = {
             "ask": self._builtins.check_ask,
-            "ask-request": self._builtins.check_ask_request,
         }
         self._builtin_method_checkers: dict[
             _BuiltinMethodReceiver, dict[str, _BuiltinMethodChecker]

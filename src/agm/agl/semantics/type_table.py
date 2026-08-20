@@ -1498,10 +1498,6 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
         name="AgentRequest",
         module_id=STD_CORE_ID,
         fields=(
-            (
-                "agent",
-                EnumType(name="Agent", module_id=STD_CORE_ID, decl_id=_reserved_id("Agent")),
-            ),
             ("prompt", TextType()),
             (
                 "target_type",

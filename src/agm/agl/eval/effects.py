@@ -644,17 +644,9 @@ class EffectHandlers:
     def eval_ir_ask_request(
         self,
         _node: IrAskRequest,
-        agent_expr: IrExpr,
         prompt_expr: IrExpr,
     ) -> Value:
         """Handle IrAskRequest: build AgentRequest record without dispatching."""
-        request_agent = self._ctx._eval(agent_expr)
-        if not isinstance(request_agent, EnumValue):
-            raise TypeError(
-                "IrAskRequest agent must evaluate to an Agent enum value, "
-                f"got {type(request_agent).__name__}"
-            )
-
         prompt_text = self._text_of(self._ctx._eval(prompt_expr))
 
         agent_request = self._ctx._program.builtin_nominals.resolve("AgentRequest")
@@ -662,7 +654,6 @@ class EffectHandlers:
             nominal=agent_request.nominal,
             display_name=agent_request.display_name,
             fields={
-                "agent": request_agent,
                 "prompt": TextValue(prompt_text),
                 "target_type": some_value(TextValue("text")),
                 "format_instructions": none_value(),

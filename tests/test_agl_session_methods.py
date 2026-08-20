@@ -174,15 +174,12 @@ def test_session_raw_tail_ask_uses_session_ask_typechecking() -> None:
     assert checked.call_sites[0].target_type.kind == "int"
 
 
-def test_agent_builtin_methods_keep_their_existing_dispatch() -> None:
+def test_agent_builtin_ask_keeps_its_existing_dispatch() -> None:
     checked = _check(
-        'let agent = AgentCommand("worker")\n'
-        'let response: text = agent.ask("summarize")\n'
-        'let request: AgentRequest = agent.ask-request("prepare")\n'
-        "request"
+        'let agent = AgentCommand("worker")\nlet response: text = agent.ask("summarize")\nresponse'
     )
 
-    assert [site.callee for site in checked.call_sites] == ["ask", "ask-request"]
+    assert [site.callee for site in checked.call_sites] == ["ask"]
 
 
 def test_non_session_receivers_do_not_gain_session_methods() -> None:

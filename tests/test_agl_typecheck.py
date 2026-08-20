@@ -1689,7 +1689,7 @@ class TestScopedBuiltinTypes:
         )
         assert r.resolved.program is not None
 
-    @pytest.mark.parametrize("method", ("ask", "ask-request"))
+    @pytest.mark.parametrize("method", ("ask",))
     def test_builtin_agent_method_with_explicit_type_args_cannot_be_a_value(
         self, method: str
     ) -> None:
@@ -2514,15 +2514,15 @@ class TestAskRequest:
         binding_type = r.type_env.get_binding_type(decl.pattern.node_id)
         assert binding_type == r.type_env.get_type("AgentRequest")
 
-    def test_with_explicit_agent(self) -> None:
-        r = accept_type(
+    def test_rejects_agent_argument(self) -> None:
+        err = reject_type(
             'let reviewer = AgentCommand("reviewer")\nask-request("Q", agent = reviewer)'
         )
-        assert r.resolved.program is not None
-
-    def test_wrong_agent_type_raises(self) -> None:
-        err = reject_type('let x = "no"\nask-request("Q", agent = x)')
         assert "agent" in str(err).lower()
+
+    def test_rejects_agent_method(self) -> None:
+        err = reject_type('let reviewer = AgentCommand("reviewer")\nreviewer.ask-request("Q")')
+        assert "ask-request" in str(err).lower()
 
     def test_no_prompt_raises(self) -> None:
         err = reject_type("ask-request()")
@@ -2613,7 +2613,7 @@ class TestBuiltinAgentMethodSelection:
     ordinary user-declared method of the same name must still behave as a plain
     method in every position, value and partial positions included."""
 
-    @pytest.mark.parametrize("method", ("ask", "ask-request"))
+    @pytest.mark.parametrize("method", ("ask",))
     @pytest.mark.parametrize(
         "use",
         (
@@ -6947,7 +6947,6 @@ _AGENT_VARIANTS_TC = (
 )
 
 _AGENT_REQUEST_FIELDS_TC = (
-    "  agent: Agent\n"
     "  prompt: text\n"
     "  target_type: Option[text]\n"
     "  format_instructions: Option[text]\n"
@@ -6961,27 +6960,21 @@ _PARSE_POLICY_VARIANTS_TC = "  | Abort\n  | Retry(n: int)\n"
 
 
 class TestHostContractBuiltinIdentity:
-    def test_scoped_agent_value_rejected_as_ask_request_agent_argument(self) -> None:
-        """A value of the program's own scoped ``Agent`` is an ordinary
-        static type mismatch against ``AgentRequest``'s canonical ``agent``
-        field type (only ``Agent`` is redeclared here, not ``AgentRequest``,
-        so that field keeps its canonical static type)."""
-        err = reject_type(
+    def test_scoped_agent_does_not_affect_ask_request(self) -> None:
+        result = accept_type(
             f"scope A\nbuiltin enum Agent\n{_AGENT_VARIANTS_TC}end A\n"
             'let g = A::Agent::AgentCommand("x")\n'
-            'ask-request("hi", agent = g)\n'
+            'ask-request("hi")\n'
         )
-        assert "A::Agent" in err.to_diagnostic().message
+        assert result.resolved.program is not None
 
-    def test_unrelated_type_still_rejected_as_agent_argument_with_a_scoped_agent_live(
-        self,
-    ) -> None:
-        err = reject_type(
+    def test_unrelated_type_does_not_affect_ask_request(self) -> None:
+        result = accept_type(
             f"scope A\nbuiltin enum Agent\n{_AGENT_VARIANTS_TC}end A\n"
             "enum NotAgent\n  | X\n"
-            'ask-request("hi", agent = NotAgent::X)\n'
+            'ask-request("hi")\n'
         )
-        assert "NotAgent" in err.to_diagnostic().message
+        assert result.resolved.program is not None
 
     def test_scoped_agent_request_result_type_names_the_scoped_declaration(self) -> None:
         r = accept_type(
@@ -7004,9 +6997,8 @@ class TestHostContractBuiltinIdentity:
             "  | None\n"
             "  | Some(value: T)\n"
             f"builtin record AgentRequest\n{_AGENT_REQUEST_FIELDS_TC}"
-            "builtin def ask-request(prompt: text, "
-            'agent: Agent = AgentCommand(command = "noop")) -> AgentRequest\n'
-            'ask-request("hi", agent = AgentCommand(command = "noop"))\n',
+            "builtin def ask-request(prompt: text) -> AgentRequest\n"
+            'ask-request("hi")\n',
             default_stdlib=False,
         )
         assert "target_type" in err.to_diagnostic().message
@@ -7070,8 +7062,7 @@ class TestHostContractBuiltinIdentity:
             "scope A\n"
             f"builtin enum Agent\n{_AGENT_VARIANTS_TC}"
             f"builtin record AgentRequest\n{_AGENT_REQUEST_FIELDS_TC}"
-            'builtin def ask-request(prompt: text, agent: Agent = AgentCommand(command = "x")) '
-            "-> AgentRequest\n"
+            "builtin def ask-request(prompt: text) -> AgentRequest\n"
             "end A\n()\n"
         )
         assert r.resolved.program is not None
@@ -7084,8 +7075,7 @@ class TestHostContractBuiltinIdentity:
             "scope A\n"
             f"builtin enum Agent\n{_AGENT_VARIANTS_TC}"
             f"builtin record AgentRequest\n{_AGENT_REQUEST_FIELDS_TC}"
-            'builtin def ask-request(prompt: text, agent: Agent = AgentCommand(command = "x")) '
-            "-> Agent\n"
+            "builtin def ask-request(prompt: text) -> Agent\n"
             "end A\n()\n"
         )
         assert "ask-request" in err.to_diagnostic().message
@@ -7105,11 +7095,11 @@ class TestHostContractBuiltinIdentity:
             'let q = g.ask-request("hi")\n'
             "end A\n()\n"
         )
-        assert "A::Agent" in err.to_diagnostic().message
+        assert "ask-request" in err.to_diagnostic().message
 
     def test_scoped_agent_receiver_rejected_for_ask(self) -> None:
         """The ``ask`` counterpart of the receiver form."""
-        err = reject_type(
+        result = accept_type(
             "scope A\n"
             f"builtin enum Agent\n{_AGENT_VARIANTS_TC}"
             "builtin def Agent::ask[T](\n"
@@ -7123,7 +7113,7 @@ class TestHostContractBuiltinIdentity:
             'let r: text = g.ask("hi")\n'
             "end A\n()\n"
         )
-        assert "A::Agent" in err.to_diagnostic().message
+        assert result.resolved.program is not None
 
     def test_canonical_agent_receiver_still_accepted(self) -> None:
         """Regression: the ordinary receiver form, with nothing redeclared,

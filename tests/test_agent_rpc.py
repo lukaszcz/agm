@@ -222,6 +222,66 @@ def test_spawn_prompt_and_lifecycle_protocol(
     backend.close()
 
 
+@pytest.mark.parametrize("method", ["confirm", "select", "input", "editor"])
+def test_prompt_cancels_extension_ui_dialog_requests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    stub = RpcStub(
+        tmp_path,
+        monkeypatch,
+        {
+            "prompt": [
+                {"id": "$id", "type": "response", "command": "prompt", "success": True},
+                {"type": "extension_ui_request", "id": "ui-1", "method": method},
+                {
+                    "type": "message_update",
+                    "assistantMessageEvent": {"type": "text_delta", "delta": "answer"},
+                },
+                {"type": "agent_settled"},
+            ]
+        },
+    )
+    backend = open_backend()
+
+    assert backend.ask(SessionAskRequest("hello")).content == "answer"
+
+    assert stub.wait_for("commands.jsonl", 2)[1] == {
+        "id": "ui-1",
+        "type": "extension_ui_response",
+        "cancelled": True,
+    }
+    backend.close()
+
+
+def test_extension_ui_cancellation_write_failure_is_an_ask_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    RpcStub(
+        tmp_path,
+        monkeypatch,
+        {
+            "prompt": [
+                {"id": "$id", "type": "response", "command": "prompt", "success": True},
+                {"type": "extension_ui_request", "id": "ui-1", "method": "confirm"},
+            ]
+        },
+    )
+    backend = open_backend()
+    write_command = rpc._write_command
+
+    def fail_ui_cancellation(child: rpc._RpcChild, command: dict[str, object]) -> None:
+        if command["type"] == "extension_ui_response":
+            raise BrokenPipeError
+        write_command(child, command)
+
+    monkeypatch.setattr(rpc, "_write_command", fail_ui_cancellation)
+
+    with pytest.raises(SessionAskError):
+        backend.ask(SessionAskRequest("hello"))
+
+    backend.close()
+
+
 def test_clone_immediately_after_open_keeps_parent_and_child_live(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

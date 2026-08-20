@@ -74,6 +74,22 @@ def test_session_ask_rejects_an_explicit_agent() -> None:
     )
 
 
+def test_agent_receiver_ask_rejects_a_conflicting_explicit_agent() -> None:
+    _reject(
+        'let worker = AgentCommand("worker")\n'
+        'let other = AgentCommand("other")\n'
+        'worker.ask("summarize", agent = other)'
+    )
+
+
+def test_session_values_cannot_be_forged_through_record_update() -> None:
+    _reject(
+        "let session = Session::default()\n"
+        'let other = AgentCommand("other")\n'
+        "session with agent = other"
+    )
+
+
 def test_session_ask_records_parse_options_and_output_contract_metadata() -> None:
     checked = _check(
         "let session = Session::default()\n"

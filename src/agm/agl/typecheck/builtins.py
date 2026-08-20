@@ -410,7 +410,7 @@ class BuiltinCallChecker:
         """Type-check ``ask``. *receiver_type* is set for an ``Agent`` receiver."""
         # Target type: explicit type argument overrides context.
         if allows_agent is None:
-            allows_agent = receiver_type is not None
+            allows_agent = receiver_type is None
         explicit = self._resolve_explicit_target(node, "ask")
         target_type: Type = (
             explicit if explicit is not None else (expected if expected is not None else TextType())

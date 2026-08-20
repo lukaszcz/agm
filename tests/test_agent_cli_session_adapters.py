@@ -454,6 +454,7 @@ def test_codex_initial_ask_parses_jsonl_and_resume_returns_plaintext(
                     (
                         '{"type":"thread.started","thread_id":"first"}',
                         '{"type":"turn.started"}',
+                        '{"type":"item.started","item":{"type":"command_execution"}}',
                         '{"type":"item.completed","item":'
                         '{"type":"agent_message","text":"first answer"}}',
                         '{"type":"turn.completed"}',
@@ -468,7 +469,11 @@ def test_codex_initial_ask_parses_jsonl_and_resume_returns_plaintext(
     backend = CodexCliSessionBackend()
     _open(backend, agent)
 
-    assert backend.ask(SessionAskRequest("first")).content == "first answer"
+    first = backend.ask(SessionAskRequest("first"))
+    assert first.content == "first answer"
+    assert first.metadata == {"elapsed": 0.1}
+    assert first.call_info is not None
+    assert first.call_info.argv[:3] == ["codex", "exec", "--json"]
     assert backend.ask(SessionAskRequest("later")).content == "later answer"
 
     assert transport.calls == [

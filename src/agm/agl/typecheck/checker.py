@@ -4547,6 +4547,12 @@ class _Checker:
                 fields = self._env.type_table.exception_fields(obj_type)
                 kind_label = "Exception type"
             elif isinstance(obj_type, RecordType):
+                if obj_type.decl_id in HOST_MINTED_PRELUDE_TYPE_IDS:
+                    raise AglTypeError(
+                        f"'{obj_type.name}' values are created by the host and cannot be "
+                        "updated in source.",
+                        span=node.span,
+                    )
                 fields = self._env.type_table.record_fields(obj_type)
                 kind_label = "Record"
             else:

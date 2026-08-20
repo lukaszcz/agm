@@ -260,10 +260,16 @@ class PiRpcSessionBackend:
         while response is None or (wait_for_settled and not settled):
             try:
                 event = self._next_event(child)
+                ui_cancellation = _extension_ui_cancellation(event)
+                if ui_cancellation is not None:
+                    _write_command(child, ui_cancellation)
                 delta = _event_text_delta(event)
                 if event["type"] == "response":
                     _validate_response(event)
                 failure = _terminal_prompt_failure(event) if wait_for_settled else None
+            except (BrokenPipeError, OSError) as exc:
+                self._kill_dead_child(child)
+                self._raise_transport_or_host(operation, "Pi RPC stdin closed", started, exc, child)
             except _RpcIdleTimeout as exc:
                 self._kill_dead_child(child)
                 self._raise_transport_or_host(operation, "Pi RPC idle timeout", started, exc, child)
@@ -567,6 +573,19 @@ def _event_text_delta(event: dict[str, object]) -> str | None:
     if not isinstance(delta, str):
         raise _RpcProtocolError("Pi RPC text delta was not text")
     return delta
+
+
+def _extension_ui_cancellation(event: dict[str, object]) -> dict[str, object] | None:
+    """Cancel extension dialog requests that AGM cannot present to a user."""
+    if event["type"] != "extension_ui_request":
+        return None
+    method = event.get("method")
+    if method not in {"confirm", "select", "input", "editor"}:
+        return None
+    request_id = event.get("id")
+    if not isinstance(request_id, str) or not request_id:
+        raise _RpcProtocolError("Pi RPC extension UI request had no id")
+    return {"type": "extension_ui_response", "id": request_id, "cancelled": True}
 
 
 def _terminal_prompt_failure(event: dict[str, object]) -> str | None:

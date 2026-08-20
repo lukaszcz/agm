@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Generic, NoReturn, TypeVar, cast
@@ -410,7 +410,7 @@ class CodexCliSessionBackend(_CliPromptBackend):
             return response
         thread_id, content = _parse_codex_jsonl(response.content, require_thread_id=True)
         session.session_id = thread_id
-        return SessionAskResponse(content=content)
+        return replace(response, content=content)
 
     def compact(self, instructions: str) -> None:
         """Reject unsupported Codex CLI compaction."""
@@ -542,7 +542,7 @@ def _parse_codex_jsonl(output: str, *, require_thread_id: bool) -> tuple[str | N
             if thread_id is not None or not isinstance(candidate, str) or not candidate:
                 raise _codex_jsonl_error("Codex reported an invalid thread id")
             thread_id = candidate
-        elif event_type in {"turn.started", "turn.completed"}:
+        elif event_type in {"turn.started", "turn.completed", "item.started", "item.updated"}:
             continue
         elif event_type == "item.completed":
             item = event_object.get("item")

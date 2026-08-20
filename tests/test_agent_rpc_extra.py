@@ -200,6 +200,18 @@ def test_helpers_and_spawn_edges(monkeypatch: pytest.MonkeyPatch) -> None:
         == "x"
     )
     assert rpc._event_text_delta({"type": "agent_start"}) is None
+    assert rpc._extension_ui_cancellation({"type": "agent_start"}) is None
+    assert (
+        rpc._extension_ui_cancellation(
+            {"type": "extension_ui_request", "id": "notice", "method": "notify"}
+        )
+        is None
+    )
+    assert rpc._extension_ui_cancellation(
+        {"type": "extension_ui_request", "id": "dialog", "method": "confirm"}
+    ) == {"type": "extension_ui_response", "id": "dialog", "cancelled": True}
+    with pytest.raises(rpc._RpcProtocolError):
+        rpc._extension_ui_cancellation({"type": "extension_ui_request", "method": "confirm"})
     assert (
         rpc._terminal_prompt_failure(
             {"type": "auto_retry_end", "success": False, "finalError": "bad"}

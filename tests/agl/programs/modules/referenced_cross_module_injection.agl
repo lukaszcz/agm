@@ -1,4 +1,4 @@
-import outer using E
+import outer::{E}
 
 program def main() -> unit =
   let value: E = Shared(value = 4)

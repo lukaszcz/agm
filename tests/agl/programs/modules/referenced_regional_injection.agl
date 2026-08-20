@@ -1,5 +1,5 @@
 scope Local
-import outer using E
+import outer::{E}
 def show() -> unit =
   let value: E = Shared(value = 5)
   print value

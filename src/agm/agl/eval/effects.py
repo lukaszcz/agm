@@ -39,7 +39,6 @@ from agm.agl.semantics.exceptions import make_builtin_exception as _make_exc_val
 from agm.agl.semantics.values import (
     VOID_VALUE,
     BoolValue,
-    EnumValue,
     ExceptionValue,
     IntValue,
     JsonValue,
@@ -129,10 +128,10 @@ class EffectHandlers:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _agent_trace_value(agent: EnumValue) -> dict[str, object]:
-        """Return the agent variant and payload without re-decoding it."""
+    def _agent_trace_value(agent: RecordValue) -> dict[str, object]:
+        """Return the agent member name and payload without re-decoding it."""
         return {
-            "variant": agent.variant,
+            "variant": agent.display_name.rsplit("::", maxsplit=1)[-1],
             "payload": {
                 name: value.value if isinstance(value, TextValue) else render_value(value)
                 for name, value in agent.fields.items()
@@ -200,7 +199,7 @@ class EffectHandlers:
         )
         return response
 
-    def _raise_agent_call_error(self, agent: EnumValue, error: AgentCallHostError) -> NoReturn:
+    def _raise_agent_call_error(self, agent: RecordValue, error: AgentCallHostError) -> NoReturn:
         """Convert a transport failure after it was recorded in the trace."""
         declared = self._ctx._program.builtin_nominals.resolve("AgentCallError")
         agent_label = render_value(agent)
@@ -285,9 +284,10 @@ class EffectHandlers:
     ) -> Value:
         """Handle IrAsk: dispatch an Agent enum value and parse output."""
         agent_val = self._ctx._eval(agent_expr)
-        if not isinstance(agent_val, EnumValue):
+        if not isinstance(agent_val, RecordValue):
             raise TypeError(
-                f"IrAsk agent must evaluate to an Agent enum value, got {type(agent_val).__name__}"
+                "IrAsk agent must evaluate to an Agent member record, "
+                f"got {type(agent_val).__name__}"
             )
         agent_name = render_value(agent_val)
 
@@ -401,9 +401,9 @@ class EffectHandlers:
     ) -> Value:
         """Handle IrAskRequest: build AgentRequest record without dispatching."""
         request_agent = self._ctx._eval(agent_expr)
-        if not isinstance(request_agent, EnumValue):
+        if not isinstance(request_agent, RecordValue):
             raise TypeError(
-                "IrAskRequest agent must evaluate to an Agent enum value, "
+                "IrAskRequest agent must evaluate to an Agent member record, "
                 f"got {type(request_agent).__name__}"
             )
 

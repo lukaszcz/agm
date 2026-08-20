@@ -7,7 +7,7 @@ enum Review
 param mode
 
 program def main() -> unit =
-  let reviewer = AgentCommand("reviewer")
+  let reviewer: Agent = AgentCommand("reviewer")
   try
     if
       | mode == "abort" =>

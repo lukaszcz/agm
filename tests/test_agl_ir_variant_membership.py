@@ -1,24 +1,23 @@
-"""IR evaluation tests for `is` / `is not` enum-variant membership (IrVariantIs)."""
+"""IR evaluation tests for `is` / `is not` enum-variant membership (IrNominalIs)."""
 
 from __future__ import annotations
 
 import pytest
 
 from agm.agl.ir.ids import Location, NominalId, SourceId
-from agm.agl.ir.nodes import IrBind, IrConstInt, IrSequence, IrVariantIs
+from agm.agl.ir.nodes import IrBind, IrConstInt, IrNominalCast, IrNominalIs, IrSequence
 from agm.agl.ir.program import (
     ExecutableModule,
     ExecutableProgram,
     NominalDescriptor,
     NominalKind,
     SourceFile,
-    VariantDescriptor,
 )
 from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.semantics.values import BoolValue
 from tests._agl_helpers import let_root_capture
-from tests.agl.ir_harness import evaluate_ir, inline_main_items, lower_inline_ir, nominal_id_for
+from tests.agl.ir_harness import evaluate_ir, inline_main_items, lower_inline_ir
 
 
 def _lower(source: str) -> ExecutableProgram:
@@ -46,7 +45,7 @@ def test_is_matching_variant() -> None:
     """`c is Red` is True when the value is that variant."""
     source = """\
 enum Color | Red | Blue
-let c = Color::Red()
+let c: Color = Color::Red()
 let r = c is Red
 ()
 """
@@ -58,7 +57,7 @@ def test_is_non_matching_variant() -> None:
     """`c is Blue` is False when the value is a different variant."""
     source = """\
 enum Color | Red | Blue
-let c = Color::Red()
+let c: Color = Color::Red()
 let r = c is Blue
 ()
 """
@@ -70,7 +69,7 @@ def test_is_not_matching_variant() -> None:
     """`c is not Red` negates the membership test."""
     source = """\
 enum Color | Red | Blue
-let c = Color::Red()
+let c: Color = Color::Red()
 let r = c is not Red
 let s = c is not Blue
 ()
@@ -84,7 +83,7 @@ def test_is_field_carrying_variant() -> None:
     """`is` works on a value of a variant that carries fields."""
     source = """\
 enum Shape | Circle(radius: decimal) | Rectangle(w: decimal, h: decimal)
-let s = Shape::Circle(radius = 2.5)
+let s: Shape = Shape::Circle(radius = 2.5)
 let is_circle = s is Circle
 let is_rect = s is Rectangle
 ()
@@ -98,7 +97,7 @@ def test_is_qualified_variant() -> None:
     """`is` accepts a qualified variant name (Color::Red)."""
     source = """\
 enum Color | Red | Blue
-let c = Color::Blue()
+let c: Color = Color::Blue()
 let r = c is Color::Blue
 ()
 """
@@ -111,11 +110,11 @@ let r = c is Color::Blue
 # ---------------------------------------------------------------------------
 
 
-def test_golden_is_test_lowers_to_ir_variant_is() -> None:
-    """An `is` test lowers to IrVariantIs with the resolved nominal/variant/negated."""
+def test_golden_is_test_lowers_to_ir_nominal_member() -> None:
+    """An `is` test lowers to a nominal member identity and negation flag."""
     source = """\
 enum Color | Red | Blue
-let c = Color::Red()
+let c: Color = Color::Red()
 let r = c is not Blue
 ()
 """
@@ -124,14 +123,17 @@ let r = c is not Blue
     found = False
     for node in inline_main_items(prog):
         if isinstance(node, (IrSequence, IrBind)) and isinstance(
-            let_root_capture(node).value, IrVariantIs
+            let_root_capture(node).value, IrNominalIs
         ):
             vi = let_root_capture(node).value
-            assert vi.nominal == nominal_id_for(prog, "Color")
-            assert vi.variant == "Blue"
+            assert vi.nominal == next(
+                nominal
+                for nominal, descriptor in prog.nominals.items()
+                if descriptor.scope_path == ("Color",) and descriptor.declared_name == "Blue"
+            )
             assert vi.negated is True
             found = True
-    assert found, "Expected IrBind(value=IrVariantIs) in initializers"
+    assert found, "Expected IrBind(value=IrNominalIs) in initializers"
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +142,7 @@ let r = c is not Blue
 
 
 def _variant_is_program(
-    node: IrVariantIs, nominals: dict[NominalId, NominalDescriptor]
+    node: IrNominalIs | IrNominalCast, nominals: dict[NominalId, NominalDescriptor]
 ) -> ExecutableProgram:
     sid = SourceId(0)
     return ExecutableProgram(
@@ -153,25 +155,36 @@ def _variant_is_program(
 
 
 def test_validate_cheap_tier_skips_nominal_checks_for_ir_variant_is() -> None:
-    """deep=False validation of IrVariantIs skips the nominal/variant table checks."""
+    """deep=False validation of IrNominalIs skips the nominal/variant table checks."""
     loc = Location(source_id=SourceId(0), start_offset=0, end_offset=1, start_line=1, start_col=0)
-    node = IrVariantIs(
+    node = IrNominalIs(
         location=loc,
         nominal=NominalId(1),  # not registered — ignored when deep=False
-        variant="Red",
         value=IrConstInt(loc, 1),
         negated=False,
     )
     validate_ir(_variant_is_program(node, {}), deep=False)  # no exception
 
 
-def test_validate_rejects_ir_variant_is_with_unknown_nominal() -> None:
-    """Validator rejects IrVariantIs whose nominal is absent from program.nominals."""
+def test_validate_cheap_tier_skips_nominal_checks_for_ir_nominal_cast() -> None:
     loc = Location(source_id=SourceId(0), start_offset=0, end_offset=1, start_line=1, start_col=0)
-    node = IrVariantIs(
+    node = IrNominalCast(
+        location=loc,
+        nominal=NominalId(1),
+        value=IrConstInt(loc, 1),
+        test_only=False,
+        source_label="int",
+        target_label="Record",
+    )
+    validate_ir(_variant_is_program(node, {}), deep=False)
+
+
+def test_validate_rejects_ir_variant_is_with_unknown_nominal() -> None:
+    """Validator rejects IrNominalIs whose nominal is absent from program.nominals."""
+    loc = Location(source_id=SourceId(0), start_offset=0, end_offset=1, start_line=1, start_col=0)
+    node = IrNominalIs(
         location=loc,
         nominal=NominalId(2),
-        variant="Red",
         value=IrConstInt(loc, 1),
         negated=False,
     )
@@ -179,25 +192,19 @@ def test_validate_rejects_ir_variant_is_with_unknown_nominal() -> None:
         validate_ir(_variant_is_program(node, {}), deep=True)
 
 
-def test_validate_rejects_ir_variant_is_with_unknown_variant() -> None:
-    """Validator rejects IrVariantIs whose variant is absent from the descriptor."""
+def test_validate_ir_nominal_is_requires_member_record() -> None:
+    """Nominal tests accept member-record identities and reject enum identities."""
     loc = Location(source_id=SourceId(0), start_offset=0, end_offset=1, start_line=1, start_col=0)
-    nominal_id = NominalId(3)
-    desc = NominalDescriptor(
-        nominal=nominal_id,
-        module_id=ENTRY_ID,
-        scope_path=(),
-        declared_name="Color",
-        kind=NominalKind.ENUM,
-        fields=(),
-        variants=(VariantDescriptor(name="Red", fields=()),),
-    )
-    node = IrVariantIs(
+    member_id = NominalId(3)
+    node = IrNominalIs(
         location=loc,
-        nominal=nominal_id,
-        variant="Purple",
+        nominal=member_id,
         value=IrConstInt(loc, 1),
         negated=False,
     )
-    with pytest.raises(InvalidIrError, match="variant"):
-        validate_ir(_variant_is_program(node, {nominal_id: desc}), deep=True)
+    member = NominalDescriptor(member_id, ENTRY_ID, ("Color",), "Red", NominalKind.RECORD)
+    validate_ir(_variant_is_program(node, {member_id: member}), deep=True)
+
+    enum = NominalDescriptor(member_id, ENTRY_ID, (), "Color", NominalKind.ENUM, variants=())
+    with pytest.raises(InvalidIrError, match="non-record"):
+        validate_ir(_variant_is_program(node, {member_id: enum}), deep=True)

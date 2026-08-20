@@ -22,7 +22,6 @@ from pathlib import Path
 from agm.agl.repl import ReplSession
 from agm.agl.semantics.values import (
     ArrayValue,
-    EnumValue,
     ExceptionValue,
     IntValue,
     RecordValue,
@@ -255,7 +254,7 @@ class TestFreshImportSeesTheCurrentDeclaration:
         assert r.ok, r.diagnostics
         assert r.value == TextValue("extra,value")
 
-    def test_fresh_import_sees_the_new_enum_variants_not_the_old_ones(self, tmp_path: Path) -> None:
+    def test_fresh_import_sees_the_new_enum_members_not_the_old_ones(self, tmp_path: Path) -> None:
         _write_extern_lib(
             tmp_path,
             "capture_enum_after",
@@ -349,10 +348,10 @@ class TestBoundaryRoundTripAcrossRedeclaration:
 
         assert old_round_trip.ok, old_round_trip.diagnostics
         assert new_round_trip.ok, new_round_trip.diagnostics
-        assert isinstance(old_round_trip.value, EnumValue)
-        assert isinstance(new_round_trip.value, EnumValue)
-        assert old_round_trip.value.variant == "Gone"
-        assert new_round_trip.value.variant == "Other"
+        assert isinstance(old_round_trip.value, RecordValue)
+        assert isinstance(new_round_trip.value, RecordValue)
+        assert old_round_trip.value.display_name.rsplit("::", maxsplit=1)[-1] == "Gone"
+        assert new_round_trip.value.display_name.rsplit("::", maxsplit=1)[-1] == "Other"
         assert old_round_trip.value.nominal != new_round_trip.value.nominal
 
     def test_exception_values_round_trip_for_both_old_and_new_identities(

@@ -8,7 +8,7 @@ enum Outcome
 param fallback
 
 program def main() -> unit =
-  let worker = AgentCommand("worker")
+  let worker: Agent = AgentCommand("worker")
   let first: Outcome = ask("Attempt the task.", agent = worker)
 
   if

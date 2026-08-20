@@ -71,7 +71,7 @@ case result of
 ```
 
 At a `case` branch root, a bare name is never a variable binder: it must
-denote a visible nullary enum constructor. By contrast, a bare `let`-root name
+denote a visible fieldless enum-member constructor. By contrast, a bare `let`-root name
 always introduces an immutable binder visible in the continuation; see
 [Bindings and scope](bindings-and-scope.md#let--immutable-binding). Ordinary
 value bindings do not alter case-constructor lookup; capitalization carries no
@@ -101,15 +101,15 @@ Restrictions:
 
 ### Constructor patterns
 
-A constructor pattern matches one enum variant or one record value and
-optionally destructures its fields. A pattern is a constructor pattern when it
-is one of:
+A constructor pattern matches a record value, including a member record of an
+enum, and optionally destructures its fields. A pattern is a constructor
+pattern when it is one of:
 
 - a **bare name at a `case` branch root that denotes a visible constructor** —
-  matches that enum variant (nullary variants only; see below),
+  matches a fieldless enum member only (see below),
 - a **call form** `name(…)`, where the parentheses may be empty, or
-- a **qualified** `Enum::variant`, `Record::Record(…)`,
-  `module::Enum::variant`, or `module::Record` form.
+- a **qualified** `Enum::member`, `Record::Record(…)`,
+  `module::Enum::member`, or `module::Record` form.
 
 ```agl
 enum Review
@@ -125,26 +125,25 @@ def summarize(review: Review) -> text =
 
 The first branch could equivalently use bare `Pass` or explicit `Pass()`.
 
-When a bare name is classified as a constructor, it matches **nullary**
-variants only. A bare name for a variant that has fields is a static error
-directing you to an explicit form, so the discarded payload is acknowledged:
-write `Fail()` or destructure the fields. Empty parentheses ignore every payload
-field, including named-only fields. The call and qualified forms apply to every
-variant and to records; the bare form is a convenience for the common nullary
-case. A local record constructor such as `Record(…)` is an unqualified call
-form; its owner-qualified form repeats the record name: `Record::Record(…)`.
+When a bare name is classified as a constructor, it matches **fieldless**
+members only. A bare name for a member that has fields is a static error:
+write `Fail()` to ignore its fields or destructure them. Empty parentheses
+ignore every field, including named-only fields. The call and qualified forms
+apply to every member record and to standalone records; the bare form is a
+convenience for the common fieldless case. A local record constructor such as
+`Record(…)` is an unqualified call form; its owner-qualified form repeats the
+record name: `Record::Record(…)`.
 
 Constructor ownership in patterns is directed by the scrutinee's static
-nominal type. When two enums share an unqualified variant spelling, or a record
-constructor spelling collides with an enum variant, the scrutinee type selects
-the intended constructor, so the pattern needs no qualification. This differs
-from a bare reference in expression position, where the same situation is a
-static ambiguity error ([Bindings and scope](bindings-and-scope.md)).
+nominal type. When two enums contribute the same unqualified member spelling,
+or a record constructor spelling collides with an injected member name, the
+scrutinee type selects the intended constructor, so the pattern needs no
+qualification.
 
 #### Module-qualified constructor patterns
 
 When a type comes from an imported module, the constructor may be prefixed
-with a module qualifier. Both the module/type boundary and the type/variant
+with a module qualifier. Both the module/type boundary and the type/member
 boundary use `::`:
 
 <!-- agl-check: fragment -->
@@ -158,10 +157,10 @@ case value of
 
 The prefix may name an owning enum type (`Color::Red`), a module and owning
 type (`mylib::Color::Red` or `mylib::Point`), or the current module
-(`::Color::Red` or `::Point`). A module may also qualify an exposed enum
+(`::Color::Red` or `::Point`). A module may also qualify an exposed enum-member
 constructor directly (`mylib::Red`). Qualification states the owner explicitly
-but is not required to resolve same-spelled constructors; when present, it must
-identify the scrutinee's exact nominal type. A module route uses slash segments,
+but is not required when the scrutinee type selects a same-spelled constructor;
+when present, it must identify the scrutinee's exact nominal type. A module route uses slash segments,
 as in `company/colors::Color::Red` or `company/colors::Point`; constructor
 qualification itself uses `::`, never `.`. A named scope qualifies a pattern
 through the same chain, so a scoped constructor is written with its exact path
@@ -220,10 +219,10 @@ Static rules:
 
 1. A constructor pattern requires a **record- or enum-typed scrutinee**;
    matching one against any other type, including an exception, is a static error.
-2. An enum variant must belong to the scrutinee's enum. A record constructor
-   must denote the scrutinee's exact record type. Qualifiers and type aliases
-   resolve transparently, but module identity and instantiated type arguments
-   still must agree.
+2. An enum-member record must belong to the scrutinee's enum. A record
+   constructor must denote the scrutinee's exact record type. Qualifiers and
+   type aliases resolve transparently, but module identity and instantiated
+   type arguments still must agree.
 3. Each field may appear at most once in a pattern.
 4. Fields not mentioned in the pattern are simply ignored (patterns need not
    be complete).
@@ -289,8 +288,9 @@ value of the scrutinee type. Coverage includes the complete nested pattern,
 not only the outer constructor. For example, matching `Some(true)` and `None`
 does not cover `Some(false)`.
 
-Enum variants, record constructors, and the two boolean values form closed
-domains and can be covered by listing every remaining constructor or literal. A
+Enum member-records, record constructors, and the two boolean values form
+closed domains and can be covered by listing every remaining constructor or
+literal. A
 record type has exactly one constructor, so its empty constructor pattern (for
 example, `Point()`) covers every `Point` value, regardless of its field domains.
 A record pattern that constrains fields is exhaustive only if its nested patterns
@@ -323,7 +323,7 @@ enum Response
   | Complete
   | Rejected
 program def main() -> unit =
-  let response = Complete
+  let response: Response = Complete
   let _ = case response of
     | Complete => response
     | _ =>
@@ -336,9 +336,9 @@ program def main() -> unit =
 
 ## `is` versus `case`
 
-Use `is` / `is not` ([Expressions](expressions.md)) to *test* a variant
+Use `is` / `is not` ([Expressions](expressions.md)) to test an enum member
 without destructuring — typically in `if` and `until` conditions. Use `case`
-when you need the payload:
+when you need its fields:
 
 <!-- agl-check: fragment -->
 ```agl
@@ -349,7 +349,7 @@ case review of
   | Pass => ()
 ```
 
-`is` / `is not` also apply to generic enum instances; qualify the variant the
+`is` / `is not` also apply to generic enum instances; qualify the member the
 same way as in a pattern:
 
 <!-- agl-check: fragment -->

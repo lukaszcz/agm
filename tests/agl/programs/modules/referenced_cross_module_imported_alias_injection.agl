@@ -1,4 +1,4 @@
-import unqualified using E
+import unqualified::{E}
 
 program def main() -> unit =
   let value: E[int] = Shared(value = 5)

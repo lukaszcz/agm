@@ -9,7 +9,7 @@ enum Status
 end A
 
 program def main() -> unit =
-  let s = Status::Good
+  let s: Status = Status::Good
 
   print(s is Status::Good)
   print(s is Status::Bad)

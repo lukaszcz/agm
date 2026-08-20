@@ -1,4 +1,4 @@
-import library using RefEnum
+import library::{RefEnum}
 
 program def main() -> unit =
   let value: RefEnum = Shared(value = 2)

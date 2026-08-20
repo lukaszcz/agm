@@ -72,7 +72,7 @@ def test_constructor_consumers_resolve_whole_use_aliases(tmp_path: Path, express
                 "scope S\n"
                 "enum E\n  | A(value: int)\n  | B\n"
                 "end S\n"
-                "let value = X::E::A(1)\n"
+                "let value: X::E = X::E::A(1)\n"
                 f"{expression}\n"
             ),
         },
@@ -91,7 +91,7 @@ def test_bare_renamed_constructor_must_belong_to_matched_enum(tmp_path: Path) ->
                 "enum A | X\n"
                 "enum B | Y\n"
                 "end S\n"
-                "let value = S::B::Y\n"
+                "let value: S::B = S::B::Y\n"
                 "case value of | Renamed => 1 | _ => 0\n"
             ),
         },
@@ -112,7 +112,7 @@ def test_bare_renamed_fieldful_constructor_must_use_a_constructor_pattern(
                 "scope S\n"
                 "enum E | A(value: int)\n"
                 "end S\n"
-                "let value = X(1)\n"
+                "let value: S::E = X(1)\n"
                 "case value of | X => 1 | _ => 0\n"
             ),
         },
@@ -131,7 +131,7 @@ def test_constructor_consumers_honor_use_tail_renames(tmp_path: Path) -> None:
                 "scope S\n"
                 "enum E\n  | A(value: int)\n  | B\n"
                 "end S\n"
-                "let value = X(1)\n"
+                "let value: S::E = X(1)\n"
                 "let selected = case value of | X(_ as item) => item | _ => 0\n"
                 "let matches = value is X\n"
                 "selected\n"
@@ -141,7 +141,7 @@ def test_constructor_consumers_honor_use_tail_renames(tmp_path: Path) -> None:
 
     checked = check_program(resolve_program(graph), base_caps())
     constructors = tuple(checked.modules[graph.entry_id].resolved.constructor_refs.values())
-    assert any(constructor.variant == "A" for constructor in constructors)
+    assert any(constructor.owner_name == "A" for constructor in constructors)
 
 
 def test_ambiguous_whole_use_alias_constructor_qualifier_is_rejected(tmp_path: Path) -> None:
@@ -1186,7 +1186,7 @@ def test_type_qualifier_beats_route_without_the_requested_member(tmp_path: Path)
             "entry": (
                 "import support/config\n"
                 "enum config | On | Off\n"
-                "let flag = config::On\n"
+                "let flag: config = config::On\n"
                 "let result = case flag of\n"
                 "  | config::On => 1\n"
                 "  | config::Off => 2\n"
@@ -1208,7 +1208,7 @@ def test_generic_is_test_type_and_module_constructor_member_collision_is_ambiguo
             "entry": (
                 "import support/Owner\n"
                 "enum Owner[T] | On\n"
-                "let flag = ::Owner[int]::On\n"
+                "let flag: Owner[int] = ::Owner[int]::On\n"
                 "flag is Owner::On"
             ),
             "support/Owner": "def On() -> int = 1",
@@ -1229,7 +1229,7 @@ def test_is_test_type_and_module_constructor_member_collision_is_ambiguous(
             "entry": (
                 "import support/config\n"
                 "enum config | On\n"
-                "let flag = ::config::On\n"
+                "let flag: config = ::config::On\n"
                 "flag is config::On"
             ),
             "support/config": "def On() -> int = 1",
@@ -1278,7 +1278,7 @@ def test_invalid_qualified_pattern_and_is_routes_reach_typecheck(tmp_path: Path)
     ):
         graph = make_graph_from_files(
             tmp_path,
-            {"entry": f"enum Flag | On | Off\nlet flag = Flag::On\n{use}"},
+            {"entry": f"enum Flag | On | Off\nlet flag: Flag = Flag::On\n{use}"},
         )
         with pytest.raises(AglTypeError):
             check_program(resolve_program(graph), base_caps())
@@ -1291,7 +1291,8 @@ def test_is_test_does_not_treat_an_imported_enum_owner_as_its_variant_route(
         tmp_path,
         {
             "entry": (
-                "import support/config\nenum config | On\nlet flag = config::On\nflag is config::On"
+                "import support/config\nenum config | On\n"
+                "let flag: config = config::On\nflag is config::On"
             ),
             "support/config": "enum config | On",
         },
@@ -1304,13 +1305,13 @@ def test_is_test_does_not_treat_an_imported_enum_owner_as_its_variant_route(
     ("source", "modules", "expected"),
     [
         (
-            "enum Flag | On | Off\nlet flag = Flag::On\nflag is unknown::Flag::On",
+            "enum Flag | On | Off\nlet flag: Flag = Flag::On\nflag is unknown::Flag::On",
             {},
             "Unknown module qualifier",
         ),
         (
             "import remote/config hiding Flag\nenum Flag | On | Off\n"
-            "let flag = Flag::On\n"
+            "let flag: Flag = Flag::On\n"
             "let result = case flag of\n"
             "  | config::Flag::On => 1\n"
             "  | _ => 2\n"
@@ -1320,7 +1321,7 @@ def test_is_test_does_not_treat_an_imported_enum_owner_as_its_variant_route(
         ),
         (
             "import one/config\nimport two/config\nenum Local | On\n"
-            "let flag = Local::On\nflag is config::Flag::On",
+            "let flag: Local = Local::On\nflag is config::Flag::On",
             {"one/config": "enum Flag | On", "two/config": "enum Flag | On"},
             "ambiguous",
         ),
@@ -1445,7 +1446,7 @@ def test_pattern_and_is_filter_type_module_routes_by_the_referenced_variant(tmp_
             "entry": (
                 "import support/config\n"
                 "enum config | On | Off\n"
-                "let flag = config::On\n"
+                "let flag: config = config::On\n"
                 "let result = case flag of\n"
                 "  | config::On => 1\n"
                 "  | config::Off => 2\n"

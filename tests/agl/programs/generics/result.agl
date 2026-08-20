@@ -1,8 +1,8 @@
 # Generics: a two-parameter `enum Outcome[T, E]` combining a record success
 # payload and a record error payload. A generic function consumes it via `case`,
-# the value variants are inferred from their payloads, and an explicit
-# `ok::[…, …]` override pins both parameters. A param selects the success or
-# failure path.
+# the value variants are inferred from their payloads, and an owner-applied
+# `Outcome[…, …]::ok` constructor pins both parameters. A param selects the
+# success or failure path.
 record Pt
   x: int
   y: int
@@ -29,8 +29,8 @@ program def main() -> unit =
   print(describe(good))
   print(describe(bad))
 
-  # Explicit two-argument override on a generic constructor.
-  let pinned = ok::[int, text](value = 5)
+  # Applying the enum owner supplies both parameters, although `ok` captures only T.
+  let pinned: Outcome[int, text] = Outcome[int, text]::ok(value = 5)
   print pinned
 
   # Branch chosen by the host param; field access on the destructured payload.

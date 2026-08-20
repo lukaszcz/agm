@@ -42,6 +42,8 @@ from agm.agl.ir import (
     IrBuiltinLoad,
     IrBuiltinStore,
     IrCapture,
+    IrCase,
+    IrCaseArm,
     IrCoerce,
     IrConstBool,
     IrConstDecimal,
@@ -61,12 +63,14 @@ from agm.agl.ir import (
     IrLoad,
     IrMakeArray,
     IrMakeClosure,
+    IrMakeConstructor,
     IrMakeDict,
-    IrMakeEnum,
     IrMakeException,
     IrMakeJsonArray,
     IrMakeJsonObject,
     IrMakeRecord,
+    IrNominalCaseKey,
+    IrNominalIs,
     IrParam,
     IrPrint,
     IrRaise,
@@ -620,24 +624,24 @@ class TestCoerceToJson:
         )
         assert result == {"j": JsonValue(True)}
 
-    def test_to_json_array(self) -> None:
-        """ToJson converts an ArrayValue to a JsonValue wrapping a list."""
+    def test_to_json_array_rejects_malformed_scalar_coercion(self) -> None:
+        """ToJson is a scalar lowering contract, never a container walk."""
         sym, desc = _let_sym(0, "j")
-        result = _run(
-            (
-                IrBind(
-                    _LOC,
-                    sym,
-                    IrCoerce(
+        with pytest.raises(AssertionError, match="scalar encode"):
+            _run(
+                (
+                    IrBind(
                         _LOC,
-                        IrMakeArray(_LOC, (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2))),
-                        ToJson(),
+                        sym,
+                        IrCoerce(
+                            _LOC,
+                            IrMakeArray(_LOC, (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2))),
+                            ToJson(),
+                        ),
                     ),
                 ),
-            ),
-            {sym: desc},
-        )
-        assert result == {"j": JsonValue([1, 2])}
+                {sym: desc},
+            )
 
     def test_to_json_already_json_is_idempotent(self) -> None:
         """ToJson on a JsonValue returns as-is (idempotent defensively)."""
@@ -891,22 +895,157 @@ class TestDefensiveErrors:
             IrInterpreter(prog).run()
 
     def test_ir_variant_is_on_non_enum_raises(self) -> None:
-        """IrVariantIs on a non-enum value raises InvalidIrError (defensive)."""
-        from agm.agl.ir import IrVariantIs, NominalId
+        """IrNominalIs on a non-enum value raises InvalidIrError (defensive)."""
+        from agm.agl.ir import IrNominalIs, NominalId
 
         prog = _make_program(
             (
-                IrVariantIs(
+                IrNominalIs(
                     _LOC,
                     nominal=NominalId(1),
-                    variant="Red",
                     value=IrConstInt(_LOC, 1),
                     negated=False,
                 ),
             ),
         )
-        with pytest.raises(InvalidIrError, match="IrVariantIs"):
+        with pytest.raises(InvalidIrError, match="IrNominalIs"):
             IrInterpreter(prog).run()
+
+    def test_ir_nominal_cast_on_non_record_raises(self) -> None:
+        """IrNominalCast accepts only record values from checked enum slots."""
+        from agm.agl.ir import IrNominalCast, NominalId
+
+        prog = _make_program(
+            (
+                IrNominalCast(
+                    _LOC,
+                    nominal=NominalId(1),
+                    value=IrConstInt(_LOC, 1),
+                    test_only=False,
+                    source_label="int",
+                    target_label="Record",
+                ),
+            ),
+        )
+        with pytest.raises(InvalidIrError, match="IrNominalCast"):
+            IrInterpreter(prog).run()
+
+
+# ---------------------------------------------------------------------------
+# Enum member dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestEnumMemberDispatch:
+    """Enum dispatch resolves member-record identity through its descriptor."""
+
+    def test_indirect_enum_constructor_dispatches_case_field_and_is(self) -> None:
+        enum = NominalId(40)
+        member = NominalId(41)
+        constructor, constructor_desc = _let_sym(40, "constructor")
+        value, value_desc = _let_sym(41, "value")
+        case_result, case_result_desc = _let_sym(42, "case_result")
+        is_result, is_result_desc = _let_sym(43, "is_result")
+        program = _make_program(
+            (
+                IrBind(
+                    _LOC,
+                    constructor,
+                    IrMakeConstructor(_LOC, member, "Packet::data"),
+                ),
+                IrBind(
+                    _LOC,
+                    value,
+                    IrIndirectCall(
+                        _LOC,
+                        IrLoad(_LOC, constructor),
+                        (IrConstInt(_LOC, 7),),
+                    ),
+                ),
+                IrBind(
+                    _LOC,
+                    case_result,
+                    IrCase(
+                        _LOC,
+                        IrLoad(_LOC, value),
+                        (
+                            IrCaseArm(
+                                IrNominalCaseKey(member),
+                                (),
+                                IrField(_LOC, IrLoad(_LOC, value), member, "payload"),
+                            ),
+                        ),
+                        IrConstInt(_LOC, 0),
+                    ),
+                ),
+                IrBind(
+                    _LOC,
+                    is_result,
+                    IrNominalIs(_LOC, member, IrLoad(_LOC, value), False),
+                ),
+            ),
+            {
+                constructor: constructor_desc,
+                value: value_desc,
+                case_result: case_result_desc,
+                is_result: is_result_desc,
+            },
+            nominals={
+                enum: NominalDescriptor(
+                    enum,
+                    ENTRY_ID,
+                    (),
+                    "Packet",
+                    NominalKind.ENUM,
+                    variants=(VariantDescriptor("data", ("payload",), member),),
+                ),
+                member: NominalDescriptor(
+                    member,
+                    ENTRY_ID,
+                    ("Packet",),
+                    "data",
+                    NominalKind.RECORD,
+                    fields=("payload",),
+                ),
+            },
+        )
+
+        result = IrInterpreter(program).run()
+
+        assert result["case_result"] == IntValue(7)
+        assert result["is_result"] == BoolValue(True)
+
+    def test_enum_dispatch_rejects_a_variant_without_a_linked_member_record(self) -> None:
+        enum = NominalId(44)
+        program = _make_program(
+            (
+                IrNominalIs(
+                    _LOC,
+                    NominalId(45),
+                    IrIndirectCall(
+                        _LOC,
+                        IrMakeConstructor(_LOC, NominalId(45), "Packet::data"),
+                        (IrConstInt(_LOC, 7),),
+                    ),
+                    False,
+                ),
+            ),
+            nominals={
+                enum: NominalDescriptor(
+                    enum,
+                    ENTRY_ID,
+                    (),
+                    "Packet",
+                    NominalKind.ENUM,
+                    variants=(VariantDescriptor("data", ("payload",), NominalId(45)),),
+                ),
+            },
+        )
+
+        from agm.agl.ir.validate import validate_ir
+
+        with pytest.raises(InvalidIrError):
+            validate_ir(program)
 
 
 # ---------------------------------------------------------------------------
@@ -1046,23 +1185,23 @@ class TestIrField:
         enum_sym, enum_desc = _let_sym(0, "wrapped")
         out_sym, out_desc = _let_sym(1, "out")
         nominal = NominalId(6)
+        member = NominalId(7)
         prog = _make_program(
             (
                 IrBind(
                     _LOC,
                     enum_sym,
-                    IrMakeEnum(
+                    IrMakeRecord(
                         _LOC,
-                        nominal,
-                        "Wrapper",
-                        "wrap",
+                        member,
+                        "Wrapper::wrap",
                         (("value", IrConstInt(_LOC, 9)),),
                     ),
                 ),
                 IrBind(
                     _LOC,
                     out_sym,
-                    IrField(_LOC, IrLoad(_LOC, enum_sym), nominal, "value"),
+                    IrField(_LOC, IrLoad(_LOC, enum_sym), member, "value"),
                 ),
             ),
             {enum_sym: enum_desc, out_sym: out_desc},
@@ -1073,8 +1212,16 @@ class TestIrField:
                     scope_path=(),
                     declared_name="Wrapper",
                     kind=NominalKind.ENUM,
-                    variants=(VariantDescriptor("wrap", ("value",)),),
-                )
+                    variants=(VariantDescriptor("wrap", ("value",), member),),
+                ),
+                member: NominalDescriptor(
+                    nominal=member,
+                    module_id=ENTRY_ID,
+                    scope_path=("Wrapper",),
+                    declared_name="wrap",
+                    kind=NominalKind.RECORD,
+                    fields=("value",),
+                ),
             },
         )
         assert IrInterpreter(prog).run()["out"] == IntValue(9)

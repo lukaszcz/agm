@@ -125,7 +125,7 @@ class TestPersistence:
     def test_builtin_agent_method_is_callable_across_entries(self) -> None:
         agent = CountingAgent("42")
         session = ReplSession(agent_dispatcher=agent)
-        assert session.eval_entry('let worker = AgentCommand("worker")').ok
+        assert session.eval_entry('let worker: Agent = AgentCommand("worker")').ok
 
         result = session.eval_entry('worker.ask::[int]("How many?")')
 
@@ -973,7 +973,7 @@ class TestStdlib:
     def test_type_of_uses_implicit_core_import(self) -> None:
         s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
 
-        assert "Option[int]" in s.type_of("Some(value = 1)")
+        assert "Option::Some[int]" in s.type_of("Some(value = 1)")
 
     def test_retained_explicit_core_import_suppresses_later_preludes(self) -> None:
         s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
@@ -1027,6 +1027,7 @@ class TestStdlib:
 
     def test_all_public_builtin_prelude_constructors_are_available(self) -> None:
         s = ReplSession()
+        table = create_seeded_type_table()
 
         for name, typ in BUILTIN_PRELUDE_TYPES.items():
             if name in COMPATIBILITY_PRELUDE_TYPE_NAMES:
@@ -1038,13 +1039,14 @@ class TestStdlib:
                 assert result.value_type is not None
                 assert result.value_type.name == name
             elif isinstance(typ, EnumType):
-                for variant, fields in typedef.variants:
-                    args = _constructor_args(dict(fields))
+                for member in typedef.members:
+                    variant = member.name
+                    args = _constructor_args(dict(table.record_fields(member)))
                     call = f"{name}::{variant}({args})" if args else f"{name}::{variant}"
                     result = s.eval_entry(call)
                     assert result.ok, (name, variant, result.diagnostics)
                     assert result.value_type is not None
-                    assert result.value_type.name == name
+                    assert result.value_type.name == variant
 
     def test_all_concrete_builtin_exceptions_are_available(self) -> None:
         s = ReplSession()
@@ -1781,7 +1783,7 @@ class TestAgentArgumentBuiltinIdentity:
         )
         assert declare.ok, declare.diagnostics
 
-        g = s.eval_entry('let g = A::Agent::AgentCommand("echo")')
+        g = s.eval_entry('let g: A::Agent = A::Agent::AgentCommand("echo")')
         assert g.ok, g.diagnostics
 
         result = s.eval_entry('let q = g.ask-request("hi")')
@@ -1792,7 +1794,9 @@ class TestAgentArgumentBuiltinIdentity:
         """Regression: the ordinary receiver form still works and still mints
         a request whose ``agent`` field is readable."""
         s = ReplSession()
-        result = s.eval_entry('let q = AgentCommand("echo").ask-request("hi")')
+        result = s.eval_entry(
+            'let agent: Agent = AgentCommand("echo")\nlet q = agent.ask-request("hi")'
+        )
         assert result.ok, result.diagnostics
         field = s.eval_entry("q.prompt")
         assert field.ok, field.diagnostics
@@ -2065,11 +2069,92 @@ enum Agent
         fresh = session.eval_entry('AgentCommand(command = "echo hello")')
 
         assert stale.ok, stale.diagnostics
-        assert isinstance(stale.value_type, EnumType)
-        assert stale.value_type.name == "Agent"
+        assert isinstance(stale.value_type, RecordType)
+        assert stale.value_type.name == "AgentClaude"
         assert fresh.ok, fresh.diagnostics
-        assert isinstance(fresh.value_type, EnumType)
-        assert fresh.value_type.name == "Agent"
+        assert isinstance(fresh.value_type, RecordType)
+        assert fresh.value_type.name == "AgentCommand"
+
+    def test_referenced_enum_keeps_its_original_record_member_after_record_supersession(
+        self,
+    ) -> None:
+        """A retained enum selects its member by handle, not its record's current name."""
+        session = ReplSession()
+        assert session.eval_entry("record R(old: int)").ok
+        assert session.eval_entry("type OldR = R").ok
+        assert session.eval_entry("enum E = ::R").ok
+        assert session.eval_entry("let old: E = R(old = 1)").ok
+        assert session.eval_entry("record R(fresh: text)").ok
+
+        matched = session.eval_entry("case old of\n  | R(old) => old")
+        tested = session.eval_entry("old is R")
+        narrowed = session.eval_entry("(old as OldR).old")
+        not_a_member = session.eval_entry('let fresh: E = R(fresh = "new")')
+
+        assert matched.ok, matched.diagnostics
+        assert matched.value == IntValue(1)
+        assert tested.ok, tested.diagnostics
+        assert tested.value == BoolValue(True)
+        assert narrowed.ok, narrowed.diagnostics
+        assert narrowed.value == IntValue(1)
+        assert not not_a_member.ok
+
+    def test_enum_supersession_remints_inline_members_without_invalidating_old_ones(self) -> None:
+        """Old and new enum-member handles remain independently matchable and castable."""
+        session = ReplSession()
+        assert session.eval_entry("enum E\n  | A(old: int)").ok
+        assert session.eval_entry("type OldA = E::A").ok
+        assert session.eval_entry("let old: E = A(old = 1)").ok
+        assert session.eval_entry("enum E\n  | B(fresh: text)").ok
+        assert session.eval_entry('let new: E = B(fresh = "new")').ok
+
+        old_case = session.eval_entry("case old of\n  | A(old) => old")
+        old_is = session.eval_entry("old is A")
+        old_cast = session.eval_entry("(old as OldA).old")
+        new_case = session.eval_entry("case new of\n  | B(fresh) => fresh")
+        new_is = session.eval_entry("new is B")
+        new_cast = session.eval_entry("(new as E::B).fresh")
+        current_member_on_old_value = session.eval_entry("old as E::B")
+
+        assert old_case.ok, old_case.diagnostics
+        assert old_case.value == IntValue(1)
+        assert old_is.ok, old_is.diagnostics
+        assert old_is.value == BoolValue(True)
+        assert old_cast.ok, old_cast.diagnostics
+        assert old_cast.value == IntValue(1)
+        assert new_case.ok, new_case.diagnostics
+        assert new_case.value == TextValue("new")
+        assert new_is.ok, new_is.diagnostics
+        assert new_is.value == BoolValue(True)
+        assert new_cast.ok, new_cast.diagnostics
+        assert new_cast.value == TextValue("new")
+        assert not current_member_on_old_value.ok
+
+    def test_same_spelling_enum_member_supersession_keeps_old_and_new_identities_incompatible(
+        self,
+    ) -> None:
+        """A reused enum/member spelling never bridges its old and new identities."""
+        session = ReplSession()
+        assert session.eval_entry("enum E\n  | A(old: int)").ok
+        assert session.eval_entry("type OldE = E").ok
+        assert session.eval_entry("type OldA = E::A").ok
+        assert session.eval_entry("let old: OldE = E::A(old = 1)").ok
+        assert session.eval_entry("enum E\n  | A(fresh: text)").ok
+        assert session.eval_entry('let new: E = E::A(fresh = "new")').ok
+
+        old_to_new_cast = session.eval_entry("old as E::A")
+        new_to_old_cast = session.eval_entry("new as OldA")
+        old_to_new_assignment = session.eval_entry("let current: E = old")
+        new_to_old_assignment = session.eval_entry("let previous: OldE = new")
+        old_case_against_new_member = session.eval_entry("case old of\n  | E::A(fresh) => fresh")
+        new_case_against_old_member = session.eval_entry("case new of\n  | OldA(old) => old")
+
+        assert not old_to_new_cast.ok
+        assert not new_to_old_cast.ok
+        assert not old_to_new_assignment.ok
+        assert not new_to_old_assignment.ok
+        assert not old_case_against_new_member.ok
+        assert not new_case_against_old_member.ok
 
     def test_record_redefinition_clears_generic_metadata(self) -> None:
         s = ReplSession()
@@ -2162,6 +2247,18 @@ enum Agent
         assert nested.ok, nested.diagnostics
         assert isinstance(nested.value, RecordValue)
         assert nested.value.display_name == "Color::Meta"
+
+    def test_redeclaring_an_enum_retires_types_nested_under_an_old_member(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("enum Color | Old").ok
+        assert session.eval_entry("record Color::Old::Meta(value: int)").ok
+
+        assert session.eval_entry("enum Color | New").ok
+
+        retired = session.eval_entry("Color::Old::Meta(value = 1)")
+        fresh = session.eval_entry("Color::New")
+        assert not retired.ok
+        assert fresh.ok, fresh.diagnostics
 
     def test_redeclaring_a_used_enum_drops_its_stale_bare_variant(self) -> None:
         """A local use recorded before the enum is redeclared must not
@@ -2298,7 +2395,7 @@ class TestRecursiveTypesAcrossEntries:
         assert declare.ok
 
         build = s.eval_entry(
-            "let t = Node(value = 1, left = Leaf(), right = Node(value = 2, left = Leaf(), "
+            "let t: Tree = Node(value = 1, left = Leaf(), right = Node(value = 2, left = Leaf(), "
             "right = Leaf()))"
         )
         assert build.ok
@@ -2411,7 +2508,7 @@ class TestRecursiveTypesAcrossEntries:
     def test_enum_variant_on_an_old_typed_value_survives_redeclaration(self) -> None:
         s = ReplSession()
         assert s.eval_entry("enum Color\n  | Red(shade: int)\n  | Green").ok
-        assert s.eval_entry("let old = Color::Red(shade = 1)").ok
+        assert s.eval_entry("let old: Color = Color::Red(shade = 1)").ok
         assert s.eval_entry("enum Color\n  | Blue").ok
 
         old_match = s.eval_entry("case old of\n  | Red(shade) => shade\n  | Green() => 0")
@@ -2423,6 +2520,30 @@ class TestRecursiveTypesAcrossEntries:
         assert fresh.ok, fresh.diagnostics
         assert not cross_match.ok
 
+    def test_superseded_enum_members_do_not_suggest_the_reused_enum_annotation(self) -> None:
+        """An old enum's members cannot be joined through its reused name."""
+        s = ReplSession()
+        assert s.eval_entry("enum Choice\n  | Yes\n  | No").ok
+
+        current = s.eval_entry("[Choice::Yes, Choice::No]", check_only=True)
+
+        assert not current.ok
+        assert any(
+            "annotate the literal with its enum type" in diagnostic.message.lower()
+            for diagnostic in current.diagnostics
+        )
+
+        assert s.eval_entry("let yes = Choice::Yes\nlet no = Choice::No").ok
+        assert s.eval_entry("enum Choice\n  | Maybe").ok
+
+        mismatch = s.eval_entry("[yes, no]", check_only=True)
+
+        assert not mismatch.ok
+        assert all(
+            "annotate the literal with its enum type" not in diagnostic.message.lower()
+            for diagnostic in mismatch.diagnostics
+        )
+
     def test_type_qualified_variant_pattern_names_the_newest_enum_declaration(self) -> None:
         """A qualifier is a type name, so it names the newest declaration.
 
@@ -2433,12 +2554,12 @@ class TestRecursiveTypesAcrossEntries:
         """
         s = ReplSession()
         assert s.eval_entry("enum E\n  | A(x: int)").ok
-        assert s.eval_entry("let old = E::A(x = 1)").ok
+        assert s.eval_entry("let old: E = E::A(x = 1)").ok
         assert s.eval_entry("enum E\n  | A(x: int)").ok
 
         bare = s.eval_entry("case old of\n  | A(x) => x")
         qualified = s.eval_entry("case old of\n  | E::A(x) => x")
-        fresh = s.eval_entry("case E::A(x = 2) of\n  | E::A(x) => x")
+        fresh = s.eval_entry("let fresh: E = E::A(x = 2)\ncase fresh of\n  | E::A(x) => x")
 
         assert bare.ok, bare.diagnostics
         assert bare.value == IntValue(1)
@@ -2506,6 +2627,35 @@ class TestEchoData:
         assert r.name is None
         assert r.value is not None and _int(r.value) == 12
         assert isinstance(r.value_type, IntType)
+
+    @pytest.mark.parametrize(
+        ("source", "rendered"),
+        (
+            ('Agent::AgentCommand("runner")', 'Agent::AgentCommand(\n  command = "runner"\n)'),
+            (
+                'Agent::AgentClaude("sonnet", "medium")',
+                'Agent::AgentClaude(\n  model = "sonnet",\n  thinking = "medium"\n)',
+            ),
+            (
+                'Agent::AgentCodex("o3", "high")',
+                'Agent::AgentCodex(\n  model = "o3",\n  thinking = "high"\n)',
+            ),
+            (
+                'Agent::AgentPi("openai", "gpt", "low")',
+                'Agent::AgentPi(\n  provider = "openai",\n  model = "gpt",\n  thinking = "low"\n)',
+            ),
+        ),
+    )
+    def test_qualified_builtin_agent_constructor_echoes_its_surface_form(
+        self, source: str, rendered: str
+    ) -> None:
+        """REPL echoes every qualified built-in Agent constructor unambiguously."""
+        from agm.agl.repl.render import render_entry_result
+
+        result = ReplSession().eval_entry(source)
+
+        assert result.ok, result.diagnostics
+        assert render_entry_result(result, echo=True) == rendered
 
     @pytest.mark.parametrize("binder", ("let", "var"))
     def test_trailing_binder_echoes_declared_value(self, binder: str) -> None:
@@ -2679,15 +2829,13 @@ class TestTypeOf:
         s.eval_entry("enum Result\n  | Ok(value: int)\n  | Err(message: text)\n  | Unknown")
         s.eval_entry("let r = Ok(value = 1)")
 
-        assert (
-            s.type_of("r") == "enum Result\n  | Ok(value: int)\n  | Err(message: text)\n  | Unknown"
-        )
+        assert s.type_of("r") == "record Result::Ok\n  value: int"
 
     def test_type_of_resolves_prior_entry_constructor(self) -> None:
         s = ReplSession()
         assert s.eval_entry("enum Result\n  | Ok(value: int)\n  | Err(message: text)").ok
 
-        expected = "enum Result\n  | Ok(value: int)\n  | Err(message: text)"
+        expected = "record Result::Ok\n  value: int"
         assert s.type_of("Ok(value = 1)") == expected
         assert s.type_of("Result::Ok(value = 1)") == expected
 
@@ -5971,13 +6119,43 @@ class TestUnpromotedNominalDeclarationEffects:
         assert not failed.ok
 
         construct = s.eval_entry("Color::Red")
-        match = s.eval_entry("case Color::Green of\n  | Red => 0\n  | Green => 1")
+        match = s.eval_entry(
+            "let green: Color = Color::Green\ncase green of\n  | Red => 0\n  | Green => 1"
+        )
         stale_variant = s.eval_entry("Color::Blue")
 
         assert construct.ok, construct.diagnostics
         assert match.ok, match.diagnostics
         assert match.value == IntValue(1)
         assert not stale_variant.ok
+
+    def test_failed_enum_with_inline_members_leaves_no_scope_or_member_behind(self) -> None:
+        s = ReplSession()
+
+        failed = s.eval_entry("let z: decimal = 1 / 0\nenum Tree\n  | Node(value: int)")
+        assert not failed.ok
+
+        member = s.eval_entry("Tree::Node(value = 1)")
+        later = s.eval_entry("42")
+
+        assert not member.ok
+        assert later.ok, later.diagnostics
+        assert later.value == IntValue(42)
+
+    def test_failed_enum_with_inline_members_preserves_same_named_prior_state(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("enum Tree\n  | Leaf(value: int)").ok
+
+        failed = s.eval_entry("let z: decimal = 1 / 0\nenum Tree\n  | Node(value: int)")
+        assert not failed.ok
+
+        retained_type = s.eval_entry("def leaf_value(value: Tree::Leaf) -> int = value.value")
+        retained = s.eval_entry("Tree::Leaf(value = 1)")
+        unpromoted = s.eval_entry("Tree::Node(value = 1)")
+
+        assert retained_type.ok, retained_type.diagnostics
+        assert retained.ok, retained.diagnostics
+        assert not unpromoted.ok
 
     def test_runtime_failure_leaves_the_previous_exception_declaration_in_effect(self) -> None:
         s = ReplSession()
@@ -7057,7 +7235,7 @@ class TestSessionOpen:
         assert s._loaded_lib_modules == {}
 
     def test_open_applies_a_well_formed_override_before_the_first_entry(self) -> None:
-        from agm.agl.semantics.values import EnumValue, TextValue
+        from agm.agl.semantics.values import RecordValue, TextValue
         from agm.agl.setting_overrides import SettingOverride
 
         s = ReplSession(
@@ -7071,8 +7249,8 @@ class TestSessionOpen:
 
         result = s.eval_entry("import std/config\nstd/config::default-agent")
         assert result.ok
-        assert isinstance(result.value, EnumValue)
-        assert result.value.variant == "AgentCommand"
+        assert isinstance(result.value, RecordValue)
+        assert result.value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
         assert result.value.fields["command"] == TextValue("preloaded")
 
     def test_open_rejects_an_unparseable_override_naming_its_origin(self) -> None:
@@ -7122,7 +7300,7 @@ class TestSessionOpen:
         assert any("--agent" in format_diagnostic(d) for d in diagnostics)
 
     def test_reset_leaves_the_override_in_force(self) -> None:
-        from agm.agl.semantics.values import EnumValue, TextValue
+        from agm.agl.semantics.values import RecordValue, TextValue
         from agm.agl.setting_overrides import SettingOverride
 
         s = ReplSession(
@@ -7139,8 +7317,8 @@ class TestSessionOpen:
 
         result = s.eval_entry("import std/config\nstd/config::default-agent")
         assert result.ok
-        assert isinstance(result.value, EnumValue)
-        assert result.value.variant == "AgentCommand"
+        assert isinstance(result.value, RecordValue)
+        assert result.value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
         assert result.value.fields["command"] == TextValue("preloaded")
 
     def test_stdlib_is_loaded_exactly_once_across_open_and_two_entries(

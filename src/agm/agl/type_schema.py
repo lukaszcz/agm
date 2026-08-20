@@ -1,10 +1,10 @@
-"""Compile-time JSON Schema and decode-schema derivation.
+"""Compile-time JSON Schema, decode-schema, and encode-plan derivation.
 
 :func:`derive_schema` produces a JSON Schema ``dict[str, object]`` from a
-semantic :class:`~agm.agl.semantics.types.Type`.  Every entry point in this
+semantic :class:`~agm.agl.semantics.types.Type`. Every entry point in this
 module takes an explicit :class:`~agm.agl.semantics.type_table.TypeTable` and
-resolves record/enum field and variant shapes through it
-(``table.record_fields``/``table.enum_variants``) rather than through the
+resolves record fields and enum member sets through it
+(``table.record_fields``/``table.enum_members``) rather than through the
 ``RecordType``/``EnumType`` handle's own embedded maps — the handle carries
 only its declaration identity.  The derived schema is used:
 
@@ -70,16 +70,37 @@ from typing import assert_never
 
 from agm.agl.ir.contracts import (
     ArrayDecode,
+    ArrayEncode,
     DecodePlan,
     DecodeSchema,
     DictDecode,
+    DictEncode,
+    DynamicApplyEncode,
+    DynamicArrayEncode,
+    DynamicDictEncode,
+    DynamicEncodeDefinition,
+    DynamicEncodePlan,
+    DynamicEncodeSchema,
+    DynamicEnumEncode,
+    DynamicExceptionEncode,
+    DynamicRecordEncode,
+    DynamicTypeParameterEncode,
+    DynamicVariantEncode,
+    EncodePlan,
+    EncodeSchema,
     EnumDecode,
+    EnumEncode,
+    ExceptionEncode,
     ParamDecoder,
     RecordDecode,
+    RecordEncode,
     RefDecode,
+    RefEncode,
     ScalarDecode,
+    ScalarEncode,
     ScalarKind,
     VariantDecode,
+    VariantEncode,
 )
 from agm.agl.ir.ids import NominalId
 from agm.agl.semantics.type_table import TypeTable
@@ -268,7 +289,8 @@ def _enum_schema(typ: EnumType, type_table: TypeTable, plan: _SchemaPlan) -> dic
     follow alongside it.
     """
     variant_schemas: list[object] = []
-    for variant_name, variant_fields in type_table.enum_variants(typ).items():
+    for variant_name, member in type_table.enum_member_names(typ).items():
+        variant_fields = type_table.record_fields(member)
         required: list[str] = ["$case"]
         properties: dict[str, object] = {
             "$case": {"const": variant_name},
@@ -391,8 +413,8 @@ def _direct_neighbours(handle: Instantiation, type_table: TypeTable) -> frozense
     elif isinstance(handle, EnumType):
         field_types = [
             ftype
-            for vfields in type_table.enum_variants(handle).values()
-            for ftype in vfields.values()
+            for member in type_table.enum_members(handle)
+            for ftype in type_table.record_fields(member).values()
         ]
     else:
         field_types = list(type_table.exception_fields(handle).values())
@@ -558,19 +580,22 @@ def _emit_decode_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -> 
             ),
         )
     if isinstance(typ, EnumType):
-        variants = type_table.enum_variants(typ)
+        members = type_table.enum_member_names(typ)
         return EnumDecode(
             nominal=NominalId(typ.decl_id),
             display_name="::".join((*typ.scope_path, typ.name)),
             variants=tuple(
                 VariantDecode(
                     name=vname,
+                    nominal=NominalId(member.decl_id),
+                    display_name="::".join((*member.scope_path, member.name)),
                     fields=tuple(
                         (fname, _emit_decode(ftype, type_table, plan))
                         for fname, ftype in vfields.items()
                     ),
                 )
-                for vname, vfields in variants.items()
+                for vname, member in members.items()
+                for vfields in (type_table.record_fields(member),)
             ),
         )
     # Non-data targets (unit/function/exception/bottom/typevar) are not
@@ -578,6 +603,160 @@ def _emit_decode_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -> 
     raise AssertionError(  # pragma: no cover
         f"build_decode_schema: undecodable type {typ!r}"
     )
+
+
+def build_encode_plan(typ: Type, type_table: TypeTable) -> EncodePlan:
+    """Compile a checker ``Type`` into a typeless static JSON encode plan.
+
+    The plan follows the same concrete-instantiation recursion graph as decode
+    planning, but is independent of JSON Schema emission. It deliberately
+    accepts exceptions because ``as json`` may serialize their fields even
+    though exceptions are not JSON decode targets.
+    """
+    _require_finite_schema(typ, type_table, "build a JSON encode plan")
+    plan = _plan_schema(typ, type_table)
+    return EncodePlan(
+        root=_emit_encode(typ, type_table, plan),
+        defs=tuple(
+            (plan.keys[handle], _emit_encode_body(handle, type_table, plan))
+            for handle in plan.order
+        ),
+    )
+
+
+def build_dynamic_encode_plan(typ: Type, type_table: TypeTable) -> DynamicEncodePlan:
+    """Compile a finite generic-template plan for a growing JSON source.
+
+    Concrete instantiations such as ``Perfect[Pair[T, T]]`` grow without a
+    finite closure, but their declaration templates are finite. ``Apply``
+    nodes retain every static slot choice and bind the template's parameters at
+    the point of use, so the runtime never guesses enum membership from a
+    record's nominal identity.
+    """
+    definitions: dict[NominalId, DynamicEncodeDefinition] = {}
+
+    def emit(current: Type, parameters: dict[str, int]) -> DynamicEncodeSchema:
+        if isinstance(current, (TextType, IntType, DecimalType, BoolType, JsonType)):
+            return ScalarEncode()
+        if isinstance(current, ArrayType):
+            return DynamicArrayEncode(emit(current.elem, parameters))
+        if isinstance(current, DictType):
+            return DynamicDictEncode(emit(current.value, parameters))
+        if isinstance(current, TypeVarType):
+            index = parameters.get(current.name)
+            if index is None:
+                raise AssertionError(f"unbound encode type parameter {current.name!r}")
+            return DynamicTypeParameterEncode(index)
+        if isinstance(current, (RecordType, EnumType, ExceptionType)):
+            nominal = NominalId(current.decl_id)
+            ensure_definition(current)
+            args = current.type_args if isinstance(current, (RecordType, EnumType)) else ()
+            return DynamicApplyEncode(nominal, tuple(emit(arg, parameters) for arg in args))
+        raise AssertionError(f"build a dynamic JSON encode plan: unencodable type {current!r}")
+
+    def ensure_definition(handle: RecordType | EnumType | ExceptionType) -> None:
+        nominal = NominalId(handle.decl_id)
+        if nominal in definitions:
+            return
+        typedef = type_table.get_by_id(handle.decl_id)
+        if typedef is None:
+            raise AssertionError(f"dynamic encode plan references unknown nominal {nominal!r}")
+        if typedef.kind == "exception":
+            template: RecordType | EnumType | ExceptionType = typedef.handle()
+        else:
+            template = typedef.handle(tuple(TypeVarType(name) for name in typedef.type_params))
+        parameters = {name: index for index, name in enumerate(typedef.type_params)}
+        # Register first so a recursive template can refer to itself while its
+        # body is being compiled; replace the temporary once complete.
+        definitions[nominal] = DynamicEncodeDefinition(nominal, len(parameters), ScalarEncode())
+        if isinstance(template, RecordType):
+            body: DynamicEncodeSchema = DynamicRecordEncode(
+                nominal,
+                tuple(
+                    (name, emit(field_type, parameters))
+                    for name, field_type in type_table.record_fields(template).items()
+                ),
+            )
+        elif isinstance(template, ExceptionType):
+            body = DynamicExceptionEncode(
+                nominal,
+                tuple(
+                    (name, emit(field_type, parameters))
+                    for name, field_type in type_table.exception_fields(template).items()
+                ),
+            )
+        else:
+            body = DynamicEnumEncode(
+                nominal,
+                tuple(
+                    DynamicVariantEncode(
+                        name=member_name,
+                        nominal=NominalId(member.decl_id),
+                        fields=tuple(
+                            (field_name, emit(field_type, parameters))
+                            for field_name, field_type in type_table.record_fields(member).items()
+                        ),
+                    )
+                    for member_name, member in type_table.enum_member_names(template).items()
+                ),
+            )
+        definitions[nominal] = DynamicEncodeDefinition(nominal, len(parameters), body)
+
+    root = emit(typ, {})
+    return DynamicEncodePlan(root=root, definitions=tuple(definitions.values()))
+
+
+def _emit_encode(typ: Type, type_table: TypeTable, plan: _SchemaPlan) -> EncodeSchema:
+    """Emit *typ*'s encoder, referencing recursive bodies through ``defs``."""
+    schema_type = type_table.canonical_schema_type(typ)
+    if (
+        isinstance(schema_type, (RecordType, EnumType, ExceptionType))
+        and schema_type in plan.recursive
+    ):
+        return RefEncode(plan.keys[schema_type])
+    return _emit_encode_body(schema_type, type_table, plan)
+
+
+def _emit_encode_body(typ: Type, type_table: TypeTable, plan: _SchemaPlan) -> EncodeSchema:
+    """Emit a non-reference encoder body for one static type."""
+    if isinstance(typ, (TextType, IntType, DecimalType, BoolType, JsonType)):
+        return ScalarEncode()
+    if isinstance(typ, ArrayType):
+        return ArrayEncode(_emit_encode(typ.elem, type_table, plan))
+    if isinstance(typ, DictType):
+        return DictEncode(_emit_encode(typ.value, type_table, plan))
+    if isinstance(typ, RecordType):
+        return RecordEncode(
+            nominal=NominalId(typ.decl_id),
+            fields=tuple(
+                (name, _emit_encode(field_type, type_table, plan))
+                for name, field_type in type_table.record_fields(typ).items()
+            ),
+        )
+    if isinstance(typ, ExceptionType):
+        return ExceptionEncode(
+            nominal=NominalId(typ.decl_id),
+            fields=tuple(
+                (name, _emit_encode(field_type, type_table, plan))
+                for name, field_type in type_table.exception_fields(typ).items()
+            ),
+        )
+    if isinstance(typ, EnumType):
+        return EnumEncode(
+            nominal=NominalId(typ.decl_id),
+            variants=tuple(
+                VariantEncode(
+                    name=name,
+                    nominal=NominalId(member.decl_id),
+                    fields=tuple(
+                        (field_name, _emit_encode(field_type, type_table, plan))
+                        for field_name, field_type in type_table.record_fields(member).items()
+                    ),
+                )
+                for name, member in type_table.enum_member_names(typ).items()
+            ),
+        )
+    raise AssertionError(f"build_encode_plan: unencodable type {typ!r}")
 
 
 def build_param_decoder(typ: Type, type_table: TypeTable) -> ParamDecoder:

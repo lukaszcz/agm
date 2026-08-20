@@ -5,8 +5,8 @@ enum Review
   | Fail(issues: array[text])
 
 program def main() -> unit =
-  let impl = AgentCommand("impl")
-  let reviewer = AgentCommand("reviewer")
+  let impl: Agent = AgentCommand("impl")
+  let reviewer: Agent = AgentCommand("reviewer")
   var artifact: text = ask("Implement %{spec}", agent = impl)
   var review: Review = Pass
   do[5]

@@ -13,13 +13,13 @@ param start: int
 
 program def main() -> unit =
   let r = R(x = 0, y = 1)
-  let e = A(x = start)
+  let e: E = A(x = start)
 
-  let ee = case e of
+  let ee: E = case e of
     | A(x) => B(x, r = R(x = x + 1, y = x + 2))
     | B(x, r) => B(x, r = r)
 
-  let d = {"e1": e, "e2": ee}
+  let d: dict[text, E] = {"e1": e, "e2": ee}
 
   let same = (r.x == 0)
   print same

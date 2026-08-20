@@ -37,6 +37,7 @@ from agm.agl.semantics.type_table import (
     create_seeded_type_table,
     is_json_convertible,
     json_cast_hint,
+    source_enum_member_decl_id,
 )
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
@@ -55,6 +56,7 @@ from agm.agl.semantics.types import (
     JsonType,
     RecordType,
     TextType,
+    Type,
     TypeVarType,
     UnitType,
 )
@@ -65,6 +67,7 @@ from agm.agl.syntax.nodes import (
     ParamKind,
     RecordDef,
     VarDecl,
+    VariantDef,
     simple_let_pattern_name,
 )
 from agm.agl.typecheck import AglTypeError, CheckedModule
@@ -87,6 +90,40 @@ _LIB_ID = ModuleId.from_path("lib")
 def _check(src: str) -> CheckedModule:
     """Resolve + check *src* as the entry of a real module graph."""
     return resolve_and_check_inline_entry(src, _CAPS)
+
+
+def test_builtin_member_identity_falls_back_for_non_enum_prelude_types() -> None:
+    assert (
+        source_enum_member_decl_id(
+            STD_CORE_ID,
+            (),
+            "ExecResult",
+            "not-a-member",
+            42,
+            is_builtin=True,
+        )
+        == 42
+    )
+
+
+def test_enum_owner_for_member_recovers_only_captured_type_arguments() -> None:
+    table = TypeTable()
+    outcome = TypeDef(
+        kind="enum",
+        name="Outcome",
+        module_id=ENTRY_ID,
+        type_params=("T", "E"),
+        members=(
+            RecordType("ok", (TypeVarType("T"),), scope_path=("Outcome",), decl_id=1),
+            RecordType("fixed", (IntType(),), scope_path=("Outcome",), decl_id=2),
+        ),
+        decl_node_id=2,
+    )
+    table.register(outcome)
+    members = table.enum_members(outcome.handle((IntType(), TextType())))
+
+    assert table.enum_owner_for_member(members[0]) is None
+    assert table.enum_owner_for_member(members[1]) is None
 
 
 def test_scoped_generic_enum_does_not_claim_the_root_type_or_constructor_namespace() -> None:
@@ -196,6 +233,14 @@ def test_scoped_generic_type_applications_resolve_in_module_and_program_contexts
     assert _check_program(tmp_path, {"entry": source}).modules[ENTRY_ID].node_types
 
 
+def _enum_fields(table: TypeTable, handle: EnumType) -> dict[str, dict[str, Type]]:
+    """Project a member set into the legacy name-to-fields test view."""
+    return {
+        name: dict(table.record_fields(member))
+        for name, member in table.enum_member_names(handle).items()
+    }
+
+
 def _binding_value_type(checked: CheckedModule, name: str):
     """Inferred type of the RHS of the top-level ``let``/``var <name> = ...``."""
     for item in checked.resolved.program.body.items:
@@ -204,6 +249,35 @@ def _binding_value_type(checked: CheckedModule, name: str):
         if isinstance(item, LetDecl) and simple_let_pattern_name(item.pattern) == name:
             return checked.node_types[item.value.node_id]
     raise AssertionError(f"no top-level binding named {name!r}")
+
+
+def test_inline_enum_members_are_scoped_records_with_captured_parameters() -> None:
+    checked = _check("enum E[T, U]\n  | Leaf\n  | One(value: U)\n  | Both(left: T, right: U)\n()")
+
+    enum_type = checked.type_env.get_generic_type("E")
+    assert enum_type is not None
+    members = checked.type_env.type_table.enum_members(
+        EnumType("E", type_args=(IntType(), TextType()), decl_id=enum_type.template.decl_id)
+    )
+    assert [member.name for member in members] == ["Leaf", "One", "Both"]
+    enum_def = next(
+        item for item in checked.resolved.program.body.items if isinstance(item, EnumDef)
+    )
+    source_member_ids = [
+        member.node_id for member in enum_def.members if isinstance(member, VariantDef)
+    ]
+    assert [member.decl_id for member in members] == source_member_ids
+    assert [member.type_args for member in members] == [(), (TextType(),), (IntType(), TextType())]
+    assert checked.type_env.type_table.enum_member_names(
+        EnumType("E", type_args=(IntType(), TextType()), decl_id=enum_type.template.decl_id)
+    ) == {"Leaf": members[0], "One": members[1], "Both": members[2]}
+    member_defs = [checked.type_env.type_table.get_by_id(member.decl_id) for member in members]
+    assert all(member_def is not None for member_def in member_defs)
+    assert [member_def.type_params for member_def in member_defs if member_def is not None] == [
+        (),
+        ("U",),
+        ("T", "U"),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -270,11 +344,14 @@ class TestRegisterAndGet:
             kind="enum",
             name="Color",
             module_id=_LIB_ID,
-            variants=(("Red", ()), ("Blue", ())),
+            members=(("Red", ()), ("Blue", ())),
             decl_node_id=700004,
         )
         table.register(typedef)
-        assert table.get(_LIB_ID, "Color") == typedef
+        found = table.get(_LIB_ID, "Color")
+        assert found is not None
+        assert found.kind == typedef.kind
+        assert tuple(member.name for member in found.members) == ("Red", "Blue")
 
     def test_get_missing_key_returns_none(self) -> None:
         table = TypeTable()
@@ -303,7 +380,7 @@ class TestRegisterAndGet:
 
 
 # ---------------------------------------------------------------------------
-# record_fields / enum_variants on non-generic handles
+# record_fields / enum_members on non-generic handles
 # ---------------------------------------------------------------------------
 
 
@@ -322,19 +399,19 @@ class TestNonGenericAccessors:
         handle = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700000)
         assert dict(table.record_fields(handle)) == {"x": IntType(), "y": IntType()}
 
-    def test_enum_variants_non_generic(self) -> None:
+    def test_enum_members_non_generic(self) -> None:
         table = TypeTable()
         table.register(
             TypeDef(
                 kind="enum",
                 name="Color",
                 module_id=ENTRY_ID,
-                variants=(("Red", ()), ("Custom", (("hex", TextType()),))),
+                members=(("Red", ()), ("Custom", (("hex", TextType()),))),
                 decl_node_id=700001,
             )
         )
         handle = EnumType(name="Color", module_id=ENTRY_ID, decl_id=700001)
-        result = table.enum_variants(handle)
+        result = _enum_fields(table, handle)
         assert {v: dict(f) for v, f in result.items()} == {
             "Red": {},
             "Custom": {"hex": TextType()},
@@ -346,11 +423,11 @@ class TestNonGenericAccessors:
         with pytest.raises(KeyError):
             table.record_fields(handle)
 
-    def test_enum_variants_missing_def_raises_keyerror(self) -> None:
+    def test_enum_members_missing_def_raises_keyerror(self) -> None:
         table = TypeTable()
         handle = EnumType(name="Ghost", module_id=ENTRY_ID)
         with pytest.raises(KeyError):
-            table.enum_variants(handle)
+            _enum_fields(table, handle)
 
     def test_record_fields_raises_when_key_registered_as_enum(self) -> None:
         table = TypeTable()
@@ -359,7 +436,7 @@ class TestNonGenericAccessors:
                 kind="enum",
                 name="Color",
                 module_id=ENTRY_ID,
-                variants=(("Red", ()),),
+                members=(("Red", ()),),
                 decl_node_id=700001,
             )
         )
@@ -367,7 +444,7 @@ class TestNonGenericAccessors:
         with pytest.raises(AssertionError):
             table.record_fields(handle)
 
-    def test_enum_variants_raises_when_key_registered_as_record(self) -> None:
+    def test_enum_members_raises_when_key_registered_as_record(self) -> None:
         table = TypeTable()
         table.register(
             TypeDef(
@@ -380,7 +457,7 @@ class TestNonGenericAccessors:
         )
         handle = EnumType(name="Point", module_id=ENTRY_ID, decl_id=700000)
         with pytest.raises(AssertionError):
-            table.enum_variants(handle)
+            _enum_fields(table, handle)
 
 
 # ---------------------------------------------------------------------------
@@ -676,7 +753,7 @@ class TestExceptionAccessors:
                 kind="enum",
                 name="Color",
                 module_id=ENTRY_ID,
-                variants=(("Red", ()),),
+                members=(("Red", ()),),
                 decl_node_id=700001,
             )
         )
@@ -1210,7 +1287,7 @@ class TestGenericSubstitution:
             "seconds": DictType(TextType()),
         }
 
-    def test_enum_variants_substitutes_type_args(self) -> None:
+    def test_enum_members_substitute_type_args(self) -> None:
         table = TypeTable()
         table.register(
             TypeDef(
@@ -1218,12 +1295,12 @@ class TestGenericSubstitution:
                 name="Maybe",
                 module_id=ENTRY_ID,
                 type_params=("T",),
-                variants=(("None", ()), ("Just", (("value", TypeVarType("T")),))),
+                members=(("None", ()), ("Just", (("value", TypeVarType("T")),))),
                 decl_node_id=700019,
             )
         )
         handle = EnumType(name="Maybe", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700019)
-        result = table.enum_variants(handle)
+        result = _enum_fields(table, handle)
         assert {v: dict(f) for v, f in result.items()} == {
             "None": {},
             "Just": {"value": IntType()},
@@ -1252,20 +1329,20 @@ class TestMemoization:
         second = table.record_fields(handle)
         assert first is second
 
-    def test_enum_variants_returns_same_object_for_same_handle(self) -> None:
+    def test_enum_members_return_same_object_for_same_handle(self) -> None:
         table = TypeTable()
         table.register(
             TypeDef(
                 kind="enum",
                 name="Color",
                 module_id=ENTRY_ID,
-                variants=(("Red", ()),),
+                members=(("Red", ()),),
                 decl_node_id=700001,
             )
         )
         handle = EnumType(name="Color", module_id=ENTRY_ID, decl_id=700001)
-        first = table.enum_variants(handle)
-        second = table.enum_variants(handle)
+        first = table.enum_members(handle)
+        second = table.enum_members(handle)
         assert first is second
 
     def test_record_fields_caches_each_generic_instantiation_separately(self) -> None:
@@ -1291,7 +1368,7 @@ class TestMemoization:
         # Re-fetching the first handle still returns its own cached result.
         assert dict(table.record_fields(int_handle)) == {"value": IntType()}
 
-    def test_enum_variants_caches_each_generic_instantiation_separately(self) -> None:
+    def test_enum_members_cache_each_generic_instantiation_separately(self) -> None:
         table = TypeTable()
         table.register(
             TypeDef(
@@ -1299,7 +1376,7 @@ class TestMemoization:
                 name="Maybe",
                 module_id=ENTRY_ID,
                 type_params=("T",),
-                variants=(("Just", (("value", TypeVarType("T")),)),),
+                members=(("Just", (("value", TypeVarType("T")),)),),
                 decl_node_id=700019,
             )
         )
@@ -1309,10 +1386,10 @@ class TestMemoization:
         text_handle = EnumType(
             name="Maybe", type_args=(TextType(),), module_id=ENTRY_ID, decl_id=700019
         )
-        assert {v: dict(f) for v, f in table.enum_variants(int_handle).items()} == {
+        assert {v: dict(f) for v, f in _enum_fields(table, int_handle).items()} == {
             "Just": {"value": IntType()}
         }
-        assert {v: dict(f) for v, f in table.enum_variants(text_handle).items()} == {
+        assert {v: dict(f) for v, f in _enum_fields(table, text_handle).items()} == {
             "Just": {"value": TextType()}
         }
 
@@ -1701,7 +1778,7 @@ class TestEntriesAndMerge:
                 kind="enum",
                 name="Color",
                 module_id=ENTRY_ID,
-                variants=(("Red", ()), ("Blue", ())),
+                members=(("Red", ()), ("Blue", ())),
                 decl_node_id=700023,
             )
         )
@@ -1712,16 +1789,16 @@ class TestEntriesAndMerge:
                 kind="enum",
                 name="Color",
                 module_id=ENTRY_ID,
-                variants=(("Red", ()),),
+                members=(("Red", ()),),
                 decl_node_id=700023,
             )
         )
         handle = EnumType(name="Color", module_id=ENTRY_ID, decl_id=700023)
-        assert set(target.enum_variants(handle)) == {"Red"}
+        assert set(target.enum_member_names(handle)) == {"Red"}
 
         target.merge_from(source)
 
-        assert set(target.enum_variants(handle)) == {"Red", "Blue"}
+        assert set(target.enum_member_names(handle)) == {"Red", "Blue"}
 
 
 # ---------------------------------------------------------------------------
@@ -1741,9 +1818,9 @@ class TestBuiltinSeeding:
                 assert dict(table.record_fields(handle)) == dict(expected.fields)
             else:
                 handle = EnumType(name=name, module_id=STD_CORE_ID, decl_id=typedef.decl_node_id)
-                result = table.enum_variants(handle)
+                result = _enum_fields(table, handle)
                 assert {v: dict(f) for v, f in result.items()} == {
-                    vname: dict(vfields) for vname, vfields in expected.variants
+                    member.name: dict(table.record_fields(member)) for member in expected.members
                 }
 
     def test_generic_option_seeded_under_std_core(self) -> None:
@@ -1757,7 +1834,7 @@ class TestBuiltinSeeding:
             module_id=STD_CORE_ID,
             decl_id=typedef.decl_node_id,
         )
-        result = table.enum_variants(handle)
+        result = _enum_fields(table, handle)
         assert {v: dict(f) for v, f in result.items()} == {
             "None": {},
             "Some": {"value": TextType()},
@@ -1801,7 +1878,7 @@ class TestEnvTypeHasMatchingTableDefSingleModule:
         typedef = table.get(color.module_id, "Color")
         assert typedef is not None
         assert typedef.kind == "enum"
-        result = table.enum_variants(color)
+        result = _enum_fields(table, color)
         assert {v: dict(f) for v, f in result.items()} == {
             "Red": {},
             "Green": {},
@@ -1810,13 +1887,15 @@ class TestEnvTypeHasMatchingTableDefSingleModule:
 
     def test_generic_enum(self) -> None:
         checked = _check("enum Maybe[T]\n  | none\n  | just(value: T)\nlet m = just(value = 1)\nm")
-        maybe = _binding_value_type(checked, "m")
-        assert isinstance(maybe, EnumType)
+        member = _binding_value_type(checked, "m")
+        assert isinstance(member, RecordType)
         table = checked.type_env.type_table
-        typedef = table.get(maybe.module_id, "Maybe")
+        typedef = table.get(ENTRY_ID, "Maybe")
         assert typedef is not None
         assert typedef.type_params == ("T",)
-        result = table.enum_variants(maybe)
+        maybe = checked.type_env.instantiate_nominal("Maybe", (IntType(),))
+        assert isinstance(maybe, EnumType)
+        result = _enum_fields(table, maybe)
         assert {v: dict(f) for v, f in result.items()} == {
             "none": {},
             "just": {"value": IntType()},
@@ -1915,7 +1994,7 @@ class TestComparableTypesTableAware:
                 name="Holder",
                 module_id=ENTRY_ID,
                 type_params=("T",),
-                variants=(("None", ()), ("Some", (("value", TypeVarType("T")),))),
+                members=(("None", ()), ("Some", (("value", TypeVarType("T")),))),
                 decl_node_id=700023,
             )
         )
@@ -2071,7 +2150,7 @@ class TestComparableTypesTableAware:
                 kind="enum",
                 name="Tree",
                 module_id=ENTRY_ID,
-                variants=(
+                members=(
                     ("Leaf", ()),
                     (
                         "Node",
@@ -2099,7 +2178,7 @@ class TestComparableTypesTableAware:
                 kind="enum",
                 name="Tree",
                 module_id=ENTRY_ID,
-                variants=(
+                members=(
                     ("Leaf", ()),
                     ("Handler", (("fn", handler_type),)),
                     (
@@ -2308,7 +2387,7 @@ class TestCastClassification:
                 kind="enum",
                 name="E",
                 module_id=ENTRY_ID,
-                variants=(("A", ()), ("B", (("x", IntType()),))),
+                members=(("A", ()), ("B", (("x", IntType()),))),
                 decl_node_id=700031,
             )
         )
@@ -2518,7 +2597,7 @@ class TestJsonRepresentationObstacle:
                 kind="enum",
                 name="Holder",
                 module_id=ENTRY_ID,
-                variants=(
+                members=(
                     ("Empty", ()),
                     ("Full", (("run", FunctionType(params=(), result=IntType())),)),
                 ),
@@ -2695,7 +2774,7 @@ class TestFiniteClosure:
                 name="Swap",
                 module_id=ENTRY_ID,
                 type_params=("A", "B"),
-                variants=(
+                members=(
                     ("Base", (("a", TypeVarType("A")), ("b", TypeVarType("B")))),
                     (
                         "Rec",
@@ -3077,7 +3156,7 @@ class TestFiniteClosure:
                 name="E",
                 module_id=ENTRY_ID,
                 type_params=("T",),
-                variants=(
+                members=(
                     ("Leaf", (("value", TypeVarType("T")),)),
                     (
                         "Node",

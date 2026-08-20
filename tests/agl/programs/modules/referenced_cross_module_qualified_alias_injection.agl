@@ -1,4 +1,4 @@
-import qualified using E
+import qualified::{E}
 
 program def main() -> unit =
   let value: E[int] = Shared(value = 6)

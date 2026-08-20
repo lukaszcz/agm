@@ -1,6 +1,6 @@
 # Imported enum and alias paths to an inline member retain its one canonical
 # constructor when referenced enums are brought into this module.
-import routes using ViaImportedEnum, ViaImportedAlias
+import routes::{ViaImportedEnum, ViaImportedAlias}
 
 program def main() -> unit =
   let from_enum: ViaImportedEnum[int] = Member(value = 6)

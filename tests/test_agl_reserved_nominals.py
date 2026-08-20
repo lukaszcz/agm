@@ -18,6 +18,7 @@ from agm.agl.semantics.type_table import (
     BUILTIN_EXCEPTION_TYPE_DEFS,
     BUILTIN_PRELUDE_TYPE_DEFS,
     OPTION_TYPE_DEF,
+    create_seeded_type_table,
 )
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTION_NAMES,
@@ -96,8 +97,10 @@ class TestSeededTypeDefsCarryReservedIds:
             assert _decl_id(fields[field_name]) == reserved_nominal_id("Option")
 
     def test_output_contract_option_embedded_record_carries_reserved_id(self) -> None:
-        variants = dict(BUILTIN_PRELUDE_TYPE_DEFS["OutputContractOption"].variants)
-        value_field_type = dict(variants["Some"])["value"]
+        table = create_seeded_type_table()
+        option = BUILTIN_PRELUDE_TYPE_DEFS["OutputContractOption"]
+        some = next(member for member in option.members if member.name == "Some")
+        value_field_type = dict(table.record_fields(some))["value"]
         assert _decl_id(value_field_type) == reserved_nominal_id("OutputContract")
 
     def test_agent_call_error_embedded_agent_field_carries_reserved_id(self) -> None:

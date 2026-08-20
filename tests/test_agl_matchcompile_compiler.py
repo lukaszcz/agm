@@ -52,16 +52,15 @@ from agm.agl.matchcompile.model import (
     DecisionFail,
     DecisionLeaf,
     DecisionSwitch,
-    EnumConstructor,
     EnumConstructorSpelling,
     FieldOccurrenceProvenance,
     LetSite,
     LiteralKind,
     MatchCaseContext,
     MatchSiteSource,
+    NominalConstructor,
     Occurrence,
     OccurrenceId,
-    RecordConstructor,
     Signature,
     WildcardCell,
 )
@@ -74,8 +73,8 @@ from agm.agl.matchcompile.normalize import (
 from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID
 from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.type_table import TypeTable
-from agm.agl.semantics.types import EnumType, IntType, Type, TypeTemplate
-from agm.agl.semantics.values import BoolValue, EnumValue, RecordValue, Value
+from agm.agl.semantics.types import EnumType, IntType, RecordType, Type, TypeTemplate
+from agm.agl.semantics.values import BoolValue, RecordValue, Value
 from agm.agl.syntax.nodes import Case, LetDecl
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck import (
@@ -85,7 +84,7 @@ from agm.agl.typecheck import (
     check_program,
 )
 from tests.agl.ir_harness import make_graph_from_files
-from tests.agl.match_reference import reference_action
+from tests.agl.match_reference import enum_variant_members, reference_action
 from tests.agl.module_graph import resolve_and_check_inline_entry
 
 _CAPS = HostCapabilities(
@@ -202,20 +201,23 @@ def _compile_without_normalized_rows(source: str) -> tuple[Case, CompiledMatchSi
     return case, compile_match_site(normalized)
 
 
-def _branch_matches(constructor: object, value: Value) -> bool:
+def _branch_matches(
+    constructor: object,
+    value: Value,
+    enum_variant_members: dict[tuple[NominalId, str], NominalId],
+) -> bool:
     if isinstance(constructor, BoolConstructor):
         return isinstance(value, BoolValue) and value.value is constructor.value
-    if isinstance(constructor, EnumConstructor):
-        return (
-            isinstance(value, EnumValue)
-            and value.nominal.value == constructor.enum_type.decl_id
-            and value.variant == constructor.variant
+    if isinstance(constructor, NominalConstructor):
+        return isinstance(value, RecordValue) and value.nominal == NominalId(
+            constructor.record_type.decl_id
         )
     raise AssertionError("finite generated tests only use boolean and enum constructors")
 
 
 def _decision_action(compiled: CompiledMatchSite, subject: Value) -> int | None:
     occurrences = {occurrence.id: occurrence for occurrence in compiled.occurrences}
+    members_by_variant = enum_variant_members(compiled.occurrences, compiled.normalized.type_table)
 
     def evaluate(decision: Decision, values: dict[object, Value]) -> int | None:
         if isinstance(decision, DecisionFail):
@@ -224,7 +226,7 @@ def _decision_action(compiled: CompiledMatchSite, subject: Value) -> int | None:
             return decision.action_id
         value = values[decision.occurrence.id]
         if isinstance(decision, DecisionDecompose):
-            assert isinstance(value, (EnumValue, RecordValue))
+            assert isinstance(value, RecordValue)
             next_values = dict(values)
             children = sorted(
                 (
@@ -240,11 +242,11 @@ def _decision_action(compiled: CompiledMatchSite, subject: Value) -> int | None:
                 next_values[child.id] = value.fields[field.name]
             return evaluate(decision.child, next_values)
         for branch in decision.keyed_children:
-            if not _branch_matches(branch.constructor, value):
+            if not _branch_matches(branch.constructor, value, members_by_variant):
                 continue
             next_values = dict(values)
-            if isinstance(branch.constructor, EnumConstructor):
-                assert isinstance(value, EnumValue)
+            if isinstance(branch.constructor, NominalConstructor):
+                assert isinstance(value, RecordValue)
 
                 def creation_order(occurrence: Occurrence) -> int:
                     return occurrence.creation_order
@@ -355,7 +357,7 @@ def _diagonal_source(size: int, *, exhaustive: bool) -> str:
         "enum Subject\n"
         "  | covered(value: Vector)\n"
         "  | missing\n"
-        f"let value = missing\ncase value of\n{'\n'.join(rows)}"
+        f"let value: Subject = missing\ncase value of\n{'\n'.join(rows)}"
     )
 
 
@@ -383,15 +385,23 @@ def _nested_pair_value(
     bit_type: EnumType,
     left: str,
     right: str,
-) -> EnumValue:
-    bit_nominal = NominalId(bit_type.decl_id)
-    return EnumValue(
-        NominalId(pair_type.decl_id),
-        pair_type.name,
-        "pair",
-        {
-            "left": EnumValue(bit_nominal, bit_type.name, left, {}),
-            "right": EnumValue(bit_nominal, bit_type.name, right, {}),
+    type_table: TypeTable,
+) -> RecordValue:
+    bit_members = type_table.enum_member_names(bit_type)
+    return RecordValue(
+        nominal=NominalId(type_table.enum_member_names(pair_type)["pair"].decl_id),
+        display_name=f"{pair_type.name}::{'pair'}",
+        fields={
+            "left": RecordValue(
+                nominal=NominalId(bit_members[left].decl_id),
+                display_name=f"{bit_type.name}::{left}",
+                fields={},
+            ),
+            "right": RecordValue(
+                nominal=NominalId(bit_members[right].decl_id),
+                display_name=f"{bit_type.name}::{right}",
+                fields={},
+            ),
         },
     )
 
@@ -409,7 +419,7 @@ def test_singleton_nominals_decompose_without_a_discriminant_and_demand_only_use
     )
 
     root = cast(DecisionDecompose, compiled.root)
-    assert isinstance(root.constructor, RecordConstructor)
+    assert isinstance(root.constructor, NominalConstructor)
     assert isinstance(root.child, DecisionSwitch)
     assert root.free_occurrences == (compiled.normalized.root.id,)
     assert [occurrence.provenance.field_name for occurrence in root.children] == ["payload", "note"]
@@ -551,7 +561,7 @@ def test_true_single_variant_enum_decomposes_before_its_refutable_payload() -> N
     )
 
     root = cast(DecisionDecompose, compiled.root)
-    assert isinstance(root.constructor, EnumConstructor)
+    assert isinstance(root.constructor, NominalConstructor)
     assert isinstance(root.child, DecisionSwitch)
     assert root.demanded_occurrences == (root.children[0].id,)
     validate_compiled_case(compiled)
@@ -588,7 +598,7 @@ def test_nested_missing_witness_is_structured_from_the_first_failure_path() -> N
         "enum Box\n"
         "  | box(flag: bool)\n"
         "  | empty\n"
-        "let value = box(flag = false)\n"
+        "let value: Box = box(flag = false)\n"
         "case value of | box(flag = false) => 1 | empty => 0"
     )
 
@@ -609,7 +619,7 @@ def test_nested_enum_and_boolean_signatures_can_be_exhaustive_without_default() 
         "enum Box\n"
         "  | box(flag: bool)\n"
         "  | empty\n"
-        "let value = empty\n"
+        "let value: Box = empty\n"
         "case value of\n"
         "  | box(flag = false) => 0\n"
         "  | box(flag = true) => 1\n"
@@ -730,17 +740,53 @@ def test_qba_reordering_preserves_source_priority_for_every_pair_value() -> None
         "  | _ => 3\n"
     )
     root = cast(DecisionDecompose, compiled.root)
-    pair = cast(EnumConstructor, root.constructor)
-    nominal = NominalId(pair.enum_type.decl_id)
+    pair = cast(NominalConstructor, root.constructor)
+    enum_type = cast(EnumType, compiled.normalized.root.type)
 
     for left, right in itertools.product((False, True), repeat=2):
-        value = EnumValue(
-            nominal,
-            pair.enum_type.name,
-            pair.variant,
-            {"left": BoolValue(left), "right": BoolValue(right)},
+        value = RecordValue(
+            nominal=NominalId(pair.record_type.decl_id),
+            display_name=f"{enum_type.name}::{pair.terminal_name}",
+            fields={"left": BoolValue(left), "right": BoolValue(right)},
         )
         assert _decision_action(compiled, value) == reference_action(case, checked, value)
+
+
+def test_decision_oracle_distinguishes_same_named_enum_members() -> None:
+    """A same-named variant from another enum must take the fallback branch."""
+    _, _, compiled = _compile(
+        "enum Left\n  | same(payload: bool)\n  | other\n"
+        "enum Right\n  | same(payload: bool)\n  | other\n"
+        "enum Pair\n  | pair(left: Left, right: Right)\n"
+        "let value = pair(left = Left::same(payload = false), "
+        "right = Right::same(payload = false))\n"
+        "case value of\n"
+        "  | pair(left = Left::same(payload = false), right = Right::same(payload = false)) => 1\n"
+        "  | _ => 2\n"
+    )
+    root = cast(DecisionDecompose, compiled.root)
+    pair = cast(NominalConstructor, root.constructor)
+    pair_type = cast(EnumType, compiled.normalized.root.type)
+    right_type = cast(EnumType, pair.fields[1].type)
+    foreign_left = RecordValue(
+        nominal=NominalId(right_type.decl_id),
+        display_name=f"{right_type.name}::{'same'}",
+        fields={"payload": BoolValue(False)},
+    )
+    subject = RecordValue(
+        nominal=NominalId(pair_type.decl_id),
+        display_name=f"{pair_type.name}::{pair.terminal_name}",
+        fields={
+            "left": foreign_left,
+            "right": RecordValue(
+                nominal=NominalId(right_type.decl_id),
+                display_name=f"{right_type.name}::{'same'}",
+                fields={"payload": BoolValue(False)},
+            ),
+        },
+    )
+
+    assert _decision_action(compiled, subject) == compiled.normalized.rows[1].action_id
 
 
 def test_generated_finite_matrices_match_reference_reachability_and_failure() -> None:
@@ -755,20 +801,21 @@ def test_generated_finite_matrices_match_reference_reachability_and_failure() ->
         patterns = [row_patterns[index] for index in indices]
         source = (
             "enum Pair\n  | pair(left: bool, right: bool)\n"
-            "let value = pair(left = false, right = false)\ncase value of\n"
+            "let value: Pair = pair(left = false, right = false)\ncase value of\n"
             + "\n".join(f"  | {pattern} => {action}" for action, pattern in enumerate(patterns))
         )
         checked, case, compiled = _compile(source)
         pair_type = cast(EnumType, compiled.normalized.root.type)
-        nominal = NominalId(pair_type.decl_id)
+        pair_nominal = NominalId(
+            compiled.normalized.type_table.enum_member_names(pair_type)["pair"].decl_id
+        )
         expected_actions: set[int] = set()
         unmatched = False
         for left, right in itertools.product((False, True), repeat=2):
-            value = EnumValue(
-                nominal,
-                pair_type.name,
-                "pair",
-                {"left": BoolValue(left), "right": BoolValue(right)},
+            value = RecordValue(
+                nominal=pair_nominal,
+                display_name=f"{pair_type.name}::{'pair'}",
+                fields={"left": BoolValue(left), "right": BoolValue(right)},
             )
             expected = reference_action(case, checked, value)
             actual = _decision_action(compiled, value)
@@ -814,7 +861,7 @@ def test_generated_nested_multi_column_matrices_match_the_reference() -> None:
         checked, case, compiled = _compile(source)
         pair_type = cast(EnumType, compiled.normalized.root.type)
         pair_constructor = cast(
-            EnumConstructor,
+            NominalConstructor,
             cast(
                 ClosedSignature, signature_for_type(pair_type, checked.type_env.type_table)
             ).constructors[0],
@@ -822,14 +869,15 @@ def test_generated_nested_multi_column_matrices_match_the_reference() -> None:
         bit_type = cast(EnumType, pair_constructor.fields[0].type)
         values: tuple[Value, ...] = (
             *(
-                _nested_pair_value(pair_type, bit_type, left, right)
+                _nested_pair_value(pair_type, bit_type, left, right, checked.type_env.type_table)
                 for left, right in itertools.product(("zero", "one"), repeat=2)
             ),
-            EnumValue(
-                NominalId(pair_type.decl_id),
-                pair_type.name,
-                "missing",
-                {},
+            RecordValue(
+                nominal=NominalId(
+                    checked.type_env.type_table.enum_member_names(pair_type)["missing"].decl_id
+                ),
+                display_name=f"{pair_type.name}::{'missing'}",
+                fields={},
             ),
         )
         expected_actions: set[int] = set()
@@ -906,14 +954,14 @@ def test_wide_enum_match_does_not_rebuild_its_signature_per_matrix_cell(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = 0
-    original = TypeTable.enum_variants
+    original = TypeTable.enum_member_names
 
-    def count_enum_variants(self: TypeTable, handle: EnumType) -> Mapping[str, Mapping[str, Type]]:
+    def count_enum_member_names(self: TypeTable, handle: EnumType) -> Mapping[str, RecordType]:
         nonlocal calls
         calls += 1
         return original(self, handle)
 
-    monkeypatch.setattr(TypeTable, "enum_variants", count_enum_variants)
+    monkeypatch.setattr(TypeTable, "enum_member_names", count_enum_member_names)
 
     size = 20
     _compile(_wide_enum_source(size))
@@ -978,7 +1026,7 @@ def test_enum_witness_uses_wildcards_for_unconstrained_fields() -> None:
         "enum Pair\n"
         "  | pair(left: bool, right: bool)\n"
         "  | empty\n"
-        "let value = empty\n"
+        "let value: Pair = empty\n"
         "case value of | empty => 0"
     )
     issue = cast(NonExhaustiveIssue, compiled.issues[0])
@@ -1497,7 +1545,7 @@ def test_module_route_blocks_only_the_variant_it_shadows(tmp_path: Path) -> None
             "entry": (
                 "import helpers/Owner\n"
                 f"{declarations}"
-                "let value = Owner::free\n"
+                "let value: Owner = Owner::free\n"
                 "case value of | Owner::free => 0\n"
             ),
         },
@@ -1523,7 +1571,7 @@ def test_module_route_blocks_only_the_variant_it_shadows(tmp_path: Path) -> None
             "entry": (
                 "import helpers/Owner\n"
                 f"{declarations}"
-                "let value = ::Owner::block\n"
+                "let value: Owner = ::Owner::block\n"
                 "case value of | ::Owner::block => 0\n"
             ),
         },
@@ -2018,8 +2066,10 @@ def test_strong_compiled_case_validator_rejects_internal_corruption() -> None:
             root_occurrence,
             normalized.type_table,
         )
-    foreign_constructor = replace(pair_constructor, variant="foreign", fields=())
-    with pytest.raises(MatchCompileInvariantError, match="absent"):
+    foreign_constructor = NominalConstructor(
+        replace(pair_constructor.record_type, name="foreign"), ()
+    )
+    with pytest.raises(MatchCompileInvariantError, match="incompatible"):
         compiler_module._canonical_switch_constructor(
             foreign_constructor,
             root_occurrence,
@@ -2068,7 +2118,7 @@ def test_strong_compiled_case_validator_rejects_internal_corruption() -> None:
         "enum Box\n"
         "  | box(value: int)\n"
         "  | empty\n"
-        "let value = box(value = 1)\n"
+        "let value: Box = box(value = 1)\n"
         "case value of | box(value = _ as captured) => captured"
     )
     nested_root = cast(DecisionSwitch, nested_binder_compiled.root)

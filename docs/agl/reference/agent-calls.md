@@ -101,17 +101,18 @@ position.
 ```agl
 program def main() -> unit =
   let command = AgentCommand("claude -p")
-  let reviewer = AgentClaude("sonnet", "medium")
+  let reviewer: Agent = AgentClaude("sonnet", "medium")
   let local = AgentCodex("o3", "high")
   let pi = AgentPi("openai", "gpt", "low")
   let review: text = ask("Review this artifact", agent = reviewer)
   let same_review: text = reviewer.ask("Review this artifact")
 ```
 
-Each variant builds its own argv at dispatch. `AgentCommand` accepts a shell-like
-command string; the provider variants carry their model and thinking settings:
+Each member record builds its own argv at dispatch. `AgentCommand` accepts a
+shell-like command string; the provider members carry their model and thinking
+settings:
 
-| Variant | Invocation |
+| Member | Invocation |
 | --- | --- |
 | `AgentCommand(command)` | the supplied command, with the normal prompt-file handling |
 | `AgentClaude(model, thinking)` | `claude -p --model <model> --effort <thinking>` |
@@ -124,8 +125,8 @@ inspected, and JSON-encoded like other enum values.
 
 Because `Agent` is ordinary enum data, it is also decodable: an `ask` whose
 target type is `Agent`, or a cast of foreign JSON to `Agent`, produces a value
-whose `AgentCommand` variant carries the command the host will spawn on the
-next call through it. Data reaching such a decode therefore chooses a
+whose `AgentCommand` member record carries the command the host will spawn on
+the next call through it. Data reaching such a decode therefore chooses a
 subprocess. Construct `Agent` values in source, or from data you trust, when
 that matters.
 
@@ -295,7 +296,7 @@ default applies; the portable default is **lenient recovery** (see below).
 ### `on_parse_error`
 
 The parse policy for invalid structured output. The value is a `ParsePolicy`
-— one of two variants from the standard core enum:
+— one of two members from the standard core enum:
 
 <!-- agl-check: fragment -->
 ```agl
@@ -340,9 +341,10 @@ rules:
    violations, strict parsing does not).
 3. Records are JSON objects with exactly the declared fields.
 4. Enums are JSON objects with a reserved **`"$case"`** tag naming the
-   variant, plus that variant's fields. `"$case"` is reserved; since AgL
-   field names are ordinary identifiers, user fields can never collide with
-   it.
+   terminal member name, plus that member record's fields. `"$case"` is
+   reserved; since AgL field names are ordinary identifiers, user fields can
+   never collide with it. A record-typed slot for the same value is a plain
+   object with no `"$case"` tag.
 5. Unknown fields are rejected.
 6. Missing required fields are rejected.
 
@@ -382,7 +384,7 @@ mechanically from the target type:
 | `array[T]` | `{"type": "array", "items": <T>}` |
 | `dict[text, V]` | `{"type": "object", "additionalProperties": <V>}` |
 | record | object schema: `additionalProperties: false`, all fields `required`, per-field `properties` |
-| enum | `oneOf` of per-variant schemas, each with a `"$case"` `const` plus payload fields, `additionalProperties: false` |
+| enum | `oneOf` of per-member-record schemas, each with a `"$case"` `const` plus record fields, `additionalProperties: false` |
 
 A [recursive](types.md#recursive-types) target type's schema uses standard
 JSON Schema `$defs`/`$ref`: every recursive record/enum reachable from the

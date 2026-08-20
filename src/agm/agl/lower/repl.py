@@ -300,8 +300,10 @@ def _declaration_dependencies(
     if typedef is not None:
         for _, field_type in typedef.fields:
             dependencies.update(_nominal_dependencies(field_type, nominal_declaration_ids))
-        for _, fields in typedef.variants:
-            for _, field_type in fields:
+        for member in typedef.members:
+            member_def = checked.type_env.type_table.get_by_id(member.decl_id)
+            assert member_def is not None
+            for _, field_type in member_def.fields:
                 dependencies.update(_nominal_dependencies(field_type, nominal_declaration_ids))
         if typedef.base is not None:
             base_typedef = checked.type_env.type_table.get_by_id(typedef.base)

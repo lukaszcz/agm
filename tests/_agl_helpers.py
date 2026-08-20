@@ -50,9 +50,22 @@ from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program_seeded, wrap_inline_program
 from agm.agl.pipeline import PreparedProgram, RunResult
-from agm.agl.semantics.type_table import TypeDef, TypeTable, create_seeded_type_table
-from agm.agl.semantics.types import EnumType, ExceptionType, RecordType, Type, transform_type
-from agm.agl.semantics.values import EnumValue, TextValue
+from agm.agl.semantics.type_table import (
+    BUILTIN_PRELUDE_MEMBER_TYPE_DEFS,
+    TypeDef,
+    TypeTable,
+    create_seeded_type_table,
+)
+from agm.agl.semantics.types import (
+    EnumType,
+    ExceptionType,
+    RecordType,
+    Type,
+    TypeVarType,
+    free_type_vars,
+    transform_type,
+)
+from agm.agl.semantics.values import RecordValue, TextValue
 from agm.agl.setting_overrides import SettingOverride
 from agm.agl.syntax import (
     AssignStmt,
@@ -261,6 +274,9 @@ def strip_decl_ids(t: Type) -> Type:
     return transform_type(t, _strip)
 
 
+_ENUM_MEMBER_DEFS: dict[int, tuple[TypeDef, ...]] = {}
+
+
 def type_table_for(*defs: TypeDef) -> TypeTable:
     """Return a fresh seeded ``TypeTable`` with every given ``TypeDef`` registered.
 
@@ -273,6 +289,8 @@ def type_table_for(*defs: TypeDef) -> TypeTable:
     """
     table = create_seeded_type_table()
     for typedef in defs:
+        for member_def in _ENUM_MEMBER_DEFS.get(typedef.decl_node_id, ()):
+            table.register(member_def)
         table.register(typedef)
     return table
 
@@ -321,27 +339,61 @@ def enum_type(
 
     See :func:`record_type`.
     """
+    enum_decl_id = next_decl_id() if decl_id is None else decl_id
+    member_defs = tuple(
+        TypeDef(
+            kind="record",
+            name=member_name,
+            module_id=module_id,
+            scope_path=(name,),
+            type_params=tuple(
+                param
+                for param in type_params
+                if any(param in free_type_vars(field_type) for field_type in fields.values())
+            ),
+            fields=tuple(fields.items()),
+            decl_node_id=next_decl_id(),
+        )
+        for member_name, fields in variants.items()
+    )
     typedef = TypeDef(
         kind="enum",
         name=name,
         module_id=module_id,
         type_params=type_params,
-        variants=tuple((vname, tuple(vfields.items())) for vname, vfields in variants.items()),
-        decl_node_id=next_decl_id() if decl_id is None else decl_id,
+        members=tuple(
+            RecordType(
+                name=member.name,
+                type_args=tuple(TypeVarType(param) for param in member.type_params),
+                module_id=module_id,
+                scope_path=(name,),
+                decl_id=member.decl_node_id,
+            )
+            for member in member_defs
+        ),
+        decl_node_id=enum_decl_id,
     )
+    _ENUM_MEMBER_DEFS[enum_decl_id] = member_defs
     return typedef.handle(type_args), typedef
 
 
-def agent_value(variant: str, **fields: str) -> EnumValue:
+def agent_value(variant: str, **fields: str) -> RecordValue:
     """Build the runtime ``std/core::Agent`` enum value for *variant*.
 
     Each keyword becomes a text-valued field, matching every ``Agent``
     variant's payload shape (``command``, ``model``/``thinking``, etc.); pass
     none for a variant with no payload.
     """
-    return EnumValue(
-        nominal=NominalId(require_reserved_nominal_id("Agent")),
-        display_name="Agent",
-        variant=variant,
+    member_nominal = next(
+        (
+            NominalId(member.decl_node_id)
+            for member in BUILTIN_PRELUDE_MEMBER_TYPE_DEFS.values()
+            if member.scope_path == ("Agent",) and member.name == variant
+        ),
+        NominalId(require_reserved_nominal_id("Agent")),
+    )
+    return RecordValue(
+        nominal=member_nominal,
+        display_name=f"{'Agent'}::{variant}",
         fields={name: TextValue(value) for name, value in fields.items()},
     )

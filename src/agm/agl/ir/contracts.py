@@ -20,6 +20,7 @@ from agm.agl.ir.ids import NominalId
 
 __all__ = [
     "ArrayDecode",
+    "ArrayEncode",
     "ContractPayload",
     "ContractRequest",
     "ConversionFailureMode",
@@ -28,13 +29,34 @@ __all__ = [
     "DecodePlan",
     "DecodeSchema",
     "DictDecode",
+    "DictEncode",
+    "DynamicApplyEncode",
+    "DynamicArrayEncode",
+    "DynamicDictEncode",
+    "DynamicEncodeDefinition",
+    "DynamicEncodePlan",
+    "DynamicEncodeSchema",
+    "DynamicEnumEncode",
+    "DynamicExceptionEncode",
+    "DynamicRecordEncode",
+    "DynamicTypeParameterEncode",
+    "DynamicVariantEncode",
+    "EncodePlan",
+    "EncodeSchema",
+    "EnumEncode",
+    "ExceptionEncode",
+    "ExceptionFieldEncode",
     "EnumDecode",
     "ParamDecoder",
     "RecordDecode",
+    "RecordEncode",
     "RefDecode",
+    "RefEncode",
     "ScalarDecode",
+    "ScalarEncode",
     "ScalarKind",
     "VariantDecode",
+    "VariantEncode",
 ]
 
 
@@ -87,9 +109,11 @@ class RecordDecode:
 
 @dataclass(frozen=True, slots=True)
 class VariantDecode:
-    """One enum variant: its name and ordered field decoders."""
+    """One enum member's terminal tag, record identity, display name, and field decoders."""
 
     name: str
+    nominal: NominalId
+    display_name: str
     fields: "tuple[tuple[str, DecodeSchema], ...]"
 
 
@@ -148,6 +172,196 @@ class DecodePlan:
     defs: "tuple[tuple[str, DecodeSchema], ...]" = ()
 
 
+# ---------------------------------------------------------------------------
+# Encode schema — typeless mirror of static Value → JSON conversion.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ScalarEncode:
+    """Encode a scalar or opaque ``json`` value."""
+
+
+@dataclass(frozen=True, slots=True)
+class ArrayEncode:
+    """Encode an array by recursively encoding each element."""
+
+    elem: "EncodeSchema"
+
+
+@dataclass(frozen=True, slots=True)
+class DictEncode:
+    """Encode a dict by recursively encoding each value."""
+
+    value: "EncodeSchema"
+
+
+@dataclass(frozen=True, slots=True)
+class RecordEncode:
+    """Encode a record as its statically ordered field object."""
+
+    nominal: NominalId
+    fields: "tuple[tuple[str, EncodeSchema], ...]"
+
+
+@dataclass(frozen=True, slots=True)
+class ExceptionEncode:
+    """Encode an exception as its statically ordered field object."""
+
+    nominal: NominalId
+    fields: "tuple[tuple[str, EncodeSchema], ...]"
+
+
+@dataclass(frozen=True, slots=True)
+class VariantEncode:
+    """One enum member's terminal tag, identity, and ordered field encoders."""
+
+    name: str
+    nominal: NominalId
+    fields: "tuple[tuple[str, EncodeSchema], ...]"
+
+
+@dataclass(frozen=True, slots=True)
+class EnumEncode:
+    """Encode an enum slot with its member-selected ``$case`` tag."""
+
+    nominal: NominalId
+    variants: tuple[VariantEncode, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RefEncode:
+    """Reference to a recursive encode body in an enclosing defs table."""
+
+    key: str
+
+
+EncodeSchema = (
+    ScalarEncode
+    | ArrayEncode
+    | DictEncode
+    | RecordEncode
+    | ExceptionEncode
+    | EnumEncode
+    | RefEncode
+)
+
+
+@dataclass(frozen=True, slots=True)
+class EncodePlan:
+    """An encode schema paired with recursive bodies keyed like decode-plan defs."""
+
+    root: EncodeSchema
+    defs: "tuple[tuple[str, EncodeSchema], ...]" = ()
+
+
+# ---------------------------------------------------------------------------
+# Dynamic encode schema — source-slot-directed encoding for growing generic
+# recursion.  Unlike ``EncodePlan``, definitions bind generic type parameters
+# and applications supply their runtime slot arguments.  This retains static
+# record-versus-enum context without requiring an infinite instantiation plan.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class DynamicArrayEncode:
+    """Encode an array through a generic-template element slot."""
+
+    elem: "DynamicEncodeSchema"
+
+
+@dataclass(frozen=True, slots=True)
+class DynamicDictEncode:
+    """Encode a dict through a generic-template value slot."""
+
+    value: "DynamicEncodeSchema"
+
+
+@dataclass(frozen=True, slots=True)
+class DynamicRecordEncode:
+    """Encode a record through generic-template field slots."""
+
+    nominal: NominalId
+    fields: "tuple[tuple[str, DynamicEncodeSchema], ...]"
+
+
+@dataclass(frozen=True, slots=True)
+class DynamicExceptionEncode:
+    """Encode an exception through generic-template field slots."""
+
+    nominal: NominalId
+    fields: "tuple[tuple[str, DynamicEncodeSchema], ...]"
+
+
+@dataclass(frozen=True, slots=True)
+class DynamicVariantEncode:
+    """One enum member selected by a generic-template enum slot."""
+
+    name: str
+    nominal: NominalId
+    fields: "tuple[tuple[str, DynamicEncodeSchema], ...]"
+
+
+@dataclass(frozen=True, slots=True)
+class DynamicEnumEncode:
+    """Encode an enum slot while retaining its static member/tag relation."""
+
+    nominal: NominalId
+    variants: "tuple[DynamicVariantEncode, ...]"
+
+
+@dataclass(frozen=True, slots=True)
+class DynamicTypeParameterEncode:
+    """The encoding shape supplied for one enclosing generic type parameter."""
+
+    index: int
+
+
+@dataclass(frozen=True, slots=True)
+class DynamicApplyEncode:
+    """Apply a nominal encoding definition to statically selected slot arguments."""
+
+    nominal: NominalId
+    arguments: "tuple[DynamicEncodeSchema, ...]"
+
+
+DynamicEncodeSchema = (
+    ScalarEncode
+    | DynamicArrayEncode
+    | DynamicDictEncode
+    | DynamicRecordEncode
+    | DynamicExceptionEncode
+    | DynamicEnumEncode
+    | DynamicTypeParameterEncode
+    | DynamicApplyEncode
+)
+
+
+@dataclass(frozen=True, slots=True)
+class DynamicEncodeDefinition:
+    """One nominal template body used by :class:`DynamicEncodePlan`."""
+
+    nominal: NominalId
+    parameter_count: int
+    body: DynamicEncodeSchema
+
+
+@dataclass(frozen=True, slots=True)
+class DynamicEncodePlan:
+    """Finite generic-template encoding plan for a value-directed JSON cast."""
+
+    root: DynamicEncodeSchema
+    definitions: "tuple[DynamicEncodeDefinition, ...]"
+
+
+@dataclass(frozen=True, slots=True)
+class ExceptionFieldEncode:
+    """Static encode provenance for one reportable exception field."""
+
+    field_name: str
+    plan: EncodePlan | DynamicEncodePlan
+
+
 @dataclass(frozen=True, slots=True)
 class ParamDecoder:
     """Typeless decoder for one host-supplied entry parameter."""
@@ -170,7 +384,8 @@ class ConversionStrategy(enum.Enum):
     NOOP = "noop"  # identity / already-assignable (return value unchanged)
     WIDEN_INT_TO_DECIMAL = "widen_int_to_decimal"
     RENDER_TO_TEXT = "render_to_text"  # total
-    TO_JSON = "to_json"  # total
+    TO_JSON = "to_json"  # total, static encode plan
+    TO_JSON_VALUE_DIRECTED = "to_json_value_directed"  # total, finite-value fallback
     NARROW_DECIMAL_TO_INT = "narrow_decimal_to_int"  # fallible
     PARSE_TEXT_THEN_DECODE = "parse_text_then_decode"  # fallible
     DECODE_JSON = "decode_json"  # fallible
@@ -180,7 +395,7 @@ class ConversionFailureMode(enum.Enum):
     """What a failed fallible conversion does at runtime."""
 
     RAISE_CAST_ERROR = "raise_cast_error"  # `as`
-    RETURN_BOOL = "return_bool"  # `as?` (fallible)
+    RETURN_BOOL = "return_bool"  # `as?`
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,8 +410,14 @@ class ConversionRecipe:
     hashable (a bare ``dict`` would break ``__hash__``, the invariant every IR
     node maintains) — and ``decode`` carries the typeless decode walk; ``defs``
     carries the ``$defs`` table for a recursive target type (empty for a
-    non-recursive one, see ``DecodePlan``); all three are ``None``/empty for
-    the total strategies.
+    non-recursive one, see ``DecodePlan``). ``TO_JSON`` instead carries the
+    static encode walk and its recursive bodies. ``TO_JSON_VALUE_DIRECTED``
+    is the fallback for a statically JSON-convertible source whose growing
+    polymorphic recursion has no finite concrete-instantiation plan; its
+    ``dynamic_encode`` carries a finite generic-template plan. The runtime
+    follows statically selected slots (including record versus enum context)
+    while instantiating template parameters from the value walk. All unrelated
+    fields are ``None``/empty for each strategy.
     """
 
     strategy: ConversionStrategy
@@ -205,6 +426,9 @@ class ConversionRecipe:
     json_schema: str | None = None
     decode: DecodeSchema | None = None
     defs: "tuple[tuple[str, DecodeSchema], ...]" = ()
+    encode: EncodeSchema | None = None
+    encode_defs: "tuple[tuple[str, EncodeSchema], ...]" = ()
+    dynamic_encode: DynamicEncodePlan | None = None
 
 
 # ---------------------------------------------------------------------------

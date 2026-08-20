@@ -11,9 +11,9 @@ enum Plan
 param spec
 
 program def main() -> unit =
-  let impl = AgentCommand("impl")
-  let reviewer = AgentCommand("reviewer")
-  let planner = AgentCommand("planner")
+  let impl: Agent = AgentCommand("impl")
+  let reviewer: Agent = AgentCommand("reviewer")
+  let planner: Agent = AgentCommand("planner")
   var artifact: text = ask("Implement %{spec}", agent = impl)
   var status: text = "working"
 

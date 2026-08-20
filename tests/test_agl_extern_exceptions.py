@@ -7,13 +7,13 @@ from typing import Protocol, cast
 
 import pytest
 
-from agm.agl.ir.ids import NominalId
+from agm.agl.ir.ids import FunctionId, NominalId
 from agm.agl.ir.program import NominalDescriptor, NominalKind
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.runtime.boundary import AglException
 from agm.agl.runtime.externs import AglCallableProxy, ExternCallWindow, ExternRegistry
 from agm.agl.semantics.exceptions import AglRaise
-from agm.agl.semantics.values import ExceptionValue, TextValue, Value
+from agm.agl.semantics.values import ExceptionValue, IrClosureValue, TextValue, Value
 
 
 class _NominalConstructor(Protocol):
@@ -35,6 +35,7 @@ def _raising_proxy(window: ExternCallWindow, problem: ExceptionValue) -> AglCall
 
     return AglCallableProxy(
         arity=0,
+        closure=IrClosureValue(FunctionId(1), ()),
         require_active_window=window.require_active,
         invoke=invoke,
         encode=lambda value: value,

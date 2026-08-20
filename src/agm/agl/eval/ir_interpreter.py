@@ -882,6 +882,7 @@ class IrInterpreter:
 
         return AglCallableProxy(
             arity=closure.arity,
+            closure=closure,
             require_active_window=self._extern_call_window_guard.require_active,
             invoke=invoke,
             encode=self._encode_extern_value,

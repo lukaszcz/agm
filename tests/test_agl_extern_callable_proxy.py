@@ -27,6 +27,7 @@ def _proxy(window: ExternCallWindow) -> AglCallableProxy:
 
     return AglCallableProxy(
         arity=1,
+        closure=IrClosureValue(FunctionId(1), ()),
         require_active_window=window.require_active,
         invoke=invoke,
         encode=encode_boundary_value,
@@ -210,12 +211,13 @@ def test_unencodable_argument_remains_an_extern_error() -> None:
         registry.invoke("take", lambda value: value, (ConstructorValue(NominalId(1), "Box", None),))
 
 
-def test_crossed_extern_function_reenters_the_registry(tmp_path: Path) -> None:
+def test_extern_returning_a_callback_round_trips_its_agl_closure(tmp_path: Path) -> None:
     result, _ = evaluate_ir_with_externs(
-        "extern def relay(f: (int) -> int, value: int) -> int\n"
+        "extern def relay(f: (int) -> int) -> (int) -> int\n"
         "extern def increment(value: int) -> int\n"
-        "let result = relay(increment, 2)\n",
-        "def relay(f, value): return f(value)\ndef increment(value): return value + 1\n",
+        "let callback = relay(increment)\n"
+        "let result = callback(2)\n",
+        "def relay(f): return f\ndef increment(value): return value + 1\n",
         tmp_path,
     )
 

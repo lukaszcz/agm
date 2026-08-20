@@ -531,6 +531,13 @@ def decode_boundary_value(obj: object) -> Value:
         return obj._value
     if isinstance(obj, AglDictView):
         return obj._value
+    # Imported lazily because externs depends on this module for normal
+    # boundary conversion. Only proxies minted by the evaluator carry an AgL
+    # closure; arbitrary Python callables remain unsupported.
+    from agm.agl.runtime.externs import AglCallableProxy
+
+    if isinstance(obj, AglCallableProxy):
+        return obj._closure
     descriptor = cast(object, getattr(type(obj), "_agl_descriptor", None))
     if isinstance(descriptor, NominalDescriptor):
         nominal_obj = cast(_AglNominal, obj)

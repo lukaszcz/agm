@@ -206,17 +206,19 @@ class AglCallableProxy:
     Python argument/result conversion and the invocation-window guard.
     """
 
-    __slots__ = ("_arity", "_require_active_window", "_invoke", "_encode")
+    __slots__ = ("_arity", "_closure", "_require_active_window", "_invoke", "_encode")
 
     def __init__(
         self,
         *,
         arity: int,
+        closure: IrClosureValue,
         require_active_window: Callable[[], None],
         invoke: _ClosureInvoker,
         encode: Callable[[Value], object],
     ) -> None:
         self._arity = arity
+        self._closure = closure
         self._require_active_window = require_active_window
         self._invoke = invoke
         self._encode = encode

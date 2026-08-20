@@ -54,10 +54,12 @@ hole raises a catchable `ExternError` from `std/text::interp`.
 
 Text indexes address Unicode code points: `"é😀"[0]` is `"é"` and
 `"é😀"[-1]` is `"😀"`. An out-of-range index raises `IndexError`; text is
-immutable, so indexed assignment is not allowed. `std/text` supplies ambient
-methods such as `chars()`, `lines()`, `split`, `trim`, case conversion,
-searching, slicing, repetition, and padding. The complete API and its
-code-point length semantics are documented in [Types](types.md#stdtext).
+immutable, so indexed assignment is not allowed. When the standard-library
+prelude injects `std/builtin-methods`, `std/text` supplies ambient methods such
+as `chars()`, `lines()`, `split`, `trim`, case conversion, searching, slicing,
+repetition, and padding. Otherwise, import `std/text` before calling them. The
+complete API and its code-point length semantics are documented in
+[Types](types.md#stdtext).
 
 ## Uniform rendering rules
 

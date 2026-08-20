@@ -163,13 +163,14 @@ See [Copying values](#copying-values) below for `copy`/`shallow_copy`.)
 
 #### Builtin-type methods
 
-Methods on `array[T]`, `dict[text, T]`, `text`, `json`, `int`, `decimal`, and
-`bool` are supplied by their owning standard-library modules. They are ambient
-members of their receiver types: use them directly wherever a value has that
-type, without importing the owning module just to call the method. The module's
-free functions remain subject to normal import visibility. See
-[Functions](functions.md#methods) for method declarations, bound values, and
-calls.
+Methods declared on `array[T]`, `dict[text, T]`, `text`, `json`, `int`, and
+`decimal` are supplied by their owning standard-library modules. When the
+standard-library prelude injects its optional `std/builtin-methods` registry,
+they are ambient members of their receiver types: use them directly wherever a
+value has that type. With `--no-stdlib`, or a custom standard library without
+the registry, import the owning module first. The module's free functions remain
+subject to normal import visibility. See [Functions](functions.md#methods) for
+method declarations, bound values, and calls.
 
 #### Cycles
 
@@ -316,10 +317,13 @@ The automatic `std/core` prelude exposes the core types and re-exports
 
 ### `std/text`
 
-`std/text` owns the ambient methods on `text`; importing it is only needed for
-its free `interp(template, vars)` function. Text lengths, indexes, slices,
-padding, and `chars()` use Unicode code points. `lines()` recognizes Unicode
-line boundaries and omits line terminators.
+`std/text` owns methods on `text`. They are ambient only when the loader
+injects `std/builtin-methods`; otherwise, including with `--no-stdlib` or a
+custom standard library without that registry, import `std/text` before calling
+them. Importing it is also required for its free `interp(template, vars)`
+function. Text lengths, indexes, slices, padding, and `chars()` use Unicode
+code points. `lines()` recognizes Unicode line boundaries and omits line
+terminators.
 
 | Method | Result |
 | ------ | ------ |

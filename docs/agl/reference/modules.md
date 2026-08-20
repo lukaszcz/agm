@@ -223,10 +223,10 @@ publish a narrower surface does so with a facade — the implementation lives in
 one module, and another re-exports the selection it means to publish.
 
 `export` re-exports members without injecting them into the exporting module's
-local scope. A method travels with its receiver type: any module with a value
-of that type can call the method without importing the module that declared it.
-Import selections and facades cannot hide a method; they control access to
-qualified declarations, not member calls.
+local scope. Once the declaring module is loaded, a method travels with its
+receiver type: any module with a value of that type can call it. Import
+selections and facades cannot hide a method; they control access to qualified
+declarations, not member calls.
 
 <!-- agl-check: fragment -->
 ```agl
@@ -242,10 +242,13 @@ origin are allowed.
 ## Prelude
 
 Every loaded entry and library module, except `std/core` itself, implicitly
-behaves as if it began with `open import std/core`. The `--no-stdlib` option
-disables that automatic opening throughout the loaded program; an explicit
-`import std/core` or `open import std/core` always follows the ordinary import
-rules.
+behaves as if it began with `open import std/core`. When this standard-library
+prelude is enabled, the loader also injects the optional `std/builtin-methods`
+registry when it exists, making its receiver methods ambient. The `--no-stdlib`
+option disables both automatic additions throughout the loaded program; a custom
+standard library may also omit the registry. In either case, importing an
+owning module loads its methods. An explicit `import std/core` or
+`open import std/core` always follows the ordinary import rules.
 
 ## Standard library modules
 
@@ -271,12 +274,11 @@ rules.
   [`std/array`](#stdarray).
 - `std/dict` owns dictionary methods and conversion from key/value pairs; see
   [`std/dict`](#stddict).
-- `std/text` owns the ambient `text` methods and exposes
-  `interp(template, vars) -> text` for name-only runtime interpolation; import
-  it to call `interp`, and see [Types](types.md#stdtext) and
+- `std/text` owns `text` methods and exposes `interp(template, vars) -> text`
+  for name-only runtime interpolation; see [Types](types.md#stdtext) and
   [Strings and interpolation](strings-and-interpolation.md#runtime-interpolation).
-- `std/json` owns ambient `json` inspection methods and explicit strict and
-  lenient parsers; see [`std/json`](#stdjson).
+- `std/json` owns `json` inspection methods and explicit strict and lenient
+  parsers; see [`std/json`](#stdjson).
 - `std/toml` converts TOML documents to and from `json`; see
   [`std/toml`](#stdtoml).
 - `std/path` provides lexical host-platform path manipulation; see
@@ -338,10 +340,12 @@ a normal runtime error and does not terminate the host.
 
 ## `std/math`
 
-`std/math` owns methods on `int` and `decimal`. The `std/builtin-methods`
-registry makes these methods available on scalar values without an import.
-Import `std/math` to call its free functions or read its constants; a plain
-import keeps them qualified, for example `math::sum([1, 2, 3])` and `math::pi`.
+`std/math` owns methods on `int` and `decimal`. When the standard-library
+prelude injects `std/builtin-methods`, these methods are available on scalar
+values without an import. Otherwise, import `std/math` before calling them;
+import it also to call its free functions or read its constants. A plain import
+keeps free functions qualified, for example `math::sum([1, 2, 3])` and
+`math::pi`.
 
 | Receiver | Method | Result |
 | --- | --- | --- |
@@ -436,19 +440,21 @@ no AgL-visible state.
 
 ## `std/array`
 
-`std/array` owns methods on `array[E]`. The `std/builtin-methods` registry makes
-these methods available on every array without an import. Import `std/array` to
-call its free functions, for example `array::range(1, 5)`; a plain import keeps
-them qualified, while `open import std/array` also makes them bare.
+`std/array` owns methods on `array[E]`. When the standard-library prelude
+injects `std/builtin-methods`, these methods are available on every array
+without an import. Otherwise, import `std/array` before calling them; import it
+also to call its free functions, for example `array::range(1, 5)`. A plain
+import keeps free functions qualified, while `open import std/array` also makes
+them bare.
 
-Operations with a `?` suffix return `Option`; `first`, `last`, and `pop`
-raise `IndexError` when no element is available. `index-of` instead returns
-`-1` when absent, while `index-of?` returns `Option::None`. A `!` suffix marks
-an in-place counterpart of a pure operation. `append`, `insert`, `pop`,
-`remove-at`, `clear`, and `extend` are inherently mutating. `remove-at(i)`
-accepts the same negative positions as normal array indexing. `insert` accepts
-insertion boundaries from `-size()`
-(the start) through `size()` (the end) and raises `IndexError` outside that
+See [Standard-library conventions](standard-library.md#conventions) for the
+`?`/`!` naming rules. `first`, `last`, and `pop` raise `IndexError` when no
+element is available. `index-of` instead returns `-1` when absent, while
+`index-of?` returns `Option::None`. `append`, `insert`, `pop`, `remove-at`,
+`clear`, and `extend` are inherently mutating. `remove-at(i)` accepts the same
+negative positions as normal array indexing. `insert` accepts insertion
+boundaries from `-size()` (the start) through `size()` (the end) and raises
+`IndexError` outside that
 range. `slice` follows the half-open `[start, end)` convention; `take` and
 `drop` clamp a negative count to zero. `range(a, b)` includes both endpoints
 and descends when `a > b`.
@@ -486,15 +492,16 @@ callback may capture local bindings and may raise normally.
 
 ## `std/dict`
 
-`std/dict` owns methods on `dict[text, V]`. The `std/builtin-methods` registry
-makes these methods available on every dictionary without an import. Import
-`std/dict` to call `dict::from-entries`; a plain import keeps it qualified,
-while `open import std/dict` also makes it bare.
+`std/dict` owns methods on `dict[text, V]`. When the standard-library prelude
+injects `std/builtin-methods`, these methods are available on every dictionary
+without an import. Otherwise, import `std/dict` before calling them; import it
+also to call `dict::from-entries`. A plain import keeps it qualified, while
+`open import std/dict` also makes it bare.
 
-Operations with a `?` suffix return `Option`; `get` and `remove` raise
-`KeyError` for a missing key. A `!` suffix marks the in-place counterpart of a
-pure operation. `clear` and `remove` are inherently mutating. Dictionary order
-is preserved by `keys`, `values`, `entries`, and callback traversal.
+See [Standard-library conventions](standard-library.md#conventions) for the
+`?`/`!` naming rules. `get` and `remove` raise `KeyError` for a missing key.
+`clear` and `remove` are inherently mutating. Dictionary order is preserved by
+`keys`, `values`, `entries`, and callback traversal.
 
 | Method | Result |
 | --- | --- |
@@ -516,10 +523,11 @@ is preserved by `keys`, `values`, `entries`, and callback traversal.
 
 ## `std/json`
 
-`std/json` provides parsing and inspection for untyped `json` values. The
-`std/builtin-methods` registry makes its methods ambient; import `std/json` to
-call its free functions. A plain import keeps those functions qualified, so
-use `json::parse(raw)`; `open import std/json` also makes them bare.
+`std/json` provides parsing and inspection for untyped `json` values. When the
+standard-library prelude injects `std/builtin-methods`, its methods are ambient.
+Otherwise, import `std/json` before calling them; import it also to call its
+free functions. A plain import keeps those functions qualified, so use
+`json::parse(raw)`; `open import std/json` also makes them bare.
 
 ```agl
 import std/json

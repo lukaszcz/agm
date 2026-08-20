@@ -137,8 +137,8 @@ returns the `ExecResult` standard core record:
 
 ```text
 stdout:    text
-stderr:    text
 exit_code: int
+stderr:    text
 timed_out: bool
 ```
 

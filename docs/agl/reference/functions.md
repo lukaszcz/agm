@@ -219,19 +219,21 @@ in its declaration head. This syntax is available to ordinary, `builtin`, and
 receiver element or value parameter; `text`, `json`, `int`, `decimal`, and
 `bool` are bare receivers. Such a declaration belongs only in its owning
 module: `std/array`, `std/dict`, `std/text`, `std/json`, and `std/math`
-respectively. A builtin receiver must use its bare generic form, so
+respectively. The standard library declares methods for every listed receiver
+except `bool`. A builtin receiver must use its bare generic form, so
 `array[int]::name` and `dict[text, array[int]]::name` are invalid. As with a
 nominal generic receiver, `_` may occupy an unused builtin receiver slot; it
 binds a private rigid parameter and cannot be named by the method body.
 
-Builtin receiver methods are available by member access wherever their receiver
-type is available. The standard library's optional `std/builtin-methods`
-registry loads their owning modules ambiently, so calling `xs.size()` or
-`(-3).abs()` does not need an import of that module. This ambient availability
-applies only to methods: an ordinary free function in an owning module still
-requires an import. Ordinary and `extern` builtin-receiver methods use the
-same direct-call, bound-method, and generic-specialization rules as nominal
-methods.
+Declared builtin receiver methods are available by member access once their
+owning module is loaded. With the standard-library prelude enabled, the loader
+injects the optional `std/builtin-methods` registry when present, loading the
+owning modules ambiently; then `xs.size()` or `(-3).abs()` does not need an
+import of that module. With `--no-stdlib`, or a custom standard library without
+the registry, import the owning module first. This ambient availability applies
+only to methods: an ordinary free function in an owning module still requires
+an import. Ordinary and `extern` builtin-receiver methods use the same
+direct-call, bound-method, and generic-specialization rules as nominal methods.
 
 A `builtin def` receiver method is instead a call-only host route. Its name and
 signature must be one of `print`, `render`, `copy`, or `shallow_copy`; each

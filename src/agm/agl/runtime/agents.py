@@ -12,6 +12,7 @@ from agm.agl.runtime.request import (
     AgentRequest,
     AgentResponse,
 )
+from agm.agl.semantics.types import terminal_name
 from agm.agl.semantics.values import RecordValue, TextValue
 from agm.core.env import clone_env
 
@@ -99,10 +100,10 @@ def decode_agent_value(value: RecordValue) -> "AgentSpec":
     """Decode an ``Agent`` member record into its host-side specification."""
     from agm.agent.spec import AGENT_SPECS
 
-    terminal_name = value.display_name.rsplit("::", maxsplit=1)[-1]
-    spec_cls = AGENT_SPECS.get(terminal_name)
+    member_name = terminal_name(value.display_name)
+    spec_cls = AGENT_SPECS.get(member_name)
     if spec_cls is None:
-        raise ValueError(f"unsupported Agent member: {terminal_name}")
+        raise ValueError(f"unsupported Agent member: {member_name}")
     return spec_cls(*(_text_field(value, name) for name in spec_cls.PAYLOAD_FIELDS))
 
 

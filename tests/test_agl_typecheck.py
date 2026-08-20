@@ -131,7 +131,7 @@ from agm.agl.typecheck.env import (
     OutputContractSpec,
 )
 from agm.agl.typecheck.function_inference import resolve_function_header
-from tests._agl_helpers import all_node_ids, strip_decl_ids
+from tests._agl_helpers import all_node_ids, enum_typedef, register_typedef, strip_decl_ids
 from tests.agl.module_graph import (
     check_resolved,
     resolve_and_check_entry,
@@ -343,7 +343,7 @@ def _table_for(*typedefs: TypeDef) -> TypeTable:
     """
     table = TypeTable()
     for typedef in typedefs:
-        table.register(typedef)
+        register_typedef(table, typedef)
     return table
 
 
@@ -405,13 +405,7 @@ class TestComparableTypes:
 
     def test_enum_with_function_field_not_comparable(self) -> None:
         ft = FunctionType(params=(), result=IntType())
-        typedef = TypeDef(
-            kind="enum",
-            name="E",
-            module_id=ENTRY_ID,
-            members=(("A", (("fn", ft),)),),
-            decl_node_id=1,
-        )
+        typedef = enum_typedef("E", {"A": {"fn": ft}}, decl_id=1)
         et = typedef.handle()
         assert not comparable_types(et, et, _table_for(typedef))
 
@@ -9452,15 +9446,15 @@ class TestGenericTypeDef:
         template = EnumType("Option", type_args=(TypeVarType("T"),), decl_id=1)
         gdef = GenericTypeDef(kind="enum", type_params=("T",), template=template)
         env.register_generic_type("Option", gdef)
-        env.type_table.register(
-            TypeDef(
-                kind="enum",
-                name="Option",
+        register_typedef(
+            env.type_table,
+            enum_typedef(
+                "Option",
+                {"Some": {"value": TypeVarType("T")}, "None": {}},
                 module_id=template.module_id,
                 type_params=("T",),
-                members=(("Some", (("value", TypeVarType("T")),)), ("None", ())),
-                decl_node_id=1,
-            )
+                decl_id=1,
+            ),
         )
         result = env.instantiate_nominal("Option", (TextType(),))
         assert isinstance(result, EnumType)

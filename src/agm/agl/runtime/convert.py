@@ -45,6 +45,7 @@ from agm.agl.ir.contracts import (
     RefDecode,
     ScalarDecode,
     ScalarKind,
+    resolve_schema_ref,
 )
 from agm.agl.semantics.values import (
     ArrayValue,
@@ -285,18 +286,12 @@ def decode_value(
 
 def _resolve_decode_ref(key: str, defs: Mapping[str, DecodeSchema]) -> DecodeSchema:
     """Resolve a ``RefDecode`` key to a non-ref body, rejecting malformed cycles."""
-    seen: set[str] = set()
-    current = key
-    while True:
-        if current in seen:
-            raise AssertionError(f"decode_value: RefDecode cycle at $defs key {current!r}")
-        seen.add(current)
-        resolved = defs.get(current)
-        if resolved is None:  # pragma: no cover — invariant: plan keys always resolve
-            raise AssertionError(f"decode_value: unknown $defs key {current!r}")
-        if not isinstance(resolved, RefDecode):
-            return resolved
-        current = resolved.key
+    return resolve_schema_ref(
+        key,
+        defs,
+        lambda schema: schema.key if isinstance(schema, RefDecode) else None,
+        subject="decode_value: RefDecode",
+    )
 
 
 def _decode_scalar(kind: ScalarKind, obj: object) -> Value:

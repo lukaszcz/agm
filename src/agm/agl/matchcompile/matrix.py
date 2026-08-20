@@ -13,15 +13,13 @@ from typing import TypeAlias
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import TypeTable
-from agm.agl.semantics.types import Type
+from agm.agl.semantics.types import RecordType, Type
 
 from .model import (
     BinderAssignment,
     BoolConstructor,
     Constructor,
     ConstructorCell,
-    FieldBearingConstructorKey,
-    FieldBearingNominalConstructor,
     FieldOccurrenceProvenance,
     LiteralKind,
     MatchCaseContext,
@@ -34,7 +32,6 @@ from .model import (
     PatternCell,
     PatternProvenance,
     WildcardCell,
-    field_bearing_constructor_key,
     field_bearing_constructor_sort_key,
 )
 from .normalize import (
@@ -55,9 +52,7 @@ class _LiteralConstructorKey:
     value: decimal.Decimal | str | None
 
 
-_ConstructorKey: TypeAlias = (
-    FieldBearingConstructorKey | _BoolConstructorKey | _LiteralConstructorKey
-)
+_ConstructorKey: TypeAlias = RecordType | _BoolConstructorKey | _LiteralConstructorKey
 _ConstructorSortKey: TypeAlias = tuple[
     int,
     tuple[str, ...],
@@ -69,7 +64,7 @@ _ConstructorSortKey: TypeAlias = tuple[
 
 def _constructor_key(constructor: Constructor) -> _ConstructorKey:
     if isinstance(constructor, NominalConstructor):
-        return field_bearing_constructor_key(constructor)
+        return constructor.record_type
     if isinstance(constructor, BoolConstructor):
         return _BoolConstructorKey(constructor.value)
     return _LiteralConstructorKey(constructor.kind, constructor.value)
@@ -94,9 +89,7 @@ def _canonical_constructor(
     if not isinstance(constructor, NominalConstructor):
         return constructor
 
-    canonical: FieldBearingNominalConstructor = record_constructor(
-        constructor.record_type, type_table
-    )
+    canonical = record_constructor(constructor.record_type, type_table)
     if canonical != constructor:
         raise MatchCompileInvariantError(
             "nominal constructor does not exactly match its checked signature"

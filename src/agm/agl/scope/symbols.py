@@ -28,7 +28,7 @@ from typing import TypeAlias as TypingTypeAlias
 
 from agm.agl.diagnostics import AglError
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.semantics.types import EnumType
+from agm.agl.semantics.types import EnumType, RecordType, TypeVarType
 from agm.agl.syntax.nodes import (
     EnumDef,
     ExceptionDef,
@@ -247,6 +247,17 @@ class ConstructorRef:
     can_match_bare_pattern: bool = False
     owner_path: ScopePath = ()
     is_builtin: bool = False
+
+    @classmethod
+    def for_member(cls, member: RecordType) -> "ConstructorRef":
+        """Build the reference denoting *member*'s own record declaration."""
+        return cls(
+            owner_name=member.name,
+            owner_decl_node_id=member.decl_id,
+            type_params=tuple(arg.name for arg in member.type_args if isinstance(arg, TypeVarType)),
+            owner_module_id=member.module_id,
+            owner_path=member.scope_path,
+        )
 
     def matches(self, enum_type: EnumType, member_name: str) -> bool:
         """Whether this reference denotes *member_name* of *enum_type*."""

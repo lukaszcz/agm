@@ -71,7 +71,5 @@ def test_nominal_constructor_invariants_require_resolved_enum_members() -> None:
     unknown_enum = EnumType("Unknown", decl_id=999)
     constructor = NominalConstructor(RecordType("Member", decl_id=1000), ())
 
-    with pytest.raises(MatchCompileInvariantError, match="requires a type table"):
-        constructor_inhabits_type(constructor, unknown_enum)
     with pytest.raises(MatchCompileInvariantError, match="cannot resolve enum signature"):
         constructor_inhabits_type(constructor, unknown_enum, TypeTable())

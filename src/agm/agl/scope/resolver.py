@@ -509,6 +509,10 @@ class _Resolver:
         self._scoped_constructor_candidates: dict[tuple[ScopePath, str], list[ConstructorRef]] = {}
         # Constructor candidates: name -> ordered list of ConstructorRef.
         self._constructor_candidates: dict[str, list[ConstructorRef]] = {}
+        # Every prefix of every registered candidate's ``owner_path``, so
+        # "does any candidate live under this type scope?" is a set lookup
+        # rather than a scan of both candidate tables.
+        self._constructor_owner_scopes: set[ScopePath] = set()
         # Nominal aliases whose chain provably ends at an enum: they occupy
         # their name (so a bare reference resolves instead of raising "not
         # defined") but have no constructor candidate, since an enum's variants
@@ -1228,7 +1232,13 @@ class _Resolver:
         ]
 
     def _remove_constructor_candidates_in_type_scope(self, type_scope: ScopePath) -> None:
-        """Remove retained member constructors of a redeclared local enum."""
+        """Remove retained member constructors of a redeclared local enum.
+
+        A first declaration registers nothing under its own scope, so the
+        common case leaves both tables untouched without inspecting them.
+        """
+        if type_scope not in self._constructor_owner_scopes:
+            return
 
         def keep(candidate: ConstructorRef) -> bool:
             return not (
@@ -1268,6 +1278,11 @@ class _Resolver:
         by a host-seeded built-in of the same name.
         """
         cref = self._canonical_constructor_ref(cref)
+        if cref.owner_module_id == self._module_id:
+            owner_path = cref.owner_path
+            self._constructor_owner_scopes.update(
+                owner_path[:index] for index in range(len(owner_path) + 1)
+            )
         scoped_key = (scope_path, ctor_key)
         self._scoped_constructor_candidates[scoped_key] = self._place_candidate(
             self._scoped_constructor_candidates.get(scoped_key, []), cref

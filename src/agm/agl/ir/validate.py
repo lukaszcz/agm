@@ -429,7 +429,7 @@ def _check_dynamic_encode_plan(plan: DynamicEncodePlan, ctx: _Context) -> None:
                 descriptor = ctx.program.nominals[nominal]
                 if descriptor.kind is not NominalKind.RECORD:
                     raise InvalidIrError(f"RecordEncode references non-record nominal {nominal!r}")
-                _check_encode_fields(fields, descriptor.fields, "RecordEncode")
+                _check_nominal_fields(fields, descriptor.fields, "RecordEncode")
                 for _field_name, field in fields:
                     walk(field, parameter_count)
             case DynamicExceptionEncode(nominal=nominal, fields=fields):
@@ -439,7 +439,7 @@ def _check_dynamic_encode_plan(plan: DynamicEncodePlan, ctx: _Context) -> None:
                     raise InvalidIrError(
                         f"ExceptionEncode references non-exception nominal {nominal!r}"
                     )
-                _check_encode_fields(fields, descriptor.fields, "ExceptionEncode")
+                _check_nominal_fields(fields, descriptor.fields, "ExceptionEncode")
                 for _field_name, field in fields:
                     walk(field, parameter_count)
             case DynamicEnumEncode(nominal=nominal, variants=variants):
@@ -457,7 +457,7 @@ def _check_dynamic_encode_plan(plan: DynamicEncodePlan, ctx: _Context) -> None:
                             f"EnumEncode variant {variant.name!r} disagrees with"
                             f" enum nominal {nominal!r}"
                         )
-                    _check_encode_fields(variant.fields, expected.fields, "EnumEncode variant")
+                    _check_nominal_fields(variant.fields, expected.fields, "EnumEncode variant")
                     for _field_name, field in variant.fields:
                         walk(field, parameter_count)
             case _ as unreachable:  # pragma: no cover
@@ -537,7 +537,7 @@ def _walk_encode_schema(
             desc = ctx.program.nominals[nominal]
             if desc.kind is not NominalKind.RECORD:
                 raise InvalidIrError(f"RecordEncode references non-record nominal {nominal!r}")
-            _check_encode_fields(fields, desc.fields, "RecordEncode")
+            _check_nominal_fields(fields, desc.fields, "RecordEncode")
             for _fname, fschema in fields:
                 _walk_encode_schema(fschema, defs, ctx)
         case ExceptionEncode(nominal=nominal, fields=fields):
@@ -547,7 +547,7 @@ def _walk_encode_schema(
                 raise InvalidIrError(
                     f"ExceptionEncode references non-exception nominal {nominal!r}"
                 )
-            _check_encode_fields(fields, desc.fields, "ExceptionEncode")
+            _check_nominal_fields(fields, desc.fields, "ExceptionEncode")
             for _fname, fschema in fields:
                 _walk_encode_schema(fschema, defs, ctx)
         case EnumEncode(nominal=nominal, variants=variants):
@@ -563,17 +563,17 @@ def _walk_encode_schema(
                         f"EnumEncode variant {variant.name!r} disagrees with"
                         f" enum nominal {nominal!r}"
                     )
-                _check_encode_fields(variant.fields, expected.fields, "EnumEncode variant")
+                _check_nominal_fields(variant.fields, expected.fields, "EnumEncode variant")
                 for _fname, fschema in variant.fields:
                     _walk_encode_schema(fschema, defs, ctx)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 
 
-def _check_encode_fields(
+def _check_nominal_fields(
     fields: "tuple[tuple[str, object], ...]", expected: tuple[str, ...], owner: str
 ) -> None:
-    """Require an encoder to select exactly its linked declaration's fields."""
+    """Require an encoder or decoder to select exactly its linked declaration's fields."""
     if tuple(name for name, _schema in fields) != expected:
         raise InvalidIrError(f"{owner} fields disagree with its nominal descriptor")
 
@@ -606,7 +606,7 @@ def _walk_decode_schema(
                 raise InvalidIrError(
                     f"RecordDecode display name disagrees with nominal {nominal!r}"
                 )
-            _check_decode_fields(fields, record.fields, "RecordDecode")
+            _check_nominal_fields(fields, record.fields, "RecordDecode")
             for _fname, fschema in fields:
                 _walk_decode_schema(fschema, defs, ctx)
         case EnumDecode(nominal=nominal, display_name=display_name, variants=variants):
@@ -629,7 +629,7 @@ def _walk_decode_schema(
                         f"EnumDecode variant {variant.name!r} display name disagrees with"
                         f" member nominal {variant.nominal!r}"
                     )
-                _check_decode_fields(variant.fields, expected.fields, "EnumDecode variant")
+                _check_nominal_fields(variant.fields, expected.fields, "EnumDecode variant")
                 for _fname, fschema in variant.fields:
                     _walk_decode_schema(fschema, defs, ctx)
         case _ as unreachable:  # pragma: no cover
@@ -637,14 +637,6 @@ def _walk_decode_schema(
 
 
 _RefT = TypeVar("_RefT")
-
-
-def _check_decode_fields(
-    fields: "tuple[tuple[str, DecodeSchema], ...]", expected: tuple[str, ...], owner: str
-) -> None:
-    """Require a decoder to select exactly its linked declaration's fields."""
-    if tuple(name for name, _schema in fields) != expected:
-        raise InvalidIrError(f"{owner} fields disagree with its nominal descriptor")
 
 
 def _check_ref_chain(

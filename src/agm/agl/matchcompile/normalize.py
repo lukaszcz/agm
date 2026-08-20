@@ -53,7 +53,6 @@ from .model import (
     Constructor,
     ConstructorCell,
     ConstructorField,
-    FieldBearingNominalConstructor,
     LetBindingAction,
     LetSite,
     LiteralConstructor,
@@ -125,13 +124,7 @@ def enum_constructor(enum_type: EnumType, variant: str, table: TypeTable) -> Nom
         raise MatchCompileInvariantError(
             f"checked enum pattern names unknown variant {enum_type!r}::{variant}"
         )
-    return NominalConstructor(
-        record_type=member,
-        fields=tuple(
-            ConstructorField(name, field_type)
-            for name, field_type in table.record_fields(member).items()
-        ),
-    )
+    return record_constructor(member, table)
 
 
 def record_constructor(record_type: RecordType, table: TypeTable) -> NominalConstructor:
@@ -148,7 +141,7 @@ def record_constructor(record_type: RecordType, table: TypeTable) -> NominalCons
 
 
 def constructor_inhabits_type(
-    constructor: Constructor, subject_type: Type, table: TypeTable | None = None
+    constructor: Constructor, subject_type: Type, table: TypeTable
 ) -> bool:
     """Return whether a constructor denotes any runtime value of ``subject_type``.
 
@@ -167,10 +160,6 @@ def constructor_inhabits_type(
         case BoolType():
             return isinstance(constructor, BoolConstructor)
         case EnumType() as enum_type:
-            if table is None:
-                raise MatchCompileInvariantError(
-                    "enum constructor inhabitation requires a type table"
-                )
             try:
                 members = table.enum_members(enum_type)
             except (KeyError, AssertionError) as exc:
@@ -224,9 +213,7 @@ def constructor_inhabits_type(
             _unsupported("semantic type", unsupported_type)
 
 
-def pattern_cell_inhabits_type(
-    cell: PatternCell, subject_type: Type, table: TypeTable | None = None
-) -> bool:
+def pattern_cell_inhabits_type(cell: PatternCell, subject_type: Type, table: TypeTable) -> bool:
     """Return whether a canonical cell can match a value of ``subject_type``."""
     if isinstance(subject_type, BottomType):
         return False
@@ -461,7 +448,7 @@ def normalize_pattern(
                 )
             if isinstance(subject_type, EnumType):
                 assert applied_variant is not None
-                nominal_constructor: FieldBearingNominalConstructor = enum_constructor(
+                nominal_constructor = enum_constructor(
                     subject_type, applied_variant, checked.type_env.type_table
                 )
             else:

@@ -2075,11 +2075,11 @@ class _Lowerer:
         if isinstance(result, FunctionType):
             result = result.result
         if isinstance(result, EnumType):
-            return next(
-                member
-                for member in self._checked.type_env.type_table.enum_members(result)
-                if member.decl_id == constructor_ref.owner_decl_node_id
+            member = self._checked.type_env.type_table.enum_member_by_decl(
+                result, constructor_ref.owner_decl_node_id
             )
+            assert member is not None
+            return member
         assert isinstance(result, (RecordType, ExceptionType))
         return result
 
@@ -2571,11 +2571,11 @@ class _Lowerer:
             assert constructor_ref is not None, (
                 "compiler bug: partial constructor lost its selection"
             )
-            result_type = next(
-                member
-                for member in self._checked.type_env.type_table.enum_members(result_type)
-                if member.decl_id == constructor_ref.owner_decl_node_id
+            member = self._checked.type_env.type_table.enum_member_by_decl(
+                result_type, constructor_ref.owner_decl_node_id
             )
+            assert member is not None
+            result_type = member
         field_types = self._constructor_field_types(result_type)
         binding_by_name = self._checked.argument_bindings.constructor_calls[call_node.node_id]
         field_order = tuple(binding_by_name)

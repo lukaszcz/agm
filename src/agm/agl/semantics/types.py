@@ -1047,6 +1047,15 @@ BUILTIN_PRELUDE_TYPE_NAMES: frozenset[str] = frozenset(BUILTIN_PRELUDE_TYPES)
 _BUILTIN_HOST_NAMES: frozenset[str] = BUILTIN_EXCEPTION_NAMES | BUILTIN_PRELUDE_TYPE_NAMES
 
 
+def terminal_name(display_name: str) -> str:
+    """Return the last segment of a ``::``-qualified nominal display name.
+
+    Display names carry the module route and scope path a reader would write;
+    a host that keys on the declaration alone wants only that final segment.
+    """
+    return display_name.rsplit("::", maxsplit=1)[-1]
+
+
 def spells_bare(module_id: ModuleId, name: str) -> bool:
     """Return whether a nominal owned by *module_id* named *name* spells bare.
 

@@ -45,6 +45,7 @@ from agm.agl.ir.contracts import (
     RefEncode,
     ScalarEncode,
     VariantEncode,
+    resolve_schema_ref,
 )
 from agm.agl.ir.ids import NominalId
 from agm.agl.semantics.cycles import CYCLIC_VALUE_MARKER, AglCyclicValue, enter_container
@@ -333,18 +334,12 @@ def _instantiate_dynamic(
 
 def _resolve_encode_ref(key: str, defs: dict[str, EncodeSchema]) -> EncodeSchema:
     """Resolve a recursive plan reference to its non-reference body."""
-    seen: set[str] = set()
-    current = key
-    while True:
-        if current in seen:
-            raise AssertionError(f"encode plan cycle at $defs key {current!r}")
-        seen.add(current)
-        resolved = defs.get(current)
-        if resolved is None:
-            raise AssertionError(f"unknown encode plan $defs key {current!r}")
-        if not isinstance(resolved, RefEncode):
-            return resolved
-        current = resolved.key
+    return resolve_schema_ref(
+        key,
+        defs,
+        lambda schema: schema.key if isinstance(schema, RefEncode) else None,
+        subject="encode plan",
+    )
 
 
 def value_to_json_obj(value: Value, active: "set[int] | None" = None) -> object:

@@ -191,13 +191,8 @@ class ConstructorChecker:
             and isinstance(result.result, RecordType)
             and isinstance(expected.result, EnumType)
         ):
-            expected_member = next(
-                (
-                    member
-                    for member in self._ctx._env.type_table.enum_members(expected.result)
-                    if member.decl_id == result.result.decl_id
-                ),
-                None,
+            expected_member = self._ctx._env.type_table.enum_member_by_decl(
+                expected.result, result.result.decl_id
             )
             if expected_member is not None:
                 engine = self._ctx._active_inference_engine()
@@ -337,13 +332,8 @@ class ConstructorChecker:
         if enum_gdef is None or enum_gdef.kind != "enum":
             return None
         assert isinstance(enum_gdef.template, EnumType)
-        member = next(
-            (
-                candidate
-                for candidate in self._ctx._env.type_table.enum_members(enum_gdef.template)
-                if candidate.decl_id == ctor_ref.owner_decl_node_id
-            ),
-            None,
+        member = self._ctx._env.type_table.enum_member_by_decl(
+            enum_gdef.template, ctor_ref.owner_decl_node_id
         )
         if member is None:
             return None

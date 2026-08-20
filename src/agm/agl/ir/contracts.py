@@ -14,7 +14,9 @@ every descriptor is immutable, runtime-neutral data.
 from __future__ import annotations
 
 import enum
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from typing import TypeVar
 
 from agm.agl.ir.ids import NominalId
 
@@ -57,6 +59,7 @@ __all__ = [
     "ScalarKind",
     "VariantDecode",
     "VariantEncode",
+    "resolve_schema_ref",
 ]
 
 
@@ -497,3 +500,34 @@ class ContractRequest:
     target_type_kind: str = ""
     target_type: object | None = None
     defs: "tuple[tuple[str, DecodeSchema], ...]" = ()
+
+
+_SchemaT = TypeVar("_SchemaT")
+
+
+def resolve_schema_ref(
+    key: str,
+    defs: Mapping[str, _SchemaT],
+    forwarded_key: Callable[[_SchemaT], str | None],
+    *,
+    subject: str,
+) -> _SchemaT:
+    """Follow ``$defs`` references to the first non-reference body.
+
+    *forwarded_key* returns the onward key of a reference node, or ``None``
+    once the walk reaches a body. Encode and decode plans share the same
+    ``$defs`` keying, so they share this walk.
+    """
+    seen: set[str] = set()
+    current = key
+    while True:
+        if current in seen:
+            raise AssertionError(f"{subject}: $defs reference cycle at key {current!r}")
+        seen.add(current)
+        resolved = defs.get(current)
+        if resolved is None:
+            raise AssertionError(f"{subject}: unknown $defs key {current!r}")
+        onward = forwarded_key(resolved)
+        if onward is None:
+            return resolved
+        current = onward

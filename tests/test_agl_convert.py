@@ -602,7 +602,7 @@ class TestDecodeValueRefDecode:
 
     def test_ref_only_defs_cycle_is_internal_error(self) -> None:
         """A malformed defs table must not make RefDecode resolution recurse forever."""
-        with pytest.raises(AssertionError, match="RefDecode cycle"):
+        with pytest.raises(AssertionError, match=r"\$defs reference cycle"):
             decode_value(RefDecode("A"), {}, {"A": RefDecode("B"), "B": RefDecode("A")})
 
     def test_defs_defaults_to_empty_for_non_recursive_schemas(self) -> None:

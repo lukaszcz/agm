@@ -162,14 +162,7 @@ class InferenceEngine:
             zonked_left = self.zonk(left)
             zonked_right = self.zonk(right)
             if isinstance(zonked_left, RecordType) and isinstance(zonked_right, EnumType):
-                member = next(
-                    (
-                        candidate
-                        for candidate in self._type_table.enum_members(zonked_right)
-                        if candidate.decl_id == zonked_left.decl_id
-                    ),
-                    None,
-                )
+                member = self._type_table.enum_member_by_decl(zonked_right, zonked_left.decl_id)
                 if member is not None:
                     for value_arg, member_arg in zip(
                         zonked_left.type_args, member.type_args, strict=True
@@ -369,14 +362,7 @@ class InferenceEngine:
             for value, target in ((inferred, context), (context, inferred)):
                 if not (isinstance(value, RecordType) and isinstance(target, EnumType)):
                     continue
-                member = next(
-                    (
-                        candidate
-                        for candidate in self._type_table.enum_members(target)
-                        if candidate.decl_id == value.decl_id
-                    ),
-                    None,
-                )
+                member = self._type_table.enum_member_by_decl(target, value.decl_id)
                 if member is not None:
                     self._complete_nominal_args(value.type_args, member.type_args, origin)
                 return

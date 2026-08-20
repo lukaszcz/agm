@@ -90,9 +90,16 @@ def test_encode_plan_derives_enum_members_and_nested_records() -> None:
         ("One", NominalId(choice_def.members[0].decl_id)),
         ("Many", NominalId(choice_def.members[1].decl_id)),
     ]
+    # ``Item`` occurs in both variants, so it is emitted once into ``defs`` and
+    # referenced from each occurrence rather than inlined twice.
     many = plan.root.variants[1]
     assert isinstance(many.fields[0][1], ArrayEncode)
-    assert isinstance(many.fields[0][1].elem, RecordEncode)
+    assert many.fields[0][1].elem == RefEncode("Item")
+    one = plan.root.variants[0]
+    assert one.fields[0][1] == RefEncode("Item")
+    assert [key for key, _body in plan.defs] == ["Item"]
+    item_body = dict(plan.defs)["Item"]
+    assert isinstance(item_body, RecordEncode)
 
 
 def test_encode_plan_preserves_enum_tags_for_member_records() -> None:

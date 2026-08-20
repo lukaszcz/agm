@@ -280,6 +280,7 @@ def _build_cross_module_constructor_candidates(
     all_public_types: dict[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias],
     cross_module_constructor_refs: Mapping[QName, ConstructorRef],
     import_envs: Mapping[ModuleId, ImportEnv],
+    referenced_member_constructor_refs: Mapping[tuple[ModuleId, int], tuple[ConstructorRef, ...]],
 ) -> tuple[dict[str, tuple[ConstructorRef, ...]], frozenset[str]]:
     """Build constructor candidates from types exposed by import tails for a module.
 
@@ -365,15 +366,9 @@ def _build_cross_module_constructor_candidates(
             elif isinstance(decl, EnumDef):
                 for member in decl.members:
                     if isinstance(member, VariantRef):
-                        referenced_crefs = _referenced_member_constructor_refs(
-                            member,
-                            mid,
-                            import_envs[mid],
-                            all_public_types,
-                            cross_module_constructor_refs,
-                            import_envs,
-                        )
-                        for referenced_cref in referenced_crefs:
+                        for referenced_cref in referenced_member_constructor_refs.get(
+                            (mid, member.node_id), ()
+                        ):
                             add_candidate(referenced_cref.owner_name, referenced_cref)
                         continue
                     exception_qname = sibling_qname(key, member.name)
@@ -912,7 +907,11 @@ def resolve_program(
         # Build cross-module constructor candidates from unqualified import tails.
         cross_module_candidates, cross_module_type_names = (
             _build_cross_module_constructor_candidates(
-                import_envs[mid], all_public_types, cross_module_constructor_refs, import_envs
+                import_envs[mid],
+                all_public_types,
+                cross_module_constructor_refs,
+                import_envs,
+                referenced_member_constructor_refs,
             )
         )
         constructor_candidates = cross_module_candidates

@@ -11,6 +11,7 @@ from typing import Protocol, SupportsIndex, cast, overload
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.program import NominalDescriptor, NominalKind
 from agm.agl.runtime.render import render_value
+from agm.agl.semantics.types import terminal_name
 from agm.agl.semantics.values import (
     UNIT_VALUE,
     ArrayValue,
@@ -114,7 +115,7 @@ class _AglEnum:
 
 
 def _nominal_class_name(descriptor: NominalDescriptor) -> str:
-    return descriptor.display_name.rsplit("::", maxsplit=1)[-1]
+    return terminal_name(descriptor.display_name)
 
 
 def _nominal_attrs(descriptor: NominalDescriptor, fields: tuple[str, ...]) -> dict[str, object]:

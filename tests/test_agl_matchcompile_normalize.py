@@ -65,7 +65,7 @@ from agm.agl.syntax.nodes import AsPattern, Case, ConstructorPattern, LetDecl, P
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck import CheckedModule, check_program
-from tests._agl_helpers import next_decl_id, strip_decl_ids
+from tests._agl_helpers import enum_typedef, next_decl_id, register_typedef, strip_decl_ids
 from tests.agl.ir_harness import make_graph_from_files
 from tests.agl.match_reference import reference_action
 from tests.agl.module_graph import resolve_and_check_inline_entry
@@ -388,6 +388,7 @@ def test_bottom_has_an_empty_closed_signature_and_no_inhabiting_patterns() -> No
             provenance=SourcePatternProvenance(0, SourceSpan(1, 1, 1, 1, 0, 0)),
         ),
         BottomType(),
+        checked.type_env.type_table,
     )
 
 
@@ -398,7 +399,7 @@ def test_flexible_inference_types_cannot_enter_match_normalization() -> None:
     with pytest.raises(MatchCompileInvariantError):
         signature_for_type(leaked, checked.type_env.type_table)
     with pytest.raises(MatchCompileInvariantError):
-        constructor_inhabits_type(BoolConstructor(False), leaked)
+        constructor_inhabits_type(BoolConstructor(False), leaked, checked.type_env.type_table)
 
 
 def test_normalize_case_preserves_priority_actions_and_binder_provenance() -> None:
@@ -521,13 +522,13 @@ def test_numeric_constructor_inhabitation_matches_runtime_numeric_domains(
 ) -> None:
     constructor = LiteralConstructor(LiteralKind.NUMERIC, value)
 
-    assert constructor_inhabits_type(constructor, IntType()) is inhabits_int
-    assert constructor_inhabits_type(constructor, DecimalType()) is inhabits_decimal
+    assert constructor_inhabits_type(constructor, IntType(), TypeTable()) is inhabits_int
+    assert constructor_inhabits_type(constructor, DecimalType(), TypeTable()) is inhabits_decimal
 
 
 def test_non_data_and_generic_types_have_no_inhabiting_constructors() -> None:
     """Match compilation cannot construct values for non-concrete subject types."""
-    assert not constructor_inhabits_type(BoolConstructor(False), TypeVarType("T"))
+    assert not constructor_inhabits_type(BoolConstructor(False), TypeVarType("T"), TypeTable())
 
 
 def test_boolean_literals_normalize_to_boolean_constructors() -> None:
@@ -762,9 +763,13 @@ def test_signature_and_pattern_dispatch_reject_unknown_future_members() -> None:
     with pytest.raises(MatchCompileInvariantError, match="unsupported semantic type"):
         signature_for_type(cast(Type, object()), checked.type_env.type_table)
     with pytest.raises(MatchCompileInvariantError, match="unsupported semantic type"):
-        constructor_inhabits_type(BoolConstructor(False), cast(Type, object()))
+        constructor_inhabits_type(
+            BoolConstructor(False), cast(Type, object()), checked.type_env.type_table
+        )
     with pytest.raises(MatchCompileInvariantError, match="unsupported constructor"):
-        constructor_inhabits_type(cast(Constructor, object()), IntType())
+        constructor_inhabits_type(
+            cast(Constructor, object()), IntType(), checked.type_env.type_table
+        )
     unknown = cast(Pattern, _UnknownPattern(node_id=999, span=case.span))
     with pytest.raises(MatchCompileInvariantError, match="unsupported source pattern"):
         normalize_pattern(unknown, IntType(), checked)
@@ -850,14 +855,8 @@ def test_bare_variant_normalization_rejects_missing_and_wrong_owner_metadata() -
 
     ref = checked.pattern_classifications[pattern.node_id]
     assert ref is not None
-    checked.type_env.type_table.register(
-        TypeDef(
-            kind="enum",
-            name="Other",
-            module_id=ENTRY_ID,
-            members=(("none", ()),),
-            decl_node_id=next_decl_id(),
-        )
+    register_typedef(
+        checked.type_env.type_table, enum_typedef("Other", {"none": {}}, module_id=ENTRY_ID)
     )
     wrong_owner = replace(ref, owner_name="Other")
     with pytest.raises(MatchCompileInvariantError, match="invalid final"):

@@ -57,34 +57,17 @@ class NominalConstructor:
         return self.record_type.name
 
 
-FieldBearingNominalConstructor: TypeAlias = NominalConstructor
-
-
-@dataclass(frozen=True, slots=True)
-class FieldBearingConstructorKey:
-    """Runtime identity of a field-bearing record declaration."""
-
-    nominal_type: RecordType
-
-
-def field_bearing_constructor_key(
-    constructor: FieldBearingNominalConstructor,
-) -> FieldBearingConstructorKey:
-    """Return the equality key independent of declaration field metadata."""
-    return FieldBearingConstructorKey(constructor.record_type)
-
-
 def field_bearing_constructor_sort_key(
-    constructor: FieldBearingNominalConstructor,
+    constructor: NominalConstructor,
 ) -> tuple[int, tuple[str, ...], str, tuple[str, ...], str]:
     """Return a stable order for a nominal constructor identity."""
-    key = field_bearing_constructor_key(constructor)
+    record_type = constructor.record_type
     return (
         0,
-        key.nominal_type.module_id.segments,
-        key.nominal_type.name,
-        tuple(repr(argument) for argument in key.nominal_type.type_args),
-        "::".join(key.nominal_type.scope_path),
+        record_type.module_id.segments,
+        record_type.name,
+        tuple(repr(argument) for argument in record_type.type_args),
+        "::".join(record_type.scope_path),
     )
 
 
@@ -138,7 +121,7 @@ class LiteralConstructor:
         return 0
 
 
-Constructor: TypeAlias = FieldBearingNominalConstructor | BoolConstructor | LiteralConstructor
+Constructor: TypeAlias = NominalConstructor | BoolConstructor | LiteralConstructor
 
 
 @dataclass(frozen=True, slots=True)
@@ -445,7 +428,7 @@ class DecisionDecompose:
     """
 
     occurrence: Occurrence
-    constructor: FieldBearingNominalConstructor
+    constructor: NominalConstructor
     children: tuple[Occurrence, ...]
     child: Decision
     demanded_occurrences: tuple[OccurrenceId, ...]
@@ -510,8 +493,6 @@ __all__ = [
     "DecisionLeaf",
     "DecisionSwitch",
     "EnumConstructorSpelling",
-    "FieldBearingConstructorKey",
-    "FieldBearingNominalConstructor",
     "FieldOccurrenceProvenance",
     "LiteralConstructor",
     "LiteralKind",
@@ -536,6 +517,5 @@ __all__ = [
     "SourceAction",
     "SourcePatternProvenance",
     "WildcardCell",
-    "field_bearing_constructor_key",
     "field_bearing_constructor_sort_key",
 ]

@@ -142,7 +142,7 @@ def compute_uninhabited(table: TypeTable) -> frozenset[DeclId]:
         for decl_id, typedef in defs.items():
             if decl_id in inhabited:
                 continue
-            if _decl_inhabited(typedef, inhabited, defs):
+            if _InhabitationSolver(defs, inhabited).decl_inhabited(typedef):
                 inhabited.add(decl_id)
                 changed = True
     member_ids = {
@@ -155,6 +155,135 @@ def compute_uninhabited(table: TypeTable) -> frozenset[DeclId]:
     return frozenset(defs) - inhabited - member_ids
 
 
+class _InhabitationSolver:
+    """One declaration's inhabitation walk over a fixed ``inhabited`` set.
+
+    ``defs`` and ``inhabited`` are constant for the walk's lifetime, so the
+    answer for a given (instantiation, recursion stack) pair is stable and is
+    memoized. Without that memo a declaration whose fields reference the same
+    type more than once is re-walked once per path through the type graph,
+    which is exponential in the graph's depth for a diamond-shaped one.
+    """
+
+    __slots__ = ("_defs", "_inhabited", "_memo")
+
+    def __init__(self, defs: Mapping[DeclId, TypeDef], inhabited: set[DeclId]) -> None:
+        self._defs = defs
+        self._inhabited = inhabited
+        self._memo: dict[tuple[InstantiationKey, frozenset[InstantiationKey]], bool] = {}
+
+    def decl_inhabited(self, typedef: TypeDef) -> bool:
+        """Return whether *typedef*'s own body is inhabited."""
+        args = tuple(TypeVarType(param) for param in typedef.type_params)
+        return self._body_inhabited(typedef, {}, stack=frozenset({(typedef.decl_node_id, args)}))
+
+    def _body_inhabited(
+        self, typedef: TypeDef, env: TypeEnv, *, stack: frozenset[InstantiationKey]
+    ) -> bool:
+        if typedef.kind == "enum":
+            return any(
+                self._template_inhabited(member, env, stack=stack) for member in typedef.members
+            )
+        if typedef.kind == "exception":
+            return self._exception_decl_inhabited(typedef, env, stack=stack)
+        return all(self._template_inhabited(t, env, stack=stack) for _fname, t in typedef.fields)
+
+    def _exception_decl_inhabited(
+        self, typedef: TypeDef, env: TypeEnv, *, stack: frozenset[InstantiationKey]
+    ) -> bool:
+        decl_id = typedef.decl_node_id
+        if typedef.abstract:
+            return any(
+                child.kind == "exception" and child.base == decl_id and child_id in self._inhabited
+                for child_id, child in self._defs.items()
+            )
+        return self._exception_fields_inhabited(
+            typedef, env, stack=stack, extends_stack=frozenset({decl_id})
+        )
+
+    def _exception_fields_inhabited(
+        self,
+        typedef: TypeDef,
+        env: TypeEnv,
+        *,
+        stack: frozenset[InstantiationKey],
+        extends_stack: frozenset[DeclId],
+    ) -> bool:
+        own_ok = all(self._template_inhabited(t, env, stack=stack) for _fname, t in typedef.fields)
+        if not own_ok:
+            return False
+        if typedef.base is None:
+            return True
+        if typedef.base in extends_stack:
+            return False
+        base_def = self._defs.get(typedef.base)
+        if base_def is None or base_def.kind != "exception":
+            return False
+        return self._exception_fields_inhabited(
+            base_def,
+            env,
+            stack=stack,
+            extends_stack=extends_stack | frozenset({typedef.base}),
+        )
+
+    def _template_inhabited(
+        self, t: Type, env: TypeEnv, *, stack: frozenset[InstantiationKey]
+    ) -> bool:
+        match t:
+            case TypeVarType():
+                replacement = env.get(t.name)
+                if replacement is None or replacement == t:
+                    return True
+                return self._template_inhabited(replacement, env, stack=stack)
+            case InferenceVarType():
+                return True
+            case RecordType() | EnumType():
+                decl_id = t.decl_id
+                if any(stack_id == decl_id for stack_id, _args in stack):
+                    return False
+                target = self._defs.get(decl_id)
+                if target is None:
+                    return decl_id in self._inhabited
+                args = tuple(substitute(arg, env) for arg in t.type_args)
+                instantiation = (decl_id, args)
+                memo_key = (instantiation, stack)
+                cached = self._memo.get(memo_key)
+                if cached is not None:
+                    return cached
+                result = self._body_inhabited(
+                    target,
+                    dict(zip(target.type_params, args)),
+                    stack=stack | frozenset({instantiation}),
+                )
+                self._memo[memo_key] = result
+                return result
+            case ExceptionType():
+                decl_id = t.decl_id
+                if any(stack_id == decl_id for stack_id, _args in stack):
+                    return False
+                return decl_id in self._inhabited
+            case ArrayType() | DictType():
+                # The empty collection is always a value, regardless of the
+                # element/value type — this is exactly what "guards" recursion.
+                return True
+            case FunctionType():
+                # Function values are opaque for inhabitation; their parameter and
+                # result types do not require values to exist at this site.
+                return True
+            case (
+                TextType()
+                | JsonType()
+                | BoolType()
+                | IntType()
+                | DecimalType()
+                | UnitType()
+                | BottomType()
+            ):
+                return True
+            case _ as unreachable:  # pragma: no cover
+                assert_never(unreachable)
+
+
 def uninhabitable_message(kind: TypeDefKind, name: str) -> str:
     """Return the diagnostic text for an uninhabitable declaration named *name*."""
     label = {"record": "Record", "enum": "Enum", "exception": "Exception"}[kind]
@@ -163,156 +292,6 @@ def uninhabitable_message(kind: TypeDefKind, name: str) -> str:
         "infinite. Recursion must be guarded by an enum base-case variant or "
         "an array/dict field."
     )
-
-
-def _decl_inhabited(
-    typedef: TypeDef,
-    inhabited: set[DeclId],
-    defs: Mapping[DeclId, TypeDef],
-) -> bool:
-    args = tuple(TypeVarType(param) for param in typedef.type_params)
-    return _body_inhabited(
-        typedef,
-        {},
-        inhabited,
-        defs,
-        stack=frozenset({(typedef.decl_node_id, args)}),
-    )
-
-
-def _body_inhabited(
-    typedef: TypeDef,
-    env: TypeEnv,
-    inhabited: set[DeclId],
-    defs: Mapping[DeclId, TypeDef],
-    *,
-    stack: frozenset[InstantiationKey],
-) -> bool:
-    if typedef.kind == "enum":
-        return any(
-            _template_inhabited(member, env, inhabited, defs, stack=stack)
-            for member in typedef.members
-        )
-    if typedef.kind == "exception":
-        return _exception_decl_inhabited(typedef, env, inhabited, defs, stack=stack)
-    return all(
-        _template_inhabited(t, env, inhabited, defs, stack=stack) for _fname, t in typedef.fields
-    )
-
-
-def _exception_decl_inhabited(
-    typedef: TypeDef,
-    env: TypeEnv,
-    inhabited: set[DeclId],
-    defs: Mapping[DeclId, TypeDef],
-    *,
-    stack: frozenset[InstantiationKey],
-) -> bool:
-    decl_id = typedef.decl_node_id
-    if typedef.abstract:
-        return any(
-            child.kind == "exception" and child.base == decl_id and child_id in inhabited
-            for child_id, child in defs.items()
-        )
-    return _exception_fields_inhabited(
-        typedef,
-        env,
-        inhabited,
-        defs,
-        stack=stack,
-        extends_stack=frozenset({decl_id}),
-    )
-
-
-def _exception_fields_inhabited(
-    typedef: TypeDef,
-    env: TypeEnv,
-    inhabited: set[DeclId],
-    defs: Mapping[DeclId, TypeDef],
-    *,
-    stack: frozenset[InstantiationKey],
-    extends_stack: frozenset[DeclId],
-) -> bool:
-    own_ok = all(
-        _template_inhabited(t, env, inhabited, defs, stack=stack) for _fname, t in typedef.fields
-    )
-    if not own_ok:
-        return False
-    if typedef.base is None:
-        return True
-    if typedef.base in extends_stack:
-        return False
-    base_def = defs.get(typedef.base)
-    if base_def is None or base_def.kind != "exception":
-        return False
-    return _exception_fields_inhabited(
-        base_def,
-        env,
-        inhabited,
-        defs,
-        stack=stack,
-        extends_stack=extends_stack | frozenset({typedef.base}),
-    )
-
-
-def _template_inhabited(
-    t: Type,
-    env: TypeEnv,
-    inhabited: set[DeclId],
-    defs: Mapping[DeclId, TypeDef],
-    *,
-    stack: frozenset[InstantiationKey],
-) -> bool:
-    match t:
-        case TypeVarType():
-            replacement = env.get(t.name)
-            if replacement is None or replacement == t:
-                return True
-            return _template_inhabited(replacement, env, inhabited, defs, stack=stack)
-        case InferenceVarType():
-            return True
-        case RecordType() | EnumType():
-            decl_id = t.decl_id
-            if any(stack_id == decl_id for stack_id, _args in stack):
-                return False
-            target = defs.get(decl_id)
-            if target is None:
-                return decl_id in inhabited
-            args = tuple(substitute(arg, env) for arg in t.type_args)
-            instantiation = (decl_id, args)
-            target_env = dict(zip(target.type_params, args))
-            return _body_inhabited(
-                target,
-                target_env,
-                inhabited,
-                defs,
-                stack=stack | frozenset({instantiation}),
-            )
-        case ExceptionType():
-            decl_id = t.decl_id
-            if any(stack_id == decl_id for stack_id, _args in stack):
-                return False
-            return decl_id in inhabited
-        case ArrayType() | DictType():
-            # The empty collection is always a value, regardless of the
-            # element/value type — this is exactly what "guards" recursion.
-            return True
-        case FunctionType():
-            # Function values are opaque for inhabitation; their parameter and
-            # result types do not require values to exist at this site.
-            return True
-        case (
-            TextType()
-            | JsonType()
-            | BoolType()
-            | IntType()
-            | DecimalType()
-            | UnitType()
-            | BottomType()
-        ):
-            return True
-        case _ as unreachable:  # pragma: no cover
-            assert_never(unreachable)
 
 
 # ---------------------------------------------------------------------------

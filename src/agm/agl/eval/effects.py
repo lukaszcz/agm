@@ -36,6 +36,7 @@ from agm.agl.runtime.trace import TraceStore
 from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.exceptions import make_builtin_exception as _make_exc_value
+from agm.agl.semantics.types import terminal_name
 from agm.agl.semantics.values import (
     VOID_VALUE,
     BoolValue,
@@ -131,7 +132,7 @@ class EffectHandlers:
     def _agent_trace_value(agent: RecordValue) -> dict[str, object]:
         """Return the agent member name and payload without re-decoding it."""
         return {
-            "variant": agent.display_name.rsplit("::", maxsplit=1)[-1],
+            "variant": terminal_name(agent.display_name),
             "payload": {
                 name: value.value if isinstance(value, TextValue) else render_value(value)
                 for name, value in agent.fields.items()

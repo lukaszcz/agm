@@ -268,6 +268,9 @@ class TypeTable:
         self._record_fields_cache: dict[DeclId, dict[RecordType, Mapping[str, Type]]] = {}
         self._enum_members_cache: dict[DeclId, dict[EnumType, tuple[RecordType, ...]]] = {}
         self._enum_member_names_cache: dict[DeclId, dict[EnumType, Mapping[str, RecordType]]] = {}
+        self._enum_member_by_decl_cache: dict[
+            DeclId, dict[EnumType, Mapping[DeclId, RecordType]]
+        ] = {}
         # Exceptions are non-generic, so (unlike record_fields/enum_members)
         # there is no type_args substitution — the memo is keyed directly by
         # declaration identity, one entry per exception.
@@ -286,6 +289,10 @@ class TypeTable:
         # invalidated (set back to ``None``) whenever a declaration is added,
         # removed, or overwritten.
         self._non_data_caps: NonDataReachability | None = None
+        # Member declaration id -> the enums declaring or referencing it, in
+        # registration order. A referenced member belongs to several enums, so
+        # this is multi-valued. Whole-table, rebuilt on any registration change.
+        self._member_enum_owners: dict[DeclId, tuple[DeclId, ...]] | None = None
         # Whole-table finiteness fixpoint (see :meth:`has_finite_schema`),
         # cached and invalidated the same way as ``_non_data_caps``.
         self._finite_closure: FiniteClosure | None = None
@@ -321,7 +328,6 @@ class TypeTable:
         reclaims its name path the same way, which is how a caller restores
         a name to a declaration that a since-discarded one took over.
         """
-        typedef = self._materialize_member_records(typedef)
         if self_validation_enabled() and typedef.decl_node_id == NO_DECL_ID:
             raise AssertionError(
                 f"cannot register a TypeDef with no declaration identity: {typedef!r}"
@@ -332,6 +338,7 @@ class TypeTable:
         if existing is None:
             self._defs[decl_id] = typedef
             self._non_data_caps = None
+            self._member_enum_owners = None
             self._finite_closure = None
             return
         if self_validation_enabled() and existing != typedef:
@@ -339,47 +346,6 @@ class TypeTable:
                 f"conflicting TypeDef registration for identity {decl_id!r}: "
                 f"{existing!r} is already registered, got {typedef!r}"
             )
-
-    def _materialize_member_records(self, typedef: TypeDef) -> TypeDef:
-        """Register record declarations for a data-only enum fixture, if any.
-
-        Production enum builders always provide member record handles. The
-        tuple form keeps hand-built semantic fixtures concise while ensuring
-        every table entry and every public member query still exposes records.
-        """
-        raw_members = cast(tuple[object, ...], typedef.members)
-        if typedef.kind != "enum" or all(isinstance(member, RecordType) for member in raw_members):
-            return typedef
-        member_scope = (*typedef.scope_path, typedef.name)
-        records: list[RecordType] = []
-        for index, raw_member in enumerate(raw_members):
-            fixture_member = cast(tuple[str, tuple[tuple[str, Type], ...]], raw_member)
-            name, fields = fixture_member
-            decl_id = typedef.decl_node_id * 10_000 + index + 1
-            record_def = TypeDef(
-                kind="record",
-                name=name,
-                module_id=typedef.module_id,
-                scope_path=member_scope,
-                type_params=tuple(
-                    param
-                    for param in typedef.type_params
-                    if any(param in free_type_vars(field_type) for _, field_type in fields)
-                ),
-                fields=fields,
-                decl_node_id=decl_id,
-            )
-            self.register(record_def)
-            records.append(
-                RecordType(
-                    name=name,
-                    type_args=tuple(TypeVarType(param) for param in record_def.type_params),
-                    module_id=typedef.module_id,
-                    scope_path=member_scope,
-                    decl_id=decl_id,
-                )
-            )
-        return replace(typedef, members=tuple(records))
 
     def get(
         self, module_id: ModuleId, name: str, scope_path: tuple[str, ...] = ()
@@ -542,6 +508,7 @@ class TypeTable:
         self._record_fields_cache.pop(decl_id, None)
         self._enum_members_cache.pop(decl_id, None)
         self._enum_member_names_cache.pop(decl_id, None)
+        self._enum_member_by_decl_cache.pop(decl_id, None)
         # Exception field accessors flatten inherited base chains, so changing
         # one exception can invalidate cached descendants as well as the changed
         # identity. Clear the exception caches wholesale rather than trying to
@@ -554,6 +521,7 @@ class TypeTable:
         # a single changed identity invalidates the whole cached result rather
         # than just this one.
         self._non_data_caps = None
+        self._member_enum_owners = None
         self._finite_closure = None
 
     def record_fields(self, handle: RecordType) -> Mapping[str, Type]:
@@ -619,6 +587,32 @@ class TypeTable:
         self._enum_members_cache.setdefault(decl_id, {})[handle] = result
         return result
 
+    def _member_enum_owner_index(self) -> Mapping[DeclId, tuple[DeclId, ...]]:
+        """Return the memoized member-declaration -> owning-enum index.
+
+        A member declared in one enum may also be referenced by others, so the
+        relation is multi-valued and keeps registration order — the order the
+        owner scan used before this index existed.
+        """
+        index = self._member_enum_owners
+        if index is None:
+            index = {}
+            for enum_def in self._defs.values():
+                if enum_def.kind != "enum":
+                    continue
+                for member in enum_def.members:
+                    index[member.decl_id] = (
+                        *index.get(member.decl_id, ()),
+                        enum_def.decl_node_id,
+                    )
+            self._member_enum_owners = index
+        return index
+
+    def _enum_defs_owning(self, record: RecordType) -> tuple[TypeDef, ...]:
+        """Return the enum definitions *record* is a member of, in registration order."""
+        owners = self._member_enum_owner_index().get(record.decl_id, ())
+        return tuple(self._defs[owner_id] for owner_id in owners)
+
     def records_share_enum_membership(self, records: tuple[RecordType, ...]) -> bool:
         """Return whether *records* belong to one currently nameable enum instantiation.
 
@@ -629,19 +623,18 @@ class TypeTable:
         any value. Superseded enums remain available by identity for retained
         values, but their reused name cannot annotate a new expression.
         """
-        for enum_def in self._defs.values():
-            if enum_def.kind != "enum" or not self.is_current(enum_def):
+        candidates = (
+            self._enum_defs_owning(records[0])
+            if records
+            else tuple(enum_def for enum_def in self._defs.values() if enum_def.kind == "enum")
+        )
+        for enum_def in candidates:
+            if not self.is_current(enum_def):
                 continue
+            members = {member.decl_id: member for member in enum_def.members}
             bindings: dict[str, Type] = {}
             for record in records:
-                member = next(
-                    (
-                        candidate
-                        for candidate in enum_def.members
-                        if candidate.decl_id == record.decl_id
-                    ),
-                    None,
-                )
+                member = members.get(record.decl_id)
                 if member is None:
                     break
                 for parameter, argument in zip(member.type_args, record.type_args, strict=True):
@@ -658,14 +651,10 @@ class TypeTable:
 
     def enum_owner_for_member(self, handle: RecordType) -> EnumType | None:
         """Return the concrete enum containing *handle*, when its arguments are known."""
-        for typedef in self._defs.values():
-            if typedef.kind != "enum":
-                continue
-            member = next(
-                (item for item in typedef.members if item.decl_id == handle.decl_id), None
-            )
-            if member is None:
-                continue
+        for typedef in self._enum_defs_owning(handle):
+            # The owner index only yields enums that declare or reference this
+            # member, so the lookup always succeeds.
+            member = next(item for item in typedef.members if item.decl_id == handle.decl_id)
             bindings: dict[str, Type | None] = dict(
                 zip(typedef.type_params, (None,) * len(typedef.type_params))
             )
@@ -690,6 +679,31 @@ class TypeTable:
                 return cached
         result = {member.name: member for member in self.enum_members(handle)}
         self._enum_member_names_cache.setdefault(decl_id, {})[handle] = result
+        return result
+
+    def enum_member_by_decl(self, handle: EnumType, decl_id: DeclId) -> RecordType | None:
+        """Return *handle*'s member declared as *decl_id*, or ``None`` if it has none.
+
+        The declaration-keyed counterpart of :meth:`enum_member_names`, memoized
+        per enum instantiation the same way. Callers holding a constructor's
+        declaration identity use this rather than rescanning the member tuple.
+        """
+        return self.enum_member_ids(handle).get(decl_id)
+
+    def enum_member_ids(self, handle: EnumType) -> Mapping[DeclId, RecordType]:
+        """Return *handle*'s members indexed by declaration id, memoized per instantiation.
+
+        Membership tests and member lookups both key off a declaration id, so
+        callers use this index rather than rescanning the member tuple.
+        """
+        enum_decl_id = handle.decl_id
+        bucket = self._enum_member_by_decl_cache.get(enum_decl_id)
+        if bucket is not None:
+            cached = bucket.get(handle)
+            if cached is not None:
+                return cached
+        result = {member.decl_id: member for member in self.enum_members(handle)}
+        self._enum_member_by_decl_cache.setdefault(enum_decl_id, {})[handle] = result
         return result
 
     def exception_fields(self, handle: ExceptionType) -> Mapping[str, Type]:

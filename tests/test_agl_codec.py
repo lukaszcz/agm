@@ -85,6 +85,7 @@ from agm.agl.type_schema import build_decode_schema, derive_schema
 from agm.agl.typecheck.env import CheckedModule, OutputContractSpec
 from tests._agl_helpers import (
     enum_type,
+    enum_typedef,
     next_decl_id,
     prepare_inline_command,
     record_type,
@@ -714,29 +715,18 @@ class TestRecursiveSchemaDerivation:
         # Tree[int] and Tree[text] — two distinct concrete instantiations of
         # the SAME generic declaration — get distinct, non-colliding keys.
         tree_id = next_decl_id()
-        tree_def = TypeDef(
-            kind="enum",
-            name="Tree",
-            module_id=ENTRY_ID,
+        tree_def = enum_typedef(
+            "Tree",
+            {
+                "Leaf": {},
+                "Node": {
+                    "value": TypeVarType("T"),
+                    "left": EnumType(name="Tree", type_args=(TypeVarType("T"),), decl_id=tree_id),
+                    "right": EnumType(name="Tree", type_args=(TypeVarType("T"),), decl_id=tree_id),
+                },
+            },
             type_params=("T",),
-            members=(
-                ("Leaf", ()),
-                (
-                    "Node",
-                    (
-                        ("value", TypeVarType("T")),
-                        (
-                            "left",
-                            EnumType(name="Tree", type_args=(TypeVarType("T"),), decl_id=tree_id),
-                        ),
-                        (
-                            "right",
-                            EnumType(name="Tree", type_args=(TypeVarType("T"),), decl_id=tree_id),
-                        ),
-                    ),
-                ),
-            ),
-            decl_node_id=tree_id,
+            decl_id=tree_id,
         )
         tree_int = EnumType(name="Tree", type_args=(IntType(),), decl_id=tree_id)
         tree_text = EnumType(name="Tree", type_args=(TextType(),), decl_id=tree_id)
@@ -829,34 +819,26 @@ class TestRecursiveSchemaDerivation:
             fields=(("first", TypeVarType("A")), ("second", TypeVarType("B"))),
             decl_node_id=pair_id,
         )
-        perfect_def = TypeDef(
-            kind="enum",
-            name="Perfect",
-            module_id=ENTRY_ID,
-            type_params=("T",),
-            members=(
-                ("Single", (("value", TypeVarType("T")),)),
-                (
-                    "Succ",
-                    (
-                        (
-                            "next",
-                            EnumType(
-                                name="Perfect",
-                                type_args=(
-                                    RecordType(
-                                        name="Pair",
-                                        type_args=(TypeVarType("T"), TypeVarType("T")),
-                                        decl_id=pair_id,
-                                    ),
-                                ),
-                                decl_id=perfect_id,
+        perfect_def = enum_typedef(
+            "Perfect",
+            {
+                "Single": {"value": TypeVarType("T")},
+                "Succ": {
+                    "next": EnumType(
+                        name="Perfect",
+                        type_args=(
+                            RecordType(
+                                name="Pair",
+                                type_args=(TypeVarType("T"), TypeVarType("T")),
+                                decl_id=pair_id,
                             ),
                         ),
-                    ),
-                ),
-            ),
-            decl_node_id=perfect_id,
+                        decl_id=perfect_id,
+                    )
+                },
+            },
+            type_params=("T",),
+            decl_id=perfect_id,
         )
         table = type_table_for(pair_def, perfect_def)
         perfect_int = EnumType(name="Perfect", type_args=(IntType(),), decl_id=perfect_id)
@@ -1087,29 +1069,18 @@ class TestRecursiveDecodeDerivation:
 
     def test_generic_instantiations_get_distinct_keys_matching_schema(self) -> None:
         tree_id = next_decl_id()
-        tree_def = TypeDef(
-            kind="enum",
-            name="Tree",
-            module_id=ENTRY_ID,
+        tree_def = enum_typedef(
+            "Tree",
+            {
+                "Leaf": {},
+                "Node": {
+                    "value": TypeVarType("T"),
+                    "left": EnumType(name="Tree", type_args=(TypeVarType("T"),), decl_id=tree_id),
+                    "right": EnumType(name="Tree", type_args=(TypeVarType("T"),), decl_id=tree_id),
+                },
+            },
             type_params=("T",),
-            members=(
-                ("Leaf", ()),
-                (
-                    "Node",
-                    (
-                        ("value", TypeVarType("T")),
-                        (
-                            "left",
-                            EnumType(name="Tree", type_args=(TypeVarType("T"),), decl_id=tree_id),
-                        ),
-                        (
-                            "right",
-                            EnumType(name="Tree", type_args=(TypeVarType("T"),), decl_id=tree_id),
-                        ),
-                    ),
-                ),
-            ),
-            decl_node_id=tree_id,
+            decl_id=tree_id,
         )
         tree_int = EnumType(name="Tree", type_args=(IntType(),), decl_id=tree_id)
         tree_text = EnumType(name="Tree", type_args=(TextType(),), decl_id=tree_id)
@@ -1160,34 +1131,26 @@ class TestRecursiveDecodeDerivation:
             fields=(("first", TypeVarType("A")), ("second", TypeVarType("B"))),
             decl_node_id=pair_id,
         )
-        perfect_def = TypeDef(
-            kind="enum",
-            name="Perfect",
-            module_id=ENTRY_ID,
-            type_params=("T",),
-            members=(
-                ("Single", (("value", TypeVarType("T")),)),
-                (
-                    "Succ",
-                    (
-                        (
-                            "next",
-                            EnumType(
-                                name="Perfect",
-                                type_args=(
-                                    RecordType(
-                                        name="Pair",
-                                        type_args=(TypeVarType("T"), TypeVarType("T")),
-                                        decl_id=pair_id,
-                                    ),
-                                ),
-                                decl_id=perfect_id,
+        perfect_def = enum_typedef(
+            "Perfect",
+            {
+                "Single": {"value": TypeVarType("T")},
+                "Succ": {
+                    "next": EnumType(
+                        name="Perfect",
+                        type_args=(
+                            RecordType(
+                                name="Pair",
+                                type_args=(TypeVarType("T"), TypeVarType("T")),
+                                decl_id=pair_id,
                             ),
                         ),
-                    ),
-                ),
-            ),
-            decl_node_id=perfect_id,
+                        decl_id=perfect_id,
+                    )
+                },
+            },
+            type_params=("T",),
+            decl_id=perfect_id,
         )
         table = type_table_for(pair_def, perfect_def)
         perfect_int = EnumType(name="Perfect", type_args=(IntType(),), decl_id=perfect_id)

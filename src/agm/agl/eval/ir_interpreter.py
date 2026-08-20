@@ -314,7 +314,6 @@ def _project_nominal_field(
     nominal: NominalId,
     field: str,
     mode: IrFieldMode,
-    actual_nominal: NominalId | None,
 ) -> Value:
     """Read one declared field from a nominal runtime value.
 
@@ -330,9 +329,9 @@ def _project_nominal_field(
         )
     match mode:
         case IrFieldMode.EXACT:
-            if actual_nominal != nominal:
+            if value.nominal != nominal:
                 raise InvalidIrError(
-                    f"IrField: expected nominal {nominal!r}, got {actual_nominal!r}"
+                    f"IrField: expected nominal {nominal!r}, got {value.nominal!r}"
                 )
         case IrFieldMode.UPPER_BOUND:
             pass
@@ -1110,11 +1109,6 @@ class IrInterpreter:
     # Expression evaluator (closed IrExpr dispatch)
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _dispatch_nominal(value: RecordValue | ExceptionValue) -> NominalId:
-        """Return a nominal value's declaration identity for dispatch."""
-        return value.nominal
-
     def _eval(self, node: IrExpr) -> Value:
         """Evaluate *node* in the current frame and return its value.
 
@@ -1359,12 +1353,7 @@ class IrInterpreter:
 
             case IrField(value=val_expr, nominal=nominal, field=field_name, mode=mode):
                 value = self._eval(val_expr)
-                member = (
-                    self._dispatch_nominal(value)
-                    if isinstance(value, (RecordValue, ExceptionValue))
-                    else None
-                )
-                return _project_nominal_field(value, nominal, field_name, mode, member)
+                return _project_nominal_field(value, nominal, field_name, mode)
 
             case IrUpdateRecord(value=val_expr, updates=updates):
                 target = self._eval(val_expr)
@@ -1466,7 +1455,7 @@ class IrInterpreter:
                     raise InvalidIrError(
                         f"IrNominalIs: value is not nominal, got {type(value).__name__}"
                     )
-                return BoolValue((self._dispatch_nominal(value) == nominal) != negated)
+                return BoolValue((value.nominal == nominal) != negated)
 
             case IrConvert(value=val_expr, recipe=recipe, failure_mode=failure_mode):
                 source_value = self._eval(val_expr)
@@ -1533,12 +1522,17 @@ class IrInterpreter:
 
             case IrCase(subject=subject_expr, arms=arms, default=default):
                 subject_val = self._eval(subject_expr)
+                # The subject's identity is invariant across the arm scan, so it
+                # is read once here rather than per arm.
+                subject_nominal = (
+                    subject_val.nominal
+                    if isinstance(subject_val, (RecordValue, ExceptionValue))
+                    else None
+                )
                 for arm in arms:
                     key = arm.key
                     if isinstance(key, IrNominalCaseKey):
-                        selected = isinstance(subject_val, (RecordValue, ExceptionValue)) and (
-                            self._dispatch_nominal(subject_val) == key.nominal
-                        )
+                        selected = subject_nominal == key.nominal
                     else:
                         selected = value_eq(subject_val, _literal_key_value(key))
                     if not selected:
@@ -1555,7 +1549,6 @@ class IrInterpreter:
                                 key.nominal,
                                 field_name,
                                 IrFieldMode.EXACT,
-                                self._dispatch_nominal(subject_val),
                             )
                     return self._eval(arm.body)
                 if default is not None:

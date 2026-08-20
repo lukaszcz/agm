@@ -1,7 +1,7 @@
 {
   "scenarios": [
     {
-      "name": "declares_base_via_open_scope_and_catches_by_declared_type",
+      "name": "declares_base_via_scope_use_and_catches_by_declared_type",
       "expect": {
         "stdout": "child 7 extra\nbase 3\n"
       }

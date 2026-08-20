@@ -1,0 +1,5 @@
+use Scope::{missing}
+scope Scope
+def known() -> int = 1
+end Scope
+program def main() -> unit = ()

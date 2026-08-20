@@ -1,6 +1,6 @@
 import namespaces/primary/config
 import namespaces/secondary/config
-import namespaces/primary/config using primary
+import namespaces/primary/config::{primary}
 
 program def main() -> unit =
   print(config::secondary())

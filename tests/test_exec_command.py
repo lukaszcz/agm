@@ -1187,7 +1187,7 @@ class TestExecLowersGraphOnce:
         (tmp_path / "helper.agl").write_text('def greet(who: text) -> text = "hi %{who}"\n')
         agl_file = tmp_path / "prog.agl"
         write_file_program(
-            agl_file, 'open import helper\nparam who: text = "world"\nprint helper::greet(who)\n'
+            agl_file, 'import helper::*\nparam who: text = "world"\nprint helper::greet(who)\n'
         )
 
         assert exec_command.run(_exec_args(agl_file, param_tokens=["--who", "agl"])) is None
@@ -2057,7 +2057,7 @@ class TestExecFFI:
 
         marker = tmp_path / "marker.txt"
         agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "open import mylib\nmylib::run()\n")
+        write_file_program(agl_file, "import mylib::*\nmylib::run()\n")
         (tmp_path / "mylib.agl").write_text(
             "extern def from_lib(x: int) -> int\ndef run() -> int = from_lib(1)\n"
         )
@@ -3022,7 +3022,7 @@ class TestExecModuleRoots:
         lib_dir = tmp_path
         (lib_dir / "mylib.agl").write_text("def answer() -> int = 42\n")
         entry = lib_dir / "entry.agl"
-        write_file_program(entry, "open import mylib\nlet r = answer()\nprint r\n")
+        write_file_program(entry, "import mylib::*\nlet r = answer()\nprint r\n")
 
         # A successful run returns normally (no SystemExit).
         exec_command.run(_exec_args_no_log(entry))
@@ -3036,7 +3036,7 @@ class TestExecModuleRoots:
         lib_dir = tmp_path
         (lib_dir / "broken.agl").write_text("def f() -> int = undeclared_name\n")
         entry = lib_dir / "entry.agl"
-        write_file_program(entry, "open import broken\nlet r = f()\nr\n")
+        write_file_program(entry, "import broken::*\nlet r = f()\nr\n")
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_log(entry))
@@ -3053,7 +3053,7 @@ class TestExecModuleRoots:
         lib_dir = tmp_path / "libdir"
         lib_dir.mkdir()
         (lib_dir / "util.agl").write_text('def greet() -> text = "Hi!"\n')
-        entry_source = "open import util\nlet r = greet()\nprint r\n"
+        entry_source = "import util::*\nlet r = greet()\nprint r\n"
 
         # Patch current_config_context as imported in exec_command
         from agm.config import context as ctx_mod
@@ -3077,7 +3077,7 @@ class TestExecModuleRoots:
     ) -> None:
         """A missing import causes exit 1 with a diagnostic on stderr."""
         entry = tmp_path / "prog.agl"
-        write_file_program(entry, "open import no_such_module\nlet x = 1\nx\n")
+        write_file_program(entry, "import no_such_module::*\nlet x = 1\nx\n")
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_log(entry))
@@ -3092,7 +3092,7 @@ class TestExecModuleRoots:
         lib_dir = tmp_path
         (lib_dir / "calc.agl").write_text("def square(n: int) -> int = n * n\n")
         entry = lib_dir / "prog.agl"
-        write_file_program(entry, "open import calc\nlet r = square(4)\nprint r\n")
+        write_file_program(entry, "import calc::*\nlet r = square(4)\nprint r\n")
 
         # A successful run returns normally (no SystemExit).
         exec_command.run(_exec_args_no_log(entry))
@@ -3158,7 +3158,7 @@ class TestExecModuleRoots:
         entry_dir = tmp_path / "work"
         entry_dir.mkdir()
         entry = entry_dir / "prog.agl"
-        write_file_program(entry, "open import shared\nlet r = pi()\nprint r\n")
+        write_file_program(entry, "import shared::*\nlet r = pi()\nprint r\n")
 
         # Patch load_module_roots to return a ModuleRootsConfig with lib_root set.
         with monkeypatch.context() as mp:
@@ -3176,7 +3176,7 @@ class TestExecModuleRoots:
     def test_exec_wildcard_import_multifile(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """``open import pkg/*`` imports two sibling modules and makes both callable.
+        """``import pkg/*::*`` imports two sibling modules and makes both callable.
 
         Verifies that the wildcard import path works end-to-end through the
         exec_command pipeline (discover_params + run_prepared).
@@ -3187,7 +3187,7 @@ class TestExecModuleRoots:
         (pkg_dir / "mul.agl").write_text("def mul(a: int, b: int) -> int = a * b\n")
         entry = tmp_path / "prog.agl"
         write_file_program(
-            entry, "open import pkg/*\nlet s = add(3, 4)\nlet p = mul(3, 4)\nprint s\nprint p\n"
+            entry, "import pkg/*::*\nlet s = add(3, 4)\nlet p = mul(3, 4)\nprint s\nprint p\n"
         )
 
         exec_command.run(_exec_args_no_log(entry))
@@ -3229,7 +3229,7 @@ class TestExecModuleRoots:
         entry = tmp_path / "entry.agl"
         write_file_program(
             entry,
-            "open import greeter\n"
+            "import greeter::*\n"
             'let mybot = AgentCommand("mock")\n'
             'let result = greeter::greet("What is your name?", mybot)\n'
             "print result\n",
@@ -3276,7 +3276,7 @@ class TestExecCliModulePaths:
         entry_dir = tmp_path / "prog"
         entry_dir.mkdir()
         entry = entry_dir / "main.agl"
-        write_file_program(entry, "open import helper\nlet r = answer()\nprint r\n")
+        write_file_program(entry, "import helper::*\nlet r = answer()\nprint r\n")
 
         args = ExecArgs(
             file=str(entry),
@@ -3310,7 +3310,7 @@ class TestExecCliModulePaths:
         entry = entry_dir / "prog.agl"
         write_file_program(
             entry,
-            "open import mod_a\nopen import mod_b\nlet r = va() + vb()\nprint r\n",
+            "import mod_a::*\nimport mod_b::*\nlet r = va() + vb()\nprint r\n",
         )
 
         args = ExecArgs(
@@ -3339,7 +3339,7 @@ class TestExecCliModulePaths:
         entry_dir = tmp_path / "prog"
         entry_dir.mkdir()
         entry = entry_dir / "main.agl"
-        write_file_program(entry, "open import helper\nlet r = answer()\nprint r\n")
+        write_file_program(entry, "import helper::*\nlet r = answer()\nprint r\n")
 
         args = ExecArgs(
             file=str(entry),
@@ -3383,7 +3383,7 @@ class TestExecCliModulePaths:
 
         args = ExecArgs(
             file=None,
-            command="open import util\nlet r = greet()\nprint r\n",
+            command="import util::*\nlet r = greet()\nprint r\n",
             param_tokens=[],
             strict_json=None,
             max_iters=None,

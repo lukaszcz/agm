@@ -95,9 +95,10 @@ either is a static error.
   (repeatable), resolved relative to the invocation working directory. See
   [Module resolution](#module-resolution). This is also how e2e/fixture tests point
   `agm exec` at test-specific module roots.
-- `--no-stdlib`: Disable automatic `std/core` opening throughout the loaded
-  program (the entry and its library modules). Explicit `import std/core` still
-  uses the normal module import semantics.
+- `--no-stdlib`: Disable the automatic `import std/core::*` prelude throughout
+  the loaded program (the entry and its library modules). Any explicit import whose
+  expansion includes `std/core` supplies that module's contribution instead; plain
+  `import std/core` leaves core names qualified-only.
 - `--strict-json`: Require agents to return exactly one bare JSON value (no fences,
   prose, or repair). Overridable per call site with the `strict_json:` named argument
   to `ask`.
@@ -266,7 +267,7 @@ program def main() -> unit =
 ```
 
 A qualified target (`std/config::KEY := …`) always writes a setting. After an
-`open import std/config`, its names are also in scope, so a bare `KEY := …` write
+`import std/config::*`, its names are also in scope, so a bare `KEY := …` write
 is valid. The `Option[text]` settings (`log-file`, `timeout`) take a `Some("…")`
 or `None` value.
 

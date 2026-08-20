@@ -2702,225 +2702,88 @@ class TestCastNode:
 
 
 class TestModuleSystemNodes:
-    """Tests for ImportMode, import, and export AST nodes."""
+    """Tests for import, use, and export AST nodes."""
 
     def _sp(self) -> SourceSpan:
         return SourceSpan(1, 0, 1, 1, 0, 1)
 
-    def test_import_mode_enum_values(self) -> None:
-        from agm.agl.syntax import ImportMode
+    def test_import_decl_preserves_tail_and_hidden_items(self) -> None:
+        from agm.agl.syntax import ImportDecl, ImportItem
 
-        assert ImportMode.ALL.value == "ALL"
-        assert ImportMode.USING.value == "USING"
-        assert ImportMode.HIDING.value == "HIDING"
-
-    def test_import_item_with_rename(self) -> None:
-        from agm.agl.syntax import ImportItem
-
-        item = ImportItem(name="foo", rename="bar", span=self._sp(), node_id=0)
-        assert item.name == "foo"
-        assert item.rename == "bar"
-
-    def test_import_item_no_rename(self) -> None:
-        from agm.agl.syntax import ImportItem
-
-        item = ImportItem(name="baz", rename=None, span=self._sp(), node_id=0)
-        assert item.rename is None
-
-    def test_import_item_equality_ignores_span(self) -> None:
-        from agm.agl.syntax import ImportItem
-
-        i1 = ImportItem(name="x", rename=None, span=SourceSpan(1, 0, 1, 1, 0, 1), node_id=0)
-        i2 = ImportItem(name="x", rename=None, span=SourceSpan(2, 0, 2, 1, 0, 1), node_id=99)
-        assert i1 == i2
-
-    def test_import_decl_basic(self) -> None:
-        from agm.agl.syntax import ImportDecl, ImportMode
-
+        item = ImportItem(name="member", rename="renamed", span=self._sp(), node_id=1)
+        hidden = ImportItem(name="secret", rename=None, span=self._sp(), node_id=2)
         decl = ImportDecl(
             module_path=("foo", "bar"),
             wildcard=False,
-            is_open=False,
             alias=None,
-            mode=ImportMode.ALL,
-            items=(),
+            tail=(item,),
+            hidden=(hidden,),
             span=self._sp(),
             node_id=0,
         )
-        assert decl.module_path == ("foo", "bar")
-        assert decl.wildcard is False
-        assert decl.is_open is False
-        assert decl.alias is None
-        assert decl.mode == ImportMode.ALL
-        assert decl.items == ()
+        assert decl.tail == (item,)
+        assert decl.hidden == (hidden,)
 
-    def test_import_decl_wildcard(self) -> None:
-        from agm.agl.syntax import ImportDecl, ImportMode
+    def test_use_decl_preserves_target_and_selection(self) -> None:
+        from agm.agl.syntax import ImportItem, ScopeSegment, UseDecl
 
-        decl = ImportDecl(
-            module_path=("utils",),
-            wildcard=True,
-            is_open=False,
+        target = ScopeSegment(name="Scope", span=self._sp(), node_id=1)
+        item = ImportItem(name="member", rename=None, span=self._sp(), node_id=2)
+        decl = UseDecl(
+            anchored=False,
+            target=(target,),
+            tail=(item,),
+            hidden=(),
             alias=None,
-            mode=ImportMode.ALL,
-            items=(),
             span=self._sp(),
             node_id=0,
         )
-        assert decl.wildcard is True
+        assert decl.target == (target,)
+        assert decl.tail == (item,)
 
-    def test_open_import_decl_with_alias(self) -> None:
-        from agm.agl.syntax import ImportDecl, ImportMode
+    def test_parsed_use_preserves_current_module_anchor(self) -> None:
+        from agm.agl.parser import parse_program
+        from agm.agl.syntax import UseDecl
 
-        decl = ImportDecl(
-            module_path=("foo",),
-            wildcard=False,
-            is_open=True,
-            alias="f",
-            mode=ImportMode.ALL,
-            items=(),
-            span=self._sp(),
-            node_id=0,
-        )
-        assert decl.is_open is True
-        assert decl.alias == "f"
+        program = parse_program("use ::Scope::*\nuse ::Scope as S")
+        glob, alias = program.body.items
+        assert isinstance(glob, UseDecl)
+        assert isinstance(alias, UseDecl)
+        assert glob.anchored is True
+        assert alias.anchored is True
+        assert tuple(segment.name for segment in glob.target) == ("Scope",)
+        assert glob.tail == ()
+        assert alias.alias == "S"
+        assert alias.tail is None
 
-    def test_import_decl_using_mode(self) -> None:
-        from agm.agl.syntax import ImportDecl, ImportItem, ImportMode
-
-        items = (
-            ImportItem(name="foo", rename=None, span=self._sp(), node_id=1),
-            ImportItem(name="bar", rename="b", span=self._sp(), node_id=2),
-        )
-        decl = ImportDecl(
-            module_path=("m",),
-            wildcard=False,
-            is_open=False,
-            alias=None,
-            mode=ImportMode.USING,
-            items=items,
-            span=self._sp(),
-            node_id=0,
-        )
-        assert decl.mode == ImportMode.USING
-        assert len(decl.items) == 2
-
-    def test_import_decl_hiding_mode(self) -> None:
-        from agm.agl.syntax import ImportDecl, ImportItem, ImportMode
-
-        items = (ImportItem(name="private_fn", rename=None, span=self._sp(), node_id=1),)
-        decl = ImportDecl(
-            module_path=("m",),
-            wildcard=False,
-            is_open=False,
-            alias=None,
-            mode=ImportMode.HIDING,
-            items=items,
-            span=self._sp(),
-            node_id=0,
-        )
-        assert decl.mode == ImportMode.HIDING
-
-    def test_import_decl_is_declaration(self) -> None:
-        from agm.agl.syntax import ImportDecl, ImportMode
-
-        decl = ImportDecl(
-            module_path=("m",),
-            wildcard=False,
-            is_open=False,
-            alias=None,
-            mode=ImportMode.ALL,
-            items=(),
-            span=self._sp(),
-            node_id=0,
-        )
-        assert isinstance(decl, ImportDecl)
-        # Verify it is part of the Declaration union (isinstance check)
-        _ = decl  # Declaration is a type alias, not a class, so just check it's the right type
-        assert type(decl).__name__ == "ImportDecl"
-
-    def test_import_decl_walk_visits_items(self) -> None:
-        from agm.agl.syntax import ImportDecl, ImportItem, ImportMode
+    def test_module_declarations_walk_selection_items(self) -> None:
+        from agm.agl.syntax import ExportDecl, ExportItem, ImportDecl, ImportItem
         from agm.agl.syntax.visitor import walk
 
-        item = ImportItem(name="x", rename=None, span=self._sp(), node_id=1)
-        decl = ImportDecl(
+        import_item = ImportItem(name="x", rename=None, span=self._sp(), node_id=1)
+        export_item = ExportItem(name="x", rename=None, span=self._sp(), node_id=3)
+        import_decl = ImportDecl(
             module_path=("m",),
             wildcard=False,
-            is_open=False,
             alias=None,
-            mode=ImportMode.USING,
-            items=(item,),
+            tail=(import_item,),
+            hidden=(),
             span=self._sp(),
             node_id=0,
         )
-        visited: list[object] = []
-        walk(decl, visited.append)
-        assert any(isinstance(n, ImportDecl) for n in visited)
-        assert any(isinstance(n, ImportItem) for n in visited)
-
-    def test_export_item_with_rename(self) -> None:
-        from agm.agl.syntax import ExportItem
-
-        item = ExportItem(name="foo", rename="bar", span=self._sp(), node_id=0)
-        assert item.name == "foo"
-        assert item.rename == "bar"
-
-    def test_export_item_equality_ignores_span(self) -> None:
-        from agm.agl.syntax import ExportItem
-
-        i1 = ExportItem(name="x", rename=None, span=SourceSpan(1, 0, 1, 1, 0, 1), node_id=0)
-        i2 = ExportItem(name="x", rename=None, span=SourceSpan(2, 0, 2, 1, 0, 1), node_id=99)
-        assert i1 == i2
-
-    def test_export_decl_basic(self) -> None:
-        from agm.agl.syntax import ExportDecl, ImportMode
-
-        decl = ExportDecl(
-            module_path=("foo", "bar"),
-            wildcard=False,
-            mode=ImportMode.ALL,
-            items=(),
-            span=self._sp(),
-            node_id=0,
-        )
-        assert decl.module_path == ("foo", "bar")
-        assert decl.wildcard is False
-        assert decl.mode == ImportMode.ALL
-        assert decl.items == ()
-
-    def test_export_decl_using_mode(self) -> None:
-        from agm.agl.syntax import ExportDecl, ExportItem, ImportMode
-
-        item = ExportItem(name="foo", rename="bar", span=self._sp(), node_id=1)
-        decl = ExportDecl(
+        export_decl = ExportDecl(
             module_path=("m",),
             wildcard=False,
-            mode=ImportMode.USING,
-            items=(item,),
+            items=(export_item,),
+            hidden=(),
             span=self._sp(),
-            node_id=0,
-        )
-        assert decl.mode == ImportMode.USING
-        assert decl.items == (item,)
-
-    def test_export_decl_walk_visits_items(self) -> None:
-        from agm.agl.syntax import ExportDecl, ExportItem, ImportMode
-        from agm.agl.syntax.visitor import walk
-
-        item = ExportItem(name="x", rename=None, span=self._sp(), node_id=1)
-        decl = ExportDecl(
-            module_path=("m",),
-            wildcard=False,
-            mode=ImportMode.USING,
-            items=(item,),
-            span=self._sp(),
-            node_id=0,
+            node_id=2,
         )
         visited: list[object] = []
-        walk(decl, visited.append)
-        assert any(isinstance(n, ExportDecl) for n in visited)
-        assert any(isinstance(n, ExportItem) for n in visited)
+        walk(import_decl, visited.append)
+        walk(export_decl, visited.append)
+        assert import_item in visited
+        assert export_item in visited
 
     def test_infix_decl_walk_is_leaf(self) -> None:
         from agm.agl.syntax import InfixAssoc, InfixDecl

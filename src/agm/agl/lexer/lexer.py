@@ -29,12 +29,15 @@ and downstream tooling rely on.
 from __future__ import annotations
 
 import contextvars
+import importlib.resources
 from contextlib import contextmanager
 from typing import Iterator
 
+from lark import Lark
 from lark.lexer import Lexer, LexerState, Token
 
 from agm.agl.diagnostics import Diagnostic, SourceSpan
+from agm.agl.keywords import KW_AS
 from agm.agl.lexer.errors import LexError
 from agm.agl.lexer.layout import layout
 from agm.agl.lexer.scanner import _Scanner
@@ -53,34 +56,74 @@ from agm.agl.lexer.tokens import (
     LBRACE,
     LPAR,
     LSQB,
+    MINUS,
     MODPATH,
     MODQUAL,
     NAME,
     OP_NAME,
-    OPEN,
+    RBRACE,
     RPAR,
     RSQB,
     SCOPE,
     SLASH,
+    STAR,
+    TEMPLATE_END,
+    TEMPLATE_START,
     TYPEARG_LSQB,
-    USING,
+    USE,
     WILDCARD,
 )
 from agm.agl.syntax.advisories import SpacedQualifier
 
-_INDEX_PREDECESSORS = frozenset(
+_GRAMMAR_TOKEN_UNMAP = {
+    grammar_type: scanner_type for scanner_type, grammar_type in GRAMMAR_TOKEN_REMAP.items()
+}
+
+
+def _scanner_token_type(token_type: str) -> str:
+    """Return the public scanner spelling for a possibly parser-remapped token type."""
+    return _GRAMMAR_TOKEN_UNMAP.get(token_type, token_type)
+
+
+# Canonical scanner token types that delimit closed expressions and begin infix
+# operands. Keeping these sets in scanner form lets both the public tokenizer's
+# lowercase keywords and the Lark stream's remapped keywords use one inventory.
+_EXPRESSION_END_TYPES = frozenset(
     {
-        "NAME",
+        NAME,
         OP_NAME,
         INT,
-        "DECIMAL",
-        "TRUE",
-        "FALSE",
-        "NULL",
-        "TEMPLATE_END",
-        "RPAR",
+        DECIMAL,
+        "true",
+        "false",
+        "null",
+        TEMPLATE_END,
+        RPAR,
         RSQB,
-        "RBRACE",
+        RBRACE,
+        "break",
+        "continue",
+    }
+)
+_INFIX_OPERAND_START_TYPES = frozenset(
+    {
+        NAME,
+        OP_NAME,
+        INT,
+        DECIMAL,
+        "true",
+        "false",
+        "null",
+        TEMPLATE_START,
+        LPAR,
+        LSQB,
+        LBRACE,
+        MODQUAL,
+        DCOLON,
+        "break",
+        "continue",
+        "not",
+        MINUS,
     }
 )
 
@@ -154,6 +197,9 @@ def _remap(tokens: Iterator[Token]) -> Iterator[Token]:
 
 _ITEM_START_TYPES = frozenset({"_NEWLINE", "_INDENT", "_DEDENT", "SEMICOLON"})
 
+# The three header keywords whose clause a hiding promotion can terminate.
+_HEADER_TYPES = frozenset({IMPORT, USE, EXPORT})
+
 
 def _retype(tok: Token, new_type: str) -> Token:
     """Return a copy of *tok* with a new token type, preserving value and span."""
@@ -194,19 +240,67 @@ def _is_scope_closer(tokens: list[Token], index: int) -> bool:
     )
 
 
+def _is_as(token: Token) -> bool:
+    """Whether *token* is ``as`` before or after parser keyword remapping."""
+    return _scanner_token_type(token.type) == KW_AS
+
+
+def _is_use_declaration(tokens: list[Token], index: int) -> bool:
+    """Whether an item-start ``use`` has a declaration-shaped token header."""
+
+    end = index + 1
+    while end < len(tokens) and tokens[end].type not in _ITEM_START_TYPES:
+        end += 1
+    header = tokens[index + 1 : end]
+    if not header:
+        return False
+    if header[0].type == SLASH and (
+        len(header) < 2 or header[1].type != NAME or header[0].end_pos != header[1].start_pos
+    ):
+        return False
+    if header[0].type == SLASH and not any(
+        token.type == DCOLON or _is_as(token) for token in header
+    ):
+        return False
+    for hiding_index, token in enumerate(header):
+        if not (
+            token.type == NAME
+            and str(token) == "hiding"
+            and hiding_index > 0
+            and header[hiding_index - 1].type in {STAR, "RBRACE"}
+        ):
+            continue
+        if hiding_index + 1 >= len(header) or header[hiding_index + 1].type != NAME:
+            return False
+    if any(
+        _is_as(token) and (position + 1 >= len(header) or header[position + 1].type != NAME)
+        for position, token in enumerate(header)
+    ):
+        return False
+    for position in range(index + 1, end):
+        if tokens[position].type != DCOLON:
+            continue
+        if (
+            position + 1 >= end
+            or tokens[position].end_pos != tokens[position + 1].start_pos
+            or (position > index + 1 and tokens[position - 1].end_pos != tokens[position].start_pos)
+        ):
+            return False
+    current_module = header[0].type == DCOLON
+    if current_module and sum(token.type == DCOLON for token in header) == 1:
+        return any(_is_as(token) for token in header)
+    return header[-1].type in {NAME, STAR, "RBRACE"}
+
+
 def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
     """Contextually promote soft keywords in the post-layout token stream.
 
     Rules:
-    - 'open' → OPEN at item-start before an import or scope reference.
-    - 'import' → IMPORT at item-start, or immediately after OPEN.
-    - 'export' → EXPORT at item-start.
-    - 'using' → USING and 'hiding' → HIDING within import or export declarations.
+    - 'import' → IMPORT, 'use' → USE, and 'export' → EXPORT at item-start.
     - 'scope' → SCOPE at item-start before a scope path.
     - 'end' → END only for a complete closer at its region's layout level.
     """
     result: list[Token] = []
-    in_module_header = False
     scope_layouts: list[int] = []
     layout_depth = 0
     prev_type: str | None = None  # None means start-of-stream
@@ -220,26 +314,14 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
         elif tt == "_DEDENT":
             layout_depth -= 1
 
-        # Track the module-header window: close on line/stmt terminators
-        if tt in ("_NEWLINE", "_INDENT", "_DEDENT", "SEMICOLON"):
-            in_module_header = False
-
         if tt == NAME:
             at_item_start = prev_type is None or prev_type in _ITEM_START_TYPES
-            if (
-                tv == "open"
-                and at_item_start
-                and index + 1 < len(tokens)
-                and tokens[index + 1].type == NAME
-            ):
-                tok = _retype(tok, OPEN)
-                in_module_header = str(tokens[index + 1]) != "import"
-            elif tv == "import" and (at_item_start or prev_type == OPEN):
+            if tv == "import" and at_item_start:
                 tok = _retype(tok, IMPORT)
-                in_module_header = True
+            elif tv == "use" and at_item_start and _is_use_declaration(tokens, index):
+                tok = _retype(tok, USE)
             elif tv == "export" and at_item_start:
                 tok = _retype(tok, EXPORT)
-                in_module_header = True
             elif tv == "scope" and at_item_start and _is_scope_path(tokens, index + 1):
                 tok = _retype(tok, SCOPE)
                 scope_layouts.append(layout_depth)
@@ -252,11 +334,6 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
             ):
                 tok = _retype(tok, END)
                 scope_layouts.pop()
-            elif in_module_header:
-                if tv == "using":
-                    tok = _retype(tok, USING)
-                elif tv == "hiding":
-                    tok = _retype(tok, HIDING)
 
         result.append(tok)
         prev_type = tok.type
@@ -264,10 +341,58 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
     return result
 
 
+def _promote_hiding(tokens: list[Token]) -> list[Token]:
+    """Promote only a header's hiding-clause delimiter, not path atoms named ``hiding``."""
+    result: list[Token] = []
+    header: str | None = None
+    hiding_promoted = False
+    brace_depth = 0
+    saw_dcolon = False
+    saw_alias = False
+    for tok in tokens:
+        if tok.type in _HEADER_TYPES:
+            header = tok.type
+            hiding_promoted = False
+            brace_depth = 0
+            saw_dcolon = False
+            saw_alias = False
+        elif tok.type in {"_NEWLINE", "_INDENT", "_DEDENT", "SEMICOLON"}:
+            header = None
+        elif tok.type == LBRACE:
+            brace_depth += 1
+        elif tok.type == "RBRACE":
+            brace_depth -= 1
+        elif header is not None and tok.type == DCOLON:
+            saw_dcolon = True
+        elif header is not None and _is_as(tok):
+            saw_alias = True
+        elif (
+            header is not None
+            and not hiding_promoted
+            and brace_depth == 0
+            and tok.type == NAME
+            and str(tok) == "hiding"
+            and result
+            and (
+                result[-1].type in {STAR, WILDCARD, "RBRACE"}
+                or (header in {IMPORT, EXPORT} and result[-1].type == MODPATH)
+                or (
+                    header in {IMPORT, USE}
+                    and result[-1].type in {NAME, OP_NAME}
+                    and (saw_dcolon or saw_alias)
+                )
+            )
+        ):
+            tok = _retype(tok, HIDING)
+            hiding_promoted = True
+        result.append(tok)
+    return result
+
+
 def _merge_modpath(tokens: list[Token]) -> list[Token]:
     """Merge module-header paths into single MODPATH tokens.
 
-    Pattern: immediately following an IMPORT or EXPORT token, consume
+    Pattern: immediately following an IMPORT, USE, or EXPORT token, consume
     NAME (SLASH NAME)* into a single MODPATH token whose value is the slash
     path (e.g. "foo/bar", "utils"). Every pair in the run is adjacent in the
     source, the rule module qualifiers obey: ``a/b`` is a path, ``a / b`` is
@@ -282,9 +407,21 @@ def _merge_modpath(tokens: list[Token]) -> list[Token]:
     n = len(tokens)
     while i < n:
         tok = tokens[i]
-        if tok.type in (IMPORT, EXPORT) and i + 1 < n and tokens[i + 1].type == NAME:
+        has_plain_path = i + 1 < n and tokens[i + 1].type == NAME
+        has_anchored_use_path = (
+            tok.type == USE
+            and i + 2 < n
+            and tokens[i + 1].type == SLASH
+            and tokens[i + 2].type == NAME
+            and tokens[i + 1].end_pos == tokens[i + 2].start_pos
+        )
+        if tok.type in (IMPORT, USE, EXPORT) and (has_plain_path or has_anchored_use_path):
             result.append(tok)
             i += 1
+            anchored = has_anchored_use_path
+            anchor = tokens[i] if anchored else None
+            if anchored:
+                i += 1
             # Absorb NAME (SLASH NAME)*. Module path segments may begin with
             # either lowercase or uppercase letters.
             j = i
@@ -301,8 +438,8 @@ def _merge_modpath(tokens: list[Token]) -> list[Token]:
                 last_seg = tokens[j + 1]
                 seg_parts.append(str(last_seg))
                 j += 2
-            modpath_value = "/".join(seg_parts)
-            first_tok = tokens[i]
+            modpath_value = ("/" if anchored else "") + "/".join(seg_parts)
+            first_tok = anchor if anchor is not None else tokens[i]
             last_tok = tokens[j - 1]
             merged = Token(
                 MODPATH,
@@ -527,11 +664,9 @@ def _merge_modqual(tokens: list[Token], source: str) -> list[Token]:
     return result
 
 
-# Tokens that can end an operand immediately left of a slash, and tokens that
-# can begin one immediately right of it. A slash touching either is reaching for
-# a path; a slash touching neither (the positional-parameter marker) is not.
-_OPERAND_END = frozenset({NAME, INT, DECIMAL, RPAR, RSQB, MODQUAL})
-_OPERAND_START = frozenset({NAME, INT, DECIMAL, LPAR})
+# A merged qualifier is not itself an expression, but a following slash still
+# clings to a path operand that failed to acquire its final name.
+_SLASH_LEFT_OPERAND_TYPES = _EXPRESSION_END_TYPES | {MODQUAL}
 
 
 def _reaches_a_spaced_dcolon(tokens: list[Token], slash_index: int) -> bool:
@@ -573,12 +708,12 @@ def _reject_clinging_slash(tokens: list[Token]) -> list[Token]:
         next_tok = tokens[index + 1] if index + 1 < len(tokens) else None
         tight_left = (
             prev_tok is not None
-            and prev_tok.type in _OPERAND_END
+            and _scanner_token_type(prev_tok.type) in _SLASH_LEFT_OPERAND_TYPES
             and prev_tok.end_pos == tok.start_pos
         )
         tight_right = (
             next_tok is not None
-            and next_tok.type in _OPERAND_START
+            and _scanner_token_type(next_tok.type) in _INFIX_OPERAND_START_TYPES
             and tok.end_pos == next_tok.start_pos
         )
         if tight_left or tight_right:
@@ -591,9 +726,9 @@ def _reject_clinging_slash(tokens: list[Token]) -> list[Token]:
 
 def apply_module_passes(tokens: list[Token], source: str) -> list[Token]:
     """Apply soft-keyword promotion, import path merging, and module-qualifier merging."""
-    return _reject_clinging_slash(
-        _merge_modqual(_merge_modpath(_promote_soft_keywords(tokens)), source)
-    )
+    promoted = _promote_soft_keywords(tokens)
+    merged = _merge_modqual(_promote_hiding(_merge_modpath(promoted)), source)
+    return _reject_clinging_slash(merged)
 
 
 def unclosed_scope_path(source: str) -> str | None:
@@ -637,14 +772,14 @@ def _remap_adjacent_brackets(tokens: list[Token]) -> list[Token]:
         elif (
             tok.type == LSQB
             and previous is not None
-            and previous.type in _INDEX_PREDECESSORS
+            and _scanner_token_type(previous.type) in _EXPRESSION_END_TYPES
             and previous.end_pos == tok.start_pos
         ):
             tok = _retype(tok, INDEX_LSQB)
         elif (
             tok.type == LBRACE
             and previous is not None
-            and previous.type in _INDEX_PREDECESSORS
+            and _scanner_token_type(previous.type) in _EXPRESSION_END_TYPES
             and previous.end_pos == tok.start_pos
         ):
             tok = _retype(tok, CALL_LBRACE)
@@ -735,3 +870,30 @@ class AglLexer(Lexer):
             if sink is not None:
                 sink.extend(scanner.tab_warnings)
         return iter(tokens)
+
+
+def load_grammar() -> str:
+    """Load the canonical grammar file via importlib.resources (package-anchored)."""
+    return (
+        importlib.resources.files("agm.agl")
+        .joinpath("grammar/agl.lark")
+        .read_text(encoding="utf-8")
+    )
+
+
+def build_parser(start: str = "start") -> Lark:
+    """Build a Lark instance over the canonical grammar rooted at *start*.
+
+    The one place the grammar file and the Lark options are named, so every
+    parser -- the program parser and each alternate-start parser -- is built
+    from identical settings and shares one on-disk cache shape.
+    """
+    return Lark(
+        load_grammar(),
+        parser="lalr",
+        lexer=AglLexer,
+        propagate_positions=True,
+        maybe_placeholders=True,
+        start=start,
+        cache=True,
+    )

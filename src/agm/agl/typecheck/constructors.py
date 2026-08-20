@@ -568,7 +568,7 @@ class ConstructorChecker:
         declarations into the shared program type table before any body is
         checked, so a resolved ``ConstructorRef`` usually finds its owner
         there. Falls back to the unqualified local registry for cross-module
-        types that are open-imported but not registered in the shared table
+        types exposed by import tails but not registered in the shared table
         — including a host builtin (e.g. an exception like ``Abort``) whose
         constructor candidate is ambiently seeded under ``std/core``'s module
         id even when the standard library is not loaded, so the shared table

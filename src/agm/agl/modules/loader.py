@@ -4,7 +4,7 @@ This module provides :func:`load_graph`, which drives the full load-and-graph
 phase of the AgL module system:
 
 1. Parse the entry source (inline ``-c`` or a file on disk).
-2. Extract top-level import/export declarations.
+2. Extract import and export declarations from the module and its named scope regions.
 3. BFS over transitive import and export declarations, resolving each module id
    to its canonical file via :func:`~agm.agl.modules.resolver.resolve_module` (or
    :func:`~agm.agl.modules.resolver.expand_wildcard` for ``/*`` imports),
@@ -41,7 +41,6 @@ from agm.agl.parser.parser import parse_program_seeded
 from agm.agl.syntax.advisories import SpacedQualifier
 from agm.agl.syntax.nodes import ExportDecl, FuncDef, ImportDecl, static_items
 from agm.agl.syntax.spans import SourceId, SourceSpan
-from agm.agl.syntax.types import ImportMode
 from agm.core import fs
 from agm.packages.model import owning_package
 from agm.util.graph import sccs as _compute_sccs
@@ -65,11 +64,11 @@ class LoadedModule:
         The :class:`~agm.agl.syntax.spans.SourceId` stamped on every span in
         ``program``.
     imports:
-        Top-level :class:`~agm.agl.syntax.nodes.ImportDecl` nodes extracted
-        from ``program.body.items``.
+        :class:`~agm.agl.syntax.nodes.ImportDecl` nodes extracted from the
+        module root and named scope regions.
     export_decls:
-        Top-level :class:`~agm.agl.syntax.nodes.ExportDecl` nodes extracted
-        from ``program.body.items``.
+        :class:`~agm.agl.syntax.nodes.ExportDecl` nodes extracted from the
+        module root and named scope regions.
     spaced_qualifiers:
         Lexical advisories for qualifier runs this module's source separated
         from their ``::`` by whitespace — see
@@ -133,9 +132,9 @@ class ModuleGraph:
         Tarjan's algorithm. Each SCC is a tuple of :class:`ModuleId` values;
         the outer tuple is in **reverse topological order**.
     adjacency:
-        Direct dependency edges for every loaded module. This includes both
-        imports and exports, after wildcard expansion, and is the authoritative
-        reachability relation for graph consumers.
+        Direct dependency edges for every loaded module. This includes imports
+        and exports after wildcard expansion; uses do not create edges. It is
+        the authoritative reachability relation for graph consumers.
     """
 
     modules: dict[ModuleId, LoadedModule]
@@ -164,12 +163,12 @@ class ModuleGraph:
 
 
 def _extract_imports(program: syntax.Program) -> tuple[ImportDecl, ...]:
-    """Return the module's ImportDecl nodes, including region-nested ones.
+    """Return a module's imports, including region-nested declarations.
 
-    Named scope regions are transparent to this walk, so a scoped ``import``
-    is discovered as a module-graph edge exactly like a root one. Imports
-    inside an ordinary nested block are not valid and are ignored here (the
-    scope pass enforces the restriction).
+    Named scope regions are transparent to this walk. Imports create
+    module-graph edges; ``use`` declarations do not, and the scope pass reads
+    them straight from the AST. Declarations inside ordinary nested blocks are
+    not valid and are ignored here (the scope pass enforces the restriction).
     """
     return tuple(item for item in static_items(program.body.items) if isinstance(item, ImportDecl))
 
@@ -230,10 +229,9 @@ def _synthetic_stdlib_import(node_id: int) -> ImportDecl:
     return ImportDecl(
         module_path=STD_CORE_ID.segments,
         wildcard=False,
-        is_open=True,
         alias=None,
-        mode=ImportMode.ALL,
-        items=(),
+        tail=(),
+        hidden=(),
         span=span,
         node_id=node_id,
     )
@@ -244,6 +242,13 @@ def _with_default_stdlib_import(
     *,
     import_node_id: int,
 ) -> syntax.Program:
+    imports = _extract_imports(program)
+    if any(
+        decl.module_path == STD_CORE_ID.segments
+        or (decl.wildcard and STD_CORE_ID.segments[: len(decl.module_path)] == decl.module_path)
+        for decl in imports
+    ):
+        return program
     std_import = _synthetic_stdlib_import(import_node_id)
     body = syntax.Block(
         items=(std_import, *program.body.items),
@@ -419,12 +424,13 @@ def _load_into_graph(
         if default_stdlib and mid != STD_CORE_ID:
             program = _with_default_stdlib_import(program, import_node_id=next_id)
             next_id += 1
+        imports = _extract_imports(program)
         loaded = LoadedModule(
             module_id=mid,
             program=program,
             path=canon_path,
             source=file_source_id,
-            imports=_extract_imports(program),
+            imports=imports,
             export_decls=_extract_exports(program),
             source_text=source_text,
             spaced_qualifiers=tuple(spaced_sink),
@@ -514,12 +520,13 @@ def _build_entry_loaded_module(
     if default_stdlib:
         program = _with_default_stdlib_import(program, import_node_id=next_id)
         next_id += 1
+    imports = _extract_imports(program)
     entry_loaded = LoadedModule(
         module_id=ENTRY_ID,
         program=program,
         path=canonical_entry_path,
         source=entry_source_id,
-        imports=_extract_imports(program),
+        imports=imports,
         export_decls=_extract_exports(program),
         source_text=source_text,
         spaced_qualifiers=spaced_qualifiers,

@@ -100,8 +100,9 @@ program def main() -> unit =
 ## Type application
 
 A generic declaration is **used** by applying it to type arguments. The
-applied-type syntax is `Name[arg, …]`; imported declarations may use an open
-name or a module-qualified name such as `lib::Box[int]`:
+applied-type syntax is `Name[arg, …]`; imported declarations may use a bare
+name contributed by an import tail or `use`, or a module-qualified name such as
+`lib::Box[int]`:
 
 ```agl
 record Box[T]
@@ -123,7 +124,7 @@ program def main() -> unit =
 
 <!-- agl-check: fragment -->
 ```agl
-open import containers
+import containers::*
 
 def unwrap(box: Box[int]) -> int = box.value
 let open_box: Box[int] = Box(value = 1)

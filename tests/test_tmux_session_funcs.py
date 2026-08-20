@@ -18,6 +18,8 @@ from agm.tmux.session import (
     focus_tmux_session,
     kill_tmux_session,
     queue_command_in_session,
+    require_session_absent,
+    session_exists,
 )
 
 # ---------------------------------------------------------------------------
@@ -770,3 +772,85 @@ class TestCreateTmuxSessionLive:
             )
         out = capsys.readouterr().out
         assert "display stdout output" in out
+
+
+# ===========================================================================
+# session_exists / require_session_absent
+# ===========================================================================
+
+
+class TestSessionExists:
+    """Detecting an already running tmux session."""
+
+    def _record_tmux(self, monkeypatch: pytest.MonkeyPatch, *, returncode: int) -> list[list[str]]:
+        calls: list[list[str]] = []
+
+        def _fake_capture(cmd: list[str], **_kwargs: Any) -> tuple[int, str, str]:
+            calls.append(cmd)
+            return returncode, "", ""
+
+        monkeypatch.setattr(session_module, "run_capture", _fake_capture)
+        return calls
+
+    def test_running_session_is_detected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = self._record_tmux(monkeypatch, returncode=0)
+
+        assert session_exists("proj/feature", cwd=tmp_path) is True
+        assert calls[0][:2] == ["tmux", "has-session"]
+
+    def test_absent_session_is_reported_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._record_tmux(monkeypatch, returncode=1)
+
+        assert session_exists("proj/feature", cwd=tmp_path) is False
+
+    def test_require_session_absent_passes_when_no_session_runs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._record_tmux(monkeypatch, returncode=1)
+
+        require_session_absent(session_name="proj/feature", cwd=tmp_path)
+
+    def test_require_session_absent_exits_for_a_running_session(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        self._record_tmux(monkeypatch, returncode=0)
+
+        with pytest.raises(SystemExit) as exc_info:
+            require_session_absent(session_name="proj/feature", cwd=tmp_path, env={})
+
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert "proj/feature" in err
+        assert "attach-session" in err
+
+    def test_require_session_absent_suggests_switching_inside_tmux(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        self._record_tmux(monkeypatch, returncode=0)
+
+        with pytest.raises(SystemExit):
+            require_session_absent(
+                session_name="proj/feature", cwd=tmp_path, env={"TMUX": "/tmp/socket,1,0"}
+            )
+
+        assert "switch-client" in capsys.readouterr().err
+
+    def test_dry_run_does_not_consult_tmux(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _enable_dry_run()
+        calls = self._record_tmux(monkeypatch, returncode=0)
+
+        require_session_absent(session_name="proj/feature", cwd=tmp_path)
+
+        assert calls == []

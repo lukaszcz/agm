@@ -6,6 +6,8 @@ public ``tokenize`` helper.  No scanner/layout internals are tested.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 from lark.lexer import LexerState, TextSlice
 
@@ -1527,6 +1529,15 @@ class TestAglLexerClass:
             ("INT", "1"),
         ]
 
+    def test_speculative_use_parse_does_not_duplicate_tab_warning(self) -> None:
+        from agm.agl.parser import parse_program
+
+        with tab_warning_collector() as warnings:
+            parse_program("import shared\nuse\tshared::*")
+
+        assert len(warnings) == 1
+        assert warnings[0].line == 2
+
     def test_tab_warning_collector_receives_lexer_warnings(self) -> None:
         lexer = AglLexer(None)
         state = LexerState("let\tx = 1")
@@ -1845,19 +1856,30 @@ class TestTripleTemplatePositions:
         # (it was emitted after consuming the quote), overlapping TEMPLATE_END
         # and duplicating the quote in span consumers like the REPL highlighter.
         for source in ('x = "hi"', "x = 'hi'", 'f("a" + "b")'):
-            spanned = [
-                t
+            spans: list[tuple[int, int, str, str]] = [
+                (t.start_pos, t.end_pos, t.type, str(t))
                 for t in tokenize(source)
                 if t.start_pos is not None and t.end_pos is not None and t.end_pos > t.start_pos
             ]
-            ends = sorted(spanned, key=lambda t: t.start_pos)
-            for prev, nxt in zip(ends, ends[1:]):
-                assert prev.end_pos <= nxt.start_pos, (
-                    f"overlap in {source!r}: {prev.type} {prev.value!r} "
-                    f"[{prev.start_pos},{prev.end_pos}) overlaps "
-                    f"{nxt.type} {nxt.value!r} [{nxt.start_pos},{nxt.end_pos})"
+
+            def span_start(span: tuple[int, int, str, str]) -> int:
+                return span[0]
+
+            spans.sort(key=span_start)
+            for (prev_start, prev_end, prev_type, prev_value), (
+                nxt_start,
+                nxt_end,
+                nxt_type,
+                nxt_value,
+            ) in zip(spans, spans[1:]):
+                assert prev_end <= nxt_start, (
+                    f"overlap in {source!r}: {prev_type} {prev_value!r} "
+                    f"[{prev_start},{prev_end}) overlaps "
+                    f"{nxt_type} {nxt_value!r} [{nxt_start},{nxt_end})"
                 )
             frag = next(t for t in tokenize(source) if t.type == "STRING_FRAGMENT")
+            assert frag.start_pos is not None
+            assert frag.end_pos is not None
             assert frag.end_pos == frag.start_pos + len(frag.value)
 
     def test_layout_tokens_have_positions(self) -> None:
@@ -1874,6 +1896,7 @@ class TestTripleTemplatePositions:
         # Per the layout rule, a _NEWLINE sits at the newline character itself.
         source = "a\nb"
         nl = next(t for t in tokenize(source) if t.type == "_NEWLINE")
+        assert nl.start_pos is not None
         assert source[nl.start_pos] == "\n"
 
 
@@ -2634,16 +2657,53 @@ class TestAsQuestionKeyword:
 class TestModuleSystemLexer:
     """Tests for soft-keyword promotion and MODQUAL merging."""
 
-    # --- import soft keyword ---
+    # --- module-header soft keywords ---
 
     def test_import_at_line_start_is_import_token(self) -> None:
         result = tok("import foo/bar")
         assert result[0] == ("IMPORT", "import")
 
-    def test_open_is_promoted_only_directly_before_item_start_import(self) -> None:
-        assert tok("open import foo")[0:2] == [("OPEN", "open"), ("IMPORT", "import")]
-        assert ("NAME", "open") in tok("let open = 1")
-        assert ("NAME", "open") in tok("open\nimport foo")
+    def test_use_at_item_start_promotes_a_bare_target_for_a_parse_diagnostic(self) -> None:
+        assert tok("use shared")[:2] == [("USE", "use"), ("MODPATH", "shared")]
+        assert tok("use shared::*")[:2] == [("USE", "use"), ("MODPATH", "shared")]
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "use S::* hiding",
+            "use S::* hiding x,",
+            "use S::",
+            "use S::{x as}",
+            "use S::{x, y as}",
+            "use S::x as",
+        ),
+    )
+    def test_incomplete_use_headers_remain_identifier_expressions(self, source: str) -> None:
+        assert tok(source)[0] == ("NAME", "use")
+
+    @pytest.mark.parametrize("source", ("use S::{x,}", "use S::>> as add"))
+    def test_complete_use_header_recognizer_handles_tail_edges(self, source: str) -> None:
+        assert tok(source)[0] == ("USE", "use")
+
+    def test_use_header_rejects_an_incomplete_slash_segment(self) -> None:
+        with pytest.raises(LexError):
+            tok("use a/::x")
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "use library as L",
+            "use /pkg as P",
+            "use m/n::Scope as S",
+            "use ::Scope as S",
+        ),
+    )
+    def test_public_tokenize_accepts_use_alias_forms(self, source: str) -> None:
+        tokens = tok(source)
+        assert tokens[0] == ("USE", "use")
+
+    def test_open_and_using_remain_identifiers(self) -> None:
+        assert tok("open using") == [("NAME", "open"), ("NAME", "using")]
 
     def test_qualified_remains_an_identifier(self) -> None:
         assert tok("qualified") == [("NAME", "qualified")]
@@ -2660,31 +2720,30 @@ class TestModuleSystemLexer:
         assert ("NAME", "private") in tok("x + private")
         assert ("NAME", "private") in tok("let private = 1")
 
-    def test_using_in_import_line(self) -> None:
-        result = tok("import foo using bar")
-        types = [t for t, _ in result]
-        assert "USING" in types
-
     def test_hiding_in_import_line(self) -> None:
         result = tok("import foo hiding bar")
         types = [t for t, _ in result]
         assert "HIDING" in types
 
-    def test_using_outside_import_stays_name(self) -> None:
-        result = tok("let using = 1")
-        assert ("NAME", "using") in result
+    def test_use_alias_hiding_is_independent_of_preceding_qualifiers(self) -> None:
+        plain = tok("use S as A hiding x")
+        after_qualifier = tok("let q = f::[int]()\nuse S as A hiding x")
+
+        assert ("HIDING", "hiding") in plain
+        assert ("HIDING", "hiding") in after_qualifier
+
+    @pytest.mark.parametrize("source", ("use S::{}", "use S::{{*}}", "use S::{x, *}"))
+    def test_use_promotion_tracks_canonical_nested_brace_grammar(self, source: str) -> None:
+        assert tok(source)[0] == ("USE", "use")
 
     def test_hiding_outside_import_stays_name(self) -> None:
         result = tok("let hiding = 1")
         assert ("NAME", "hiding") in result
 
-    def test_import_window_closes_at_newline(self) -> None:
-        # After newline, a new import line resets; 'using' on a different line
-        # from 'import' is not inside the import window
-        src = "import foo\nusing bar"
+    def test_module_header_window_closes_at_newline(self) -> None:
+        src = "use shared\nhiding member"
         result = tok(src)
-        # 'using' here is on its own line not preceded by import on same line
-        assert ("NAME", "using") in result
+        assert ("NAME", "hiding") in result
 
     # --- MODQUAL merging ---
 
@@ -2744,15 +2803,6 @@ class TestModuleSystemLexer:
             ("NAME", "bar"),
         ]
 
-    def test_export_using_in_export_line(self) -> None:
-        result = tok("export foo using bar")
-        assert result == [
-            ("EXPORT", "export"),
-            ("MODPATH", "foo"),
-            ("USING", "using"),
-            ("NAME", "bar"),
-        ]
-
     def test_export_hiding_in_export_line(self) -> None:
         result = tok("export foo hiding bar")
         assert result == [
@@ -2762,10 +2812,9 @@ class TestModuleSystemLexer:
             ("NAME", "bar"),
         ]
 
-    def test_import_in_lark_token_stream(self) -> None:
-        # After remap, 'import' at item-start becomes IMPORT in the parser stream
-        result = lark_tok("import foo")
-        assert result[0] == ("IMPORT", "import")
+    def test_use_in_lark_token_stream(self) -> None:
+        result = lark_tok("use shared::*")
+        assert result[0] == ("USE", "use")
 
 
 # ---------------------------------------------------------------------------
@@ -2793,6 +2842,47 @@ class TestDivisionRequiresSurroundingSpace:
     def test_slash_clinging_to_an_operand_is_rejected(self, source: str) -> None:
         with pytest.raises(LexError):
             lark_tok(source)
+
+    @pytest.mark.parametrize("lexer", (tok, lark_tok), ids=("public", "lark"))
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "true/ value",
+            "false/ value",
+            "null/ value",
+            '"text"/ value',
+            "{key: 1}/ value",
+            "break/ value",
+            "continue/ value",
+        ),
+    )
+    def test_slash_clinging_to_omitted_expression_end_kind_is_rejected(
+        self, source: str, lexer: Callable[[str], list[tuple[str, str]]]
+    ) -> None:
+        with pytest.raises(LexError):
+            lexer(source)
+
+    @pytest.mark.parametrize("lexer", (tok, lark_tok), ids=("public", "lark"))
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "value /true",
+            "value /false",
+            "value /null",
+            'value /"text"',
+            "value /[1]",
+            "value /{key: 1}",
+            "value /break",
+            "value /continue",
+            "value /not true",
+            "value /::member",
+        ),
+    )
+    def test_slash_clinging_to_omitted_expression_start_kind_is_rejected(
+        self, source: str, lexer: Callable[[str], list[tuple[str, str]]]
+    ) -> None:
+        with pytest.raises(LexError):
+            lexer(source)
 
     def test_spaced_dcolon_run_is_left_to_the_qualifier_advisory(self) -> None:
         # `app/config ::x` is a qualifier with a gap before its `::`; the

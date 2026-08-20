@@ -1,8 +1,8 @@
 # Whole-program record pattern workflows: local swap plus nested generic records
-# reached through open, qualified, and aliased imports.
+# reached through glob-tail, qualified, and aliased imports.
 import record_patterns
 import record_patterns as rp
-open import record_patterns
+import record_patterns::*
 
 param seed: int
 

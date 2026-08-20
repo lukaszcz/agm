@@ -9,17 +9,50 @@ import pytest
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope import AglScopeError
-from agm.agl.scope.imports import ImportEnv, ModuleContribution
+from agm.agl.scope.imports import (
+    ImportEnv,
+    ModuleContribution,
+    QualResolutionFound,
+    QualResolutionMissingMember,
+    SingleTarget,
+    build_import_env,
+    resolve_qualified,
+)
 from agm.agl.scope.program import resolve_program
-from agm.agl.syntax.nodes import QualifierChain, QualifierSegment
+from agm.agl.syntax.nodes import ImportDecl, ImportItem, QualifierChain, QualifierSegment
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
-from agm.agl.typecheck import AglTypeError
-from agm.agl.typecheck.env import TypeEnvironment
-from agm.agl.typecheck.program import check_program
-from tests.agl.ir_harness import base_caps, make_graph_from_files
-from tests.agl.module_graph import resolve_and_check_inline_entry
 
 Outcome = Literal["accepted", "scope", "typecheck"]
+
+
+def _import_env(
+    module_path: str,
+    public_atoms: tuple[str | tuple[str, ...], ...],
+    *,
+    tail: tuple[ImportItem, ...] | None = None,
+    hidden: tuple[ImportItem, ...] = (),
+) -> ImportEnv:
+    span = SourceSpan(1, 1, 1, 1, 0, 0, UNKNOWN_SOURCE)
+    module = ModuleId.from_path(module_path)
+    decl = ImportDecl(
+        module_path=module.segments,
+        wildcard=False,
+        alias=None,
+        tail=tail,
+        hidden=hidden,
+        span=span,
+        node_id=1,
+    )
+    return build_import_env(
+        (decl,),
+        {decl.node_id: SingleTarget(module)},
+        {module: {atom: (module, atom) for atom in public_atoms}},
+    )
+
+
+def _item(name: str) -> ImportItem:
+    span = SourceSpan(1, 1, 1, 1, 0, 0, UNKNOWN_SOURCE)
+    return ImportItem(name, None, span, 2)
 
 
 def _qualifier(*segments: str, member: str = "") -> QualifierChain:
@@ -37,6 +70,10 @@ def _qualifier(*segments: str, member: str = "") -> QualifierChain:
 
 
 def _module_outcome(source: str) -> Outcome:
+    from agm.agl.typecheck import AglTypeError
+    from tests.agl.ir_harness import base_caps
+    from tests.agl.module_graph import resolve_and_check_inline_entry
+
     try:
         resolve_and_check_inline_entry(source, base_caps())
     except AglScopeError:
@@ -47,6 +84,10 @@ def _module_outcome(source: str) -> Outcome:
 
 
 def _program_outcome(tmp_path: Path, modules: dict[str, str]) -> Outcome:
+    from agm.agl.typecheck import AglTypeError
+    from agm.agl.typecheck.program import check_program
+    from tests.agl.ir_harness import base_caps, make_graph_from_files
+
     try:
         resolved = resolve_program(make_graph_from_files(tmp_path, modules))
         check_program(resolved, base_caps())
@@ -124,22 +165,13 @@ def test_type_name_and_module_route_clash_stays_rejected_in_both_positions(
     assert _program_outcome(tmp_path / "pattern", pattern) == "typecheck"
 
 
-def test_unselected_qualified_owner_is_rejected_in_both_positions(tmp_path: Path) -> None:
-    modules = {
-        "entry": "import Pal using public\nPal::Secret::hidden",
-        "Pal": "def public() -> int = 1\nenum Secret\n  | hidden",
-    }
-    pattern_modules = {
-        **modules,
-        "entry": (
-            "import Pal using public\n"
-            "let value = 1\n"
-            "case value of | Pal::Secret::hidden => 1 | _ => 2"
-        ),
-    }
+def test_import_tail_keeps_an_unselected_qualified_owner_reachable() -> None:
+    module = ModuleId.from_path("Pal")
+    env = _import_env("Pal", ("public", ("Secret", "hidden")), tail=(_item("public"),))
 
-    assert _program_outcome(tmp_path / "expression", modules) == "scope"
-    assert _program_outcome(tmp_path / "pattern", pattern_modules) == "typecheck"
+    assert resolve_qualified(env, ("Pal",), ("Secret", "hidden")) == QualResolutionFound(
+        module, (module, ("Secret", "hidden"))
+    )
 
 
 def test_explicit_owner_matching_the_route_segment_is_rejected(tmp_path: Path) -> None:
@@ -184,15 +216,17 @@ def test_ambiguous_imported_owner_is_rejected_by_scope(tmp_path: Path) -> None:
 
 
 def test_typecheck_import_member_query_uses_the_shared_route_environment() -> None:
+    from agm.agl.typecheck.env import TypeEnvironment
+
     module = ModuleId.from_path("pkg/types")
     import_env = ImportEnv(
         contributions={
             module: ModuleContribution(
                 module=module,
-                members={"Color": (module, "Color")},
-                bare_names=frozenset(),
+                members={},
                 path_enabled=True,
                 aliases=frozenset(),
+                path_members={"Color": (module, "Color")},
             )
         },
         unqualified={},
@@ -204,21 +238,12 @@ def test_typecheck_import_member_query_uses_the_shared_route_environment() -> No
     assert not TypeEnvironment().has_qualified_import_member(_qualifier("types"), "Color")
 
 
-def test_unselected_qualified_owner_is_rejected_by_typecheck_in_an_is_test(
-    tmp_path: Path,
-) -> None:
-    modules = {
-        "entry": (
-            "import Pal using public\n"
-            "enum Local\n"
-            "  | ok\n"
-            "let value = Local::ok\n"
-            "value is Pal::Secret::hidden"
-        ),
-        "Pal": "def public() -> int = 1\nenum Secret\n  | hidden",
-    }
+def test_import_hiding_removes_a_qualified_owner_at_the_route_seam() -> None:
+    env = _import_env("Pal", ("public", ("Secret", "hidden")), hidden=(_item("Secret"),))
 
-    assert _program_outcome(tmp_path, modules) == "typecheck"
+    assert isinstance(
+        resolve_qualified(env, ("Pal",), ("Secret", "hidden")), QualResolutionMissingMember
+    )
 
 
 def test_ambiguous_qualified_owner_is_rejected_by_typecheck_in_an_is_test(

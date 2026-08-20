@@ -698,7 +698,7 @@ class TestExternCallSiteRecording:
         checked = check_extern_graph(
             tmp_path,
             {
-                "entry": "open import lib/mod\nlib/mod::f(1)",
+                "entry": "import lib/mod::*\nlib/mod::f(1)",
                 "lib/mod": "extern def f(x: int) -> int",
             },
         )
@@ -713,7 +713,7 @@ class TestExternCallSiteRecording:
         checked = check_extern_graph(
             tmp_path,
             {
-                "entry": "open import lib/mod\nlib/mod::id(1)",
+                "entry": "import lib/mod::*\nlib/mod::id(1)",
                 "lib/mod": "extern def id[T](value: T) -> T",
             },
         )
@@ -751,7 +751,7 @@ class TestExternCallSiteRecording:
         checked = check_extern_graph(
             tmp_path,
             {
-                "entry": "open import lib/mod\n()",
+                "entry": "import lib/mod::*\n()",
                 "lib/mod": "extern def f(x: int) -> int\ndef g() -> int = f(1)",
             },
         )

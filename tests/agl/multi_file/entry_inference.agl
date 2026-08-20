@@ -1,4 +1,4 @@
-open import inference/app
+import inference/app::*
 program def main() -> unit =
   let number = relay(1)
   let word = relay("text")

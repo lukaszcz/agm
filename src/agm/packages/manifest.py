@@ -23,7 +23,7 @@ class ManifestError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class DependencySpec:
-    """A minimum version requirement and its optional development source."""
+    """A dependency version floor and its optional development source."""
 
     version: semver.Version
     path: str | None = None

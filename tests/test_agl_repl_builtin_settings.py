@@ -295,7 +295,7 @@ def _declared_defaults_session(tmp_path: Path) -> ReplSession:
     config_path = stdlib_root / "std" / "config.agl"
     config_path.parent.mkdir(parents=True)
     config_path.write_text(
-        "open import std/core\n"
+        "import std/core::*\n"
         'builtin var default-agent: Agent = AgentCommand("declared")\n'
         "builtin var strict-json: bool = true\n"
         "builtin var max-iters: int = 3\n"
@@ -712,7 +712,7 @@ class TestResetRestoresMixedSeedOrigins:
         config_path = stdlib_root / "std" / "config.agl"
         config_path.parent.mkdir(parents=True)
         config_path.write_text(
-            "import std/core using Option, Agent\n"
+            "import std/core::{Option, Agent}\n"
             'builtin var default-agent: Agent = AgentCommand("declared")\n'
             "builtin var max-iters: int = 3\n"
             'builtin var log-file: Option[text] = Option[text]::Some("declared.jsonl")\n',
@@ -838,7 +838,7 @@ def test_reset_uses_declared_live_engine_defaults(tmp_path: Path) -> None:
     config_path = stdlib_root / "std" / "config.agl"
     config_path.parent.mkdir(parents=True)
     config_path.write_text(
-        "open import std/core\n"
+        "import std/core::*\n"
         'builtin var default-agent: Agent = AgentCommand("declared")\n'
         "builtin var strict-json: bool = true\n"
         "builtin var max-iters: int = 3\n"
@@ -849,7 +849,7 @@ def test_reset_uses_declared_live_engine_defaults(tmp_path: Path) -> None:
     (config_path.parent / "core.agl").write_text((_STDLIB_ROOT / "std" / "core.agl").read_text())
     session = ReplSession(stdlib_root=stdlib_root, default_stdlib=False)
 
-    _ok(session, "open import std/core\nimport std/config\nstd/config::strict-json")
+    _ok(session, "import std/core::*\nimport std/config\nstd/config::strict-json")
     _ok(session, "std/config::strict-json := false\nstd/config::max-iters := 0")
     session.reset()
 

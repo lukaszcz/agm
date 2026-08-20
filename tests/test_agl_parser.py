@@ -100,6 +100,7 @@ from agm.agl.syntax import (
     UnaryNeg,
     UnaryNot,
     UnitLit,
+    UseDecl,
     VarDecl,
     VarPattern,
     VarRef,
@@ -953,13 +954,13 @@ class TestScopeRegions:
         (member,) = region.items
         assert [segment.name for segment in member.scope_path] == ["Point"]
 
-    @pytest.mark.parametrize("item", ("import package", "open import package", "export package"))
+    @pytest.mark.parametrize("item", ("import package", "use Scope::*", "export package"))
     def test_region_admits_import_and_export(self, item: str) -> None:
         region = first(parse(f"scope Point\n{item}\nend Point"))
 
         assert isinstance(region, ScopeRegion)
         (member,) = region.items
-        assert isinstance(member, (ImportDecl, ExportDecl))
+        assert isinstance(member, (ImportDecl, UseDecl, ExportDecl))
         assert [segment.name for segment in member.scope_path] == ["Point"]
 
     @pytest.mark.parametrize("item", ("let value = 1", "var value = 1"))
@@ -3666,17 +3667,16 @@ class TestCastParsing:
 
 
 class TestImportDecl:
-    """Tests for slash-path import declaration parsing."""
+    """Tests for the import, use, and export declaration surface."""
 
     def test_simple_import_is_qualified_by_default(self) -> None:
         (decl,) = items(parse("import foo/bar"))
         assert isinstance(decl, syntax.ImportDecl)
         assert decl.module_path == ("foo", "bar")
         assert decl.wildcard is False
-        assert decl.is_open is False
         assert decl.alias is None
-        assert decl.mode == syntax.ImportMode.ALL
-        assert decl.items == ()
+        assert decl.tail is None
+        assert decl.hidden == ()
 
     @pytest.mark.parametrize(
         ("source", "expected"),
@@ -3715,48 +3715,196 @@ class TestImportDecl:
         (decl,) = items(parse(f"import foo/bar as {alias}"))
         assert isinstance(decl, syntax.ImportDecl)
         assert decl.alias == alias
-        assert decl.is_open is False
+        assert decl.tail is None
+
+    def test_import_alias_must_be_an_identifier(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse("import foo/bar as >>")
 
     @pytest.mark.parametrize(
-        ("source", "mode", "expected_items"),
+        ("source", "tail"),
         (
-            ("import foo using item", syntax.ImportMode.USING, (("item", None),)),
+            ("import foo::*", ()),
+            ("import foo::item", (("item", None),)),
+            ("import foo::item as renamed", (("item", "renamed"),)),
             (
-                "import foo using first, second",
-                syntax.ImportMode.USING,
-                (("first", None), ("second", None)),
+                "import foo::{first, Scope::second as renamed}",
+                (("first", None), ("second", "renamed")),
             ),
-            ("import foo hiding item", syntax.ImportMode.HIDING, (("item", None),)),
-            (
-                "import foo hiding first, second",
-                syntax.ImportMode.HIDING,
-                (("first", None), ("second", None)),
-            ),
-            ("import foo using item as renamed", syntax.ImportMode.USING, (("item", "renamed"),)),
+            ("import foo/*::{item}", (("item", None),)),
         ),
     )
-    def test_import_items(
-        self,
-        source: str,
-        mode: syntax.ImportMode,
-        expected_items: tuple[tuple[str, str | None], ...],
-    ) -> None:
+    def test_import_tails(self, source: str, tail: tuple[tuple[str, str | None], ...]) -> None:
         (decl,) = items(parse(source))
         assert isinstance(decl, syntax.ImportDecl)
-        assert decl.mode is mode
-        assert tuple((item.name, item.rename) for item in decl.items) == expected_items
+        assert tuple((item.name, item.rename) for item in decl.tail or ()) == tail
 
-    def test_open_import_with_alias_and_hiding(self) -> None:
-        (decl,) = items(parse("open import foo/bar as fb hiding secret"))
-        assert isinstance(decl, syntax.ImportDecl)
-        assert decl.is_open is True
-        assert decl.alias == "fb"
-        assert decl.mode == syntax.ImportMode.HIDING
-        assert decl.items[0].name == "secret"
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "import foo as F::item",
+            "import foo::{item} hiding secret",
+            "import foo::item hiding secret",
+            "import foo::{}",
+            "import foo::{item, {nested}}",
+            "import foo::{*}",
+        ),
+    )
+    def test_import_constraint_errors(self, source: str) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse(source)
 
-    def test_open_import_using_is_a_syntax_error(self) -> None:
-        with pytest.raises(AglSyntaxError, match="open.*using"):
-            parse("open import foo using bar")
+    def test_import_hiding_forms(self) -> None:
+        for source in ("import foo hiding x", "import foo::* hiding x", "import foo/* hiding x"):
+            (decl,) = items(parse(source))
+            assert isinstance(decl, syntax.ImportDecl)
+            assert tuple(item.name for item in decl.hidden) == ("x",)
+
+    @pytest.mark.parametrize(
+        "expression",
+        (
+            "use a::[T](x)",
+            "use / x::member",
+            "use a::member(x)",
+        ),
+    )
+    def test_use_remains_an_identifier_when_the_item_is_not_a_complete_header(
+        self, expression: str
+    ) -> None:
+        parse(expression)
+        parse(f"({expression})")
+
+    def test_use_forms(self) -> None:
+        for source, target, alias, tail in (
+            ("use Scope::*", ("Scope",), None, ()),
+            ("use Scope::{a as b}", ("Scope",), None, (("a", "b"),)),
+            ("use m/n::Scope::*", ("m/n", "Scope"), None, ()),
+            ("use m/n as S", ("m/n",), "S", None),
+            ("use m/n::Scope as S", ("m/n", "Scope"), "S", None),
+            ("use /m/n::Scope::*", ("m/n", "Scope"), None, ()),
+        ):
+            (decl,) = items(parse(source))
+            assert isinstance(decl, syntax.UseDecl)
+            assert tuple(segment.name for segment in decl.target) == target
+            assert decl.alias == alias
+            assert (
+                decl.tail is None or tuple((item.name, item.rename) for item in decl.tail) == tail
+            )
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "use Scope::{a} hiding x",
+            "use Scope::a hiding x",
+            "use Scope::{}",
+            "use Scope::{*}",
+        ),
+    )
+    def test_use_constraint_errors(self, source: str) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse(source)
+
+    def test_use_glob_hiding(self) -> None:
+        (decl,) = items(parse("use Scope::* hiding x"))
+        assert isinstance(decl, syntax.UseDecl)
+        assert tuple(item.name for item in decl.hidden) == ("x",)
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "use hiding::*",
+            "use S::{hiding}",
+            "use S::* hiding hiding",
+            "import hiding",
+            "import foo::{hiding}",
+            "import foo hiding hiding",
+            "export hiding",
+            "export foo::{hiding}",
+        ),
+    )
+    def test_hiding_remains_available_as_a_header_path_atom(self, source: str) -> None:
+        parse(source)
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "use Root :: Child::*",
+            "use :: Root::Child::*",
+            "use /m:: Scope::*",
+            "use Root:: Child::*",
+            "use /m ::Scope::*",
+        ),
+    )
+    def test_use_target_qualifiers_require_byte_adjacency(self, source: str) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse(source)
+
+    @pytest.mark.parametrize(
+        ("source", "target", "alias", "tail"),
+        (
+            ("use ::Scope::*", ("Scope",), None, ()),
+            ("use ::Scope as S", ("Scope",), "S", None),
+            ("use ::A::B::C as Alias", ("A", "B", "C"), "Alias", None),
+            ("use ::A::B::C::D as Alias", ("A", "B", "C", "D"), "Alias", None),
+        ),
+    )
+    def test_use_current_module_anchor(
+        self, source: str, target: tuple[str, ...], alias: str | None, tail: object
+    ) -> None:
+        (decl,) = items(parse(source))
+        assert isinstance(decl, syntax.UseDecl)
+        assert decl.anchored is True
+        assert tuple(segment.name for segment in decl.target) == target
+        assert decl.alias == alias
+        assert decl.tail == tail
+
+    def test_use_current_module_anchor_rejects_module_route(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse("use ::foo/bar::*")
+
+    @pytest.mark.parametrize(
+        ("source", "target"),
+        (
+            ("use m/n::Outer::Inner as Alias", ("m/n", "Outer", "Inner")),
+            ("use m::A::B::C as Alias", ("m", "A", "B", "C")),
+            ("use m::A::B::C::D as Alias", ("m", "A", "B", "C", "D")),
+        ),
+    )
+    def test_use_nested_target_alias(self, source: str, target: tuple[str, ...]) -> None:
+        (decl,) = items(parse(source))
+        assert isinstance(decl, syntax.UseDecl)
+        assert tuple(segment.name for segment in decl.target) == target
+        assert decl.alias == "Alias"
+
+    def test_prefixed_scope_preserves_a_use_declaration(self) -> None:
+        (region,) = items(parse("scope A::B\nuse C::*\nend A::B"))
+        assert isinstance(region, syntax.ScopeRegion)
+        nested = region.items[0]
+        assert isinstance(nested, syntax.ScopeRegion)
+        (decl,) = nested.items
+        assert isinstance(decl, syntax.UseDecl)
+        assert tuple(segment.name for segment in decl.target) == ("C",)
+
+    def test_import_alias_tail_with_whitespace_is_rejected_by_the_transformer(self) -> None:
+        with pytest.raises(AglSyntaxError, match="alias"):
+            parse("import module as Alias ::*")
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "import module hiding Scope::secret, private",
+            "use Scope::* hiding Scope::secret, private",
+            "export module hiding Scope::secret, private",
+        ),
+    )
+    def test_hidden_items_retain_their_path_spans(self, source: str) -> None:
+        (decl,) = items(parse(source))
+        assert isinstance(decl, (syntax.ImportDecl, syntax.UseDecl, syntax.ExportDecl))
+        hidden = decl.hidden
+        assert [(item.span.start_offset, item.span.end_offset) for item in hidden] == [
+            (source.index("Scope::secret"), source.index("Scope::secret") + len("Scope::secret")),
+            (source.index("private"), source.index("private") + len("private")),
+        ]
 
     def test_import_wildcard_with_alias_and_hiding(self) -> None:
         (decl,) = items(parse("import foo/bar/* as F hiding x, y"))
@@ -3764,15 +3912,7 @@ class TestImportDecl:
         assert decl.wildcard is True
         assert decl.module_path == ("foo", "bar")
         assert decl.alias == "F"
-        assert decl.mode is syntax.ImportMode.HIDING
-        assert tuple(item.name for item in decl.items) == ("x", "y")
-
-    def test_import_wildcard_with_using_rename(self) -> None:
-        (decl,) = items(parse("import foo/bar/* using x as X"))
-        assert isinstance(decl, syntax.ImportDecl)
-        assert decl.wildcard is True
-        assert decl.mode is syntax.ImportMode.USING
-        assert decl.items[0].rename == "X"
+        assert tuple(item.name for item in decl.hidden) == ("x", "y")
 
     @pytest.mark.parametrize(
         "source",
@@ -3797,7 +3937,7 @@ class TestImportDecl:
             "import foo qualified",
         ),
     )
-    def test_legacy_import_spellings_are_syntax_errors(self, source: str) -> None:
+    def test_invalid_import_spellings_are_syntax_errors(self, source: str) -> None:
         with pytest.raises(AglSyntaxError):
             parse(source)
 
@@ -3815,8 +3955,8 @@ class TestExportDecl:
         assert isinstance(decl, syntax.ExportDecl)
         assert decl.module_path == ("foo",)
         assert decl.wildcard is False
-        assert decl.mode == syntax.ImportMode.ALL
         assert decl.items == ()
+        assert decl.hidden == ()
 
     def test_export_slash_path_wildcard(self) -> None:
         (decl,) = items(parse("export foo/bar/*"))
@@ -3824,44 +3964,26 @@ class TestExportDecl:
         assert decl.module_path == ("foo", "bar")
         assert decl.wildcard is True
 
-    def test_export_using_single_item(self) -> None:
-        prog = parse("export foo using Bar")
-        (decl,) = items(prog)
+    def test_export_braces_with_rename(self) -> None:
+        (decl,) = items(parse("export foo::{Bar, Scope::Baz as B}"))
         assert isinstance(decl, syntax.ExportDecl)
-        assert decl.mode == syntax.ImportMode.USING
-        assert len(decl.items) == 1
-        assert decl.items[0].name == "Bar"
-        assert decl.items[0].rename is None
+        assert tuple((item.name, item.rename) for item in decl.items) == (
+            ("Bar", None),
+            ("Baz", "B"),
+        )
 
-    def test_export_using_multiple_items(self) -> None:
-        prog = parse("export foo using Bar, Baz")
-        (decl,) = items(prog)
+    def test_export_hiding(self) -> None:
+        (decl,) = items(parse("export foo hiding Baz, Scope::Secret"))
         assert isinstance(decl, syntax.ExportDecl)
-        assert decl.mode == syntax.ImportMode.USING
-        assert {item.name for item in decl.items} == {"Bar", "Baz"}
+        assert tuple(item.name for item in decl.hidden) == ("Baz", "Secret")
 
-    def test_export_using_with_rename(self) -> None:
-        prog = parse("export foo using Bar as B")
-        (decl,) = items(prog)
-        assert isinstance(decl, syntax.ExportDecl)
-        assert decl.mode == syntax.ImportMode.USING
-        assert decl.items[0].name == "Bar"
-        assert decl.items[0].rename == "B"
-
-    def test_export_hiding_single_name(self) -> None:
-        prog = parse("export foo hiding Baz")
-        (decl,) = items(prog)
-        assert isinstance(decl, syntax.ExportDecl)
-        assert decl.mode == syntax.ImportMode.HIDING
-        assert len(decl.items) == 1
-        assert decl.items[0].name == "Baz"
-
-    def test_export_hiding_multiple_names(self) -> None:
-        prog = parse("export foo hiding X, Y")
-        (decl,) = items(prog)
-        assert isinstance(decl, syntax.ExportDecl)
-        assert decl.mode == syntax.ImportMode.HIDING
-        assert {item.name for item in decl.items} == {"X", "Y"}
+    @pytest.mark.parametrize(
+        "source",
+        ("export foo::*", "export foo::{x} hiding y", "export foo::{}", "export foo::{*}"),
+    )
+    def test_export_constraint_errors(self, source: str) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse(source)
 
     def test_export_is_not_promoted_inside_expressions(self) -> None:
         prog = parse("let x = export")

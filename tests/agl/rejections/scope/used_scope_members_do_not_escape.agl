@@ -2,7 +2,7 @@ scope Inner
 def member() -> int = 1
 end Inner
 scope Outer
-open Inner
+use Inner::*
 def use() -> int = member()
 end Outer
 program def main() -> unit =

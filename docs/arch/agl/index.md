@@ -21,7 +21,7 @@ source (.agl)
         ↘ host runtime: agents, shell execution, the Python FFI registry, codecs, rendering, trace store
 ```
 
-The linked IR is the only execution format; checked frontend objects are never fed to the evaluator. Scope emits immutable shared pattern slots for uncertain field-directed names, typecheck selects their concrete binders or constructors, and consumers resolve them through checked-artifact accessors. No pass rewrites another pass's resolution tables.
+The linked IR is the only execution format; checked frontend objects are never fed to the evaluator. Scope emits immutable shared pattern slots for uncertain field-directed names and candidate sets for ambiguous bare `is` variants; typecheck selects their concrete binders or constructors from nominal types, and consumers resolve them through checked-artifact accessors. No pass rewrites another pass's resolution tables.
 
 ## The Firewall
 
@@ -46,7 +46,7 @@ AgL has no separate statement category. Every construct — bindings, assignment
 
 ## Programs and Modules
 
-A **program** is the entry module together with its transitive imports. A `program def` remains an ordinary callable function but is also a host-discoverable entry; `exec` selects an entry-module declaration after the linked modules initialize, within the evaluator's normal execution boundary. Unless the host disables it, every loaded entry and library module except `std/core` itself receives the automatic `std/core` open-import prelude. The production pipeline always loads that program and runs program-level scope, typecheck, match compilation, and lowering passes. A **module** is one unit within the program. Scope, typecheck, match compilation, and lowering run only as whole-program passes over the graph; their per-module steps are internal workers with no standalone entry point, so no caller — production or test — can run them in a configuration the program passes do not. `ModuleGraph` remains the loader's data structure. Parameter inventories follow each selected program module's transitive import subgraph; their descriptors retain module identity for host CLI disambiguation. Module loading and program passes are described in [modules.md](modules.md).
+A **program** is the entry module together with its transitive import and re-export dependencies. A `program def` remains an ordinary callable function but is also a host-discoverable entry; `exec` selects an entry-module declaration after the linked modules initialize, within the evaluator's normal execution boundary. Unless the host disables it or a module explicitly imports `std/core` directly or through wildcard expansion, every loaded entry and library module except `std/core` itself receives the automatic `import std/core::*` prelude. The production pipeline always loads that program and runs program-level scope, typecheck, match compilation, and lowering passes. A **module** is one unit within the program. Scope, typecheck, match compilation, and lowering run only as whole-program passes over the graph; their per-module steps are internal workers with no standalone entry point, so no caller — production or test — can run them in a configuration the program passes do not. `ModuleGraph` remains the loader's data structure. Parameter inventories follow each selected program module's transitive import/export subgraph; their descriptors retain module identity for host CLI disambiguation. Module loading and program passes are described in [modules.md](modules.md).
 
 ## Package Map
 

@@ -327,20 +327,20 @@ class TestPersistence:
         assert result.ok, result.diagnostics
         assert result.value == IntValue(5)
 
-    def test_opened_scope_members_persist_into_later_entries(self) -> None:
+    def test_use_exposes_scope_members_in_later_entries(self) -> None:
         s = ReplSession()
         assert s.eval_entry("scope Tools\ndef twice(x: int) -> int = x * 2\nend Tools").ok
-        assert s.eval_entry("open Tools").ok
+        assert s.eval_entry("use Tools::*").ok
 
         result = s.eval_entry("twice(3)")
 
         assert result.ok, result.diagnostics
         assert result.value == IntValue(6)
 
-    def test_opened_scope_members_persist_in_later_scope_extensions(self) -> None:
+    def test_use_exposes_scope_members_in_later_scope_extensions(self) -> None:
         s = ReplSession()
         assert s.eval_entry("def Source::value() -> int = 2").ok
-        assert s.eval_entry("scope Target\nopen Source\nend Target").ok
+        assert s.eval_entry("scope Target\nuse Source::*\nend Target").ok
         assert s.eval_entry("scope Target\ndef doubled() -> int = value() * 2\nend Target").ok
 
         result = s.eval_entry("Target::doubled()")
@@ -495,10 +495,12 @@ class TestPersistence:
         s = ReplSession()
         assert s.eval_entry("let Widget = 1").ok
 
-        result = s.eval_entry("record Widget\n  x: int")
+        result = s.eval_entry("let other = 2\nrecord Widget\n  x: int")
 
         assert not result.ok
         assert "already declared" in result.diagnostics[0].message.lower()
+        # The complaint locates the colliding declaration, not a placeholder line.
+        assert result.diagnostics[0].line == 2
 
     def test_selected_pattern_slots_lower_in_repl_entries(self) -> None:
         s = ReplSession()
@@ -778,31 +780,80 @@ class TestScopedBindingRetention:
         assert result.ok, result.diagnostics
         assert result.value == IntValue(1)
 
-    def test_retained_scoped_var_assignable_bare_after_open_in_a_later_entry(self) -> None:
+    def test_retained_scoped_var_assignable_bare_after_use_in_a_later_entry(self) -> None:
         s = ReplSession()
         assert s.eval_entry("scope A\nvar counter = 0\nend A").ok
         assert s.eval_entry("A::counter := 5").ok
 
-        assign = s.eval_entry("open A\ncounter := counter + 1")
+        assign = s.eval_entry("use A::*\ncounter := counter + 1")
         result = s.eval_entry("A::counter")
 
         assert assign.ok, assign.diagnostics
         assert result.ok, result.diagnostics
         assert result.value == IntValue(6)
 
-    def test_retained_open_sees_a_member_promoted_by_a_later_entry(self) -> None:
-        """An ``open`` recorded in one entry still resolves a member a later
-        entry's promotion adds to the opened path, live rather than from
-        whatever the path held when the ``open`` itself was promoted."""
+    @pytest.mark.parametrize("binding", ["let", "var"])
+    def test_use_selects_scoped_binding_declared_in_same_entry(self, binding: str) -> None:
+        result = ReplSession().eval_entry(f"use A::{{x}}\n{binding} A::x = 1\nx")
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(1)
+
+    def test_retained_use_exposes_a_retained_scoped_type_alias(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("type A::Meters = int").ok
+        assert session.eval_entry("use A::*").ok
+
+        result = session.eval_entry("let distance: Meters = 1")
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(1)
+
+    def test_retained_use_exposes_a_retained_scoped_generic_type_alias(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("type A::Items[T] = array[T]").ok
+        assert session.eval_entry("use A::*").ok
+
+        result = session.eval_entry("let items: Items[int] = [1]")
+
+        assert result.ok, result.diagnostics
+        assert result.value == ArrayValue([IntValue(1)])
+
+    def test_retained_relative_use_keeps_its_resolved_scope_target(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("scope Source\ndef value() -> int = 1\nend Source").ok
+        assert session.eval_entry("scope Outer\nuse Source::*\nend Outer").ok
+        assert session.eval_entry(
+            "scope Outer\nscope Source\ndef value() -> int = 2\nend Source\nend Outer"
+        ).ok
+
+        declared = session.eval_entry("scope Outer\ndef selected() -> int = value()\nend Outer")
+        result = session.eval_entry("Outer::selected()")
+
+        assert declared.ok, declared.diagnostics
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(1)
+
+    def test_retained_use_sees_a_member_promoted_by_a_later_entry(self) -> None:
+        """A retained use resolves a member a later entry adds to its target."""
         s = ReplSession()
         assert s.eval_entry("scope A\nvar x = 1\nend A").ok
-        assert s.eval_entry("open A").ok
+        assert s.eval_entry("use A::*").ok
         assert s.eval_entry("scope A\nvar y = 2\nend A").ok
 
         result = s.eval_entry("y")
 
         assert result.ok, result.diagnostics
         assert result.value == IntValue(2)
+
+    def test_replacing_a_scoped_use_discards_its_empty_prior_region(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope A\ndef member() -> int = 1\nend A").ok
+        assert s.eval_entry("scope B\nuse A::*\nend B").ok
+
+        replacement = s.eval_entry("scope B\nuse A::*\nend B")
+
+        assert replacement.ok, replacement.diagnostics
 
     def test_scoped_declarations_and_bindings_coexist_at_one_path(self) -> None:
         s = ReplSession()
@@ -914,7 +965,7 @@ class TestCrossEntryScopeCollision:
 
 
 class TestStdlib:
-    def test_core_stdlib_is_opened_unqualified_by_default(self) -> None:
+    def test_implicit_core_import_makes_names_available_unqualified(self) -> None:
         s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
 
         some_result = s.eval_entry("let present: Option[int] = Some(value = 1)")
@@ -923,10 +974,17 @@ class TestStdlib:
         assert some_result.ok, some_result.diagnostics
         assert none_result.ok, none_result.diagnostics
 
-    def test_type_of_uses_opened_core_stdlib(self) -> None:
+    def test_type_of_uses_implicit_core_import(self) -> None:
         s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
 
         assert "Option[int]" in s.type_of("Some(value = 1)")
+
+    def test_retained_explicit_core_import_suppresses_later_preludes(self) -> None:
+        s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
+
+        assert s.eval_entry("import std/core").ok
+        assert not s.eval_entry("Some(value = 1)").ok
+        assert s.eval_entry("std/core::Option::Some(value = 1)").ok
 
     def test_no_stdlib_requires_explicit_core_import_after_reset(self) -> None:
         s = ReplSession(
@@ -935,7 +993,7 @@ class TestStdlib:
         )
 
         assert not s.eval_entry("Some(value = 1)").ok
-        assert s.eval_entry("open import std/core\nSome(value = 1)").ok
+        assert s.eval_entry("import std/core::*\nSome(value = 1)").ok
 
         s.reset()
 
@@ -1941,7 +1999,7 @@ class TestParsePolicyBuiltinIdentity:
     def test_parse_policy_declared_in_an_imported_library_module_accepted_by_exec(
         self, tmp_path: Path
     ) -> None:
-        """``open import`` brings ``Lib::ParsePolicy`` into scope at its own
+        """A wildcard import brings ``Lib::ParsePolicy`` into scope at its own
         path without the module route prefix -- the qualifier spelling this
         fix recognizes (a module-route-qualified spelling like
         ``lib::Lib::ParsePolicy::Retry`` is outside this fix's scope, exactly
@@ -1951,7 +2009,7 @@ class TestParsePolicyBuiltinIdentity:
             f"scope Lib\nbuiltin enum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}end Lib\n"
         )
         s = _session_with_import_root(tmp_path)
-        declare = s.eval_entry("open import lib")
+        declare = s.eval_entry("import lib::*")
         assert declare.ok, declare.diagnostics
 
         shell = FakeShell(stdout="2")
@@ -2070,12 +2128,51 @@ enum Agent
         assert not stale.ok
         assert fresh.ok, fresh.diagnostics
 
-    def test_redeclaring_an_opened_enum_drops_its_stale_bare_variant(self) -> None:
-        """A local ``open`` recorded before the enum is redeclared must not
+    def test_redeclaring_an_enum_as_a_record_drops_stale_variants(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("enum Color | Red").ok
+        assert session.eval_entry("record Color(value: int)").ok
+
+        stale_use = session.eval_entry("use Color::{Red}")
+        fresh = session.eval_entry("Color(value = 1)")
+
+        assert not stale_use.ok
+        assert fresh.ok, fresh.diagnostics
+
+    def test_redeclaring_an_enum_preserves_unrelated_retained_static_members(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("enum Color | Red").ok
+        assert session.eval_entry("def Color::code() -> int = 42").ok
+
+        redeclared = session.eval_entry("enum Color | Blue\nColor::code()")
+        retained = session.eval_entry("Color::code()")
+        obsolete = session.eval_entry("Color::Red")
+
+        assert redeclared.ok, redeclared.diagnostics
+        assert redeclared.value == IntValue(42)
+        assert retained.ok, retained.diagnostics
+        assert retained.value == IntValue(42)
+        assert not obsolete.ok
+
+    def test_redeclaring_a_type_preserves_nested_constructor_members(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("enum Color | Old").ok
+        assert session.eval_entry("record Color::Meta(value: int)").ok
+        assert session.eval_entry("use Color::*").ok
+        assert session.eval_entry("enum Color | New").ok
+
+        nested = session.eval_entry("Meta(value = 1)")
+
+        assert nested.ok, nested.diagnostics
+        assert isinstance(nested.value, RecordValue)
+        assert nested.value.display_name == "Color::Meta"
+
+    def test_redeclaring_a_used_enum_drops_its_stale_bare_variant(self) -> None:
+        """A local use recorded before the enum is redeclared must not
         resurrect a variant the redeclaration's fresh member layer dropped."""
         s = ReplSession()
         assert s.eval_entry("enum Color\n  | Red\n  | Green").ok
-        assert s.eval_entry("open Color").ok
+        assert s.eval_entry("use Color::*").ok
         assert s.eval_entry("enum Color\n  | Blue").ok
 
         stale = s.eval_entry("Red")
@@ -3496,10 +3593,10 @@ class TestReset:
         assert r.ok
         assert _int({name: value for name, _typ, value in s.bindings()}["a"]) == 2
 
-    def test_reset_clears_retained_scope_opens(self) -> None:
+    def test_reset_clears_retained_uses(self) -> None:
         s = ReplSession()
         assert s.eval_entry("scope Tools\ndef twice(x: int) -> int = x * 2\nend Tools").ok
-        assert s.eval_entry("open Tools").ok
+        assert s.eval_entry("use Tools::*").ok
         assert s.eval_entry("twice(3)").ok
 
         s.reset()
@@ -3515,6 +3612,22 @@ class TestReset:
 
 
 class TestLoadFile:
+    @pytest.mark.parametrize(
+        "transcript",
+        (
+            "# agm:repl-transcript:v1\ninvalid",
+            "# agm:repl-transcript:v1\n# agm:entry:1",
+            "# agm:repl-transcript:v1\n# agm:entry:x\n",
+            "# agm:repl-transcript:v1\n# agm:entry:2\nx\n",
+        ),
+    )
+    def test_malformed_saved_transcript_is_treated_as_an_ordinary_file(
+        self, transcript: str
+    ) -> None:
+        from agm.agl.repl.session import _decode_transcript
+
+        assert _decode_transcript(transcript) is None
+
     def test_load_file_executes_into_session(self, tmp_path: Path) -> None:
         f = tmp_path / "prog.agl"
         f.write_text("let a = 1\nlet b = a + 2\n")
@@ -3536,6 +3649,24 @@ class TestLoadFile:
         s.eval_entry("g")
         assert agent.calls == 1
 
+    def test_saved_transcript_halts_at_first_failed_entry(self, tmp_path: Path) -> None:
+        transcript = tmp_path / "failed.agl"
+        transcript.write_text(
+            "# agm:repl-transcript:v1\n"
+            "# agm:entry:9\nlet a = 1\n"
+            "# agm:entry:7\nmissing\n"
+            "# agm:entry:9\nlet b = 2\n",
+            encoding="utf-8",
+        )
+
+        session = ReplSession()
+        results = session.load_file(transcript)
+
+        assert len(results) == 2
+        assert results[0].ok
+        assert not results[1].ok
+        assert [name for name, _type, _value in session.bindings()] == ["a"]
+
     def test_load_file_incremental_redefinition_round_trips(self, tmp_path: Path) -> None:
         # Redefinition across entries is supported; a saved transcript containing
         # a redefinition must reload because :load runs one statement per entry.
@@ -3550,6 +3681,35 @@ class TestLoadFile:
         assert all(r.ok for r in results)
         vals = {n: _int(v) for n, _t, v in b.bindings()}
         assert vals == {"x": 2}
+
+    def test_load_file_round_trips_a_forward_resolved_use_entry(self, tmp_path: Path) -> None:
+        original = ReplSession()
+        assert original.eval_entry("use S::*\ndef S::value() -> int = 1").ok
+        transcript = tmp_path / "session.agl"
+        transcript.write_text(original.dump_source(), encoding="utf-8")
+
+        loaded = ReplSession()
+        results = loaded.load_file(transcript)
+
+        assert all(result.ok for result in results)
+        value = loaded.eval_entry("value()")
+        assert value.ok, value.diagnostics
+        assert value.value == IntValue(1)
+
+    def test_load_file_round_trips_a_use_after_a_declaration(self, tmp_path: Path) -> None:
+        original = ReplSession()
+        assert original.eval_entry("scope S\ndef value() -> int = 1\nend S").ok
+        assert original.eval_entry("use S::*").ok
+        transcript = tmp_path / "session.agl"
+        transcript.write_text(original.dump_source(), encoding="utf-8")
+
+        loaded = ReplSession()
+        results = loaded.load_file(transcript)
+
+        assert all(result.ok for result in results)
+        value = loaded.eval_entry("value()")
+        assert value.ok, value.diagnostics
+        assert value.value == IntValue(1)
 
     def test_load_file_can_be_loaded_twice_with_nominal_and_function_definitions(
         self, tmp_path: Path
@@ -3664,14 +3824,16 @@ class TestDumpSource:
         s = ReplSession()
         s.eval_entry("let a = 1")
         s.eval_entry("let b = 2")
-        assert s.dump_source() == "let a = 1\nlet b = 2"
+        assert s.dump_source() == (
+            "# agm:repl-transcript:v1\n# agm:entry:9\nlet a = 1\n# agm:entry:9\nlet b = 2\n"
+        )
 
     def test_dump_source_excludes_failed_entries(self) -> None:
         s = ReplSession()
         s.eval_entry("let a = 1")
         s.eval_entry("let z: decimal = 1 / 0")  # runtime fail
         s.eval_entry('let b = a + "x"')  # type fail
-        assert s.dump_source() == "let a = 1"
+        assert s.dump_source() == ("# agm:repl-transcript:v1\n# agm:entry:9\nlet a = 1\n")
 
 
 # ---------------------------------------------------------------------------
@@ -4469,7 +4631,7 @@ class TestInfixDecl:
 
 
 class TestImports:
-    """REPL import declaration support."""
+    """REPL import and use declaration support."""
 
     def _make_session_with_root(self, root: Path) -> ReplSession:
         """Create a ReplSession with *root* as the only module search root."""
@@ -4491,8 +4653,8 @@ class TestImports:
         lib = tmp_path / "mylib.agl"
         lib.write_text("def add(a: int, b: int) -> int = a + b\n")
         s = self._make_session_with_root(tmp_path)
-        # Open import: functions are in unqualified scope
-        r = s.eval_entry("open import mylib\nadd(3, 4)")
+        # A wildcard import makes functions available unqualified.
+        r = s.eval_entry("import mylib::*\nadd(3, 4)")
         assert r.ok, r.diagnostics
         assert r.kind == "expression"
         assert _int(r.value) == 7
@@ -4525,18 +4687,591 @@ class TestImports:
         lib = tmp_path / "util.agl"
         lib.write_text("def double(x: int) -> int = x * 2\n")
         s = self._make_session_with_root(tmp_path)
-        r1 = s.eval_entry("open import util")
+        r1 = s.eval_entry("import util::*")
         assert r1.ok, r1.diagnostics
-        # Open import: double() is in unqualified scope in next entry too
         r2 = s.eval_entry("double(5)")
         assert r2.ok, r2.diagnostics
         assert _int(r2.value) == 10
 
-    def test_import_using_hiding(self, tmp_path: Path) -> None:
+    def test_current_module_use_is_retained(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("def Source::value() -> int = 1").ok
+        assert s.eval_entry("use ::Source::*").ok
+        assert s.eval_entry("value()").value == IntValue(1)
+
+    def test_same_target_use_is_replaced_and_failed_entries_preserve_it(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("def Source::original() -> int = 1").ok
+        assert s.eval_entry("def Source::replacement() -> int = 2").ok
+        assert s.eval_entry("use Source::{original}").ok
+        assert s.eval_entry("original()").value == IntValue(1)
+
+        assert s.eval_entry("use Source::{replacement}").ok
+        assert not s.eval_entry("original()").ok
+        assert s.eval_entry("replacement()").value == IntValue(2)
+
+        failed = s.eval_entry('use Source::{original}\nlet bad: int = "not an int"')
+        assert not failed.ok
+        assert not s.eval_entry("original()").ok
+        assert s.eval_entry("replacement()").value == IntValue(2)
+
+    def test_single_member_alias_use_is_replaced_by_parent_target(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("def Source::old() -> int = 1").ok
+        assert session.eval_entry("def Source::new() -> int = 2").ok
+        assert session.eval_entry("use Source::old as selected").ok
+
+        replacement = session.eval_entry("use Source::{new}")
+
+        assert replacement.ok, replacement.diagnostics
+        assert session.eval_entry("new()").value == IntValue(2)
+        assert not session.eval_entry("selected()").ok
+
+    def test_single_member_alias_replacement_applies_to_its_entry_transactionally(
+        self,
+    ) -> None:
+        session = ReplSession()
+        assert session.eval_entry("def Source::old() -> int = 1").ok
+        assert session.eval_entry("def Source::new() -> int = 2").ok
+        assert session.eval_entry("use Source::{old}").ok
+
+        failed = session.eval_entry("use Source::new as selected\nold()")
+
+        assert not failed.ok
+        assert session.eval_entry("old()").value == IntValue(1)
+
+        replacement = session.eval_entry("use Source::new as selected\nselected()")
+
+        assert replacement.ok, replacement.diagnostics
+        assert replacement.value == IntValue(2)
+        assert not session.eval_entry("old()").ok
+
+    def test_single_member_alias_replacement_can_reuse_the_exposed_name(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("def Source::old() -> int = 1").ok
+        assert session.eval_entry("def Source::new() -> int = 2").ok
+        assert session.eval_entry("use Source::old as selected").ok
+
+        replacement = session.eval_entry("use Source::new as selected\nselected()")
+
+        assert replacement.ok, replacement.diagnostics
+        assert replacement.value == IntValue(2)
+
+    def test_nested_whole_target_alias_does_not_replace_its_parent_use(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("def Source::old() -> int = 1").ok
+        assert session.eval_entry("def Source::Nested::value() -> int = 2").ok
+        assert session.eval_entry("use Source::{old}").ok
+
+        aliased = session.eval_entry("use Source::Nested as N\nold() + N::value()")
+
+        assert aliased.ok, aliased.diagnostics
+        assert aliased.value == IntValue(3)
+        assert session.eval_entry("old()").value == IntValue(1)
+
+    def test_nested_single_member_alias_replacement_keeps_other_retained_headers(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "lib.agl").write_text("def value() -> int = 0\n", encoding="utf-8")
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("def Source::old() -> int = 1").ok
+        assert session.eval_entry("def Source::new() -> int = 2").ok
+        assert session.eval_entry(
+            "scope Outer\nimport lib\nscope Inner\nuse ::Source::{old}\nend Inner\nend Outer"
+        ).ok
+
+        replacement = session.eval_entry(
+            "scope Outer\n"
+            "scope Inner\n"
+            "use ::Source::new as selected\n"
+            "def read() -> int = selected()\n"
+            "end Inner\n"
+            "end Outer\n"
+            "Outer::Inner::read()"
+        )
+
+        assert replacement.ok, replacement.diagnostics
+        assert replacement.value == IntValue(2)
+        assert not session.eval_entry(
+            "scope Outer\nscope Inner\ndef stale() -> int = old()\nend Inner\nend Outer"
+        ).ok
+
+    def test_unrelated_import_alias_does_not_key_a_local_use(self, tmp_path: Path) -> None:
+        (tmp_path / "lib.agl").write_text("def value() -> int = 0\n", encoding="utf-8")
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("import lib as Other").ok
+        assert session.eval_entry("def Source::old() -> int = 1").ok
+        assert session.eval_entry("def Source::new() -> int = 2").ok
+        assert session.eval_entry("use Source::{old}").ok
+
+        replacement = session.eval_entry("use ::Source::{new}")
+
+        assert replacement.ok, replacement.diagnostics
+        assert not session.eval_entry("old()").ok
+
+    def test_nested_relative_and_current_module_use_targets_replace_each_other(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("def Outer::Source::old() -> int = 1").ok
+        assert session.eval_entry("def Outer::Source::new() -> int = 2").ok
+        assert session.eval_entry("scope Outer\nuse Source::{old}\nend Outer").ok
+
+        replacement = session.eval_entry("scope Outer\nuse ::Outer::Source::{new}\nend Outer")
+
+        assert replacement.ok, replacement.diagnostics
+        assert not session.eval_entry(
+            "scope Outer\ndef read() -> int = old()\nend Outer\nOuter::read()"
+        ).ok
+
+    def test_relative_use_does_not_replace_retained_target_after_nearer_scope_appears(
+        self,
+    ) -> None:
+        session = ReplSession()
+        assert session.eval_entry("def Source::old() -> int = 1").ok
+        assert session.eval_entry("scope Outer\nuse Source::{old}\nend Outer").ok
+        assert session.eval_entry("def Outer::Source::new() -> int = 2").ok
+
+        result = session.eval_entry(
+            "scope Outer\n"
+            "use Source::{new}\n"
+            "def both() -> int = old() + new()\n"
+            "end Outer\n"
+            "Outer::both()"
+        )
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(3)
+
+    def test_replacing_nested_relative_use_hides_old_names_in_replacement_entry(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("def Source::old() -> int = 1").ok
+        assert session.eval_entry("def Source::new() -> int = 2").ok
+        assert session.eval_entry("scope Outer\nuse Source::{old}\nend Outer").ok
+
+        replacement = session.eval_entry(
+            "scope Outer\nuse Source::{new}\ndef captured() -> int = old()\nend Outer"
+        )
+
+        assert not replacement.ok
+        assert not session.eval_entry("Outer::captured()").ok
+
+    def test_regional_import_tail_does_not_canonicalize_an_unrelated_use(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "lib.agl").write_text(
+            "scope Source\ndef old() -> int = 9\nend Source\n", encoding="utf-8"
+        )
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("def Right::Source::old() -> int = 1").ok
+        assert session.eval_entry("def Right::Source::new() -> int = 2").ok
+        assert session.eval_entry(
+            "scope Left\nimport lib::{Source}\nend Left\nscope Right\nuse Source::{old}\nend Right"
+        ).ok
+
+        replacement = session.eval_entry("scope Right\nuse ::Right::Source::{new}\nend Right")
+
+        assert replacement.ok, replacement.diagnostics
+        assert not session.eval_entry(
+            "scope Right\ndef read() -> int = old()\nend Right\nRight::read()"
+        ).ok
+
+    def test_glob_imported_scope_use_is_replaced_by_anchored_target(self, tmp_path: Path) -> None:
+        (tmp_path / "lib.agl").write_text(
+            "scope Source\ndef old() -> int = 1\ndef new() -> int = 2\nend Source\n",
+            encoding="utf-8",
+        )
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("import lib::*\nuse Source::{old}").ok
+
+        replacement = session.eval_entry("use /lib::Source::{new}")
+
+        assert replacement.ok, replacement.diagnostics
+        assert session.eval_entry("new()").value == IntValue(2)
+        assert not session.eval_entry("old()").ok
+
+    def test_wildcard_facade_use_survives_alias_replacement(self, tmp_path: Path) -> None:
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text("def old() -> int = 1\n", encoding="utf-8")
+        (package / "b.agl").write_text("def new() -> int = 2\n", encoding="utf-8")
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("import pkg/* as Old\nuse Old::{old}").ok
+
+        replacement = session.eval_entry("import pkg/* as New\nuse New::{new}")
+
+        assert replacement.ok, replacement.diagnostics
+        assert session.eval_entry("new()").value == IntValue(2)
+        assert not session.eval_entry("old()").ok
+
+    def test_anchored_use_replaces_suffix_use_of_same_module(self, tmp_path: Path) -> None:
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "lib.agl").write_text(
+            "def old() -> int = 1\ndef new() -> int = 2\n", encoding="utf-8"
+        )
+        s = self._make_session_with_root(tmp_path)
+        assert s.eval_entry("import pkg/lib\nuse lib::{old}").ok
+
+        replacement = s.eval_entry("use /pkg/lib::{new}")
+
+        assert replacement.ok, replacement.diagnostics
+        assert s.eval_entry("new()").value == IntValue(2)
+        assert not s.eval_entry("old()").ok
+
+    def test_retained_local_use_ignores_a_later_colliding_import(self, tmp_path: Path) -> None:
+        (tmp_path / "lib.agl").write_text("def imported() -> int = 2\n")
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("def Source::local() -> int = 1").ok
+        assert session.eval_entry("use Source::*").ok
+
+        imported = session.eval_entry("import lib as Source")
+        local = session.eval_entry("local()")
+
+        assert imported.ok, imported.diagnostics
+        assert local.ok, local.diagnostics
+        assert local.value == IntValue(1)
+
+    def test_retained_import_canonicalizes_a_later_use_replacement(self, tmp_path: Path) -> None:
+        (tmp_path / "lib.agl").write_text(
+            "def old() -> int = 1\ndef new() -> int = 2\n", encoding="utf-8"
+        )
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("import lib").ok
+        assert session.eval_entry("use lib::{old}").ok
+
+        replacement = session.eval_entry("use /lib::{new}")
+
+        assert replacement.ok, replacement.diagnostics
+        assert session.eval_entry("new()").value == IntValue(2)
+        assert not session.eval_entry("old()").ok
+
+    def test_retained_imported_use_survives_import_alias_change(self, tmp_path: Path) -> None:
+        (tmp_path / "lib.agl").write_text("def value() -> int = 1\n", encoding="utf-8")
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("import lib as Old").ok
+        assert session.eval_entry("use Old::*").ok
+
+        changed = session.eval_entry("import lib as New")
+        result = session.eval_entry("value()")
+
+        assert changed.ok, changed.diagnostics
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(1)
+
+    def test_retained_imported_use_reports_when_a_replacement_hides_its_target(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "lib.agl").write_text(
+            "scope S\ndef value() -> int = 1\nend S\n", encoding="utf-8"
+        )
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("import lib\nuse lib::S::*").ok
+
+        replacement = session.eval_entry("let other = 2\nimport lib hiding S")
+
+        assert not replacement.ok
+        assert replacement.diagnostics[0].message
+        # The complaint locates the import that hid the route, not a placeholder line.
+        assert replacement.diagnostics[0].line == 2
+
+    def test_retained_imported_use_keeps_nested_scope_routes_after_alias_change(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "lib.agl").write_text(
+            "scope Nested\ndef value() -> int = 1\nend Nested\n", encoding="utf-8"
+        )
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("import lib as Old").ok
+        assert session.eval_entry("use Old::*").ok
+        assert session.eval_entry("import lib as New").ok
+
+        result = session.eval_entry("use Nested::*\nvalue()")
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(1)
+
+    def test_import_tail_rename_canonicalizes_use_replacement(self, tmp_path: Path) -> None:
+        (tmp_path / "lib.agl").write_text(
+            "scope Source\ndef old() -> int = 1\ndef new() -> int = 2\nend Source\n"
+            "scope Other\ndef value() -> int = 3\nend Other\n",
+            encoding="utf-8",
+        )
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("import lib::{Source as Alias, Other}").ok
+        assert session.eval_entry("use Alias::{old}").ok
+
+        replacement = session.eval_entry("use /lib::Source::{new}")
+
+        assert replacement.ok, replacement.diagnostics
+        assert session.eval_entry("new()").value == IntValue(2)
+        assert not session.eval_entry("old()").ok
+
+    def test_wildcard_alias_facade_use_is_retained(self, tmp_path: Path) -> None:
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text("def first() -> int = 1\n", encoding="utf-8")
+        (package / "b.agl").write_text("def second() -> int = 2\n", encoding="utf-8")
+        session = self._make_session_with_root(tmp_path)
+
+        assert session.eval_entry("import pkg/* as Facade\nuse Facade::*").ok
+        assert session.eval_entry("first() + second()").value == IntValue(3)
+
+    def test_retained_wildcard_facade_use_survives_a_shrinking_import(self, tmp_path: Path) -> None:
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text("def first() -> int = 1\n", encoding="utf-8")
+        removed = package / "b.agl"
+        removed.write_text("def second() -> int = 2\n", encoding="utf-8")
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("import pkg/* as Facade\nuse Facade::*").ok
+        removed.unlink()
+
+        result = session.eval_entry("first()")
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(1)
+        assert not session.eval_entry("second()").ok
+
+    def test_retained_wildcard_facade_refreshes_only_its_original_import(
+        self, tmp_path: Path
+    ) -> None:
+        package = tmp_path / "pkg"
+        unrelated = tmp_path / "unrelated"
+        package.mkdir()
+        unrelated.mkdir()
+        (package / "a.agl").write_text("def first() -> int = 1\n", encoding="utf-8")
+        (unrelated / "c.agl").write_text("def intruder() -> int = 3\n", encoding="utf-8")
+        session = self._make_session_with_root(tmp_path)
+
+        assert session.eval_entry("import pkg/* as Facade\nuse Facade::*").ok
+        (package / "b.agl").write_text("def second() -> int = 2\n", encoding="utf-8")
+        assert session.eval_entry("import unrelated/* as Facade").ok
+
+        refreshed = session.eval_entry("first() + second()")
+        assert refreshed.ok, refreshed.diagnostics
+        assert refreshed.value == IntValue(3)
+        assert not session.eval_entry("intruder()").ok
+
+        assert session.eval_entry("import pkg/a as Direct").ok
+        fallback = session.eval_entry("first() + second()")
+        assert fallback.ok, fallback.diagnostics
+        assert fallback.value == IntValue(3)
+
+    def test_named_scope_retains_a_wildcard_facade_use_of_an_imported_enum_across_entries(
+        self, tmp_path: Path
+    ) -> None:
+        """A ``use`` targeting an imported module inside a named ``scope``
+        region -- not the REPL root -- is retained and replayed the same way
+        a root-level retained use already is, including the enum
+        constructors a wildcard selection exposes."""
+        (tmp_path / "lib.agl").write_text("enum Color\n  | Red\n  | Blue\n", encoding="utf-8")
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("import lib\nscope Outer\nuse lib::*\nend Outer").ok
+
+        declared = session.eval_entry(
+            "scope Outer\n"
+            "def describe(c: Color) -> int = case c of | Color::Red => 1 | Color::Blue => 2\n"
+            "end Outer"
+        )
+        assert declared.ok, declared.diagnostics
+        result = session.eval_entry("Outer::describe(lib::Color::Red)")
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(1)
+
+    def test_named_scope_retained_wildcard_facade_use_survives_a_shrinking_import(
+        self, tmp_path: Path
+    ) -> None:
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text("def first() -> int = 1\n", encoding="utf-8")
+        removed = package / "b.agl"
+        removed.write_text("def second() -> int = 2\n", encoding="utf-8")
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry(
+            "import pkg/* as Facade\nscope Outer\nuse Facade::*\nend Outer"
+        ).ok
+        removed.unlink()
+
+        declared = session.eval_entry("scope Outer\ndef readFirst() -> int = first()\nend Outer")
+        assert declared.ok, declared.diagnostics
+        result = session.eval_entry("Outer::readFirst()")
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(1)
+
+        stale = session.eval_entry("scope Outer\ndef readSecond() -> int = second()\nend Outer")
+        assert not stale.ok
+
+    def test_named_scope_retained_wildcard_facade_use_survives_direct_reimport_of_its_members(
+        self, tmp_path: Path
+    ) -> None:
+        """Once every module a wildcard facade discovered is ALSO reimported
+        directly under its own alias, the facade's own resolved origin no
+        longer matches any current declaration -- the retained contribution
+        must fall back to what is still independently importable rather than
+        losing its members."""
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text("def first() -> int = 1\n", encoding="utf-8")
+        (package / "b.agl").write_text("def second() -> int = 2\n", encoding="utf-8")
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry(
+            "import pkg/* as Facade\nscope Outer\nuse Facade::*\nend Outer"
+        ).ok
+
+        assert session.eval_entry("import pkg/a as Q1\nimport pkg/b as Q2").ok
+
+        declared = session.eval_entry(
+            "scope Outer\n"
+            "def readFirst() -> int = first()\n"
+            "def readSecond() -> int = second()\n"
+            "end Outer"
+        )
+        assert declared.ok, declared.diagnostics
+        result = session.eval_entry("Outer::readFirst() + Outer::readSecond()")
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(3)
+
+    def test_retained_deep_wildcard_facade_member_use_tolerates_a_removed_module(
+        self, tmp_path: Path
+    ) -> None:
+        """A retained use naming one wildcard-discovered module directly (not
+        through the facade alias) simply stops seeing that module once it is
+        removed from disk, rather than rejecting the unrelated entry that
+        triggers the replay."""
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text("scope S\ndef value() -> int = 1\nend S\n", encoding="utf-8")
+        (package / "b.agl").write_text("def other() -> int = 2\n", encoding="utf-8")
+        removed = package / "a.agl"
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry("import pkg/*\nuse /pkg/a::S::*").ok
+        removed.unlink()
+
+        result = session.eval_entry("1")
+
+        assert result.ok, result.diagnostics
+
+    def test_retained_imported_use_with_constructors_survives_a_narrower_replacement(
+        self, tmp_path: Path
+    ) -> None:
+        """A retained imported wildcard use inside a named scope, that
+        exposed record constructors alongside plain bindings from TWO
+        overlapping modules -- each also named through both its bare and its
+        ``/``-anchored spelling -- keeps its plain bindings reachable once a
+        later entry narrows every one of those four declarations down to
+        just them. Two overlapping contributions per module (bare + anchored
+        spellings of the same target) exercise every shape the constructor
+        and binding retraction can see: an atom already retracted by an
+        earlier contribution, one a later contribution still shares, and one
+        a contribution owns outright."""
+        (tmp_path / "a.agl").write_text(
+            "record Point\n  x: int\ndef onlyA() -> int = 11\n", encoding="utf-8"
+        )
+        (tmp_path / "b.agl").write_text(
+            "record Point\n  y: int\ndef onlyB() -> int = 22\n", encoding="utf-8"
+        )
+        session = self._make_session_with_root(tmp_path)
+        assert session.eval_entry(
+            "import a\nimport b\nscope Outer\nuse a::*\nuse /a::*\nuse b::*\nuse /b::*\nend Outer"
+        ).ok
+
+        narrowed = session.eval_entry(
+            "scope Outer\n"
+            "use a::{onlyA}\nuse /a::{onlyA}\nuse b::{onlyB}\nuse /b::{onlyB}\nend Outer"
+        )
+        assert narrowed.ok, narrowed.diagnostics
+
+        result = session.eval_entry(
+            "scope Outer\ndef check() -> int = onlyA() + onlyB()\nend Outer"
+        )
+        assert result.ok, result.diagnostics
+        assert session.eval_entry("Outer::check()").value == IntValue(33)
+
+    def test_retained_separate_wildcard_aliases_do_not_form_one_facade(
+        self, tmp_path: Path
+    ) -> None:
+        alpha = tmp_path / "alpha"
+        beta = tmp_path / "beta"
+        alpha.mkdir()
+        beta.mkdir()
+        (alpha / "one.agl").write_text("def first() -> int = 1\n", encoding="utf-8")
+        (beta / "two.agl").write_text("def second() -> int = 2\n", encoding="utf-8")
+        session = self._make_session_with_root(tmp_path)
+
+        assert session.eval_entry("import alpha/* as Facade").ok
+        assert session.eval_entry("import beta/* as Facade").ok
+
+        assert not session.eval_entry("use Facade::*").ok
+
+    def test_local_and_current_module_use_spellings_replace_each_other(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("def Source::old() -> int = 1").ok
+        assert session.eval_entry("def Source::new() -> int = 2").ok
+        assert session.eval_entry("use Source::{old}").ok
+
+        replacement = session.eval_entry("use ::Source::{new}")
+
+        assert replacement.ok, replacement.diagnostics
+        assert session.eval_entry("new()").value == IntValue(2)
+        assert not session.eval_entry("old()").ok
+
+    def test_import_alias_replacement_replaces_use_of_same_module(self, tmp_path: Path) -> None:
+        (tmp_path / "lib.agl").write_text(
+            "def old() -> int = 1\ndef new() -> int = 2\n", encoding="utf-8"
+        )
+        s = self._make_session_with_root(tmp_path)
+        assert s.eval_entry("import lib as L\nuse L::{old}").ok
+
+        replacement = s.eval_entry("import lib as X\nuse X::{new}")
+
+        assert replacement.ok, replacement.diagnostics
+        assert s.eval_entry("new()").value == IntValue(2)
+        assert not s.eval_entry("old()").ok
+
+    def test_plain_import_route_use_is_replaced_when_import_gains_alias(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "lib.agl").write_text(
+            "def old() -> int = 1\ndef new() -> int = 2\n", encoding="utf-8"
+        )
+        s = self._make_session_with_root(tmp_path)
+        assert s.eval_entry("import lib\nuse lib::{old}").ok
+
+        replacement = s.eval_entry("import lib as X\nuse X::{new}")
+
+        assert replacement.ok, replacement.diagnostics
+        assert s.eval_entry("new()").value == IntValue(2)
+        assert not s.eval_entry("old()").ok
+
+    def test_distinct_use_targets_with_clashing_bare_names_remain_ambiguous(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("def First::value() -> int = 1").ok
+        assert s.eval_entry("def Second::value() -> int = 2").ok
+        assert s.eval_entry("use First::*").ok
+        assert s.eval_entry("use Second::*").ok
+
+        assert not s.eval_entry("value()").ok
+        assert s.eval_entry("First::value()").value == IntValue(1)
+        assert s.eval_entry("Second::value()").value == IntValue(2)
+
+    def test_same_target_uses_in_different_regions_remain_independent(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("def Source::value() -> int = 3").ok
+        assert s.eval_entry("scope Left\nuse Source::*\nend Left").ok
+        assert s.eval_entry("scope Right\nuse Source::*\nend Right").ok
+
+        left = s.eval_entry("scope Left\ndef read() -> int = value()\nend Left\nLeft::read()")
+        right = s.eval_entry("scope Right\ndef read() -> int = value()\nend Right\nRight::read()")
+
+        assert left.ok, left.diagnostics
+        assert left.value == IntValue(3)
+        assert right.ok, right.diagnostics
+        assert right.value == IntValue(3)
+
+    def test_import_selected_members(self, tmp_path: Path) -> None:
         lib = tmp_path / "funcs.agl"
         lib.write_text("def square(n: int) -> int = n * n\ndef cube(n: int) -> int = n * n * n\n")
         s = self._make_session_with_root(tmp_path)
-        r = s.eval_entry("import funcs using square\nsquare(4)")
+        r = s.eval_entry("import funcs::{square}\nsquare(4)")
         assert r.ok, r.diagnostics
         assert _int(r.value) == 16
 
@@ -4638,8 +5373,8 @@ class TestImports:
         from agm.agl.modules.ids import ModuleId
 
         cached_id = ModuleId(segments=("cached",))
-        # Import once to cache it (open import: greet() in unqualified scope)
-        r1 = s.eval_entry("open import cached\ngreet()")
+        # Import once to cache it with its bare members.
+        r1 = s.eval_entry("import cached::*\ngreet()")
         assert r1.ok, r1.diagnostics
         # Now cached_id should be in loaded_lib_modules
         assert cached_id in s._loaded_lib_modules
@@ -4651,7 +5386,7 @@ class TestImports:
         lib = tmp_path / "temp.agl"
         lib.write_text("def f() -> int = 1\n")
         s = self._make_session_with_root(tmp_path)
-        r = s.eval_entry("open import temp\nf()")
+        r = s.eval_entry("import temp::*\nf()")
         assert r.ok, r.diagnostics
         s.reset()
         assert not s._loaded_lib_modules
@@ -4669,7 +5404,7 @@ class TestImports:
         )
         config = std_dir / "config.agl"
         config.write_text(
-            "import std/core using Option, Agent\n"
+            "import std/core::{Option, Agent}\n"
             'builtin var default-agent: Agent = AgentCommand("runner")\n'
             'builtin var timeout: Option[text] = Some("not-a-timeout")\n',
             encoding="utf-8",
@@ -4684,7 +5419,7 @@ class TestImports:
         assert next_node_id > 0
 
         config.write_text(
-            "import std/core using Option, Agent\n"
+            "import std/core::{Option, Agent}\n"
             'builtin var default-agent: Agent = AgentCommand("runner")\n'
             'builtin var timeout: Option[text] = Some("2s")\n',
             encoding="utf-8",
@@ -4708,7 +5443,7 @@ class TestImports:
         (tmp_path / "broken.py").write_text("raise RuntimeError('boom')\n")
         s = self._make_session_with_root(tmp_path)
 
-        failed = s.eval_entry("open import broken\ndef helper() -> int\n  7\nlet stale = helper()")
+        failed = s.eval_entry("import broken::*\ndef helper() -> int\n  7\nlet stale = helper()")
 
         assert not failed.ok
         assert s._link_image == LinkImage()
@@ -4733,7 +5468,7 @@ class TestImports:
         assert boom_id in s._loaded_lib_modules
         assert boom_id in s._link_image._linked_modules
 
-        r2 = s.eval_entry("open import boom\nf()")
+        r2 = s.eval_entry("import boom::*\nf()")
         assert r2.ok, r2.diagnostics
         assert _int(r2.value) == 42
 
@@ -4745,7 +5480,7 @@ class TestImports:
         )
         session = self._make_session_with_root(tmp_path)
 
-        failed = session.eval_entry("open import unstable\ndef retained() -> int = get_seed()")
+        failed = session.eval_entry("import unstable::*\ndef retained() -> int = get_seed()")
 
         assert not failed.ok
         assert "retained" not in failed.installed
@@ -4766,7 +5501,7 @@ class TestImports:
         lib = tmp_path / "mylib.agl"
         lib.write_text("def add(a: int, b: int) -> int = a + b\n")
         s = self._make_session_with_root(tmp_path)
-        r = s.eval_entry("open import mylib\nadd(1, 2)", check_only=True)
+        r = s.eval_entry("import mylib::*\nadd(1, 2)", check_only=True)
         assert r.ok, r.diagnostics
         # check_only does not promote session state.
         assert s.bindings() == []
@@ -4796,7 +5531,7 @@ class TestImports:
         lib = tmp_path / "mylib.agl"
         lib.write_text('def boom() -> int = raise Abort(message = "boom")\n')
         s = self._make_session_with_root(tmp_path)
-        r = s.eval_entry("open import mylib\nboom()")
+        r = s.eval_entry("import mylib::*\nboom()")
         assert not r.ok
         assert r.error is not None
 
@@ -4809,7 +5544,7 @@ class TestImports:
         s = self._make_session_with_root(tmp_path)
         s._trace_path = trace
 
-        r = s.eval_entry("open import mylib\nboom()")
+        r = s.eval_entry("import mylib::*\nboom()")
 
         assert not r.ok
         records = [json.loads(line) for line in trace.read_text().splitlines() if line]
@@ -4826,7 +5561,7 @@ class TestImports:
         (tmp_path / "tools" / "mul.agl").write_text("def mul() -> int = 2\n")
         s = self._make_session_with_root(tmp_path)
 
-        assert s.eval_entry("open import tools/*\nadd() + mul()").ok
+        assert s.eval_entry("import tools/*::*\nadd() + mul()").ok
         replacement = s.eval_entry("import tools/add as arithmetic\narithmetic::add()")
 
         assert replacement.ok, replacement.diagnostics
@@ -4844,7 +5579,7 @@ class TestImports:
         s = self._make_session_with_root(tmp_path)
 
         assert s.eval_entry(
-            "open import tools/add\nimport tools/mul as old_mul\nadd() + old_mul::mul()"
+            "import tools/add::*\nimport tools/mul as old_mul\nadd() + old_mul::mul()"
         ).ok
         replacement = s.eval_entry(
             "import tools/* as all_tools\nall_tools::add() + all_tools::mul()"
@@ -4864,9 +5599,9 @@ class TestImports:
         lib.write_text("def add() -> int = 1\ndef mul() -> int = 2\n")
         s = self._make_session_with_root(tmp_path)
 
-        assert s.eval_entry("open import math\nadd() + mul()").ok
+        assert s.eval_entry("import math::*\nadd() + mul()").ok
         result = s.eval_entry(
-            "import math using add\nimport math as arithmetic\nadd() + arithmetic::mul()"
+            "import math::{add}\nimport math as arithmetic\nadd() + arithmetic::mul()"
         )
 
         assert result.ok, result.diagnostics
@@ -4883,7 +5618,7 @@ class TestImports:
         s = self._make_session_with_root(tmp_path)
 
         assert s.eval_entry(
-            "import math using add\nimport math as arithmetic\nadd() + arithmetic::mul()"
+            "import math::{add}\nimport math as arithmetic\nadd() + arithmetic::mul()"
         ).ok
         replacement = s.eval_entry("import math hiding add\nmath::mul()")
 
@@ -4893,17 +5628,17 @@ class TestImports:
         assert not s.eval_entry("math::add()").ok
         assert s.eval_entry("math::mul()").ok
 
-    def test_replacement_removes_alias_using_hiding_and_open_options(self, tmp_path: Path) -> None:
+    def test_replacement_removes_alias_selection_and_hiding_options(self, tmp_path: Path) -> None:
         lib = tmp_path / "api.agl"
         lib.write_text("def alpha() -> int = 1\ndef beta() -> int = 2\n")
         s = self._make_session_with_root(tmp_path)
 
-        assert s.eval_entry("open import api\nalpha() + beta()").ok
+        assert s.eval_entry("import api::*\nalpha() + beta()").ok
         assert s.eval_entry("import api as old_api\nold_api::alpha()").ok
         assert not s.eval_entry("alpha()").ok
         assert not s.eval_entry("beta()").ok
 
-        assert s.eval_entry("import api using beta\nbeta()").ok
+        assert s.eval_entry("import api::{beta}\nbeta()").ok
         assert not s.eval_entry("old_api::alpha()").ok
         assert s.eval_entry("beta()").ok
 
@@ -4937,7 +5672,7 @@ class TestImports:
         lib = tmp_path / "lazylib.agl"
         lib.write_text("def val() -> int = 42\n")
         s = ReplSession(cwd=tmp_path)
-        r = s.eval_entry("open import lazylib\nval()")
+        r = s.eval_entry("import lazylib::*\nval()")
         assert r.ok, r.diagnostics
         assert _int(r.value) == 42
         # Roots were assembled lazily.
@@ -5006,10 +5741,10 @@ class TestImports:
         (tmp_path / "foo.agl").write_text("def top() -> int = 99\n")
         s = self._make_session_with_root(tmp_path)
         # Entry 1: wildcard import of foo.* (imports foo.a, brings val into scope)
-        r1 = s.eval_entry("open import foo/*\nval()")
+        r1 = s.eval_entry("import foo/*::*\nval()")
         assert r1.ok, r1.diagnostics
         # Entry 2: plain import of foo (brings top() into scope)
-        r2 = s.eval_entry("open import foo\ntop()")
+        r2 = s.eval_entry("import foo::*\ntop()")
         assert r2.ok, r2.diagnostics
         # Entry 3: val() from foo.a must still resolve (wildcard import persists)
         r3 = s.eval_entry("val()")
@@ -5023,7 +5758,7 @@ class TestImports:
         (tmp_path / "tools" / "add.agl").write_text("def add() -> int = 1\n")
         s = self._make_session_with_root(tmp_path)
 
-        assert s.eval_entry("open import tools/*\nadd()").ok
+        assert s.eval_entry("import tools/*::*\nadd()").ok
 
         (tmp_path / "tools" / "mul.agl").write_text("def mul() -> int = 2\n")
         later = s.eval_entry("mul()")
@@ -5040,7 +5775,7 @@ class TestImports:
         (tmp_path / "tools" / "mul.agl").write_text("def mul() -> int = 2\n")
         s = self._make_session_with_root(tmp_path)
 
-        assert s.eval_entry("open import tools/*\nadd() + mul()").ok
+        assert s.eval_entry("import tools/*::*\nadd() + mul()").ok
         assert s.eval_entry("import tools/add as arithmetic\narithmetic::add()").ok
 
         assert not s.eval_entry("add()").ok
@@ -5079,7 +5814,7 @@ class TestImports:
         s = self._make_session_with_root(tmp_path)
 
         assert s.eval_entry(
-            "scope A\nopen import mylib\ndef go() -> int = add(1, 2)\nend A\nA::go()"
+            "scope A\nimport mylib::*\ndef go() -> int = add(1, 2)\nend A\nA::go()"
         ).ok
         r = s.eval_entry("mylib::add(1, 2)")
         assert r.ok, r.diagnostics
@@ -5093,7 +5828,7 @@ class TestImports:
         s = self._make_session_with_root(tmp_path)
 
         assert s.eval_entry(
-            "scope A\nopen import mylib\ndef go() -> int = add(1, 2)\nend A\nA::go()"
+            "scope A\nimport mylib::*\ndef go() -> int = add(1, 2)\nend A\nA::go()"
         ).ok
         r = s.eval_entry("scope A\ndef go2() -> int = add(3, 4)\nend A\nA::go2()")
         assert r.ok, r.diagnostics
@@ -5103,8 +5838,8 @@ class TestImports:
         (tmp_path / "mylib.agl").write_text("def x() -> int = 1\ndef y() -> int = 2\n")
         s = self._make_session_with_root(tmp_path)
 
-        assert s.eval_entry("scope A\nimport mylib using x\nend A").ok
-        replacement = s.eval_entry("scope A\nimport mylib using y\nend A")
+        assert s.eval_entry("scope A\nimport mylib::{x}\nend A").ok
+        replacement = s.eval_entry("scope A\nimport mylib::{y}\nend A")
 
         assert replacement.ok, replacement.diagnostics
         old_selection = s.eval_entry("scope A\ndef old() -> int = x()\nend A")
@@ -5120,14 +5855,14 @@ class TestImports:
         (tmp_path / "mylib.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
         s = self._make_session_with_root(tmp_path)
 
-        assert s.eval_entry("scope A\nopen import mylib\nend A").ok
+        assert s.eval_entry("scope A\nimport mylib::*\nend A").ok
         r = s.eval_entry("add(1, 2)")
         assert not r.ok
 
-    def test_non_open_region_scoped_import_retains_its_qualifier_route_across_entries(
+    def test_plain_region_scoped_import_retains_its_qualifier_route_across_entries(
         self, tmp_path: Path
     ) -> None:
-        """A plain (non-``open``) region-scoped import also persists across entries.
+        """A plain region-scoped import also persists across entries.
 
         A later entry extending the same region must still resolve the
         qualifier the import established, without redeclaring it.
@@ -5156,7 +5891,7 @@ class TestImports:
         (tmp_path / "other.agl").write_text("def mul(a: int, b: int) -> int = a * b\n")
         s = self._make_session_with_root(tmp_path)
 
-        assert s.eval_entry("scope A\nopen import mylib\nend A").ok
+        assert s.eval_entry("scope A\nimport mylib::*\nend A").ok
 
         r = s.eval_entry("import other\nother::mul(2, 3)")
 
@@ -5170,27 +5905,27 @@ class TestImports:
         (tmp_path / "other.agl").write_text("def val() -> int = 5\n")
         s = self._make_session_with_root(tmp_path)
 
-        assert s.eval_entry("scope Src\ndef v() -> int = 1\nend Src\nscope T\nopen Src\nend T").ok
+        assert s.eval_entry("scope Src\ndef v() -> int = 1\nend Src\nscope T\nuse Src::*\nend T").ok
 
         r = s.eval_entry("import other\nother::val()")
 
         assert r.ok, r.diagnostics
         assert _int(r.value) == 5
 
-    def test_root_open_import_survives_a_later_region_scoped_import_of_the_same_module(
+    def test_root_wildcard_import_survives_a_later_region_scoped_import_of_the_same_module(
         self, tmp_path: Path
     ) -> None:
         """A region-scoped import must not revoke an earlier root import's bare names.
 
         Regression: retention keyed the replacement decision on module identity
         alone, so a region-scoped ``import mylib`` clobbered the generation
-        recorded for the earlier ROOT ``open import mylib``, silently removing
+        recorded for the earlier ROOT ``import mylib::*``, silently removing
         its bare names from later entries.
         """
         (tmp_path / "mylib.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
         s = self._make_session_with_root(tmp_path)
 
-        assert s.eval_entry("open import mylib\nadd(1, 2)").ok
+        assert s.eval_entry("import mylib::*\nadd(1, 2)").ok
         assert s.eval_entry("scope A\nimport mylib\nend A").ok
 
         r = s.eval_entry("add(1, 2)")
@@ -5402,7 +6137,7 @@ class TestExternRepl:
             "def add_one(x):\n    return x + 1\n",
         )
         s = self._make_session_with_root(tmp_path)
-        r1 = s.eval_entry("open import extlib")
+        r1 = s.eval_entry("import extlib::*")
         assert r1.ok, r1.diagnostics
         r2 = s.eval_entry("add_one(41)")
         assert r2.ok, r2.diagnostics
@@ -5416,7 +6151,7 @@ class TestExternRepl:
             "def add_one(x):\n    return x + 1\n",
         )
         s = self._make_session_with_root(tmp_path)
-        s.eval_entry("open import extlib")
+        s.eval_entry("import extlib::*")
         r1 = s.eval_entry("let g = add_one")
         assert r1.ok, r1.diagnostics
         r2 = s.eval_entry("g(9)")
@@ -5445,7 +6180,7 @@ class TestExternRepl:
         )
         session = self._make_session_with_root(tmp_path)
 
-        result = session.eval_entry("open import broken\nf()")
+        result = session.eval_entry("import broken::*\nf()")
 
         assert not result.ok
         assert result.diagnostics
@@ -5463,12 +6198,12 @@ class TestExternRepl:
             f"open({str(marker)!r}, 'a').write('x')\ndef touch():\n    return 1\n",
         )
         s = self._make_session_with_root(tmp_path)
-        r1 = s.eval_entry("open import counting\ntouch()")
+        r1 = s.eval_entry("import counting::*\ntouch()")
         assert r1.ok, r1.diagnostics
         r2 = s.eval_entry("touch()")
         assert r2.ok, r2.diagnostics
         # Re-importing the same module in a later entry is a no-op import.
-        r3 = s.eval_entry("open import counting\ntouch()")
+        r3 = s.eval_entry("import counting::*\ntouch()")
         assert r3.ok, r3.diagnostics
         assert marker.read_text() == "x"
 
@@ -5495,11 +6230,11 @@ class TestExternRepl:
         )
         s = self._make_session_with_root(tmp_path)
         roots = s._roots
-        r1 = s.eval_entry("open import extlib\nadd_one(1)")
+        r1 = s.eval_entry("import extlib::*\nadd_one(1)")
         assert r1.ok, r1.diagnostics
         s.reset()
         s._roots = roots  # :reset clears roots too; a real host re-supplies them
-        r2 = s.eval_entry("open import extlib\nadd_one(1)")
+        r2 = s.eval_entry("import extlib::*\nadd_one(1)")
         assert r2.ok, r2.diagnostics
         assert _int(r2.value) == 2
 
@@ -5515,7 +6250,7 @@ class TestExternRepl:
             "def boom():\n    raise ValueError('kaboom')\n",
         )
         s = self._make_session_with_root(tmp_path)
-        s.eval_entry("open import extlib")
+        s.eval_entry("import extlib::*")
         r = s.eval_entry("boom()")
         assert not r.ok
         assert r.error is not None
@@ -5535,7 +6270,7 @@ class TestExternRepl:
             "def boom():\n    raise ValueError('kaboom')\n",
         )
         s = self._make_session_with_root(tmp_path)
-        s.eval_entry("open import extlib")
+        s.eval_entry("import extlib::*")
         r = s.eval_entry(
             "let r = try\n  boom()\ncatch ExternError as e =>\n  print(e.function)\n  -1\n"
         )
@@ -5749,6 +6484,131 @@ class TestBareTypeEntry:
         assert r.value is None
         assert render_entry_result(r, echo=True) == "<type:\nrecord Box[T]\n  value: T\n>"
 
+    def test_use_exposed_generic_record_name_echoes_definition(self) -> None:
+        from agm.agl.repl.render import render_entry_result
+
+        session = ReplSession()
+        assert session.eval_entry("scope S\nrecord Box[T](value: T)\nend S").ok
+        assert session.eval_entry("use S::*").ok
+
+        result = session.eval_entry("Box")
+
+        assert result.ok, result.diagnostics
+        assert render_entry_result(result, echo=True) == "<type:\nrecord Box[T]\n  value: T\n>"
+
+    @pytest.mark.parametrize(
+        ("use_decl", "query", "display_name"),
+        (
+            ("use S::{Box}", "Box", "Box"),
+            ("use S::{Box as Renamed}", "Renamed", "Renamed"),
+        ),
+    )
+    def test_selective_use_exposed_generic_record_name_echoes_definition(
+        self, use_decl: str, query: str, display_name: str
+    ) -> None:
+        from agm.agl.repl.render import render_entry_result
+
+        session = ReplSession()
+        assert session.eval_entry("scope S\nrecord Box[T](value: T)\nend S").ok
+        assert session.eval_entry(use_decl).ok
+
+        result = session.eval_entry(query)
+
+        assert result.ok, result.diagnostics
+        assert (
+            render_entry_result(result, echo=True)
+            == f"<type:\nrecord {display_name}[T]\n  value: T\n>"
+        )
+
+    def test_hidden_use_generic_record_name_does_not_echo_definition(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("scope S\nrecord Box[T](value: T)\nend S").ok
+        assert session.eval_entry("use S::* hiding Box").ok
+
+        assert not session.eval_entry("Box").ok
+
+    def test_use_alias_qualified_generic_record_name_echoes_definition(self) -> None:
+        from agm.agl.repl.render import render_entry_result
+
+        session = ReplSession()
+        assert session.eval_entry("scope S\nrecord Box[T](value: T)\nend S").ok
+        assert session.eval_entry("use S as Alias").ok
+
+        result = session.eval_entry("Alias::Box")
+
+        assert result.ok, result.diagnostics
+        assert (
+            render_entry_result(result, echo=True) == "<type:\nrecord Alias::Box[T]\n  value: T\n>"
+        )
+
+    def test_use_alias_does_not_expose_another_qualifier(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("scope S\nrecord Box[T](value: T)\nend S").ok
+        assert session.eval_entry("use S as Alias").ok
+
+        assert not session.eval_entry("Other::Box").ok
+
+    @pytest.mark.parametrize(
+        "local_route",
+        (
+            "use S as a\nscope S\nrecord Box[T](value: T)\nend S",
+            "scope a\nrecord Box[T](value: T)\nend a",
+        ),
+    )
+    def test_qualified_unapplied_generic_rejects_distinct_local_and_import_routes(
+        self, tmp_path: Path, local_route: str
+    ) -> None:
+        (tmp_path / "a.agl").write_text("record Box[T](value: T)\n")
+        session = ReplSession(
+            cwd=tmp_path,
+            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+        )
+        setup = session.eval_entry(f"import a\n{local_route}")
+        assert setup.ok, setup.diagnostics
+
+        assert not session.eval_entry("a::Box[int]").ok
+        assert not session.eval_entry("a::Box").ok
+
+    def test_qualified_unapplied_generic_displays_equivalent_duplicate_routes(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.repl.render import render_entry_result
+
+        (tmp_path / "a.agl").write_text("record Box[T](value: T)\n")
+        session = ReplSession(
+            cwd=tmp_path,
+            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+        )
+        setup = session.eval_entry("import a\nuse /a as a")
+        assert setup.ok, setup.diagnostics
+
+        result = session.eval_entry("a::Box")
+
+        assert result.ok, result.diagnostics
+        assert render_entry_result(result, echo=True) == "<type:\nrecord a::Box[T]\n  value: T\n>"
+
+    def test_use_alias_nested_generic_record_name_echoes_definition(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry(
+            "scope S\nscope Nested\nrecord Box[T](value: T)\nend Nested\nend S"
+        ).ok
+        assert session.eval_entry("use S as Alias").ok
+
+        result = session.eval_entry("Alias::Nested::Box")
+
+        assert result.ok, result.diagnostics
+        assert result.kind == "type"
+
+    def test_use_alias_non_generic_enum_falls_back_to_type_display(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("scope S\nenum Status | ready\nend S").ok
+        assert session.eval_entry("use S as Alias").ok
+
+        result = session.eval_entry("Alias::Status")
+
+        assert result.ok, result.diagnostics
+        assert result.kind == "type"
+
     def test_bare_scoped_generic_record_name_echoes_definition(self) -> None:
         """A retained named-scope generic resolves by its qualified local name.
 
@@ -5779,7 +6639,7 @@ class TestBareTypeEntry:
             == "<type:\nenum Option[T]\n  | none\n  | some(value: T)\n>"
         )
 
-    def test_opened_stdlib_bare_generic_type_echoes_definition(self) -> None:
+    def test_implicit_core_import_bare_generic_type_echoes_definition(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
         s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
@@ -5792,7 +6652,7 @@ class TestBareTypeEntry:
             == "<type:\nenum Option[T]\n  | None\n  | Some(value: T)\n>"
         )
 
-    def test_opened_stdlib_qualified_bare_generic_type_echoes_definition(self) -> None:
+    def test_implicit_core_import_qualified_generic_type_echoes_definition(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
         s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
@@ -5900,9 +6760,7 @@ class TestBareTypeEntry:
         no_name_env = TypeEnvironment(
             program_generic_table={},
             import_env=ImportEnv(
-                contributions={
-                    lib: ModuleContribution(lib, {}, frozenset(), False, frozenset({"missing"}))
-                },
+                contributions={lib: ModuleContribution(lib, {}, False, frozenset({"missing"}))},
                 unqualified={},
             ),
         )
@@ -5914,12 +6772,17 @@ class TestBareTypeEntry:
             is None
         )
 
+        missing = ModuleId(("missing",))
         no_generic_env = TypeEnvironment(
             program_generic_table={},
             import_env=ImportEnv(
                 contributions={
-                    lib: ModuleContribution(
-                        lib, {"Box": (lib, "Box")}, frozenset(), False, frozenset({"missing"})
+                    missing: ModuleContribution(
+                        missing,
+                        {"Box": (missing, "Box")},
+                        True,
+                        frozenset(),
+                        {"Box": (missing, "Box")},
                     )
                 },
                 unqualified={},
@@ -6039,6 +6902,128 @@ class TestBareTypeEntry:
         assert r.ok
         assert r.kind == "type"
         assert render_entry_result(r, echo=True, check_only=True) == "<type: int>"
+
+
+# ---------------------------------------------------------------------------
+# Local `use` narrowing across REPL entries
+# ---------------------------------------------------------------------------
+
+
+class TestLocalUseNarrowing:
+    """A retained local-scope ``use`` stays in sync with later narrowing ``use``s.
+
+    Mirrors how a region-scoped ``import`` narrowing replaces the prior
+    selection (see ``TestImports``): a later, narrower ``use`` of the same
+    local scope must supersede an earlier glob ``use``, not merely add to it.
+    """
+
+    def test_narrowing_local_use_retracts_a_member_exposed_by_an_earlier_glob_use(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("scope S\ndef foo() -> int = 1\ndef bar() -> int = 2\nend S").ok
+        assert session.eval_entry("use S::*").ok
+        assert session.eval_entry("use S::{bar}").ok
+
+        assert session.eval_entry("bar()").ok
+        assert not session.eval_entry("foo()").ok
+
+    def test_narrowing_local_use_in_a_named_scope_retracts_a_type_in_a_later_entry(
+        self,
+    ) -> None:
+        """A tail-selecting (non-glob) local use, retained on a NAMED scope,
+
+        must stop exposing its selected type once a later ``use`` on the same
+        target supersedes it -- even in an entry that declares no ``use`` of
+        its own, and even though type resolution has no live fallback and
+        depends entirely on the retained static bare-contribution table.
+        """
+        session = ReplSession()
+        assert session.eval_entry("type Source::Meters = int").ok
+        assert session.eval_entry("type Source::Seconds = int").ok
+        assert session.eval_entry("scope Outer\nuse Source::{Meters}\nend Outer").ok
+        assert session.eval_entry("scope Outer\nuse Source::{Seconds}\nend Outer").ok
+
+        result = session.eval_entry("scope Outer\nlet duration: Seconds = 1\nend Outer")
+        assert result.ok, result.diagnostics
+
+        assert not session.eval_entry("scope Outer\nlet distance: Meters = 1\nend Outer").ok
+
+    def test_a_narrower_use_supersedes_a_retained_local_scope_route_within_the_same_entry(
+        self,
+    ) -> None:
+        """A local scope reached only through an earlier bare ``use`` (not
+        declared as a top-level scope of its own) stops being nameable once
+        that earlier ``use`` is narrowed away by a later declaration in the
+        SAME entry -- the earlier declaration is retained from a prior entry,
+        so the narrowing here must see it as superseded mid-entry, not only
+        once the next entry rebuilds the scope from scratch."""
+        session = ReplSession()
+        assert session.eval_entry(
+            "scope A\nscope B\ndef value() -> int = 1\nend B\ndef direct() -> int = 5\nend A"
+        ).ok
+        assert session.eval_entry("use A::*").ok
+
+        narrowed = session.eval_entry("use A::{direct}\nuse B::*")
+
+        assert not narrowed.ok
+
+    def test_narrowing_local_use_retracts_constructors_shared_by_overlapping_glob_uses(
+        self,
+    ) -> None:
+        """Mirrors ``test_narrowing_local_use_retracts_a_member_exposed_by_an_earlier_glob_use``
+        for the record constructors two overlapping local wildcard ``use``s
+        inside a named scope expose, not just their plain bindings: a bare
+        constructor pattern needs the source scopes' own constructor
+        candidates, so it stops matching once every wildcard is narrowed
+        away. Each source is named through both its bare and its
+        current-module-anchored spelling, so retraction sees an atom already
+        cleared by an earlier contribution, one a later contribution still
+        shares, and one a contribution owns outright."""
+        session = ReplSession()
+        assert session.eval_entry(
+            "scope SourceA\nrecord Point\n  x: int\ndef onlyA() -> int = 11\nend SourceA\n"
+            "scope SourceB\nrecord Point\n  y: int\ndef onlyB() -> int = 22\nend SourceB\n"
+        ).ok
+        assert session.eval_entry(
+            "scope Outer\n"
+            "use SourceA::*\nuse ::SourceA::*\nuse SourceB::*\nuse ::SourceB::*\n"
+            "end Outer"
+        ).ok
+
+        narrowed = session.eval_entry(
+            "scope Outer\n"
+            "use SourceA::{onlyA}\nuse ::SourceA::{onlyA}\n"
+            "use SourceB::{onlyB}\nuse ::SourceB::{onlyB}\n"
+            "end Outer"
+        )
+        assert narrowed.ok, narrowed.diagnostics
+
+        result = session.eval_entry(
+            "scope Outer\ndef check() -> int = onlyA() + onlyB()\nend Outer"
+        )
+        assert result.ok, result.diagnostics
+        assert session.eval_entry("Outer::check()").value == IntValue(33)
+
+        stale = session.eval_entry(
+            "scope Outer\ndef mk() -> int = case Point(x = 1) of | Point(x) => x\nend Outer"
+        )
+        assert not stale.ok
+
+    def test_local_use_of_a_scope_that_never_promotes_is_dropped_on_replay(self) -> None:
+        """A retained local ``use`` whose source scope fails to promote on
+        the SAME entry that declared it (first declaration, runtime failure)
+        must not be replayed on a later entry -- there is no promoted source
+        scope left to resolve it against."""
+        session = ReplSession()
+        assert session.eval_entry("scope Outer\nend Outer").ok
+
+        failed = session.eval_entry(
+            "let z: decimal = 1 / 0\n"
+            "enum Color\n  | Red\n  | Blue\n"
+            "scope Outer\nuse Color::*\nend Outer\n"
+        )
+        assert not failed.ok
+
+        assert not session.eval_entry("Color::Red").ok
 
 
 # ---------------------------------------------------------------------------

@@ -34,8 +34,14 @@ _HELP_TEXTS: dict[str, str] = {
                          Open the tmux session for an existing branch workspace.
                          With --parent, this is an error.
           existing branch Check out BRANCH into a Git worktree, then open it as a workspace.
+                         A branch that exists only on a remote is checked out as a
+                         tracking branch of that remote; a branch carried by several
+                         remotes is ambiguous and is rejected.
                          With --parent, warn and ignore --parent.
           missing branch  Create BRANCH from PARENT/current branch, then open it.
+
+        A workspace whose tmux session is already running is reported as an error
+        instead of being opened again; attach to that session instead.
 
         Examples:
           agm open repo
@@ -588,8 +594,8 @@ _HELP_TEXTS: dict[str, str] = {
           --no-log              Disable trace logging (overrides config).
           --log, --log-file, and --no-log are mutually exclusive.
           --log-file and --no-log-file are mutually exclusive.
-          --no-stdlib           Disable automatic std/core opening throughout the
-                                loaded program (entry and library modules).
+          --no-stdlib           Disable the automatic import std/core::* prelude
+                                throughout the loaded program (entry and library modules).
           -I DIR, --module-path DIR
                                 Add DIR as an additional module search root
                                 (repeatable). Resolved relative to the invocation
@@ -617,11 +623,12 @@ _HELP_TEXTS: dict[str, str] = {
         that accumulates bindings, types, and declarations across entries, so
         earlier results stay available and agent calls fire exactly once.  The
         session reuses the [exec] configuration (default agent, call-depth
-        limit, JSON strictness, timeout). Like agm exec, it
-        automatically opens std/core throughout each loaded program, so
-        standard-library names are available unqualified. Other imports are
-        qualified by default; use --no-stdlib to require an explicit std/core
-        import instead.
+        limit, JSON strictness, timeout). Like agm exec, it supplies an automatic
+        import std/core::* prelude to each loaded program, so standard-library
+        names are available unqualified. An explicit import whose expansion
+        includes std/core supplies its core contribution instead, so plain
+        import std/core leaves core names qualified-only. Other imports are
+        qualified by default; --no-stdlib disables the automatic prelude.
 
         Trace logging is OFF by default.  A ``std/config::KEY := VALUE`` write
         entered at the REPL prompt takes effect from that point and persists for
@@ -644,8 +651,8 @@ _HELP_TEXTS: dict[str, str] = {
           --confirm-agents     Confirm each agent prompt before dispatching it
                                 (default: fire agent calls without confirming).
           --quiet               Suppress automatic echoing of entry results.
-          --no-stdlib           Disable automatic std/core opening for each loaded
-                                REPL program (entries and library modules).
+          --no-stdlib           Disable the automatic import std/core::* prelude for
+                                each loaded REPL program (entries and library modules).
                                 Explicit imports remain available, and :reset
                                 keeps this choice.
           --log                 Enable trace logging (auto timestamped path).

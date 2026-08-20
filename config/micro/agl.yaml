@@ -4,8 +4,8 @@ detect:
     filename: "\\.agl$"
 
 rules:
-    # Root declarations and declaration modifiers.
-    - preproc: "\\b(import|qualified|using|hiding|builtin)\\b"
+    # Module/scope headers and declaration modifiers.
+    - preproc: "\\b(import|use|export|hiding|scope|end|builtin)\\b"
     - statement: "\\b(record|enum|type|exception|extends|param|program|agent|config|def|fn|let|var)\\b"
 
     # Control flow and expression keywords.
@@ -14,10 +14,7 @@ rules:
 
     # Contextual built-ins and primitive type names.
     - identifier: "\\b(print|render|parse_json|ask-request|ask|exec)\\b"
-    - type: "\\b(unit|text|json|bool|int|decimal|list|dict)\\b"
-
-    # By AgL convention, uppercase-leading names are types or constructors.
-    - type: "\\b[A-Z][^\\s()\\[\\]{}:,.|;/]*"
+    - type: "\\b(unit|text|json|bool|int|decimal|array|dict)\\b"
 
     # Literals.
     - constant.bool: "\\b(true|false)\\b"

@@ -19,7 +19,7 @@ _ROOT_DECLARATIONS = (
     syntax.InfixDecl,
     syntax.ImportDecl,
     syntax.ExportDecl,
-    syntax.OpenDecl,
+    syntax.UseDecl,
     syntax.ScopeRegion,
 )
 

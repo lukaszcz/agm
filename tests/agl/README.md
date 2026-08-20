@@ -31,7 +31,7 @@ Layout:
 | `functions/` | User-defined functions: recursion, default args, first-class values, lambdas, `Agent::ask` in a `def` body |
 | `generics/` | Generic types/functions: inference, explicit `::[…]` overrides, erasure, HOFs, imported generics |
 | `inline/` | Single-expression programs and host-wrapped `inline_entry` sources |
-| `methods/` | Record and enum methods: direct and bound calls, generic receivers, partial application, and scope opening |
+| `methods/` | Record and enum methods: direct and bound calls, generic receivers, partial application, and scope use |
 | `modules/` | Multi-file module programs (via `module_roots`): imports combined with generics, casts, records/enums, pattern matching, and cross-module mutual recursion |
 | `partial/` | Partial application placeholders for calls, constructors, generics, eager capture, and higher-order use |
 | `rendering/` | Console/value rendering: nesting, escaping, exception rendering |

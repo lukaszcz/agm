@@ -30,8 +30,10 @@ config, workspace config, dependency environment, setup scripts, and tmux sessio
 - the branch currently checked out in the main workspace also opens the main workspace
 - an existing branch workspace opens its tmux session
 - an existing branch without a workspace is checked out into a Git worktree and then opened
+- a branch that exists only on a remote is checked out as a tracking branch of that remote, whichever remote carries it; a branch carried by several remotes is ambiguous and is rejected
 - a missing branch is created from `--parent` or the main workspace's current branch and then opened
 - with `--parent`, an existing target branch produces a warning because `--parent` only bases new branches; an existing target workspace is an error
+- a workspace whose tmux session is already running is reported as an error rather than opened again, and nothing is created; attach to the running session instead
 
 `agm workspace open` options:
 

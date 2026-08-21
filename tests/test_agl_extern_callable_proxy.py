@@ -217,7 +217,7 @@ def test_extern_returning_a_callback_round_trips_its_agl_closure(tmp_path: Path)
         "extern def increment(value: int) -> int\n"
         "let callback = relay(increment)\n"
         "let result = callback(2)\n",
-        "def relay(f): return f\ndef increment(value): return value + 1\n",
+        "def relay(f): f(2); return f\ndef increment(value): return value + 1\n",
         tmp_path,
     )
 

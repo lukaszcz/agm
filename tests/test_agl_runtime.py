@@ -1301,12 +1301,14 @@ class TestRenderValue:
         assert render_value(v) == 'Issue(title = "Missing tests", severity = 3)'
 
     def test_record_empty(self) -> None:
-        """A record with no fields renders as ``TypeName()``."""
+        """A record with no fields renders bare, as ``TypeName`` (no parens):
+        a nullary constructor is an auto-value, so its bare spelling
+        round-trips as written."""
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import RecordValue
 
         v = RecordValue(nominal=NominalId(1), display_name="Empty", fields={})
-        assert render_value(v) == "Empty()"
+        assert render_value(v) == "Empty"
 
     def test_record_nested_record(self) -> None:
         """Nested records render inline."""
@@ -1360,14 +1362,28 @@ class TestRenderValue:
         assert render_value(v) == "Outcome::Partial(left = 2)"
 
     def test_enum_nullary_variant(self) -> None:
-        "Nullary enum variant renders as ``TypeName::Variant`` (no parens)."
+        """Nullary enum variant renders as ``TypeName::Variant`` (no parens),
+        the same bare rule applied to every fieldless record regardless of
+        its display name."""
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import RecordValue
 
         v = RecordValue(nominal=NominalId(1), display_name=f"{'Outcome'}::{'Done'}", fields={})
         assert render_value(v) == "Outcome::Done"
         empty = RecordValue(nominal=NominalId(2), display_name="Empty", fields={})
-        assert render_value(empty) == "Empty()"
+        assert render_value(empty) == "Empty"
+
+    def test_fieldless_record_bare_but_fieldless_exception_parenthesized(self) -> None:
+        """A fieldless record and a fieldless exception spell differently:
+        the record's nullary constructor is an auto-value so it renders bare,
+        while an exception has no nullary auto-value form and keeps ``()``."""
+        from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import ExceptionValue, RecordValue
+
+        record = RecordValue(nominal=NominalId(1), display_name="Empty", fields={})
+        exception = ExceptionValue(nominal=NominalId(2), display_name="Empty", fields={})
+        assert render_value(record) == "Empty"
+        assert render_value(exception) == "Empty()"
 
     def test_enum_multi_field_payload(self) -> None:
         """Enum with multiple payload fields renders them in stored order."""

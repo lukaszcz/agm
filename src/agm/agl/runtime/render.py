@@ -179,7 +179,10 @@ def _render(
         return _render_sequence("{", "}", items, level=level, pretty=pretty)
 
     if isinstance(value, RecordValue):
-        if not value.fields and "::" in value.display_name:
+        # A nullary constructor is an auto-value, so a fieldless record's bare
+        # spelling round-trips as written: every fieldless record renders bare,
+        # whether it is an enum member (`E::A`) or a standalone record (`Root`).
+        if not value.fields:
             return value.display_name
         items = [
             f"{name} = {_render_child(child, pretty=pretty, level=level + 1, active=active)}"

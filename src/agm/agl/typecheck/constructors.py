@@ -769,7 +769,11 @@ class ConstructorChecker:
             )
         if isinstance(owner, RecordType):
             return self.check_constructor_as_value(owner=owner, span=span, expected=expected)
-        raise AglTypeError(f"'{callee_ref.name}' is a type name, not a value; ", span=span)
+        raise AglTypeError(
+            f"'{callee_ref.name}' is a type name, not a value; "
+            "use it with a constructor call (e.g. 'EnumName::Variant' or 'RecordName(...)').",
+            span=span,
+        )
 
     def check_cross_module_constructor_call(
         self,

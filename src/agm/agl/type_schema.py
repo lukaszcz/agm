@@ -638,7 +638,19 @@ def _emit_decode_body(
 
 
 def build_encode_plan(typ: Type, type_table: TypeTable) -> EncodePlan:
-    """Compile a checker ``Type`` into a typeless static JSON encode plan.
+    """Compile a checker ``Type`` into the typeless JSON encode plan for it.
+
+    Both plan shapes are the same closed node family; only how their
+    definitions are keyed and parameterized differs, so the choice between
+    them is made here rather than by every caller.
+    """
+    if type_table.has_finite_schema(typ):
+        return _build_finite_encode_plan(typ, type_table)
+    return _build_template_encode_plan(typ, type_table)
+
+
+def _build_finite_encode_plan(typ: Type, type_table: TypeTable) -> EncodePlan:
+    """Compile a plan over the concrete instantiations a finite source reaches.
 
     The plan follows the same concrete-instantiation recursion graph as decode
     planning, but is independent of JSON Schema emission. It deliberately
@@ -673,8 +685,8 @@ def _template_key(nominal: NominalId) -> str:
     return f"n{nominal.value}"
 
 
-def build_dynamic_encode_plan(typ: Type, type_table: TypeTable) -> EncodePlan:
-    """Compile a finite generic-template plan for a growing JSON source.
+def _build_template_encode_plan(typ: Type, type_table: TypeTable) -> EncodePlan:
+    """Compile a finite declaration-template plan for a growing JSON source.
 
     Concrete instantiations such as ``Perfect[Pair[T, T]]`` grow without a
     finite closure, but their declaration templates are finite. Every

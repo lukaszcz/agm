@@ -34,7 +34,7 @@ from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import TypeTable, is_json_convertible
 from agm.agl.semantics.types import EnumType, ExceptionType, RecordType
 from agm.agl.syntax.nodes import BuiltinVarDecl, FuncDef, static_items
-from agm.agl.type_schema import build_dynamic_encode_plan, build_encode_plan
+from agm.agl.type_schema import build_encode_plan
 from agm.util.text import normalize_newlines
 
 __all__ = ["lower_program"]
@@ -51,12 +51,7 @@ def _exception_field_encodes(
         handle = typedef.handle()
         assert isinstance(handle, ExceptionType)
         result[NominalId(typedef.decl_node_id)] = tuple(
-            ExceptionFieldEncode(
-                field_name,
-                build_encode_plan(field_type, type_table)
-                if type_table.has_finite_schema(field_type)
-                else build_dynamic_encode_plan(field_type, type_table),
-            )
+            ExceptionFieldEncode(field_name, build_encode_plan(field_type, type_table))
             for field_name, field_type in type_table.exception_fields(handle).items()
             if is_json_convertible(field_type, type_table)
         )

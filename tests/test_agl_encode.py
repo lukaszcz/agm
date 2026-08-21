@@ -55,7 +55,11 @@ from agm.agl.semantics.values import (
     RecordValue,
     TextValue,
 )
-from agm.agl.type_schema import build_dynamic_encode_plan, build_encode_plan, build_param_decoder
+from agm.agl.type_schema import (
+    _build_template_encode_plan,
+    build_encode_plan,
+    build_param_decoder,
+)
 from tests._agl_helpers import enum_type, next_decl_id, record_type, type_table_for
 from tests.agl.ir_harness import (
     evaluate_ir,
@@ -128,7 +132,9 @@ def test_encode_plan_preserves_enum_tags_for_member_records() -> None:
     assert encode_value(build_encode_plan(problem, table), problem_value) == {
         "choice": {"$case": "Many", "items": [{"value": 7}]}
     }
-    assert encode_value(build_dynamic_encode_plan(problem, table), problem_value) == {
+    # The template builder is what a growing source gets; on a source both
+    # builders accept it must agree, exception root and enum slot alike.
+    assert encode_value(_build_template_encode_plan(problem, table), problem_value) == {
         "choice": {"$case": "Many", "items": [{"value": 7}]}
     }
 
@@ -551,16 +557,16 @@ def test_encode_plan_distinguishes_record_and_enum_slots_for_a_shared_member() -
     }
 
 
-def test_build_dynamic_encode_plan_rejects_unbound_or_unknown_types() -> None:
+def test_template_encode_plan_rejects_unbound_or_unknown_types() -> None:
     from agm.agl.semantics.types import TypeVarType
 
     table = type_table_for()
     with pytest.raises(AssertionError):
-        build_dynamic_encode_plan(TypeVarType("T"), table)
+        _build_template_encode_plan(TypeVarType("T"), table)
     with pytest.raises(AssertionError):
-        build_dynamic_encode_plan(RecordType("Ghost", decl_id=999), table)
+        _build_template_encode_plan(RecordType("Ghost", decl_id=999), table)
     with pytest.raises(AssertionError):
-        build_dynamic_encode_plan(UnitType(), table)
+        _build_template_encode_plan(UnitType(), table)
 
 
 def test_growing_polymorphic_recursive_json_cast_lowers_and_evaluates() -> None:

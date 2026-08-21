@@ -40,7 +40,6 @@ from agm.agl.semantics.types import (
     Type,
 )
 from agm.agl.type_schema import (
-    build_dynamic_encode_plan,
     build_encode_plan,
     derive_schema_and_decode,
 )
@@ -88,14 +87,9 @@ def compile_recipe(
             )
         case CastKind.TOTAL_JSON:
             # A growing polymorphic-recursive source is still known to have a
-            # JSON representation, but no finite set of concrete
-            # instantiations covers it; its plan is built from parameterized
-            # declaration templates instead.
-            encode_plan = (
-                build_encode_plan(source, type_table)
-                if type_table.has_finite_schema(source)
-                else build_dynamic_encode_plan(source, type_table)
-            )
+            # JSON representation even though no finite set of concrete
+            # instantiations covers it; build_encode_plan picks the plan shape.
+            encode_plan = build_encode_plan(source, type_table)
             return ConversionRecipe(
                 strategy=ConversionStrategy.TO_JSON,
                 source_label=source_label,

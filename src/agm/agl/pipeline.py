@@ -1939,12 +1939,10 @@ def exception_value_to_run_error(
     when present, ``RunError.line`` and ``RunError.col`` are populated from it
     so the CLI can include the source location in its exit-2 error output.
     """
-    from agm.agl.ir.contracts import DynamicEncodePlan
     from agm.agl.ir.ids import Location
     from agm.agl.runtime.serialize import (
         AglNonDataValue,
         degraded_marker,
-        encode_dynamic_value,
         encode_value,
         value_to_json_obj,
     )
@@ -1961,13 +1959,7 @@ def exception_value_to_run_error(
     for k, v in exc.fields.items():
         try:
             plan = encodes.get(k)
-            fields[k] = (
-                encode_dynamic_value(plan, v)
-                if isinstance(plan, DynamicEncodePlan)
-                else encode_value(plan, v)
-                if plan is not None
-                else value_to_json_obj(v)
-            )
+            fields[k] = encode_value(plan, v) if plan is not None else value_to_json_obj(v)
         except (AglCyclicValue, AglNonDataValue) as field_exc:
             fields[k] = degraded_marker(field_exc)
     line: int | None = None

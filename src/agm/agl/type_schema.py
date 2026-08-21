@@ -75,17 +75,6 @@ from agm.agl.ir.contracts import (
     DecodeSchema,
     DictDecode,
     DictEncode,
-    DynamicApplyEncode,
-    DynamicArrayEncode,
-    DynamicDictEncode,
-    DynamicEncodeDefinition,
-    DynamicEncodePlan,
-    DynamicEncodeSchema,
-    DynamicEnumEncode,
-    DynamicExceptionEncode,
-    DynamicRecordEncode,
-    DynamicTypeParameterEncode,
-    DynamicVariantEncode,
     EncodeDefinition,
     EncodePlan,
     EncodeSchema,
@@ -100,6 +89,7 @@ from agm.agl.ir.contracts import (
     ScalarDecode,
     ScalarEncode,
     ScalarKind,
+    TypeParameterEncode,
     VariantDecode,
     VariantEncode,
 )
@@ -672,34 +662,46 @@ def build_encode_plan(typ: Type, type_table: TypeTable) -> EncodePlan:
     )
 
 
-def build_dynamic_encode_plan(typ: Type, type_table: TypeTable) -> DynamicEncodePlan:
+def _template_key(nominal: NominalId) -> str:
+    """Key a declaration template's definition in a growing plan.
+
+    A growing plan has no JSON Schema counterpart, so — unlike the ``$defs``
+    keys of a finite plan (:func:`_assign_defs_keys`) — this key is internal
+    and need only be deterministic and collision-free per declaration, which
+    the declaration identity already is.
+    """
+    return f"n{nominal.value}"
+
+
+def build_dynamic_encode_plan(typ: Type, type_table: TypeTable) -> EncodePlan:
     """Compile a finite generic-template plan for a growing JSON source.
 
     Concrete instantiations such as ``Perfect[Pair[T, T]]`` grow without a
-    finite closure, but their declaration templates are finite. ``Apply``
-    nodes retain every static slot choice and bind the template's parameters at
-    the point of use, so the runtime never guesses enum membership from a
-    record's nominal identity.
+    finite closure, but their declaration templates are finite. Every
+    definition is one declaration's template, keyed by its identity and taking
+    one parameter per declared type parameter; each reference retains its
+    static slot choices and binds those parameters at the point of use, so the
+    runtime never guesses enum membership from a record's nominal identity.
     """
-    definitions: dict[NominalId, DynamicEncodeDefinition] = {}
+    definitions: dict[NominalId, EncodeDefinition] = {}
 
-    def emit(current: Type, parameters: dict[str, int]) -> DynamicEncodeSchema:
+    def emit(current: Type, parameters: dict[str, int]) -> EncodeSchema:
         if isinstance(current, (TextType, IntType, DecimalType, BoolType, JsonType)):
             return ScalarEncode()
         if isinstance(current, ArrayType):
-            return DynamicArrayEncode(emit(current.elem, parameters))
+            return ArrayEncode(emit(current.elem, parameters))
         if isinstance(current, DictType):
-            return DynamicDictEncode(emit(current.value, parameters))
+            return DictEncode(emit(current.value, parameters))
         if isinstance(current, TypeVarType):
             index = parameters.get(current.name)
             if index is None:
                 raise AssertionError(f"unbound encode type parameter {current.name!r}")
-            return DynamicTypeParameterEncode(index)
+            return TypeParameterEncode(index)
         if isinstance(current, (RecordType, EnumType, ExceptionType)):
             nominal = NominalId(current.decl_id)
             ensure_definition(current)
             args = current.type_args if isinstance(current, (RecordType, EnumType)) else ()
-            return DynamicApplyEncode(nominal, tuple(emit(arg, parameters) for arg in args))
+            return RefEncode(_template_key(nominal), tuple(emit(arg, parameters) for arg in args))
         raise AssertionError(f"build a dynamic JSON encode plan: unencodable type {current!r}")
 
     def ensure_definition(handle: RecordType | EnumType | ExceptionType) -> None:
@@ -714,11 +716,12 @@ def build_dynamic_encode_plan(typ: Type, type_table: TypeTable) -> DynamicEncode
         else:
             template = typedef.handle(tuple(TypeVarType(name) for name in typedef.type_params))
         parameters = {name: index for index, name in enumerate(typedef.type_params)}
+        key = _template_key(nominal)
         # Register first so a recursive template can refer to itself while its
         # body is being compiled; replace the temporary once complete.
-        definitions[nominal] = DynamicEncodeDefinition(nominal, len(parameters), ScalarEncode())
+        definitions[nominal] = EncodeDefinition(key, len(parameters), ScalarEncode())
         if isinstance(template, RecordType):
-            body: DynamicEncodeSchema = DynamicRecordEncode(
+            body: EncodeSchema = RecordEncode(
                 nominal,
                 tuple(
                     (name, emit(field_type, parameters))
@@ -726,7 +729,7 @@ def build_dynamic_encode_plan(typ: Type, type_table: TypeTable) -> DynamicEncode
                 ),
             )
         elif isinstance(template, ExceptionType):
-            body = DynamicExceptionEncode(
+            body = ExceptionEncode(
                 nominal,
                 tuple(
                     (name, emit(field_type, parameters))
@@ -734,10 +737,10 @@ def build_dynamic_encode_plan(typ: Type, type_table: TypeTable) -> DynamicEncode
                 ),
             )
         else:
-            body = DynamicEnumEncode(
+            body = EnumEncode(
                 nominal,
                 tuple(
-                    DynamicVariantEncode(
+                    VariantEncode(
                         name=member_name,
                         nominal=NominalId(member.decl_id),
                         fields=tuple(
@@ -748,10 +751,10 @@ def build_dynamic_encode_plan(typ: Type, type_table: TypeTable) -> DynamicEncode
                     for member_name, member in type_table.enum_member_names(template).items()
                 ),
             )
-        definitions[nominal] = DynamicEncodeDefinition(nominal, len(parameters), body)
+        definitions[nominal] = EncodeDefinition(key, len(parameters), body)
 
     root = emit(typ, {})
-    return DynamicEncodePlan(root=root, definitions=tuple(definitions.values()))
+    return EncodePlan(root=root, definitions=tuple(definitions.values()))
 
 
 def _emit_encode(

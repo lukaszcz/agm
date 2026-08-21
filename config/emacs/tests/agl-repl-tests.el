@@ -83,6 +83,18 @@
     (should (= (length agl-repl-tests--sent) 1))
     (should (equal (car agl-repl-tests--sent) "def f() -> int =\n  1\n"))))
 
+(ert-deftest agl-repl-terminates-a-trailing-raw-tail-block ()
+  ;; A blank line tells the plain reader that the indented raw payload is
+  ;; complete; a single final newline only starts its continuation line.
+  (agl-repl--with-stubs
+    (dolist (opener '("exec!" "ask!"))
+      (with-temp-buffer
+        (agl-mode)
+        (insert opener "\n  payload\n")
+        (agl-send-buffer)))
+    (should (equal agl-repl-tests--sent
+                   '("exec!\n  payload\n\n" "ask!\n  payload\n\n")))))
+
 (ert-deftest agl-repl-does-not-double-a-trailing-newline ()
   (agl-repl--with-stubs
     (with-temp-buffer

@@ -61,23 +61,39 @@ line start; the alternative is kept so the regexp describes both.")
   (interactive)
   (pop-to-buffer (agl-repl-buffer)))
 
-(defun agl-repl-send-string (text)
+(defun agl-repl-send-string (text &optional terminate-raw-tail)
   "Send TEXT to the inferior AgL REPL, followed by a newline.
 
 The REPL reads continuation lines until an entry is complete, so a
-multi-line TEXT is sent unchanged rather than split into entries here."
+multi-line TEXT is sent unchanged rather than split into entries here.
+When TERMINATE-RAW-TAIL is non-nil, send the blank line that ends an
+indented raw-tail block."
   (let ((buffer (agl-repl-buffer)))
     (comint-send-string (get-buffer-process buffer)
-                        ;; Exactly one terminating newline: trailing blank
-                        ;; lines would submit extra empty entries.
-                        (concat (string-trim-right text "\n+") "\n"))
+                        ;; Exactly one terminating newline, except raw-tail
+                        ;; blocks, for which the second newline is their
+                        ;; required blank-line terminator.
+                        (concat (string-trim-right text "\n+")
+                                (if terminate-raw-tail "\n\n" "\n")))
     buffer))
+
+(defun agl-repl--trailing-raw-tail-block-p (start end)
+  "Return non-nil when START through END ends in an indented raw-tail block."
+  (syntax-propertize end)
+  (let ((last-content (save-excursion
+                        (goto-char end)
+                        (skip-chars-backward " \t\n" start)
+                        (point))))
+    (and (> last-content start)
+         (get-text-property (1- last-content) 'agl-raw-tail-payload)
+         (get-text-property (1- last-content) 'agl-multiline))))
 
 ;;;###autoload
 (defun agl-send-region (start end)
   "Send the region between START and END to the inferior AgL REPL."
   (interactive "r")
-  (agl-repl-send-string (buffer-substring-no-properties start end)))
+  (agl-repl-send-string (buffer-substring-no-properties start end)
+                        (agl-repl--trailing-raw-tail-block-p start end)))
 
 ;;;###autoload
 (defun agl-send-buffer ()

@@ -4911,7 +4911,7 @@ class _Checker:
                 if isinstance(subj_type, EnumType) and pattern.qualifier
                 else owner_type
                 if pattern.name == owner_type.name
-                and self._env.type_table.enum_owner_for_member(owner_type) is not None
+                and self._env.type_table.is_enum_member(owner_type)
                 else None
             )
             if enum_member is not None:

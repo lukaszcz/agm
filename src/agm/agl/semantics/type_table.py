@@ -669,6 +669,15 @@ class TypeTable:
             return result
         return None
 
+    def is_enum_member(self, handle: RecordType) -> bool:
+        """Return whether *handle* names a declaration registered as an enum member.
+
+        Unlike :meth:`enum_owner_for_member`, this is a declaration-membership
+        query. It therefore remains true for a fieldless generic member whose
+        record handle cannot reconstruct its owning enum's phantom arguments.
+        """
+        return handle.decl_id in self._member_enum_owner_index()
+
     def enum_member_names(self, handle: EnumType) -> Mapping[str, RecordType]:
         """Return the terminal member-name index for one enum instantiation."""
         decl_id = handle.decl_id

@@ -407,16 +407,23 @@ def field_templates(typedef: TypeDef, defs: Mapping[DeclId, TypeDef]) -> list[tu
     non-data-reachability and reference-edge fixpoints look at every field of
     every variant flat: a function/unit anywhere is reachable from some
     value of the declaration, and a reference to another declaration matters,
-    regardless of which variant carries it. Names are carried alongside so a
-    use-site diagnostic can point at the field responsible.
+    regardless of which variant carries it. Enum member fields are first
+    specialized through their member handles, so referenced generic records
+    retain the arguments applied by the enum. Names are carried alongside so
+    a use-site diagnostic can point at the field responsible.
     """
     if typedef.kind == "enum":
-        return [
-            field
-            for member in typedef.members
-            if (member_def := defs.get(member.decl_id)) is not None
-            for field in member_def.fields
-        ]
+        templates: list[tuple[str, Type]] = []
+        for member in typedef.members:
+            member_def = defs.get(member.decl_id)
+            if member_def is None:
+                continue
+            substitutions = dict(zip(member_def.type_params, member.type_args, strict=True))
+            templates.extend(
+                (name, substitute(field_type, substitutions))
+                for name, field_type in member_def.fields
+            )
+        return templates
     return list(typedef.fields)
 
 

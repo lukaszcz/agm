@@ -2099,6 +2099,22 @@ enum Agent
         assert narrowed.value == IntValue(1)
         assert not not_a_member.ok
 
+    def test_referenced_generic_member_preserves_its_applied_field_for_json_casts(self) -> None:
+        """A referenced member applies the enum's arguments to its own fields."""
+        session = ReplSession()
+        assert session.eval_entry("record Box[A](value: A)").ok
+        assert session.eval_entry("enum Result[T] = ::Box[T]").ok
+        assert session.eval_entry("let box = Box(value = 1)").ok
+        assert session.eval_entry("let result: Result[int] = box").ok
+
+        encoded = session.eval_entry("let wire = result as json")
+        decoded = session.eval_entry("wire as Result[int]")
+
+        assert encoded.ok, encoded.diagnostics
+        assert decoded.ok, decoded.diagnostics
+        assert isinstance(decoded.value, RecordValue)
+        assert decoded.value.fields == {"value": IntValue(1)}
+
     def test_enum_supersession_remints_inline_members_without_invalidating_old_ones(self) -> None:
         """Old and new enum-member handles remain independently matchable and castable."""
         session = ReplSession()
@@ -2519,6 +2535,18 @@ class TestRecursiveTypesAcrossEntries:
         assert old_match.value == IntValue(1)
         assert fresh.ok, fresh.diagnostics
         assert not cross_match.ok
+
+    def test_phantom_generic_member_on_a_retained_value_survives_enum_redeclaration(self) -> None:
+        """A fieldless member remains matchable without recovering its enum arguments."""
+        s = ReplSession()
+        assert s.eval_entry("enum E[T]\n  | A").ok
+        assert s.eval_entry("let old = A").ok
+        assert s.eval_entry("enum E[T]\n  | B").ok
+
+        matched = s.eval_entry("case old of\n  | A() => 1")
+
+        assert matched.ok, matched.diagnostics
+        assert matched.value == IntValue(1)
 
     def test_superseded_enum_members_do_not_suggest_the_reused_enum_annotation(self) -> None:
         """An old enum's members cannot be joined through its reused name."""

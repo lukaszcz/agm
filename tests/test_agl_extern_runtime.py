@@ -73,6 +73,70 @@ def test_enum_nested_variant_classes_support_matching(tmp_path: Path) -> None:
     assert result["result"] == IntValue(9)
 
 
+def test_enum_referencing_a_scoped_record_keeps_the_record_companion_visible(
+    tmp_path: Path,
+) -> None:
+    """Listing an existing record as a qualified enum member must not hide it.
+
+    Only an inline member (declared bare inside its enum body) is a companion
+    implementation detail; a qualified member keeps its own independent name
+    path -- both its bare name and its scoped ``nominals`` path -- regardless
+    of which enums also list it.
+    """
+    source = (
+        "scope M\n"
+        "record Go(amount: int)\n"
+        "end M\n"
+        "\n"
+        "enum Step\n"
+        "  | Continue(amount: int)\n"
+        "  | M::Go\n"
+        "\n"
+        "extern def make(n: int) -> M::Go\n"
+        "extern def probe() -> bool\n"
+        "let made = make(3)\n"
+        "let seen = probe()\n"
+        "made\n"
+    )
+    companion = (
+        "from agl import Go, nominals\n"
+        "def make(n): return Go(amount=n)\n"
+        "def probe(): return nominals.entry.M.Go is Go\n"
+    )
+    result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+    assert result["made"].fields == {"amount": IntValue(3)}
+    assert result["seen"] == BoolValue(True)
+
+
+def test_enum_member_classes_never_subclass_their_enum_class(tmp_path: Path) -> None:
+    """An inline and a referenced member behave uniformly: neither subclasses
+    its enum. The enum class is a pure namespace over each member's own
+    record class.
+    """
+    source = (
+        "scope M\n"
+        "record Go(amount: int)\n"
+        "end M\n"
+        "\n"
+        "enum Step\n"
+        "  | Continue(amount: int)\n"
+        "  | M::Go\n"
+        "\n"
+        "extern def probe() -> bool\n"
+        "let ok = probe()\n"
+        "ok\n"
+    )
+    companion = (
+        "from agl import Step\n"
+        "def probe():\n"
+        "    inline_ok = not issubclass(Step.Continue, Step)\n"
+        "    referenced_ok = not issubclass(Step.Go, Step)\n"
+        "    return inline_ok and referenced_ok\n"
+    )
+    result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+    assert result["ok"] == BoolValue(True)
+
+
 def test_exception_values_cross_as_plain_nominal_objects(tmp_path: Path) -> None:
     source = (
         "exception Problem extends Exception\n  detail: text\n"

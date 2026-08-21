@@ -111,16 +111,23 @@ def lower_program(
         )
         module_source_ids[mid] = source_id
 
-    # Member records are semantic implementation details of their enclosing
-    # enum. They receive descriptors only so runtime identity remains complete,
-    # but must not be exposed as companion namespace leaves (where e.g.
-    # ``Step::Continue`` would overwrite ``Step.Continue``).
-    enum_member_ids = {
+    # An INLINE member record (one declared bare inside its enum body, whose
+    # scope path is the enum's own) is a semantic implementation detail of
+    # that enum: it receives a descriptor only so runtime identity remains
+    # complete, but must not be exposed as a companion namespace leaf of its
+    # own (where e.g. ``Step::Continue`` would overwrite ``Step.Continue``).
+    # A REFERENCED member (a qualified name naming a record declared
+    # elsewhere, e.g. ``M::Go``) keeps its own independent name path -- it
+    # may be a companion namespace leaf in its own right, and other enums may
+    # reference the same record, so listing it as one enum's member must not
+    # suppress it.
+    inline_member_ids = {
         member.decl_id
         for enum_def in type_table.entries()
         if enum_def.kind == "enum"
         for member in enum_def.members
         if isinstance(member, RecordType)
+        and member.scope_path == (*enum_def.scope_path, enum_def.name)
     }
 
     # Step 2: Build nominals from the authoritative TypeTable declarations.
@@ -136,7 +143,7 @@ def lower_program(
     for typedef in type_table.entries():
         nominal = NominalId(typedef.decl_node_id)
         bears_name_path = (
-            type_table.is_current(typedef) and typedef.decl_node_id not in enum_member_ids
+            type_table.is_current(typedef) and typedef.decl_node_id not in inline_member_ids
         )
         if typedef.kind == "record":
             link.nominals[nominal] = NominalDescriptor(

@@ -709,12 +709,20 @@ def test_synthesized_record_repr_identifies_the_type_without_the_field_values() 
     assert repr(box_cls(value=1)) == "Box(...)"
 
 
-def test_synthesized_enum_variant_instance_is_an_instance_of_the_enum_class() -> None:
+def test_synthesized_enum_variant_class_is_not_a_subclass_of_the_enum_class() -> None:
+    """The enum class is a pure namespace over its members' own record classes:
+
+    a member's runtime shape does not depend on how it was declared, so a
+    variant is never a subclass of its enum -- matching a bare record
+    referenced by a qualified name, which also never subclasses the enums
+    that list it as a member.
+    """
     _, choice_cls = _synthesize_choice_classes()
 
     some = choice_cls.Some(value=2)
 
-    assert isinstance(some, choice_cls)
+    assert not issubclass(choice_cls.Some, choice_cls)
+    assert not isinstance(some, choice_cls)
 
 
 def test_synthesized_enum_variant_round_trips_through_decode() -> None:
@@ -901,6 +909,58 @@ def test_referenced_record_keeps_one_class_across_multiple_enums() -> None:
 
     assert classes[record] is classes[left].Shared
     assert classes[record] is classes[right].Shared
+
+
+def test_referenced_member_decodes_with_its_own_scope_and_display_name() -> None:
+    """A referenced member decodes through its own descriptor, not the enum's:
+
+    its ``NominalId`` and display name come from where it was declared, even
+    though an enum also lists it as a member.
+    """
+    record = _fresh_nominal()
+    enum = _fresh_nominal()
+    descriptors = (
+        NominalDescriptor(record, ENTRY_ID, ("M",), "Go", NominalKind.RECORD, ("amount",)),
+        NominalDescriptor(
+            enum,
+            ENTRY_ID,
+            (),
+            "Step",
+            NominalKind.ENUM,
+            variants=(VariantDescriptor("Go", ("amount",), record),),
+        ),
+    )
+    classes = synthesize_nominal_classes(descriptors)
+    instance = classes[enum].Go(amount=5)
+
+    assert classes[record] is classes[enum].Go
+    assert not issubclass(classes[enum].Go, classes[enum])
+    assert decode_boundary_value(instance) == RecordValue(record, "M::Go", {"amount": IntValue(5)})
+
+
+def test_enum_variant_built_without_its_own_descriptor_gets_a_scoped_display_name() -> None:
+    """The fallback path :func:`synthesize_nominal_classes` takes when a
+    member's own descriptor is reachable in neither the current synthesis
+    batch nor the existing class table (an inline member whose descriptor was
+    never separately supplied) derives one that names the member below its
+    enum's scope, matching what a real lowering would have produced for it.
+    """
+    nominal = _fresh_nominal()
+    some = _fresh_nominal()
+    descriptor = NominalDescriptor(
+        nominal=nominal,
+        module_id=ENTRY_ID,
+        scope_path=(),
+        declared_name="Choice",
+        kind=NominalKind.ENUM,
+        variants=(VariantDescriptor("Some", ("value",), some),),
+    )
+    classes = synthesize_nominal_classes((descriptor,))
+    instance = classes[nominal].Some(value=1)
+
+    assert decode_boundary_value(instance) == RecordValue(
+        some, "Choice::Some", {"value": IntValue(1)}
+    )
 
 
 def test_companion_namespace_keeps_same_named_nominals_distinct() -> None:

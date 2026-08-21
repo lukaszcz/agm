@@ -196,8 +196,7 @@ class RunError:
 
     ``type_name`` is the exception's declared type name (e.g. ``"AgentParseError"``).
     ``fields`` is a mapping from field names to JSON-shaped Python values.
-    ``line`` is the 1-based source line of the raise site when known (design
-    : source location is part of runtime error reporting); ``None`` when
+    ``line`` is the 1-based source line of the raise site when known; ``None`` when
     the span was not threaded through (e.g. arithmetic errors inside expressions).
     ``col`` is the 1-based source column of the raise site; ``None`` when unknown.
     """

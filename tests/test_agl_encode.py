@@ -25,12 +25,14 @@ from agm.agl.ir.contracts import (
     DynamicRecordEncode,
     DynamicTypeParameterEncode,
     DynamicVariantEncode,
+    EncodeDefinition,
     EncodePlan,
     EnumEncode,
     ExceptionEncode,
     RecordEncode,
     RefEncode,
     ScalarEncode,
+    TypeParameterEncode,
     VariantEncode,
 )
 from agm.agl.ir.ids import NominalId
@@ -47,6 +49,7 @@ from agm.agl.semantics.type_table import TypeDef
 from agm.agl.semantics.types import (
     ArrayType,
     DictType,
+    EnumType,
     ExceptionType,
     IntType,
     RecordType,
@@ -97,9 +100,10 @@ def test_encode_plan_derives_enum_members_and_nested_records() -> None:
     assert many.fields[0][1].elem == RefEncode("Item")
     one = plan.root.variants[0]
     assert one.fields[0][1] == RefEncode("Item")
-    assert [key for key, _body in plan.defs] == ["Item"]
-    item_body = dict(plan.defs)["Item"]
-    assert isinstance(item_body, RecordEncode)
+    assert [definition.key for definition in plan.definitions] == ["Item"]
+    (item_definition,) = plan.definitions
+    assert item_definition.parameter_count == 0
+    assert isinstance(item_definition.body, RecordEncode)
 
 
 def test_encode_plan_preserves_enum_tags_for_member_records() -> None:
@@ -208,9 +212,102 @@ def test_encode_plan_reports_malformed_static_plans() -> None:
         EncodePlan(RefEncode("missing")),
         EncodePlan(
             RefEncode("first"),
-            (("first", RefEncode("second")), ("second", RefEncode("first"))),
+            (
+                EncodeDefinition("first", 0, RefEncode("second")),
+                EncodeDefinition("second", 0, RefEncode("first")),
+            ),
         ),
     ):
+        with pytest.raises(AssertionError):
+            encode_value(plan, IntValue(1))
+
+
+def test_encode_plan_binds_definition_parameters_at_each_reference() -> None:
+    """A parameterized definition encodes its slots through the caller's arguments."""
+    pair = NominalId(1)
+    plan = EncodePlan(
+        root=RefEncode("Pair", (ScalarEncode(), ArrayEncode(ScalarEncode()))),
+        definitions=(
+            EncodeDefinition(
+                "Pair",
+                2,
+                RecordEncode(
+                    pair,
+                    (("first", TypeParameterEncode(0)), ("second", TypeParameterEncode(1))),
+                ),
+            ),
+        ),
+    )
+    value = RecordValue(
+        pair, "Pair", {"first": IntValue(1), "second": ArrayValue([IntValue(2), IntValue(3)])}
+    )
+
+    assert encode_value(plan, value) == {"first": 1, "second": [2, 3]}
+
+
+def test_encode_plan_substitutes_arguments_through_every_composite_shape() -> None:
+    """An argument is rewritten out of the caller's parameter space before it binds."""
+    outer = NominalId(1)
+    record = NominalId(2)
+    exception = NominalId(3)
+    enum = NominalId(4)
+    member = NominalId(5)
+    # ``Outer`` hands ``Inner`` a composite written in terms of ITS OWN
+    # parameter, and ``Inner``'s body is just that parameter — so each case
+    # encodes correctly only if the substitution reached every leaf position
+    # inside the composite it was given.
+    cases = (
+        (ArrayEncode(TypeParameterEncode(0)), ArrayValue([IntValue(4)]), [4]),
+        (DictEncode(TypeParameterEncode(0)), DictValue({"n": IntValue(5)}), {"n": 5}),
+        (
+            RecordEncode(record, (("value", TypeParameterEncode(0)),)),
+            RecordValue(record, "Record", {"value": IntValue(1)}),
+            {"value": 1},
+        ),
+        (
+            ExceptionEncode(exception, (("value", TypeParameterEncode(0)),)),
+            ExceptionValue(exception, "Problem", {"value": IntValue(2)}),
+            {"value": 2},
+        ),
+        (
+            EnumEncode(
+                enum, (VariantEncode("Case", member, (("value", TypeParameterEncode(0)),)),)
+            ),
+            RecordValue(member, "Case", {"value": IntValue(3)}),
+            {"$case": "Case", "value": 3},
+        ),
+        (RefEncode("Inner", (TypeParameterEncode(0),)), IntValue(6), 6),
+        (TypeParameterEncode(0), IntValue(7), 7),
+    )
+    for composite, value, expected in cases:
+        plan = EncodePlan(
+            root=RefEncode("Outer", (ScalarEncode(),)),
+            definitions=(
+                EncodeDefinition("Inner", 1, TypeParameterEncode(0)),
+                EncodeDefinition(
+                    "Outer",
+                    1,
+                    RecordEncode(outer, (("held", RefEncode("Inner", (composite,))),)),
+                ),
+            ),
+        )
+        assert encode_value(plan, RecordValue(outer, "Outer", {"held": value})) == {
+            "held": expected
+        }
+
+
+def test_encode_plan_reports_malformed_parameterized_plans() -> None:
+    """An unbound parameter or a mis-applied definition is an internal-invariant violation."""
+    box = EncodeDefinition("Box", 1, ScalarEncode())
+    cases = (
+        # A parameter at the root, where nothing binds it.
+        EncodePlan(TypeParameterEncode(0)),
+        # A reference supplying no argument for the definition's parameter.
+        EncodePlan(RefEncode("Box"), (box,)),
+        # An argument naming a parameter the referring position does not have.
+        EncodePlan(RefEncode("Box", (TypeParameterEncode(0),)), (box,)),
+    )
+    for plan in cases:
         with pytest.raises(AssertionError):
             encode_value(plan, IntValue(1))
 
@@ -601,3 +698,33 @@ def test_encode_plan_handles_recursive_containers() -> None:
 
     assert isinstance(plan.root, RefEncode)
     assert encode_value(plan, value) == value_to_json_obj(value)
+
+
+def test_encode_definition_keys_match_the_schema_and_decode_defs_keys() -> None:
+    """One recursion plan keys the JSON Schema, the decode walk, and the encode walk alike."""
+    from agm.agl.type_schema import build_decode_schema, derive_schema
+
+    tree_id = next_decl_id()
+    tree_ref = EnumType(name="Tree", decl_id=tree_id)
+    tree, tree_def = enum_type(
+        "Tree",
+        {"Leaf": {}, "Node": {"left": tree_ref, "right": tree_ref}},
+        decl_id=tree_id,
+    )
+    # ``Tree`` is both recursive and reached from two fields, so it is hoisted
+    # once and referenced from every occurrence in all three derivations.
+    wrapper, wrapper_def = record_type("Wrapper", {"first": tree, "second": tree})
+    table = type_table_for(tree_def, wrapper_def)
+
+    schema = derive_schema(wrapper, table)
+    schema_defs = schema["$defs"]
+    assert isinstance(schema_defs, dict)
+    encode_keys = [definition.key for definition in build_encode_plan(wrapper, table).definitions]
+    decode_keys = [key for key, _body in build_decode_schema(wrapper, table).defs]
+
+    assert encode_keys == decode_keys == ["Tree"]
+    assert set(encode_keys) == set(schema_defs)
+    assert all(
+        definition.parameter_count == 0
+        for definition in build_encode_plan(wrapper, table).definitions
+    )

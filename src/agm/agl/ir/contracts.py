@@ -43,6 +43,7 @@ __all__ = [
     "DynamicRecordEncode",
     "DynamicTypeParameterEncode",
     "DynamicVariantEncode",
+    "EncodeDefinition",
     "EncodePlan",
     "EncodeSchema",
     "EnumEncode",
@@ -57,8 +58,10 @@ __all__ = [
     "ScalarDecode",
     "ScalarEncode",
     "ScalarKind",
+    "TypeParameterEncode",
     "VariantDecode",
     "VariantEncode",
+    "forwarded_encode_key",
     "resolve_schema_ref",
 ]
 
@@ -234,9 +237,27 @@ class EnumEncode:
 
 @dataclass(frozen=True, slots=True)
 class RefEncode:
-    """Reference to a recursive encode body in an enclosing defs table."""
+    """Reference to a plan definition, applied to its type-parameter arguments.
+
+    A definition with no parameters is referenced with no *arguments*, and its
+    ``key`` is the ``$defs`` key its instantiation also has in the decode plan
+    and the JSON Schema (same recursion plan, see ``type_schema._plan_schema``)
+    — the shape every finite plan emits.  A generic-template definition instead
+    takes parameters, and each reference supplies one encode schema per
+    parameter; that is how a growing polymorphic-recursive source, whose
+    concrete instantiations never close, is still described by finitely many
+    bodies.
+    """
 
     key: str
+    arguments: "tuple[EncodeSchema, ...]" = ()
+
+
+@dataclass(frozen=True, slots=True)
+class TypeParameterEncode:
+    """The encoding shape supplied for one enclosing definition parameter."""
+
+    index: int
 
 
 EncodeSchema = (
@@ -247,15 +268,43 @@ EncodeSchema = (
     | ExceptionEncode
     | EnumEncode
     | RefEncode
+    | TypeParameterEncode
 )
 
 
 @dataclass(frozen=True, slots=True)
+class EncodeDefinition:
+    """One reusable encode body, referenced by ``key`` from anywhere in its plan.
+
+    ``parameter_count`` is zero for a concrete instantiation's body and
+    positive for a generic template, whose ``body`` reaches its parameters
+    through :class:`TypeParameterEncode`.
+    """
+
+    key: str
+    parameter_count: int
+    body: EncodeSchema
+
+
+@dataclass(frozen=True, slots=True)
 class EncodePlan:
-    """An encode schema paired with recursive bodies keyed like decode-plan defs."""
+    """An encode schema paired with the definitions its references resolve against."""
 
     root: EncodeSchema
-    defs: "tuple[tuple[str, EncodeSchema], ...]" = ()
+    definitions: "tuple[EncodeDefinition, ...]" = ()
+
+
+def forwarded_encode_key(definition: "EncodeDefinition") -> str | None:
+    """Onward key when a definition's body is a bare reference, else ``None``.
+
+    Shared by the runtime encoder and the IR validator so both agree on where a
+    reference chain terminates.  A reference carrying arguments is a template
+    application rather than a forwarding link, so it ends the chain.
+    """
+    body = definition.body
+    if isinstance(body, RefEncode) and not body.arguments:
+        return body.key
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -430,7 +479,7 @@ class ConversionRecipe:
     decode: DecodeSchema | None = None
     defs: "tuple[tuple[str, DecodeSchema], ...]" = ()
     encode: EncodeSchema | None = None
-    encode_defs: "tuple[tuple[str, EncodeSchema], ...]" = ()
+    encode_definitions: "tuple[EncodeDefinition, ...]" = ()
     dynamic_encode: DynamicEncodePlan | None = None
 
 

@@ -77,7 +77,9 @@ def run_recipe(recipe: ConversionRecipe, value: Value) -> Value:
         case ConversionStrategy.TO_JSON:
             if recipe.encode is None:
                 raise AssertionError("TO_JSON strategy requires an encode plan")
-            return JsonValue(encode_value(EncodePlan(recipe.encode, recipe.encode_defs), value))
+            return JsonValue(
+                encode_value(EncodePlan(recipe.encode, recipe.encode_definitions), value)
+            )
         case ConversionStrategy.TO_JSON_VALUE_DIRECTED:
             if recipe.dynamic_encode is None:
                 raise AssertionError(

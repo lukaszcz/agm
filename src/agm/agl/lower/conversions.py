@@ -105,7 +105,7 @@ def compile_recipe(
                 source_label=source_label,
                 target_label=target_label,
                 encode=encode_plan.root,
-                encode_defs=encode_plan.defs,
+                encode_definitions=encode_plan.definitions,
             )
         case CastKind.FALLIBLE:
             if isinstance(source, DecimalType) and isinstance(target, IntType):

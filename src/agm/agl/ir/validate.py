@@ -67,6 +67,7 @@ from agm.agl.ir.contracts import (
     DynamicExceptionEncode,
     DynamicRecordEncode,
     DynamicTypeParameterEncode,
+    EncodeDefinition,
     EncodeSchema,
     EnumDecode,
     EnumEncode,
@@ -77,6 +78,8 @@ from agm.agl.ir.contracts import (
     RefEncode,
     ScalarDecode,
     ScalarEncode,
+    TypeParameterEncode,
+    forwarded_encode_key,
 )
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
@@ -333,7 +336,7 @@ def _check_recipe_consistency(
     decode: DecodeSchema | None,
     defs: "tuple[tuple[str, DecodeSchema], ...]",
     encode: EncodeSchema | None,
-    encode_defs: "tuple[tuple[str, EncodeSchema], ...]",
+    encode_definitions: "tuple[EncodeDefinition, ...]",
     dynamic_encode: DynamicEncodePlan | None,
 ) -> None:
     """Require only the conversion metadata selected by each strategy."""
@@ -350,9 +353,9 @@ def _check_recipe_consistency(
     needs_encode = strategy is ConversionStrategy.TO_JSON
     if needs_encode and encode is None:
         raise InvalidIrError("ConversionRecipe strategy 'to_json' requires encode")
-    if not needs_encode and (encode is not None or encode_defs):
+    if not needs_encode and (encode is not None or encode_definitions):
         raise InvalidIrError(
-            f"ConversionRecipe strategy {strategy.value!r} must not carry encode/encode_defs"
+            f"ConversionRecipe strategy {strategy.value!r} must not carry encode/encode_definitions"
         )
     needs_dynamic_encode = strategy is ConversionStrategy.TO_JSON_VALUE_DIRECTED
     if needs_dynamic_encode and dynamic_encode is None:
@@ -498,40 +501,84 @@ def _check_decode_nominals(
         _walk_decode_schema(entry, defs_map, ctx)
 
 
+class _EncodeWalk:
+    """The definition table one encode-plan walk resolves against, and what it reached.
+
+    Reachability is accumulated across the whole plan rather than per body: a
+    definition is legitimate only if some reference — from the root or from
+    another reached definition — names it.
+    """
+
+    __slots__ = ("ctx", "definitions", "reached")
+
+    def __init__(self, definitions: "Mapping[str, EncodeDefinition]", ctx: _Context) -> None:
+        self.definitions = definitions
+        self.ctx = ctx
+        self.reached: set[str] = set()
+
+
 def _check_encode_nominals(
-    encode: EncodeSchema, defs: "tuple[tuple[str, EncodeSchema], ...]", ctx: _Context
+    encode: EncodeSchema, definitions: "tuple[EncodeDefinition, ...]", ctx: _Context
 ) -> None:
-    """Validate the root and each recursive encode body exactly once."""
-    keys: set[str] = set()
-    for key, _entry in defs:
-        if key in keys:
-            raise InvalidIrError(f"EncodeSchema has duplicate $defs key {key!r}")
-        keys.add(key)
-    defs_map = dict(defs)
-    _walk_encode_schema(encode, defs_map, ctx)
-    for _key, entry in defs:
-        _walk_encode_schema(entry, defs_map, ctx)
+    """Validate the root and every reachable definition body of one encode plan.
+
+    Each definition is walked under its own arity, so a
+    ``TypeParameterEncode`` inside it is checked against the parameters it can
+    actually bind; the root binds none. A definition no reference reaches is
+    rejected rather than validated in isolation.
+    """
+    by_key: dict[str, EncodeDefinition] = {}
+    for definition in definitions:
+        if definition.key in by_key:
+            raise InvalidIrError(f"EncodeSchema has duplicate $defs key {definition.key!r}")
+        if definition.parameter_count < 0:
+            raise InvalidIrError(
+                f"EncodeDefinition {definition.key!r} has a negative parameter count"
+            )
+        by_key[definition.key] = definition
+    walk = _EncodeWalk(by_key, ctx)
+    _walk_encode_schema(encode, walk, 0)
+    pending = list(walk.reached)
+    while pending:
+        definition = by_key[pending.pop()]
+        before = set(walk.reached)
+        _walk_encode_schema(definition.body, walk, definition.parameter_count)
+        pending.extend(walk.reached - before)
+    if walk.reached != set(by_key):
+        raise InvalidIrError("EncodePlan has unreachable definitions")
 
 
-def _walk_encode_schema(
-    encode: EncodeSchema, defs: "Mapping[str, EncodeSchema]", ctx: _Context
-) -> None:
-    """Walk one encode-schema node without expanding recursive references."""
+def _walk_encode_schema(encode: EncodeSchema, walk: _EncodeWalk, parameter_count: int) -> None:
+    """Walk one encode-schema node without expanding the definitions it references."""
+    ctx = walk.ctx
     match encode:
         case ScalarEncode():
             return
-        case RefEncode(key=key):
-            _check_ref_chain(
+        case TypeParameterEncode(index=index):
+            if index < 0 or index >= parameter_count:
+                raise InvalidIrError(
+                    f"TypeParameterEncode index {index} is outside its definition arity"
+                )
+        case RefEncode(key=key, arguments=arguments):
+            target = _check_ref_chain(
                 key,
-                defs,
-                lambda t: t.key if isinstance(t, RefEncode) else None,
+                walk.definitions,
+                forwarded_encode_key,
                 ref_kind="EncodeSchema RefEncode",
                 key_noun="$defs key",
             )
+            if len(arguments) != target.parameter_count:
+                raise InvalidIrError(
+                    f"RefEncode supplies {len(arguments)} arguments for the"
+                    f" {target.parameter_count} parameters of $defs key {key!r}"
+                )
+            walk.reached.add(key)
+            for argument in arguments:
+                _walk_encode_schema(argument, walk, parameter_count)
         case ArrayEncode(elem=elem):
-            _walk_encode_schema(elem, defs, ctx)
+            _walk_encode_schema(elem, walk, parameter_count)
         case DictEncode(value=value_schema):
-            _walk_encode_schema(value_schema, defs, ctx)
+            _walk_encode_schema(value_schema, walk, parameter_count)
         case RecordEncode(nominal=nominal, fields=fields):
             _check_nominal_in_table(nominal, ctx)
             desc = ctx.program.nominals[nominal]
@@ -539,7 +586,7 @@ def _walk_encode_schema(
                 raise InvalidIrError(f"RecordEncode references non-record nominal {nominal!r}")
             _check_nominal_fields(fields, desc.fields, "RecordEncode")
             for _fname, fschema in fields:
-                _walk_encode_schema(fschema, defs, ctx)
+                _walk_encode_schema(fschema, walk, parameter_count)
         case ExceptionEncode(nominal=nominal, fields=fields):
             _check_nominal_in_table(nominal, ctx)
             desc = ctx.program.nominals[nominal]
@@ -549,7 +596,7 @@ def _walk_encode_schema(
                 )
             _check_nominal_fields(fields, desc.fields, "ExceptionEncode")
             for _fname, fschema in fields:
-                _walk_encode_schema(fschema, defs, ctx)
+                _walk_encode_schema(fschema, walk, parameter_count)
         case EnumEncode(nominal=nominal, variants=variants):
             _check_nominal_in_table(nominal, ctx)
             desc = ctx.program.nominals[nominal]
@@ -565,7 +612,7 @@ def _walk_encode_schema(
                     )
                 _check_nominal_fields(variant.fields, expected.fields, "EnumEncode variant")
                 for _fname, fschema in variant.fields:
-                    _walk_encode_schema(fschema, defs, ctx)
+                    _walk_encode_schema(fschema, walk, parameter_count)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 
@@ -646,14 +693,15 @@ def _check_ref_chain(
     *,
     ref_kind: str,
     key_noun: str,
-) -> None:
-    """Ensure a chain of ``$defs`` refs reaches a non-ref body without cycling.
+) -> "_RefT":
+    """Resolve a chain of ``$defs`` refs to the non-ref body it must reach.
 
     *follow* returns the next key when its argument is itself a ref node
     (``RefDecode``), or ``None`` at a concrete body where the
     chain terminates.  A key absent from *defs* or revisited (a cycle) is an
     IR invariant violation; *ref_kind* and *key_noun* name the schema flavour
-    and its defs-key wording in the message.
+    and its defs-key wording in the message.  The resolved entry is returned
+    for callers that must also check it against the reference itself.
     """
     seen: set[str] = set()
     current = key
@@ -666,7 +714,7 @@ def _check_ref_chain(
             raise InvalidIrError(f"{ref_kind} references unknown {key_noun} {current!r}")
         next_key = follow(target)
         if next_key is None:
-            return
+            return target
         current = next_key
 
 
@@ -1078,13 +1126,13 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                 recipe.decode,
                 recipe.defs,
                 recipe.encode,
-                recipe.encode_defs,
+                recipe.encode_definitions,
                 recipe.dynamic_encode,
             )
             if ctx.deep and recipe.decode is not None:
                 _check_decode_nominals(recipe.decode, recipe.defs, ctx)
             if ctx.deep and recipe.encode is not None:
-                _check_encode_nominals(recipe.encode, recipe.encode_defs, ctx)
+                _check_encode_nominals(recipe.encode, recipe.encode_definitions, ctx)
             if ctx.deep and recipe.dynamic_encode is not None:
                 _check_dynamic_encode_plan(recipe.dynamic_encode, ctx)
             _validate_expr(val, ctx)
@@ -1563,7 +1611,9 @@ def validate_ir(program: ExecutableProgram, *, deep: bool = True) -> None:
                 if isinstance(field_encode.plan, DynamicEncodePlan):
                     _check_dynamic_encode_plan(field_encode.plan, ctx)
                 else:
-                    _check_encode_nominals(field_encode.plan.root, field_encode.plan.defs, ctx)
+                    _check_encode_nominals(
+                        field_encode.plan.root, field_encode.plan.definitions, ctx
+                    )
 
     for _module_id, em in program.modules.items():
         for node in em.initializers:

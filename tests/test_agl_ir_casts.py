@@ -21,6 +21,7 @@ from agm.agl.ir.contracts import (
     ConversionRecipe,
     ConversionStrategy,
     DictDecode,
+    EncodeDefinition,
     EnumDecode,
     EnumEncode,
     ExceptionEncode,
@@ -31,6 +32,7 @@ from agm.agl.ir.contracts import (
     ScalarDecode,
     ScalarEncode,
     ScalarKind,
+    TypeParameterEncode,
     VariantDecode,
     VariantEncode,
 )
@@ -334,7 +336,7 @@ def test_golden_finite_scalar_json_cast_uses_a_static_plan() -> None:
     assert isinstance(value, IrConvert)
     assert value.recipe.strategy is ConversionStrategy.TO_JSON
     assert value.recipe.encode == ScalarEncode()
-    assert value.recipe.encode_defs == ()
+    assert value.recipe.encode_definitions == ()
 
 
 def test_golden_finite_recursive_json_cast_uses_a_static_plan() -> None:
@@ -346,7 +348,7 @@ def test_golden_finite_recursive_json_cast_uses_a_static_plan() -> None:
     assert isinstance(value, IrConvert)
     assert value.recipe.strategy is ConversionStrategy.TO_JSON
     assert isinstance(value.recipe.encode, RefEncode)
-    assert value.recipe.encode_defs
+    assert value.recipe.encode_definitions
 
 
 def test_golden_growing_recursive_json_cast_uses_dynamic_template_strategy() -> None:
@@ -365,7 +367,7 @@ def test_golden_growing_recursive_json_cast_uses_dynamic_template_strategy() -> 
     assert isinstance(value, IrConvert)
     assert value.recipe.strategy is ConversionStrategy.TO_JSON_VALUE_DIRECTED
     assert value.recipe.encode is None
-    assert value.recipe.encode_defs == ()
+    assert value.recipe.encode_definitions == ()
     assert value.recipe.dynamic_encode is not None
 
 
@@ -381,7 +383,7 @@ def test_golden_bottom_json_cast_lowers_to_noop(source: str) -> None:
     assert isinstance(value, IrConvert)
     assert value.recipe.strategy is ConversionStrategy.NOOP
     assert value.recipe.encode is None
-    assert value.recipe.encode_defs == ()
+    assert value.recipe.encode_definitions == ()
 
 
 @pytest.mark.parametrize("source", _BOTTOM_JSON_CAST_SOURCES)
@@ -644,16 +646,16 @@ def test_validate_rejects_to_json_with_decode_or_malformed_encode_plan() -> None
             source_label="Tree",
             target_label="json",
             encode=RefEncode("loop"),
-            encode_defs=(("loop", RefEncode("loop")),),
+            encode_definitions=(EncodeDefinition("loop", 0, RefEncode("loop")),),
         ),
         ConversionRecipe(
             strategy=ConversionStrategy.TO_JSON,
             source_label="Tree",
             target_label="json",
             encode=RefEncode("same"),
-            encode_defs=(
-                ("same", ScalarEncode()),
-                ("same", ScalarEncode()),
+            encode_definitions=(
+                EncodeDefinition("same", 0, ScalarEncode()),
+                EncodeDefinition("same", 0, ScalarEncode()),
             ),
         ),
         ConversionRecipe(
@@ -661,6 +663,44 @@ def test_validate_rejects_to_json_with_decode_or_malformed_encode_plan() -> None
             source_label="int",
             target_label="int",
             encode=ScalarEncode(),
+        ),
+        # A parameter at the root, which binds none.
+        ConversionRecipe(
+            strategy=ConversionStrategy.TO_JSON,
+            source_label="Perfect[int]",
+            target_label="json",
+            encode=TypeParameterEncode(0),
+        ),
+        # A parameter index past its own definition's arity.
+        ConversionRecipe(
+            strategy=ConversionStrategy.TO_JSON,
+            source_label="Perfect[int]",
+            target_label="json",
+            encode=RefEncode("Box", (ScalarEncode(),)),
+            encode_definitions=(EncodeDefinition("Box", 1, TypeParameterEncode(1)),),
+        ),
+        # A reference whose arguments disagree with the definition's arity.
+        ConversionRecipe(
+            strategy=ConversionStrategy.TO_JSON,
+            source_label="Perfect[int]",
+            target_label="json",
+            encode=RefEncode("Box"),
+            encode_definitions=(EncodeDefinition("Box", 1, TypeParameterEncode(0)),),
+        ),
+        ConversionRecipe(
+            strategy=ConversionStrategy.TO_JSON,
+            source_label="Perfect[int]",
+            target_label="json",
+            encode=RefEncode("Box", (ScalarEncode(),)),
+            encode_definitions=(EncodeDefinition("Box", -1, ScalarEncode()),),
+        ),
+        # A definition no reference reaches.
+        ConversionRecipe(
+            strategy=ConversionStrategy.TO_JSON,
+            source_label="Tree",
+            target_label="json",
+            encode=ScalarEncode(),
+            encode_definitions=(EncodeDefinition("Orphan", 0, ScalarEncode()),),
         ),
     )
     for recipe in bad_recipes:
@@ -731,9 +771,10 @@ def test_validate_accepts_recursive_to_json_encode_plan() -> None:
         source_label="Tree",
         target_label="json",
         encode=RefEncode("Tree"),
-        encode_defs=(
-            (
+        encode_definitions=(
+            EncodeDefinition(
                 "Tree",
+                0,
                 EnumEncode(
                     tree,
                     (
@@ -769,6 +810,36 @@ def test_validate_accepts_recursive_to_json_encode_plan() -> None:
                 NominalKind.RECORD,
                 ("child",),
             ),
+        }
+    )
+    validate_ir(program, deep=True)
+
+
+def test_validate_accepts_a_parameterized_to_json_encode_plan() -> None:
+    """A generic-template definition validates under its own arity, transitively."""
+    from agm.agl.ir.validate import validate_ir
+
+    box = NominalId(4)
+    inner = NominalId(5)
+    recipe = ConversionRecipe(
+        strategy=ConversionStrategy.TO_JSON,
+        source_label="Box[int]",
+        target_label="json",
+        encode=RefEncode("Box", (ScalarEncode(),)),
+        encode_definitions=(
+            EncodeDefinition(
+                "Box",
+                1,
+                RecordEncode(box, (("item", RefEncode("Inner", (TypeParameterEncode(0),))),)),
+            ),
+            EncodeDefinition("Inner", 1, RecordEncode(inner, (("value", TypeParameterEncode(0)),))),
+        ),
+    )
+    program = _convert_program(recipe)
+    program.nominals.update(
+        {
+            box: NominalDescriptor(box, ENTRY_ID, (), "Box", NominalKind.RECORD, ("item",)),
+            inner: NominalDescriptor(inner, ENTRY_ID, (), "Inner", NominalKind.RECORD, ("value",)),
         }
     )
     validate_ir(program, deep=True)

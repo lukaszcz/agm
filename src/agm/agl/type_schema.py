@@ -86,6 +86,7 @@ from agm.agl.ir.contracts import (
     DynamicRecordEncode,
     DynamicTypeParameterEncode,
     DynamicVariantEncode,
+    EncodeDefinition,
     EncodePlan,
     EncodeSchema,
     EnumDecode,
@@ -662,8 +663,10 @@ def build_encode_plan(typ: Type, type_table: TypeTable) -> EncodePlan:
     memo: dict[Type, EncodeSchema] = {}
     return EncodePlan(
         root=_emit_encode(typ, type_table, plan, memo),
-        defs=tuple(
-            (plan.keys[handle], _emit_encode_body(handle, type_table, plan, memo))
+        definitions=tuple(
+            EncodeDefinition(
+                plan.keys[handle], 0, _emit_encode_body(handle, type_table, plan, memo)
+            )
             for handle in plan.order
         ),
     )

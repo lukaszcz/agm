@@ -37,6 +37,7 @@ from agm.agl.ir.contracts import (
     DynamicRecordEncode,
     DynamicTypeParameterEncode,
     DynamicVariantEncode,
+    EncodeDefinition,
     EncodePlan,
     EncodeSchema,
     EnumEncode,
@@ -44,7 +45,9 @@ from agm.agl.ir.contracts import (
     RecordEncode,
     RefEncode,
     ScalarEncode,
+    TypeParameterEncode,
     VariantEncode,
+    forwarded_encode_key,
     resolve_schema_ref,
 )
 from agm.agl.ir.ids import NominalId
@@ -103,24 +106,38 @@ def degraded_marker(exc: "AglCyclicValue | AglNonDataValue") -> str:
 
 
 def encode_value(plan: EncodePlan, value: Value) -> object:
-    """Encode *value* through its lowering-derived static JSON plan.
+    """Encode *value* through its lowering-derived JSON plan.
 
-    Static plans select enum ``$case`` tags from the slot type rather than the
-    runtime value. Lowered casts use this path whenever their statically known
-    source has a finite plan; a growing polymorphic-recursive source uses
-    :func:`encode_dynamic_value` instead.
+    Plans select enum ``$case`` tags from the slot type rather than the runtime
+    value. A finite source's definitions take no parameters; a growing
+    polymorphic-recursive source's definitions are generic templates whose
+    parameters each reference binds (see :class:`RefEncode`).
     """
-    return _encode(plan.root, value, dict(plan.defs), None)
+    return _encode(plan.root, value, {d.key: d for d in plan.definitions}, (), None)
 
 
 def _encode(
     schema: EncodeSchema,
     value: Value,
-    defs: dict[str, EncodeSchema],
+    definitions: dict[str, EncodeDefinition],
+    arguments: tuple[EncodeSchema, ...],
     active: "set[int] | None",
 ) -> object:
+    if isinstance(schema, TypeParameterEncode):
+        return _encode(
+            _bound_argument(schema.index, arguments), value, definitions, arguments, active
+        )
     if isinstance(schema, RefEncode):
-        return _encode(_resolve_encode_ref(schema.key, defs), value, defs, active)
+        definition = _resolve_encode_ref(schema.key, definitions)
+        if len(schema.arguments) != definition.parameter_count:
+            raise AssertionError(
+                f"encode plan reference to {schema.key!r} supplies {len(schema.arguments)}"
+                f" arguments for {definition.parameter_count} parameters"
+            )
+        # A reference's arguments are written in the CALLER's parameter space,
+        # so they are substituted before they become the callee's bindings.
+        bound = tuple(_substitute_arguments(argument, arguments) for argument in schema.arguments)
+        return _encode(definition.body, value, definitions, bound, active)
     if isinstance(schema, ScalarEncode):
         if isinstance(value, TextValue):
             return value.value
@@ -138,7 +155,10 @@ def _encode(
             raise AssertionError(f"array encode plan received {type(value).__name__}")
         active = enter_container(id(value), active)
         try:
-            return [_encode(schema.elem, item, defs, active) for item in value.elements]
+            return [
+                _encode(schema.elem, item, definitions, arguments, active)
+                for item in value.elements
+            ]
         finally:
             active.discard(id(value))
     if isinstance(schema, DictEncode):
@@ -147,7 +167,7 @@ def _encode(
         active = enter_container(id(value), active)
         try:
             return {
-                name: _encode(schema.value, item, defs, active)
+                name: _encode(schema.value, item, definitions, arguments, active)
                 for name, item in value.entries.items()
             }
         finally:
@@ -160,7 +180,8 @@ def _encode(
                 f"record encode plan received {value.nominal!r}, expected {schema.nominal!r}"
             )
         return {
-            name: _encode(field, value.fields[name], defs, active) for name, field in schema.fields
+            name: _encode(field, value.fields[name], definitions, arguments, active)
+            for name, field in schema.fields
         }
     if isinstance(schema, ExceptionEncode):
         if not isinstance(value, ExceptionValue):
@@ -170,13 +191,17 @@ def _encode(
                 f"exception encode plan received {value.nominal!r}, expected {schema.nominal!r}"
             )
         return {
-            name: _encode(field, value.fields[name], defs, active) for name, field in schema.fields
+            name: _encode(field, value.fields[name], definitions, arguments, active)
+            for name, field in schema.fields
         }
     if isinstance(schema, EnumEncode):
         variant, fields = _variant_for_encode(schema, value)
         result: dict[str, object] = {"$case": variant.name}
         result.update(
-            {name: _encode(field, fields[name], defs, active) for name, field in variant.fields}
+            {
+                name: _encode(field, fields[name], definitions, arguments, active)
+                for name, field in variant.fields
+            }
         )
         return result
     raise AssertionError(f"unknown encode schema {schema!r}")  # pragma: no cover
@@ -225,7 +250,7 @@ def _encode_dynamic(
         )
         return _encode_dynamic(definition.body, value, definitions, bound_arguments, active)
     if isinstance(schema, ScalarEncode):
-        return _encode(schema, value, {}, active)
+        return _encode(schema, value, {}, (), active)
     if isinstance(schema, DynamicArrayEncode):
         if not isinstance(value, ArrayValue):
             raise AssertionError(f"array encode plan received {type(value).__name__}")
@@ -332,12 +357,72 @@ def _instantiate_dynamic(
     return schema
 
 
-def _resolve_encode_ref(key: str, defs: dict[str, EncodeSchema]) -> EncodeSchema:
-    """Resolve a recursive plan reference to its non-reference body."""
+def _bound_argument(index: int, arguments: tuple[EncodeSchema, ...]) -> EncodeSchema:
+    """Read one enclosing definition parameter out of the current bindings."""
+    try:
+        return arguments[index]
+    except IndexError as exc:
+        raise AssertionError(f"encode plan parameter {index} is unbound") from exc
+
+
+def _substitute_arguments(
+    schema: EncodeSchema, arguments: tuple[EncodeSchema, ...]
+) -> EncodeSchema:
+    """Replace every parameter in *schema* with its binding from *arguments*.
+
+    Applied to a reference's arguments on the way into a definition: they are
+    written in terms of the enclosing definition's parameters, which must be
+    resolved before they can bind the callee's own.
+    """
+    match schema:
+        case TypeParameterEncode(index=index):
+            return _bound_argument(index, arguments)
+        case ScalarEncode():
+            return schema
+        case RefEncode(key=key, arguments=reference_arguments):
+            return RefEncode(
+                key,
+                tuple(
+                    _substitute_arguments(argument, arguments) for argument in reference_arguments
+                ),
+            )
+        case ArrayEncode(elem=elem):
+            return ArrayEncode(_substitute_arguments(elem, arguments))
+        case DictEncode(value=value_schema):
+            return DictEncode(_substitute_arguments(value_schema, arguments))
+        case RecordEncode(nominal=nominal, fields=fields):
+            return RecordEncode(nominal, _substitute_fields(fields, arguments))
+        case ExceptionEncode(nominal=nominal, fields=fields):
+            return ExceptionEncode(nominal, _substitute_fields(fields, arguments))
+        case EnumEncode(nominal=nominal, variants=variants):
+            return EnumEncode(
+                nominal,
+                tuple(
+                    VariantEncode(
+                        variant.name,
+                        variant.nominal,
+                        _substitute_fields(variant.fields, arguments),
+                    )
+                    for variant in variants
+                ),
+            )
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
+
+
+def _substitute_fields(
+    fields: "tuple[tuple[str, EncodeSchema], ...]", arguments: tuple[EncodeSchema, ...]
+) -> "tuple[tuple[str, EncodeSchema], ...]":
+    """Substitute *arguments* through one ordered field or variant-field list."""
+    return tuple((name, _substitute_arguments(field, arguments)) for name, field in fields)
+
+
+def _resolve_encode_ref(key: str, definitions: dict[str, EncodeDefinition]) -> EncodeDefinition:
+    """Resolve a plan reference to the definition whose body is not itself a reference."""
     return resolve_schema_ref(
         key,
-        defs,
-        lambda schema: schema.key if isinstance(schema, RefEncode) else None,
+        definitions,
+        forwarded_encode_key,
         subject="encode plan",
     )
 

@@ -15,8 +15,8 @@
 ;; standard flymake caveat for on-disk checkers.
 ;;
 ;; `agm check' exits 1 whenever it reports a diagnostic, so a non-zero
-;; exit is the ordinary path and never a backend failure; only being
-;; unable to run the command at all is an error.
+;; exit is the ordinary path.  A non-zero exit with no source diagnostic
+;; is instead reported as a checker failure.
 ;;
 ;; Diagnostics carry the path of the file they belong to, which for an
 ;; imported module is not the buffer being checked.  Those foreign
@@ -197,6 +197,20 @@ message."
                   diagnostics)))))
     (nreverse diagnostics)))
 
+(defun agl-flymake--result-diagnostics (buffer file output exit-status)
+  "Return Flymake diagnostics from an `agm check' result.
+
+EXIT-STATUS is non-zero both for source diagnostics and checker failures.
+The latter emit no GNU-style diagnostic, so attach their output to BUFFER
+rather than incorrectly reporting a clean result."
+  (let ((reports (agl-flymake-parse output)))
+    (if (or reports (zerop exit-status))
+        (agl-flymake--diagnostics buffer file reports)
+      (with-current-buffer buffer
+        (list (flymake-make-diagnostic
+               buffer (point-min) (min (point-max) (1+ (point-min))) :error
+               (format "agm check failed: %s" (string-trim output))))))))
+
 (defvar-local agl-flymake--process nil
   "The `agm check' process currently checking this buffer, if any.")
 
@@ -229,14 +243,11 @@ can never overwrite a newer one."
                  (unwind-protect
                      (when (with-current-buffer buffer
                              (eq proc agl-flymake--process))
-                       ;; `agm check' exits 1 whenever it reports a
-                       ;; diagnostic, so the exit status says nothing about
-                       ;; whether the run succeeded.
                        (let ((text (with-current-buffer output
                                      (buffer-string))))
                          (funcall report-fn
-                                  (agl-flymake--diagnostics
-                                   buffer file (agl-flymake-parse text)))))
+                                  (agl-flymake--result-diagnostics
+                                   buffer file text (process-exit-status proc)))))
                    (kill-buffer output)))))))
       (setq agl-flymake--process process))))
 

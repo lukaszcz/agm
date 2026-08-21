@@ -82,6 +82,16 @@
   (should-not (agl-flymake-parse "Error: cannot read missing.agl\n"))
   (should-not (agl-flymake-parse "")))
 
+(ert-deftest agl-fm-reports-a-checker-failure-without-a-source-diagnostic ()
+  (agl-fm--with-buffer "let a = 1\n"
+    (let ((diagnostics
+           (agl-flymake--result-diagnostics
+            (current-buffer) buffer-file-name "Error: invalid module root\n" 2)))
+      (should (= (length diagnostics) 1))
+      (should (eq (flymake-diagnostic-type (car diagnostics)) :error))
+      (should (string-match-p "invalid module root"
+                              (flymake-diagnostic-text (car diagnostics)))))))
+
 (ert-deftest agl-fm-folds-a-note-into-its-diagnostic ()
   (let ((report (car (agl-flymake-parse
                       "a.agl:1:1: error: boom\n  a.agl:2:1: note: declared here\n"))))

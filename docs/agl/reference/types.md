@@ -629,21 +629,19 @@ The host fills the fields of such a value itself, always with standard
 values, so any field of one whose type is itself a nominal type must keep the
 standard identity for that name — including a nominal nested inside a type
 argument, such as the `Option` in `AgentRequest`'s `target_type:
-Option[text]`. The fields subject to this are `AgentRequest`'s `agent: Agent`
-and its `Option`-typed fields, and the `agent: Agent` field of the built-in
-exceptions `AgentCallError` and `AgentParseError`; `ExecResult` has no
-nominal field. So a program may declare its own `builtin enum Agent`, or —
-without the standard library — its own `Option`, and it may separately
-declare a `builtin record AgentRequest` or a `builtin exception
-AgentCallError`; but writing both so that the redeclaration is what the
-contract's own field resolves to makes the pair unusable together. That is
-reported where the contract is used: at an `ask`/`ask-request` call for
-`AgentRequest`, and at a `catch` clause naming the exception.
+Option[text]`. The fields subject to this are `AgentRequest`'s `Option`-typed
+fields and the `agent: Agent` field of the built-in exceptions `AgentCallError`
+and `AgentParseError`; `ExecResult` has no nominal field. So a program may
+declare its own `builtin enum Agent`, or — without the standard library — its
+own `Option`, and it may separately declare a `builtin record AgentRequest`
+or a `builtin exception AgentCallError`; but writing both so that the
+redeclaration is what the contract's own field resolves to makes the pair
+unusable together. That is reported where the contract is used: at an
+`ask-request` call for `AgentRequest`, and at a `catch` clause naming the
+exception.
 
-The agent an `ask`/`ask-request` dispatches to must likewise be a standard
-`Agent`, whether it is supplied as the `agent` argument or as the receiver of
-`agent.ask(...)` / `agent.ask-request(...)`. A value of a program's own
-differently-scoped `Agent` is an ordinary type mismatch there.
+An `Agent::ask(...)` receiver must be a standard `Agent`. A value of a
+program's own differently-scoped `Agent` is an ordinary type mismatch there.
 
 ## Recursive types
 

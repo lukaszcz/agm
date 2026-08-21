@@ -564,5 +564,5 @@ let r = ask-request("Summarize %{topic}")
 ```
 
 The result is an `AgentRequest` record (see [Types](types.md)) with `attempt`
-set to `0`, `previous_error` set to `None`, and its selected `Agent` value and
-text-output contract recorded for inspection.
+set to `0`, `previous_error` set to `None`, and its fixed text-output contract
+recorded for inspection.

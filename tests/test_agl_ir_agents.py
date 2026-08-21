@@ -382,24 +382,16 @@ def test_ask_surfaces_an_ephemeral_session_close_failure(source: str) -> None:
     assert result.error.type_name == "SessionError"
 
 
-@pytest.mark.skip(reason="ask-request no longer carries an agent")
-def test_agent_ask_request_method_uses_its_receiver() -> None:
-    """Agent::ask-request constructs a request without dispatching."""
+def test_agent_ask_request_method_is_rejected() -> None:
+    """``ask-request`` is a free request builder, not an Agent method."""
     source = """\
 let worker = AgentCommand("worker")
 let request = worker.ask-request("Draft it.")
 request
 """
-    ir = evaluate_ir_with_agents(source, scripts={"worker": []})
+    result = run_inline_command(PipelineDriver(), source)
 
-    request = ir["request"]
-    assert isinstance(request, RecordValue)
-    assert request.fields["agent"] == EnumValue(
-        nominal=request.fields["agent"].nominal,
-        display_name="Agent",
-        variant="AgentCommand",
-        fields={"command": TextValue("worker")},
-    )
+    assert not result.ok
 
 
 def test_user_declared_method_named_ask_dispatches_as_an_ordinary_method() -> None:
@@ -803,20 +795,15 @@ def test_default_agent_ask() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason="ask-request no longer carries an agent")
 def test_ask_request_builds_record() -> None:
     """ask-request: no agent dispatch, returns an AgentRequest-shaped record."""
     source = """\
-let dummy = AgentCommand("dummy")
-let req = ask-request("My prompt.", agent = dummy)
+let req = ask-request("My prompt.")
 let prompt_text: text = req.prompt
 prompt_text
 """
     # ask-request does not call the agent — no scripted responses needed.
-    ir = evaluate_ir_with_agents(
-        source,
-        scripts={"dummy": []},
-    )
+    ir = evaluate_ir(source)
     assert ir["prompt_text"] == TextValue("My prompt.")
 
     from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
@@ -824,8 +811,6 @@ prompt_text
     req = ir["req"]
     assert isinstance(req, RecordValue)
     assert req.nominal == NO_BUILTIN_DECLARATIONS.nominal("AgentRequest")
-    assert isinstance(req.fields["agent"], EnumValue)
-    assert req.fields["agent"].variant == "AgentCommand"
     assert isinstance(req.fields["target_type"], EnumValue)
     assert req.fields["target_type"].variant == "Some"
     assert req.fields["target_type"].fields["value"] == TextValue("text")
@@ -1075,19 +1060,14 @@ def test_validate_contract_request_json_missing_schema() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason="ask-request no longer carries an agent")
 def test_ask_request_builds_a_text_request_record() -> None:
     """ask-request builds its fixed text-contract AgentRequest record."""
     source = """\
-let worker = AgentCommand("worker")
-let req = ask-request("Give me a number.", agent = worker)
+let req = ask-request("Give me a number.")
 let prompt_text: text = req.prompt
 prompt_text
 """
-    ir = evaluate_ir_with_agents(
-        source,
-        scripts={"worker": []},
-    )
+    ir = evaluate_ir(source)
     assert ir["prompt_text"] == TextValue("Give me a number.")
 
 
@@ -1942,21 +1922,16 @@ def test_validate_contract_request_recursive_decode_unknown_defs_key() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason="ask-request no longer carries an agent")
 def test_ir_ask_request_text_contract() -> None:
     """IrAskRequest builds an AgentRequest with its fixed text contract."""
     source = """\
-let a = AgentCommand("a")
-let req = ask-request("Do it.", agent = a)
+let req = ask-request("Do it.")
 let prompt_text: text = req.prompt
 prompt_text
 """
     from tests.agl.ir_harness import evaluate_ir_with_agents
 
-    ir = evaluate_ir_with_agents(
-        source,
-        scripts={"a": []},
-    )
+    ir = evaluate_ir_with_agents(source, scripts={})
     assert ir["prompt_text"] == TextValue("Do it.")
 
 
@@ -2064,7 +2039,6 @@ def test_validate_ir_ask_deep_valid_contract() -> None:
     validate_ir(prog, deep=True)
 
 
-@pytest.mark.skip(reason="ask-request no longer carries an agent")
 def test_validate_ir_ask_request_deep_valid_without_a_contract() -> None:
     """validate_ir: a well-formed IrAskRequest passes deep validation without a contract."""
     from agm.agl.ir.ids import Location, SourceId
@@ -2077,7 +2051,6 @@ def test_validate_ir_ask_request_deep_valid_without_a_contract() -> None:
     dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
     node = IrAskRequest(
         location=dummy_loc,
-        agent=IrConstText(location=dummy_loc, value="ask"),
         prompt=IrConstText(location=dummy_loc, value="test"),
     )
     prog = ExecutableProgram(
@@ -2091,21 +2064,16 @@ def test_validate_ir_ask_request_deep_valid_without_a_contract() -> None:
     validate_ir(prog, deep=True)
 
 
-@pytest.mark.skip(reason="ask-request no longer carries an agent")
 def test_ir_ask_request_has_a_text_target() -> None:
     """ask-request always reports the fixed text target on its request record."""
     source = """\
-let a = AgentCommand("a")
-let req = ask-request("Do it.", agent = a)
+let req = ask-request("Do it.")
 let target = req.target_type
 target
 """
     from tests.agl.ir_harness import evaluate_ir_with_agents
 
-    ir = evaluate_ir_with_agents(
-        source,
-        scripts={"a": []},
-    )
+    ir = evaluate_ir_with_agents(source, scripts={})
     assert isinstance(ir["target"], EnumValue)
     assert ir["target"].variant == "Some"
     assert ir["target"].fields["value"] == TextValue("text")

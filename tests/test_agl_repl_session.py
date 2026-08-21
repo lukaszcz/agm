@@ -1517,8 +1517,8 @@ class TestBuiltinIdentityAcrossModules:
 
 # ---------------------------------------------------------------------------
 # Builtin identity for the other host-contract nominals: ``AgentRequest``
-# (``ask-request``'s result), ``Agent`` (the ``agent`` argument to
-# ``ask``/``ask-request``), and ``ParsePolicy`` (``on_parse_error``).
+# (``ask-request``'s result), ``Agent`` (the receiver of ``ask``), and
+# ``ParsePolicy`` (``on_parse_error``).
 #
 # Every one of these resolutions goes through a program's own ``builtin``
 # declaration of the name (``BuiltinCallChecker._builtin_contract_type``), so
@@ -1545,8 +1545,7 @@ class TestAgentRequestBuiltinIdentity:
         assert declare.ok, declare.diagnostics
 
         result = s.eval_entry('let q = ask-request("hi")')
-        assert not result.ok
-        assert any("target_type" in diagnostic.message for diagnostic in result.diagnostics)
+        assert result.ok, result.diagnostics
         assert isinstance(result.value_type, RecordType)
         assert result.value_type.scope_path == ("A",)
 
@@ -1564,53 +1563,30 @@ class TestAgentRequestBuiltinIdentity:
         assert isinstance(result.value_type, RecordType)
         assert result.value_type.scope_path == ("A",)
 
-    @pytest.mark.skip(reason="ask-request no longer selects an agent")
-    def test_scoped_agent_and_agent_request_declared_together_with_agent_omitted_rejected(
-        self,
-    ) -> None:
-        """Both ``Agent`` and ``AgentRequest`` declared together at the same
-        scope, with the ``agent`` argument OMITTED entirely: the host still
-        fills the field from the canonical default agent regardless, into a
-        field statically typed as this scope's own ``Agent`` -- the contract
-        is incoherent whether or not a value is explicitly supplied for the
-        argument that field holds."""
+    def test_scoped_agent_does_not_affect_agent_request(self) -> None:
+        """An ``Agent`` redeclaration is irrelevant to agent-independent requests."""
         s = ReplSession()
+        declare = s.eval_entry(f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}end A\n")
+        assert declare.ok, declare.diagnostics
+
+        result = s.eval_entry('let q = ask-request("hi")')
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value_type, RecordType)
+        assert result.value_type.scope_path == ()
+
+    def test_root_agent_request_with_custom_option_without_stdlib_is_rejected(self) -> None:
+        """A host request cannot populate a program-defined ``Option`` field."""
+        s = ReplSession(default_stdlib=False)
         declare = s.eval_entry(
-            f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}"
-            f"builtin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}end A\n"
+            f"{_OPTION_DECL}"
+            f"builtin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}"
+            "builtin def ask-request(prompt: text) -> AgentRequest\n"
         )
         assert declare.ok, declare.diagnostics
 
         result = s.eval_entry('let q = ask-request("hi")')
         assert not result.ok
-        assert any("AgentRequest" in d.message and "agent" in d.message for d in result.diagnostics)
-
-    @pytest.mark.skip(reason="ask-request no longer selects an agent")
-    def test_root_agent_request_declared_without_stdlib_rejected_as_incoherent(self) -> None:
-        """Without the standard library, a root ``AgentRequest`` whose own
-        ``agent`` field types to this program's own root ``Agent`` (the only
-        ``Agent`` there is here, since nothing seeds a canonical one without
-        the standard library) is an incoherent contract: the host always
-        fills that field with the standard ``Agent`` identity, never
-        whatever declaration the contract's own field type happens to name,
-        so the call is rejected rather than minting a value whose identity
-        disagrees with its static field type."""
-        s = ReplSession(default_stdlib=False)
-        declare = s.eval_entry(
-            f"{_OPTION_DECL}"
-            f"builtin\nenum Agent\n{_AGENT_VARIANTS}"
-            f"builtin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}"
-            'builtin def ask-request(prompt: text, agent: Agent = AgentCommand(command = "noop")) '
-            "-> AgentRequest\n"
-        )
-        assert declare.ok, declare.diagnostics
-
-        # No standard library, so ``std/config::default-agent`` -- the
-        # ``agent`` parameter's canonical default -- was never declared;
-        # supplying ``agent`` explicitly is unrelated to the fix under test.
-        result = s.eval_entry('let q = ask-request("hi"))')
-        assert not result.ok
-        assert any("AgentRequest" in d.message and "agent" in d.message for d in result.diagnostics)
+        assert any("target_type" in d.message for d in result.diagnostics)
 
     def test_ask_request_without_named_program_syntax_types_as_canonical_agent_request(
         self,
@@ -1648,43 +1624,20 @@ class TestAgentRequestBuiltinIdentity:
         assert field.value == TextValue("hi")
 
 
-class TestAgentArgumentBuiltinIdentity:
-    """The ``agent`` argument to ``ask``/``ask-request``
-    (``BuiltinCallChecker._validate_ask_like_arguments``)."""
+class TestAgentBuiltinIdentity:
+    """The ``Agent`` receiver of ``Agent::ask`` and request independence."""
 
-    @pytest.mark.skip(reason="ask-request no longer selects an agent")
-    def test_scoped_agent_value_rejected_as_ask_request_agent_argument(self) -> None:
-        """A value of the program's own scoped ``Agent`` is rejected as the
-        ``agent`` argument to ``ask-request``.
-
-        Only ``Agent`` is redeclared here (matching the reported repro
-        exactly), not ``AgentRequest``, so ``AgentRequest``'s own ``agent``
-        field keeps its canonical (root) static field type: the value's
-        differently-scoped ``Agent`` is an ordinary static type mismatch
-        against it, restoring the clean, pre-existing diagnostic instead of
-        the internal crash that accepting the mismatched value used to lead
-        to at evaluation.
-        """
+    def test_scoped_agent_value_does_not_affect_ask_request(self) -> None:
+        """A request does not read a program-defined ``Agent`` value."""
         s = ReplSession()
         declare = s.eval_entry(f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}end A\n")
         assert declare.ok, declare.diagnostics
 
-        g = s.eval_entry('let g = A::Agent::AgentCommand("echo")')
-        assert g.ok, g.diagnostics
-
         result = s.eval_entry('let q = ask-request("hi")')
-        assert not result.ok
-        assert any("A::Agent" in d.message for d in result.diagnostics)
+        assert result.ok, result.diagnostics
 
-    @pytest.mark.skip(reason="ask-request no longer selects an agent")
-    def test_scoped_agent_and_agent_request_declared_together_rejected_as_incoherent(
-        self,
-    ) -> None:
-        """A program that redeclares BOTH ``Agent`` and ``AgentRequest`` at
-        the same scope gets an incoherent contract: ``AgentRequest.agent``
-        resolves to that same scoped ``Agent``, not the standard identity the
-        host actually fills the field with, so the call is rejected rather
-        than minting a field whose static type disagrees with its value."""
+    def test_scoped_agent_and_agent_request_mint_consistently(self) -> None:
+        """A sibling ``Agent`` does not affect a request's canonical Option fields."""
         s = ReplSession()
         declare = s.eval_entry(
             f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}"
@@ -1692,12 +1645,10 @@ class TestAgentArgumentBuiltinIdentity:
         )
         assert declare.ok, declare.diagnostics
 
-        g = s.eval_entry('let g = A::Agent::AgentCommand("echo")')
-        assert g.ok, g.diagnostics
-
         result = s.eval_entry('let q = ask-request("hi")')
-        assert not result.ok
-        assert any("AgentRequest" in d.message and "agent" in d.message for d in result.diagnostics)
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value_type, RecordType)
+        assert result.value_type.scope_path == ("A",)
 
     def test_scoped_agent_value_rejected_as_agent_ask_receiver(self) -> None:
         """``Agent::ask`` shares ``_validate_ask_like_arguments`` with
@@ -1731,11 +1682,8 @@ class TestAgentArgumentBuiltinIdentity:
         assert not result.ok
         assert any("target_type" in diagnostic.message for diagnostic in result.diagnostics)
 
-    @pytest.mark.skip(reason="ask-request no longer selects an agent")
-    def test_unrelated_value_is_still_rejected_as_the_agent_argument(self) -> None:
-        """Regression: passing a value of an unrelated type as ``agent`` is
-        still a static rejection -- the shape-mismatch direction of this fix,
-        confirmed with the program's own scoped ``Agent`` also live."""
+    def test_ask_request_rejects_agent_argument(self) -> None:
+        """The free request builder accepts no agent-selection argument."""
         s = ReplSession()
         declare = s.eval_entry(f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}end A\n")
         assert declare.ok, declare.diagnostics
@@ -1743,20 +1691,14 @@ class TestAgentArgumentBuiltinIdentity:
         not_agent = s.eval_entry("enum NotAgent\n  | X")
         assert not_agent.ok, not_agent.diagnostics
 
-        result = s.eval_entry('ask-request("hi")', check_only=True)
+        result = s.eval_entry('ask-request("hi", agent = NotAgent::X)', check_only=True)
         assert not result.ok
-        assert any("NotAgent" in d.message for d in result.diagnostics)
+        assert result.diagnostics
 
-    @pytest.mark.skip(reason="ask-request no longer selects an agent")
-    def test_agent_declared_in_an_imported_library_module_rejected_as_agent_argument(
+    def test_agent_declared_in_an_imported_library_module_does_not_affect_ask_request(
         self, tmp_path: Path
     ) -> None:
-        """Only ``Agent`` is declared by the library module here (not
-        ``AgentRequest``), so -- as in
-        ``test_scoped_agent_value_rejected_as_ask_request_agent_argument``
-        above -- the value's own (differently-scoped) ``Agent`` is an
-        ordinary static type mismatch against ``AgentRequest``'s canonical
-        field type."""
+        """A library's ``Agent`` declaration does not select a request agent."""
         (tmp_path / "lib.agl").write_text(
             f"scope Lib\nbuiltin enum Agent\n{_AGENT_VARIANTS}end Lib\n"
         )
@@ -1764,46 +1706,22 @@ class TestAgentArgumentBuiltinIdentity:
         declare = s.eval_entry("import lib")
         assert declare.ok, declare.diagnostics
 
-        g = s.eval_entry('let g = lib::Lib::Agent::AgentCommand("echo")')
-        assert g.ok, g.diagnostics
-
         result = s.eval_entry('let q = ask-request("hi")')
-        assert not result.ok
-        assert any("Lib::Agent" in d.message for d in result.diagnostics)
+        assert result.ok, result.diagnostics
 
-    @pytest.mark.skip(reason="ask-request no longer selects an agent")
-    def test_scoped_agent_receiver_rejected_as_ask_request_receiver(self) -> None:
-        """The receiver of ``x.ask-request(...)`` IS the agent the host stores
-        in ``AgentRequest.agent``, so it is held to the same identity
-        requirement as the ``agent`` named argument. Reaching evaluation with
-        a differently-scoped ``Agent`` receiver instead mints a request whose
-        ``agent`` field value disagrees with its static type, which an
-        exhaustive ``case q.agent of`` then cannot dispatch."""
-        s = ReplSession()
-        declare = s.eval_entry(
-            f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}"
-            "builtin def Agent::ask-request(self, prompt: text) -> AgentRequest\n"
-            "end A\n"
-        )
-        assert declare.ok, declare.diagnostics
-
-        g = s.eval_entry('let g = A::Agent::AgentCommand("echo")')
-        assert g.ok, g.diagnostics
-
-        result = s.eval_entry('let q = g.ask-request("hi")')
-        assert not result.ok
-        assert any("A::Agent" in d.message for d in result.diagnostics)
-
-    @pytest.mark.skip(reason="ask-request no longer selects an agent")
-    def test_canonical_agent_receiver_still_builds_a_request(self) -> None:
-        """Regression: the ordinary receiver form still works and still mints
-        a request whose ``agent`` field is readable."""
+    def test_agent_ask_request_receiver_is_rejected(self) -> None:
+        """``ask-request`` has no Agent receiver form."""
         s = ReplSession()
         result = s.eval_entry('let q = AgentCommand("echo").ask-request("hi")')
-        assert result.ok, result.diagnostics
-        field = s.eval_entry("q.prompt")
-        assert field.ok, field.diagnostics
-        assert field.value == TextValue("hi")
+        assert not result.ok
+        assert result.diagnostics
+
+    def test_agent_ask_request_member_value_is_rejected(self) -> None:
+        """The removed Agent method cannot be used as a first-class value."""
+        s = ReplSession()
+        result = s.eval_entry('let q = AgentCommand("echo").ask-request')
+        assert not result.ok
+        assert result.diagnostics
 
 
 class TestHostRaisedExceptionContractIdentity:

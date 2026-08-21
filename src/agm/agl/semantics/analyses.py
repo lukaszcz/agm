@@ -415,9 +415,10 @@ def field_templates(typedef: TypeDef, defs: Mapping[DeclId, TypeDef]) -> list[tu
     if typedef.kind == "enum":
         templates: list[tuple[str, Type]] = []
         for member in typedef.members:
-            member_def = defs.get(member.decl_id)
-            if member_def is None:
-                continue
+            # A member handle always names a registered declaration: ``defs``
+            # retains every declaration the table has ever registered,
+            # superseded or not.
+            member_def = defs[member.decl_id]
             substitutions = dict(zip(member_def.type_params, member.type_args, strict=True))
             templates.extend(
                 (name, substitute(field_type, substitutions))

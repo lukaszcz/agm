@@ -955,6 +955,91 @@ class TestCrossEntryScopeCollision:
         assert any("not a member of 'A::B'" in d.message for d in result.diagnostics)
 
 
+class TestBareConstructorVisibilityAcrossEntries:
+    """A declaration's bare-name reach must not depend on the entry boundary.
+
+    Whether a constructor spelling is usable unqualified is decided once, by
+    where and how it was declared -- never by whether the reference happens
+    to land in the same REPL entry as the declaration or a later one.
+    """
+
+    def test_record_in_a_named_scope_is_not_bare_across_entries(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope S\nrecord Inner(v: int)\nend S").ok
+
+        bare = s.eval_entry("Inner(v = 1)")
+        qualified = s.eval_entry("S::Inner(v = 1)")
+
+        assert not bare.ok
+        assert qualified.ok, qualified.diagnostics
+
+    def test_record_in_a_named_scope_is_not_bare_within_one_entry(self) -> None:
+        s = ReplSession()
+
+        result = s.eval_entry("scope S\nrecord Inner(v: int)\nend S\nInner(v = 1)")
+
+        assert not result.ok
+
+    def test_constructible_alias_in_a_named_scope_is_not_bare_across_entries(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope S\nrecord Inner(v: int)\ntype Wrap = Inner\nend S").ok
+
+        bare = s.eval_entry("Wrap(v = 1)")
+        qualified = s.eval_entry("S::Wrap(v = 1)")
+
+        assert not bare.ok
+        assert qualified.ok, qualified.diagnostics
+
+    def test_constructible_alias_in_a_named_scope_is_not_bare_within_one_entry(self) -> None:
+        s = ReplSession()
+
+        result = s.eval_entry(
+            "scope S\nrecord Inner(v: int)\ntype Wrap = Inner\nend S\nWrap(v = 1)"
+        )
+
+        assert not result.ok
+
+    def test_root_enum_inline_member_stays_bare_across_entries(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("enum E\n  | Foo(v: int)").ok
+
+        bare = s.eval_entry("Foo(v = 1)")
+
+        assert bare.ok, bare.diagnostics
+        assert isinstance(bare.value, RecordValue)
+        assert bare.value.fields["v"] == IntValue(1)
+
+    def test_root_enum_inline_member_stays_bare_within_one_entry(self) -> None:
+        s = ReplSession()
+
+        result = s.eval_entry("enum E\n  | Foo(v: int)\nFoo(v = 1)")
+
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value, RecordValue)
+        assert result.value.fields["v"] == IntValue(1)
+
+    def test_root_enum_reference_to_a_scoped_record_stays_bare_across_entries(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope M\nrecord Go(amount: int)\nend M\nenum Step\n  | M::Go").ok
+
+        bare = s.eval_entry("Go(amount = 1)")
+
+        assert bare.ok, bare.diagnostics
+        assert isinstance(bare.value, RecordValue)
+        assert bare.value.fields["amount"] == IntValue(1)
+
+    def test_root_enum_reference_to_a_scoped_record_stays_bare_within_one_entry(self) -> None:
+        s = ReplSession()
+
+        result = s.eval_entry(
+            "scope M\nrecord Go(amount: int)\nend M\nenum Step\n  | M::Go\nGo(amount = 1)"
+        )
+
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value, RecordValue)
+        assert result.value.fields["amount"] == IntValue(1)
+
+
 # ---------------------------------------------------------------------------
 # Standard library
 # ---------------------------------------------------------------------------

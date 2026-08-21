@@ -744,6 +744,7 @@ def resolve_program(
     *,
     entry_ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
     entry_ambient_type_names: frozenset[str] = frozenset(),
+    entry_ambient_bare_constructor_keys: frozenset[tuple[str, ModuleId, int]] = frozenset(),
     entry_parent_scope: ScopeNode | None = None,
     entry_repl_session_scope: ScopeNode | None = None,
     entry_repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
@@ -761,6 +762,10 @@ def resolve_program(
     entry_ambient_type_names:
         Type names from prior REPL entries, used for qualified constructor
         access in the entry module.
+    entry_ambient_bare_constructor_keys:
+        Identity keys of the candidates that were bare-visible at the end of
+        the prior REPL entry, replaying that entry's own bare/qualified split
+        for a same-module candidate whose owner path is a retained scope.
     entry_parent_scope:
         When given, the entry module's root scope is parented to this scope
         so name lookups fall through to session bindings (REPL incremental
@@ -945,6 +950,9 @@ def resolve_program(
             parent_scope=entry_parent_scope if is_entry else None,
             ambient_constructor_candidates=constructor_candidates or None,
             ambient_type_names=type_names,
+            ambient_bare_constructor_keys=(
+                entry_ambient_bare_constructor_keys if is_entry else frozenset()
+            ),
         )
         resolved_modules[mid] = ResolvedModule(
             module_id=mid,

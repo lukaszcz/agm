@@ -567,6 +567,7 @@ class _Resolver:
         parent_scope: ScopeNode | None = None,
         ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
         ambient_type_names: frozenset[str] = frozenset(),
+        ambient_bare_constructor_keys: frozenset[tuple[str, ModuleId, int]] = frozenset(),
     ) -> ModuleResolution:
         """Execute the resolution pass over *program*.
 
@@ -582,6 +583,16 @@ class _Resolver:
         *ambient_type_names* carries type names from prior entries so that
         qualified constructor access (``Owner::variant``) resolves for types
         declared in earlier REPL entries.
+
+        *ambient_bare_constructor_keys* carries the ``(name, owner_module_id,
+        owner_decl_node_id)`` identity of every candidate that was bare-visible
+        (as opposed to only qualifier-visible) at the end of a prior REPL
+        entry.  For a same-module candidate whose owner path is a retained
+        named scope, this decides whether it stays bare here too: it replays
+        the prior entry's own bare/qualified split instead of re-deriving it
+        from the owner path's shape, which cannot distinguish a plain
+        declaration nested in a named scope from a root enum's reference to
+        one.
         """
         # Seed ambient constructor candidates (from prior REPL entries) before
         # running the local pre-passes so local declarations can shadow them.
@@ -589,8 +600,9 @@ class _Resolver:
             for cname, crefs in ambient_constructor_candidates.items():
                 for cref in crefs:
                     # Retained metadata names the member record's owning
-                    # scope. Root enum members remain bare conveniences;
-                    # declarations nested in a named scope do not.
+                    # scope. Whether the candidate is also bare here mirrors
+                    # whichever it was in the entry that declared it, not the
+                    # shape of its owner path.
                     if (
                         cref.owner_module_id == self._module_id
                         and cref.owner_path in self._repl_session_scope_nodes
@@ -599,7 +611,12 @@ class _Resolver:
                             cname,
                             cref,
                             scope_path=cref.owner_path,
-                            inject_bare=not cref.owner_path[:-1],
+                            inject_bare=(
+                                cname,
+                                cref.owner_module_id,
+                                cref.owner_decl_node_id,
+                            )
+                            in ambient_bare_constructor_keys,
                         )
                     else:
                         self._add_constructor_candidate(cname, cref)

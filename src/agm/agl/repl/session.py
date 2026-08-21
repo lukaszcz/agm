@@ -284,6 +284,13 @@ class ReplSession:
         # name → ordered tuple of ConstructorRef.  Passed to resolve() as ambient
         # so that subsequent entries can reference constructors from prior entries.
         self._ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] = {}
+        # The subset of the above that were bare-visible (not only
+        # qualifier-visible) at the end of the entry that declared them.
+        # Replayed verbatim in a later entry so a same-module candidate whose
+        # owner path is a retained named scope keeps whichever visibility it
+        # actually had, instead of that being re-derived from the owner
+        # path's shape (see ``_Resolver.run``'s ``ambient_bare_constructor_keys``).
+        self._ambient_bare_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] = {}
         # Type names declared in prior promoted entries, for qualified constructor
         # access (``Owner::variant``) across REPL entries.
         self._ambient_type_names: frozenset[str] = frozenset()
@@ -1114,6 +1121,20 @@ class ReplSession:
                 ):
                     del self._session_type_paths[type_path]
 
+        def _drop_replaced(
+            table: dict[str, tuple[ConstructorRef, ...]],
+        ) -> dict[str, tuple[ConstructorRef, ...]]:
+            filtered = {
+                cname: tuple(
+                    ref
+                    for ref in crefs
+                    if (ref.owner_path, ref.owner_name) not in replaced_type_name_paths
+                    and not is_retired_member_scope((*ref.owner_path, ref.owner_name))
+                )
+                for cname, crefs in table.items()
+            }
+            return {cname: crefs for cname, crefs in filtered.items() if crefs}
+
         if replaced_type_name_paths:
             # A replacement type declaration supersedes any earlier ambient
             # constructor candidate sharing its name path: retained bindings
@@ -1121,20 +1142,12 @@ class ReplSession:
             # superseded) declaration identity, so only the ambient bare-name
             # candidate table -- which drives how a FRESH constructor
             # reference resolves -- needs to move onto the newest owner here.
-            self._ambient_constructor_candidates = {
-                cname: tuple(
-                    ref
-                    for ref in crefs
-                    if (ref.owner_path, ref.owner_name) not in replaced_type_name_paths
-                    and not is_retired_member_scope((*ref.owner_path, ref.owner_name))
-                )
-                for cname, crefs in self._ambient_constructor_candidates.items()
-            }
-            self._ambient_constructor_candidates = {
-                cname: crefs
-                for cname, crefs in self._ambient_constructor_candidates.items()
-                if crefs
-            }
+            self._ambient_constructor_candidates = _drop_replaced(
+                self._ambient_constructor_candidates
+            )
+            self._ambient_bare_constructor_candidates = _drop_replaced(
+                self._ambient_bare_constructor_candidates
+            )
 
         # External keys of params this entry's promotions displace (a `let` /
         # `var` / `def` / `agent` binding that shares a param's public name
@@ -1307,21 +1320,34 @@ class ReplSession:
             new_type_env.seal()
             self._type_env = new_type_env
 
+        def _select_promoted(crefs: tuple[ConstructorRef, ...]) -> tuple[ConstructorRef, ...]:
+            return tuple(
+                ref
+                for ref in crefs
+                if (ref.owner_path, ref.owner_name) in replaced_type_name_paths
+                or ref.owner_path in declared_enum_type_scopes
+            )
+
         if replaced_type_name_paths:
             promoted_candidates: dict[str, tuple[ConstructorRef, ...]] = {}
             for (_path, cname), crefs in checked.resolved.constructor_candidates_by_path.items():
-                selected = tuple(
-                    ref
-                    for ref in crefs
-                    if (ref.owner_path, ref.owner_name) in replaced_type_name_paths
-                    or ref.owner_path in declared_enum_type_scopes
-                )
-                if selected:
+                if selected := _select_promoted(crefs):
                     promoted_candidates[cname] = (*promoted_candidates.get(cname, ()), *selected)
             for cname, crefs in promoted_candidates.items():
                 self._ambient_constructor_candidates[cname] = dedupe_constructor_candidates(
                     (*self._ambient_constructor_candidates.get(cname, ()), *crefs)
                 )
+            # The bare table is keyed by name alone -- it already carries only
+            # the candidates that were bare-visible when this entry resolved,
+            # so promotion just replays that same visibility for later entries
+            # (see ``ambient_bare_constructor_keys`` in ``_Resolver.run``).
+            for cname, crefs in checked.resolved.constructor_candidates.items():
+                if selected := _select_promoted(crefs):
+                    self._ambient_bare_constructor_candidates[cname] = (
+                        dedupe_constructor_candidates(
+                            (*self._ambient_bare_constructor_candidates.get(cname, ()), *selected)
+                        )
+                    )
             self._ambient_type_names |= frozenset(
                 name for path, name in promoted_type_name_paths if not path
             )
@@ -1668,6 +1694,7 @@ class ReplSession:
         self._declared_params = {}
         self._source_log = []
         self._ambient_constructor_candidates = {}
+        self._ambient_bare_constructor_candidates = {}
         self._ambient_type_names = frozenset()
         # Restore the current-value map to the seed, so a prior
         # ``std/config::KEY := VALUE`` write does not bleed past :reset.

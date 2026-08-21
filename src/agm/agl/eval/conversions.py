@@ -80,12 +80,6 @@ def run_recipe(recipe: ConversionRecipe, value: Value) -> Value:
             return JsonValue(
                 encode_value(EncodePlan(recipe.encode, recipe.encode_definitions), value)
             )
-        case ConversionStrategy.TO_JSON_VALUE_DIRECTED:
-            if recipe.dynamic_encode is None:
-                raise AssertionError(
-                    "TO_JSON_VALUE_DIRECTED strategy requires a dynamic encode plan"
-                )
-            return JsonValue(encode_value(recipe.dynamic_encode, value))
         case ConversionStrategy.NARROW_DECIMAL_TO_INT:
             if not isinstance(value, DecimalValue):
                 raise AssertionError(  # pragma: no cover

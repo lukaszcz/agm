@@ -351,7 +351,7 @@ def test_golden_finite_recursive_json_cast_uses_a_static_plan() -> None:
     assert value.recipe.encode_definitions
 
 
-def test_golden_growing_recursive_json_cast_uses_dynamic_template_strategy() -> None:
+def test_golden_growing_recursive_json_cast_uses_a_generic_template_plan() -> None:
     value = _bound_value(
         "record Pair[A, B]\n"
         "  first: A\n"
@@ -365,10 +365,11 @@ def test_golden_growing_recursive_json_cast_uses_dynamic_template_strategy() -> 
         "encoded",
     )
     assert isinstance(value, IrConvert)
-    assert value.recipe.strategy is ConversionStrategy.TO_JSON_VALUE_DIRECTED
-    assert value.recipe.encode is None
-    assert value.recipe.encode_definitions == ()
-    assert value.recipe.dynamic_encode is not None
+    assert value.recipe.strategy is ConversionStrategy.TO_JSON
+    # A growing source cannot name a concrete instantiation, so its plan is a
+    # reference into parameterized declaration templates rather than a walk.
+    assert isinstance(value.recipe.encode, RefEncode)
+    assert any(definition.parameter_count > 0 for definition in value.recipe.encode_definitions)
 
 
 _BOTTOM_JSON_CAST_SOURCES = (
@@ -594,30 +595,6 @@ def test_validate_rejects_to_json_without_encode_plan() -> None:
         validate_ir(_convert_program(recipe), deep=True)
 
 
-def test_dynamic_value_directed_recipe_requires_a_plan_at_evaluation() -> None:
-    with pytest.raises(AssertionError, match="requires a dynamic encode plan"):
-        run_recipe(
-            ConversionRecipe(
-                strategy=ConversionStrategy.TO_JSON_VALUE_DIRECTED,
-                source_label="Growing",
-                target_label="json",
-            ),
-            IntValue(1),
-        )
-
-
-def test_validate_rejects_dynamic_value_directed_recipe_without_a_plan() -> None:
-    from agm.agl.ir.validate import InvalidIrError, validate_ir
-
-    recipe = ConversionRecipe(
-        strategy=ConversionStrategy.TO_JSON_VALUE_DIRECTED,
-        source_label="Perfect[int]",
-        target_label="json",
-    )
-    with pytest.raises(InvalidIrError, match="requires dynamic_encode"):
-        validate_ir(_convert_program(recipe), deep=True)
-
-
 def test_validate_rejects_to_json_with_decode_or_malformed_encode_plan() -> None:
     from agm.agl.ir.validate import InvalidIrError, validate_ir
 
@@ -628,12 +605,6 @@ def test_validate_rejects_to_json_with_decode_or_malformed_encode_plan() -> None
             target_label="json",
             encode=ScalarEncode(),
             decode=ScalarDecode(ScalarKind.INT),
-        ),
-        ConversionRecipe(
-            strategy=ConversionStrategy.TO_JSON_VALUE_DIRECTED,
-            source_label="Perfect[int]",
-            target_label="json",
-            encode=ScalarEncode(),
         ),
         ConversionRecipe(
             strategy=ConversionStrategy.TO_JSON,
@@ -943,20 +914,6 @@ def test_validate_rejects_invalid_exception_field_encode_metadata() -> None:
         program.exception_field_encodes[nominal] = field_encodes
         with pytest.raises(InvalidIrError):
             validate_ir(program, deep=True)
-
-
-def test_validate_rejects_dynamic_encode_metadata_outside_its_strategy() -> None:
-    from agm.agl.ir.contracts import EncodePlan
-    from agm.agl.ir.validate import InvalidIrError, validate_ir
-
-    recipe = ConversionRecipe(
-        strategy=ConversionStrategy.NOOP,
-        source_label="int",
-        target_label="int",
-        dynamic_encode=EncodePlan(ScalarEncode()),
-    )
-    with pytest.raises(InvalidIrError, match="dynamic_encode"):
-        validate_ir(_convert_program(recipe), deep=True)
 
 
 def test_validate_rejects_decode_with_unregistered_nominal() -> None:

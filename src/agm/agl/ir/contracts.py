@@ -326,8 +326,7 @@ class ConversionStrategy(enum.Enum):
     NOOP = "noop"  # identity / already-assignable (return value unchanged)
     WIDEN_INT_TO_DECIMAL = "widen_int_to_decimal"
     RENDER_TO_TEXT = "render_to_text"  # total
-    TO_JSON = "to_json"  # total, static encode plan
-    TO_JSON_VALUE_DIRECTED = "to_json_value_directed"  # total, finite-value fallback
+    TO_JSON = "to_json"  # total, encode plan
     NARROW_DECIMAL_TO_INT = "narrow_decimal_to_int"  # fallible
     PARSE_TEXT_THEN_DECODE = "parse_text_then_decode"  # fallible
     DECODE_JSON = "decode_json"  # fallible
@@ -353,14 +352,9 @@ class ConversionRecipe:
     node maintains) — and ``decode`` carries the typeless decode walk; ``defs``
     carries the ``$defs`` table for a recursive target type (empty for a
     non-recursive one, see ``DecodePlan``). ``TO_JSON`` instead carries the
-    encode walk and its zero-parameter definitions.
-    ``TO_JSON_VALUE_DIRECTED`` is the fallback for a statically
-    JSON-convertible source whose growing polymorphic recursion has no finite
-    concrete-instantiation plan; its ``dynamic_encode`` carries a plan whose
-    definitions are declaration templates, so the runtime follows statically
-    selected slots (including record versus enum context) while binding those
-    templates' parameters at each reference. All unrelated fields are
-    ``None``/empty for each strategy.
+    encode walk and its ``encode_definitions``, whose parameters a source with
+    growing polymorphic recursion binds at each reference. All unrelated
+    fields are ``None``/empty for each strategy.
     """
 
     strategy: ConversionStrategy
@@ -371,7 +365,6 @@ class ConversionRecipe:
     defs: "tuple[tuple[str, DecodeSchema], ...]" = ()
     encode: EncodeSchema | None = None
     encode_definitions: "tuple[EncodeDefinition, ...]" = ()
-    dynamic_encode: EncodePlan | None = None
 
 
 # ---------------------------------------------------------------------------

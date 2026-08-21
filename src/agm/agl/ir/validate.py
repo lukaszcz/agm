@@ -59,7 +59,6 @@ from agm.agl.ir.contracts import (
     DictDecode,
     DictEncode,
     EncodeDefinition,
-    EncodePlan,
     EncodeSchema,
     EnumDecode,
     EnumEncode,
@@ -329,7 +328,6 @@ def _check_recipe_consistency(
     defs: "tuple[tuple[str, DecodeSchema], ...]",
     encode: EncodeSchema | None,
     encode_definitions: "tuple[EncodeDefinition, ...]",
-    dynamic_encode: EncodePlan | None,
 ) -> None:
     """Require only the conversion metadata selected by each strategy."""
     needs_decode = strategy in _DECODE_STRATEGIES
@@ -348,15 +346,6 @@ def _check_recipe_consistency(
     if not needs_encode and (encode is not None or encode_definitions):
         raise InvalidIrError(
             f"ConversionRecipe strategy {strategy.value!r} must not carry encode/encode_definitions"
-        )
-    needs_dynamic_encode = strategy is ConversionStrategy.TO_JSON_VALUE_DIRECTED
-    if needs_dynamic_encode and dynamic_encode is None:
-        raise InvalidIrError(
-            "ConversionRecipe strategy 'to_json_value_directed' requires dynamic_encode"
-        )
-    if not needs_dynamic_encode and dynamic_encode is not None:
-        raise InvalidIrError(
-            f"ConversionRecipe strategy {strategy.value!r} must not carry dynamic_encode"
         )
 
 
@@ -1009,16 +998,11 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                 recipe.defs,
                 recipe.encode,
                 recipe.encode_definitions,
-                recipe.dynamic_encode,
             )
             if ctx.deep and recipe.decode is not None:
                 _check_decode_nominals(recipe.decode, recipe.defs, ctx)
             if ctx.deep and recipe.encode is not None:
                 _check_encode_nominals(recipe.encode, recipe.encode_definitions, ctx)
-            if ctx.deep and recipe.dynamic_encode is not None:
-                _check_encode_nominals(
-                    recipe.dynamic_encode.root, recipe.dynamic_encode.definitions, ctx
-                )
             _validate_expr(val, ctx)
 
         case IrIf(branches=branches):

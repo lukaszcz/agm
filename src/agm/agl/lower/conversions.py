@@ -88,18 +88,14 @@ def compile_recipe(
             )
         case CastKind.TOTAL_JSON:
             # A growing polymorphic-recursive source is still known to have a
-            # JSON representation, but its concrete-instantiation closure has
-            # no finite concrete-instantiation encode plan. Keep the normal
-            # plan whenever it is derivable; only that explicitly identified
-            # case uses the generic-template encoder at runtime.
-            if not type_table.has_finite_schema(source):
-                return ConversionRecipe(
-                    strategy=ConversionStrategy.TO_JSON_VALUE_DIRECTED,
-                    source_label=source_label,
-                    target_label=target_label,
-                    dynamic_encode=build_dynamic_encode_plan(source, type_table),
-                )
-            encode_plan = build_encode_plan(source, type_table)
+            # JSON representation, but no finite set of concrete
+            # instantiations covers it; its plan is built from parameterized
+            # declaration templates instead.
+            encode_plan = (
+                build_encode_plan(source, type_table)
+                if type_table.has_finite_schema(source)
+                else build_dynamic_encode_plan(source, type_table)
+            )
             return ConversionRecipe(
                 strategy=ConversionStrategy.TO_JSON,
                 source_label=source_label,

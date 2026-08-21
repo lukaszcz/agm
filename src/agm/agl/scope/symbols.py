@@ -271,18 +271,19 @@ class ConstructorRef:
 def dedupe_constructor_candidates(
     candidates: Iterable[ConstructorRef],
 ) -> tuple[ConstructorRef, ...]:
-    """Keep the first injected candidate for each member declaration id.
+    """Keep the first occurrence of each distinct candidate, in input order.
 
     Parser node ids are session-unique in production. Test REPL entries may
     restart their parser's counter, so an id collision only denotes the same
-    declaration when its canonical metadata agrees as well.
+    declaration when its canonical metadata agrees as well -- two candidates
+    are the same injected declaration only when they compare equal outright,
+    not merely by sharing ``owner_decl_node_id``.
     """
-    seen: dict[int, ConstructorRef] = {}
+    seen: set[ConstructorRef] = set()
     unique: list[ConstructorRef] = []
     for candidate in candidates:
-        previous = seen.get(candidate.owner_decl_node_id)
-        if previous != candidate:
-            seen[candidate.owner_decl_node_id] = candidate
+        if candidate not in seen:
+            seen.add(candidate)
             unique.append(candidate)
     return tuple(unique)
 

@@ -103,12 +103,23 @@ def resolve_bare_enum_constructors(
     The witness renderer may use an explicit call form for field-bearing
     variants, so its visibility set is broader than the nullary-only bare-name
     pattern rule. Ordinary value bindings do not hide these pattern forms.
+
+    A candidate only qualifies when its owner path is a registered enum's own
+    declaration path, so the key's middle component really is an enum name. A
+    record declared in a named scope never qualifies: its owner path is its
+    declaration's enclosing scope, even when that scope shares a name with an
+    unrelated enum.
     """
+    enum_paths = {
+        (typedef.module_id, (*typedef.scope_path, typedef.name))
+        for typedef in checked.type_env.type_table.entries()
+        if typedef.kind == "enum"
+    }
     return frozenset(
         (candidate.owner_module_id, candidate.owner_path[-1], candidate.owner_name)
         for candidates in checked.resolved.constructor_candidates.values()
         for candidate in candidates
-        if candidate.owner_path
+        if (candidate.owner_module_id, candidate.owner_path) in enum_paths
     )
 
 

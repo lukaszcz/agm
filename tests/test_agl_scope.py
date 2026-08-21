@@ -867,6 +867,27 @@ class TestScopedConstructorCandidateUnion:
         assert owners == {("A", "B")}
 
 
+class TestConstructorCandidateDeduplication:
+    """``dedupe_constructor_candidates`` keeps each distinct candidate once."""
+
+    def test_keeps_first_occurrence_of_each_distinct_candidate_across_interleaving(
+        self,
+    ) -> None:
+        """A repeated candidate does not resurface after a differing same-id candidate.
+
+        Both candidates below share ``owner_decl_node_id`` but disagree on their
+        canonical metadata, so they are genuinely distinct declarations. The
+        first candidate then recurs later in the sequence; only its first
+        occurrence should survive, regardless of what was seen in between.
+        """
+        from agm.agl.scope.symbols import ConstructorRef, dedupe_constructor_candidates
+
+        first = ConstructorRef(owner_name="A", owner_decl_node_id=1, type_params=())
+        second = ConstructorRef(owner_name="B", owner_decl_node_id=1, type_params=())
+        deduped = dedupe_constructor_candidates((first, second, first))
+        assert deduped == (first, second)
+
+
 class TestScopedAssignment:
     """Qualified assignment to a scoped member.
 

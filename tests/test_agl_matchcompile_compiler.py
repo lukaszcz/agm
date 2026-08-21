@@ -1155,6 +1155,50 @@ def test_local_enum_witness_prefers_bare_constructor_over_blocked_short_owner(
     assert render_witness(witness) == "Missing"
 
 
+def test_witness_qualifies_a_reference_sharing_the_enum_names_last_segment() -> None:
+    """A member reached through a qualified enum reference never renders bare.
+
+    ``Go`` is declared two scopes deep, under ``Outer::S``, and ``enum S``
+    references it as ``Outer::S::Go``. The member's own declaring path
+    (``Outer::S``) shares its last segment with the referencing enum's name
+    (``S``), which is exactly the shape a same-shaped, unrelated declaration
+    could collide on -- so the witness must always spell it out fully
+    qualified rather than gamble on the shared last segment being safe.
+    """
+    _, _, compiled = _compile(
+        "scope Outer\n"
+        "scope S\n"
+        "record Go\n"
+        "  n: int\n"
+        "end S\n"
+        "end Outer\n"
+        "enum S\n"
+        "  | Outer::S::Go\n"
+        "  | Placeholder\n"
+        "def inspect(value: S) -> int =\n"
+        "  case value of | Placeholder => 0\n"
+        "inspect(S::Placeholder)\n"
+    )
+
+    witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
+
+    assert witness.qualification is not None
+    assert render_witness(witness) == "S::Go(n = _)"
+
+
+def test_stdlib_option_witness_still_renders_bare() -> None:
+    """A builtin enum's inline member keeps its bare witness spelling."""
+    _, _, compiled = _compile(
+        "let value: Option[int] = Option::Some(value = 1)\n"
+        "case value of | Option::Some(value) => value\n"
+    )
+
+    witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
+
+    assert witness.qualification is None
+    assert render_witness(witness) == "None"
+
+
 def test_imported_record_witness_preserves_a_checker_accepted_source_qualification(
     tmp_path: Path,
 ) -> None:

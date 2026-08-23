@@ -78,12 +78,15 @@ from agm.agl.semantics.types import (
     RecordType,
     TextType,
     Type,
+    TypeTemplate,
+    TypeTemplateMatch,
     TypeVarType,
     UnitType,
     contains_type_var,
     free_type_vars,
     is_assignable,
     is_scalar_json_shaped,
+    match_nominal_owner_template,
     spells_bare,
     substitute,
     type_children,
@@ -186,6 +189,9 @@ class TypeDef:
                    :meth:`_TypeBuilder._validate_builtin_shape`'s comparison
                    against a seeded canonical literal must not fail merely
                    because the two carry different declaration identities.
+    ``is_inline_enum_member`` — ``True`` for a synthetic record declaration
+                   created by an inline enum member. Its inhabitation is
+                   determined by its enclosing enum rather than independently.
     """
 
     kind: TypeDefKind
@@ -200,6 +206,7 @@ class TypeDef:
     field_kinds: tuple[str, ...] = ()
     is_builtin: bool = field(default=False, compare=False)
     decl_node_id: int = field(default=NO_DECL_ID, compare=False)
+    is_inline_enum_member: bool = field(default=False, compare=False)
 
     def handle(self, type_args: tuple[Type, ...] = ()) -> RecordType | EnumType | ExceptionType:
         """Return the ``RecordType``/``EnumType``/``ExceptionType`` handle naming this ``TypeDef``.
@@ -613,6 +620,18 @@ class TypeTable:
         owners = self._member_enum_owner_index().get(record.decl_id, ())
         return tuple(self._defs[owner_id] for owner_id in owners)
 
+    @staticmethod
+    def _match_enum_member_template(
+        enum_def: TypeDef, member: RecordType, record: RecordType
+    ) -> TypeTemplateMatch | None:
+        """Match a concrete record against one enum member's complete template.
+
+        An enum may have phantom parameters which no member record can reveal,
+        so their missing bindings are permitted here. Callers that need a
+        concrete enum handle still require bindings for every enum parameter.
+        """
+        return match_nominal_owner_template(TypeTemplate(member, enum_def.type_params), record)
+
     def records_share_enum_membership(self, records: tuple[RecordType, ...]) -> bool:
         """Return whether *records* belong to one currently nameable enum instantiation.
 
@@ -637,9 +656,11 @@ class TypeTable:
                 member = members.get(record.decl_id)
                 if member is None:
                     break
-                for parameter, argument in zip(member.type_args, record.type_args, strict=True):
-                    assert isinstance(parameter, TypeVarType)
-                    previous = bindings.setdefault(parameter.name, argument)
+                match = self._match_enum_member_template(enum_def, member, record)
+                if match is None:
+                    break
+                for parameter, argument in match.bindings:
+                    previous = bindings.setdefault(parameter, argument)
                     if previous != argument:
                         break
                 else:
@@ -655,19 +676,32 @@ class TypeTable:
             # The owner index only yields enums that declare or reference this
             # member, so the lookup always succeeds.
             member = next(item for item in typedef.members if item.decl_id == handle.decl_id)
-            bindings: dict[str, Type | None] = dict(
-                zip(typedef.type_params, (None,) * len(typedef.type_params))
-            )
-            for template_arg, value_arg in zip(member.type_args, handle.type_args, strict=True):
-                if isinstance(template_arg, TypeVarType):
-                    bindings[template_arg.name] = value_arg
-            args = tuple(bindings[param] for param in typedef.type_params)
-            if any(arg is None for arg in args):
+            match = self._match_enum_member_template(typedef, member, handle)
+            if match is None:
+                continue
+            bindings = dict(match.bindings)
+            if len(bindings) != len(typedef.type_params):
                 return None
-            result = typedef.handle(tuple(arg for arg in args if arg is not None))
+            args = tuple(bindings[param] for param in typedef.type_params)
+            result = typedef.handle(args)
             assert isinstance(result, EnumType)
             return result
         return None
+
+    def record_matches_enum_member(
+        self, enum: EnumType, member_name: str, record: RecordType
+    ) -> bool:
+        """Return whether *record* matches the named member of *enum* exactly.
+
+        A generic enum's bare template may qualify any of its instantiations,
+        so free variables still present in its member template are inferred
+        while concrete owner arguments must match exactly.
+        """
+        member = self.enum_member_names(enum).get(member_name)
+        if member is None:
+            return False
+        parameters = tuple(sorted(free_type_vars(member)))
+        return match_nominal_owner_template(TypeTemplate(member, parameters), record) is not None
 
     def is_enum_member(self, handle: RecordType) -> bool:
         """Return whether *handle* names a declaration registered as an enum member.

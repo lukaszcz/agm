@@ -145,14 +145,10 @@ def compute_uninhabited(table: TypeTable) -> frozenset[DeclId]:
             if _InhabitationSolver(defs, inhabited).decl_inhabited(typedef):
                 inhabited.add(decl_id)
                 changed = True
-    member_ids = {
-        member.decl_id
-        for typedef in defs.values()
-        if typedef.kind == "enum"
-        for member in typedef.members
-        if isinstance(member, RecordType)
+    inline_member_ids = {
+        decl_id for decl_id, typedef in defs.items() if typedef.is_inline_enum_member
     }
-    return frozenset(defs) - inhabited - member_ids
+    return frozenset(defs) - inhabited - inline_member_ids
 
 
 class _InhabitationSolver:

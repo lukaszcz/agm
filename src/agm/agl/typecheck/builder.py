@@ -550,6 +550,7 @@ class _TypeBuilder:
                 type_params=captured_params,
                 fields=tuple(fields.items()),
                 decl_node_id=decl_id,
+                is_inline_enum_member=True,
             )
             member_defs.append(member_def)
             members.append(

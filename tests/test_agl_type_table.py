@@ -126,6 +126,73 @@ def test_enum_owner_for_member_recovers_only_captured_type_arguments() -> None:
     assert table.enum_owner_for_member(members[1]) is None
 
 
+def test_enum_owner_for_referenced_member_requires_its_full_type_template() -> None:
+    table = TypeTable()
+    box = TypeDef(
+        kind="record",
+        name="Box",
+        module_id=ENTRY_ID,
+        type_params=("T",),
+        fields=(("value", TypeVarType("T")),),
+        decl_node_id=10,
+    )
+    enum = TypeDef(
+        kind="enum",
+        name="E",
+        module_id=ENTRY_ID,
+        members=(RecordType("Box", (IntType(),), module_id=ENTRY_ID, decl_id=10),),
+        decl_node_id=11,
+    )
+    table.register(box)
+    table.register(enum)
+
+    assert table.enum_owner_for_member(RecordType("Box", (IntType(),), decl_id=10)) == enum.handle()
+    assert table.enum_owner_for_member(RecordType("Box", (TextType(),), decl_id=10)) is None
+    assert not table.record_matches_enum_member(
+        enum.handle(), "Missing", RecordType("Box", (IntType(),), decl_id=10)
+    )
+
+
+def test_referenced_member_with_concrete_arguments_does_not_share_enum_membership() -> None:
+    table = TypeTable()
+    table.register(
+        TypeDef(
+            kind="record",
+            name="Box",
+            module_id=ENTRY_ID,
+            type_params=("T",),
+            fields=(("value", TypeVarType("T")),),
+            decl_node_id=10,
+        )
+    )
+    table.register(
+        TypeDef(
+            kind="enum",
+            name="E",
+            module_id=ENTRY_ID,
+            members=(RecordType("Box", (IntType(),), module_id=ENTRY_ID, decl_id=10),),
+            decl_node_id=11,
+        )
+    )
+
+    assert not table.records_share_enum_membership(
+        (
+            RecordType("Box", (IntType(),), decl_id=10),
+            RecordType("Box", (TextType(),), decl_id=10),
+        )
+    )
+
+
+def test_mixed_referenced_members_with_concrete_arguments_raise_a_type_error() -> None:
+    with pytest.raises(AglTypeError):
+        _check(
+            "record Box[T](value: T)\n"
+            "enum E = ::Box[int]\n"
+            'let values = [Box(value = 1), Box(value = "text")]\n'
+            "values"
+        )
+
+
 def test_scoped_generic_enum_does_not_claim_the_root_type_or_constructor_namespace() -> None:
     checked = _check(
         "enum A::Choice[T]\n"
@@ -2611,6 +2678,43 @@ def _pair_def(name: str = "Pair") -> TypeDef:
 
 
 class TestInhabitationAnalysis:
+    def test_referenced_uninhabitable_member_is_rejected_by_program_checking(self) -> None:
+        with pytest.raises(AglTypeError):
+            _check("record Bad(next: Bad)\nenum E = ::Bad | Good\n()")
+
+    def test_referenced_enum_member_still_requires_its_own_finite_value(self) -> None:
+        table = TypeTable()
+        bad = RecordType("Bad", module_id=ENTRY_ID, decl_id=700036)
+        good = RecordType("Good", module_id=ENTRY_ID, decl_id=700037)
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Bad",
+                module_id=ENTRY_ID,
+                fields=(("next", bad),),
+                decl_node_id=bad.decl_id,
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Good",
+                module_id=ENTRY_ID,
+                decl_node_id=good.decl_id,
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="enum",
+                name="E",
+                module_id=ENTRY_ID,
+                members=(bad, good),
+                decl_node_id=700038,
+            )
+        )
+
+        assert compute_uninhabited(table) == frozenset({bad.decl_id})
+
     def test_dangling_nominal_reference_stays_uninhabited(self) -> None:
         """A malformed table with a missing target does not mark the source inhabited."""
         table = TypeTable()

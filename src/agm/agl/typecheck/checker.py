@@ -4064,47 +4064,33 @@ class _Checker:
         """Validate the optional enum-type qualifier on a variant reference."""
         if qualifier is None:
             return
-        if qualifier.anchor is not QualifierAnchor.MODULE:
-            local_owner = "::".join(segment.name for segment in qualifier.segments)
-            local_enum = self._env.resolve_named_type(local_owner, span=span)
-            if local_enum is not None:
-                if qualifier.anchor is None and self._env.has_qualified_import_member(
-                    qualifier, variant
-                ):
-                    raise AglTypeError(
-                        f"Qualifier '{local_owner}' is both a type name and a module route for "
-                        f"'{variant}'. {qualification_repair_guidance()}",
-                        span=span,
-                    )
-                assert isinstance(local_enum, EnumType)
-                type_args = qualifier.segments[-1].type_args
-                if type_args is not None:
-                    local_enum = EnumType(
-                        name=local_enum.name,
-                        type_args=tuple(
-                            self._env.resolve_type_expr(type_arg, span=span)
-                            for type_arg in type_args
-                        ),
-                        module_id=local_enum.module_id,
-                        scope_path=local_enum.scope_path,
-                        decl_id=local_enum.decl_id,
-                    )
-                # A generic enum's bare name denotes its uninstantiated
-                # template, which legitimately qualifies any instantiation of
-                # the SAME declaration. Identity is the declaration, never the
-                # name: two declarations sharing one name path (a REPL
-                # redeclaration) are unrelated enums, so the qualifier must
-                # not reach across them.
-                same_generic_owner = local_enum.decl_id == enum_type.decl_id and bool(
-                    free_type_vars(local_enum)
+        local_match = self._local_qualified_enum(qualifier, span)
+        if local_match is not None:
+            local_owner, resolved_enum = local_match
+            if qualifier.anchor is None and self._env.has_qualified_import_member(
+                qualifier, variant
+            ):
+                raise AglTypeError(
+                    f"Qualifier '{local_owner}' is both a type name and a module route for "
+                    f"'{variant}'. {qualification_repair_guidance()}",
+                    span=span,
                 )
-                if local_enum != enum_type and not same_generic_owner:
-                    raise AglTypeError(
-                        f"Qualifier '{local_owner}' resolves to enum '{local_enum.name}', "
-                        f"but the value has enum type '{enum_type.name}'.",
-                        span=span,
-                    )
-                return
+            # A generic enum's bare name denotes its uninstantiated
+            # template, which legitimately qualifies any instantiation of
+            # the SAME declaration. Identity is the declaration, never the
+            # name: two declarations sharing one name path (a REPL
+            # redeclaration) are unrelated enums, so the qualifier must
+            # not reach across them.
+            same_generic_owner = resolved_enum.decl_id == enum_type.decl_id and bool(
+                free_type_vars(resolved_enum)
+            )
+            if resolved_enum != enum_type and not same_generic_owner:
+                raise AglTypeError(
+                    f"Qualifier '{local_owner}' resolves to enum '{resolved_enum.name}', "
+                    f"but the value has enum type '{enum_type.name}'.",
+                    span=span,
+                )
+            return
         if len(qualifier.segments) == 2:
             module_qualifier = QualifierChain(
                 anchor=qualifier.anchor,
@@ -4132,6 +4118,29 @@ class _Checker:
             )
         else:
             self._check_module_qualified_variant(qualifier, enum_type.name, enum_type, span)
+
+    def _local_qualified_enum(
+        self, qualifier: QualifierChain, span: SourceSpan
+    ) -> tuple[str, EnumType] | None:
+        """Resolve a non-module enum qualifier, applying any explicit arguments."""
+        if qualifier.anchor is QualifierAnchor.MODULE:
+            return None
+        local_owner = "::".join(segment.name for segment in qualifier.segments)
+        local_enum = self._env.resolve_named_type(local_owner, span=span)
+        if not isinstance(local_enum, EnumType):
+            return None
+        type_args = qualifier.segments[-1].type_args
+        if type_args is not None:
+            local_enum = EnumType(
+                name=local_enum.name,
+                type_args=tuple(
+                    self._env.resolve_type_expr(type_arg, span=span) for type_arg in type_args
+                ),
+                module_id=local_enum.module_id,
+                scope_path=local_enum.scope_path,
+                decl_id=local_enum.decl_id,
+            )
+        return local_owner, local_enum
 
     def _require_enum_owner_match(
         self,
@@ -4889,13 +4898,21 @@ class _Checker:
         elif isinstance(subj_type, RecordType):
             constructor_ref = self._constructor_pattern_ref(pattern, subj_type)
             enum_owner = self._env.type_table.enum_owner_for_member(subj_type)
-            if constructor_ref is None and enum_owner is not None and pattern.qualifier:
-                self._check_variant_qualification(
-                    qualifier=pattern.qualifier,
-                    variant=pattern.name,
-                    enum_type=enum_owner,
-                    span=pattern.span,
-                )
+            if pattern.qualifier is not None:
+                local_enum = self._local_qualified_enum(pattern.qualifier, pattern.span)
+                if local_enum is not None:
+                    _local_owner, enum_type = local_enum
+                    if not self._env.type_table.record_matches_enum_member(
+                        enum_type, pattern.name, subj_type
+                    ):
+                        raise _variant_not_in_enum(pattern.name, enum_type, pattern.span)
+                elif enum_owner is not None:
+                    self._check_variant_qualification(
+                        qualifier=pattern.qualifier,
+                        variant=pattern.name,
+                        enum_type=enum_owner,
+                        span=pattern.span,
+                    )
             owner_type = subj_type
             fields = self._env.type_table.record_fields(owner_type)
             context_desc = f"constructor '{owner_type.name}'"

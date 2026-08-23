@@ -154,6 +154,16 @@ def test_generic_record_patterns_publish_owner_without_type_arguments() -> None:
     ]
 
 
+def test_referenced_member_pattern_rejects_a_different_record_instantiation() -> None:
+    reject(
+        "record Box[T](value: T)\n"
+        "enum E = ::Box[int]\n"
+        'let subject: Box[text] = Box(value = "text")\n'
+        "let E::Box(value) = subject\n"
+        "()"
+    )
+
+
 def test_simple_let_name_binds_even_when_it_matches_a_nullary_constructor() -> None:
     checked = accept("enum Opt\n  | none\nlet value: Opt = none\nlet none = value\nnone\n")
     let = checked.resolved.program.body.items[2]

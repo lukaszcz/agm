@@ -670,8 +670,14 @@ class TypeTable:
                 return True
         return False
 
-    def enum_owner_for_member(self, handle: RecordType) -> EnumType | None:
-        """Return the concrete enum containing *handle*, when its arguments are known."""
+    def enum_owners_for_member(self, handle: RecordType) -> tuple[EnumType, ...]:
+        """Return every concrete enum containing *handle* with known arguments.
+
+        Referenced records may belong to several enums.  The result therefore
+        preserves the full relation instead of making registration order part
+        of semantic validation.
+        """
+        owners: list[EnumType] = []
         for typedef in self._enum_defs_owning(handle):
             # The owner index only yields enums that declare or reference this
             # member, so the lookup always succeeds.
@@ -681,12 +687,21 @@ class TypeTable:
                 continue
             bindings = dict(match.bindings)
             if len(bindings) != len(typedef.type_params):
-                return None
+                continue
             args = tuple(bindings[param] for param in typedef.type_params)
             result = typedef.handle(args)
             assert isinstance(result, EnumType)
-            return result
-        return None
+            owners.append(result)
+        return tuple(owners)
+
+    def enum_owner_for_member(self, handle: RecordType) -> EnumType | None:
+        """Return the first concrete enum containing *handle*, if one exists.
+
+        This compatibility query is suitable only for callers that need any
+        owner.  Validation of an explicit owner must use
+        :meth:`enum_owners_for_member`.
+        """
+        return next(iter(self.enum_owners_for_member(handle)), None)
 
     def record_matches_enum_member(
         self, enum: EnumType, member_name: str, record: RecordType

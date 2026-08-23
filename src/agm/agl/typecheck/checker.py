@@ -4897,7 +4897,7 @@ class _Checker:
             context_desc = f"member '{subj_type.name}.{owner_type.name}'"
         elif isinstance(subj_type, RecordType):
             constructor_ref = self._constructor_pattern_ref(pattern, subj_type)
-            enum_owner = self._env.type_table.enum_owner_for_member(subj_type)
+            enum_owners = self._env.type_table.enum_owners_for_member(subj_type)
             if pattern.qualifier is not None:
                 local_enum = self._local_qualified_enum(pattern.qualifier, pattern.span)
                 if local_enum is not None:
@@ -4906,13 +4906,24 @@ class _Checker:
                         enum_type, pattern.name, subj_type
                     ):
                         raise _variant_not_in_enum(pattern.name, enum_type, pattern.span)
-                elif enum_owner is not None:
-                    self._check_variant_qualification(
-                        qualifier=pattern.qualifier,
-                        variant=pattern.name,
-                        enum_type=enum_owner,
-                        span=pattern.span,
-                    )
+                elif enum_owners:
+                    qualification_error: AglTypeError | None = None
+                    for enum_owner in enum_owners:
+                        try:
+                            self._check_variant_qualification(
+                                qualifier=pattern.qualifier,
+                                variant=pattern.name,
+                                enum_type=enum_owner,
+                                span=pattern.span,
+                            )
+                        except AglTypeError as exc:
+                            if qualification_error is None:
+                                qualification_error = exc
+                        else:
+                            break
+                    else:
+                        assert qualification_error is not None
+                        raise qualification_error
             owner_type = subj_type
             fields = self._env.type_table.record_fields(owner_type)
             context_desc = f"constructor '{owner_type.name}'"

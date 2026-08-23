@@ -285,6 +285,45 @@ def test_module_qualified_record_pattern_rejects_an_absent_named_owner(tmp_path:
     )
 
 
+def test_module_qualified_record_pattern_accepts_each_referencing_enum_owner(
+    tmp_path: Path,
+) -> None:
+    accept_graph(
+        tmp_path,
+        {
+            "lib": ("record Shared(value: int)\nenum First = ::Shared\nenum Second = ::Shared\n"),
+            "entry": (
+                "import lib\n"
+                "let shared: lib::Shared = lib::Shared(value = 1)\n"
+                "let lib::Second::Shared(value) = shared\n"
+                "value\n"
+            ),
+        },
+    )
+
+
+def test_module_qualified_record_pattern_rejects_an_unrelated_enum_owner(
+    tmp_path: Path,
+) -> None:
+    reject_graph(
+        tmp_path,
+        {
+            "lib": (
+                "record Shared(value: int)\n"
+                "enum First = ::Shared\n"
+                "enum Second = ::Shared\n"
+                "enum Unrelated | Other\n"
+            ),
+            "entry": (
+                "import lib\n"
+                "let shared: lib::Shared = lib::Shared(value = 1)\n"
+                "let lib::Unrelated::Shared(value) = shared\n"
+                "value\n"
+            ),
+        },
+    )
+
+
 def test_self_qualified_record_pattern_rejects_an_absent_current_owner(tmp_path: Path) -> None:
     reject_graph(
         tmp_path,

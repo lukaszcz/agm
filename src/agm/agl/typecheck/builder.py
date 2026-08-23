@@ -46,12 +46,8 @@ from collections.abc import Iterator, Mapping
 from dataclasses import replace
 from typing import cast
 
-from agm.agl.ir.reserved_nominals import NO_DECL_ID
-from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.semantics.type_table import (
-    BUILTIN_EXCEPTION_TYPE_DEFS,
-    BUILTIN_PRELUDE_TYPE_DEFS,
-    OPTION_TYPE_DEF,
     TypeDef,
     source_enum_member_decl_id,
     source_nominal_decl_id,
@@ -65,7 +61,6 @@ from agm.agl.semantics.types import (
     Type,
     TypeVarType,
     free_type_vars,
-    reroot_type,
 )
 from agm.agl.syntax.nodes import (
     EnumDef,
@@ -82,6 +77,13 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import AppliedT, NameT, TypeExpr, member_type_params
+from agm.agl.typecheck.builtin_contracts import (
+    BUILTIN_ENUM_CONTRACTS,
+    BUILTIN_EXCEPTION_CONTRACTS,
+    BUILTIN_RECORD_CONTRACTS,
+    BuiltinTypeContract,
+    contract_for_typedef,
+)
 from agm.agl.typecheck.env import (
     AglTypeError,
     ConstructorSignature,
@@ -99,17 +101,6 @@ _BUILTIN_TYPE_NAMES: frozenset[str] = (
     | BUILTIN_EXCEPTION_NAMES
     | BUILTIN_PRELUDE_TYPE_NAMES
 )
-
-# Expected-shape lookup for a ``builtin`` enum declaration. ``Option`` is
-# generic and seeded separately from ``BUILTIN_PRELUDE_TYPE_DEFS`` (see
-# ``semantics.type_table.create_seeded_type_table``), so its canonical shape
-# (``OPTION_TYPE_DEF``) is folded in here rather than into that table — a
-# record can never be named ``Option``, so ``BUILTIN_PRELUDE_TYPE_DEFS`` alone
-# remains correct for record sites.
-_BUILTIN_ENUM_TYPE_DEFS: Mapping[str, TypeDef] = {
-    **BUILTIN_PRELUDE_TYPE_DEFS,
-    "Option": OPTION_TYPE_DEF,
-}
 
 
 def _decl_identity(
@@ -229,6 +220,7 @@ class _TypeBuilder:
                     self._validate_alias(item)
 
         self._finalize_exceptions()
+        self.validate_builtin_contracts()
 
     def collect_shells_only(self, program: Program) -> None:
         """Register phase-1 declarations: names, handles, and alias targets.
@@ -248,7 +240,7 @@ class _TypeBuilder:
                     item.name,
                     item.span,
                     is_builtin=item.is_builtin,
-                    expected_defs=BUILTIN_PRELUDE_TYPE_DEFS,
+                    expected_contracts=BUILTIN_RECORD_CONTRACTS,
                 )
                 self._env.unregister_name(item.name)
                 self._register_record_or_enum_handle(item, is_enum=False)
@@ -258,7 +250,7 @@ class _TypeBuilder:
                     item.name,
                     item.span,
                     is_builtin=item.is_builtin,
-                    expected_defs=_BUILTIN_ENUM_TYPE_DEFS,
+                    expected_contracts=BUILTIN_ENUM_CONTRACTS,
                 )
                 self._env.unregister_name(item.name)
                 self._clear_inline_member_names(item)
@@ -272,7 +264,7 @@ class _TypeBuilder:
                     item.name,
                     item.span,
                     is_builtin=item.is_builtin,
-                    expected_defs=BUILTIN_EXCEPTION_TYPE_DEFS,
+                    expected_contracts=BUILTIN_EXCEPTION_CONTRACTS,
                 )
                 self._env.unregister_name(item.name)
                 module_id = self._module_id
@@ -394,29 +386,60 @@ class _TypeBuilder:
         """Resolve and register the named exception's body. See :meth:`build_record`."""
         self._build_exception(self._exception_defs[name])
 
+    def validate_builtin_contracts(self) -> None:
+        """Validate builtin shapes after every referenced type body is available."""
+        declarations: tuple[
+            tuple[
+                RecordDef | EnumDef | ExceptionDef,
+                Mapping[str, BuiltinTypeContract],
+            ],
+            ...,
+        ] = (
+            *((item, BUILTIN_RECORD_CONTRACTS) for item in self._record_defs.values()),
+            *((item, BUILTIN_ENUM_CONTRACTS) for item in self._enum_defs.values()),
+            *((item, BUILTIN_EXCEPTION_CONTRACTS) for item in self._exception_defs.values()),
+        )
+        for stmt, expected_contracts in declarations:
+            if not stmt.is_builtin:
+                continue
+            scope_path = tuple(segment.name for segment in stmt.scope_path)
+            typedef = self._env.type_table.get(self._module_id, _bare_name(stmt.name), scope_path)
+            assert typedef is not None, "compiler bug: builtin type is not registered"
+            base_type: ExceptionType | None = None
+            if typedef.base is not None:
+                base_def = self._env.type_table.get_by_id(typedef.base)
+                assert base_def is not None, "compiler bug: builtin base is not registered"
+                base_handle = base_def.handle()
+                assert isinstance(base_handle, ExceptionType)
+                base_type = base_handle
+            self._validate_builtin_shape(
+                stmt,
+                typedef,
+                expected_contracts,
+                base_type=base_type,
+            )
+
     def _register_name(
         self,
         name: str,
         span: SourceSpan,
         *,
         is_builtin: bool = False,
-        expected_defs: Mapping[str, TypeDef] | None = None,
+        expected_contracts: Mapping[str, BuiltinTypeContract] | None = None,
     ) -> None:
         # `name` carries its scope path joined with "::" (see
         # `_static_type_items`) when the declaration is scoped, so the check
         # strips it back to the bare canonical name a scoped `builtin`
         # declaration still has to spell — the host-known tables name
-        # canonical types, never a scope path.
+        # contracts, never a scope path.
         #
-        # Every caller that can pass `is_builtin=True` passes the table for
-        # its own kind (records against BUILTIN_PRELUDE_TYPE_DEFS, enums
-        # against `_BUILTIN_ENUM_TYPE_DEFS` — the same table plus the generic
-        # `Option` template — exceptions against BUILTIN_EXCEPTION_TYPE_DEFS),
+        # Every caller that can pass `is_builtin=True` passes the contract
+        # table for its own kind,
         # so this one check rejects both an entirely unknown name and a name
         # declared under the wrong kind — the latter being exactly what
         # `_validate_builtin_shape` would otherwise assume was present.
         bare_name = _bare_name(name)
-        if is_builtin and expected_defs is not None and bare_name not in expected_defs:
+        if is_builtin and expected_contracts is not None and bare_name not in expected_contracts:
             raise AglTypeError(
                 f"Unknown builtin type '{name}'.",
                 span=span,
@@ -459,7 +482,6 @@ class _TypeBuilder:
             is_builtin=stmt.is_builtin,
             decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
         )
-        self._validate_builtin_shape(stmt, typedef, BUILTIN_PRELUDE_TYPE_DEFS)
         self._env.type_table.register(typedef)
         # Register field kinds for this record constructor, under the same
         # owning identity as the TypeDef just above (its declaring module,
@@ -480,7 +502,6 @@ class _TypeBuilder:
         typedef, member_defs = self._build_enum_members(stmt, type_vars=frozenset())
         for member_def in member_defs:
             self._env.type_table.register(member_def)
-        self._validate_builtin_shape(stmt, typedef, _BUILTIN_ENUM_TYPE_DEFS)
         self._env.type_table.register(typedef)
         self._register_enum_constructor_field_kinds(stmt)
 
@@ -659,9 +680,6 @@ class _TypeBuilder:
             is_builtin=stmt.is_builtin,
             decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
         )
-        self._validate_builtin_shape(
-            stmt, typedef, BUILTIN_EXCEPTION_TYPE_DEFS, base_type=base_type
-        )
         self._env.type_table.register(typedef)
 
     def _finalize_exceptions(self) -> None:
@@ -703,128 +721,26 @@ class _TypeBuilder:
         self,
         stmt: RecordDef | EnumDef | ExceptionDef,
         typedef: TypeDef,
-        expected_defs: Mapping[str, TypeDef],
+        expected_contracts: Mapping[str, BuiltinTypeContract],
         *,
         base_type: ExceptionType | None = None,
     ) -> None:
-        """Check a ``builtin`` declaration's shape against its canonical definition.
+        """Check a ``builtin`` declaration against its structural host contract.
 
-        The canonical definitions in *expected_defs* are host-known shapes
-        keyed by bare name and written on the shipped standard library's own
-        module (``STD_CORE_ID``), indifferent to where or in which module the
-        declaration sits: a scoped ``builtin`` declaration in any module names
-        the same host type as ``std/core``'s own root one and must match the
-        same shape, just at a different nominal path and (unless it IS
-        ``std/core``) a different declaring module. The comparison therefore
-        re-roots *typedef* onto that canonical frame (:meth:`_reroot_typedef`)
-        before comparing — not just its own top-level ``scope_path``/
-        ``module_id`` (the two fields *expected* to differ), but also every
-        nominal reference embedded in its fields/variants/base that resolves
-        under that same path or module, so a scoped exception hierarchy or a
-        scoped record naming a sibling scoped builtin — or a program without
-        the standard library declaring its own ``builtin exception
-        Exception`` root — still compares equal to the canonical shape.
-        *bare_name* is always present in *expected_defs* here:
-        ``_register_name`` already validated it against this same
-        kind-appropriate table during phase 1. *base_type* is the already
-        resolved ``extends`` target handle (an exception's own; ``None``
-        for a record/enum or a hierarchy root), passed through to
-        :meth:`_reroot_typedef` so it can normalize ``typedef.base`` — a bare
-        declaration identity, which carries no module/path of its own to
-        re-root.
+        Contracts exclude declaration and enum-member identities, so a builtin
+        may live at any source path and may satisfy an enum member with either
+        an inline or referenced record. Nominal types inside fields and an
+        exception's base remain contract-bearing and are normalized by
+        :func:`contract_for_typedef` relative to the declaration's own frame.
         """
-        if not stmt.is_builtin:
-            return
         bare_name = _bare_name(stmt.name)
-        expected = expected_defs[bare_name]
-        matches = self._reroot_typedef(typedef, base_type) == self._reroot_typedef(expected, None)
-        if matches and typedef.kind == "enum":
-            matches = self._enum_member_shapes(typedef) == self._enum_member_shapes(expected)
-        if not matches:
+        expected = expected_contracts[bare_name]
+        actual = contract_for_typedef(typedef, self._env.type_table, base_type=base_type)
+        if actual != expected:
             raise AglTypeError(
                 f"Builtin type '{stmt.name}' has an invalid definition.",
                 span=stmt.span,
             )
-
-    def _enum_member_shapes(
-        self, typedef: TypeDef
-    ) -> tuple[tuple[str, tuple[tuple[str, Type], ...]], ...]:
-        """Return an enum's re-rooted ordered member-record payloads."""
-        remap = (typedef.module_id, STD_CORE_ID)
-        return tuple(
-            (
-                member.name,
-                tuple(
-                    (name, reroot_type(field_type, typedef.scope_path, remap_module=remap))
-                    for name, field_type in self._env.type_table.record_fields(member).items()
-                ),
-            )
-            for member in typedef.members
-        )
-
-    @staticmethod
-    def _reroot_typedef(typedef: TypeDef, base_type: ExceptionType | None) -> TypeDef:
-        """Re-root *typedef* onto the canonical (``std/core``) frame, for comparison.
-
-        *typedef.scope_path* is dropped and *typedef.module_id* is mapped onto
-        ``STD_CORE_ID`` (the two fields a ``builtin`` declaration is always
-        expected to differ in from the canonical shape) — always, even when
-        the declared scope path is already empty, since a root-level
-        declaration outside ``std/core`` (e.g. one in the entry module, used
-        when a program loads without the standard library) still needs its
-        module mapped. The same scope-path stripping and module mapping is
-        also applied, via :func:`~agm.agl.semantics.types.reroot_type`, to
-        every nominal reference embedded in its fields and variant fields:
-        each of those resolves under the declaration's own scope path and
-        module exactly when it names a sibling member of the same region,
-        matching how the canonical shape names its own siblings; a reference
-        naming a type from another module is left alone, so a genuine
-        mismatch is still rejected.
-
-        ``base`` (for an exception) is a bare declaration identity, not a
-        handle, so it cannot be re-rooted the same way directly — *base_type*
-        is the ORIGINAL resolved ``ExceptionType`` handle *typedef.base* was
-        minted from (``None`` exactly when *typedef.base* is ``None``), which
-        carries the module/scope path/name :func:`reroot_type` needs. Every
-        canonical shape spells its base at ``std/core``'s root, so only a
-        handle that re-roots onto that exact frame can name one: its
-        ``decl_id`` is then read back off (the reserved identity for a
-        reserved name), while a handle left at another module or another
-        scope path names a different declaration and is normalized to
-        ``NO_DECL_ID``, which no canonical base identity ever equals. Reading
-        the identity off the re-rooted handle rather than looking the base up
-        also keeps this independent of whether the base's own ``TypeDef`` is
-        registered yet — the whole-program pre-pass resolves bodies in name
-        order, not source order.
-        """
-        prefix = typedef.scope_path
-        declaring_module = typedef.module_id
-        remap = (declaring_module, STD_CORE_ID)
-
-        def _reroot(t: Type) -> Type:
-            return reroot_type(t, prefix, remap_module=remap)
-
-        fields = tuple((name, _reroot(t)) for name, t in typedef.fields)
-        members = tuple(
-            replace(cast(RecordType, _reroot(member)), decl_id=NO_DECL_ID)
-            for member in typedef.members
-        )
-        base = typedef.base
-        if base_type is not None:
-            rerooted_base = _reroot(base_type)
-            assert isinstance(rerooted_base, ExceptionType)
-            names_canonical_frame = (
-                rerooted_base.module_id == STD_CORE_ID and rerooted_base.scope_path == ()
-            )
-            base = rerooted_base.decl_id if names_canonical_frame else NO_DECL_ID
-        return replace(
-            typedef,
-            scope_path=(),
-            module_id=STD_CORE_ID,
-            fields=fields,
-            members=members,
-            base=base,
-        )
 
     def _resolve_field_type(self, fd: Param, type_vars: frozenset[str] = frozenset()) -> Type:
         """Resolve a field's TypeExpr to a semantic Type.
@@ -876,7 +792,6 @@ class _TypeBuilder:
             # every instantiated handle agree on which declaration they name.
             decl_node_id=template.decl_id,
         )
-        self._validate_builtin_shape(stmt, typedef, BUILTIN_PRELUDE_TYPE_DEFS)
         self._env.type_table.register(typedef)
         field_names = tuple(fields.keys())
         field_templates = tuple(fields.values())
@@ -910,7 +825,6 @@ class _TypeBuilder:
         typedef = replace(typedef, decl_node_id=template.decl_id)
         for member_def in member_defs:
             self._env.type_table.register(member_def)
-        self._validate_builtin_shape(stmt, typedef, _BUILTIN_ENUM_TYPE_DEFS)
         self._env.type_table.register(typedef)
         for member in stmt.members:
             if not isinstance(member, VariantDef):

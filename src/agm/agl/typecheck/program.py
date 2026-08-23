@@ -600,6 +600,12 @@ def _build_program_type_table(
     for key in body_order:
         _resolve_one(key)
 
+    # Builtin contracts may inspect referenced enum-member record fields, so
+    # validate only after every type body has been resolved.  This preserves
+    # the order-free handle phase while making contract validation structural.
+    for builder in cross_builders.values():
+        builder.validate_builtin_contracts()
+
     # Step C: every body is now resolved, so the inhabitation fixpoint can
     # run over the whole shared table (this program's declarations plus the
     # builtin/prelude defs, all trivially inhabited). This is the only

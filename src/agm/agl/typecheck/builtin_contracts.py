@@ -3,8 +3,8 @@
 The seeded ``std/core`` ``TypeDef`` objects are real nominal declarations used
 by type resolution and runtime values.  They are not validation schemas: a
 source ``builtin`` declaration may live in another module or scope, and an enum
-may satisfy a member contract with a referenced record whose declaration path
-necessarily differs from the canonical inline member's path.
+is validated only after the builder has required its members to be inline, so
+source constructors can share the identities expected by host-minted values.
 
 This module projects nominal declarations into explicit contracts.  A contract
 keeps declaration kind, parameters, fields, member names, captured member type
@@ -68,7 +68,8 @@ def contract_for_typedef(
     in ``TypeTable``.  Only type references inside contract-bearing fields and
     the exception base are normalized onto the host contract namespace.  This
     lets a scoped builtin name a sibling scoped builtin while preserving a
-    reference to an unrelated module as a genuine mismatch.
+    reference to an unrelated module as a genuine mismatch. Enum member identity
+    is enforced separately by requiring inline source members before projection.
     """
     remap = (typedef.module_id, STD_CORE_ID)
 

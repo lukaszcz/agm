@@ -4924,6 +4924,12 @@ class _Checker:
                     else:
                         assert qualification_error is not None
                         raise qualification_error
+                elif constructor_ref is None:
+                    raise AglTypeError(
+                        f"Qualified constructor pattern '{pattern.name}' does not belong to "
+                        f"'{subj_type!r}'.",
+                        span=pattern.span,
+                    )
             owner_type = subj_type
             fields = self._env.type_table.record_fields(owner_type)
             context_desc = f"constructor '{owner_type.name}'"

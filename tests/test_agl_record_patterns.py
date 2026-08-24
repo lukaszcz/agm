@@ -324,6 +324,25 @@ def test_module_qualified_record_pattern_rejects_an_unrelated_enum_owner(
     )
 
 
+def test_module_qualified_pattern_rejects_wrong_phantom_generic_enum_owner(
+    tmp_path: Path,
+) -> None:
+    reject_graph(
+        tmp_path,
+        {
+            "lib": "enum Other[T]\n  | none\n",
+            "entry": (
+                "import lib\n"
+                "enum Maybe[T]\n"
+                "  | none\n"
+                "case Maybe::none of\n"
+                "  | lib::Other::none => ()\n"
+                "  | _ => ()\n"
+            ),
+        },
+    )
+
+
 def test_self_qualified_record_pattern_rejects_an_absent_current_owner(tmp_path: Path) -> None:
     reject_graph(
         tmp_path,

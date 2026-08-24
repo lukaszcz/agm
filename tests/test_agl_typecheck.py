@@ -1549,8 +1549,8 @@ class TestScopedBuiltinTypes:
         assert isinstance(handle, EnumType)
         assert handle.scope_path == ("A",)
 
-    def test_builtin_enum_accepts_referenced_members_with_the_canonical_shapes(self) -> None:
-        r = accept_type(
+    def test_builtin_enum_rejects_referenced_members_with_the_canonical_shapes(self) -> None:
+        err = reject_type(
             "record AgentCommand(command: text)\n"
             "record AgentClaude(model: text, thinking: text)\n"
             "record AgentCodex(model: text, thinking: text)\n"
@@ -1564,24 +1564,33 @@ class TestScopedBuiltinTypes:
             default_stdlib=False,
         )
 
-        assert r.resolved.program is not None
+        assert "Agent" in err.to_diagnostic().message
 
-    def test_builtin_enum_rejects_a_referenced_member_with_the_wrong_shape(self) -> None:
+    def test_builtin_enum_rejects_an_inline_member_with_the_wrong_shape(self) -> None:
         err = reject_type(
-            "record AgentCommand(command: int)\n"
-            "record AgentClaude(model: text, thinking: text)\n"
-            "record AgentCodex(model: text, thinking: text)\n"
-            "record AgentPi(provider: text, model: text, thinking: text)\n"
             "builtin enum Agent =\n"
-            "  | ::AgentCommand\n"
-            "  | ::AgentClaude\n"
-            "  | ::AgentCodex\n"
-            "  | ::AgentPi\n"
+            "  | AgentCommand(command: int)\n"
+            "  | AgentClaude(model: text, thinking: text)\n"
+            "  | AgentCodex(model: text, thinking: text)\n"
+            "  | AgentPi(provider: text, model: text, thinking: text)\n"
             "()\n",
             default_stdlib=False,
         )
 
         assert "Agent" in err.to_diagnostic().message
+
+    def test_builtin_option_rejects_referenced_members_with_canonical_shapes(self) -> None:
+        err = reject_type(
+            "record None()\n"
+            "record Some[T](value: T)\n"
+            "builtin enum Option[T] =\n"
+            "  | ::None\n"
+            "  | ::Some[T]\n"
+            "()\n",
+            default_stdlib=False,
+        )
+
+        assert "Option" in err.to_diagnostic().message
 
     def test_method_declared_on_a_scoped_builtin_receiver_is_callable_qualified(self) -> None:
         """A method's receiver may be a ``builtin`` type declared inside a

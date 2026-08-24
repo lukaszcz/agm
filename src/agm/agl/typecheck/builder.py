@@ -727,12 +727,20 @@ class _TypeBuilder:
     ) -> None:
         """Check a ``builtin`` declaration against its structural host contract.
 
-        Contracts exclude declaration and enum-member identities, so a builtin
-        may live at any source path and may satisfy an enum member with either
-        an inline or referenced record. Nominal types inside fields and an
-        exception's base remain contract-bearing and are normalized by
-        :func:`contract_for_typedef` relative to the declaration's own frame.
+        A builtin may live at any source path, but its enum members must be
+        inline so host-minted values and source constructors share the member
+        identities assigned by the builtin declaration. Nominal types inside
+        fields and an exception's base remain contract-bearing and are
+        normalized by :func:`contract_for_typedef` relative to the declaration's
+        own frame.
         """
+        if isinstance(stmt, EnumDef) and any(
+            isinstance(member, VariantRef) for member in stmt.members
+        ):
+            raise AglTypeError(
+                f"Builtin type '{stmt.name}' has an invalid definition.",
+                span=stmt.span,
+            )
         bare_name = _bare_name(stmt.name)
         expected = expected_contracts[bare_name]
         actual = contract_for_typedef(typedef, self._env.type_table, base_type=base_type)

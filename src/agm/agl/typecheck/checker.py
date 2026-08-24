@@ -1228,17 +1228,28 @@ class _Checker:
 
         The name whitelist that gates every builtin declaration applies here: a
         ``builtin var`` must name a known engine key, and its declared type must
-        match the key's canonical type.  The canonical engine-key type is
-        recorded as the binding type.
+        match the key's source-selected type. The program pre-pass replaces a
+        canonical fallback nominal with the loaded ``builtin`` declaration;
+        standalone checking falls back to the registry type.
         """
         from agm.agl.semantics.engine_keys import get_engine_key_type
 
-        key_type = get_engine_key_type(node.name)
-        if key_type is None:
+        canonical_key_type = get_engine_key_type(node.name)
+        if canonical_key_type is None:
             raise AglTypeError(
                 f"Unknown builtin var '{node.name}'.",
                 span=node.span,
             )
+        key_type = canonical_key_type
+        if isinstance(canonical_key_type, (RecordType, EnumType, ExceptionType)):
+            standard = self._env.type_table.standard_builtin_declaration(canonical_key_type.name)
+            if standard is not None:
+                type_args = (
+                    canonical_key_type.type_args
+                    if isinstance(canonical_key_type, (RecordType, EnumType))
+                    else ()
+                )
+                key_type = standard.handle(type_args=type_args)
         declared = self._env.resolve_type_expr(node.type_ann, span=node.span, type_vars=frozenset())
         if declared != key_type:
             raise AglTypeError(
@@ -3486,7 +3497,10 @@ class _Checker:
         if clause.exc_type is None or clause.exc_type == "_":
             from agm.agl.semantics.types import EXCEPTION_BASE
 
-            exc_type: ExceptionType = EXCEPTION_BASE
+            standard = self._env.type_table.standard_builtin_declaration("Exception")
+            selected = EXCEPTION_BASE if standard is None else standard.handle()
+            assert isinstance(selected, ExceptionType)
+            exc_type: ExceptionType = selected
         else:
             # resolve_named_type is used instead of get_type so exception types exposed
             # by import tails (in cross-module program context) are found as well.

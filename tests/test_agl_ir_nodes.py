@@ -195,6 +195,28 @@ class TestBuiltinNominals:
         assert table.nominal("RangeError") == NominalId(require_reserved_nominal_id("RangeError"))
         assert table.resolve("RangeError").display_name == "RangeError"
 
+    def test_declared_enum_members_override_the_fallback_identity(self) -> None:
+        member = DeclaredNominal(nominal=NominalId(42), display_name="A::Option::Some")
+        table = BuiltinNominals(declared={}, members={("Option", "Some"): member})
+
+        assert table.resolve_member("Option", "Some") == member
+
+    def test_undeclared_enum_member_uses_the_fallback_identity(self) -> None:
+        table = BuiltinNominals(declared={})
+
+        assert table.resolve_member("Option", "Some").display_name == "Option::Some"
+
+    def test_standard_enum_members_are_selected_independently(self) -> None:
+        selected = DeclaredNominal(nominal=NominalId(42), display_name="A::Option::Some")
+        standard = DeclaredNominal(nominal=NominalId(43), display_name="Option::Some")
+        table = BuiltinNominals(
+            declared={},
+            members={("Option", "Some"): selected},
+            standard_members={("Option", "Some"): standard},
+        )
+
+        assert table.resolve_standard_member("Option", "Some") == standard
+
     def test_no_builtin_declarations_answers_every_name_with_the_shipped_identity(self) -> None:
         assert NO_BUILTIN_DECLARATIONS.nominal("ExecResult") == NominalId(
             require_reserved_nominal_id("ExecResult")

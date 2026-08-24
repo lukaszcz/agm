@@ -245,10 +245,6 @@ class ConstructorChecker:
             sig = self._ctx._env.get_ctor_sig_from_module(
                 ctor_ref.owner_module_id, owner_name, scope_path=ctor_ref.owner_path
             )
-            if sig is None:
-                sig = self._ctx._env.get_constructor_signature(
-                    owner_name, scope_path=ctor_ref.owner_path
-                )
             assert sig is not None, f"No constructor signature for {owner_name}"
             return ctor_ref, sig, gdef
 

@@ -15,12 +15,13 @@ Phase 1 (``collect_shells_only``)
     Register every declared name's handle (or, for a generic
     declaration, its ``GenericTypeDef``) and every alias target.  A handle
     carries no shape. Inline enum-member shells use their syntactically
-    captured owner parameters until phase 2 can resolve transparent aliases.
+    captured owner parameters until an intermediate reconciliation pass
+    resolves transparent aliases and finalizes every member arity.
 Phase 2 (the loop in ``collect``)
     Resolve each declaration's field/variant type expressions, in source
     order, into a ``TypeDef`` registered in the shared ``TypeTable``.  An
-    inline enum member's name binding is reconciled with the parameters that
-    remain free in those resolved field types.  An
+    inline enum member's resolved body confirms the already-finalized shell.
+    An
     exception's ``TypeDef`` stores its OWN fields plus a resolved ``base``
     key (see ``semantics.type_table.TypeDef``); no ordering is required since
     the base need not be built yet to resolve the key.  A small post-pass
@@ -111,17 +112,10 @@ def _decl_identity(
 ) -> int:
     """Return the declaration identity for a record/enum/exception declaration.
 
-    The shipped standard library's own declaration of a reserved host-known
-    name (``ExecResult``, ``Option``, ``CastError``, ...), written at
-    ``std/core``'s top scope, denotes the same type the host mints directly
-    (see ``ir.reserved_nominals``), so it adopts that reserved identity
-    instead of its own AST node id — that is how the shipped standard
-    library's declaration comes to denote the same type as a program that
-    declares nothing of its own. Every other declaration — including a
-    ``builtin`` declaration anywhere other than ``std/core``'s root, and any
-    non-reserved name declared at ``std/core``'s root — is identified by its
-    own AST node id instead, which the loader keeps disjoint across a
-    program's modules, so declaration identities stay distinct program-wide.
+    Every parsed declaration is identified by its own AST node id, which the
+    loader keeps disjoint across a program's modules. Host-known reserved ids
+    identify only seeded fallback definitions used when no source declaration
+    is loaded.
     """
     return source_nominal_decl_id(module_id, scope_path, bare_name, node_id)
 
@@ -138,7 +132,7 @@ def _bare_name(name: str) -> str:
 
 
 def _member_identity(enum: EnumDef, member: VariantDef, module_id: ModuleId) -> int:
-    """Return a member's declaration identity, canonical for std/core builtins."""
+    """Return an inline member's source declaration identity."""
     return source_enum_member_decl_id(
         module_id,
         tuple(segment.name for segment in enum.scope_path),
@@ -180,6 +174,10 @@ class _TypeBuilder:
         self._record_defs: dict[str, RecordDef] = {}
         self._enum_defs: dict[str, EnumDef] = {}
         self._exception_defs: dict[str, ExceptionDef] = {}
+        # Source-built definitions retained independently of the shared table.
+        # A source declaration can supersede a seeded fallback at the same
+        # name path, so contract validation must inspect this exact object.
+        self._resolved_defs: dict[str, TypeDef] = {}
 
     @staticmethod
     def _static_type_items(
@@ -209,6 +207,7 @@ class _TypeBuilder:
         does not repeat it per module.
         """
         self.collect_shells_only(program)
+        self.reconcile_inline_member_arities()
 
         for item in self._static_type_items(program.body.items):
             path = tuple(segment.name for segment in item.scope_path)
@@ -289,6 +288,32 @@ class _TypeBuilder:
                 self._register_name(item.name, item.span)
                 self._env.unregister_name(item.name)
                 self._env.register_alias(item.name, item.type_expr, type_params=item.type_params)
+
+    def reconcile_inline_member_arities(self) -> None:
+        """Finalize inline-member shells before any dependent body resolves.
+
+        Transparent aliases can erase owner parameters mentioned in source
+        syntax. Resolve only the member field types here, then replace each
+        provisional shell with the parameters that remain genuinely free.
+        Full enum bodies and constructor metadata are still built in phase 2.
+        """
+        for stmt in self._enum_defs.values():
+            type_vars = frozenset(stmt.type_params)
+            path = tuple(segment.name for segment in stmt.scope_path)
+            with self._env.type_scope(path):
+                for member in stmt.members:
+                    if not isinstance(member, VariantDef):
+                        continue
+                    field_types = tuple(
+                        self._resolve_field_type(field, type_vars=type_vars)
+                        for field in member.fields
+                    )
+                    captured_params = tuple(
+                        param
+                        for param in stmt.type_params
+                        if any(param in free_type_vars(field_type) for field_type in field_types)
+                    )
+                    self._replace_inline_member_handle(stmt, member, captured_params)
 
     def _clear_inline_member_names(self, enum: EnumDef) -> None:
         """Release member record names from a superseded enum declaration."""
@@ -415,8 +440,7 @@ class _TypeBuilder:
         for stmt, expected_contracts in declarations:
             if not stmt.is_builtin:
                 continue
-            scope_path = tuple(segment.name for segment in stmt.scope_path)
-            typedef = self._env.type_table.get(self._module_id, _bare_name(stmt.name), scope_path)
+            typedef = self._resolved_defs.get(stmt.name)
             assert typedef is not None, "compiler bug: builtin type is not registered"
             base_type: ExceptionType | None = None
             if typedef.base is not None:
@@ -495,6 +519,7 @@ class _TypeBuilder:
             is_builtin=stmt.is_builtin,
             decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
         )
+        self._resolved_defs[stmt.name] = typedef
         self._env.type_table.register(typedef)
         # Register field kinds for this record constructor, under the same
         # owning identity as the TypeDef just above (its declaring module,
@@ -513,6 +538,7 @@ class _TypeBuilder:
             self._build_generic_enum(stmt)
             return
         typedef, member_defs = self._build_enum_members(stmt, type_vars=frozenset())
+        self._resolved_defs[stmt.name] = typedef
         for member_def in member_defs:
             self._env.type_table.register(member_def)
         self._env.type_table.register(typedef)
@@ -694,6 +720,7 @@ class _TypeBuilder:
             is_builtin=stmt.is_builtin,
             decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
         )
+        self._resolved_defs[stmt.name] = typedef
         self._env.type_table.register(typedef)
 
     def _finalize_exceptions(self) -> None:
@@ -814,6 +841,7 @@ class _TypeBuilder:
             # every instantiated handle agree on which declaration they name.
             decl_node_id=template.decl_id,
         )
+        self._resolved_defs[stmt.name] = typedef
         self._env.type_table.register(typedef)
         field_names = tuple(fields.keys())
         field_templates = tuple(fields.values())
@@ -845,6 +873,7 @@ class _TypeBuilder:
         assert isinstance(template, EnumType)
         typedef, member_defs = self._build_enum_members(stmt, type_vars=frozenset(type_params))
         typedef = replace(typedef, decl_node_id=template.decl_id)
+        self._resolved_defs[stmt.name] = typedef
         for member_def in member_defs:
             self._env.type_table.register(member_def)
         self._env.type_table.register(typedef)

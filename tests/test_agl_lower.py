@@ -1290,18 +1290,17 @@ class TestNominalsEmpty:
 class TestBuiltinNominalsTable:
     """``ExecutableProgram.builtin_nominals`` — the host's per-program nominal table."""
 
-    def test_answers_for_every_builtin_name_with_the_shipped_identity(self) -> None:
-        """A program that declares no ``builtin`` types still answers for every name.
+    def test_answers_with_loaded_standard_library_source_identities(self) -> None:
+        """Loaded ``std/core`` declarations drive the host's nominal table.
 
-        A trivial program declares no ``builtin`` types of its own, so every
-        built-in prelude/exception name resolves to the shipped standard
-        library's own identity.
+        Reserved identities remain the fallback only for a program that does
+        not load a source declaration.
         """
-        from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
+        from tests.agl.ir_harness import nominal_id_for
 
         prog = _lower("()")
         for name in ("ExecResult", "AgentRequest", "RangeError", "MaxIterationsExceeded"):
-            assert prog.builtin_nominals.nominal(name) == NO_BUILTIN_DECLARATIONS.nominal(name)
+            assert prog.builtin_nominals.nominal(name) == nominal_id_for(prog, name)
 
     def test_declared_builtin_type_resolves_to_the_declaration_identity(self) -> None:
         """A program's own ``builtin`` declaration is reflected in its table.
@@ -1320,6 +1319,13 @@ class TestBuiltinNominalsTable:
         assert typedef is not None
         prog = _lower(source, default_stdlib=False)
         assert prog.builtin_nominals.nominal("RangeError") == NominalId(typedef.decl_node_id)
+
+    def test_standard_option_member_uses_its_loaded_source_identity(self) -> None:
+        from tests.agl.ir_harness import nominal_id_for
+
+        prog = _lower("()")
+        some = prog.builtin_nominals.resolve_standard_member("Option", "Some")
+        assert some.nominal == nominal_id_for(prog, "Option::Some")
 
     def test_scoped_declared_builtin_type_resolves_to_its_own_declared_path(self) -> None:
         """A SCOPED ``builtin`` declaration's own path drives the table's answer.
@@ -1344,12 +1350,13 @@ class TestBuiltinNominalsTable:
         Uses a variable (not a literal) step: a literal non-positive step is
         rejected statically, before this runtime guard is ever reached.
         """
-        from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
         from tests.agl.ir_harness import evaluate_ir_raises
 
-        exc = evaluate_ir_raises("let step = 0\nfor i in 1 to 5 by step do\n  ()\ndone\n")
+        source = "let step = 0\nfor i in 1 to 5 by step do\n  ()\ndone\n"
+        program = _lower(source)
+        exc = evaluate_ir_raises(source)
         assert exc.display_name == "RangeError"
-        assert exc.nominal == NO_BUILTIN_DECLARATIONS.nominal("RangeError")
+        assert exc.nominal == program.builtin_nominals.nominal("RangeError")
 
     def test_scoped_range_error_raised_at_runtime_carries_the_scoped_nominal(self) -> None:
         """A host-raised exception now carries its declaring region's own path.
@@ -1385,12 +1392,13 @@ class TestBuiltinNominalsTable:
 
     def test_max_iterations_exceeded_raised_at_runtime_carries_the_table_nominal(self) -> None:
         """A ``do[n]`` loop exhausted at its bound carries the table's nominal."""
-        from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
         from tests.agl.ir_harness import evaluate_ir_raises
 
-        exc = evaluate_ir_raises("var dummy = 0\ndo[3]\n  dummy := 1\nuntil false\n")
+        source = "var dummy = 0\ndo[3]\n  dummy := 1\nuntil false\n"
+        program = _lower(source)
+        exc = evaluate_ir_raises(source)
         assert exc.display_name == "MaxIterationsExceeded"
-        assert exc.nominal == NO_BUILTIN_DECLARATIONS.nominal("MaxIterationsExceeded")
+        assert exc.nominal == program.builtin_nominals.nominal("MaxIterationsExceeded")
 
     @pytest.mark.parametrize(
         ("source", "default_stdlib"),

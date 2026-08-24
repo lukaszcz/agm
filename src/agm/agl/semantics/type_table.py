@@ -58,7 +58,10 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, assert_never, cast
 
-from agm.agl.ir.reserved_nominals import NO_DECL_ID, reserved_nominal_id
+from agm.agl.ir.reserved_nominals import (
+    NO_DECL_ID,
+    require_reserved_enum_member_id,
+)
 from agm.agl.ir.reserved_nominals import require_reserved_nominal_id as _reserved_id
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
@@ -871,39 +874,70 @@ class TypeTable:
         not itself a declaration.
 
         Builtin declarations are unique by complete scoped name, so a compile
-        unit may contain several paths with this bare name. This bare-name
-        lookup is used only by host contracts that have one matching builtin
-        type; the last registered declaration is the current contract
-        declaration. REPL accumulation can likewise retain older paths;
-        ``_defs`` never moves an existing entry, so a forward scan's last
-        match is the newest one. An orphaned declaration (:meth:`orphan`) is
-        skipped: it never took effect, so it must not become the contract a
-        later entry's host call is typed against.
+        unit may contain several paths with this bare name. A live declaration
+        outside ``std/core`` overrides the standard declaration; within each
+        tier the newest registered match wins. An orphaned declaration
+        (:meth:`orphan`) is skipped because it never took effect.
+        """
+        standard: TypeDef | None = None
+        override: TypeDef | None = None
+        for decl_id, typedef in self._defs.items():
+            if typedef.is_builtin and typedef.name == name and decl_id not in self._orphaned:
+                if typedef.module_id == STD_CORE_ID:
+                    standard = typedef
+                else:
+                    override = typedef
+        return override if override is not None else standard
+
+    def standard_builtin_declaration(self, name: str) -> TypeDef | None:
+        """Return the loaded ``std/core`` source declaration for *name*.
+
+        Host contracts may contain fields whose values are supplied by the
+        standard host representation rather than by the selected top-level
+        contract declaration. Reserved fallback identities cover the same
+        fields when ``std/core`` is not loaded.
         """
         result: TypeDef | None = None
         for decl_id, typedef in self._defs.items():
-            if typedef.is_builtin and typedef.name == name and decl_id not in self._orphaned:
+            if (
+                typedef.is_builtin
+                and typedef.name == name
+                and typedef.module_id == STD_CORE_ID
+                and decl_id not in self._orphaned
+            ):
                 result = typedef
+        return result
+
+    def standard_builtin_declarations(self) -> Mapping[str, TypeDef]:
+        """Return all loaded ``std/core`` source builtin declarations."""
+        result: dict[str, TypeDef] = {}
+        for decl_id, typedef in self._defs.items():
+            if (
+                typedef.is_builtin
+                and typedef.module_id == STD_CORE_ID
+                and decl_id not in self._orphaned
+            ):
+                result[typedef.name] = typedef
         return result
 
     def builtin_declarations(self) -> Mapping[str, TypeDef]:
         """Return every bare name's currently live registered ``builtin`` declaration.
 
         The all-names counterpart of :meth:`builtin_declaration`: for each
-        bare name that has at least one registered, non-orphaned ``builtin``
-        declaration, the entry is the exact same declaration
-        :meth:`builtin_declaration` would return for that name alone (same
-        forward-scan, last-match-wins tie-break; same orphan skip). Building
+        bare name, it applies the same non-standard-over-standard precedence,
+        newest-within-tier tie-break, and orphan filtering. Building
         the host's minting table from this instead of an independent scan is
         how the host and the checker are kept from ever disagreeing about
         which declaration a built-in name denotes (see
         ``lower.lowerer.builtin_nominals_from_declarations``).
         """
-        result: dict[str, TypeDef] = {}
+        standard: dict[str, TypeDef] = {}
+        overrides: dict[str, TypeDef] = {}
         for decl_id, typedef in self._defs.items():
             if typedef.is_builtin and decl_id not in self._orphaned:
-                result[typedef.name] = typedef
-        return result
+                target = standard if typedef.module_id == STD_CORE_ID else overrides
+                target[typedef.name] = typedef
+        return {**standard, **overrides}
 
     def nominal_reaches_non_data(self, handle: RecordType | EnumType | ExceptionType) -> bool:
         """Return ``True`` if a non-data type is reachable from *handle* (cycle-safe).
@@ -1628,7 +1662,6 @@ def _builtin_enum_defs(
     variants: tuple[tuple[str, tuple[tuple[str, Type], ...]], ...],
     *,
     type_params: tuple[str, ...] = (),
-    first_member_id: int,
 ) -> tuple[TypeDef, tuple[TypeDef, ...]]:
     """Build canonical enum and scoped record-member definitions for the prelude."""
     scope_path = (name,)
@@ -1644,9 +1677,9 @@ def _builtin_enum_defs(
                 if any(param in free_type_vars(field_type) for _field, field_type in fields)
             ),
             fields=fields,
-            decl_node_id=first_member_id - index,
+            decl_node_id=require_reserved_enum_member_id(name, member_name),
         )
-        for index, (member_name, fields) in enumerate(variants)
+        for member_name, fields in variants
     )
     members = tuple(
         cast(RecordType, member.handle(tuple(TypeVarType(param) for param in member.type_params)))
@@ -1667,7 +1700,6 @@ def _builtin_enum_defs(
 _PARSE_POLICY_DEF, _PARSE_POLICY_MEMBER_DEFS = _builtin_enum_defs(
     "ParsePolicy",
     (("Abort", ()), ("Retry", (("n", IntType()),))),
-    first_member_id=-1000,
 )
 _AGENT_DEF, _AGENT_MEMBER_DEFS = _builtin_enum_defs(
     "Agent",
@@ -1680,7 +1712,6 @@ _AGENT_DEF, _AGENT_MEMBER_DEFS = _builtin_enum_defs(
             (("provider", TextType()), ("model", TextType()), ("thinking", TextType())),
         ),
     ),
-    first_member_id=-1010,
 )
 _OUTPUT_CONTRACT_OPTION_DEF, _OUTPUT_CONTRACT_OPTION_MEMBER_DEFS = _builtin_enum_defs(
     "OutputContractOption",
@@ -1700,13 +1731,11 @@ _OUTPUT_CONTRACT_OPTION_DEF, _OUTPUT_CONTRACT_OPTION_MEMBER_DEFS = _builtin_enum
             ),
         ),
     ),
-    first_member_id=-1020,
 )
 _OPTION_DEF, _OPTION_MEMBER_DEFS = _builtin_enum_defs(
     "Option",
     (("None", ()), ("Some", (("value", TypeVarType("T")),))),
     type_params=("T",),
-    first_member_id=-1030,
 )
 
 
@@ -1827,12 +1856,11 @@ def source_nominal_decl_id(
 ) -> int:
     """Return the semantic identity of a source nominal declaration.
 
-    Reserved declarations at ``std/core``'s root denote the same types as the
-    corresponding host-minted handles. All other source declarations retain
-    their parser node identity.
+    Every parsed declaration retains its parser node identity. Reserved
+    identities belong only to seeded fallback definitions used when a program
+    loads no source declaration for a host-known type.
     """
-    reserved = reserved_nominal_id(name) if module_id == STD_CORE_ID and not scope_path else None
-    return node_id if reserved is None else reserved
+    return node_id
 
 
 def source_enum_member_decl_id(
@@ -1844,18 +1872,8 @@ def source_enum_member_decl_id(
     *,
     is_builtin: bool,
 ) -> int:
-    """Return a source enum member's identity, canonicalizing prelude members."""
-    if not (is_builtin and module_id == STD_CORE_ID and not scope_path):
-        return node_id
-    expected_enum = (
-        OPTION_TYPE_DEF if enum_name == "Option" else BUILTIN_PRELUDE_TYPE_DEFS.get(enum_name)
-    )
-    if expected_enum is None or expected_enum.kind != "enum":
-        return node_id
-    expected_member = next(
-        (member for member in expected_enum.members if member.name == member_name), None
-    )
-    return node_id if expected_member is None else expected_member.decl_id
+    """Return a source inline enum member's parser node identity."""
+    return node_id
 
 
 # ---------------------------------------------------------------------------

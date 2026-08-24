@@ -160,7 +160,7 @@ from agm.agl.matchcompile import (
 )
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId, spell_scope_path
 from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
-from agm.agl.semantics.type_table import MethodDef, TypeTable
+from agm.agl.semantics.type_table import MethodDef, TypeDef, TypeTable
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPES,
@@ -285,6 +285,8 @@ def _add_builtin_nominals(
     is seeded into every table by ``create_seeded_type_table``).
     """
     for name, typ in BUILTIN_PRELUDE_TYPES.items():
+        if type_table.standard_builtin_declaration(name) is not None:
+            continue
         nominal = NominalId(require_reserved_nominal_id(name))
         if isinstance(typ, RecordType):
             nominals[nominal] = NominalDescriptor(
@@ -314,6 +316,8 @@ def _add_builtin_nominals(
         )
 
     for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
+        if type_table.standard_builtin_declaration(exc_name) is not None:
+            continue
         nominal = NominalId(require_reserved_nominal_id(exc_name))
         nominals[nominal] = NominalDescriptor(
             nominal=nominal,
@@ -336,21 +340,40 @@ def builtin_nominals_from_declarations(type_table: TypeTable) -> BuiltinNominals
     same orphan skip) the checker itself queries
     (:meth:`~agm.agl.semantics.type_table.TypeTable.builtin_declaration`) to
     type a host call (e.g. ``exec``'s default result type) against a
-    program's own declaration, rather than an independent walk of the
-    modules' ASTs with its own separate tie-break -- so the two can never
-    disagree about which declaration a built-in name denotes. A name no
-    declaration claims is simply absent -- the resulting table then answers
-    it with the shipped standard library's own identity (see
+    program's selected declaration, rather than an independent walk of the
+    modules' ASTs. Enum members are derived from those same definitions, with
+    the loaded ``std/core`` members retained separately for nested standard
+    host representations. A name no declaration claims is absent and uses a
+    reserved fallback (see
     :meth:`~agm.agl.ir.builtin_nominals.BuiltinNominals.resolve`).
     """
+    declarations = type_table.builtin_declarations()
     declared = {
         name: DeclaredNominal(
             nominal=NominalId(typedef.decl_node_id),
             display_name=spell_scope_path((*typedef.scope_path, typedef.name)),
         )
-        for name, typedef in type_table.builtin_declarations().items()
+        for name, typedef in declarations.items()
     }
-    return BuiltinNominals(declared=declared)
+
+    def member_nominals(
+        definitions: Mapping[str, TypeDef],
+    ) -> dict[tuple[str, str], DeclaredNominal]:
+        return {
+            (name, member.name): DeclaredNominal(
+                nominal=NominalId(member.decl_id),
+                display_name=spell_scope_path((*typedef.scope_path, typedef.name, member.name)),
+            )
+            for name, typedef in definitions.items()
+            if typedef.kind == "enum"
+            for member in typedef.members
+        }
+
+    return BuiltinNominals(
+        declared=declared,
+        members=member_nominals(declarations),
+        standard_members=member_nominals(type_table.standard_builtin_declarations()),
+    )
 
 
 # ---------------------------------------------------------------------------

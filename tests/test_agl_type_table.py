@@ -365,6 +365,26 @@ def test_inline_member_aliases_capture_only_resolved_parameters() -> None:
     assert _binding_value_type(checked, "value") == member
 
 
+def test_forward_inline_member_uses_arity_after_alias_erasure() -> None:
+    checked = _check(
+        "record A(value: E::M)\n"
+        "type Ignore[T] = int\n"
+        "enum E[T] | M(value: Ignore[T])\n"
+        "A(value = M(value = 1))"
+    )
+
+    value_type = checked.node_types[checked.resolved.program.body.items[-1].node_id]
+    assert isinstance(value_type, RecordType)
+    assert value_type.name == "A"
+
+
+def test_forward_inline_member_rejects_type_arguments_erased_by_alias() -> None:
+    with pytest.raises(AglTypeError):
+        _check(
+            "record A(value: E::M[int])\ntype Ignore[T] = int\nenum E[T] | M(value: Ignore[T])\n()"
+        )
+
+
 # ---------------------------------------------------------------------------
 # register / get
 # ---------------------------------------------------------------------------
@@ -3894,10 +3914,10 @@ class TestFiniteClosure:
 
 
 class TestDeclarationIdentity:
-    """An ordinary declaration's handle/``TypeDef`` adopt its own AST node id
-    as their declaration identity; the shipped standard library's own
-    declaration of a reserved host-known name instead adopts that name's
-    fixed reserved identity (see ``ir.reserved_nominals``)."""
+    """Every source declaration's handle/``TypeDef`` adopts its own AST node
+    id as its declaration identity. Reserved identities belong only to
+    canonical fallback definitions used when no source declaration is loaded.
+    """
 
     def test_the_first_declaration_in_a_program_is_not_read_as_having_no_identity(self) -> None:
         """A field-less declaration written as a program's very first item owns
@@ -4014,16 +4034,19 @@ class TestDeclarationIdentity:
         assert decl_ids[0] != decl_ids[1]
         assert all(decl_id != NO_DECL_ID for decl_id in decl_ids)
 
-    def test_stdlib_declarations_of_reserved_names_adopt_the_reserved_identity(
+    def test_stdlib_declarations_of_reserved_names_adopt_their_source_identity(
         self, tmp_path: Path
     ) -> None:
-        """Every reserved host-known name the shipped standard library declares
-        itself resolves, in ``std/core``'s own namespace, to the fixed reserved
-        identity — so a handle the host mints without any declaration in hand
-        names the same declaration a stdlib-loading program resolves."""
+        """Loading ``std/core`` selects its declarations over the reserved
+        fallbacks without making their identity depend on the module path."""
         checked = _check_program(tmp_path, {"entry": "()"})
         core = checked.modules[STD_CORE_ID]
         generics = core.type_env.all_generic_types()
+        declarations = {
+            item.name: item
+            for item in core.resolved.program.body.items
+            if isinstance(item, (RecordDef, EnumDef, ExceptionDef))
+        }
         declared_reserved = set(RESERVED_NOMINAL_NAMES) - COMPATIBILITY_PRELUDE_TYPE_NAMES
         assert "Option" in declared_reserved
         for name in sorted(declared_reserved):
@@ -4032,4 +4055,17 @@ class TestDeclarationIdentity:
                 # Generic declarations register a template, not a bare handle.
                 handle = generics[name].template
             assert isinstance(handle, (RecordType, EnumType, ExceptionType))
-            assert handle.decl_id == reserved_nominal_id(name), name
+            assert handle.decl_id == declarations[name].node_id, name
+            assert handle.decl_id != reserved_nominal_id(name), name
+            if isinstance(handle, EnumType):
+                declaration = declarations[name]
+                assert isinstance(declaration, EnumDef)
+                source_members = {
+                    member.name: member.node_id
+                    for member in declaration.members
+                    if isinstance(member, VariantDef)
+                }
+                resolved_members = core.type_env.type_table.enum_member_names(handle)
+                assert {
+                    member_name: member.decl_id for member_name, member in resolved_members.items()
+                } == source_members

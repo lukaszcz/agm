@@ -20,6 +20,7 @@ from agm.agl.ir.program import (
     SourceFile,
     VariantDescriptor,
 )
+from agm.agl.ir.reserved_nominals import RESERVED_ENUM_MEMBER_IDS, reserved_nominal_id
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.lowerer import (
     _add_builtin_nominals,
@@ -47,6 +48,10 @@ def _exception_field_encodes(
     result: dict[NominalId, tuple[ExceptionFieldEncode, ...]] = {}
     for typedef in type_table.entries():
         if typedef.kind != "exception":
+            continue
+        if type_table.standard_builtin_declaration(
+            typedef.name
+        ) is not None and typedef.decl_node_id == reserved_nominal_id(typedef.name):
             continue
         handle = typedef.handle()
         assert isinstance(handle, ExceptionType)
@@ -141,6 +146,17 @@ def lower_program(
     # that the extern boundary later uses to resolve a companion's bare/dotted
     # nominal lookup.
     for typedef in type_table.entries():
+        standard = type_table.standard_builtin_declaration(typedef.name)
+        if standard is not None and typedef.decl_node_id == reserved_nominal_id(typedef.name):
+            continue
+        if typedef.scope_path:
+            enum_name = typedef.scope_path[-1]
+            fallback_member_id = RESERVED_ENUM_MEMBER_IDS.get((enum_name, typedef.name))
+            if (
+                fallback_member_id == typedef.decl_node_id
+                and type_table.standard_builtin_declaration(enum_name) is not None
+            ):
+                continue
         nominal = NominalId(typedef.decl_node_id)
         bears_name_path = (
             type_table.is_current(typedef) and typedef.decl_node_id not in inline_member_ids

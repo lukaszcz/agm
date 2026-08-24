@@ -221,6 +221,24 @@ def test_builtin_type_shape_must_match() -> None:
         _check("builtin record ExecResult\n  stdout: text\n()\n")
 
 
+def test_std_core_source_builtin_shape_is_not_masked_by_seed(
+    tmp_path: Path,
+) -> None:
+    stdlib_root = tmp_path / "stdlib"
+    core_path = stdlib_root / "std" / "core.agl"
+    core_path.parent.mkdir(parents=True)
+    core_path.write_text("builtin enum Agent\n  | AgentCommand(command: int)\n")
+    graph = load_graph(
+        "program def main() = ()\n",
+        entry_path=None,
+        roots=RootSet(frozenset({stdlib_root})),
+        default_stdlib=True,
+    )
+
+    with pytest.raises(AglTypeError):
+        check_program(resolve_program(graph), _CAPS)
+
+
 def test_builtin_option_shape_must_match() -> None:
     with pytest.raises(AglTypeError, match="Builtin type 'Option' has an invalid definition"):
         _check("builtin\nenum Option[T] =\n  | None\n  | Some(value: T, extra: int)\n()\n")

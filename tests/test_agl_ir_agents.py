@@ -21,9 +21,11 @@ from agm.agl.semantics.values import (
 )
 from tests._agl_helpers import run_inline_command
 from tests.agl.ir_harness import (
+    agent_caps,
     evaluate_ir,
     evaluate_ir_raises_with_agents,
     evaluate_ir_with_agents,
+    lower_inline_ir,
 )
 
 if TYPE_CHECKING:
@@ -449,11 +451,10 @@ prompt_text
     )
     assert ir["prompt_text"] == TextValue("My prompt.")
 
-    from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
-
     req = ir["req"]
     assert isinstance(req, RecordValue)
-    assert req.nominal == NO_BUILTIN_DECLARATIONS.nominal("AgentRequest")
+    program = lower_inline_ir(source, caps=agent_caps())
+    assert req.nominal == program.builtin_nominals.nominal("AgentRequest")
     assert isinstance(req.fields["agent"], RecordValue)
     assert req.fields["agent"].display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
     assert isinstance(req.fields["target_type"], RecordValue)

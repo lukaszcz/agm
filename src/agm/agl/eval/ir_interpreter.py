@@ -504,7 +504,7 @@ class IrInterpreter:
         self._strict_json = False
         self._loop_limit: int | None = None
         self._shell_exec_timeout: float | None = None
-        self._timeout_setting = none_value()
+        self._timeout_setting = none_value(nominals=self._program.builtin_nominals)
         self._builtin_host_settings: dict[str, Value] = {}
         self._host_reconfigurer = host_reconfigurer
 
@@ -543,7 +543,10 @@ class IrInterpreter:
         timeout_setting = seed.get("timeout")
         if timeout_setting is None:
             timeout_setting = (
-                some_value(TextValue(_format_timeout(shell_exec_timeout)))
+                some_value(
+                    TextValue(_format_timeout(shell_exec_timeout)),
+                    nominals=self._program.builtin_nominals,
+                )
                 if shell_exec_timeout is not None
                 else defaults["timeout"]
             )
@@ -1841,7 +1844,9 @@ class IrInterpreter:
         previous = dict(self._builtin_host_settings)
         self._builtin_host_settings[key] = value
         if trace_write_implies_enabled(
-            key, isinstance(value, RecordValue) and option_text(value) is not None
+            key,
+            isinstance(value, RecordValue)
+            and option_text(value, nominals=self._program.builtin_nominals) is not None,
         ):
             self._builtin_host_settings["log"] = BoolValue(True)
         if self._host_reconfigurer is None or key not in TRACE_ENGINE_KEYS:
@@ -1864,7 +1869,8 @@ class IrInterpreter:
         log_file_reg = self._builtin_host_settings["log-file"]
         assert isinstance(log_file_reg, RecordValue)
         self._host_reconfigurer.reconfigure_trace(
-            enabled=log.value, log_file=option_text(log_file_reg)
+            enabled=log.value,
+            log_file=option_text(log_file_reg, nominals=self._program.builtin_nominals),
         )
 
     # ------------------------------------------------------------------
@@ -1894,7 +1900,7 @@ class IrInterpreter:
         else:
             assert public_name == "timeout"
             assert isinstance(config_value, RecordValue)
-            raw = option_text(config_value)
+            raw = option_text(config_value, nominals=self._program.builtin_nominals)
             if raw is None:
                 self._shell_exec_timeout = None
             else:

@@ -617,11 +617,12 @@ class BuiltinCallChecker:
         """
         table = self._ctx._env.type_table
         typedef = table.get_by_id(exc_type.decl_id)
-        if typedef is not None and typedef.is_builtin:
-            self._check_host_contract_coherent(exc_type, span=span)
-        live_declaration = table.builtin_declaration(exc_type.name)
-        if live_declaration is None:
+        assert typedef is not None, "compiler bug: caught exception is not registered"
+        if not typedef.is_builtin:
             return
+        self._check_host_contract_coherent(exc_type, span=span)
+        live_declaration = table.builtin_declaration(exc_type.name)
+        assert live_declaration is not None, "compiler bug: builtin exception is not live"
         live_handle = live_declaration.handle()
         assert isinstance(live_handle, ExceptionType), (
             f"{exc_type.name!r} is registered as a builtin exception name but its live "
@@ -648,20 +649,10 @@ class BuiltinCallChecker:
     ) -> None:
         """Reject *contract_type* if the host cannot produce a value of its shape.
 
-        The host produces a value of *contract_type* itself — a record a
-        built-in call mints (``ask-request``, ``ask``, ``exec``) or an
-        exception it raises — filling every nominal-typed field with a value
-        that carries a fixed, host-known identity (the canonical ``Agent`` for
-        ``AgentRequest.agent`` and ``AgentCallError.agent``, the canonical
-        ``Option`` for ``AgentRequest``'s ``Option``-typed fields — see
-        ``eval/effects.py``, ``runtime/agents.py`` and ``runtime/option.py``)
-        — never whatever declaration *contract_type*'s own field type happens
-        to name. When a field's type does not itself carry that fixed
-        identity — checked recursively through type arguments, so
-        ``Option[text]``'s own ``Option`` is checked too — the checker would
-        type the field one way while the host produces another, so such a
-        contract is rejected here (an ordinary, user-facing static error)
-        rather than left to crash the evaluator.
+        Nominal fields filled by the host use the loaded ``std/core`` source
+        declaration, falling back to its reserved identity when the standard
+        library is absent. A contract field must name that same standard
+        declaration, checked recursively through type arguments.
         """
         if contract_type.decl_id in self._coherent_contracts:
             return
@@ -673,20 +664,20 @@ class BuiltinCallChecker:
         )
         for field_name, field_type in field_types.items():
             for nominal in nominal_references(field_type):
-                # A name with no reserved identity at all (``reserved_id is
-                # None``) is also incoherent: ``!=`` against ``None`` is
-                # always true, so it is rejected here exactly like a name
-                # that has one but whose declaration doesn't carry it.
-                reserved_id = reserved_nominal_id(nominal.name)
-                if nominal.decl_id != reserved_id:
+                selected = table.standard_builtin_declaration(nominal.name)
+                selected_id = (
+                    selected.decl_node_id
+                    if selected is not None
+                    else reserved_nominal_id(nominal.name)
+                )
+                if nominal.decl_id != selected_id:
                     raise AglTypeError(
                         f"{contract_type.name}'s field '{field_name}' is typed "
-                        f"'{field_type!r}', which names this program's own "
-                        f"'{nominal.name}' declaration rather than the standard one. "
+                        f"'{field_type!r}', which does not name the selected "
+                        f"'{nominal.name}' builtin declaration. "
                         f"{contract_type.name} is produced directly by the host, which "
-                        f"always fills '{field_name}' with the standard "
-                        f"'{nominal.name}' identity, so this contract cannot be used "
-                        "here.",
+                        f"fills '{field_name}' with the selected '{nominal.name}' identity, "
+                        "so this contract cannot be used here.",
                         span=span,
                     )
         self._coherent_contracts.add(contract_type.decl_id)

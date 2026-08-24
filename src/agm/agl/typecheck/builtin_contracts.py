@@ -18,8 +18,9 @@ being validated.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
+from agm.agl.ir.reserved_nominals import reserved_nominal_id
 from agm.agl.modules.ids import STD_CORE_ID
 from agm.agl.semantics.type_table import (
     BUILTIN_EXCEPTION_TYPE_DEFS,
@@ -30,7 +31,14 @@ from agm.agl.semantics.type_table import (
     TypeTable,
     create_seeded_type_table,
 )
-from agm.agl.semantics.types import ExceptionType, Type, reroot_type
+from agm.agl.semantics.types import (
+    EnumType,
+    ExceptionType,
+    RecordType,
+    Type,
+    reroot_type,
+    transform_type,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,7 +82,23 @@ def contract_for_typedef(
     remap = (typedef.module_id, STD_CORE_ID)
 
     def normalize(typ: Type) -> Type:
-        return reroot_type(typ, typedef.scope_path, remap_module=remap)
+        rerooted = reroot_type(typ, typedef.scope_path, remap_module=remap)
+
+        def normalize_builtin(node: Type) -> Type:
+            if not isinstance(node, (RecordType, EnumType, ExceptionType)):
+                return node
+            referenced = table.get_by_id(node.decl_id)
+            reserved_id = reserved_nominal_id(node.name)
+            if referenced is None or not referenced.is_builtin or reserved_id is None:
+                return node
+            return replace(
+                node,
+                module_id=STD_CORE_ID,
+                scope_path=(),
+                decl_id=reserved_id,
+            )
+
+        return transform_type(rerooted, normalize_builtin)
 
     fields = tuple((name, normalize(field_type)) for name, field_type in typedef.fields)
     members = tuple(

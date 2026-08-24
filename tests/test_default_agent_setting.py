@@ -48,6 +48,12 @@ def _run(
     return result
 
 
+def _assert_agent_shape(actual: Value, expected: RecordValue) -> None:
+    assert isinstance(actual, RecordValue)
+    assert actual.display_name == expected.display_name
+    assert actual.fields == expected.fields
+
+
 def test_engine_key_uses_the_agent_nominal_type() -> None:
     from agm.agl.semantics.engine_keys import get_engine_key_type
 
@@ -81,10 +87,11 @@ def test_default_agent_initializer_and_qualified_write_are_visible() -> None:
     )
 
     assert result.ok
-    assert result.bindings["initial"] == agent_value(
-        "AgentClaude", model="sonnet", thinking="medium"
+    _assert_agent_shape(
+        result.bindings["initial"],
+        agent_value("AgentClaude", model="sonnet", thinking="medium"),
     )
-    assert result.bindings["updated"] == agent_value("AgentCommand", command="command")
+    _assert_agent_shape(result.bindings["updated"], agent_value("AgentCommand", command="command"))
 
 
 @pytest.mark.parametrize(
@@ -167,8 +174,9 @@ def test_host_seed_overrides_initializer_until_source_write() -> None:
 
     assert result.ok
     assert result.bindings["seeded"] == agent_value("AgentCodex", model="o3", thinking="medium")
-    assert result.bindings["written"] == agent_value(
-        "AgentPi", provider="openai", model="gpt", thinking="high"
+    _assert_agent_shape(
+        result.bindings["written"],
+        agent_value("AgentPi", provider="openai", model="gpt", thinking="high"),
     )
 
 

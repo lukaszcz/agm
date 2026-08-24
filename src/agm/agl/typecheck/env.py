@@ -93,11 +93,10 @@ def _is_own_builtin_declaration(name: str, typ: Type) -> bool:
 
     A canonical binding for a built-in exception or prelude type name carries
     that name's fixed reserved identity (``ir.reserved_nominals``); a
-    program's own ``builtin`` declaration of the same name -- root or scoped,
-    anywhere other than ``std/core``'s own root -- instead carries its own
-    declaration identity, which never equals the reserved one (see
-    ``typecheck.builder._decl_identity``). *name* is always one of the
-    reserved names, so it always has a reserved identity to compare against.
+    source ``builtin`` declaration of the same name instead carries its own
+    declaration identity, wherever it is declared (including ``std/core``),
+    which never equals the reserved one. *name* is always one of the reserved
+    names, so it always has a reserved identity to compare against.
 
     ``NO_DECL_ID`` is excluded too: it is the identity a handle carries when
     none is attached at all, never a real declaration's, so a binding
@@ -2065,6 +2064,11 @@ class TypeEnvironment:
         # Direct named type (record, enum, exception, prelude).
         typ = self._types.get(name)
         if typ is not None:
+            builtin = frozenset(BUILTIN_EXCEPTIONS) | BUILTIN_PRELUDE_TYPE_NAMES
+            if name in builtin and not _is_own_builtin_declaration(name, typ):
+                selected = self._resolve_bare_type(name, span)
+                if selected is not None:
+                    return selected
             return typ
         bare = self._resolve_bare_type(name, span)
         if bare is not None:
@@ -2136,14 +2140,20 @@ class TypeEnvironment:
         raise AglTypeError(f"'{rendered}::{name}' does not name a type.", span=span)
 
     def non_builtin_type_items(self) -> list[tuple[str, Type]]:
-        """Return ``(name, type)`` pairs for all non-builtin registered types.
+        """Return source-owned ``(name, type)`` pairs from the type namespace.
 
         Used by the program pre-pass to collect type shells into the shared
         ``program_type_table`` without accessing the private ``_types`` dict.
-        Builtins (exception types and prelude types) are excluded.
+        Canonical fallback bindings are excluded, while a parsed ``builtin``
+        declaration of the same reserved name is included like any other
+        source declaration.
         """
         builtin = frozenset(BUILTIN_EXCEPTIONS) | BUILTIN_PRELUDE_TYPE_NAMES
-        return [(name, t) for name, t in self._types.items() if name not in builtin]
+        return [
+            (name, typ)
+            for name, typ in self._types.items()
+            if name not in builtin or _is_own_builtin_declaration(name, typ)
+        ]
 
     def all_declared_type_names(self) -> frozenset[str]:
         """Return the full declared type-name set for type-namespace enumeration.

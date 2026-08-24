@@ -411,17 +411,18 @@ class EffectHandlers:
         prompt_text = self._text_of(self._ctx._eval(prompt_expr))
 
         agent_request = self._ctx._program.builtin_nominals.resolve("AgentRequest")
+        nominals = self._ctx._program.builtin_nominals
         return RecordValue(
             nominal=agent_request.nominal,
             display_name=agent_request.display_name,
             fields={
                 "agent": request_agent,
                 "prompt": TextValue(prompt_text),
-                "target_type": some_value(TextValue("text")),
-                "format_instructions": none_value(),
-                "json_schema": none_value(),
+                "target_type": some_value(TextValue("text"), nominals=nominals),
+                "format_instructions": none_value(nominals=nominals),
+                "json_schema": none_value(nominals=nominals),
                 "attempt": IntValue(0),
-                "previous_error": none_value(),
+                "previous_error": none_value(nominals=nominals),
                 "metadata": JsonValue(
                     {
                         "codec_name": "text",

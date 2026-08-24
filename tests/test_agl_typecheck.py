@@ -216,7 +216,10 @@ def reject_any(
 
 def _expected_type(checked: CheckedModule, expected: Type | str) -> Type | None:
     """Resolve named nominal expectations while keeping primitive expectations direct."""
-    return checked.type_env.get_type(expected) if isinstance(expected, str) else expected
+    if not isinstance(expected, str):
+        return expected
+    declared = checked.type_env.type_table.builtin_declaration(expected)
+    return declared.handle() if declared is not None else checked.type_env.get_type(expected)
 
 
 def assert_raw_tail_type_parity(
@@ -2604,7 +2607,9 @@ class TestAskRequest:
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
         binding_type = r.type_env.get_binding_type(decl.pattern.node_id)
-        assert binding_type == r.type_env.get_type("AgentRequest")
+        selected = r.type_env.type_table.builtin_declaration("AgentRequest")
+        assert selected is not None
+        assert binding_type == selected.handle()
 
     def test_with_explicit_agent(self) -> None:
         r = accept_type(

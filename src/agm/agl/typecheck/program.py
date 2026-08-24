@@ -224,13 +224,21 @@ def _collect_shells_only(builder: _TypeBuilder, program: object) -> None:
 def _sync_program_env_extensions(
     mid: ModuleId,
     env: TypeEnvironment,
+    program_type_table: dict[DeclKey, Type],
     program_generic_table: dict[DeclKey, GenericTypeDef],
     program_ctor_sig_table: dict[DeclKey, ConstructorSignature],
     program_ctor_field_kinds_table: dict[DeclKey, tuple[tuple[str, ParamKind], ...]],
 ) -> None:
-    """Copy generic type and constructor metadata built for one module into program tables."""
+    """Copy reconciled type and constructor metadata into the program tables."""
+    for _type_name, typ in env.non_builtin_type_items():
+        assert isinstance(typ, (RecordType, EnumType, ExceptionType))
+        key = (mid, typ.scope_path, typ.name)
+        program_type_table[key] = typ
+        program_generic_table.pop(key, None)
     for _generic_name, gdef in env.all_generic_types().items():
-        program_generic_table[(mid, gdef.template.scope_path, gdef.template.name)] = gdef
+        key = (mid, gdef.template.scope_path, gdef.template.name)
+        program_generic_table[key] = gdef
+        program_type_table.pop(key, None)
     for key, sig in env.all_constructor_sigs():
         program_ctor_sig_table[key] = sig
     for key, kinds in env.all_constructor_field_kinds():
@@ -314,6 +322,7 @@ def _resolve_body_for_one(
     _sync_program_env_extensions(
         mid,
         cross_env,
+        program_type_table,
         program_generic_table,
         program_ctor_sig_table,
         program_ctor_field_kinds_table,
@@ -413,7 +422,9 @@ def _build_program_type_table(
             enums, and exceptions get their handle entered into
             ``program_type_table`` directly (a handle carries no field/variant
             data, so there is nothing left to fill in later — forward
-            references within or across modules are valid immediately).
+            references within or across modules are valid immediately). Inline
+            member arity is provisional until its resolved fields reveal which
+            owner parameters survive transparent aliases.
             Type aliases are registered as lazy program alias keys (their target
             type is not known until the alias body is resolved, so they have
             no handle entry yet).
@@ -476,17 +487,19 @@ def _build_program_type_table(
             assert isinstance(t, (RecordType, EnumType, ExceptionType))
             program_type_table[(mid, t.scope_path, t.name)] = t
 
-    # Cross-module generic type definitions carry no shape (a GenericTypeDef is
-    # just a type-parameter count plus a TypeVarType-stamped template — the
+    # Cross-module generic type definitions carry no field shape (a GenericTypeDef
+    # is just a type-parameter count plus a TypeVarType-stamped template — the
     # same "shell" data a non-generic handle carries), so — like
     # program_type_table above — they are collected here in Step A rather than
     # gated on that module's own body-resolution order in Step C: a qualified
     # generic application (e.g. ``lib::Box[int]``) inside a field of a type
     # declared in a module that sorts before ``lib`` in the fixed body-resolution
-    # order must still resolve.  Aliases need resolved targets rather than
-    # shells, so program environments resolve them lazily; constructor signatures
-    # and constructor field kinds genuinely need a resolved body (field/target
-    # types), so those remain filled as each type body is resolved in Step C.
+    # order must still resolve. Inline enum-member entries are reconciled after
+    # their resolved fields determine their true captured parameters. Aliases
+    # need resolved targets rather than shells, so program environments resolve
+    # them lazily; constructor signatures and constructor field kinds genuinely
+    # need a resolved body (field/target types), so those remain filled as each
+    # type body is resolved in Step C.
     program_generic_table: dict[DeclKey, GenericTypeDef] = {}
     for mid, env in per_module_envs.items():
         for _name, gdef in env.all_generic_types().items():

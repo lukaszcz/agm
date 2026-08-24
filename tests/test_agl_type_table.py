@@ -349,7 +349,10 @@ def test_inline_enum_members_are_scoped_records_with_captured_parameters() -> No
 
 def test_inline_member_aliases_capture_only_resolved_parameters() -> None:
     checked = _check(
-        "type Ignore[T] = int\nenum E[T] | M(value: Ignore[T])\nlet value = M(value = 1)\nvalue"
+        "type Ignore[T] = int\n"
+        "enum E[T] | M(value: Ignore[T])\n"
+        "let value: E::M = M(value = 1)\n"
+        "value"
     )
 
     enum_type = checked.type_env.get_generic_type("E")

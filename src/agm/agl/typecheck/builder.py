@@ -12,12 +12,15 @@ matter: every reference — forward or backward — resolves to a valid handle.
 Building is therefore two simple, order-free phases:
 
 Phase 1 (``collect_shells_only``)
-    Register every declared name's FINAL handle (or, for a generic
+    Register every declared name's handle (or, for a generic
     declaration, its ``GenericTypeDef``) and every alias target.  A handle
-    carries no shape, so this phase never needs revisiting.
+    carries no shape. Inline enum-member shells use their syntactically
+    captured owner parameters until phase 2 can resolve transparent aliases.
 Phase 2 (the loop in ``collect``)
     Resolve each declaration's field/variant type expressions, in source
     order, into a ``TypeDef`` registered in the shared ``TypeTable``.  An
+    inline enum member's name binding is reconciled with the parameters that
+    remain free in those resolved field types.  An
     exception's ``TypeDef`` stores its OWN fields plus a resolved ``base``
     key (see ``semantics.type_table.TypeDef``); no ordering is required since
     the base need not be built yet to resolve the key.  A small post-pass
@@ -227,12 +230,14 @@ class _TypeBuilder:
 
         Public interface for the program pre-pass (``program.py``) which needs to
         register every module's declarations before resolving any body.
-        Non-generic records/enums/exceptions get their FINAL handle
+        Non-generic records/enums/exceptions get their handle
         registered directly (a handle carries no shape, so there is nothing
         left to "finish" later); generic records/enums get their
         ``GenericTypeDef`` (name, type params, and a handle template stamped
-        with ``TypeVarType`` args) registered instead — likewise final, since
-        the template carries no shape either.  Exceptions are never generic.
+        with ``TypeVarType`` args) registered instead. Inline member handles
+        are provisional because transparent aliases can erase syntactically
+        captured owner parameters; phase 2 reconciles them. Exceptions are
+        never generic.
         """
         for item in self._static_type_items(program.body.items):
             if isinstance(item, RecordDef):
@@ -299,13 +304,20 @@ class _TypeBuilder:
 
     def _register_inline_member_handle(self, enum: EnumDef, member: VariantDef) -> None:
         """Register an inline enum member as its scoped record type."""
-        enum_name = _bare_name(enum.name)
-        scope_path = (*tuple(segment.name for segment in enum.scope_path), enum_name)
         member_name = f"{enum.name}::{member.name}"
         type_params = member_type_params(
             (cast(TypeExpr, field.type_expr) for field in member.fields), enum.type_params
         )
         self._register_name(member_name, member.span)
+        self._replace_inline_member_handle(enum, member, type_params)
+
+    def _replace_inline_member_handle(
+        self, enum: EnumDef, member: VariantDef, type_params: tuple[str, ...]
+    ) -> None:
+        """Make a member's type shell agree with its current captured parameters."""
+        enum_name = _bare_name(enum.name)
+        scope_path = (*tuple(segment.name for segment in enum.scope_path), enum_name)
+        member_name = f"{enum.name}::{member.name}"
         self._env.unregister_name(member_name)
         decl_id = _member_identity(enum, member, self._module_id)
         template = RecordType(
@@ -575,6 +587,7 @@ class _TypeBuilder:
                 is_inline_enum_member=True,
             )
             member_defs.append(member_def)
+            self._replace_inline_member_handle(stmt, vd, captured_params)
             members.append(
                 RecordType(
                     name=vd.name,

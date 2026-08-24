@@ -3308,6 +3308,44 @@ class TestFailureEffects:
         assert not s.eval_entry("After").ok
         assert not s.eval_entry("After(value = 3)").ok
 
+    def test_runtime_raise_does_not_promote_enum_without_its_later_referenced_member(
+        self,
+    ) -> None:
+        s = ReplSession()
+
+        failed = s.eval_entry("enum E = ::R\nlet z: decimal = 1 / 0\nrecord R()")
+
+        assert not failed.ok
+        assert "E" not in failed.installed
+        assert "E" not in s.type_names()
+        assert "R" not in s.type_names()
+
+    def test_runtime_raise_tracks_applied_referenced_member_dependencies(self) -> None:
+        s = ReplSession()
+
+        failed = s.eval_entry(
+            "enum E = ::R[Payload]\nlet z: decimal = 1 / 0\nrecord Payload()\nrecord R[T]()"
+        )
+
+        assert not failed.ok
+        assert "E" not in s.type_names()
+
+    def test_runtime_raise_does_not_promote_function_typed_with_later_inline_member(
+        self,
+    ) -> None:
+        s = ReplSession()
+
+        failed = s.eval_entry(
+            "def read(value: E::A) -> int = value.value\n"
+            "let z: decimal = 1 / 0\n"
+            "enum E\n"
+            "  | A(value: int)"
+        )
+
+        assert not failed.ok
+        assert "read" not in failed.installed
+        assert not s.eval_entry("read").ok
+
     def test_runtime_raise_retains_completed_function_initializer_metadata(self) -> None:
         s = ReplSession()
         failed = s.eval_entry("let z: decimal = 1 / 0\ndef later[T](x: T) -> T = x")

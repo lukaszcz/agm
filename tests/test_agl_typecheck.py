@@ -1314,6 +1314,18 @@ class TestScopedBindingTypes:
     binding type via the node-id-keyed binding environment.
     """
 
+    def test_enum_declaration_preserves_a_standalone_record_in_its_scope(self) -> None:
+        checked = accept_type(
+            "scope Color\n"
+            "record Meta(value: int)\n"
+            "end Color\n"
+            "enum Color | Red\n"
+            "let meta: Color::Meta = Color::Meta(value = 1)\n"
+            "meta.value"
+        )
+
+        assert checked.resolved.program is not None
+
     def test_type_inferred_from_initializer(self) -> None:
         r = accept_type("scope Config\nlet retries = 3\nend Config\nConfig::retries")
         region = r.resolved.program.body.items[0]

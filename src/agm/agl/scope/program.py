@@ -499,6 +499,9 @@ def _member_record_constructor_refs(
                     owner_path=path,
                     can_match_bare_pattern=not member.fields,
                     is_builtin=declaration.is_builtin,
+                    inline_enum_owner_decl_node_id=source_nominal_decl_id(
+                        module_id, path[:-1], declaration.name, declaration.node_id
+                    ),
                 )
     return result
 

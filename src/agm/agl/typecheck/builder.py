@@ -293,6 +293,7 @@ class _TypeBuilder:
                 typedef.kind == "record"
                 and typedef.module_id == self._module_id
                 and typedef.scope_path == scope_path
+                and typedef.is_inline_enum_member
             ):
                 self._env.unregister_name(f"{enum.name}::{typedef.name}")
 

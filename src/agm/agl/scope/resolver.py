@@ -1257,10 +1257,28 @@ class _Resolver:
         if type_scope not in self._constructor_owner_scopes:
             return
 
+        candidates = (
+            candidate
+            for refs in (
+                *self._constructor_candidates.values(),
+                *self._scoped_constructor_candidates.values(),
+            )
+            for candidate in refs
+        )
+        member_scopes = {
+            (*candidate.owner_path, candidate.owner_name)
+            for candidate in candidates
+            if candidate.owner_module_id == self._module_id
+            and candidate.owner_path == type_scope
+            and candidate.inline_enum_owner_decl_node_id is not None
+        }
+        if not member_scopes:
+            return
+
         def keep(candidate: ConstructorRef) -> bool:
-            return not (
-                candidate.owner_module_id == self._module_id
-                and candidate.owner_path[: len(type_scope)] == type_scope
+            owner = (*candidate.owner_path, candidate.owner_name)
+            return candidate.owner_module_id != self._module_id or not any(
+                owner[: len(member_scope)] == member_scope for member_scope in member_scopes
             )
 
         self._constructor_candidates = {

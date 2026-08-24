@@ -238,6 +238,8 @@ class ConstructorRef:
     path (``Enum::Member``), while standalone records use their declaration
     path. ``owner_decl_node_id`` is that record's nominal identity, including
     the canonical identity of a seeded builtin member.
+    ``inline_enum_owner_decl_node_id`` identifies the enum that synthetically
+    declared this record; standalone and referenced records leave it unset.
     """
 
     owner_name: str
@@ -247,6 +249,7 @@ class ConstructorRef:
     can_match_bare_pattern: bool = False
     owner_path: ScopePath = ()
     is_builtin: bool = False
+    inline_enum_owner_decl_node_id: int | None = None
 
     @classmethod
     def for_member(cls, member: RecordType) -> "ConstructorRef":

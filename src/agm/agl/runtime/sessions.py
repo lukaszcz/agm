@@ -147,6 +147,8 @@ class SessionHost(Protocol):
 
     def close(self, handle: str) -> None: ...
 
+    def reset_all(self) -> None: ...
+
     def close_all(self) -> None: ...
 
 
@@ -267,10 +269,13 @@ class AgentDispatcherSessionHost(SessionHost):
         else:
             del self._sessions[handle]
 
-    def close_all(self) -> None:
+    def reset_all(self) -> None:
         self._sessions.clear()
         self._closed.clear()
         self._default_handle = None
+
+    def close_all(self) -> None:
+        self.reset_all()
 
     def _new_handle(self) -> str:
         handle = f"ephemeral-{self._next_handle}"

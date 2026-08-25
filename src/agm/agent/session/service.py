@@ -202,6 +202,15 @@ class AglSessionHost:
         self._call_host(lambda: self._service.close(handle))
         self._retire_ephemeral(handle)
 
+    def reset_all(self) -> None:
+        try:
+            self._service.reset_all()
+        finally:
+            for handle in tuple(self._agents):
+                if not self._service.is_known(handle):
+                    self._agents.pop(handle, None)
+                    self._ephemeral_handles.discard(handle)
+
     def close_all(self) -> None:
         try:
             self._service.close_all()
@@ -398,6 +407,25 @@ class SessionService:
     def is_known(self, handle: str) -> bool:
         """Whether *handle* is still retained by this service."""
         return handle in self._entries
+
+    def reset_all(self) -> None:
+        """Close and forget all sessions so the next default starts fresh.
+
+        Successfully closed and previously closed entries are discarded. Entries
+        whose close fails remain available for a later cleanup attempt.
+        """
+        failures: list[Exception] = []
+        for handle, entry in tuple(self._entries.items()):
+            if not entry.closed:
+                try:
+                    self.close(handle)
+                except Exception as error:
+                    failures.append(error)
+                    continue
+            self._entries.pop(handle, None)
+        self._default_handle = None
+        if failures:
+            raise ExceptionGroup("failed to reset one or more agent sessions", failures)
 
     def close_all(self) -> None:
         """Close every live backend, raising grouped failures after all attempts.

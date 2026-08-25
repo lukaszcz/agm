@@ -21,6 +21,7 @@ from agm.agl.diagnostics import AglError
 from agm.agl.ir.program import IrParam
 from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.runtime.request import AgentRequest, AgentResponse
+from agm.agl.runtime.sessions import AgentDispatcherSessionHost
 from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS, create_seeded_type_table
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
@@ -46,7 +47,7 @@ from agm.agl.semantics.values import (
     TextValue,
     UnitValue,
 )
-from tests._agl_helpers import strip_decl_ids
+from tests._agl_helpers import agent_value, strip_decl_ids
 from tests._process_helpers import FakeShell
 
 # ---------------------------------------------------------------------------
@@ -3912,6 +3913,16 @@ class TestParams:
 
 
 class TestReset:
+    def test_reset_starts_a_fresh_default_agent_session(self) -> None:
+        host = AgentDispatcherSessionHost(None)
+        agent = agent_value("AgentCommand", command="worker")
+        first = host.default(agent, "Cli")
+        session = ReplSession(session_host=host)
+
+        session.reset()
+
+        assert host.default(agent, "Cli") != first
+
     def test_reset_clears_all_state(self) -> None:
         s = ReplSession()
         s.eval_entry("let x = 1")

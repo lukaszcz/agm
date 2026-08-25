@@ -264,6 +264,7 @@ class ReplSession:
             if session_host is not None
             else AgentDispatcherSessionHost(agent_dispatcher)
         )
+        self._session_host = effective_session_host
         self._runtime = PipelineDriver(
             default_call_depth_limit=default_call_depth_limit,
             agent_dispatcher=agent_dispatcher,
@@ -1728,6 +1729,7 @@ class ReplSession:
         # session-scoped binding: a companion resolves and imports again on
         # its next use, as though the session were new.
         self._runtime.reset_extern_registry()
+        self._session_host.reset_all()
 
     def load_file(self, path: "Path") -> list[EntryResult]:
         """Evaluate the contents of *path* incrementally.

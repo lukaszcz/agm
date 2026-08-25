@@ -300,6 +300,37 @@ def test_default_session_snapshots_the_first_agent_and_returns_it_after_changes(
     assert factory.backends[0].open_requests[0].agent is first_agent
 
 
+def test_reset_all_discards_handles_and_starts_a_fresh_default_generation() -> None:
+    service, factory = _service()
+    first_default = service.default(AgentCommand("first"), "cli")
+    explicit = service.open(AgentCommand("other"), "cli")
+
+    service.reset_all()
+
+    assert [backend.close_calls for backend in factory.backends] == [1, 1]
+    assert not service.is_known(first_default)
+    assert not service.is_known(explicit)
+    next_default = service.default(AgentCommand("second"), "cli")
+    assert next_default != first_default
+    assert len(factory.backends) == 3
+
+
+def test_reset_all_retains_failed_closes_for_cleanup_retry() -> None:
+    service, factory = _service()
+    failed = service.open(AgentCommand("failed"), "cli")
+    closed = service.open(AgentCommand("closed"), "cli")
+    factory.backends[0].close_error = RuntimeError("busy")
+
+    with pytest.raises(ExceptionGroup):
+        service.reset_all()
+
+    assert service.is_known(failed)
+    assert not service.is_known(closed)
+    factory.backends[0].close_error = None
+    service.reset_all()
+    assert not service.is_known(failed)
+
+
 def test_close_all_closes_live_backends_once_and_is_safe_to_repeat() -> None:
     service, factory = _service()
     first = service.open(object(), "cli")

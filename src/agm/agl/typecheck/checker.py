@@ -2096,7 +2096,9 @@ class _Checker:
 
     def _check_cast(self, node: Cast) -> Type:
         source_type = self._check_expr(node.expr, expected=None)
-        target_type = self._env.resolve_type_expr(node.target_type, span=node.span)
+        target_type = self._env.resolve_type_expr(
+            node.target_type, span=node.span, type_vars=self._current_type_vars
+        )
         table = self._env.type_table
         kind = cast_classification(source_type, target_type, table)
         if kind == CastKind.STATIC_ERROR:

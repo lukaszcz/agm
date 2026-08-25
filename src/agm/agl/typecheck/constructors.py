@@ -464,6 +464,7 @@ class ConstructorChecker:
             )
             field_types = instantiation.templates[:-1]
             result = instantiation.templates[-1]
+            self._constrain_member_result_from_context(result, expected, span, owner_name)
             for type_param in type_params:
                 engine.require_solved(
                     instantiation.variables[type_param],
@@ -526,6 +527,21 @@ class ConstructorChecker:
                 bound_exprs,
             )
         return contextualized
+
+    def _constrain_member_result_from_context(
+        self, result: Type, expected: Type | None, span: SourceSpan, owner_name: str
+    ) -> None:
+        """Use an expected enum slot to specialize its member constructor before arguments."""
+        if not isinstance(result, RecordType) or not isinstance(expected, EnumType):
+            return
+        expected_member = self._ctx._env.type_table.enum_member_by_decl(expected, result.decl_id)
+        if expected_member is not None:
+            engine = self._inference_engine()
+            engine.unify(
+                result,
+                expected_member,
+                engine.origin(span, role=ConstraintRole.EXPECTED_RESULT, subject=owner_name),
+            )
 
     def _inference_engine(self) -> InferenceEngine:
         """Return the active shared solver for a generic constructor occurrence."""

@@ -4500,6 +4500,16 @@ class TestPartialConstructorAndValueCalls:
             "enum Option[T]\n  | some(value: T)\nlet make: (int) -> Option[text] = some\nmake"
         )
 
+    def test_generic_member_constructor_rejects_an_unrelated_expected_enum_value(self) -> None:
+        reject_type(
+            "enum Option[T]\n"
+            "  | some(value: T)\n"
+            "enum Other\n"
+            "  | none\n"
+            "let value: Other = Option::some(value = 1)\n"
+            "value"
+        )
+
     def test_generic_constructor_uses_expected_function_type_for_hole(self) -> None:
         checked = accept_type(
             "record Box[T]\n  value: T\nlet make: (text) -> Box[text] = Box(value = ?)\nmake"

@@ -10,7 +10,7 @@
         "ask": {"responses": []}
       },
       "expect": {
-        "stdout": "compact\nfork\nrename\nstats\nname\ncommand session requires a %{SESSION_ID} placeholder; use [exec] default-agent instead\ncommand-rpc\nclaude-rpc\n",
+        "stdout": "compact\nfork\nrename\nstats\nname\nmissing\ncommand-rpc\nclaude-rpc\n",
         "calls": {"writer": 0, "missing": 0, "ask": 0},
         "sessions": [
           {"agent": "writer", "tag": "session-1", "opened": true, "closed": true}

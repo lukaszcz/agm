@@ -691,6 +691,7 @@ class ConstructorChecker:
                 "construct the exception directly (e.g. `Abort(message: ...)`).",
                 span=span,
             )
+        self._reject_session_constructor(owner, span)
         fields = self._ctx._env.type_table.record_fields(owner)
         if fields:
             params = tuple(fields.values())
@@ -880,16 +881,7 @@ class ConstructorChecker:
                 span=node.span,
             )
         owner = self.resolve_constructor_owner(ctor_ref, node.span)
-        session = self._ctx._env.type_table.standard_builtin_declaration("Session")
-        if (
-            isinstance(owner, RecordType)
-            and session is not None
-            and owner.decl_id == session.decl_node_id
-        ):
-            raise AglTypeError(
-                "'Session' values are created by the host and cannot be constructed in source.",
-                span=node.span,
-            )
+        self._reject_session_constructor(owner, node.span)
         self._reject_abstract_exception_constructor(owner, node.span)
         return self._check_constructor_call(
             owner=owner,
@@ -901,6 +893,20 @@ class ConstructorChecker:
         )
 
     # --- Constructor call validation (private helper) ---
+
+    def _reject_session_constructor(
+        self, owner: RecordType | ExceptionType, span: SourceSpan
+    ) -> None:
+        session = self._ctx._env.type_table.standard_builtin_declaration("Session")
+        if (
+            isinstance(owner, RecordType)
+            and session is not None
+            and owner.decl_id == session.decl_node_id
+        ):
+            raise AglTypeError(
+                "'Session' values are created by the host and cannot be constructed in source.",
+                span=span,
+            )
 
     def _reject_abstract_exception_constructor(
         self, owner: RecordType | EnumType | ExceptionType, span: SourceSpan

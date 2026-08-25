@@ -12505,11 +12505,17 @@ class TestSessionPreludeTypes:
         )
         assert checked.resolved.program is not None
 
-    def test_session_cannot_be_constructed_by_user_code(self) -> None:
+    @pytest.mark.parametrize(
+        "source",
+        [
+            'Session(id = "session", agent = AgentCommand(command = "agent"), transport = Cli)',
+            "let make = Session\n"
+            'make("session", AgentCommand(command = "agent"), SessionTransport::Cli)',
+        ],
+    )
+    def test_session_cannot_be_constructed_by_user_code(self, source: str) -> None:
         with pytest.raises((AglScopeError, AglTypeError)) as exc_info:
-            parse_resolve_check(
-                'Session(id = "session", agent = AgentCommand(command = "agent"), transport = Cli)'
-            )
+            parse_resolve_check(source)
         assert "session" in str(exc_info.value).lower()
 
 

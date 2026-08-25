@@ -195,6 +195,26 @@ def test_prompt_handled_without_agent_run_completes_and_keeps_session_usable(
     backend.close()
 
 
+def test_interrupting_prompt_kills_the_active_rpc_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub = RpcStub(tmp_path, monkeypatch)
+    backend = open_backend()
+    pid = cast(int, stub.wait_for("starts.jsonl")[0]["pid"])
+
+    monkeypatch.setattr(
+        backend, "_next_event", lambda _child: (_ for _ in ()).throw(KeyboardInterrupt)
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        backend.ask(SessionAskRequest("interrupt"))
+
+    assert_exited(pid)
+    with pytest.raises(SessionHostError):
+        backend.compact("")
+    backend.close()
+
+
 def test_spawn_prompt_and_lifecycle_protocol(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -253,6 +253,9 @@ class PiRpcSessionBackend:
         started = time.monotonic()
         try:
             _write_command(child, command, self._idle_timeout)
+        except KeyboardInterrupt:
+            self._kill_dead_child(child)
+            raise
         except _RpcIdleTimeout as exc:
             self._kill_dead_child(child)
             self._raise_transport_or_host(
@@ -285,6 +288,9 @@ class PiRpcSessionBackend:
                     if event.get("id") == state_request_id and event.get("command") == "get_state":
                         streaming_state = _response_streaming_state(event)
                 failure = _terminal_prompt_failure(event) if wait_for_settled else None
+            except KeyboardInterrupt:
+                self._kill_dead_child(child)
+                raise
             except (BrokenPipeError, OSError) as exc:
                 self._kill_dead_child(child)
                 self._raise_transport_or_host(operation, "Pi RPC stdin closed", started, exc, child)
@@ -319,6 +325,9 @@ class PiRpcSessionBackend:
                                 {"id": state_request_id, "type": "get_state"},
                                 self._idle_timeout,
                             )
+                        except KeyboardInterrupt:
+                            self._kill_dead_child(child)
+                            raise
                         except _RpcIdleTimeout as exc:
                             self._kill_dead_child(child)
                             self._raise_transport_or_host(

@@ -7,6 +7,7 @@ import os
 import queue
 import signal
 import subprocess
+import time
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import cast
@@ -262,6 +263,56 @@ def test_terminate_process_group_allows_graceful_exit_before_kill(
 
     assert signals[:2] == [signal.SIGTERM, signal.SIGCHLD]
     assert signals[-1] == signal.SIGKILL
+
+
+@pytest.mark.parametrize("kill_disappears", [False, True])
+def test_terminate_process_group_kills_after_timeout(
+    monkeypatch: pytest.MonkeyPatch, *, kill_disappears: bool
+) -> None:
+    signals: list[int] = []
+    waits: list[float | None] = []
+
+    class Process:
+        stdin = None
+
+        def wait(self, timeout: float | None = None) -> int:
+            waits.append(timeout)
+            if timeout is not None:
+                raise subprocess.TimeoutExpired("pi", timeout)
+            return 0
+
+    def send_signal(_group: int, sent: int) -> None:
+        signals.append(sent)
+        if sent == signal.SIGKILL and kill_disappears:
+            raise ProcessLookupError
+
+    monkeypatch.setattr(os, "killpg", send_signal)
+
+    rpc._terminate_process_group(cast(subprocess.Popen[bytes], Process()), 123)
+
+    assert signals == [signal.SIGTERM, signal.SIGKILL]
+    assert waits == [1, None]
+
+
+def test_terminate_process_group_ignores_disappearance_after_grace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Process:
+        stdin = None
+
+        def wait(self, timeout: float | None = None) -> int:
+            assert timeout == 1
+            return 0
+
+    def send_signal(_group: int, sent: int) -> None:
+        if sent == signal.SIGKILL:
+            raise ProcessLookupError
+
+    times = iter([0.0, 0.3])
+    monkeypatch.setattr(os, "killpg", send_signal)
+    monkeypatch.setattr(time, "monotonic", lambda: next(times))
+
+    rpc._terminate_process_group(cast(subprocess.Popen[bytes], Process()), 123)
 
 
 def test_terminate_ignores_stdin_close_failure() -> None:

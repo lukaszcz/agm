@@ -27,4 +27,5 @@ program def main() -> unit =
   print j
   # JSON opt-in via "as json": print still emits single-line render output.
   print(Pair(name = "x", score = 3) as json)
-  print(Verdict::Bad(reason = "slow") as json)
+  let verdict: Verdict = Verdict::Bad(reason = "slow")
+  print(verdict as json)

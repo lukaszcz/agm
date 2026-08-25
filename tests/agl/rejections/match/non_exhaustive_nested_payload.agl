@@ -2,7 +2,7 @@ enum Box
   | box(flag: bool)
   | empty
 program def main() -> unit =
-  let value = box(flag = false)
+  let value: Box = box(flag = false)
   case value of
     | box(flag = false) => ()
     | empty => ()

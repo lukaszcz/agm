@@ -1,0 +1,1 @@
+{"scenarios": [{"name": "same_referenced_record_deduplicates", "expect": {"stdout": "1\n"}}]}

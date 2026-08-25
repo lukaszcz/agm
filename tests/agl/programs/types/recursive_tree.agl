@@ -24,17 +24,17 @@ def tree_depth(t: Tree) -> int =
         1 + (if l >= r => l else => r)
 
 program def main() -> unit =
-  let tree = Node(
+  let tree: Tree = Node(
     value = a,
     left = Node(value = b, left = Leaf(), right = Leaf()),
     right = Node(value = c, left = Leaf(), right = Leaf()),
   )
-  let same_shape = Node(
+  let same_shape: Tree = Node(
     value = a,
     left = Node(value = b, left = Leaf(), right = Leaf()),
     right = Node(value = c, left = Leaf(), right = Leaf()),
   )
-  let different = Node(value = a, left = Leaf(), right = Leaf())
+  let different: Tree = Node(value = a, left = Leaf(), right = Leaf())
 
   print sum_tree(tree)
   print tree_depth(tree)

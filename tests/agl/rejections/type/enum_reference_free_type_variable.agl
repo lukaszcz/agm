@@ -1,0 +1,6 @@
+enum Box[T]
+  | Value(value: T)
+
+enum E[T] = ::Box[U]::Value[T]
+
+program def main() -> unit = ()

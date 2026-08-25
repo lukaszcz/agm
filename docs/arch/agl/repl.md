@@ -10,7 +10,9 @@ A REPL session retains successful declarations, bindings, types, and runtime
 state, so later entries can refer to earlier entries without replaying them.
 A later declaration at the same reachable path supersedes the earlier one.
 Static failures do not promote their entry; completed runtime effects retain
-their ordinary REPL behavior.
+their ordinary REPL behavior. Nominal redeclarations receive fresh declaration
+identities, so retained values and methods keep the exact record, enum-member,
+or exception shape against which they were checked.
 
 Imports and `use` declarations also persist after a successful entry. A later
 import replaces retained declarations for the modules it names at the same
@@ -37,7 +39,9 @@ disables that prelude for the whole session.
 `exec` discovers a program's parameters and selects its entry function. The
 REPL obtains imported parameter values from configuration and requires defaults
 for entry-local parameters. Both hosts seed engine settings and use the shared
-runtime for agents, shell commands, and standard-library services.
+runtime for agents, shell commands, and standard-library services. Agent enum
+members cross the host boundary as their nominal record values rather than as
+enum wrappers.
 
 ## Front-End Seam
 

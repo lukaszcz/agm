@@ -485,7 +485,7 @@ class TestReplRun:
         tmp_path: Path,
         fake_plain_console: list[dict[str, object]],
     ) -> None:
-        from agm.agl.semantics.values import EnumValue, TextValue
+        from agm.agl.semantics.values import RecordValue, TextValue
         from agm.agl.setting_overrides import SettingOverride
 
         _isolated_home(monkeypatch, tmp_path)
@@ -499,15 +499,15 @@ class TestReplRun:
         assert session.eval_entry("import std/config").ok
         seeded = session.eval_entry("std/config::default-agent")
         assert seeded.ok
-        assert isinstance(seeded.value, EnumValue)
-        assert seeded.value.variant == "AgentCommand"
+        assert isinstance(seeded.value, RecordValue)
+        assert seeded.value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
         assert seeded.value.fields["command"] == TextValue("configured")
 
         assert session.eval_entry('std/config::default-agent := AgentClaude("haiku", "low")').ok
         result = session.eval_entry("std/config::default-agent")
         assert result.ok
-        assert isinstance(result.value, EnumValue)
-        assert result.value.variant == "AgentClaude"
+        assert isinstance(result.value, RecordValue)
+        assert result.value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentClaude"
         assert result.value.fields["model"] == TextValue("haiku")
 
     def test_cli_agent_override_still_applies_after_reset(
@@ -517,7 +517,7 @@ class TestReplRun:
         fake_plain_console: list[dict[str, object]],
     ) -> None:
         """``:reset`` clears the session's cached stdlib, but the override reapplies."""
-        from agm.agl.semantics.values import EnumValue, TextValue
+        from agm.agl.semantics.values import RecordValue, TextValue
 
         _isolated_home(monkeypatch, tmp_path)
         repl_command.run(_args(agent='AgentCommand("configured")'))
@@ -528,8 +528,8 @@ class TestReplRun:
 
         result = session.eval_entry("import std/config\nstd/config::default-agent")
         assert result.ok
-        assert isinstance(result.value, EnumValue)
-        assert result.value.variant == "AgentCommand"
+        assert isinstance(result.value, RecordValue)
+        assert result.value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
         assert result.value.fields["command"] == TextValue("configured")
 
     def test_exec_config_seeds_each_configured_engine_setting(
@@ -642,7 +642,7 @@ class TestReplRun:
         expected_log: bool,
         expected_file: str | None,
     ) -> None:
-        from agm.agl.semantics.values import BoolValue, EnumValue, TextValue
+        from agm.agl.semantics.values import BoolValue, RecordValue, TextValue
 
         _isolated_home(monkeypatch, tmp_path)
         monkeypatch.setattr(
@@ -655,7 +655,7 @@ class TestReplRun:
             assert "log-file" not in session._persisted_host_settings
         else:
             log_file = session._persisted_host_settings["log-file"]
-            assert isinstance(log_file, EnumValue)
+            assert isinstance(log_file, RecordValue)
             assert log_file.fields["value"] == TextValue(expected_file)
 
     def test_dry_run_runs_console_in_check_only_mode(
@@ -871,7 +871,7 @@ class TestReplRun:
         fake_plain_console: list[dict[str, object]],
     ) -> None:
         """``[exec] runner`` is a bare host command, decoded into an ``AgentCommand`` value seed."""
-        from agm.agl.semantics.values import EnumValue, TextValue
+        from agm.agl.semantics.values import RecordValue, TextValue
 
         home = _isolated_home(monkeypatch, tmp_path)
         config_dir = home / ".agm"
@@ -882,8 +882,8 @@ class TestReplRun:
 
         session: ReplSession = fake_plain_console[0]["session"]
         seeded = session._engine_seed["default-agent"]
-        assert isinstance(seeded, EnumValue)
-        assert seeded.variant == "AgentCommand"
+        assert isinstance(seeded, RecordValue)
+        assert seeded.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
         assert seeded.fields["command"] == TextValue("claude")
         assert session._setting_overrides == {}
 
@@ -931,7 +931,7 @@ class TestReplRun:
         tmp_path: Path,
         fake_plain_console: list[dict[str, object]],
     ) -> None:
-        from agm.agl.semantics.values import EnumValue, TextValue
+        from agm.agl.semantics.values import RecordValue, TextValue
 
         home = _isolated_home(monkeypatch, tmp_path)
         agm_dir = home / ".agm"
@@ -946,7 +946,7 @@ class TestReplRun:
         )
 
         assert result.ok
-        assert isinstance(result.value, EnumValue)
+        assert isinstance(result.value, RecordValue)
         assert result.value.fields["value"] == TextValue("0.0000001s")
 
     def test_string_timeout_in_config_accepted(

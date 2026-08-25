@@ -11,13 +11,13 @@ from typing import Protocol, SupportsIndex, cast, overload
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.program import NominalDescriptor, NominalKind
 from agm.agl.runtime.render import render_value
+from agm.agl.semantics.types import terminal_name
 from agm.agl.semantics.values import (
     UNIT_VALUE,
     ArrayValue,
     BoolValue,
     DecimalValue,
     DictValue,
-    EnumValue,
     ExceptionValue,
     IntValue,
     JsonValue,
@@ -77,7 +77,6 @@ class _AglNominal:
     _agl_kind: NominalKind
     _agl_fields: tuple[str, ...]
     _agl_descriptor: NominalDescriptor
-    _agl_variant: str
 
     def __init__(self, **fields: object) -> None:
         expected = type(self)._agl_fields
@@ -108,24 +107,31 @@ class _AglNominal:
 
 
 class _AglEnum:
-    """Base class for one synthesized AgL enum."""
+    """Base class for one synthesized AgL enum: a pure namespace.
+
+    Every member -- declared inline in the enum body or referenced by a
+    qualified name -- is its own plain record class, set as an attribute of
+    the enum class (``Step.Go``); the enum class itself carries no
+    ``_agl_descriptor`` and is never instantiated, and no member class
+    inherits from it (``issubclass(Step.Go, Step)`` is ``False``).
+    """
 
     __slots__ = ()
     _agl_nominal: NominalId
 
 
 def _nominal_class_name(descriptor: NominalDescriptor) -> str:
-    return descriptor.display_name.rsplit("::", maxsplit=1)[-1]
+    return terminal_name(descriptor.display_name)
 
 
-def _nominal_attrs(descriptor: NominalDescriptor, fields: tuple[str, ...]) -> dict[str, object]:
+def _nominal_attrs(descriptor: NominalDescriptor) -> dict[str, object]:
     """Return the class-level attributes shared by every synthesized nominal shape."""
     return {
         "_agl_nominal": descriptor.nominal,
         "_agl_kind": descriptor.kind,
-        "_agl_fields": fields,
+        "_agl_fields": descriptor.fields,
         "_agl_descriptor": descriptor,
-        "__match_args__": fields,
+        "__match_args__": descriptor.fields,
     }
 
 
@@ -143,17 +149,24 @@ def _create_nominal(descriptor: NominalDescriptor, name: str) -> type[object]:
     an identity's layout is fixed at its declaration, so there is never a
     reason to build a second class for the same ``NominalId``.
     """
-    attrs = _nominal_attrs(descriptor, descriptor.fields)
+    attrs = _nominal_attrs(descriptor)
     return cast(
         type[object],
         type(name, (cast(type[object], _AglNominal),), _class_namespace(attrs)),
     )
 
 
-def _create_enum(descriptor: NominalDescriptor, name: str) -> type[object]:
-    """Create the synthesized enum class and its nested variant classes.
+def _create_enum(
+    descriptor: NominalDescriptor, name: str, variant_classes: dict[NominalId, type[object]]
+) -> type[object]:
+    """Create the synthesized enum class: a pure namespace over its members' own classes.
 
     Called at most once per identity, for the same reason as :func:`_create_nominal`.
+    Every member -- inline or referenced -- already has its own plain record
+    class by the time this runs (see :func:`synthesize_nominal_classes`); this
+    only ever builds a class itself for a member whose own descriptor is
+    reachable in neither *variant_classes* nor the current synthesis batch --
+    a member record built standalone, elsewhere, from its own descriptor.
     """
     enum_cls = cast(
         type[object],
@@ -164,12 +177,18 @@ def _create_enum(descriptor: NominalDescriptor, name: str) -> type[object]:
         ),
     )
     for variant in descriptor.variants:
-        attrs = {**_nominal_attrs(descriptor, variant.fields), "_agl_variant": variant.name}
-        variant_cls = type(
-            variant.name,
-            (cast(type[object], _AglNominal), enum_cls),
-            _class_namespace(attrs),
-        )
+        variant_cls = variant_classes.get(variant.member)
+        if variant_cls is None:
+            member_descriptor = NominalDescriptor(
+                nominal=variant.member,
+                module_id=descriptor.module_id,
+                scope_path=(*descriptor.scope_path, descriptor.declared_name),
+                declared_name=variant.name,
+                kind=NominalKind.RECORD,
+                fields=variant.fields,
+            )
+            variant_cls = _create_nominal(member_descriptor, variant.name)
+            variant_classes[variant.member] = variant_cls
         setattr(enum_cls, variant.name, variant_cls)
     return enum_cls
 
@@ -204,19 +223,26 @@ def synthesize_nominal_classes(
     :func:`encode_boundary_value` consults for the encode direction; see
     :data:`_NOMINAL_CLASSES` for its lifetime.
     """
+    all_descriptors = tuple(descriptors)
     current = existing if existing is not None else {}
     result: dict[NominalId, type[object]] = {}
-    for descriptor in descriptors:
-        reused = current.get(descriptor.nominal)
+    pending_enums: list[NominalDescriptor] = []
+    for descriptor in all_descriptors:
+        reused = result.get(descriptor.nominal) or current.get(descriptor.nominal)
         if reused is not None:
             result[descriptor.nominal] = reused
             continue
         name = _nominal_class_name(descriptor)
-        result[descriptor.nominal] = (
-            _create_enum(descriptor, name)
-            if descriptor.kind is NominalKind.ENUM
-            else _create_nominal(descriptor, name)
-        )
+        if descriptor.kind is NominalKind.ENUM:
+            pending_enums.append(descriptor)
+        else:
+            result[descriptor.nominal] = _create_nominal(descriptor, name)
+    for descriptor in pending_enums:
+        variant_classes = {**current, **result}
+        enum_cls = _create_enum(descriptor, _nominal_class_name(descriptor), variant_classes)
+        result[descriptor.nominal] = enum_cls
+        for variant in descriptor.variants:
+            result.setdefault(variant.member, cast(type[object], getattr(enum_cls, variant.name)))
     _NOMINAL_CLASSES.update(result)
     return result
 
@@ -417,14 +443,12 @@ def encode_boundary_value(value: Value) -> object:
         return AglArrayView(value)
     if isinstance(value, DictValue):
         return AglDictView(value)
-    if isinstance(value, (RecordValue, EnumValue, ExceptionValue)):
+    if isinstance(value, (RecordValue, ExceptionValue)):
         try:
             cls = _NOMINAL_CLASSES[value.nominal]
         except KeyError as exc:
             raise BoundaryViolation(f"unknown AgL nominal {value.display_name!r}") from exc
         fields = {name: encode_boundary_value(field) for name, field in value.fields.items()}
-        if isinstance(value, EnumValue):
-            cls = getattr(cls, value.variant)
         return cls(**fields)
     raise BoundaryViolation(f"cannot encode {type(value).__name__}")
 
@@ -463,9 +487,8 @@ def decode_boundary_value(obj: object) -> Value:
         }
         if descriptor.kind is NominalKind.RECORD:
             return RecordValue(descriptor.nominal, descriptor.display_name, fields)
-        if descriptor.kind is NominalKind.EXCEPTION:
-            return ExceptionValue(descriptor.nominal, descriptor.display_name, fields)
-        return EnumValue(
-            descriptor.nominal, descriptor.display_name, type(nominal_obj)._agl_variant, fields
-        )
+        # A descriptor reaches here only from :func:`_create_nominal`, which
+        # builds a class for a record or an exception declaration; an enum
+        # class is a pure namespace carrying no descriptor of its own.
+        return ExceptionValue(descriptor.nominal, descriptor.display_name, fields)
     raise BoundaryViolation(f"unsupported Python extern value {type(obj).__name__}")

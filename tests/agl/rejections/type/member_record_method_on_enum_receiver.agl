@@ -1,0 +1,9 @@
+enum Tree[T]
+  | Leaf
+  | Node(value: T)
+
+def Tree::Node::value_only[T](self) -> T = self.value
+
+program def main() -> unit =
+  let tree: Tree[int] = Node(value = 1)
+  print(tree.value_only())

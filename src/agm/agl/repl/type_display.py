@@ -81,7 +81,8 @@ def _format_enum_type(typ: EnumType, table: TypeTable) -> str:
 
 def _format_enum_type_with_name(typ: EnumType, name: str, table: TypeTable) -> str:
     lines = [f"enum {name}"]
-    for variant_name, fields in table.enum_variants(typ).items():
+    for variant_name, member in table.enum_member_names(typ).items():
+        fields = table.record_fields(member)
         if fields:
             field_list = ", ".join(
                 f"{field_name}: {field_type!r}" for field_name, field_type in fields.items()

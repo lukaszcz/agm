@@ -18,9 +18,9 @@ enum FixResult
   | Blocked(reason: text)
 
 program def main() -> unit =
-  let impl = AgentCommand("impl")
-  let reviewer = AgentCommand("reviewer")
-  let critic = AgentCommand("critic")
+  let impl: Agent = AgentCommand("impl")
+  let reviewer: Agent = AgentCommand("reviewer")
+  let critic: Agent = AgentCommand("critic")
   var artifact: text = ask("Implement %{spec}", agent = impl)
 
   # review declared as var so the until condition can reference it.

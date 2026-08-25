@@ -1,0 +1,12 @@
+{
+  "note": "This program has no param declarations and no agent calls, so exactly one execution path exists. The single scenario pins bare rendering for every fieldless nominal value regardless of where its record is declared.",
+  "scenarios": [
+    {
+      "name": "fieldless_nominals_render_bare",
+      "params": {},
+      "expect": {
+        "stdout": "Root\nS::Inner\nE::A\nE::B(x = 1)\n"
+      }
+    }
+  ]
+}

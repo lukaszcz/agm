@@ -1,0 +1,4 @@
+type Alias = ::Missing::Shared
+enum E = ::Alias
+
+program def main() -> unit = ()

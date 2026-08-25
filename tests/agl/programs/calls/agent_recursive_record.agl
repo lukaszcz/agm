@@ -14,7 +14,7 @@ def count_categories(c: Category) -> int =
   total
 
 program def main() -> unit =
-  let tree_source = AgentCommand("tree_source")
+  let tree_source: Agent = AgentCommand("tree_source")
   let c: Category = ask("Fetch the category tree.", agent = tree_source)
   print c.name
   print count_categories(c)

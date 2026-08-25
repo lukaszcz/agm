@@ -1,0 +1,1 @@
+{"scenarios": [{"name": "cross_module_reference_injection", "module_roots": ["program_modules/referenced_members"], "expect": {"stdout": "Shared(value = 4)\n"}}]}

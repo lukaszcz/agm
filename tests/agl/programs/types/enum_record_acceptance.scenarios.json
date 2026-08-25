@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "name": "shared_records_recursive_members_and_generic_tree",
+      "expect": {
+        "stdout": "3\n3\ntrue\nRR::R3(r = R1(x = 1, y = 2))\nTree::Node(value = 3, children = [Tree::Leaf])\n"
+      }
+    }
+  ]
+}

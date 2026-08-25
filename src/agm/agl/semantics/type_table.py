@@ -19,7 +19,7 @@ may reference the declaration's own type parameters via ``TypeVarType`` nodes
 — the same kind of template already computed for generic types today
 (``typecheck.env.GenericTypeDef.template``), just captured under one
 representation shared by records, enums, and exceptions.
-``TypeTable.record_fields``/``enum_variants`` substitute a handle's
+``TypeTable.record_fields``/``enum_members`` substitute a handle's
 ``type_args`` into those templates and memoize the result per handle;
 ``TypeTable.exception_fields`` has no ``type_args`` to substitute but instead
 flattens the ``extends`` base chain into one field mapping. The table also
@@ -58,7 +58,10 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, assert_never, cast
 
-from agm.agl.ir.reserved_nominals import NO_DECL_ID
+from agm.agl.ir.reserved_nominals import (
+    NO_DECL_ID,
+    require_reserved_enum_member_id,
+)
 from agm.agl.ir.reserved_nominals import require_reserved_nominal_id as _reserved_id
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
@@ -78,12 +81,15 @@ from agm.agl.semantics.types import (
     RecordType,
     TextType,
     Type,
+    TypeTemplate,
+    TypeTemplateMatch,
     TypeVarType,
     UnitType,
     contains_type_var,
     free_type_vars,
     is_assignable,
     is_scalar_json_shaped,
+    match_nominal_owner_template,
     spells_bare,
     substitute,
     type_children,
@@ -139,19 +145,18 @@ class MethodDef:
 
 @dataclass(frozen=True, slots=True)
 class TypeDef:
-    """One nominal type declaration's parameter list and field/variant templates.
+    """One nominal type declaration's parameter list and shape templates.
 
-    ``fields``/``variants`` are stored as tuples (not dicts) so ``TypeDef``
-    stays hashable and declaration order is explicit; ``TypeTable`` exposes
-    mapping-shaped accessors that substitute a handle's ``type_args`` in and
-    cache the result.
+    ``fields``/``members`` are stored as tuples so ``TypeDef`` stays hashable
+    and declaration order is explicit. ``members`` contains record handles;
+    the record declarations own their fields. ``TypeTable`` substitutes a
+    handle's ``type_args`` into these templates and caches the result.
 
-    ``fields``   — field templates for records (empty for enums); for
-                   exceptions, the exception's OWN field templates only —
-                   NOT flattened with the base chain (see
-                   :meth:`TypeTable.exception_fields`).
-    ``variants`` — variant templates for enums: ``(name, fields)`` pairs
-                   (empty for records/exceptions).
+    ``fields``  — field templates for records; for exceptions, the
+                  exception's OWN field templates only — NOT flattened with
+                  the base chain (see :meth:`TypeTable.exception_fields`).
+    ``members`` — record type templates for enums (empty for
+                  records/exceptions).
     ``abstract`` — exception metadata: ``True`` for the hierarchy root
                    (catchable but not constructible); unused for
                    records/enums.
@@ -187,6 +192,9 @@ class TypeDef:
                    :meth:`_TypeBuilder._validate_builtin_shape`'s comparison
                    against a seeded canonical literal must not fail merely
                    because the two carry different declaration identities.
+    ``is_inline_enum_member`` — ``True`` for a synthetic record declaration
+                   created by an inline enum member. Its inhabitation is
+                   determined by its enclosing enum rather than independently.
     """
 
     kind: TypeDefKind
@@ -195,19 +203,20 @@ class TypeDef:
     scope_path: tuple[str, ...] = ()
     type_params: tuple[str, ...] = ()
     fields: tuple[tuple[str, Type], ...] = ()
-    variants: tuple[tuple[str, tuple[tuple[str, Type], ...]], ...] = ()
+    members: tuple[RecordType, ...] = ()
     abstract: bool = False
     base: DeclId | None = None
     field_kinds: tuple[str, ...] = ()
     is_builtin: bool = field(default=False, compare=False)
     decl_node_id: int = field(default=NO_DECL_ID, compare=False)
+    is_inline_enum_member: bool = field(default=False, compare=False)
 
     def handle(self, type_args: tuple[Type, ...] = ()) -> RecordType | EnumType | ExceptionType:
         """Return the ``RecordType``/``EnumType``/``ExceptionType`` handle naming this ``TypeDef``.
 
         Convenience for call sites that hold a ``TypeDef`` and need the
         corresponding handle (e.g. to register a value, or to pass to
-        :meth:`TypeTable.record_fields`/:meth:`TypeTable.enum_variants`/
+        :meth:`TypeTable.record_fields`/:meth:`TypeTable.enum_members`/
         :meth:`TypeTable.exception_fields`). *type_args* defaults to ``()``
         for non-generic defs and must be empty for an exception (exceptions
         are never generic) — passing a non-empty tuple for one raises
@@ -267,10 +276,12 @@ class TypeTable:
         # excluded from every query about what the session actually declares.
         self._orphaned: set[DeclId] = set()
         self._record_fields_cache: dict[DeclId, dict[RecordType, Mapping[str, Type]]] = {}
-        self._enum_variants_cache: dict[
-            DeclId, dict[EnumType, Mapping[str, Mapping[str, Type]]]
+        self._enum_members_cache: dict[DeclId, dict[EnumType, tuple[RecordType, ...]]] = {}
+        self._enum_member_names_cache: dict[DeclId, dict[EnumType, Mapping[str, RecordType]]] = {}
+        self._enum_member_by_decl_cache: dict[
+            DeclId, dict[EnumType, Mapping[DeclId, RecordType]]
         ] = {}
-        # Exceptions are non-generic, so (unlike record_fields/enum_variants)
+        # Exceptions are non-generic, so (unlike record_fields/enum_members)
         # there is no type_args substitution — the memo is keyed directly by
         # declaration identity, one entry per exception.
         self._exception_fields_cache: dict[DeclId, Mapping[str, Type]] = {}
@@ -288,6 +299,10 @@ class TypeTable:
         # invalidated (set back to ``None``) whenever a declaration is added,
         # removed, or overwritten.
         self._non_data_caps: NonDataReachability | None = None
+        # Member declaration id -> the enums declaring or referencing it, in
+        # registration order. A referenced member belongs to several enums, so
+        # this is multi-valued. Whole-table, rebuilt on any registration change.
+        self._member_enum_owners: dict[DeclId, tuple[DeclId, ...]] | None = None
         # Whole-table finiteness fixpoint (see :meth:`has_finite_schema`),
         # cached and invalidated the same way as ``_non_data_caps``.
         self._finite_closure: FiniteClosure | None = None
@@ -333,6 +348,7 @@ class TypeTable:
         if existing is None:
             self._defs[decl_id] = typedef
             self._non_data_caps = None
+            self._member_enum_owners = None
             self._finite_closure = None
             return
         if self_validation_enabled() and existing != typedef:
@@ -500,7 +516,9 @@ class TypeTable:
 
     def _invalidate_cache_for(self, decl_id: DeclId) -> None:
         self._record_fields_cache.pop(decl_id, None)
-        self._enum_variants_cache.pop(decl_id, None)
+        self._enum_members_cache.pop(decl_id, None)
+        self._enum_member_names_cache.pop(decl_id, None)
+        self._enum_member_by_decl_cache.pop(decl_id, None)
         # Exception field accessors flatten inherited base chains, so changing
         # one exception can invalidate cached descendants as well as the changed
         # identity. Clear the exception caches wholesale rather than trying to
@@ -513,6 +531,7 @@ class TypeTable:
         # a single changed identity invalidates the whole cached result rather
         # than just this one.
         self._non_data_caps = None
+        self._member_enum_owners = None
         self._finite_closure = None
 
     def record_fields(self, handle: RecordType) -> Mapping[str, Type]:
@@ -551,16 +570,16 @@ class TypeTable:
         self._record_fields_cache.setdefault(decl_id, {})[handle] = result
         return result
 
-    def enum_variants(self, handle: EnumType) -> Mapping[str, Mapping[str, Type]]:
-        """Return *handle*'s variant field types with its ``type_args`` substituted in.
+    def enum_members(self, handle: EnumType) -> tuple[RecordType, ...]:
+        """Return *handle*'s member record types with ``type_args`` substituted in.
 
-        Memoized per handle, bucketed by ``decl_id`` (see :meth:`record_fields`).
-        Raises ``KeyError`` if no ``TypeDef`` is registered for the handle's
-        ``decl_id``, or ``AssertionError`` if the registered def's ``kind`` is
-        not ``"enum"``.
+        Members retain their declaration identities and field ownership. The
+        result is memoized per enum instantiation. Raises ``KeyError`` if no
+        definition is registered, or ``AssertionError`` when the identity is
+        not an enum.
         """
         decl_id = handle.decl_id
-        bucket = self._enum_variants_cache.get(decl_id)
+        bucket = self._enum_members_cache.get(decl_id)
         if bucket is not None:
             cached = bucket.get(handle)
             if cached is not None:
@@ -570,22 +589,191 @@ class TypeTable:
             raise KeyError(f"no TypeDef registered for enum {handle!r}")
         if typedef.kind != "enum":
             raise AssertionError(
-                f"enum_variants called for {handle!r}, which is registered as kind "
+                f"enum_members called for {handle!r}, which is registered as kind "
                 f"{typedef.kind!r}, not 'enum'"
             )
         subst = dict(zip(typedef.type_params, handle.type_args))
-        result: Mapping[str, Mapping[str, Type]] = {
-            vname: {fname: substitute(ftype, subst) for fname, ftype in vfields}
-            for vname, vfields in typedef.variants
-        }
-        self._enum_variants_cache.setdefault(decl_id, {})[handle] = result
+        result = tuple(cast(RecordType, substitute(member, subst)) for member in typedef.members)
+        self._enum_members_cache.setdefault(decl_id, {})[handle] = result
+        return result
+
+    def _member_enum_owner_index(self) -> Mapping[DeclId, tuple[DeclId, ...]]:
+        """Return the memoized member-declaration -> owning-enum index.
+
+        A member declared in one enum may also be referenced by others, so the
+        relation is multi-valued and keeps registration order — the order the
+        owner scan used before this index existed.
+        """
+        index = self._member_enum_owners
+        if index is None:
+            index = {}
+            for enum_def in self._defs.values():
+                if enum_def.kind != "enum":
+                    continue
+                for member in enum_def.members:
+                    index[member.decl_id] = (
+                        *index.get(member.decl_id, ()),
+                        enum_def.decl_node_id,
+                    )
+            self._member_enum_owners = index
+        return index
+
+    def _enum_defs_owning(self, record: RecordType) -> tuple[TypeDef, ...]:
+        """Return the enum definitions *record* is a member of, in registration order."""
+        owners = self._member_enum_owner_index().get(record.decl_id, ())
+        return tuple(self._defs[owner_id] for owner_id in owners)
+
+    @staticmethod
+    def _match_enum_member_template(
+        enum_def: TypeDef, member: RecordType, record: RecordType
+    ) -> TypeTemplateMatch | None:
+        """Match a concrete record against one enum member's complete template.
+
+        An enum may have phantom parameters which no member record can reveal,
+        so their missing bindings are permitted here. Callers that need a
+        concrete enum handle still require bindings for every enum parameter.
+        """
+        if member.decl_id != record.decl_id:
+            return None
+        return match_nominal_owner_template(TypeTemplate(member, enum_def.type_params), record)
+
+    def records_share_enum_membership(self, records: tuple[RecordType, ...]) -> bool:
+        """Return whether *records* belong to one currently nameable enum instantiation.
+
+        A member record captures only the enum parameters its fields use. The
+        records therefore share an enum instantiation when they belong to the
+        same current enum and their captured arguments give every shared
+        parameter the same value; parameters none of them captures may take
+        any value. Superseded enums remain available by identity for retained
+        values, but their reused name cannot annotate a new expression.
+        """
+        candidates = (
+            self._enum_defs_owning(records[0])
+            if records
+            else tuple(enum_def for enum_def in self._defs.values() if enum_def.kind == "enum")
+        )
+        for enum_def in candidates:
+            if not self.is_current(enum_def):
+                continue
+            members = {member.decl_id: member for member in enum_def.members}
+            bindings: dict[str, Type] = {}
+            for record in records:
+                member = members.get(record.decl_id)
+                if member is None:
+                    break
+                match = self._match_enum_member_template(enum_def, member, record)
+                if match is None:
+                    break
+                for parameter, argument in match.bindings:
+                    previous = bindings.setdefault(parameter, argument)
+                    if previous != argument:
+                        break
+                else:
+                    continue
+                break
+            else:
+                return True
+        return False
+
+    def enum_owners_for_member(self, handle: RecordType) -> tuple[EnumType, ...]:
+        """Return every concrete enum containing *handle* with known arguments.
+
+        Referenced records may belong to several enums.  The result therefore
+        preserves the full relation instead of making registration order part
+        of semantic validation.
+        """
+        owners: list[EnumType] = []
+        for typedef in self._enum_defs_owning(handle):
+            # The owner index only yields enums that declare or reference this
+            # member, so the lookup always succeeds.
+            member = next(item for item in typedef.members if item.decl_id == handle.decl_id)
+            match = self._match_enum_member_template(typedef, member, handle)
+            if match is None:
+                continue
+            bindings = dict(match.bindings)
+            if len(bindings) != len(typedef.type_params):
+                continue
+            args = tuple(bindings[param] for param in typedef.type_params)
+            result = typedef.handle(args)
+            assert isinstance(result, EnumType)
+            owners.append(result)
+        return tuple(owners)
+
+    def enum_owner_for_member(self, handle: RecordType) -> EnumType | None:
+        """Return the first concrete enum containing *handle*, if one exists.
+
+        This compatibility query is suitable only for callers that need any
+        owner.  Validation of an explicit owner must use
+        :meth:`enum_owners_for_member`.
+        """
+        return next(iter(self.enum_owners_for_member(handle)), None)
+
+    def record_matches_enum_member(
+        self, enum: EnumType, member_name: str, record: RecordType
+    ) -> bool:
+        """Return whether *record* matches the named member of *enum* exactly.
+
+        A generic enum's bare template may qualify any of its instantiations,
+        so free variables still present in its member template are inferred
+        while concrete owner arguments must match exactly.
+        """
+        member = self.enum_member_names(enum).get(member_name)
+        if member is None or member.decl_id != record.decl_id:
+            return False
+        parameters = tuple(sorted(free_type_vars(member)))
+        return match_nominal_owner_template(TypeTemplate(member, parameters), record) is not None
+
+    def is_enum_member(self, handle: RecordType) -> bool:
+        """Return whether *handle* names a declaration registered as an enum member.
+
+        Unlike :meth:`enum_owner_for_member`, this is a declaration-membership
+        query. It therefore remains true for a fieldless generic member whose
+        record handle cannot reconstruct its owning enum's phantom arguments.
+        """
+        return handle.decl_id in self._member_enum_owner_index()
+
+    def enum_member_names(self, handle: EnumType) -> Mapping[str, RecordType]:
+        """Return the terminal member-name index for one enum instantiation."""
+        decl_id = handle.decl_id
+        bucket = self._enum_member_names_cache.get(decl_id)
+        if bucket is not None:
+            cached = bucket.get(handle)
+            if cached is not None:
+                return cached
+        result = {member.name: member for member in self.enum_members(handle)}
+        self._enum_member_names_cache.setdefault(decl_id, {})[handle] = result
+        return result
+
+    def enum_member_by_decl(self, handle: EnumType, decl_id: DeclId) -> RecordType | None:
+        """Return *handle*'s member declared as *decl_id*, or ``None`` if it has none.
+
+        The declaration-keyed counterpart of :meth:`enum_member_names`, memoized
+        per enum instantiation the same way. Callers holding a constructor's
+        declaration identity use this rather than rescanning the member tuple.
+        """
+        return self.enum_member_ids(handle).get(decl_id)
+
+    def enum_member_ids(self, handle: EnumType) -> Mapping[DeclId, RecordType]:
+        """Return *handle*'s members indexed by declaration id, memoized per instantiation.
+
+        Membership tests and member lookups both key off a declaration id, so
+        callers use this index rather than rescanning the member tuple.
+        """
+        enum_decl_id = handle.decl_id
+        bucket = self._enum_member_by_decl_cache.get(enum_decl_id)
+        if bucket is not None:
+            cached = bucket.get(handle)
+            if cached is not None:
+                return cached
+        result = {member.decl_id: member for member in self.enum_members(handle)}
+        self._enum_member_by_decl_cache.setdefault(enum_decl_id, {})[handle] = result
         return result
 
     def exception_fields(self, handle: ExceptionType) -> Mapping[str, Type]:
         """Return *handle*'s fully flattened field types (base chain applied).
 
         Exceptions are non-generic, so unlike :meth:`record_fields`/
-        :meth:`enum_variants` there is no ``type_args`` substitution — the
+        :meth:`enum_members` there is no ``type_args`` substitution — the
         result is memoized directly per ``decl_id``. Base fields come first
         (the root contributes ``message``), followed by the
         exception's own fields, matching declaration order.
@@ -688,39 +876,70 @@ class TypeTable:
         not itself a declaration.
 
         Builtin declarations are unique by complete scoped name, so a compile
-        unit may contain several paths with this bare name. This bare-name
-        lookup is used only by host contracts that have one matching builtin
-        type; the last registered declaration is the current contract
-        declaration. REPL accumulation can likewise retain older paths;
-        ``_defs`` never moves an existing entry, so a forward scan's last
-        match is the newest one. An orphaned declaration (:meth:`orphan`) is
-        skipped: it never took effect, so it must not become the contract a
-        later entry's host call is typed against.
+        unit may contain several paths with this bare name. A live declaration
+        outside ``std/core`` overrides the standard declaration; within each
+        tier the newest registered match wins. An orphaned declaration
+        (:meth:`orphan`) is skipped because it never took effect.
+        """
+        standard: TypeDef | None = None
+        override: TypeDef | None = None
+        for decl_id, typedef in self._defs.items():
+            if typedef.is_builtin and typedef.name == name and decl_id not in self._orphaned:
+                if typedef.module_id == STD_CORE_ID:
+                    standard = typedef
+                else:
+                    override = typedef
+        return override if override is not None else standard
+
+    def standard_builtin_declaration(self, name: str) -> TypeDef | None:
+        """Return the loaded ``std/core`` source declaration for *name*.
+
+        Host contracts may contain fields whose values are supplied by the
+        standard host representation rather than by the selected top-level
+        contract declaration. Reserved fallback identities cover the same
+        fields when ``std/core`` is not loaded.
         """
         result: TypeDef | None = None
         for decl_id, typedef in self._defs.items():
-            if typedef.is_builtin and typedef.name == name and decl_id not in self._orphaned:
+            if (
+                typedef.is_builtin
+                and typedef.name == name
+                and typedef.module_id == STD_CORE_ID
+                and decl_id not in self._orphaned
+            ):
                 result = typedef
+        return result
+
+    def standard_builtin_declarations(self) -> Mapping[str, TypeDef]:
+        """Return all loaded ``std/core`` source builtin declarations."""
+        result: dict[str, TypeDef] = {}
+        for decl_id, typedef in self._defs.items():
+            if (
+                typedef.is_builtin
+                and typedef.module_id == STD_CORE_ID
+                and decl_id not in self._orphaned
+            ):
+                result[typedef.name] = typedef
         return result
 
     def builtin_declarations(self) -> Mapping[str, TypeDef]:
         """Return every bare name's currently live registered ``builtin`` declaration.
 
         The all-names counterpart of :meth:`builtin_declaration`: for each
-        bare name that has at least one registered, non-orphaned ``builtin``
-        declaration, the entry is the exact same declaration
-        :meth:`builtin_declaration` would return for that name alone (same
-        forward-scan, last-match-wins tie-break; same orphan skip). Building
+        bare name, it applies the same non-standard-over-standard precedence,
+        newest-within-tier tie-break, and orphan filtering. Building
         the host's minting table from this instead of an independent scan is
         how the host and the checker are kept from ever disagreeing about
         which declaration a built-in name denotes (see
         ``lower.lowerer.builtin_nominals_from_declarations``).
         """
-        result: dict[str, TypeDef] = {}
+        standard: dict[str, TypeDef] = {}
+        overrides: dict[str, TypeDef] = {}
         for decl_id, typedef in self._defs.items():
             if typedef.is_builtin and decl_id not in self._orphaned:
-                result[typedef.name] = typedef
-        return result
+                target = standard if typedef.module_id == STD_CORE_ID else overrides
+                target[typedef.name] = typedef
+        return {**standard, **overrides}
 
     def nominal_reaches_non_data(self, handle: RecordType | EnumType | ExceptionType) -> bool:
         """Return ``True`` if a non-data type is reachable from *handle* (cycle-safe).
@@ -1037,7 +1256,7 @@ class TypeTable:
         """Return *typedef*'s first own field whose type structurally reaches non-data."""
         from agm.agl.semantics.analyses import field_templates
 
-        for field_name, template in field_templates(typedef):
+        for field_name, template in field_templates(typedef, self._defs):
             if _first_non_data_leaf(template) is not None:
                 return field_name, template
         return None
@@ -1057,7 +1276,7 @@ class TypeTable:
 
         flags = self._non_data_reachability().reaches_non_data
         result: set[DeclId] = set()
-        for _field_name, template in field_templates(typedef):
+        for _field_name, template in field_templates(typedef, self._defs):
             for ref in nominal_references(template):
                 if self.nominal_reaches_non_data(ref):
                     result.add(ref.decl_id)
@@ -1307,6 +1526,26 @@ def is_json_convertible(t: Type, table: TypeTable) -> bool:
             assert_never(unreachable)
 
 
+def is_assignable_in(table: TypeTable, value_type: Type, target_type: Type) -> bool:
+    """Return whether a value is assignable to a target in *table*'s nominal context.
+
+    The pure :func:`semantics.types.is_assignable` rules apply unchanged.  In
+    addition, a member record is assignable to an enum when it occurs in that
+    enum instantiation's declared member set.  This is deliberately a
+    top-level, directed relation: containers remain invariant and enums and
+    exceptions do not gain membership-based conversions.
+    """
+    if is_assignable(value_type, target_type):
+        return True
+    if (
+        isinstance(value_type, RecordType)
+        and isinstance(target_type, EnumType)
+        and value_type in table.enum_members(target_type)
+    ):
+        return True
+    return False
+
+
 def json_cast_hint(value_type: Type, target_type: Type, table: TypeTable) -> str:
     """Return a diagnostic clause naming an explicit ``as json`` cast, or ``""``.
 
@@ -1343,6 +1582,19 @@ def cast_classification(source: Type, target: Type, table: TypeTable) -> CastKin
         return CastKind.STATIC_ERROR
     # ExceptionType as target is not in the matrix
     if isinstance(target, ExceptionType):
+        return CastKind.STATIC_ERROR
+
+    # Nominal membership casts are identity operations. A member-to-enum cast
+    # is a statically established widening; enum-to-member needs one runtime
+    # nominal check. They must precede ordinary assignability, which deliberately
+    # knows nothing about declaration-table membership.
+    if isinstance(source, RecordType) and isinstance(target, EnumType):
+        if source in table.enum_members(target):
+            return CastKind.IDENTITY_UPCAST
+        return CastKind.STATIC_ERROR
+    if isinstance(source, EnumType) and isinstance(target, RecordType):
+        if target in table.enum_members(source):
+            return CastKind.NOMINAL_DOWNCAST
         return CastKind.STATIC_ERROR
 
     # Handle is_assignable cases first (no-op / widen / json-absorb).
@@ -1407,6 +1659,88 @@ def cast_classification(source: Type, target: Type, table: TypeTable) -> CastKin
 # ---------------------------------------------------------------------------
 
 
+def _builtin_enum_defs(
+    name: str,
+    variants: tuple[tuple[str, tuple[tuple[str, Type], ...]], ...],
+    *,
+    type_params: tuple[str, ...] = (),
+) -> tuple[TypeDef, tuple[TypeDef, ...]]:
+    """Build canonical enum and scoped record-member definitions for the prelude."""
+    scope_path = (name,)
+    member_defs = tuple(
+        TypeDef(
+            kind="record",
+            name=member_name,
+            module_id=STD_CORE_ID,
+            scope_path=scope_path,
+            type_params=tuple(
+                param
+                for param in type_params
+                if any(param in free_type_vars(field_type) for _field, field_type in fields)
+            ),
+            fields=fields,
+            decl_node_id=require_reserved_enum_member_id(name, member_name),
+        )
+        for member_name, fields in variants
+    )
+    members = tuple(
+        cast(RecordType, member.handle(tuple(TypeVarType(param) for param in member.type_params)))
+        for member in member_defs
+    )
+    return (
+        TypeDef(
+            kind="enum",
+            name=name,
+            module_id=STD_CORE_ID,
+            type_params=type_params,
+            members=members,
+        ),
+        member_defs,
+    )
+
+
+_PARSE_POLICY_DEF, _PARSE_POLICY_MEMBER_DEFS = _builtin_enum_defs(
+    "ParsePolicy",
+    (("Abort", ()), ("Retry", (("n", IntType()),))),
+)
+_AGENT_DEF, _AGENT_MEMBER_DEFS = _builtin_enum_defs(
+    "Agent",
+    (
+        ("AgentCommand", (("command", TextType()),)),
+        ("AgentClaude", (("model", TextType()), ("thinking", TextType()))),
+        ("AgentCodex", (("model", TextType()), ("thinking", TextType()))),
+        (
+            "AgentPi",
+            (("provider", TextType()), ("model", TextType()), ("thinking", TextType())),
+        ),
+    ),
+)
+_OUTPUT_CONTRACT_OPTION_DEF, _OUTPUT_CONTRACT_OPTION_MEMBER_DEFS = _builtin_enum_defs(
+    "OutputContractOption",
+    (
+        ("None", ()),
+        (
+            "Some",
+            (
+                (
+                    "value",
+                    RecordType(
+                        name="OutputContract",
+                        module_id=STD_CORE_ID,
+                        decl_id=_reserved_id("OutputContract"),
+                    ),
+                ),
+            ),
+        ),
+    ),
+)
+_OPTION_DEF, _OPTION_MEMBER_DEFS = _builtin_enum_defs(
+    "Option",
+    (("None", ()), ("Some", (("value", TypeVarType("T")),))),
+    type_params=("T",),
+)
+
+
 def _with_reserved_ids(defs: Mapping[str, TypeDef]) -> Mapping[str, TypeDef]:
     """Stamp each canonical entry with the reserved identity its own key names.
 
@@ -1432,29 +1766,8 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
             ("timed_out", BoolType()),
         ),
     ),
-    "ParsePolicy": TypeDef(
-        kind="enum",
-        name="ParsePolicy",
-        module_id=STD_CORE_ID,
-        variants=(
-            ("Abort", ()),
-            ("Retry", (("n", IntType()),)),
-        ),
-    ),
-    "Agent": TypeDef(
-        kind="enum",
-        name="Agent",
-        module_id=STD_CORE_ID,
-        variants=(
-            ("AgentCommand", (("command", TextType()),)),
-            ("AgentClaude", (("model", TextType()), ("thinking", TextType()))),
-            ("AgentCodex", (("model", TextType()), ("thinking", TextType()))),
-            (
-                "AgentPi",
-                (("provider", TextType()), ("model", TextType()), ("thinking", TextType())),
-            ),
-        ),
-    ),
+    "ParsePolicy": _PARSE_POLICY_DEF,
+    "Agent": _AGENT_DEF,
     "OutputContract": TypeDef(
         kind="record",
         name="OutputContract",
@@ -1468,27 +1781,7 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
             ("structured_exec", BoolType()),
         ),
     ),
-    "OutputContractOption": TypeDef(
-        kind="enum",
-        name="OutputContractOption",
-        module_id=STD_CORE_ID,
-        variants=(
-            ("None", ()),
-            (
-                "Some",
-                (
-                    (
-                        "value",
-                        RecordType(
-                            name="OutputContract",
-                            module_id=STD_CORE_ID,
-                            decl_id=_reserved_id("OutputContract"),
-                        ),
-                    ),
-                ),
-            ),
-        ),
-    ),
+    "OutputContractOption": _OUTPUT_CONTRACT_OPTION_DEF,
     "AgentRequest": TypeDef(
         kind="record",
         name="AgentRequest",
@@ -1546,19 +1839,44 @@ BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = _with_reserved_ids(_PRELUDE_S
 # Generic ``Option`` template under ``STD_CORE_ID`` (type parameter ``T``,
 # variants ``None``/``Some(value: T)``), matching the shape of the concrete
 # ``Option[text]``/``Option[json]`` prelude constants, so a program loaded
-# without the standard library can still resolve ``enum_variants`` on
+# without the standard library can still resolve its member set on
 # ``Option`` handles.
-OPTION_TYPE_DEF = TypeDef(
-    kind="enum",
-    name="Option",
-    module_id=STD_CORE_ID,
-    type_params=("T",),
-    variants=(
-        ("None", ()),
-        ("Some", (("value", TypeVarType("T")),)),
-    ),
-    decl_node_id=_reserved_id("Option"),
-)
+OPTION_TYPE_DEF = replace(_OPTION_DEF, decl_node_id=_reserved_id("Option"))
+BUILTIN_PRELUDE_MEMBER_TYPE_DEFS: Mapping[DeclId, TypeDef] = {
+    member.decl_node_id: member
+    for member in (
+        *_PARSE_POLICY_MEMBER_DEFS,
+        *_AGENT_MEMBER_DEFS,
+        *_OUTPUT_CONTRACT_OPTION_MEMBER_DEFS,
+        *_OPTION_MEMBER_DEFS,
+    )
+}
+
+
+def source_nominal_decl_id(
+    module_id: ModuleId, scope_path: tuple[str, ...], name: str, node_id: int
+) -> int:
+    """Return the semantic identity of a source nominal declaration.
+
+    Every parsed declaration retains its parser node identity. Reserved
+    identities belong only to seeded fallback definitions used when a program
+    loads no source declaration for a host-known type.
+    """
+    return node_id
+
+
+def source_enum_member_decl_id(
+    module_id: ModuleId,
+    scope_path: tuple[str, ...],
+    enum_name: str,
+    member_name: str,
+    node_id: int,
+    *,
+    is_builtin: bool,
+) -> int:
+    """Return a source inline enum member's parser node identity."""
+    return node_id
+
 
 # ---------------------------------------------------------------------------
 # Built-in exception shapes — the single source of truth for every entry of
@@ -1778,6 +2096,8 @@ def create_seeded_type_table() -> TypeTable:
     entry of ``semantics.types.BUILTIN_EXCEPTIONS``).
     """
     table = TypeTable()
+    for typedef in BUILTIN_PRELUDE_MEMBER_TYPE_DEFS.values():
+        table.register(typedef)
     for typedef in BUILTIN_PRELUDE_TYPE_DEFS.values():
         table.register(typedef)
     table.register(OPTION_TYPE_DEF)

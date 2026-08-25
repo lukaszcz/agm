@@ -1,0 +1,8 @@
+enum Tree
+  | Leaf
+  | Node(value: int)
+
+program def main() -> unit =
+  let tree: Tree = Node(value = 1)
+  if tree is Node =>
+    print tree.value

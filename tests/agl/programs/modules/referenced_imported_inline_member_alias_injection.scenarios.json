@@ -1,0 +1,1 @@
+{"scenarios": [{"name": "imported_enum_and_alias_paths_target_inline_member", "module_roots": ["program_modules/referenced_inline_member_alias_routes"], "expect": {"stdout": "Source::Member(value = 6)\nSource::Member(value = \"seven\")\n"}}]}

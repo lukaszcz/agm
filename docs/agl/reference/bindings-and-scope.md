@@ -67,7 +67,7 @@ non-`unit` value is intentionally discarded.
 
 At the REPL top level, a completed destructuring `let` persists every selected
 binder across later entries. Its echo shows the complete matched value and type,
-not a synthetic binder name. If a later initializer fails, previously completed
+not a synthetic binder name. If a later initializer fails, completed
 pattern initializers (and completed function closures) remain available; the
 failing initializer contributes no binders.
 
@@ -350,34 +350,38 @@ record Box[T]
 let b: Box[int] = Box(value = 1)
 ```
 
-### Constructors are ordinary value bindings
+### Constructors in the value namespace
 
-Record constructors and enum variants are normal bindings in the value
-namespace. They can be referenced bare, stored, and passed like any value:
+Record constructors and injected enum-member constructors are normal bindings
+in the value namespace. A field-bearing constructor can be referenced bare, stored, and
+passed as a function value:
 
 <!-- agl-check: fragment -->
 ```agl
 let mk: int -> Box[int] = Box   # the constructor as a first-class value
-let one = mk(1)                    # called positionally, in field order
+let one = mk(1)                  # called positionally, in field order
 ```
 
 Direct construction uses positional-greedy binding — positional arguments fill
 positional-capable fields first, then named arguments follow (`Box(value = 1)`,
-`Some(value = x)`, or `Ok(42)` for a single-standard-field variant). A
-constructor reached **through a variable** is an ordinary function value invoked
-**positionally**, in declaration order. Nullary enum variants are ordinary
-values (`let e: Option[int] = None`). See [Generics](generics.md) for the full
-constructor-value story (including when a generic constructor needs an
-expected-type annotation).
+`Some(value = x)`, or `Ok(42)` for a single-standard-field member). A
+field-bearing constructor reached **through a variable** is an ordinary function
+value invoked **positionally**, in declaration order. A fieldless constructor
+reference constructs its value; use `fn() => R1` where a `() -> R1` function is
+required. See [Expressions](expressions.md#fieldless-constructor-references)
+and [Generics](generics.md) for constructor typing and inference.
 
 ### Overload sets, shadowing, and ambiguity
 
-Two enums may declare the **same** unqualified variant name; that name then
-resolves to an *overload set*. An unqualified reference in ordinary expression
-position is a **static ambiguity error** — regardless of payload, surrounding
-context, or explicit type arguments. **Qualify** the reference with the owning
-enum to disambiguate. Constructor patterns and `is` tests are different: their
-scrutinee's static enum type selects the owner.
+Several visible constructors may share an unqualified member name. In ordinary
+value position, a bare reference must resolve to exactly one constructor
+candidate in its lexical scope. If it does not, it is a **static scope
+ambiguity error**, even when an expected enum type contains one of the
+candidates: scope resolves the name before that type is used to check the
+expression. **Qualify** the reference with the member's owning enum or record
+to disambiguate. Enum-member patterns and `is` tests are different: their
+scrutinee's static enum type selects the member rather than using ordinary
+value-position scope selection.
 
 ```agl
 enum Holder[T]
@@ -401,13 +405,13 @@ def shadow(tagged: int) -> int = tagged * 10   # parameter hides the constructor
 Whether an ordinary declaration may claim a constructor's spelling **in that
 constructor's own scope** depends on whether the constructor stays reachable:
 
-- An **enum variant** may be claimed. Its name is `Owner::variant`, and the
-  unqualified spelling is a convenience, so the variant remains reachable
-  qualified. The claiming declaration owns expression position, while
-  case-pattern constructor lookup stays independent.
+- An inline **enum member** may be claimed. Its name is `Owner::member`, and
+  the unqualified spelling is an injected convenience, so the member remains
+  reachable qualified. The claiming declaration owns expression position,
+  while case-pattern constructor lookup stays independent.
 - A constructor **declared in another module** may be claimed, since module
   qualification still reaches it. This covers the **standard core** names —
-  exception types (`Abort`, `AgentParseError`, …), enum variants (`Some`,
+  exception types (`Abort`, `AgentParseError`, …), enum members (`Some`,
   `Retry`, …), and records (`ExecResult`, `AgentRequest`). They are
   conveniences, not reserved words.
 - A **record**, **exception**, or **type alias** declared in the *same* module
@@ -421,7 +425,7 @@ enum Color
   | Red
   | Blue
 
-let Red = 5                 # allowed — 'Color::Red' still names the variant
+let Red = 5                 # allowed — 'Color::Red' still names the member
 let ExecResult = 0          # allowed — declared in another module
 def Retry(n: int) -> int = n + 1
 
@@ -438,7 +442,7 @@ any shadowing:
 
 <!-- agl-check: fragment -->
 ```agl
-print(::Red)                # the 'let', not the variant
+print(::Red)                # the 'let', not the member
 ```
 
 ## Lexical scoping

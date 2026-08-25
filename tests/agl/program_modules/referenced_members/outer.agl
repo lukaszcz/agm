@@ -1,0 +1,3 @@
+import library
+
+enum E = library::Shared

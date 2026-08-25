@@ -45,7 +45,7 @@ program def main() -> unit =
     | mode == "constructors" =>
         # Generic record, payload, and nullary constructors flow through HOFs.
         let boxed = apply_to(7, Box)
-        let present = apply_to(8, some)
+        let present: Option[int] = apply_to(8, some)
         let missing: Option[int] = relay(none, id)
         print(boxed.value)
         print(present is Option::some)

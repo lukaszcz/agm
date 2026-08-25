@@ -22,7 +22,7 @@ from pathlib import Path
 from agm.agl.repl import ReplSession
 from agm.agl.semantics.values import (
     ArrayValue,
-    EnumValue,
+    BoolValue,
     ExceptionValue,
     IntValue,
     RecordValue,
@@ -195,6 +195,27 @@ class TestCapturedClassSurvivesRedeclaration:
 
 
 class TestFreshImportSeesTheCurrentDeclaration:
+    def test_referenced_member_in_its_enum_scope_stays_visible_after_enum_redeclaration(
+        self, tmp_path: Path
+    ) -> None:
+        """A referenced record keeps its companion paths even when they match its enum's scope."""
+        _write_extern_lib(
+            tmp_path,
+            "same_scope_member",
+            "extern def visible() -> bool\n",
+            ("from agl import R, nominals\ndef visible():\n    return R is nominals.entry.E.R\n"),
+        )
+        s = _make_session_with_root(tmp_path)
+        declaration = "scope E\nrecord R(value: int)\nend E\nenum E = ::E::R"
+        assert s.eval_entry(declaration).ok
+        assert s.eval_entry("enum E = ::E::R").ok
+
+        assert s.eval_entry("import same_scope_member::*").ok
+        result = s.eval_entry("visible()")
+
+        assert result.ok, result.diagnostics
+        assert result.value == BoolValue(True)
+
     def test_fresh_import_sees_the_new_record_shape_not_the_old_one(self, tmp_path: Path) -> None:
         _write_extern_lib(
             tmp_path,
@@ -255,7 +276,7 @@ class TestFreshImportSeesTheCurrentDeclaration:
         assert r.ok, r.diagnostics
         assert r.value == TextValue("extra,value")
 
-    def test_fresh_import_sees_the_new_enum_variants_not_the_old_ones(self, tmp_path: Path) -> None:
+    def test_fresh_import_sees_the_new_enum_members_not_the_old_ones(self, tmp_path: Path) -> None:
         _write_extern_lib(
             tmp_path,
             "capture_enum_after",
@@ -349,10 +370,10 @@ class TestBoundaryRoundTripAcrossRedeclaration:
 
         assert old_round_trip.ok, old_round_trip.diagnostics
         assert new_round_trip.ok, new_round_trip.diagnostics
-        assert isinstance(old_round_trip.value, EnumValue)
-        assert isinstance(new_round_trip.value, EnumValue)
-        assert old_round_trip.value.variant == "Gone"
-        assert new_round_trip.value.variant == "Other"
+        assert isinstance(old_round_trip.value, RecordValue)
+        assert isinstance(new_round_trip.value, RecordValue)
+        assert old_round_trip.value.display_name.rsplit("::", maxsplit=1)[-1] == "Gone"
+        assert new_round_trip.value.display_name.rsplit("::", maxsplit=1)[-1] == "Other"
         assert old_round_trip.value.nominal != new_round_trip.value.nominal
 
     def test_exception_values_round_trip_for_both_old_and_new_identities(

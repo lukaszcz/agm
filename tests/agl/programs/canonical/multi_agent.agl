@@ -6,9 +6,9 @@ enum Review
 param spec
 
 program def main() -> unit =
-  let impl = AgentCommand("impl")
-  let reviewer = AgentCommand("reviewer")
-  let critic = AgentCommand("critic")
+  let impl: Agent = AgentCommand("impl")
+  let reviewer: Agent = AgentCommand("reviewer")
+  let critic: Agent = AgentCommand("critic")
   var artifact: text = ask("Implement %{spec}", agent = impl)
 
   # code and design declared as vars outside the loop so the until condition can see them.

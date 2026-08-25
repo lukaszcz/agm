@@ -166,6 +166,20 @@ def test_generic_constructor_partial_uses_sibling_inference_at_runtime() -> None
     assert box.fields["value"] == IntValue(7)
 
 
+def test_cross_module_constructor_call_uses_shared_lowering(tmp_path: Path) -> None:
+    result = evaluate_ir_graph(
+        "import mylib\nlet point = mylib::Point(x = 7)\n()",
+        {"mylib": "record Point\n  x: int"},
+        tmp_path,
+    )
+
+    assert result["point"] == RecordValue(
+        nominal=result["point"].nominal,
+        display_name="Point",
+        fields={"x": IntValue(7)},
+    )
+
+
 def test_cross_module_constructor_partial_uses_shared_lowering(tmp_path: Path) -> None:
     result = evaluate_ir_graph(
         "import mylib\n"

@@ -1,0 +1,4 @@
+enum Source[T]
+  | Member(value: T)
+
+type Alias[T] = Source::Member[T]

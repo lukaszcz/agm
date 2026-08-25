@@ -1,0 +1,6 @@
+record R(value: int)
+enum E = ::R
+
+program def main() -> unit =
+  let value: E::R = R(value = 1)
+  print value

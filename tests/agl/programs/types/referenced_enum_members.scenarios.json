@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "name": "shared_members_and_wire_slots",
+      "expect": {
+        "stdout": "rr 1\nprime 1\nBox(value = \"ok\")\nBox(value = \"alias\")\n{\"$case\": \"R3\", \"child\": {\"$case\": \"R1\", \"x\": 1}}\nRR::R3(child = R1(x = 1))\n"
+      }
+    }
+  ]
+}

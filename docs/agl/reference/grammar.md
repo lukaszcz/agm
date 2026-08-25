@@ -223,12 +223,13 @@ block_entry      ::= field_def | param_marker
 field_def        ::= field_name ":" type_expr
 
 enum_def         ::= "enum" decl_head type_params? "="? enum_body
-enum_body        ::= enum_variant_seq
-                   | NEWLINE INDENT enum_variant_seq NEWLINE? DEDENT
-enum_variant_seq ::= first_variant_def ("|" variant_def)*
-first_variant_def ::= "|"? name variant_payload?
-variant_def      ::= name variant_payload?
-variant_payload  ::= "(" field_list? ")"
+enum_body        ::= enum_member_seq
+                   | NEWLINE INDENT enum_member_seq NEWLINE? DEDENT
+enum_member_seq  ::= first_enum_member ("|" enum_member)*
+first_enum_member ::= "|"? enum_member
+enum_member      ::= name member_payload? | qualifier_chain name member_type_args?
+member_type_args ::= "[" type_expr ("," type_expr)* "]"
+member_payload   ::= "(" field_list? ")"
 field_list       ::= field_entry ("," field_entry)* ","?
 field_entry      ::= field_inline | param_marker
 field_inline     ::= field_name ":" type_expr
@@ -262,6 +263,12 @@ A `type_params` list declares the declaration's type parameters; each named
 entry is an ordinary name in scope as a type throughout the declaration's body.
 `_` is an unused positional slot and introduces no type name. See
 [Generics](generics.md).
+
+An enum member written as a bare `name` declares a record in the enum's scope;
+its optional field list is that record's field list. A qualified member is a
+reference to an existing record, so it has no field list. Qualification is the
+declare/reference discriminator: `Entry(x: int)` declares `Enum::Entry`, while
+`::Entry` references the current module's `Entry`. See [Enums](types.md#enum-types).
 
 ## Type expressions
 
@@ -346,8 +353,7 @@ infix_op        ::= "or" | "and" | "in"
 
 `infixl` and `infixr` declare a symbolic operator's associativity and optional
 integer priority. Larger priorities bind tighter; omitted priority defaults to
-the `+`/`-` level. `prio <op> +/- <int>` is resolved from an existing builtin or
-previously declared user operator.
+the `+`/`-` level. `prio <op> +/- <int>` is resolved from an existing builtin or user-declared operator.
 
 ## Bindings and mutation
 
@@ -500,18 +506,18 @@ pattern_field  ::= pattern              (* positional sub-pattern *)
 It has the lowest pattern precedence, may be chained, and cannot use `_` as
 its binder name. The binder is always a variable binder.
 
-A qualified variant pattern (`Option::some(value)`,
-`module::Option::some(value)`, or `/module::Option::some(value)`) names the
-owning enum and variant with `::`. A leading `/` is an anchored qualifier;
-without it, the qualifier is resolved as a suffix. The complete qualifier
-through `::` is byte-adjacent. A qualified pattern's argument list is
-optional (`Option::none` and `Option::none()` are both nullary matches) except
-at the root of a `let` pattern, where writing it or not distinguishes a match
-from a scoped binding — see [Bindings and scope](bindings-and-scope.md).
-Unqualified constructor ownership is selected by the scrutinee's static nominal
-type, even when multiple enums share a variant name or a record constructor
-spelling collides with an enum variant; a qualifier is optional and must agree
-with that type when present ([Generics](generics.md),
+A qualified member pattern (`Option::some(value)`,
+`module::Option::some(value)`, or `/module::Option::some(value)`) names a
+member record with `::`. A leading `/` is an anchored qualifier; without it,
+the qualifier is resolved as a suffix. The complete qualifier through `::` is
+byte-adjacent. A qualified pattern's argument list is optional
+(`Option::none` and `Option::none()` are both nullary matches) except at the
+root of a `let` pattern, where writing it or not distinguishes a match from a
+scoped binding — see [Bindings and scope](bindings-and-scope.md). Unqualified
+constructor ownership is selected by the scrutinee's static nominal type, even
+when multiple enums contribute the same member name or a record constructor
+spelling collides with an injected member name; a qualifier is optional and
+must agree with that type when present ([Generics](generics.md),
 [Pattern matching](pattern-matching.md)). Type arguments are carried by the
 scrutinee type rather than written in a pattern.
 
@@ -642,12 +648,13 @@ continue_expr  ::= "continue"
 ```
 
 A bare name atom is resolved by scope and position: it may name a variable, a
-record constructor, an enum variant, or a generic `def`/constructor
-used as a first-class value. The typed postfix form carries explicit type
-arguments to a generic `def` or bare constructor (`id::[int](5)`,
-`some::[int](value = 1)`, `apply::[int, int](…)`), or instantiate a generic
-function value (`id::[int]`). An enum variant qualified by its owning generic
-type puts the type arguments on the type side (`Option[int]::some(value = 1)`).
+record constructor, an injected enum-member constructor, or a generic
+`def`/constructor used as a first-class value. The typed postfix form carries
+explicit type arguments to a generic `def` or bare constructor
+(`id::[int](5)`, `some::[int](value = 1)`, `apply::[int, int](…)`), or
+instantiates a generic function value (`id::[int]`). A member selected through
+its owning generic enum puts the type arguments on the type side
+(`Option[int]::some(value = 1)`).
 A qualifier that is a scope or module route rather than an owning type leaves
 the constructor's own spelling intact, so it carries type arguments exactly as
 the unqualified form does (`A::Pair::[int]`, `boxes::A::Box::[int]`). In that explicit

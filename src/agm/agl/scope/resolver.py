@@ -18,8 +18,9 @@ Scope rules
    type checking, which alone knows a pattern slot's selected meaning.  A
    *qualified* target is settled here: only ``builtin var`` is assignable
    across a module boundary, and no qualified name is ever a pattern slot.
-   An *indexed* target (``target[index] := value``) has no binding of its
-   own: ``obj`` and ``index`` are resolved as ordinary expressions, and no
+   Indexed and field targets (``target[index] := value`` and
+   ``target.field := value``) create no assignment binding: their receivers
+   (and an index target's index) are resolved as ordinary expressions, and no
    ``resolution`` entry is recorded for the ``AssignStmt``.
 3. Reading (``VarRef``) a name not visible in the current scope chain → error.
    ``_`` is always a discard wildcard and never resolves as a readable name.
@@ -133,6 +134,7 @@ from agm.agl.syntax.nodes import (
     ExportDecl,
     Expr,
     FieldAccess,
+    FieldTarget,
     FuncDef,
     If,
     ImportDecl,
@@ -2832,6 +2834,13 @@ class _Resolver:
             # up a mutable binding.
             self._resolve_expr(target.obj)
             self._resolve_expr(target.index)
+            self._resolve_expr(node.value)
+            return
+        if isinstance(target, FieldTarget):
+            # Like an index target, a field target creates no assignment
+            # binding: it mutates its receiver value. Field validity and
+            # mutability are type rules.
+            self._resolve_expr(target.obj)
             self._resolve_expr(node.value)
             return
         if target.qualifier is not None:

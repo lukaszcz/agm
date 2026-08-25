@@ -1109,7 +1109,17 @@ class IndexTarget:
     node_id: int = dc_field(compare=False)
 
 
-AssignTarget = NameTarget | IndexTarget
+@dataclass(frozen=True, slots=True)
+class FieldTarget:
+    """Assignment target for ``record.field := expr``."""
+
+    obj: Expr
+    field: str
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+AssignTarget = NameTarget | IndexTarget | FieldTarget
 
 
 @dataclass(frozen=True, slots=True)

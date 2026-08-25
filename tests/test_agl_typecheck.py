@@ -61,6 +61,7 @@ from agm.agl.syntax.nodes import (
     Do,
     Expr,
     FieldAccess,
+    FieldTarget,
     FuncDef,
     If,
     IndexAccess,
@@ -8626,6 +8627,44 @@ class TestIndexTypechecking:
         assert "expected 'int'" in message
         assert "inferred return type" in message.lower()
         assert "mk" in message
+
+    def test_parsed_field_assignment_accepts_mutable_record_field(self) -> None:
+        checked = accept_type(
+            "record Box(var value: int)\n"
+            "def update(box: Box) -> unit =\n"
+            "  box.value := 2\n"
+            "update(Box(value = 1))"
+        )
+        update = checked.resolved.program.body.items[1]
+        assert isinstance(update, FuncDef)
+        assert isinstance(update.body, Block)
+        assignment = update.body.items[0]
+        assert isinstance(assignment, AssignStmt)
+        assert isinstance(assignment.target, FieldTarget)
+        assert checked.node_types[assignment.target.node_id] == IntType()
+        assert checked.node_types[update.body.node_id] == UnitType()
+
+    def test_field_assignment_accepts_enum_member_and_member_to_enum_value(self) -> None:
+        checked = accept_type(
+            "enum Linked\n"
+            "  | Nil\n"
+            "  | Cell(var next: Linked)\n"
+            "let cell = Cell(next = Nil())\n"
+            "cell.next := Cell(next = Nil())"
+        )
+        assignment = checked.resolved.program.body.items[-1]
+        assert isinstance(assignment, AssignStmt)
+        assert isinstance(assignment.target, FieldTarget)
+        assert isinstance(checked.node_types[assignment.target.node_id], EnumType)
+
+    def test_field_assignment_rejects_method_target(self) -> None:
+        reject_type(
+            "record Box(var value: int)\n"
+            "def Box::replace(self, value: int) -> unit =\n"
+            "  self.value := value\n"
+            "let box = Box(value = 1)\n"
+            "box.replace := 2"
+        )
 
     def test_invalid_direct_ast_assign_target_rejected(self) -> None:
         sp = mk_span()

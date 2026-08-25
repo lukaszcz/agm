@@ -64,6 +64,7 @@ from agm.agl.syntax import (
     ExceptionDef,
     ExportDecl,
     FieldAccess,
+    FieldTarget,
     FuncDef,
     If,
     IfBranch,
@@ -457,8 +458,35 @@ class TestBinders:
 
     @pytest.mark.parametrize(
         "source",
-        ("f() := 10", "r.x := 10", "1 := 10"),
-        ids=("call", "field", "literal"),
+        ("r.a.b := 1", "xs[0].field := 1", "make().field := 1"),
+        ids=("chained", "indexed", "call"),
+    )
+    def test_assign_field_target_accepts_postfix_root(self, source: str) -> None:
+        assignment = first(parse(source))
+        assert isinstance(assignment, AssignStmt)
+        assert isinstance(assignment.target, FieldTarget)
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "if true => r.a.b := 1 else => ()",
+            "if true => xs[0].field := 1 else => ()",
+            "if true => make().field := 1 else => ()",
+        ),
+        ids=("chained", "indexed", "call"),
+    )
+    def test_inline_assign_field_target_accepts_postfix_root(self, source: str) -> None:
+        assignment = first(parse(source))
+        assert isinstance(assignment, If)
+        assert isinstance(assignment.branches[0].body, Block)
+        inline_assign = assignment.branches[0].body.items[0]
+        assert isinstance(inline_assign, AssignStmt)
+        assert isinstance(inline_assign.target, FieldTarget)
+
+    @pytest.mark.parametrize(
+        "source",
+        ("f() := 10", "1 := 10"),
+        ids=("call", "literal"),
     )
     def test_assign_non_indexed_non_variable_target_rejected(self, source: str) -> None:
         """A non-indexed target that is neither a variable nor an indexed

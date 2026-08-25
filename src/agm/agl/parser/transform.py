@@ -1214,9 +1214,16 @@ class AstBuilder(Transformer):
                 span=lhs.span,
                 node_id=self._next_id(),
             )
+        elif isinstance(lhs, syntax.FieldAccess):
+            target = syntax.FieldTarget(
+                obj=lhs.obj,
+                field=lhs.field,
+                span=lhs.span,
+                node_id=self._next_id(),
+            )
         else:
             raise AglSyntaxError(
-                "assignment target must be a variable or an indexed expression.",
+                "assignment target must be a variable, indexed expression, or field.",
                 span=lhs.span,
             )
         span = self._span_from_meta(meta)
@@ -3711,6 +3718,8 @@ def _rewrite_assign_target(
             obj=_rewrite_expr(target.obj, table, builder),
             index=_rewrite_expr(target.index, table, builder),
         )
+    if isinstance(target, syntax.FieldTarget):
+        return replace(target, obj=_rewrite_expr(target.obj, table, builder))
     return target
 
 

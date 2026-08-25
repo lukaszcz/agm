@@ -58,10 +58,12 @@ Region-scoped bare contributions apply within that region and its nested regions
 while imports still make their qualified routes available to the module.
 
 Scope resolution also classifies declarations, bindings, constructors, and
-built-ins for typecheck. It records each `use` target's semantic local path or
-imported routes so incremental hosts retain target identity without re-deriving
-it from syntax. It publishes resolved program artifacts rather than rewriting
-source nodes.
+built-ins for typecheck. Index and field assignment targets resolve their
+receiver expressions as ordinary reads and introduce no binding; typecheck
+owns container, field, and mutability rules. It records each `use` target's
+semantic local path or imported routes so incremental hosts retain target
+identity without re-deriving it from syntax. It publishes resolved program
+artifacts rather than rewriting source nodes.
 
 ## Code Entry Points
 

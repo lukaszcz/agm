@@ -1,0 +1,7 @@
+enum Status
+  | Open(var days: int)
+  | Closed
+
+program def main() -> unit =
+  let status: Status = Open(days = 1)
+  status.days := 2

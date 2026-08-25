@@ -730,11 +730,12 @@ class _Lowerer:
                     # never otherwise read (e.g. `x := 5`).
                     self._record_capture(node.node_id, local_ids, captured)
                 else:
-                    # An IndexTarget has no binding of its own -- its `obj`/
-                    # `index` are ordinary expressions, so scanning them finds
-                    # every capture the assignment needs.
+                    # A non-name target has no binding of its own. Its receiver
+                    # expression supplies its captures; indexed targets also
+                    # have an ordinary index expression.
                     self._scan_captures(node.target.obj, local_ids, captured)
-                    self._scan_captures(node.target.index, local_ids, captured)
+                    if isinstance(node.target, IndexTarget):
+                        self._scan_captures(node.target.index, local_ids, captured)
                 self._scan_captures(node.value, local_ids, captured)
             case Block():
                 for item in node.items:

@@ -132,6 +132,7 @@ from agm.agl.syntax.nodes import (
     ExportDecl,
     Expr,
     FieldAccess,
+    FieldTarget,
     FuncDef,
     If,
     ImportDecl,
@@ -1426,8 +1427,11 @@ class _Checker:
         if isinstance(stmt.target, IndexTarget):
             return self._check_indexed_assign_stmt(stmt, stmt.target)
 
+        if isinstance(stmt.target, FieldTarget):
+            return self._check_field_assign_stmt(stmt, stmt.target)
+
         raise AglTypeError(
-            "assignment target must be a mutable variable or an indexed expression.",
+            "assignment target must be a mutable variable, indexed expression, or field.",
             span=stmt.span,
         )
 
@@ -1452,6 +1456,59 @@ class _Checker:
         with self._frame_direct_candidate_use(exprs=(stmt.value, target.obj)):
             self._assert_assignable(value_type, elem_type, stmt.span)
         return self._binder_result(value_type)
+
+    def _check_field_assign_stmt(self, stmt: AssignStmt, target: FieldTarget) -> Type:
+        receiver_type = self._check_boundary_expr(target.obj, expected=None)
+        try:
+            if isinstance(receiver_type, EnumType):
+                raise AglTypeError(
+                    f"Enum values expose no fields; narrow '{receiver_type.name}' directly "
+                    "through 'case' or 'as' before assigning.",
+                    span=target.span,
+                )
+            if isinstance(receiver_type, ExceptionType):
+                raise AglTypeError(
+                    f"Field assignment is not permitted on exception type '{receiver_type.name}'.",
+                    span=target.span,
+                )
+            if not isinstance(receiver_type, RecordType):
+                raise AglTypeError(
+                    f"Field assignment requires a record value; got '{receiver_type!r}'.",
+                    span=target.span,
+                )
+
+            fields = self._env.type_table.record_fields(receiver_type)
+            if target.field not in fields:
+                method = self._env.type_table.lookup_method(receiver_type, target.field)
+                if method is not None:
+                    raise AglTypeError(
+                        f"Method '{target.field}' of record '{receiver_type.name}' "
+                        "is not assignable.",
+                        span=target.span,
+                    )
+                raise AglTypeError(
+                    f"Record '{receiver_type.name}' has no field or method '{target.field}'.",
+                    span=target.span,
+                )
+
+            field_type = fields[target.field]
+            field_index = tuple(fields).index(target.field)
+            if not self._env.type_table.record_field_mutability(receiver_type)[field_index]:
+                raise AglTypeError(
+                    f"Field '{target.field}' of record '{receiver_type.name}' is immutable; "
+                    "declare it with 'var' to assign to it.",
+                    span=target.span,
+                )
+
+            # A field target is not an expression, so retain its field type for
+            # lowering's coercion sizing just as indexed assignment does.
+            self._record_node_type(target.node_id, field_type)
+            value_type = self._check_boundary_expr(stmt.value, expected=field_type)
+            with self._frame_direct_candidate_use(exprs=(stmt.value, target.obj)):
+                self._assert_assignable(value_type, field_type, stmt.span)
+            return self._binder_result(value_type)
+        except AglTypeError as exc:
+            raise self._frame_inferred_return_error(exc, exprs=(target.obj,)) from exc
 
     # ------------------------------------------------------------------
     # Expression type inference

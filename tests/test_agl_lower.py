@@ -106,12 +106,16 @@ from agm.agl.semantics.types import (
     UnitType,
 )
 from agm.agl.syntax.nodes import (
+    AssignStmt,
     Block,
     Case,
+    FieldTarget,
     FuncDef,
+    Lambda,
     LetDecl,
     ParamDecl,
     Placeholder,
+    VarRef,
     pattern_binder_candidates,
 )
 from agm.agl.typecheck.env import CheckedModule
@@ -462,6 +466,40 @@ def test_direct_lowerer_helper_passes_complete_compiled_match_site_mapping() -> 
 
     assert isinstance(case, Case)
     assert set(lowerer._compiled_sites) == {case.node_id}
+
+
+def test_capture_scan_captures_enclosing_field_assignment_receiver() -> None:
+    source = (
+        "record Box(var value: int)\n"
+        "def make_update() -> unit =\n"
+        "  let box = Box(value = 1)\n"
+        "  let update = fn() -> unit => if true => box.value := 2 else => ()\n"
+        "  ()"
+    )
+    checked = _check(source)
+    lowerer = _make_lowerer(checked, source)
+    make_update = checked.resolved.program.body.items[1]
+
+    assert isinstance(make_update, FuncDef)
+    assert isinstance(make_update.body, Block)
+    box, update = make_update.body.items[:2]
+    assert isinstance(box, LetDecl)
+    assert isinstance(update, LetDecl)
+    assert isinstance(update.value, Lambda)
+    assignment = update.value.body.branches[0].body.items[0]
+    assert isinstance(assignment, AssignStmt)
+    assert isinstance(assignment.target, FieldTarget)
+    assert isinstance(assignment.target.obj, VarRef)
+    receiver_binding = checked.binding_for(assignment.target.obj.node_id)
+    assert receiver_binding is not None
+    assert receiver_binding.name == "box"
+    with lowerer._function_body(lowerer._alloc_fn()):
+        box_symbol = lowerer._alloc_sym(
+            receiver_binding.decl_node_id, name="box", mutable=False, public=False
+        )
+    assert lowerer._compute_captures_for(
+        update.value.body, update.value.params, update.value.node_id, set()
+    ) == (IrCapture(box_symbol, by_cell=False),)
 
 
 def test_constructor_result_nominal_rejects_non_nominal_type() -> None:

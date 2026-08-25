@@ -1,0 +1,5 @@
+record Pair(var current: int, fixed: int)
+
+program def main() -> unit =
+  let pair = Pair(current = 1, fixed = 2)
+  pair.fixed := 3

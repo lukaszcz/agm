@@ -591,8 +591,8 @@ class ModuleResolution:
     ``resolution``
         Maps every ``VarRef.node_id`` and every bare-name ``AssignStmt.node_id``
         to the ``BindingRef`` it resolved to. An ``AssignStmt`` with an indexed
-        target has no entry: its object and index are resolved as ordinary
-        expressions instead.
+        or field target creates no assignment binding: its receiver (and an
+        indexed target's index) is resolved as an ordinary expression instead.
     ``builtin_calls``
         Maps every ``Call.node_id`` whose callee is a built-in name
         (``print``/``exec``/``ask``/``ask-request``) to its ``BuiltinKind``.  Calls whose

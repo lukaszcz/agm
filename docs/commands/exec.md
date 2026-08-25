@@ -192,7 +192,7 @@ source `std/config` writes can override:
 ```toml
 [exec]
 default-agent = 'AgentClaude("sonnet", "medium")' # typed default Agent value
-# runner = "claude"         # bare host agent command; lower precedence than default-agent
+# runner = "custom-agent --session %{SESSION_ID}" # command must create/resume this id
 strict-json = false         # lenient JSON recovery is the default
 max-iters = 5               # opt into a safety-valve cap for unbounded loops
 timeout = "30m"             # initial shell-exec and agent idle timeout
@@ -202,7 +202,9 @@ log = false                 # trace logging off by default; set true to enable
 ```
 
 `runner` is a bare host command (like `[loop] runner`), not AgL literal syntax; when
-set, it seeds `default-agent` as `AgentCommand(runner)`. It applies only when neither
+set, it seeds `default-agent` as `AgentCommand(runner)`. Continuing free asks require the
+command to consume `%{SESSION_ID}` and use that same ID to create or resume a transcript;
+use a native `AgentClaude`, `AgentCodex`, or `AgentPi` value when possible. It applies only when neither
 `--agent` nor `default-agent` (CLI or config) supplies a value: precedence, highest
 first, is `--agent` > qualified program-table/`[exec] default-agent` > `[exec] runner` > the
 `std/config` declaration's own default. `runner` is shell-split and validated as soon

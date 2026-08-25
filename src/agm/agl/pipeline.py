@@ -1927,7 +1927,7 @@ def exception_value_to_run_error(
     when present, or the shared value-directed serializer otherwise. Both preserve
     ``Decimal`` exactness (never routed through binary ``float``).
     This runs while reporting an error already in flight, so a field that is
-    itself a cyclic array/dict (e.g. a user exception's own data payload), or
+    itself cyclic (including one closed through mutable record fields), or
     a field of a kind with no JSON representation (``unit``, ``agent``,
     ``constructor``, ``function``, ``iterator`` — legal on an exception field
     even though a cast to ``json`` of such a type is statically rejected),

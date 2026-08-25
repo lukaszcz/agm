@@ -952,8 +952,8 @@ BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
         "CastError",
         "JsonParseError",
         "RangeError",
-        # Reference semantics makes cyclic array/dict values constructible; raised
-        # when rendering or JSON conversion re-enters a container already on its
+        # Reference semantics makes cyclic arrays, dicts, and records constructible;
+        # raised when rendering or JSON conversion re-enters a value already on its
         # path. Extern array/dict arguments cross as lazy views; repr of a view or
         # FFI view rendering that reaches a cycle raises this exception instead.
         "CyclicValueError",

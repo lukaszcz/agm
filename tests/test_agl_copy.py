@@ -172,6 +172,16 @@ class TestShallowCopyOneLevel:
         # never recurses, so it does not (and cannot) rewrite nested references.
         assert copied.elements[0] is cyclic
 
+    def test_self_referential_record_keeps_its_nested_alias(self) -> None:
+        cyclic = _record({})
+        cyclic.fields["next"] = cyclic
+
+        copied = shallow_copy_value(cyclic)
+
+        assert isinstance(copied, RecordValue)
+        assert copied is not cyclic
+        assert copied.fields["next"] is cyclic
+
 
 # ---------------------------------------------------------------------------
 # deep_copy_value — full detachment
@@ -321,6 +331,16 @@ class TestDeepCopySharingAndCycles:
         assert isinstance(copied, DictValue)
         assert copied is not cyclic
         assert copied.entries["self"] is copied
+
+    def test_self_referential_record_terminates_and_is_independent(self) -> None:
+        cyclic = _record({})
+        cyclic.fields["self"] = cyclic
+
+        copied = deep_copy_value(cyclic)
+
+        assert isinstance(copied, RecordValue)
+        assert copied is not cyclic
+        assert copied.fields["self"] is copied
 
     def test_record_array_cycle_terminates(self) -> None:
         """A cycle closed through BOTH a record and an array copies without looping."""

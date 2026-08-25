@@ -167,10 +167,14 @@ def _encode(
             raise AssertionError(
                 f"record encode plan received {value.nominal!r}, expected {schema.nominal!r}"
             )
-        return {
-            name: _encode(field, value.fields[name], definitions, arguments, active)
-            for name, field in schema.fields
-        }
+        active = enter_container(id(value), active)
+        try:
+            return {
+                name: _encode(field, value.fields[name], definitions, arguments, active)
+                for name, field in schema.fields
+            }
+        finally:
+            active.discard(id(value))
     if isinstance(schema, ExceptionEncode):
         if not isinstance(value, ExceptionValue):
             raise AssertionError(f"exception encode plan received {type(value).__name__}")
@@ -178,20 +182,28 @@ def _encode(
             raise AssertionError(
                 f"exception encode plan received {value.nominal!r}, expected {schema.nominal!r}"
             )
-        return {
-            name: _encode(field, value.fields[name], definitions, arguments, active)
-            for name, field in schema.fields
-        }
+        active = enter_container(id(value), active)
+        try:
+            return {
+                name: _encode(field, value.fields[name], definitions, arguments, active)
+                for name, field in schema.fields
+            }
+        finally:
+            active.discard(id(value))
     if isinstance(schema, EnumEncode):
         variant, fields = _variant_for_encode(schema, value)
-        result: dict[str, object] = {"$case": variant.name}
-        result.update(
-            {
-                name: _encode(field, fields[name], definitions, arguments, active)
-                for name, field in variant.fields
-            }
-        )
-        return result
+        active = enter_container(id(value), active)
+        try:
+            result: dict[str, object] = {"$case": variant.name}
+            result.update(
+                {
+                    name: _encode(field, fields[name], definitions, arguments, active)
+                    for name, field in variant.fields
+                }
+            )
+            return result
+        finally:
+            active.discard(id(value))
     raise AssertionError(f"unknown encode schema {schema!r}")  # pragma: no cover
 
 
@@ -282,9 +294,9 @@ def value_to_json_obj(value: Value, active: "set[int] | None" = None) -> object:
     ``dict | list | str | int | Decimal | bool | None``.  ``DecimalValue`` is
     preserved as :class:`decimal.Decimal` (never converted to ``float``).
 
-    Reference semantics makes a cyclic array/dict constructible; ``active``
-    (an active-container-id set, allocated lazily on first use) detects a
-    cycle and raises :class:`~agm.agl.semantics.cycles.AglCyclicValue` rather
+    Reference semantics makes cyclic arrays, dicts, and records constructible;
+    ``active`` (an active-value-id set, allocated lazily on first use) detects
+    a cycle and raises :class:`~agm.agl.semantics.cycles.AglCyclicValue` rather
     than recursing forever. Callers pass no *active* argument — it exists
     only to thread the walk's own recursive calls.
 
@@ -320,9 +332,17 @@ def value_to_json_obj(value: Value, active: "set[int] | None" = None) -> object:
         finally:
             active.discard(id(value))
     if isinstance(value, RecordValue):
-        return {k: value_to_json_obj(v, active) for k, v in value.fields.items()}
+        active = enter_container(id(value), active)
+        try:
+            return {k: value_to_json_obj(v, active) for k, v in value.fields.items()}
+        finally:
+            active.discard(id(value))
     if isinstance(value, ExceptionValue):
-        return {k: value_to_json_obj(v, active) for k, v in value.fields.items()}
+        active = enter_container(id(value), active)
+        try:
+            return {k: value_to_json_obj(v, active) for k, v in value.fields.items()}
+        finally:
+            active.discard(id(value))
     if isinstance(value, UnitValue):
         raise AglNonDataValue("unit")
     if isinstance(value, ConstructorValue):

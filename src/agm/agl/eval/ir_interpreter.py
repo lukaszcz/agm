@@ -716,7 +716,7 @@ class IrInterpreter:
 
         Mirrors ``_index_failure``: centralizes the sentinel-to-exception
         conversion so every ``render``/``as json``/coercion site that can
-        reach a cyclic array or dict raises identical exception fields.
+        reach a cyclic value raises identical exception fields.
         """
         return cyclic_value_raise(nominals=self._program.builtin_nominals)
 

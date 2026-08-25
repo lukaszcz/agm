@@ -91,8 +91,8 @@ class EffectHandlers:
         """Return the prompt/command text *value* stands for.
 
         A ``text`` value is used as-is; anything else is rendered. Rendering
-        walks the value's containers, so a cyclic array or dict surfaces here
-        as the walk's sentinel and becomes the catchable ``CyclicValueError``
+        walks structured values, so a cycle surfaces here as the walk's
+        sentinel and becomes the catchable ``CyclicValueError``
         every other rendering site raises. Shared by ``ask``, ``ask``-request,
         and ``exec``, which all turn one operand into text this way.
         """

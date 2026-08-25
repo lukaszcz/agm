@@ -3,8 +3,8 @@
 Single implementation of the two copy builtins, so the IR interpreter only
 evaluates the argument and dispatches here.
 
-``shallow_copy_value`` rebuilds exactly one container level — a fresh array,
-dict, record, or exception holding the *same* element/field
+``shallow_copy_value`` rebuilds exactly one structured-value level — a fresh
+array, dict, record, or exception holding the *same* element/field
 references as the original. It never recurses, so it can never loop and
 never raises, even on a cyclic value.
 
@@ -12,10 +12,10 @@ never raises, even on a cyclic value.
 exception reachable from the value, rebuilding each with independently
 copied contents. An ``id()``-keyed memo makes two references to the same
 object copy to the same new object: a diamond stays a diamond, and — because
-every container-shaped value is registered in the memo *before* its contents
-are copied — a self-referential array or dict (a genuine reference cycle)
-resolves the re-entrant reference to the still-being-built copy instead of
-recursing forever. This is the one deep, structure-rebuilding walk in the
+every structured value is registered in the memo *before* its contents are
+copied — a cycle closed through an array, dict, record, or exception resolves
+the re-entrant reference to the still-being-built copy instead of recursing
+forever. This is the one deep, structure-rebuilding walk in the
 language that traverses a cyclic value to completion, terminating with an
 isomorphic independent cycle instead of raising ``CyclicValueError``.
 
@@ -61,7 +61,7 @@ __all__ = ["deep_copy_value", "shallow_copy_value"]
 
 
 def shallow_copy_value(value: Value) -> Value:
-    """Return a one-level copy of *value*: same nested references, new container."""
+    """Return a one-level copy of *value*: same nested references, new shell."""
     if not isinstance(value, _SHELL_KINDS):
         return value
     return _copy_container(value, transform=None, register=lambda _shell: None)
@@ -112,8 +112,8 @@ def _copy_container(
     *register* runs on the fresh, still-empty shell before any child is visited,
     so a caller that memoizes the shell there (as :func:`_deep_copy` does) is
     structurally guaranteed to have it in place before a re-entrant reference to
-    *value* can be looked up — the ordering that lets a self-referential
-    container terminate instead of recursing forever. *transform*, if given, is
+    *value* can be looked up — the ordering that lets a cycle close through a
+    shell instead of recursing forever. *transform*, if given, is
     applied to each child value (a memoized recursive copy, for a deep copy);
     ``None`` fills the shell with the original children in one bulk call, for a
     shallow copy that never recurses.
@@ -146,10 +146,11 @@ def _copy_container(
 def _deep_copy(value: Value, memo: dict[int, Value]) -> Value:
     """Copy *value*, reusing *memo* so shared references stay shared.
 
-    Every container arm goes through :func:`_copy_container`, which registers
-    the empty shell in *memo* before filling it — that is what makes a
-    self-referential array or dict terminate: the re-entrant reference resolves
-    to the shell already under construction. (``json`` is atomic, so its arm
+    Every structured-value arm goes through :func:`_copy_container`, which
+    registers the empty shell in *memo* before filling it — that is what makes
+    a cycle closed through any structured value terminate: the re-entrant
+    reference resolves to the shell already under construction. (``json`` is
+    atomic, so its arm
     builds the copy outright; it is still memoized so two references to one
     ``json`` leaf copy to one new leaf.)
     """

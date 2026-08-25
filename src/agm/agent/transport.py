@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
 AgentTransportFailureCause: TypeAlias = Literal[
-    "spawn_failure", "timeout", "nonzero_exit", "interpolation_failure"
+    "spawn_failure", "timeout", "nonzero_exit", "interpolation_failure", "protocol_failure"
 ]
 
 

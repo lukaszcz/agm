@@ -236,7 +236,7 @@ An agent **transport** failure: the agent could not run. Not eligible for
 
 ```text
 agent: Agent      # the selected backend
-cause: text       # "spawn_failure" | "nonzero_exit" | "timeout" | "interpolation_failure" | "invalid_agent"
+cause: text       # "spawn_failure" | "nonzero_exit" | "timeout" | "interpolation_failure" | "protocol_failure" | "invalid_agent"
 metadata: json    # host details: exit code, stderr tail, elapsed seconds
 ```
 

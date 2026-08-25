@@ -423,7 +423,17 @@ class CodexCliSessionBackend(_CliPromptBackend):
         )
         if not starting:
             return response
-        thread_id, content = _parse_codex_jsonl(response.content, require_thread_id=True)
+        try:
+            thread_id, content = _parse_codex_jsonl(response.content, require_thread_id=True)
+        except _CodexProtocolError as exc:
+            call_info = cast(AgentCallInfo, response.call_info)
+            raise SessionAskError(
+                cause="protocol_failure",
+                exit_code=call_info.exit_code,
+                stderr_tail=stderr_tail(str(exc)),
+                elapsed=call_info.elapsed,
+                call_info=call_info,
+            ) from exc
         session.session_id = thread_id
         return replace(response, content=content)
 
@@ -587,9 +597,13 @@ def _parse_codex_jsonl(output: str, *, require_thread_id: bool) -> tuple[str | N
     return thread_id, "\n".join(messages)
 
 
-def _codex_jsonl_error(message: str) -> SessionHostError:
+class _CodexProtocolError(Exception):
+    """Codex output did not satisfy its JSONL response protocol."""
+
+
+def _codex_jsonl_error(message: str) -> _CodexProtocolError:
     """Build a consistently classified Codex JSONL protocol failure."""
-    return SessionHostError(message, SessionOperation.ASK.value)
+    return _CodexProtocolError(message)
 
 
 def _json_object(output: str, *, operation: SessionOperation) -> dict[str, object]:

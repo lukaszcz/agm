@@ -508,10 +508,12 @@ def test_codex_rejects_malformed_or_incomplete_jsonl(
     backend = CodexCliSessionBackend()
     _open(backend, AgentCodex("", ""))
 
-    with pytest.raises(SessionHostError) as raised:
+    with pytest.raises(SessionAskError) as raised:
         backend.ask(SessionAskRequest("first"))
 
-    assert raised.value.operation == SessionOperation.ASK
+    assert raised.value.cause == "protocol_failure"
+    assert raised.value.call_info.argv[:3] == ["codex", "exec", "--json"]
+    assert raised.value.stderr_tail
 
 
 def test_codex_ignores_completed_non_assistant_items(monkeypatch: pytest.MonkeyPatch) -> None:

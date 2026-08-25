@@ -306,9 +306,7 @@ class _SessionIdCliBackend(_CliPromptBackend, Generic[_SessionAgentT], ABC):
         session = self._session_for(SessionOperation.FORK.value)
         child._session = _SessionIdCliState(session.agent, session_id, "", False, started=True)
 
-    def _initialize_unstarted_fork(
-        self, child: _SessionIdCliBackend[_SessionAgentT]
-    ) -> None:
+    def _initialize_unstarted_fork(self, child: _SessionIdCliBackend[_SessionAgentT]) -> None:
         """Fork deferred local state before either transcript exists natively."""
         session = self._session_for(SessionOperation.FORK.value)
         child._session = _SessionIdCliState(

@@ -267,6 +267,7 @@ def test_helpers_and_spawn_edges(monkeypatch: pytest.MonkeyPatch) -> None:
     rpc._terminate(rpc._RpcChild(cast(subprocess.Popen[bytes], Process())))
 
     class NoPipes:
+        pid = 999_999_999
         stdin = None
         stdout = io.BytesIO()
         stderr = io.BytesIO()

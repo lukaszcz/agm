@@ -217,7 +217,7 @@ class PiRpcSessionBackend:
             )
         except (OSError, ValueError) as exc:
             raise SessionHostError(f"could not start Pi RPC session: {exc}", operation) from exc
-        process_group = getattr(process, "pid", None)
+        process_group = process.pid
         if process.stdin is None or process.stdout is None or process.stderr is None:
             _terminate(_RpcChild(process, process_group))
             raise SessionHostError("could not create Pi RPC pipes", operation)

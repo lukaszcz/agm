@@ -184,13 +184,14 @@ class AgentDispatcherSessionHost(SessionHost):
     def __init__(self, dispatcher: "AgentFn | None") -> None:
         self._dispatcher = dispatcher
         self._sessions: dict[str, SessionSnapshot] = {}
+        self._closed: set[str] = set()
         self._default_handle: str | None = None
         self._next_handle = 0
 
     @property
     def active_session_count(self) -> int:
         """Return the number of outstanding ephemeral sessions."""
-        return len(self._sessions)
+        return len(self._sessions) - len(self._closed)
 
     def open(self, _agent: RecordValue, _transport: str, *, name: str = "") -> str:
         del name
@@ -258,11 +259,18 @@ class AgentDispatcherSessionHost(SessionHost):
             raise SessionHostError("unknown session", "snapshot") from None
 
     def close(self, handle: str) -> None:
+        if handle in self._closed:
+            return
         self._agent_for(handle, "close")
-        del self._sessions[handle]
+        if handle == self._default_handle:
+            self._closed.add(handle)
+        else:
+            del self._sessions[handle]
 
     def close_all(self) -> None:
         self._sessions.clear()
+        self._closed.clear()
+        self._default_handle = None
 
     def _new_handle(self) -> str:
         handle = f"ephemeral-{self._next_handle}"
@@ -270,6 +278,8 @@ class AgentDispatcherSessionHost(SessionHost):
         return handle
 
     def _agent_for(self, handle: str, operation: str) -> RecordValue:
+        if handle in self._closed:
+            raise SessionHostError("closed session", operation)
         try:
             return self._sessions[handle].agent
         except KeyError:

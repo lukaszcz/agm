@@ -179,6 +179,10 @@ def test_dispatcher_session_host_snapshots_its_default_and_preserves_requests() 
     assert host.default(agent_value("AgentCommand", command="other"), "Rpc") == default
     assert host.snapshot(default).agent == agent
     assert host.snapshot(default).transport == "Cli"
+    host.close(default)
+    host.close(default)
+    with pytest.raises(SessionHostError):
+        host.ask(default, "closed")
 
     unavailable_operations = (
         lambda: host.open(agent, "Cli"),

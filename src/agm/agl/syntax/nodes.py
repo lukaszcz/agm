@@ -443,7 +443,9 @@ class Param:
     ``default`` is ``None`` for field params (records/variants/exceptions);
     only ``def``/``builtin def``/lambda params may carry a default expression.
     ``type_expr`` is ``None`` when the source omitted the annotation, which the
-    builder permits only for a method's first ``self`` parameter.
+    builder permits only for a method's first ``self`` parameter. ``mutable`` marks
+    a record, enum-variant, or exception field; function and lambda parameters
+    always leave it ``False``.
     """
 
     name: str
@@ -452,6 +454,7 @@ class Param:
     default: Expr | None
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    mutable: bool = False
 
 
 # ---------------------------------------------------------------------------

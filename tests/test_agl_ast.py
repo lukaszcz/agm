@@ -566,6 +566,7 @@ class TestParamNode:
         assert p.name == "x"
         assert p.type_expr is t
         assert p.default is None
+        assert p.mutable is False
 
     def test_param_with_default(self) -> None:
         t = IntT(span=self._s(), node_id=2)

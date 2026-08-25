@@ -25,9 +25,10 @@ their visibility.
 Qualified expressions, types, patterns, and `is` tests share a structured
 `QualifierChain`; every segment retains its span and optional type arguments.
 Enum members preserve whether the source declared an inline `VariantDef` or
-referenced a record through `VariantRef`. Let bindings retain a complete
-pattern, while declarations and region items carry canonical scope paths, so
-later passes do not reconstruct source spellings.
+referenced a record through `VariantRef`. `Param` preserves each field's
+mutable marker independently of its constructor zone. Let bindings retain a
+complete pattern, while declarations and region items carry canonical scope
+paths, so later passes do not reconstruct source spellings.
 
 ## Code Entry Points
 

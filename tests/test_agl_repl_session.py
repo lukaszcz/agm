@@ -3484,6 +3484,18 @@ class TestExactlyOnce:
         assert _text(r2.value) == "the-answer"
         assert agent.calls == 1
 
+    def test_dispatcher_session_handle_survives_across_entries(self) -> None:
+        agent = CountingAgent("the-answer")
+        session = ReplSession(agent_dispatcher=agent)
+
+        opened = session.eval_entry("let saved = Session::default()")
+        asked = session.eval_entry('saved.ask("later")')
+
+        assert opened.ok
+        assert asked.ok, asked.diagnostics
+        assert _text(asked.value) == "the-answer"
+        assert agent.calls == 1
+
     def test_standalone_ask_echo_is_unquoted(self) -> None:
         from agm.agl.repl.render import render_entry_result
 

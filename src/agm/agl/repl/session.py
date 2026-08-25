@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.repl.entry import EntryKind, EntryResult
 from agm.agl.repl.entry_pipeline import EntryPipeline
+from agm.agl.runtime.sessions import AgentDispatcherSessionHost
 from agm.agl.runtime.types import public_param_spelling
 from agm.agl.scope.symbols import dedupe_constructor_candidates
 from agm.agl.self_validation import self_validation_enabled
@@ -258,10 +259,15 @@ class ReplSession:
         # of the three live engine settings: the session owns those (above) and
         # threads them into each per-entry interpreter directly (see
         # :mod:`agm.agl.repl.entry_pipeline`).
+        effective_session_host = (
+            session_host
+            if session_host is not None
+            else AgentDispatcherSessionHost(agent_dispatcher)
+        )
         self._runtime = PipelineDriver(
             default_call_depth_limit=default_call_depth_limit,
             agent_dispatcher=agent_dispatcher,
-            session_host=session_host,
+            session_host=effective_session_host,
         )
         # Reuse the driver's resolved (default-applied) limit for the per-entry
         # interpreters this session builds directly, so the canonical default

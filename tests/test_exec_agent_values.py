@@ -20,6 +20,25 @@ def _invoke(runner: CliRunner, argv: list[str]):
     return runner.invoke(get_command(cli.app), argv, prog_name="agm", catch_exceptions=False)
 
 
+def test_exec_agent_method_single_attempt_accepts_command_without_session_id(
+    tmp_path: Path, fake_agent_transport: FakeAgentTransport
+) -> None:
+    program = tmp_path / "program.agl"
+    write_file_program(
+        program,
+        'let answer: text = AgentCommand("command --flag").ask("hello")\nprint answer\n',
+    )
+    fake_agent_transport.queue(fake_agent_transport.success("done"))
+
+    result = _invoke(CliRunner(), ["exec", "--no-log", str(program)])
+
+    assert result.exit_code == 0, result.output
+    assert result.output == "done\n"
+    prompt, argv = fake_agent_transport.calls[0]
+    assert prompt == "hello"
+    assert argv[:2] == ["command", "--flag"]
+
+
 def test_exec_agent_method_command_session_substitutes_its_session_id(
     tmp_path: Path, fake_agent_transport: FakeAgentTransport
 ) -> None:
@@ -88,7 +107,7 @@ def test_exec_runner_without_a_session_id_placeholder_fails_free_ask(
 
     assert result.exit_code != 0
     assert "%{SESSION_ID}" in result.output
-    assert "[exec] default-agent" in result.output
+    assert "AgentCommand.ask" in result.output
 
 
 @pytest.mark.parametrize(

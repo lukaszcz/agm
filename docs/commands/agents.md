@@ -96,10 +96,11 @@ and shlex splitting. A continuing `AgentCommand` session additionally requires
 an unescaped `%{SESSION_ID}` placeholder. AGM replaces it in the command argv
 with a generated id; it does not put `SESSION_ID` in the child environment.
 
-Free `ask`, `AgentCommand(...).ask(...)`, and
-`Session::open(AgentCommand(...))` open continuing sessions, so their command
-must contain that placeholder. A command without it can still exist as an
-`Agent` value, but opening it as a session raises `SessionError`. See
+Free `ask`, `Session::open(AgentCommand(...))`, and an `AgentCommand(...).ask(...)`
+with corrective retries open continuing sessions, so their command must contain
+that placeholder. A single-attempt `AgentCommand(...).ask(...)` is one-shot and
+does not require it. A command without the placeholder cannot otherwise be
+opened as a session and raises `SessionError`. See
 [`agm exec`](exec.md#agent-command-interpolation) for configuration precedence
 and [Agent calls](../agl/reference/agent-calls.md#sessions) for all session
 backends.

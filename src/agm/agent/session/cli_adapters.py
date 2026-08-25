@@ -187,7 +187,7 @@ class AgentCommandSessionBackend(_CliPromptBackend):
         if not targets_session_id and not request.one_shot:
             raise SessionHostError(
                 "command session requires a %{SESSION_ID} placeholder; "
-                "use [exec] default-agent instead",
+                "use a single-attempt AgentCommand.ask instead",
                 "open",
             )
         self._session = _CommandSession(
@@ -201,7 +201,7 @@ class AgentCommandSessionBackend(_CliPromptBackend):
             request.prompt,
             session.command,
             delivery=PromptDelivery.FILE,
-            session_id=None if session.one_shot else session.session_id,
+            session_id=session.session_id,
         )
 
     def compact(self, instructions: str) -> None:

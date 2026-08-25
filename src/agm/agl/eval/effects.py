@@ -507,7 +507,11 @@ class EffectHandlers:
 
         try:
             return with_ephemeral_session(
-                self._require_session_host("open"), agent, transport, ask_in_session
+                self._require_session_host("open"),
+                agent,
+                transport,
+                ask_in_session,
+                one_shot=terminal_name(agent.display_name) == "AgentCommand" and max_attempts == 1,
             )
         except SessionAgentError as error:
             self._invalid_agent_error(agent, error)

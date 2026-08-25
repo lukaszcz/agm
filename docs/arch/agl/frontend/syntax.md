@@ -25,11 +25,13 @@ their visibility.
 Qualified expressions, types, patterns, and `is` tests share a structured
 `QualifierChain`; every segment retains its span and optional type arguments.
 Enum members preserve whether the source declared an inline `VariantDef` or
-referenced a record through `VariantRef`. `Param` preserves each field's
-mutable marker independently of its constructor zone. Assignment targets keep
-their distinct name, index, or field shape; field targets retain an arbitrary
-postfix receiver and the selected field name. Let bindings retain a complete
-pattern, while declarations and region items carry canonical scope paths, so
+referenced a record through `VariantRef`. A record or enum-member field may be
+prefixed with `var`; `Param` preserves that marker independently of its
+constructor zone. Assignment targets keep their distinct name, index, or
+`FieldTarget` shape; a field target retains an arbitrary postfix receiver and
+the selected field name. The marker is rejected on exception fields. Let
+bindings retain a complete pattern, while declarations and region items carry
+canonical scope paths, so
 later passes do not reconstruct source spellings.
 
 ## Code Entry Points

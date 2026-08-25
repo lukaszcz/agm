@@ -28,7 +28,7 @@ from agm.agent.session.protocol import (
     SessionStats,
 )
 from agm.agent.spec import AgentPi
-from agm.agent.transport import AgentCallInfo, stderr_tail
+from agm.agent.transport import AgentCallInfo, AgentTransportFailureCause, stderr_tail
 
 _RpcOperation = Literal[
     "prompt",
@@ -343,7 +343,11 @@ class PiRpcSessionBackend:
                 else:
                     self._kill_dead_child(child)
                     self._raise_transport_or_host(
-                        operation, "Pi RPC returned an unexpected response", started, None, child
+                        operation,
+                        "Pi RPC returned an unexpected response",
+                        started,
+                        _RpcProtocolError("Pi RPC returned an unexpected response"),
+                        child,
                     )
             if wait_for_settled:
                 if event.get("willRetry") is True:
@@ -363,7 +367,7 @@ class PiRpcSessionBackend:
                             operation,
                             "Pi RPC prompt output exceeded the protocol limit",
                             started,
-                            None,
+                            _RpcProtocolError("Pi RPC prompt output exceeded the protocol limit"),
                             child,
                         )
                     if failure is not None:
@@ -477,7 +481,7 @@ class PiRpcSessionBackend:
 
     def _raise_ask_error(
         self,
-        cause: Literal["timeout", "nonzero_exit"],
+        cause: AgentTransportFailureCause,
         message: str,
         started: float,
         child: _RpcChild,
@@ -841,8 +845,12 @@ def _operation_name(operation: _RpcOperation) -> str:
     }[operation]
 
 
-def _transport_cause(error: BaseException | None) -> Literal["timeout", "nonzero_exit"]:
-    return "timeout" if isinstance(error, _RpcIdleTimeout) else "nonzero_exit"
+def _transport_cause(error: BaseException | None) -> AgentTransportFailureCause:
+    if isinstance(error, _RpcIdleTimeout):
+        return "timeout"
+    if isinstance(error, _RpcProtocolError):
+        return "protocol_failure"
+    return "nonzero_exit"
 
 
 def _stderr(child: _RpcChild | None, fallback: str, include_fallback: bool = False) -> str:

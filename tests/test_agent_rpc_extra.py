@@ -46,8 +46,9 @@ def test_malformed_protocol_records_kill_the_session(
 ) -> None:
     RpcStub(tmp_path, monkeypatch, {"prompt": [event]})
     backend = open_backend()
-    with pytest.raises(SessionAskError):
+    with pytest.raises(SessionAskError) as raised:
         backend.ask(SessionAskRequest("hello"))
+    assert raised.value.cause == "protocol_failure"
     with pytest.raises(SessionHostError):
         backend.compact("")
     backend.close()
@@ -485,8 +486,10 @@ def test_unexpected_ack_and_non_prompt_transport_errors_close_the_session(
 ) -> None:
     RpcStub(tmp_path, monkeypatch, actions)
     backend = open_backend()
-    with pytest.raises(SessionAskError if "prompt" in actions else SessionHostError):
+    with pytest.raises(SessionAskError if "prompt" in actions else SessionHostError) as raised:
         backend.ask(SessionAskRequest("hello")) if "prompt" in actions else backend.compact("")
+    if "prompt" in actions:
+        assert cast(SessionAskError, raised.value).cause == "protocol_failure"
     with pytest.raises(SessionHostError):
         backend.compact("")
     backend.close()
@@ -538,8 +541,9 @@ def test_prompt_output_limit_and_write_failure_close_the_session(
     )
     monkeypatch.setattr(rpc, "_MAX_PROMPT_CHARS", 1)
     backend = open_backend()
-    with pytest.raises(SessionAskError):
+    with pytest.raises(SessionAskError) as raised:
         backend.ask(SessionAskRequest("hello"))
+    assert raised.value.cause == "protocol_failure"
     backend.close()
 
     second = tmp_path / "second"

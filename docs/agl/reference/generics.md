@@ -38,7 +38,9 @@ type Pair[A, B] = dict[text, json]
 A declaration may have several parameters (`def apply[A, B](…)`,
 `enum Outcome[T, E]`), and each must be a distinct name. `_` is not accepted
 here; it is reserved for a method's receiver type-parameter prefix (see
-[Generic methods](#generic-methods)). Inside the body, a type parameter may be
+[Generic methods](#generic-methods)). A `var` field remains mutable at every
+instantiation; type arguments substitute its field type but do not change its
+mutability. Inside the body, a type parameter may be
 used anywhere a type is expected — including as a field type, a function
 parameter or result type, the element type of `array[T]`, or in a `let`
 annotation:
@@ -414,9 +416,10 @@ declarations) may each recurse at a different argument.
 The [inhabitation](types.md#inhabitation) rule applies exactly as for a
 non-generic recursive type: `Single` is the base-case member that makes
 `Perfect[T]` constructible for every `T`. Constructing, matching, comparing,
-and folding a value works exactly like any other recursive type — a value is
-always a finite tree, regardless of how many argument levels its declaration
-can grow through:
+and folding a value works exactly like any other recursive type. The values
+shown here are finite trees, regardless of how many argument levels their
+declaration can grow through; a recursive type with a `var` field may instead
+be updated later to close a reference cycle:
 
 <!-- agl-check: fragment -->
 ```agl

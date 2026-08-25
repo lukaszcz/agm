@@ -225,6 +225,22 @@ program def main() -> unit =
   let _ = print(by_path.address)
 ```
 
+A method may update a `var` field through `self`; `self` need not be a mutable
+binding because the assignment updates the record, not the receiver name:
+
+```agl
+record Counter(var value: int)
+
+def Counter::add(self, amount: int) -> unit =
+  self.value := self.value + amount
+
+program def main() -> unit =
+  let counter = Counter(value = 1)
+  let alias = counter
+  counter.add(2)
+  print(alias.value)
+```
+
 `self` must be the first parameter, before any zone marker. It has no default
 and cannot be supplied by name. Its annotation is optional; when written, it
 must be exactly the enclosing type with the method's receiver type parameters.

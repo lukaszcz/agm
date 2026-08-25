@@ -220,7 +220,7 @@ record_body      ::= param_marker? NEWLINE INDENT block_entry (NEWLINE block_ent
                    | "(" field_list? ")"
                    | field_list
 block_entry      ::= field_def | param_marker
-field_def        ::= field_name ":" type_expr
+field_def        ::= "var"? field_name ":" type_expr
 
 enum_def         ::= "enum" decl_head type_params? "="? enum_body
 enum_body        ::= enum_member_seq
@@ -232,7 +232,7 @@ member_type_args ::= "[" type_expr ("," type_expr)* "]"
 member_payload   ::= "(" field_list? ")"
 field_list       ::= field_entry ("," field_entry)* ","?
 field_entry      ::= field_inline | param_marker
-field_inline     ::= field_name ":" type_expr
+field_inline     ::= "var"? field_name ":" type_expr
 
 exception_def    ::= "exception" decl_head exception_base? exception_body
 exception_base   ::= "extends" name
@@ -265,7 +265,9 @@ entry is an ordinary name in scope as a type throughout the declaration's body.
 [Generics](generics.md).
 
 An enum member written as a bare `name` declares a record in the enum's scope;
-its optional field list is that record's field list. A qualified member is a
+its optional field list is that record's field list, including optional `var`
+field markers. A `var` marker is valid for records and enum-member records,
+but not exception fields. A qualified member is a
 reference to an existing record, so it has no field list. Qualification is the
 declare/reference discriminator: `Entry(x: int)` declares `Enum::Entry`, while
 `::Entry` references the current module's `Entry`. See [Enums](types.md#enum-types).
@@ -364,6 +366,7 @@ builtin_var_def ::= "builtin" NEWLINE? "var" name type_ann ["=" expr]  (* std/co
 assign_stmt ::= assign_target ":=" expr
 assign_target ::= qualifier_chain? name
                 | postfix "[" expr "]"
+                | postfix "." field_name
 ```
 
 A `builtin var` is a body-less, host-backed mutable binding with a mandatory
@@ -390,11 +393,12 @@ cross-module target — written with a qualifier, or bare when an import tail or
 `use` puts the name in scope — is valid only when it resolves to a `builtin var`;
 type-qualified constructor forms are not assignment targets. An indexed
 assignment target's object expression is evaluated like any other read, so
-`assign_target` accepts any array- or dict-typed expression there — see
-[Bindings and scope](bindings-and-scope.md#--destructive-assignment) for which
-roots are legal and the evaluation order. Each opening `[` must be adjacent to
-the target name or preceding index: `xs[0]` is indexed assignment, while
-`xs [0]` is not.
+`assign_target` accepts any array- or dict-typed expression there; a field
+assignment likewise accepts any record-typed postfix receiver, provided its
+field is marked `var`. See [Bindings and scope](bindings-and-scope.md#--destructive-assignment)
+for which roots are legal and the evaluation order. Each opening `[` must be
+adjacent to the target name or preceding index: `xs[0]` is indexed assignment,
+while `xs [0]` is not.
 
 ## Loops
 

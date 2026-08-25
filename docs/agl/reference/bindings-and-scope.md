@@ -106,6 +106,7 @@ var artifact: text = ask("Implement %{spec}", agent = impl)
 assign_stmt ::= assign_target ":=" expr
 assign_target ::= qualifier_chain? name
                 | postfix "[" expr "]"
+                | postfix "." field_name
 ```
 
 A bare `:=` (no index) rebinds the nearest visible **mutable** binding, has
@@ -154,12 +155,19 @@ assignment uses the same negative-index and `IndexError` rules as array
 access. Dictionary assignment updates existing keys only; assigning to a
 missing key raises `KeyError`.
 
-Because indexed assignment mutates in place, it can make an array or dict
-hold a reference back to a container that contains it — see
-[Cycles](types.md#cycles) for how that arises and which operations detect it.
-Because binding and assignment never copy, a program that wants an
-independent value asks for one with the `copy`/`shallow_copy` built-ins — see
-[`copy` and `shallow_copy`](types.md#copying-values).
+`:=` can also update a field declared with `var` on a record or enum-member
+record. The receiver may be any record-typed postfix expression, including a
+field, indexed element, parameter, or call result. The field must exist and be
+marked `var`; fields of exceptions and unmarked record fields are not
+assignable. An enum-typed receiver has no fields, so narrow it with a `case`
+pattern or cast it to its member record first. Like indexed assignment, field
+assignment mutates the shared value in place, even through a `let` binding.
+
+Either indexed or `var`-field assignment can close a reference cycle — see
+[Cycles](types.md#cycles) for the operations that detect one. Because binding
+and assignment never copy, a program that wants an independent value asks for
+one with the `copy`/`shallow_copy` built-ins — see [`copy` and
+`shallow_copy`](types.md#copying-values).
 
 Evaluation order for `target[index] := value` is left to right: the
 container, then the index, then `value`, then the checked in-place store. A
@@ -167,7 +175,9 @@ nested target such as `m["a"]["b"] := v` evaluates the outer container, reads
 its `"a"` entry to reach the inner container, evaluates `"b"` and `v`, then
 stores into the inner container — so a `KeyError` or `IndexError` raised
 while reaching the target aborts before `value` is evaluated, but a `value`
-with a side effect always runs before the store is checked.
+with a side effect always runs before the store is checked. For
+`receiver.field := value`, the receiver is evaluated first, then `value`, then
+the in-place store.
 
 Static rules, all checked before execution:
 
@@ -176,8 +186,10 @@ Static rules, all checked before execution:
 3. A bare `name := value` (no index) to an immutable binding is an error; the
    diagnostic names the binder kind — `let`, `param`, a catch binder, or a
    pattern binding.
-4. Reading a name that is not visible in the current scope chain is an error.
-5. The contextual keywords `ask` and `exec` cannot be used as binding or
+4. A field-assignment target must be a `var` field of a record or
+   enum-member record; an enum-typed receiver must be narrowed first.
+5. Reading a name that is not visible in the current scope chain is an error.
+6. The contextual keywords `ask` and `exec` cannot be used as binding or
    param names.
 
 ## `def` — function declarations

@@ -275,8 +275,10 @@ case box of
 
 1. The scrutinee is evaluated exactly once.
 2. Branch patterns are tried **in order**; the first matching branch runs.
-3. Pattern variables are bound as immutable values in a fresh branch scope
-   ([Bindings and scope](bindings-and-scope.md)).
+3. Pattern variables are bound as immutable snapshots of the selected field
+   values in a fresh branch scope ([Bindings and scope](bindings-and-scope.md)).
+   Reassigning a `var` field after matching does not change the bound name,
+   though a bound array, dictionary, or record value still aliases that value.
 4. Every possible scrutinee value must match a branch, and every branch must
    be selectable for at least one value. Violations are static errors, so a
    valid `case` always selects a branch.

@@ -1,6 +1,6 @@
 # AgL Host Runtime and Pipeline
 
-The runtime package is the eval-free services layer: value-driven agents, codecs, parameter conversion, host-environment assembly, and rendering. It imports neither the evaluator nor the pipeline, which keeps the services reusable and the dependency graph acyclic. It builds on AGM's shared agent runner and core primitives rather than reimplementing them ([index.md](../index.md)).
+The runtime package is the eval-free services layer: value-driven agents, session-host adapters, codecs, parameter conversion, host-environment assembly, and rendering. It imports neither the evaluator nor the pipeline, which keeps the services reusable and the dependency graph acyclic. `runtime/sessions.py` bridges opaque AgL session values to the agent session service and supplies the one-shot dispatcher compatibility host. The package otherwise builds on AGM's shared agent runner and core primitives rather than reimplementing them ([index.md](../index.md)).
 
 ## Codecs
 

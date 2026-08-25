@@ -4,7 +4,7 @@ Two foundation packages sit beneath everything else, and *both* are shared by bo
 
 ## Process Execution
 
-All subprocess work goes through a single process module rather than ad-hoc `subprocess` calls. It distinguishes running a command in the foreground (inheriting the terminal) from capturing its output, and offers "require success" variants that raise or exit on failure. It manages process groups and termination so that interrupting AGM cleanly tears down child processes — important for long-running agent and sandbox subprocesses, where a Ctrl-C must group-kill the child.
+Ordinary foreground and captured subprocess work goes through the shared process module. It distinguishes terminal-inheriting commands from captured output, offers "require success" variants, and manages process groups so interruption tears down descendants. The persistent Pi RPC session is the deliberate exception: `agent/session/rpc.py` owns a raw streaming `Popen`, nonblocking bounded writes, reader threads, and equivalent process-group teardown because the request/response process must outlive one capture call.
 
 ## Environment Handling
 

@@ -8,6 +8,12 @@ An agent invocation is a subprocess that receives a prompt and produces output. 
 
 Prompts are resolved from inline text or a file and preprocessed to expand environment variables, writing a temporary prompt file when substitution changes the content. Normal runs clean these files up; dry runs retain them so the printed prompt path can be inspected. Completion is detected by inspecting the agent's final output for a completion marker. An AgL value typed `Agent` is its selected member `RecordValue`, not an enum wrapper; it decodes into an immutable host spec. Pure per-kind builders produce argv for Claude, Codex, Pi, or a verbatim custom command. The prepared-prompt seam accepts those argv directly, retaining the shared prompt-file and process-result behavior. Most specs attach the prompt as a placeholder or an appended `@<path>` argument; a spec can instead declare stdin delivery (as `AgentCodex` does, since `codex exec` reads `-` as "prompt on stdin" rather than expanding an `@<path>` argument), in which case the runner pipes the prompt file's contents in and never appends a target.
 
+## Session Service
+
+The session layer presents one backend-neutral lifecycle for continuing agent conversations. `SessionService` owns opaque handles and their backend instances, snapshots agent and transport selection at open/default time, retains closed handles for idempotent close, and releases all owned processes at the command or interpreter boundary. Persistent/default handles live for their host run or REPL session; explicit `Agent::ask` calls use ephemeral handles spanning the complete parse-retry loop.
+
+CLI adapters defer native transcript creation until the first prompt. Claude, Codex, and Pi adapters translate the common lifecycle into their CLI-specific creation, continuation, compact, and fork protocols; custom `AgentCommand` sessions interpolate one stable session ID. Pi's RPC backend instead owns one streaming JSONL child process, bounds both pipe writes and response waits with the idle timeout, and isolates the process group so teardown includes tool descendants. AgL bridges this service through `agl/runtime/sessions.py`; its dispatcher-backed compatibility host preserves the same handle ownership while dispatching each prompt as a legacy one-shot call.
+
 ## Runner Resolution
 
 Loop, review, and revise each resolve their runner from explicit CLI arguments, then their own config section (a `[<section>.<command-name>]` sub-table layered over the base `[loop]`/`[review]`/`[revise]` table), then a shared built-in runner floor. Each command reads only its own section, so review and revise never inherit `[loop]`'s runner. Loop's selector and timeout resolve through the same precedence, without a floor.
@@ -31,6 +37,8 @@ These share prompt-preprocessing that merges scope, aspects, and other context i
 - `src/agm/agent/spec.py` — host agent specs, each building its own backend argv, plus `AGENT_SPECS`, the member-to-spec catalog used by AgL decoding. A pure data leaf; the generic decoder lives on the AgL side, in `agl/runtime/agents.py`.
 - `src/agm/agent/defaults.py` — the built-in runner floor (`DEFAULT_AGENT_RUNNER`) shared by loop, review, and revise.
 - `src/agm/agent/runner.py` — runner command parsing, prompt attachment, prepared argv handling, subprocess execution with idle timeout, the run-result structure.
+- `src/agm/agent/session/` — session protocol and service ownership, deferred CLI adapters, and the persistent Pi RPC backend.
+- `src/agm/agl/runtime/sessions.py` — AgL session-host bridge and dispatcher compatibility host.
 - `src/agm/agent/prompt.py`, `prompt_source.py`, `response.py`, `output.py` — prompt preparation, source resolution, completion detection, and output formatting.
 - `src/agm/agent/loop.py` — loop runner/selector/timeout resolution.
 - `src/agm/agent/review/` — the review, revise, and refine workflow implementations and prompt preprocessing.

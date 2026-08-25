@@ -222,6 +222,24 @@ def _run(source: str, host: _Host) -> RunResult:
     return PipelineDriver(session_host=host).run(source)
 
 
+def test_session_failures_report_the_session_call_location() -> None:
+    class FailingHost(_Host):
+        def open(self, agent: EnumValue, transport: str, *, name: str = "") -> str:
+            del agent, transport, name
+            raise SessionHostError("unavailable", "open")
+
+    result = _run(
+        "program def main() -> unit =\n"
+        "  let before = 1\n"
+        '  let session = Session::open(AgentCommand("worker"))\n',
+        FailingHost(),
+    )
+
+    assert result.error is not None
+    assert result.error.line == 3
+    assert result.error.col == 17
+
+
 def test_agent_method_maps_session_agent_errors_to_agent_call_errors() -> None:
     class InvalidAgentHost(_Host):
         def open(self, agent: EnumValue, transport: str, *, name: str = "") -> str:

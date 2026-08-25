@@ -1167,6 +1167,26 @@ class IrInterpreter:
     # Expression evaluator (closed IrExpr dispatch)
     # ------------------------------------------------------------------
 
+    def _eval_session_effect(
+        self, node: IrSessionOpen | IrSessionDefault | IrSessionAsk | IrSessionOp
+    ) -> Value:
+        try:
+            match node:
+                case IrSessionOpen():
+                    return self._effects.eval_ir_session_open(node)
+                case IrSessionDefault():
+                    return self._effects.eval_ir_session_default(
+                        node, self._load_builtin_setting("default-agent")
+                    )
+                case IrSessionAsk():
+                    return self._effects.eval_ir_session_ask(node)
+                case IrSessionOp():
+                    return self._effects.eval_ir_session_op(node)
+        except AglRaise as exc:
+            if exc.span is None:
+                exc.span = node.location
+            raise
+
     def _eval(self, node: IrExpr) -> Value:
         """Evaluate *node* in the current frame and return its value.
 
@@ -1803,19 +1823,8 @@ class IrInterpreter:
                         exc.span = node.location
                     raise
 
-            case IrSessionOpen():
-                return self._effects.eval_ir_session_open(node)
-
-            case IrSessionDefault():
-                return self._effects.eval_ir_session_default(
-                    node, self._load_builtin_setting("default-agent")
-                )
-
-            case IrSessionAsk():
-                return self._effects.eval_ir_session_ask(node)
-
-            case IrSessionOp():
-                return self._effects.eval_ir_session_op(node)
+            case IrSessionOpen() | IrSessionDefault() | IrSessionAsk() | IrSessionOp():
+                return self._eval_session_effect(node)
 
             case IrAskRequest(agent=agent_expr, prompt=prompt_expr):
                 return self._effects.eval_ir_ask_request(node, agent_expr, prompt_expr)

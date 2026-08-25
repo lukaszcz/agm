@@ -1,0 +1,6 @@
+record Box[T](value: T)
+type IntBox = Box[int]
+
+enum Both = ::Box[int] | ::IntBox
+
+program def main() -> unit = ()

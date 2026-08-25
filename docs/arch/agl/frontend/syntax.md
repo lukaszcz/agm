@@ -29,6 +29,13 @@ module-qualifier token contract, and the AST preserves their unresolved target,
 tails, hiding clauses, aliases, and scope paths for scope resolution to decide
 their visibility.
 
+Qualified expressions, types, patterns, and `is` tests share a structured
+`QualifierChain`; every segment retains its span and optional type arguments.
+Enum members preserve whether the source declared an inline `VariantDef` or
+referenced a record through `VariantRef`. Let bindings retain a complete
+pattern, while declarations and region items carry canonical scope paths, so
+later passes do not reconstruct source spellings.
+
 A function header can retain an applied builtin receiver (`array[E]::map` or
 `dict[text, V]::get`) alongside an ordinary `self` parameter; scope
 classification waits for the completed declaration path, because a scope region

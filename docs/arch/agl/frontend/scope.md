@@ -15,6 +15,15 @@ The resolver applies lexical visibility for bindings and resolves qualified
 chains through local scope paths and imported module routes. Ambiguous bare or
 qualified routes are static errors.
 
+Inline enum members are nominal record declarations beneath their owning enum
+scope. Scope resolution gives each local, imported, built-in, or REPL-retained
+constructor a canonical `ConstructorRef` for that record declaration. The
+reference carries module, scope path, terminal name, and declaration identity
+separately; display spellings are never used as identity. A local injected
+constructor shadows automatic `std/core` prelude constructors with the same
+bare spelling. Patterns and `is` tests retain candidate sets when their matched
+enum type must select the member.
+
 ## Imports and `use`
 
 `scope/imports.py` builds contribution environments for import declarations.
@@ -38,6 +47,8 @@ trailing alias names that route or one of its ordinary members,
 including a scope route exposed by an earlier `use`; imported `use` surfaces retain every filtered
 member and scope-route candidate on the owning lexical region, so colliding renamed routes remain
 ambiguous when subsequently used and selective bare imports cannot expose unselected nested scopes.
+Type aliases follow targets through the import environment of the module that declared the alias, so
+consumers select the same constructor even when that target is module-qualified or a referenced enum member.
 The module's qualified route remains complete. Incremental replay falls back to that route only when
 the retained use target is no longer nameable through the current import spelling. `use` does not
 create a module-loading edge. Bare import-tail and `use` routes at the same region are

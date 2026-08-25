@@ -105,6 +105,7 @@ from agm.agl.syntax import (
     UnitLit,
     UseDecl,
     VarDecl,
+    VariantRef,
     VarPattern,
     VarRef,
     WildcardPattern,
@@ -719,30 +720,63 @@ class TestDeclarations:
         en = first(prog)
         assert isinstance(en, EnumDef)
         assert en.name == "Status"
-        assert len(en.variants) == 2
-        assert en.variants[0].name == "Pass"
-        assert en.variants[1].name == "Fail"
+        assert len(en.members) == 2
+        assert en.members[0].name == "Pass"
+        assert en.members[1].name == "Fail"
 
     def test_enum_def_first_pipe_optional(self) -> None:
         prog = parse("enum Status Pass | Fail")
         en = first(prog)
         assert isinstance(en, EnumDef)
-        assert [variant.name for variant in en.variants] == ["Pass", "Fail"]
+        assert [member.name for member in en.members] == ["Pass", "Fail"]
 
     def test_enum_def_equals_after_name_optional(self) -> None:
         prog = parse("enum Status = Pass | Fail")
         en = first(prog)
         assert isinstance(en, EnumDef)
-        assert [variant.name for variant in en.variants] == ["Pass", "Fail"]
+        assert [member.name for member in en.members] == ["Pass", "Fail"]
 
     def test_enum_with_payload(self) -> None:
         prog = parse("enum Result\n  | Ok(value: int)\n  | Err(msg: text)")
         en = first(prog)
         assert isinstance(en, EnumDef)
-        ok = en.variants[0]
+        ok = en.members[0]
         assert ok.name == "Ok"
         assert len(ok.fields) == 1
         assert isinstance(ok.fields[0], Param)
+
+    def test_enum_member_references(self) -> None:
+        en = first(
+            parse(
+                """enum RR =
+  | ::R1
+  | RR2::R3
+  | mod::R
+  | /root/mod::R
+  | Local(x: int)"""
+            )
+        )
+
+        assert isinstance(en, EnumDef)
+        assert len(en.members) == 5
+        assert all(isinstance(member, VariantRef) for member in en.members[:4])
+        assert en.members[0].chain.member == "R1"
+        assert en.members[0].chain.anchor is syntax.QualifierAnchor.CURRENT_MODULE
+        assert en.members[1].chain.member == "R3"
+        assert [segment.name for segment in en.members[1].chain.segments] == ["RR2"]
+        assert en.members[2].chain.member == "R"
+        assert [segment.name for segment in en.members[2].chain.segments] == ["mod"]
+        assert en.members[3].chain.member == "R"
+        assert en.members[3].chain.anchor is syntax.QualifierAnchor.MODULE
+        assert [segment.name for segment in en.members[3].chain.segments] == ["root/mod"]
+        assert en.members[4].name == "Local"
+
+    def test_enum_member_reference_rejects_a_field_list(self) -> None:
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse("enum RR = ::R1(x: int)")
+
+        assert exc_info.value.span is not None
+        assert exc_info.value.span.start_line == 1
 
     def test_type_alias(self) -> None:
         ta = first(parse("type Name = text"))
@@ -832,7 +866,7 @@ class TestDeclarations:
         assert isinstance(en, EnumDef)
         assert en.name == "Status"
         assert en.is_builtin is True
-        assert len(en.variants) == 2
+        assert len(en.members) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -1218,7 +1252,7 @@ class TestParamKind:
         en = first(parse("enum Result\n  | Ok(value: int, tag: text)\n  | Err(msg: text)"))
         assert isinstance(en, EnumDef)
         assert all(
-            field.kind == ParamKind.STANDARD for variant in en.variants for field in variant.fields
+            field.kind == ParamKind.STANDARD for member in en.members for field in member.fields
         )
 
 
@@ -1360,13 +1394,13 @@ class TestMarkerParams:
         assert isinstance(en, EnumDef)
         assert all(field.kind == ParamKind.NAMED_ONLY for field in rec.fields)
         assert all(field.kind == ParamKind.NAMED_ONLY for field in exc.fields)
-        assert en.variants[1].fields[0].kind == ParamKind.NAMED_ONLY
+        assert en.members[1].fields[0].kind == ParamKind.NAMED_ONLY
 
     def test_enum_variant_with_slash(self) -> None:
         """Multi-field variant with / — first pos-only, rest standard."""
         en = first(parse("enum R\n  | A(x: int, /, y: int)\n  | B"))
         assert isinstance(en, EnumDef)
-        a = en.variants[0]
+        a = en.members[0]
         assert a.fields[0].kind == ParamKind.POSITIONAL_ONLY
         assert a.fields[1].kind == ParamKind.STANDARD
 
@@ -3087,8 +3121,8 @@ class TestVariantPayloadCoverage:
         prog = parse("enum E\n  | Empty()")
         en = first(prog)
         assert isinstance(en, EnumDef)
-        assert en.variants[0].name == "Empty"
-        assert en.variants[0].fields == ()
+        assert en.members[0].name == "Empty"
+        assert en.members[0].fields == ()
 
 
 class TestTryBodyCoverage:
@@ -3340,7 +3374,7 @@ class TestGenerics:
         assert isinstance(en, EnumDef)
         assert en.name == "Option"
         assert en.type_params == ("T",)
-        assert len(en.variants) == 2
+        assert len(en.members) == 2
 
     def test_generic_type_alias(self) -> None:
         """type Map[K] = dict[text, K] — type alias with type param."""

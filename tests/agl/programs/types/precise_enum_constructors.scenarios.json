@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "name": "directed_subsumption",
+      "expect": {
+        "stdout": "Tree::Leaf\nTree::Leaf\nBox(tree = Tree::Leaf)\nTree::Leaf\n[Tree::Leaf, Tree::Node(value = 1)]\nOption::none\n"
+      }
+    }
+  ]
+}

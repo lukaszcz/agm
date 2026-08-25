@@ -37,11 +37,11 @@ from agm.agl.runtime.trace import TraceStore
 from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.exceptions import make_builtin_exception as _make_exc_value
+from agm.agl.semantics.types import terminal_name
 from agm.agl.semantics.values import (
     VOID_VALUE,
     BoolValue,
     DictValue,
-    EnumValue,
     ExceptionValue,
     IntValue,
     JsonValue,
@@ -142,10 +142,10 @@ class EffectHandlers:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _agent_trace_value(agent: EnumValue) -> dict[str, object]:
-        """Return the agent variant and payload without re-decoding it."""
+    def _agent_trace_value(agent: RecordValue) -> dict[str, object]:
+        """Return the agent member name and payload without re-decoding it."""
         return {
-            "variant": agent.variant,
+            "variant": terminal_name(agent.display_name),
             "payload": {
                 name: value.value if isinstance(value, TextValue) else render_value(value)
                 for name, value in agent.fields.items()
@@ -213,7 +213,7 @@ class EffectHandlers:
         )
         return response
 
-    def _raise_agent_call_error(self, agent: EnumValue, error: AgentCallHostError) -> NoReturn:
+    def _raise_agent_call_error(self, agent: RecordValue, error: AgentCallHostError) -> NoReturn:
         """Convert a transport failure after it was recorded in the trace."""
         declared = self._ctx._program.builtin_nominals.resolve("AgentCallError")
         agent_label = render_value(agent)
@@ -298,9 +298,10 @@ class EffectHandlers:
     ) -> Value:
         """Handle IrAsk: dispatch an Agent enum value and parse output."""
         agent_val = self._ctx._eval(agent_expr)
-        if not isinstance(agent_val, EnumValue):
+        if not isinstance(agent_val, RecordValue):
             raise TypeError(
-                f"IrAsk agent must evaluate to an Agent enum value, got {type(agent_val).__name__}"
+                "IrAsk agent must evaluate to an Agent member record, "
+                f"got {type(agent_val).__name__}"
             )
         agent_name = render_value(agent_val)
 
@@ -414,26 +415,27 @@ class EffectHandlers:
     ) -> Value:
         """Handle IrAskRequest: build AgentRequest record without dispatching."""
         request_agent = self._ctx._eval(agent_expr)
-        if not isinstance(request_agent, EnumValue):
+        if not isinstance(request_agent, RecordValue):
             raise TypeError(
-                "IrAskRequest agent must evaluate to an Agent enum value, "
+                "IrAskRequest agent must evaluate to an Agent member record, "
                 f"got {type(request_agent).__name__}"
             )
 
         prompt_text = self._text_of(self._ctx._eval(prompt_expr))
 
         agent_request = self._ctx._program.builtin_nominals.resolve("AgentRequest")
+        nominals = self._ctx._program.builtin_nominals
         return RecordValue(
             nominal=agent_request.nominal,
             display_name=agent_request.display_name,
             fields={
                 "agent": request_agent,
                 "prompt": TextValue(prompt_text),
-                "target_type": some_value(TextValue("text")),
-                "format_instructions": none_value(),
-                "json_schema": none_value(),
+                "target_type": some_value(TextValue("text"), nominals=nominals),
+                "format_instructions": none_value(nominals=nominals),
+                "json_schema": none_value(nominals=nominals),
                 "attempt": IntValue(0),
-                "previous_error": none_value(),
+                "previous_error": none_value(nominals=nominals),
                 "metadata": JsonValue(
                     {
                         "codec_name": "text",
@@ -592,11 +594,11 @@ class EffectHandlers:
             assert isinstance(value, TextValue)
             env[name] = value.value
         cwd_value = self._ctx._eval(cwd_expr)
-        assert isinstance(cwd_value, EnumValue)
-        cwd_text = option_text(cwd_value)
+        assert isinstance(cwd_value, RecordValue)
+        cwd_text = option_text(cwd_value, nominals=self._ctx._program.builtin_nominals)
         timeout_value = self._ctx._eval(timeout_expr)
-        assert isinstance(timeout_value, EnumValue)
-        timeout_text = option_text(timeout_value)
+        assert isinstance(timeout_value, RecordValue)
+        timeout_text = option_text(timeout_value, nominals=self._ctx._program.builtin_nominals)
         if timeout_text is None:
             timeout = None
         else:

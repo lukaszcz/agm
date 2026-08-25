@@ -1,0 +1,8 @@
+enum Source
+  | A
+
+type Alias = Source
+
+enum Target = ::Alias
+
+program def main() -> unit = ()

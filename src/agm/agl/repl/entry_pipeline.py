@@ -66,6 +66,7 @@ class EntryPipelineCtx(Protocol):
     _session_type_paths: dict[tuple[str, ...], str | None]
     _type_env: TypeEnvironment
     _ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]]
+    _ambient_bare_constructor_candidates: dict[str, tuple[ConstructorRef, ...]]
     _ambient_type_names: frozenset[str]
     _trace_path: Path | None
     _default_loop_limit: int | None
@@ -428,6 +429,11 @@ class EntryPipeline:
             graph,
             entry_ambient_constructor_candidates=self._ctx._ambient_constructor_candidates,
             entry_ambient_type_names=self._ctx._ambient_type_names,
+            entry_ambient_bare_constructor_keys=frozenset(
+                (cname, ref.owner_module_id, ref.owner_decl_node_id)
+                for cname, crefs in self._ctx._ambient_bare_constructor_candidates.items()
+                for ref in crefs
+            ),
             entry_parent_scope=self._ctx._session_scope,
             entry_repl_session_scope=self._ctx._session_scope,
             entry_repl_session_scope_nodes=self._ctx._session_scope_nodes,
@@ -741,7 +747,11 @@ class EntryPipeline:
                 process_environment=self._ctx._process_environment,
             )
         except AglRaise as exc:
-            error = exception_value_to_run_error(exc.exc, span=exc.span)
+            error = exception_value_to_run_error(
+                exc.exc,
+                span=exc.span,
+                exception_field_encodes=program_to_run.exception_field_encodes,
+            )
             trace.exception(
                 type_name=error.type_name,
                 message=str(error.fields.get("message", "")),
@@ -917,7 +927,11 @@ class EntryPipeline:
             trace.run_end(ok=exc.code is None or exc.code == 0)
             raise
         except AglRaise as exc:
-            error = exception_value_to_run_error(exc.exc, span=exc.span)
+            error = exception_value_to_run_error(
+                exc.exc,
+                span=exc.span,
+                exception_field_encodes=program_to_run.exception_field_encodes,
+            )
             trace.exception(
                 type_name=error.type_name,
                 message=str(error.fields.get("message", "")),

@@ -7,7 +7,7 @@ tests/agl/rejections/**/*.agl file is an invalid program that the static
 pipeline must reject before executing anything. The data format is documented
 in tests/agl/README.md.
 
-Public contract exercised here (AgL implementation requirements , the AgL DSL design ):
+Public contract exercised here:
 
     from agm.agl import PipelineDriver
 
@@ -527,7 +527,9 @@ def test_direct_std_option_import_runs_without_the_automatic_prelude(
         PipelineDriver(),
         "import std/core::print\n"
         "import std/option::Option\n"
-        "program def main() -> unit = print(Option::Some(value = 2).map(fn(x: int) => x + 1))\n",
+        "program def main() -> unit =\n"
+        "  let option: Option[int] = Option::Some(value = 2)\n"
+        "  print(option.map(fn(x: int) => x + 1))\n",
         roots=roots,
         default_stdlib=False,
     )

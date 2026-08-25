@@ -89,7 +89,7 @@ than an extern signature.
 | `array[T]` | a mutable sequence view (`MutableSequence`) over the AgL array |
 | `dict[text, V]` | a mutable mapping view (`MutableMapping[str, object]`) over the AgL dict |
 | record | instance of its synthesized class |
-| enum value | instance of a synthesized nested variant class |
+| enum value | instance of its member record's synthesized class |
 | exception | instance of its synthesized class |
 
 `bool` is considered before `int` on return because Python makes `bool` an
@@ -119,13 +119,15 @@ def null_json():
 
 ## Nominal values
 
-Each program receives one synthesized class per nominal identity. Records and
-exceptions have immutable fields and `__match_args__`; enum classes have one
-base class with one nested class per variant. A nominal whose final name is
-unique and does not collide with a built-in `agl` API can be imported directly.
-Use the identity-preserving `nominals` namespace, rooted by module path (or
-`entry`) and then by AgL scope, for name collisions and reserved names such as
-an exception named `AglException`:
+Each program receives one synthesized class per nominal identity. Records,
+enum-member records, and exceptions have immutable fields and `__match_args__`;
+an enum class is a namespace over its member classes. An inline member record
+is available below its enum scope, so `Shape.circle` remains its Python
+spelling. A nominal whose final name is unique and does not collide with a
+built-in `agl` API can be imported directly. Use the identity-preserving
+`nominals` namespace, rooted by module path (or `entry`) and then by AgL scope,
+for name collisions and reserved names such as an exception named
+`AglException`:
 
 ```python
 from agl import Box, Shape, nominals

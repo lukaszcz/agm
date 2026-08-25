@@ -10,19 +10,22 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.ids import NominalId
-from agm.agl.ir.program import NominalDescriptor, NominalKind, VariantDescriptor
+from agm.agl.ir.program import NominalDescriptor, NominalKind
 from agm.agl.modules.ids import ModuleId
 from agm.agl.runtime.boundary import AglException, decode_boundary_value
 from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.scope import AglScopeError
-from agm.agl.semantics.values import ArrayValue, EnumValue, IntValue, TextValue
+from agm.agl.semantics.values import ArrayValue, IntValue, RecordValue, TextValue
 from agm.agl.typecheck import AglTypeError
+from tests._agl_helpers import option_nominal_descriptors
 from tests.agl.module_graph import resolve_and_check_inline_entry
 
 _STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 _TEXT_MODULE = ModuleId(("std", "text"))
 _INDEX_ERROR = NominalId(9_300_001)
 _OPTION = NominalId(9_300_002)
+_OPTION_NONE = NominalId(9_300_003)
+_OPTION_SOME = NominalId(9_300_004)
 
 
 class _TextCompanion(Protocol):
@@ -50,14 +53,7 @@ def _text_companion() -> _TextCompanion:
                 kind=NominalKind.EXCEPTION,
                 fields=("message", "index", "length"),
             ),
-            _OPTION: NominalDescriptor(
-                nominal=_OPTION,
-                module_id=ModuleId(("std", "option")),
-                scope_path=(),
-                declared_name="Option",
-                kind=NominalKind.ENUM,
-                variants=(VariantDescriptor("Some", ("value",)), VariantDescriptor("None", ())),
-            ),
+            **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
         }
     )
     module: ModuleType = registry.load_companion(_TEXT_MODULE, _STDLIB_ROOT / "std" / "text.py")
@@ -71,8 +67,8 @@ def test_text_companion_uses_unicode_code_points_and_option_search() -> None:
         [TextValue("é"), TextValue("😀")]
     )
     assert companion.index_of("banana", "na") == 2
-    assert decode_boundary_value(companion.index_of_option("banana", "zz")) == EnumValue(
-        _OPTION, "Option", "None", {}
+    assert decode_boundary_value(companion.index_of_option("banana", "zz")) == RecordValue(
+        _OPTION_NONE, "Option::None", {}
     )
 
     with pytest.raises(AglException) as exc_info:

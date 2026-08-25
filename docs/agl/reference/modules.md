@@ -64,6 +64,10 @@ module's slash-path routes. It does not make names bare and cannot be combined
 with an import tail. A tail rename is additive: it adds a bare route without
 removing the selected source path.
 
+Selecting an enum scope includes its inline member-record subtree. A referenced
+record member keeps its own declaration and export path; naming it in an enum
+does not add that record to the enum's public scope.
+
 <!-- agl-check: fragment -->
 ```agl
 import company/tools/config as settings

@@ -411,7 +411,7 @@ def _infer_function_component(
     """Infer one cross-module function component and publish concrete schemes."""
     from agm.agl.typecheck.checker import _Checker
 
-    engine = InferenceEngine()
+    engine = InferenceEngine(functions[0][0].env.type_table)
     session = CandidateSession(engine, frozenset(node.node_id for _, node in functions))
     provisional: list[_ProvisionalHeader] = []
     discovery_envs = component.discovery_targets()

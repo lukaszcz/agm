@@ -575,7 +575,7 @@ def _make_scripted_registry(
     )
 
     def dispatch(request: AgentRequest) -> AgentResponse:
-        if request.agent.variant != "AgentCommand":
+        if request.agent.display_name.rsplit("::", maxsplit=1)[-1] != "AgentCommand":
             assert default is not None
             return default(request)
         command = request.agent.fields["command"]

@@ -219,12 +219,14 @@ the module root. The leading `::` form makes an in-module path absolute, as in
 `::Outer::Inner::work`. Module routes and scope paths share qualifier-chain
 syntax; see [Lexical structure](lexical-structure.md#qualifier-chains).
 
-Types establish same-named scopes. Enum variants are members of the enum's
-scope, so `Review::Pass` is an ordinary scoped member. A `def` whose first
-parameter is `self` is a method when its enclosing scope is a record, enum, or
-exception. It is called through a receiver value with `.`; a `def` in the same
-scope with an ordinary first parameter remains a scoped function and is called
-by its qualified path.
+Types establish same-named scopes. An inline enum member declares a record in
+the enum's scope, so `Review::Pass` is an ordinary scoped record type and
+constructor. Referenced members remain at their own declaration paths rather
+than appearing in the referencing enum's scope. A `def` whose first parameter
+is `self` is a method when its enclosing scope is a record, enum, or exception.
+It is called through a receiver value with `.`; a `def` in the same scope with
+an ordinary first parameter remains a scoped function and is called by its
+qualified path.
 
 A declaration-path method and a method written in a `scope Type` region declare
 members of the same type scope. The two spellings can be mixed when extending a
@@ -253,15 +255,20 @@ takes the value as an ordinary parameter and call that function directly. A
 type alias may be used as its target type, but its scope cannot declare methods;
 methods are declared only on records, enums, and exceptions.
 
-The familiar bare-variant spelling remains available when it is unambiguous or
-selected by the expected enum type. Module-root record and exception
-construction keeps its bare type spelling (`Point(...)`); a scoped type is
-constructed through its full path or after a `use` declaration selects its
-containing scope. A scope path is a route, not a type qualifier, so a scoped
-generic constructor takes
-explicit type arguments on the constructor just as an unqualified one does
-(`A::Pair::[int]`); only a variant qualified by its owning enum puts them on the
-type (`Option[int]::some`).
+An enum member's terminal name is an injected bare constructor candidate. In
+ordinary value position, scope resolution requires it to be the only visible
+constructor candidate with that name: several candidates are a static scope
+ambiguity, even when an expected enum type contains one of them. The expected
+type checks the constructor after scope has selected it; it does not select a
+same-named member. Enum-member patterns and `is` tests are different: their
+scrutinee's static enum type selects the member. Module-root record and
+exception construction keeps its bare type spelling (`Point(...)`); a scoped
+type is constructed through its full path or after a `use` selects its enclosing
+scope. A scope path is a route, not a type qualifier, so a scoped generic
+constructor takes explicit type arguments after its name just as an
+unqualified one does (`A::Pair::[int]`). An inline member may instead be
+selected from an applied enum owner (`Option[int]::some`); type arguments
+applied directly to a generic member follow that member (`Option::some::[int]`).
 
 ## Using a scope
 

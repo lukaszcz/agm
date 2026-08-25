@@ -1,0 +1,40 @@
+record Shared(value: int)
+def Shared::double(self) -> int = self.value * 2
+
+enum First = ::Shared | FirstOnly
+enum Second = ::Shared | SecondOnly
+
+enum Tree[T]
+  | Leaf
+  | Node(value: T)
+
+program def main() -> unit =
+  let first: First = Shared(value = 4)
+  let second: Second = Shared(value = 8)
+  let node: Tree[int] = Tree[int]::Node(value = 9)
+  let leaf: Tree[int] = Tree::Leaf
+  let text_leaf: Tree[text] = Tree::Leaf
+  print(first is Shared)
+  print(second is Shared)
+  print(node is Node)
+  print(node is Tree::Node)
+  print(node is Tree[int]::Node)
+  print(node is not Leaf)
+  print(leaf is Tree::Leaf)
+  print(text_leaf is Tree::Leaf)
+  let shared = first as Shared
+  let shared_again = second as Shared
+  print(shared.double())
+  print(shared_again.double())
+  let narrow = node as Tree[int]::Node
+  print(narrow.value)
+  print(leaf as? Tree[int]::Node)
+  try
+    let _ = leaf as Tree[int]::Node
+    print "unreachable"
+  catch CastError =>
+    print "cast failed"
+  let widened = Tree::Leaf as Tree[int]
+  case widened of
+    | Leaf => print "upcast leaf"
+    | Node(_) => print "upcast node"

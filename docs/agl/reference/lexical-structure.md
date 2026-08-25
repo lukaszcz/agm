@@ -27,8 +27,8 @@ closes it.
 The layout rules:
 
 1. **Indentation width.** Leading spaces count 1 column each; a tab advances
-   to the next multiple of 4 columns. A dedent must return to a level
-   previously in effect — a misaligned dedent is a lexical error.
+   to the next multiple of 4 columns. A dedent must return to an active prior
+   indentation level — a misaligned dedent is a lexical error.
 2. **Blank lines and comment-only lines** are ignored for layout purposes.
 3. **Implicit continuation inside brackets.** While any `(`, `[`, `{`, or
    `%{` interpolation is open, newlines do not terminate the item; the
@@ -39,7 +39,7 @@ The layout rules:
    `else`, `catch`, `until`, or `done`, the line continues the enclosing
    construct instead of starting a new item, and may align with the enclosing
    keyword without opening a new block. This is what lets `if`/`case` branches,
-   `else` branches, `catch` clauses, enum variants, and the `until`/`done`
+   `else` branches, `catch` clauses, enum members, and the `until`/`done`
    terminator of a loop sit at the same indentation as the construct that owns
    them:
 
@@ -140,7 +140,7 @@ record R(end: int)            # 'end' is a field name, not a closer
 
 `::` separates qualifier-chain segments from the member they select. A chain
 can begin with a module route, continue through named scopes or types, and end
-at a value, type, or enum variant:
+at a value, type, or enum member:
 
 <!-- agl-check: fragment -->
 ```agl

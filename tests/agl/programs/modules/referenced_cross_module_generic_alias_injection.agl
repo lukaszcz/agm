@@ -1,0 +1,5 @@
+import lib::{E}
+
+program def main() -> unit =
+  let value: E[int] = Shared(value = 4)
+  print value

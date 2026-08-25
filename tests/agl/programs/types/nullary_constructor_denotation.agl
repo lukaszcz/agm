@@ -1,0 +1,34 @@
+# Fieldless constructors construct values outside call position, while calls and
+# field-bearing constructor values retain their existing behavior.
+record R1()
+record Token[T]()
+record Box(value: int)
+
+enum Tree
+  | Leaf
+  | Node(value: int)
+
+def accept_r1(value: R1) -> R1 = value
+def accept_tree(value: Tree) -> Tree = value
+def invoke_r1(factory: () -> R1) -> R1 = factory()
+
+program def main() -> unit =
+  let r = R1
+  let r_call = R1()
+  let leaf = Leaf
+  let qualified_leaf = Tree::Leaf
+  let leaf_call = Leaf()
+  let qualified_leaf_call = Tree::Leaf()
+  let token = Token::[int]
+  let make_box: int -> Box = Box
+
+  print(r == r_call)
+  print(leaf == leaf_call)
+  print(qualified_leaf == qualified_leaf_call)
+  print(accept_r1(R1))
+  print(accept_tree(Tree::Leaf))
+  print(invoke_r1(fn() => R1))
+  print(token)
+  print(make_box(3))
+  case leaf of | Leaf => print "bare pattern"
+  case qualified_leaf of | Tree::Leaf => print "qualified pattern"

@@ -11,19 +11,24 @@ import pytest
 from agm.agent.spec import AGENT_SPECS
 from agm.agl import PipelineDriver
 from agm.agl.runtime.agents import decode_agent_value, value_driven_agent_factory
-from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS
+from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS, create_seeded_type_table
 from agm.agl.semantics.types import TextType
-from agm.agl.semantics.values import EnumValue
+from agm.agl.semantics.values import RecordValue
 from tests._agl_helpers import agent_value, run_inline_command
 from tests.conftest import FakeAgentTransport
 
 
+def _agent_member_fields() -> dict[str, dict[str, object]]:
+    table = create_seeded_type_table()
+    return {
+        member.name: dict(table.record_fields(member))
+        for member in BUILTIN_PRELUDE_TYPE_DEFS["Agent"].members
+    }
+
+
 def test_host_specs_match_declared_agent_variants() -> None:
     """The host decoder catalog must track the checked ``Agent`` prelude shape."""
-    declared = {
-        variant: tuple(name for name, _ in payload)
-        for variant, payload in BUILTIN_PRELUDE_TYPE_DEFS["Agent"].variants
-    }
+    declared = {variant: tuple(payload) for variant, payload in _agent_member_fields().items()}
 
     assert set(AGENT_SPECS) == set(declared)
     for variant, spec_cls in AGENT_SPECS.items():
@@ -34,14 +39,14 @@ def test_host_specs_match_declared_agent_variants() -> None:
         assert all(hints[field.name] is str for field in spec_fields)
     assert all(
         isinstance(field_type, TextType)
-        for _, payload in BUILTIN_PRELUDE_TYPE_DEFS["Agent"].variants
-        for _, field_type in payload
+        for payload in _agent_member_fields().values()
+        for field_type in payload.values()
     )
 
 
 def test_decode_accepts_every_declared_agent_variant() -> None:
-    for variant, payload in BUILTIN_PRELUDE_TYPE_DEFS["Agent"].variants:
-        value = agent_value(variant, **{name: name for name, _ in payload})
+    for variant, payload in _agent_member_fields().items():
+        value = agent_value(variant, **{name: name for name in payload})
 
         assert isinstance(decode_agent_value(value), AGENT_SPECS[variant])
 
@@ -112,6 +117,54 @@ def test_agent_transport_failures_become_typed_errors(
     assert not run.ok
     assert run.error is not None
     assert run.error.type_name == "AgentCallError"
+    assert run.error.fields["agent"] == {"$case": "AgentCommand", "command": "runner"}
+
+
+def test_caught_agent_call_error_keeps_static_agent_encoding_when_raised_later(
+    fake_agent_transport: FakeAgentTransport,
+) -> None:
+    """An AgentCallError remains statically encoded after catch, storage, and re-raise."""
+    fake_agent_transport.queue(
+        fake_agent_transport.failure(returncode=2, stderr="boom", elapsed=1.0)
+    )
+    runtime = PipelineDriver(agent_dispatcher=value_driven_agent_factory(idle_timeout=None))
+
+    run = run_inline_command(
+        runtime,
+        "let saved = try\n"
+        '  let _ = ask("hello", agent = AgentCommand("runner"))\n'
+        '  raise Abort(message = "unreachable")\n'
+        "catch AgentCallError as err => err\n"
+        "raise saved",
+    )
+
+    assert not run.ok
+    assert run.error is not None
+    assert run.error.type_name == "AgentCallError"
+    assert run.error.fields["agent"] == {"$case": "AgentCommand", "command": "runner"}
+
+
+def test_user_exception_enum_field_keeps_slot_encoding_after_storage_and_reraise(
+    fake_agent_transport: FakeAgentTransport,
+) -> None:
+    """User exception provenance is nominal-keyed, not reserved for host errors."""
+    runtime = PipelineDriver(agent_dispatcher=value_driven_agent_factory(idle_timeout=None))
+
+    run = run_inline_command(
+        runtime,
+        "enum Status | Open | Closed\n"
+        "exception Problem extends Exception\n"
+        "  status: Status\n"
+        "let saved = try\n"
+        '  raise Problem(message = "bad", status = Closed)\n'
+        "catch Problem as err => err\n"
+        "raise saved",
+    )
+
+    assert not run.ok
+    assert run.error is not None
+    assert run.error.type_name == "Problem"
+    assert run.error.fields["status"] == {"$case": "Closed"}
 
 
 def test_nonzero_exit_message_includes_the_exit_code(
@@ -408,11 +461,11 @@ def test_invalid_agent_value_becomes_typed_error() -> None:
 
 
 def test_default_agent_value_is_read_at_each_call_and_errors_stay_typed() -> None:
-    requests: list[EnumValue] = []
+    requests: list[RecordValue] = []
 
     def agent(request: object) -> str:
         value = getattr(request, "agent")
-        assert isinstance(value, EnumValue)
+        assert isinstance(value, RecordValue)
         requests.append(value)
         return "not an integer"
 
@@ -435,4 +488,7 @@ def test_default_agent_value_is_read_at_each_call_and_errors_stay_typed() -> Non
         "model": "sonnet",
         "thinking": "medium",
     }
-    assert [request.variant for request in requests] == ["AgentCommand", "AgentClaude"]
+    assert [request.display_name.rsplit("::", maxsplit=1)[-1] for request in requests] == [
+        "AgentCommand",
+        "AgentClaude",
+    ]

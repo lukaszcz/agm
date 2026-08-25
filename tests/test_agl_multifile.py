@@ -987,7 +987,7 @@ class TestScopedModuleSelections:
 
         result = _run_program(
             "import flags::{Status::Good as X}\n"
-            "let status = flags::Status::Good\n"
+            "let status: flags::Status = flags::Status::Good\n"
             "print (status is X)\n",
             roots_dirs=[tmp_path],
         )

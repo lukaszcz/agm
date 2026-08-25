@@ -172,8 +172,8 @@ build their own argv; use an `Agent` value or `default-agent` to select one.
 ### Agent command interpolation
 
 The argv an `Agent` value builds — the command string of an `AgentCommand`, and the
-provider variants' fixed flags — interpolates `%{name}` holes strictly from the process
-environment overlaid with `PROMPT_FILE`, which wins on conflicts. Unlike `agm loop`'s
+provider member records' fixed flags — interpolates `%{name}` holes strictly from the
+process environment overlaid with `PROMPT_FILE`, which wins on conflicts. Unlike `agm loop`'s
 runner and selector, no workflow-specific variables are added. See
 [Runner command interpolation](agents.md#runner-command-interpolation) for the shared
 `%%`/`PROMPT_FILE` alias, `\%{` escape, and shlex-split rules. A prompt-file placeholder

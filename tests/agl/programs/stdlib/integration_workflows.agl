@@ -43,4 +43,5 @@ program def main() -> unit =
     | _ =>
         let workdir = path::normalize("project/../workspace")
         let child = environ.extended({"REPORT_DIR": workdir})
-        print((exec("with-env", env = child, cwd = Option::Some(value = workdir))).stdout.trim())
+        let cwd: Option[text] = Option::Some(value = workdir)
+        print((exec("with-env", env = child, cwd = cwd)).stdout.trim())

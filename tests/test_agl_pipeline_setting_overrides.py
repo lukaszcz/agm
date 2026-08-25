@@ -20,7 +20,7 @@ from agm.agl.modules.loader import load_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import AglSyntaxError
 from agm.agl.pipeline import ParsedEntry, PipelineDriver, PreparedProgram
-from agm.agl.semantics.values import EnumValue, TextValue
+from agm.agl.semantics.values import RecordValue, TextValue
 from agm.agl.setting_overrides import SettingOverride
 from tests._agl_helpers import prepare_inline_command, run_inline_command
 
@@ -111,8 +111,8 @@ class TestNoOverridesRegression:
         )
         assert result.ok, f"expected success but got: {result.diagnostics or result.error!r}"
         value = result.bindings["value"]
-        assert isinstance(value, EnumValue)
-        assert value.variant == "AgentClaude"
+        assert isinstance(value, RecordValue)
+        assert value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentClaude"
 
 
 # ---------------------------------------------------------------------------
@@ -143,8 +143,8 @@ class TestOverrideApplied:
         )
         assert result.ok, f"expected success but got: {result.diagnostics or result.error!r}"
         value = result.bindings["value"]
-        assert isinstance(value, EnumValue)
-        assert value.variant == "AgentCommand"
+        assert isinstance(value, RecordValue)
+        assert value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
         assert value.fields["command"] == TextValue("overridden")
 
     def test_program_module_graph_is_built_exactly_once(
@@ -357,8 +357,8 @@ class TestMalformedAgentCommandAtConstruction:
         )
         assert result.ok, f"expected success but got: {result.diagnostics or result.error!r}"
         value = result.bindings["value"]
-        assert isinstance(value, EnumValue)
-        assert value.variant == "AgentCommand"
+        assert isinstance(value, RecordValue)
+        assert value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
         assert value.fields["command"] == TextValue("echo hi")
 
     def test_seeded_malformed_command_text_is_also_a_pre_execution_diagnostic(self) -> None:

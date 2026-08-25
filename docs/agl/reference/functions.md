@@ -281,6 +281,20 @@ program def main() -> unit =
   let _ = print(box.size())
 ```
 
+An inline enum member likewise establishes a record type scope, including the
+captured generic parameters of its fields:
+
+```agl
+enum Tree[T]
+  | Leaf
+  | Node(value: T)
+
+def Tree::Node::extract[E](self) -> E = self.value
+```
+
+`Tree::Node::extract` is a method of `Tree::Node[E]`, not of `Tree[E]`. Methods
+of `Tree` instead require a receiver statically typed as `Tree[E]`.
+
 A method member used without a call is a **bound method**: a function value
 that has captured its receiver and has parameters only for the remaining
 method parameters. It can be stored, passed to another function, or partially
@@ -336,7 +350,8 @@ param_marker ::= "/" | "*" | "@" NAME    (* @pos, @std, @named *)
 ```
 
 `fn` produces a function value. The return type annotation is **optional**:
-when omitted it is inferred from the body. Parameter types are always
+when omitted it is inferred from the body, unless a concrete expected function
+type checks the body against its result type. Parameter types are always
 required.
 
 ```agl
@@ -366,8 +381,8 @@ program def main() -> unit =
 
 A lambda's name (the binding introduced by `let`) is not in scope inside
 the lambda body. Local recursion is expressed via a top-level `def`. The
-restriction is intentional: lambda return-type inference is bottom-up and
-safe precisely because the body never depends on the lambda's own type.
+restriction is intentional: lambda return-type inference is local and safe
+precisely because the body never depends on the lambda's own type.
 
 ## Generic functions
 

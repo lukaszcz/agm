@@ -2,8 +2,9 @@
 
 This module owns solver-local flexible variables, fresh scheme instantiation,
 exact equality constraints, contextual completion, final zonking, solve
-requirements, and constraint provenance.  It deliberately has no assignability,
-coercion, lowering, runtime, or checker-side-table dependencies.
+requirements, and constraint provenance. It depends only on semantic types and
+an optional nominal table for the directed member-to-enum check at the
+outer unification boundary.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from agm.agl.diagnostics import AglError
+from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import (
     ArrayType,
     BottomType,
@@ -103,14 +105,17 @@ class _SolveRequirement:
 class InferenceEngine:
     """A provenance-aware, first-order unifier for one inference region.
 
-    Flexible variables form a deterministic union-find forest.  A root may
-    additionally have one structural solution.  Rigid source variables are
+    Flexible variables form a deterministic union-find forest. A root may
+    additionally have one structural solution. Rigid source variables are
     ordinary leaves: they can only equal themselves, while a flexible variable
-    may solve to one.  The engine intentionally knows nothing about AgL's
-    assignability rules; callers apply those after :meth:`zonk`.
+    may solve to one. When given a type table, the engine additionally permits
+    the limited table-aware record-member-to-rigid-enum conversion only for the
+    outer equality constraint; callers apply all other assignability rules after
+    :meth:`zonk`.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, type_table: TypeTable | None = None) -> None:
+        self._type_table = type_table
         self._parent: dict[InferenceVarType, InferenceVarType] = {}
         self._solution: dict[InferenceVarType, Type] = {}
         self._evidence: dict[InferenceVarType, tuple[ConstraintOrigin, ...]] = {}
@@ -153,8 +158,8 @@ class InferenceEngine:
         )
 
     def unify(self, left: Type, right: Type, origin: ConstraintOrigin) -> None:
-        """Require exact structural equality, retaining ``origin`` as evidence."""
-        self._unify(left, right, origin, ())
+        """Unify exactly, except for a direct member-record-to-enum constraint."""
+        self._unify(left, right, origin, (), allow_member_to_enum=True)
 
     def complete_from_context(
         self, inferred: Type, context: Type, origin: ConstraintOrigin
@@ -225,6 +230,8 @@ class InferenceEngine:
         right: Type,
         origin: ConstraintOrigin,
         inherited: tuple[ConstraintOrigin, ...],
+        *,
+        allow_member_to_enum: bool = False,
     ) -> None:
         original_left, original_right = left, right
         left = self.zonk(left)
@@ -246,6 +253,17 @@ class InferenceEngine:
         evidence = self._merge_origins(
             inherited, self._origins_in(original_left), self._origins_in(original_right)
         )
+        if (
+            allow_member_to_enum
+            and self._type_table is not None
+            and isinstance(left, RecordType)
+            and isinstance(right, EnumType)
+        ):
+            member = self._type_table.enum_member_by_decl(right, left.decl_id)
+            if member is not None:
+                for value_arg, member_arg in zip(left.type_args, member.type_args, strict=True):
+                    self._unify(value_arg, member_arg, origin, evidence)
+                return
         if isinstance(left, ArrayType) and isinstance(right, ArrayType):
             self._unify(left.elem, right.elem, origin, evidence)
             return
@@ -343,6 +361,14 @@ class InferenceEngine:
             if _same_nominal_declaration(inferred, context):
                 self._complete_nominal_args(inferred.type_args, context.type_args, origin)
             return
+        if self._type_table is not None:
+            for value, target in ((inferred, context), (context, inferred)):
+                if not (isinstance(value, RecordType) and isinstance(target, EnumType)):
+                    continue
+                member = self._type_table.enum_member_by_decl(target, value.decl_id)
+                if member is not None:
+                    self._complete_nominal_args(value.type_args, member.type_args, origin)
+                return
 
     def _complete_nominal_args(
         self,

@@ -208,8 +208,6 @@ def test_std_core_declares_every_public_builtin() -> None:
 
 
 def test_std_option_declares_the_builtin_option_and_keeps_its_host_identity() -> None:
-    from agm.agl.ir.ids import NominalId
-    from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
     from agm.agl.parser import parse_program
     from tests.agl.ir_harness import lower_ir
 
@@ -223,8 +221,10 @@ def test_std_option_declares_the_builtin_option_and_keeps_its_host_identity() ->
 
     executable = lower_ir("program def main() -> unit = ()\n", caps=_CAPS)
     option = executable.builtin_nominals.resolve("Option")
-    assert option.nominal == NominalId(require_reserved_nominal_id("Option"))
-    assert executable.nominals[option.nominal].module_id == ModuleId.from_path("std/option")
+    option_descriptor = executable.nominals[option.nominal]
+    assert option_descriptor.module_id == ModuleId.from_path("std/option")
+    assert {variant.name for variant in option_descriptor.variants} == {"None", "Some"}
+    assert all(variant.member in executable.nominals for variant in option_descriptor.variants)
 
 
 def test_unknown_builtin_type_is_rejected() -> None:
@@ -235,6 +235,24 @@ def test_unknown_builtin_type_is_rejected() -> None:
 def test_builtin_type_shape_must_match() -> None:
     with pytest.raises(AglTypeError, match="Builtin type 'ExecResult' has an invalid definition"):
         _check("builtin record ExecResult\n  stdout: text\n()\n")
+
+
+def test_std_core_source_builtin_shape_is_not_masked_by_seed(
+    tmp_path: Path,
+) -> None:
+    stdlib_root = tmp_path / "stdlib"
+    core_path = stdlib_root / "std" / "core.agl"
+    core_path.parent.mkdir(parents=True)
+    core_path.write_text("builtin enum Agent\n  | AgentCommand(command: int)\n")
+    graph = load_graph(
+        "program def main() = ()\n",
+        entry_path=None,
+        roots=RootSet(frozenset({stdlib_root})),
+        default_stdlib=True,
+    )
+
+    with pytest.raises(AglTypeError):
+        check_program(resolve_program(graph), _CAPS)
 
 
 def test_builtin_option_shape_must_match() -> None:

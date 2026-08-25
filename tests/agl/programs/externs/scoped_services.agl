@@ -16,7 +16,7 @@ def echo[T](value: T) = value
 
 extern def increment(value: int) -> int
 
-let reviewer = AgentCommand("reviewer")
+let reviewer: Agent = AgentCommand("reviewer")
 end Math
 
 program def main() -> unit =

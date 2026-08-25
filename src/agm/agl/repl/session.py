@@ -28,6 +28,7 @@ from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.repl.entry import EntryKind, EntryResult
 from agm.agl.repl.entry_pipeline import EntryPipeline
 from agm.agl.runtime.types import public_param_spelling
+from agm.agl.scope.symbols import dedupe_constructor_candidates
 from agm.agl.self_validation import self_validation_enabled
 from agm.config.engine_keys import HOST_CONSUMED_ENGINE_KEYS
 
@@ -47,7 +48,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.host_settings import HostSettingsPolicy
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
-    from agm.agl.semantics.values import EnumValue, Frame, Value
+    from agm.agl.semantics.values import Frame, RecordValue, Value
     from agm.agl.setting_overrides import SettingOverride
     from agm.agl.syntax.nodes import (
         ExportDecl,
@@ -330,6 +331,13 @@ class ReplSession:
         # name → ordered tuple of ConstructorRef.  Passed to resolve() as ambient
         # so that subsequent entries can reference constructors from prior entries.
         self._ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] = {}
+        # The subset of the above that were bare-visible (not only
+        # qualifier-visible) at the end of the entry that declared them.
+        # Replayed verbatim in a later entry so a same-module candidate whose
+        # owner path is a retained named scope keeps whichever visibility it
+        # actually had, instead of that being re-derived from the owner
+        # path's shape (see ``_Resolver.run``'s ``ambient_bare_constructor_keys``).
+        self._ambient_bare_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] = {}
         # Type names declared in prior promoted entries, for qualified constructor
         # access (``Owner::variant``) across REPL entries.
         self._ambient_type_names: frozenset[str] = frozenset()
@@ -905,7 +913,7 @@ class ReplSession:
         }
 
     @staticmethod
-    def _resolve_timeout_seconds(seed: "EnumValue | None") -> float | None:
+    def _resolve_timeout_seconds(seed: "RecordValue | None") -> float | None:
         """Unwrap a ``timeout`` register value (``Option[text]``) into seconds, or ``None``.
 
         ``None`` covers both an absent register and an explicit ``None``
@@ -952,10 +960,10 @@ class ReplSession:
         completed entry instead overwrites the field with the interpreter's
         own already-parsed value (:meth:`_update_engine_settings`).
         """
-        from agm.agl.semantics.values import EnumValue
+        from agm.agl.semantics.values import RecordValue
 
         seed = self._engine_seed.get("timeout")
-        assert seed is None or isinstance(seed, EnumValue)
+        assert seed is None or isinstance(seed, RecordValue)
         return self._resolve_timeout_seconds(seed)
 
     @staticmethod
@@ -1164,6 +1172,7 @@ class ReplSession:
             RecordDef,
             TypeAlias,
             VarDecl,
+            VariantDef,
             pattern_binder_candidates,
             resolved_public_name,
             scoped_public_name,
@@ -1246,30 +1255,117 @@ class ReplSession:
             for item in entry_type_items
             if item.node_id in promoted_declaration_ids
         )
+        replaced_type_name_paths = promoted_type_name_paths if partial else entry_type_name_paths
         unpromoted_type_name_paths = entry_type_name_paths - promoted_type_name_paths
+        unpromoted_type_scope_paths = frozenset(
+            (*path, name) for path, name in unpromoted_type_name_paths
+        )
+
+        def is_unpromoted_type_scope(path: tuple[str, ...]) -> bool:
+            return any(
+                path[: len(type_path)] == type_path for type_path in unpromoted_type_scope_paths
+            )
+
         unpromoted_type_names = {
             "::".join((*path, name)) for path, name in unpromoted_type_name_paths
         }
-        if promoted_type_name_paths:
-            # A promoted type declaration supersedes any earlier ambient
+        unpromoted_type_names.update(
+            "::".join((*tuple(segment.name for segment in item.scope_path), item.name, member.name))
+            for item in entry_type_items
+            if isinstance(item, EnumDef) and item.node_id not in promoted_declaration_ids
+            for member in item.members
+            if isinstance(member, VariantDef)
+        )
+        # Redeclaring an enum clears every prior inline member from the fresh
+        # environment before it registers the new members. Roll back the full
+        # type-owned subtree, not only names the failed declaration introduced,
+        # so an earlier ``Tree::Leaf`` remains a resolvable type after a failed
+        # ``Tree`` redeclaration that declares only ``Tree::Node``.
+        unpromoted_type_names.update(
+            name
+            for name in self._type_env.all_declared_type_names()
+            if is_unpromoted_type_scope(tuple(name.split("::")))
+        )
+        replaced_type_scopes = frozenset(
+            (*path, name)
+            for path, name in replaced_type_name_paths
+            if (*path, name) in self._session_scope_nodes
+        )
+        declared_enum_type_scopes = frozenset(
+            (*tuple(segment.name for segment in item.scope_path), item.name)
+            for item in entry_type_items
+            if isinstance(item, EnumDef) and type_name_path(item) in promoted_type_name_paths
+        )
+        superseded_member_scopes = frozenset(
+            (*type_scope, member.name)
+            for type_scope in replaced_type_scopes
+            if (
+                prior_definition := self._type_env.type_table.get_by_id(
+                    self._session_scope_nodes[type_scope].node_id
+                )
+            )
+            is not None
+            and prior_definition.kind == "enum"
+            for member in prior_definition.members
+        )
+        fresh_member_scopes = frozenset(
+            (*tuple(segment.name for segment in item.scope_path), item.name, member.name)
+            for item in entry_type_items
+            if isinstance(item, EnumDef) and type_name_path(item) in replaced_type_name_paths
+            for member in item.members
+            if isinstance(member, VariantDef)
+        )
+        retired_member_scopes = superseded_member_scopes - fresh_member_scopes
+
+        def is_retired_member_scope(path: tuple[str, ...]) -> bool:
+            return any(
+                path[: len(member_scope)] == member_scope for member_scope in retired_member_scopes
+            )
+
+        if retired_member_scopes:
+            # Every replacement of an enum owner, including replacement by a
+            # record or alias, retires its prior inline member scopes. Nested
+            # standalone declarations remain and are copied back below.
+            for scope_path in tuple(self._session_scope_nodes):
+                if any(
+                    scope_path[: len(member_scope)] == member_scope
+                    for member_scope in retired_member_scopes
+                ):
+                    del self._session_scope_nodes[scope_path]
+            for type_path in tuple(self._session_type_paths):
+                if any(
+                    type_path[: len(member_scope)] == member_scope
+                    for member_scope in retired_member_scopes
+                ):
+                    del self._session_type_paths[type_path]
+
+        def _drop_replaced(
+            table: dict[str, tuple[ConstructorRef, ...]],
+        ) -> dict[str, tuple[ConstructorRef, ...]]:
+            filtered = {
+                cname: tuple(
+                    ref
+                    for ref in crefs
+                    if (ref.owner_path, ref.owner_name) not in replaced_type_name_paths
+                    and not is_retired_member_scope((*ref.owner_path, ref.owner_name))
+                )
+                for cname, crefs in table.items()
+            }
+            return {cname: crefs for cname, crefs in filtered.items() if crefs}
+
+        if replaced_type_name_paths:
+            # A replacement type declaration supersedes any earlier ambient
             # constructor candidate sharing its name path: retained bindings
             # and scope members keep resolving through their own (possibly
             # superseded) declaration identity, so only the ambient bare-name
             # candidate table -- which drives how a FRESH constructor
             # reference resolves -- needs to move onto the newest owner here.
-            self._ambient_constructor_candidates = {
-                cname: tuple(
-                    ref
-                    for ref in crefs
-                    if (ref.owner_path, ref.owner_name) not in promoted_type_name_paths
-                )
-                for cname, crefs in self._ambient_constructor_candidates.items()
-            }
-            self._ambient_constructor_candidates = {
-                cname: crefs
-                for cname, crefs in self._ambient_constructor_candidates.items()
-                if crefs
-            }
+            self._ambient_constructor_candidates = _drop_replaced(
+                self._ambient_constructor_candidates
+            )
+            self._ambient_bare_constructor_candidates = _drop_replaced(
+                self._ambient_bare_constructor_candidates
+            )
 
         # External keys of params this entry's promotions displace (a `let` /
         # `var` / `def` / `agent` binding that shares a param's public name
@@ -1298,12 +1394,18 @@ class ReplSession:
         )
 
         # Named scope paths are namespaces: a region's path is retained whenever
-        # it is not a demoted type's own path, and its members are promoted
-        # individually below.
+        # it is not part of an unpromoted type's scope subtree, and its members
+        # are promoted individually below. Inline enum members establish nested
+        # type scopes, so skipping only the enum's own path would both try to
+        # install a child below a missing parent and rewrite a prior enum's
+        # members after a failed redeclaration.
         for path, node in checked.resolved.scope_nodes.items():
-            if not path or path in self._session_scope_nodes:
-                continue
-            if path in {(*scope_path, name) for scope_path, name in unpromoted_type_name_paths}:
+            if (
+                not path
+                or path in self._session_scope_nodes
+                or is_unpromoted_type_scope(path)
+                or is_retired_member_scope(path)
+            ):
                 continue
             self._session_scope_nodes[path] = ScopeNode(
                 node_id=node.node_id,
@@ -1324,8 +1426,10 @@ class ReplSession:
             if session_node is None:
                 continue
             for name, ref in node.members.items():
-                if (ref.scope_path, ref.name) not in unpromoted_type_name_paths and _is_promoted(
-                    ref.decl_node_id
+                if (
+                    not is_unpromoted_type_scope(ref.scope_path)
+                    and not is_retired_member_scope((*path, name))
+                    and _is_promoted(ref.decl_node_id)
                 ):
                     if ref.decl_node_id in entry_declaration_node_ids:
                         displaced_param_keys.add(resolved_public_name(path, name))
@@ -1378,7 +1482,11 @@ class ReplSession:
                         if not constructor_retained_local:
                             del session_node.bare_constructor_contributions[atom]
             session_node.local_use_contributions = [
-                local_contribution
+                (
+                    replace(local_contribution, bindings={}, constructors={})
+                    if local_contribution.source.scope_path in replaced_type_scopes
+                    else local_contribution
+                )
                 for local_contribution in session_node.local_use_contributions
                 if local_contribution.target not in current_local_targets
             ]
@@ -1430,21 +1538,34 @@ class ReplSession:
             new_type_env.seal()
             self._type_env = new_type_env
 
-        if promoted_type_name_paths:
+        def _select_promoted(crefs: tuple[ConstructorRef, ...]) -> tuple[ConstructorRef, ...]:
+            return tuple(
+                ref
+                for ref in crefs
+                if (ref.owner_path, ref.owner_name) in replaced_type_name_paths
+                or ref.owner_path in declared_enum_type_scopes
+            )
+
+        if replaced_type_name_paths:
             promoted_candidates: dict[str, tuple[ConstructorRef, ...]] = {}
             for (_path, cname), crefs in checked.resolved.constructor_candidates_by_path.items():
-                selected = tuple(
-                    ref
-                    for ref in crefs
-                    if (ref.owner_path, ref.owner_name) in promoted_type_name_paths
-                )
-                if selected:
+                if selected := _select_promoted(crefs):
                     promoted_candidates[cname] = (*promoted_candidates.get(cname, ()), *selected)
             for cname, crefs in promoted_candidates.items():
-                self._ambient_constructor_candidates[cname] = (
-                    *self._ambient_constructor_candidates.get(cname, ()),
-                    *crefs,
+                self._ambient_constructor_candidates[cname] = dedupe_constructor_candidates(
+                    (*self._ambient_constructor_candidates.get(cname, ()), *crefs)
                 )
+            # The bare table is keyed by name alone -- it already carries only
+            # the candidates that were bare-visible when this entry resolved,
+            # so promotion just replays that same visibility for later entries
+            # (see ``ambient_bare_constructor_keys`` in ``_Resolver.run``).
+            for cname, crefs in checked.resolved.constructor_candidates.items():
+                if selected := _select_promoted(crefs):
+                    self._ambient_bare_constructor_candidates[cname] = (
+                        dedupe_constructor_candidates(
+                            (*self._ambient_bare_constructor_candidates.get(cname, ()), *selected)
+                        )
+                    )
             self._ambient_type_names |= frozenset(
                 name for path, name in promoted_type_name_paths if not path
             )
@@ -1801,6 +1922,7 @@ class ReplSession:
         self._declared_params = {}
         self._source_log = []
         self._ambient_constructor_candidates = {}
+        self._ambient_bare_constructor_candidates = {}
         self._ambient_type_names = frozenset()
         # Restore the current-value map to the seed, so a prior
         # ``std/config::KEY := VALUE`` write does not bleed past :reset.

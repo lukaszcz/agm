@@ -131,9 +131,9 @@ restriction does not apply to ordinary applied types, so both `Option[int]` and
 `Option [int]` are valid type expressions. This form requires `NAME` for both
 the applied type and constructor; it does not accept `OP_NAME` there.
 
-**Per-type field zones.** Record fields, enum payload fields, and an
+**Per-type field zones.** Record fields, inline enum-member fields, and an
 exception's own fields default to the **standard** zone (positional or named),
-regardless of payload arity. Markers (`/`, `*`, `@pos`, `@std`, `@named`) can
+regardless of the number of fields. Markers (`/`, `*`, `@pos`, `@std`, `@named`) can
 constrain fields to a different zone. An exception's inherited `message` field
 is named-only.
 
@@ -152,11 +152,12 @@ Issue(title = "Bug", severity = 2, description = "...")
 Every declared field must be supplied; unknown and duplicate fields are
 static errors.
 
-### Enum variant construction
+### Enum member construction
 
-An enum establishes a same-named scope and each variant is a member of it.
-Thus qualification uses the same chain syntax as every other scope member;
-the bare variant convenience is unchanged.
+An enum establishes a same-named scope and each inline member is a record in
+that scope. Qualification uses the same chain syntax as every other scope
+member; every enum member also contributes its terminal name as an injected
+bare constructor candidate.
 
 Qualified or unqualified:
 
@@ -165,32 +166,41 @@ Qualified or unqualified:
 Review::Pass
 Review::Fail(issues = ["missing tests"])
 
-let review: Review = Pass           # resolved by expected type
+let review: Review = Pass           # checked in an enum-typed slot
 ```
 
-An unqualified variant name resolves when the expected type is an enum
-containing it, or when exactly one declared enum has a variant of that name.
-A nullary variant is constructed by writing its name alone (no parentheses).
-Payload variants use positional-greedy binding. Every unmarked payload field
-is standard (positional or named), regardless of the number of fields.
+A member constructor produces its own record type. Assign it to an enum slot
+to widen it: `let pass = Pass` has type `Review::Pass`, while the annotated
+binding above has type `Review`. This is a directed check, not common-type
+inference: `let items = [Pass, Fail(issues = [])]` has no inferred enum type,
+so write `let items: array[Review] = [Pass, Fail(issues = [])]`.
+
+In ordinary value position, an unqualified member name must resolve to exactly
+one visible constructor candidate in lexical scope. An expected enum type
+checks the selected constructor but cannot choose between same-named
+candidates. A nullary member is constructed by writing its name alone (no
+parentheses). Field-bearing members use positional-greedy binding. Every
+unmarked member-record field is standard (positional or named), regardless of
+the number of fields.
 
 ```agl
 enum Result
   | Ok(value: int)
   | Err(reason: text, fatal: bool)
 
-let ok = Ok(42)
-let ok2 = Ok(value = 42)
-let err = Err("bad", false)
-let named_err = Err(reason = "bad", fatal = false)
+let ok = Result::Ok(42)
+let ok2 = Result::Ok(value = 42)
+let err = Result::Err("bad", false)
+let named_err = Result::Err(reason = "bad", fatal = false)
 ```
 
-### Unqualified variant ambiguity
+### Unqualified member ambiguity
 
-If **two or more** declared enums each have a variant of the same unqualified
-name, a bare reference to that name is a **static ambiguity error** — even
-when the expected type, the payload, or an explicit `::[…]` would in principle
-single out one enum. Disambiguate by qualifying with the owning enum:
+If two or more visible constructor candidates have the same unqualified name,
+a bare reference in ordinary value position is a **static scope ambiguity
+error**, even in a context with an expected enum type. Scope reports the
+ambiguity before type checking can use that type. Disambiguate by qualifying
+with the member's declaring record or, for an inline member, its owning enum:
 
 ```agl
 enum Holder[T]
@@ -210,14 +220,14 @@ the name refers to the binding, not the constructor.
 ### Generic constructors
 
 The constructors of a generic record or enum ([Generics](generics.md)) are
-generic too. Their type arguments are normally inferred — from payload
+generic too. Their type arguments are normally inferred — from constructor
 arguments, the expected type, or other evidence in the surrounding expression:
 
 ```agl
 record Box[T]
   value: T
 
-let bi: Box[int] = Box(value = 5)        # T = int, inferred from the payload
+let bi: Box[int] = Box(value = 5)        # T = int, inferred from the argument
 let bt: Box[text] = Box(value = "hi")    # same definition, T = text
 ```
 
@@ -229,8 +239,9 @@ should not) determine it:
 let be = Box::[int](value = 99)
 ```
 
-This also applies when a constructor value or partial constructor is an
-argument to another call: a sibling argument may determine its type arguments.
+This also applies when a field-bearing constructor value or partial
+constructor is an argument to another call: a sibling argument may determine
+its type arguments.
 
 ```agl
 record Box[T]
@@ -241,8 +252,8 @@ program def main() -> unit =
   let b = build(Box(value = ?), 5)
 ```
 
-Nullary variants of a generic enum carry no payload to infer from, so they
-need contextual evidence (or an explicit `::[…]`):
+A fieldless member of a generic enum may need contextual evidence (or an
+owner-applied qualification) to determine the enum instantiation:
 
 ```agl
 enum Option[T]
@@ -254,13 +265,13 @@ let s = some::[int](value = 1)      # T pinned explicitly
 let q = Option[int]::some(value = 2) # qualification disambiguates the owner
 ```
 
-### Constructors as values
+### Field-bearing constructors as values
 
-A record constructor or an enum variant is an **ordinary value binding**: it
-can be stored, passed to a function, and called like any other function value.
-When a constructor is reached **through a variable** rather than written
-directly, it is a positional callable — its arguments are supplied positionally
-in **declaration order**, since a function value has no named parameters
+A constructor with fields is an **ordinary function value**: it can be stored,
+passed to a function, and called like any other function value. When a
+constructor is reached **through a variable** rather than written directly, it
+is a positional callable — its arguments are supplied positionally in
+**declaration order**, since a function value has no named parameters
 ([Functions](functions.md)):
 
 <!-- agl-check: fragment -->
@@ -286,11 +297,40 @@ annotation supplies that evidence, and a surrounding higher-order call may
 supply it through another argument or its result. A bare `let f = some` is a
 static error because the binding has no such evidence.
 
-Nullary enum variants are likewise ordinary values:
+### Fieldless constructor references
 
-<!-- agl-check: fragment -->
+A fieldless constructor reference constructs its value immediately in value
+position. This applies uniformly to a standalone record and an enum member,
+whether bare or qualified:
+
 ```agl
-let n: Option[int] = none           # the nullary variant as a value
+record R1()
+enum Tree
+  | Leaf
+
+let record_value = R1
+let leaf = Leaf
+let qualified_leaf = Tree::Leaf
+```
+
+Calls remain direct constructor calls, so `R1()` and `Tree::Leaf()` construct
+the same values. A fieldless constructor reference is not a `() -> T` function
+value. Supply an explicit function when one is required:
+
+```agl
+record R1()
+def invoke(factory: () -> R1) -> R1 = factory()
+program def main() -> unit =
+  let result = invoke(fn() => R1)
+```
+
+A generic fieldless constructor may obtain its type arguments from context or
+from `::[…]`:
+
+```agl
+record Token[T]()
+let from_context: Token[int] = Token
+let explicit = Token::[int]
 ```
 
 ### Exception construction
@@ -326,19 +366,27 @@ program def main() -> unit =
 
 Thus `meter.add(3)` calls the method with `meter` as its receiver, while
 `meter.add` can be stored, passed to another function, or partially applied.
-A member access is statically checked. Arrays and dictionaries have no fields.
-Their methods are available by member access when the loader injects the
-optional `std/builtin-methods` registry. With `--no-stdlib`, or a custom standard
-library without that registry, import `std/array` or `std/dict`, respectively,
-before calling a method. Use indexing to read their elements or values. Enum
-payloads are still extracted by pattern matching rather than field access.
+A member access is statically checked. Arrays and dictionaries have no fields;
+use indexing to read their elements or values. Their methods are available by
+member access when the loader injects the optional `std/builtin-methods`
+registry. With `--no-stdlib`, or a custom standard library without that
+registry, import `std/array` or `std/dict`, respectively, before calling a
+method.
+
+A member record value exposes its own fields and methods. An enum-typed value
+exposes only methods declared by that enum: it has no fields, even when every
+member record defines the same field. A `std/option::Option` member can select
+an `Option` method directly; the call keeps the member value as its receiver.
+Other enum methods require an enum-typed receiver. Use a pattern or member-record
+cast before accessing a member's fields or methods from an enum value.
 
 ## Record update
 
 `target with field = value, ...` builds a **shallow copy** of a **record** or
-**exception** value with the listed fields replaced; all other fields keep
-their values — an unlisted array or dict field is shared with the target, not
-copied, so mutating it through the update's result is observed through the
+**exception** value with the listed fields replaced; an enum member record is
+a record for this rule. All other fields keep their values — an unlisted array
+or dict field is shared with the target, not copied, so mutating it through the
+update's result is observed through the
 target too. The target itself is unchanged (values are immutable):
 
 <!-- agl-check: fragment -->
@@ -517,7 +565,7 @@ argument (`render::[decimal](5)`) is accepted, requires the argument to be
 assignable to it, and renders the argument coerced to that type — so
 `render::[json]("hi", quote_strings = false)` renders the quoted json form
 `"hi"`: `quote_strings` controls only a top-level `text` argument, and the
-argument is no longer `text` once coerced to `json`.
+coerced argument has type `json`.
 
 ## JSON parsing
 
@@ -639,8 +687,11 @@ EXPR as T     # cast: convert EXPR to type T
 EXPR as? T    # convertibility test: bool, never raises
 ```
 
-`as` converts the value to the named type; `as?` tests whether the
-conversion would succeed. The full conversion matrix and semantics are in
+`as` converts the value to the named type; `as?` tests whether the same `as`
+conversion would succeed, returning `true` on success and `false` on failure.
+Casting from an enum to one of its member records is an identity downcast;
+casting a member record to a containing enum is an identity upcast.
+The full conversion matrix and semantics are in
 [Types](types.md#casts-and-convertibility).
 
 **Precedence.** Cast operators sit between unary `-` (tighter) and `* /`
@@ -664,7 +715,12 @@ Examples:
 <!-- agl-check: fragment -->
 ```agl
 let n: int = raw_value as int          # raises CastError if not an int
-let ok: bool = raw_value as? int       # true when cast would succeed
+let is_int: bool = raw_value as? int
+
+if is_int =>
+  let n = raw_value as int
+  print n
+else => print "not an int"
 
 let s: text = some_int as text         # total — always succeeds
 let j: json = my_record.count as json  # total — int is JSON-shaped
@@ -673,9 +729,8 @@ let j: json = my_record.count as json  # total — int is JSON-shaped
 let t: text = some_int as json as text   # (some_int as json) as text
 
 # convertibility test without exception handling
-if count_json as? int =>
-  let n: int = count_json as int
-  print n
+if count_json as? int => print(count_json as int)
+else => print "not an int"
 ```
 
 A `text` cast from a fallible source reads the value and formats it as text;
@@ -687,14 +742,14 @@ For scalar types (`bool`, `int`, `decimal`) it produces the plain scalar text.
 **Recursive cast targets.** A [recursive record or enum](types.md#recursive-types)
 works as a `text`/`json` cast target exactly like any other: the value is
 validated and decoded through the same JSON Schema (`$defs`/`$ref` for the
-recursive parts) used at the agent-call boundary, and `as`/`as?` behave
+hoisted parts) used at the agent-call boundary, and `as`/`as?` behave
 normally, including inside a container target such as `array[Tree]`. The same
 finite-schema restriction applies as for an agent output type: a
 [polymorphically recursive](generics.md#recursive-generic-types) generic type
 whose reachable instantiations never close cannot be used as a cast target
 either — a static error at the `as`/`as?` expression, not a runtime failure.
 
-### Variant tests: `is`, `is not`
+### Enum-member tests: `is`, `is not`
 
 <!-- agl-check: fragment -->
 ```agl
@@ -702,7 +757,13 @@ review is Pass
 status is Status::Blocked     # qualified; aliases resolve transparently
 ```
 
-The left operand must have enum type; the variant must belong to that enum. When one bare spelling exposes variants from multiple enums, the left operand's nominal enum type selects the variant. If the spelling exposes multiple distinct variants of that same enum, the test is ambiguous and must use an unambiguous spelling.
+The left operand must have enum type; the member must belong to that enum.
+A member may be written by its bare injected name, its record declaration name,
+or a qualified enum-member spelling. The test compares nominal member identity.
+When one bare spelling exposes members from several enums, the left operand's
+enum type selects the member; several distinct matching members remain ambiguous.
+It does not narrow the static type of the left operand in either branch; cast to
+the member record before accessing that record's fields or methods.
 
 ## `case` expressions
 
@@ -883,8 +944,10 @@ An expected type propagates top-down where it helps:
 | Function call | each parameter type into the corresponding argument |
 | Function body | `-> RetType` propagated in |
 
-Propagation resolves unqualified variant constructors (`let r: Review = Pass`),
-types empty containers, and gives agent calls their output contracts. A target
-that depends on sibling constraints is resolved with the enclosing expression
-before its codec and schema are chosen. Where no expectation exists, inference
-is bottom-up, and an untyped `ask` defaults to `text`.
+After scope has resolved an unqualified enum-member constructor (`let r: Review = Pass`),
+propagation checks it against the expected enum type, types empty containers,
+and gives agent calls their output contracts. It does not select among
+same-named constructor candidates. A target that depends on sibling constraints
+is resolved with the enclosing expression before its codec and schema are
+chosen. Where no expectation exists, inference is bottom-up, and an untyped
+`ask` defaults to `text`.

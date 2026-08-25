@@ -70,8 +70,8 @@ complete API and its code-point length semantics are documented in
 | `json` | compact JSON by default; use `render(value, pretty = true)` for indented display |
 | `array[E]` | `[e1, e2, …]` — AgL array syntax |
 | `dict[text, V]` | `{"k1": value1, "k2": value2}` — AgL dict syntax; keys always quoted |
-| record | `TypeName(f1 = value1, f2 = value2)` — AgL constructor form; fields in declaration order |
-| enum | `TypeName::Variant(f1 = value1, …)` — qualified; nullary variant as `TypeName::Variant` (no parens) |
+| record | `TypeName(f1 = value1, f2 = value2)` — AgL constructor form; fields in declaration order. Fieldless: bare `TypeName` (no parens) — a nullary constructor is an auto-value, so its bare spelling round-trips as written. |
+| enum | inline member: `TypeName::Member(f1 = value1, …)`; fieldless inline member: `TypeName::Member` (no parens). A referenced member retains its record's own display form. |
 | exception | `TypeName(f1 = value1, …)` — record-style with all fields in declaration order |
 
 AgL structured values (`array`, `dict`, record, enum, exception) always render on

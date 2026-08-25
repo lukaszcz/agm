@@ -479,8 +479,8 @@ def test_qualified_type_ref_in_constructor(tmp_path: Path) -> None:
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == EnumType(
-        "Color", module_id=mylib_id
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == RecordType(
+        "Red", scope_path=("Color",), module_id=mylib_id
     )
 
 
@@ -526,9 +526,9 @@ def test_qualified_type_ref_in_constructor_pattern(tmp_path: Path) -> None:
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    # Pin c's binding type as mylib::Color — not an any(TextType) scan over "red"/"blue".
-    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == EnumType(
-        "Color", module_id=mylib_id
+    # Pin c's concrete member identity to mylib.
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == RecordType(
+        "Red", scope_path=("Color",), module_id=mylib_id
     )
 
 
@@ -559,9 +559,9 @@ def test_module_qualified_imported_enum_pattern_publishes_constructor_ref(
     assert isinstance(let_decl.pattern, ConstructorPattern)
     constructor = entry.pattern_constructor_ref_for(let_decl.pattern.node_id)
     assert constructor is not None
-    assert (constructor.owner_module_id, constructor.owner_name, constructor.variant) == (
+    assert (constructor.owner_module_id, constructor.owner_path, constructor.owner_name) == (
         ModuleId.from_path("mylib"),
-        "Flag",
+        ("Flag",),
         "on",
     )
 
@@ -730,8 +730,8 @@ def test_enum_variant_qualification(tmp_path: Path) -> None:
     color_type = cg.program_type_table[(mylib_id, "Color")]
     assert isinstance(color_type, EnumType)
     assert color_type.module_id == mylib_id
-    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == EnumType(
-        "Color", module_id=mylib_id
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == RecordType(
+        "Red", scope_path=("Color",), module_id=mylib_id
     )
 
 
@@ -787,9 +787,9 @@ def test_unqualified_constructor_from_open_import(tmp_path: Path) -> None:
     color_type = cg.program_type_table[(mylib_id, "Color")]
     assert isinstance(color_type, EnumType)
     assert color_type.module_id == mylib_id
-    # Pin c's binding type: must be mylib::Color, not ENTRY_ID::Color
-    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == EnumType(
-        "Color", module_id=mylib_id
+    # Pin c's concrete member type to mylib, not ENTRY_ID.
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == RecordType(
+        "Red", scope_path=("Color",), module_id=mylib_id
     )
 
 
@@ -803,11 +803,11 @@ def test_bare_constructor_uses_its_open_imported_owner_module(tmp_path: Path) ->
 
     checked = _check_program(tmp_path, modules)
 
-    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "left")) == EnumType(
-        "Choice", module_id=ModuleId.from_path("first")
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "left")) == RecordType(
+        "First", scope_path=("Choice",), module_id=ModuleId.from_path("first")
     )
-    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "right")) == EnumType(
-        "Choice", module_id=ModuleId.from_path("second")
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "right")) == RecordType(
+        "Second", scope_path=("Choice",), module_id=ModuleId.from_path("second")
     )
 
 
@@ -820,8 +820,8 @@ def test_generic_bare_constructor_uses_its_open_imported_owner_module(tmp_path: 
 
     checked = _check_program(tmp_path, modules)
 
-    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "left")) == EnumType(
-        "Choice", (IntType(),), module_id=ModuleId.from_path("first")
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "left")) == RecordType(
+        "First", (IntType(),), scope_path=("Choice",), module_id=ModuleId.from_path("first")
     )
 
 
@@ -933,6 +933,149 @@ def test_later_module_alias_available_to_entry_type_body_via_open_import(
     )
 
 
+def test_std_core_generic_member_type_resolves_to_an_inhabited_record() -> None:
+    checked = _check("record Holder\n  value: Option::Some[int]\n()")
+
+    holder = next(typ for typ in checked.type_env.type_table.entries() if typ.name == "Holder")
+    fields = dict(checked.type_env.type_table.record_fields(holder.handle()))
+    assert strip_decl_ids(fields["value"]) == RecordType(
+        "Some", (IntType(),), module_id=ModuleId.from_path("std/option"), scope_path=("Option",)
+    )
+
+
+def test_owner_applied_inline_member_aliases_substitute_captured_parameters() -> None:
+    """Aliases retain the inline member type specialized by its enum owner."""
+    checked = _check(
+        "enum Source[T]\n"
+        "  | Member(value: T)\n"
+        "type Direct = Source[text]::Member\n"
+        "type Generic[T] = Source[T]::Member\n"
+        "record Holder\n"
+        "  direct: Direct\n"
+        "  generic: Generic[int]\n"
+        "()"
+    )
+
+    holder = next(typ for typ in checked.type_env.type_table.entries() if typ.name == "Holder")
+    fields = dict(checked.type_env.type_table.record_fields(holder.handle()))
+    assert strip_decl_ids(fields["direct"]) == RecordType(
+        "Member", (TextType(),), scope_path=("Source",)
+    )
+    assert strip_decl_ids(fields["generic"]) == RecordType(
+        "Member", (IntType(),), scope_path=("Source",)
+    )
+
+
+def test_cross_module_owner_applied_inline_member_aliases_substitute_captured_parameters(
+    tmp_path: Path,
+) -> None:
+    """Imported aliases preserve owner-applied inline member specialization."""
+    checked = _check_program(
+        tmp_path,
+        {
+            "entry": (
+                "import lib\nrecord Holder\n  direct: lib::Direct\n  generic: lib::Generic[int]\n()"
+            ),
+            "lib": (
+                "enum Source[T]\n"
+                "  | Member(value: T)\n"
+                "type Direct = Source[text]::Member\n"
+                "type Generic[T] = Source[T]::Member"
+            ),
+        },
+    )
+
+    entry_env = checked.modules[ENTRY_ID].type_env
+    holder = next(typ for typ in entry_env.type_table.entries() if typ.name == "Holder")
+    fields = dict(entry_env.type_table.record_fields(holder.handle()))
+    library = ModuleId.from_path("lib")
+    assert strip_decl_ids(fields["direct"]) == RecordType(
+        "Member", (TextType(),), module_id=library, scope_path=("Source",)
+    )
+    assert strip_decl_ids(fields["generic"]) == RecordType(
+        "Member", (IntType(),), module_id=library, scope_path=("Source",)
+    )
+
+
+def test_owner_applied_inline_member_rejects_a_second_type_application() -> None:
+    """An applied owner makes its member concrete before a member application."""
+    with pytest.raises(AglTypeError, match="does not take type arguments"):
+        _check(
+            "enum Source[T]\n  | Member(value: T)\ntype Invalid[T] = Source[text]::Member[T]\n()"
+        )
+
+
+def test_owner_applied_inline_member_rejects_non_enum_owners_and_unknown_members() -> None:
+    """Owner application uses the enum member namespace rather than a raw path."""
+    with pytest.raises(AglTypeError, match="not a generic enum"):
+        _check("record Source[T](value: T)\ntype Invalid = Source[text]::Member\n()")
+    with pytest.raises(AglTypeError, match="Unknown scoped type"):
+        _check("enum Source[T]\n  | Known(value: T)\ntype Invalid = Source[text]::Member\n()")
+
+
+def test_cross_module_owner_applied_inline_member_rejects_a_second_type_application(
+    tmp_path: Path,
+) -> None:
+    """An imported generic alias cannot reapply a member after its owner."""
+    with pytest.raises(AglTypeError, match="does not take type arguments"):
+        _check_program(
+            tmp_path,
+            {
+                "entry": "import lib\n()",
+                "lib": (
+                    "enum Source[T]\n"
+                    "  | Member(value: T)\n"
+                    "type Invalid[T] = Source[text]::Member[T]"
+                ),
+            },
+        )
+
+
+def test_inline_member_records_resolve_in_local_type_positions() -> None:
+    checked = _check(
+        "scope Forest\n"
+        "record Box[T](value: T)\n"
+        "enum Outer[T] | Member\n"
+        "enum Tree[T]\n"
+        "  | Leaf\n"
+        "  | Node(value: T, transform: (T) -> T, boxed: Forest::Box[T], parent: Outer[T]::Member)\n"
+        "record Holder\n"
+        "  leaf: Tree::Leaf\n"
+        "  node: Tree::Node[int]\n"
+        "def identity(node: Tree::Node[int]) -> Tree::Node[int] = node\n"
+        "end Forest\n"
+        "()"
+    )
+
+    holder = next(
+        typ
+        for typ in checked.type_env.type_table.entries()
+        if typ.name == "Holder" and typ.scope_path == ("Forest",)
+    )
+    fields = dict(checked.type_env.type_table.record_fields(holder.handle()))
+    assert strip_decl_ids(fields["leaf"]) == RecordType("Leaf", scope_path=("Forest", "Tree"))
+    assert strip_decl_ids(fields["node"]) == RecordType(
+        "Node", (IntType(),), scope_path=("Forest", "Tree")
+    )
+
+
+def test_importing_an_enum_scope_subtree_exposes_member_record_types(tmp_path: Path) -> None:
+    checked = _check_program(
+        tmp_path,
+        {
+            "entry": "import lib::{Tree}\nrecord Holder(node: Tree::Node[int])\n()",
+            "lib": "enum Tree[T]\n  | Leaf\n  | Node(value: T)",
+        },
+    )
+
+    entry = checked.modules[ENTRY_ID]
+    holder = next(typ for typ in entry.type_env.type_table.entries() if typ.name == "Holder")
+    fields = dict(entry.type_env.type_table.record_fields(holder.handle()))
+    assert strip_decl_ids(fields["node"]) == RecordType(
+        "Node", (IntType(),), module_id=ModuleId.from_path("lib"), scope_path=("Tree",)
+    )
+
+
 def test_imported_generic_alias_to_enum_constructs_variant(tmp_path: Path) -> None:
     """A generic alias retains its enum variant constructor signature."""
     checked = _check_program(
@@ -943,8 +1086,8 @@ def test_imported_generic_alias_to_enum_constructs_variant(tmp_path: Path) -> No
         },
     )
 
-    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "value")) == EnumType(
-        "Option", (IntType(),), module_id=ModuleId.from_path("lib")
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "value")) == RecordType(
+        "some", (IntType(),), scope_path=("Option",), module_id=ModuleId.from_path("lib")
     )
 
 
@@ -957,9 +1100,66 @@ def test_exact_use_of_enum_alias_constructs_variant(tmp_path: Path) -> None:
         },
     )
 
-    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "value")) == EnumType(
-        "Option", module_id=ModuleId.from_path("lib")
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "value")) == RecordType(
+        "some", scope_path=("Option",), module_id=ModuleId.from_path("lib")
     )
+
+
+def test_used_enum_alias_follows_a_qualified_target_in_its_declaring_module(
+    tmp_path: Path,
+) -> None:
+    checked = _check_program(
+        tmp_path,
+        {
+            "entry": "import lib\nuse lib::{Alias}\nlet value = Alias::some\nvalue",
+            "lib": "import target\ntype Alias = target::Choice",
+            "target": "enum Choice | some",
+        },
+        default_stdlib=False,
+    )
+
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "value")) == RecordType(
+        "some", scope_path=("Choice",), module_id=ModuleId.from_path("target")
+    )
+
+
+def test_used_alias_of_referenced_enum_member_selects_the_record_constructor(
+    tmp_path: Path,
+) -> None:
+    checked = _check_program(
+        tmp_path,
+        {
+            "entry": ("import lib\nuse lib::{Alias}\nlet value = Alias::Shared(value = 1)\nvalue"),
+            "lib": "record Shared(value: int)\nenum E = ::Shared\ntype Alias = E",
+        },
+        default_stdlib=False,
+    )
+
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "value")) == RecordType(
+        "Shared", module_id=ModuleId.from_path("lib")
+    )
+
+
+@pytest.mark.parametrize(
+    "library",
+    (
+        "record Shared(value: int)\nenum E = ::Shared\ntype Alias = E",
+        "enum E = ::Missing\ntype Alias = E",
+        "record Shared(value: int)\ntype Alias = Shared",
+    ),
+)
+def test_used_alias_of_referenced_enum_rejects_unknown_or_unresolved_members(
+    tmp_path: Path, library: str
+) -> None:
+    with pytest.raises(AglScopeError, match="not a member"):
+        _check_program(
+            tmp_path,
+            {
+                "entry": "import lib\nuse lib::{Alias}\nAlias::Missing",
+                "lib": library,
+            },
+            default_stdlib=False,
+        )
 
 
 def test_use_of_generic_enum_alias_constructs_variant(tmp_path: Path) -> None:
@@ -973,8 +1173,11 @@ def test_use_of_generic_enum_alias_constructs_variant(tmp_path: Path) -> None:
         },
     )
 
-    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "value")) == EnumType(
-        "Option", (ArrayType(IntType()),), module_id=ModuleId.from_path("lib")
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "value")) == RecordType(
+        "some",
+        (ArrayType(IntType()),),
+        scope_path=("Option",),
+        module_id=ModuleId.from_path("lib"),
     )
 
 
@@ -985,7 +1188,7 @@ def test_use_of_generic_enum_alias_qualifies_is_variant(tmp_path: Path) -> None:
             "entry": (
                 "import lib\n"
                 "use lib::{Alias}\n"
-                "let value = Alias[int]::some(value = [1])\n"
+                "let value: Alias[int] = Alias[int]::some(value = [1])\n"
                 "let result = value is Alias::some\n"
                 "result"
             ),
@@ -1054,6 +1257,24 @@ def test_imported_generic_alias_to_non_nominal_is_a_type_error(tmp_path: Path) -
                 "lib": "type Alias[T] = array[T]",
             },
         )
+
+
+def test_imported_alias_to_record_remains_constructible(tmp_path: Path) -> None:
+    checked = _check_program(
+        tmp_path,
+        {
+            "entry": (
+                "import lib\n"
+                "let factory: (int) -> lib::Point = lib::Alias\n"
+                "let point = factory(1)\n"
+                "let direct = lib::Alias(value = 2)\n"
+                "direct"
+            ),
+            "lib": "record Point\n  value: int\ntype Alias = Point",
+        },
+    )
+
+    assert _binding_value_type(checked, ENTRY_ID, "point") is not None
 
 
 def test_imported_alias_to_non_nominal_named_type_is_not_constructible(tmp_path: Path) -> None:
@@ -1392,7 +1613,9 @@ def test_module_qualified_variant_qualifier_mismatch(tmp_path: Path) -> None:
 
 def test_module_prefix_variant_is_test_uses_lhs_enum_name(tmp_path: Path) -> None:
     modules = {
-        "entry": ("import mylib\nlet c = mylib::Color::Red\nlet ok = c is mylib::Red\nok"),
+        "entry": (
+            "import mylib\nlet c: mylib::Color = mylib::Color::Red\nlet ok = c is mylib::Red\nok"
+        ),
         "mylib": "enum Color\n  | Red\n  | Blue",
     }
     cg = _check_program(tmp_path, modules)
@@ -1401,7 +1624,10 @@ def test_module_prefix_variant_is_test_uses_lhs_enum_name(tmp_path: Path) -> Non
 
 def test_slash_module_prefix_variant_is_test_uses_lhs_enum_name(tmp_path: Path) -> None:
     modules = {
-        "entry": ("import pkg/lib\nlet c = pkg/lib::Color::Red\nlet ok = c is pkg/lib::Red\nok"),
+        "entry": (
+            "import pkg/lib\nlet c: pkg/lib::Color = pkg/lib::Color::Red\n"
+            "let ok = c is pkg/lib::Red\nok"
+        ),
         "pkg/lib": "enum Color\n  | Red\n  | Blue",
     }
     cg = _check_program(tmp_path, modules)
@@ -1410,7 +1636,7 @@ def test_slash_module_prefix_variant_is_test_uses_lhs_enum_name(tmp_path: Path) 
 
 def test_is_test_uses_local_enum_when_alias_route_has_another_owner(tmp_path: Path) -> None:
     modules = {
-        "entry": ("import lib as Color\nenum Color | Red\nlet c = Red\nc is Color::Red"),
+        "entry": ("import lib as Color\nenum Color | Red\nlet c: Color = Red\nc is Color::Red"),
         "lib": "enum Other | Red",
     }
 
@@ -1577,8 +1803,8 @@ def test_open_imported_enum_variant_unqualified_bare(tmp_path: Path) -> None:
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == EnumType(
-        "Color", module_id=mylib_id
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == RecordType(
+        "Red", scope_path=("Color",), module_id=mylib_id
     )
 
 
@@ -1653,8 +1879,8 @@ def test_open_import_non_enum_type_skipped_in_variant_lookup(tmp_path: Path) -> 
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == EnumType(
-        "Color", module_id=mylib_id
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == RecordType(
+        "Red", scope_path=("Color",), module_id=mylib_id
     )
 
 
@@ -1677,8 +1903,8 @@ def test_open_import_dedup_in_variant_lookup(tmp_path: Path) -> None:
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "x")) == EnumType(
-        "Color", module_id=mylib_id
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "x")) == RecordType(
+        "Red", scope_path=("Color",), module_id=mylib_id
     )
 
 
@@ -1851,7 +2077,8 @@ def test_cross_module_enum_variant_field_type(tmp_path: Path) -> None:
     assert table.record_fields(data_type) == {"n": IntType()}
 
     assert isinstance(envelope_type, EnumType)
-    some_fields = table.enum_variants(envelope_type).get("Some", {})
+    some_member = table.enum_member_names(envelope_type).get("Some")
+    some_fields = {} if some_member is None else dict(table.record_fields(some_member))
     assert some_fields.get("value") == data_type, (
         f"carrier::Envelope.Some.value must equal payload::Data: "
         f"got {some_fields.get('value')!r}, expected {data_type!r}"
@@ -3091,8 +3318,8 @@ def test_cross_module_qualified_generic_enum_explicit_type_args(tmp_path: Path) 
         "entry": "import lib\nlet r = lib::Option[int]::some(value = 1)\nr",
     }
     cg = _check_program(tmp_path, modules)
-    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "r")) == EnumType(
-        "Option", module_id=lib_id, type_args=(IntType(),)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "r")) == RecordType(
+        "some", (IntType(),), scope_path=("Option",), module_id=lib_id
     )
 
 
@@ -3103,8 +3330,35 @@ def test_cross_module_qualified_generic_nullary_constructor_as_value(tmp_path: P
         "entry": "import lib\nlet n: lib::Option[int] = lib::Option::none\nn",
     }
     cg = _check_program(tmp_path, modules)
-    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "n")) == EnumType(
-        "Option", module_id=lib_id, type_args=(IntType(),)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "n")) == RecordType(
+        "none", scope_path=("Option",), module_id=lib_id
+    )
+
+
+def test_cross_module_direct_member_owner_type_args_preserve_member_result(tmp_path: Path) -> None:
+    lib_id = ModuleId.from_path("lib")
+    modules = {
+        "lib": (
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "enum Outcome[T, E]\n"
+            "  | ok(value: T)\n"
+            "  | err(error: E)"
+        ),
+        "entry": (
+            "import lib\n"
+            "let n = lib::Option::none::[int]\n"
+            "let value = lib::Outcome::ok::[int, text](value = 1)\n"
+            "value"
+        ),
+    }
+    checked = _check_program(tmp_path, modules)
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "n")) == RecordType(
+        "none", scope_path=("Option",), module_id=lib_id
+    )
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "value")) == RecordType(
+        "ok", (IntType(),), scope_path=("Outcome",), module_id=lib_id
     )
 
 
@@ -3123,14 +3377,15 @@ def test_open_imported_generic_constructor_payload_type_apply_as_value(tmp_path:
     }
     cg = _check_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "f")) == FunctionType(
-        (IntType(),), EnumType("Choice", module_id=lib_id, type_args=(IntType(),))
+        (IntType(),), RecordType("some", (IntType(),), scope_path=("Choice",), module_id=lib_id)
     )
 
 
 def test_open_imported_generic_constructor_nullary_type_apply_as_value(tmp_path: Path) -> None:
     """Import-tail-exposed generic nullary constructor as a value with explicit type args.
 
-    ``none::[int]`` constructs the nullary ``Choice[int]`` value owned by ``lib``.
+    ``Choice[int]::none`` applies the type argument to the enum owner before
+    constructing its nullary member.
     """
     lib_id = ModuleId.from_path("lib")
     modules = {
@@ -3138,8 +3393,8 @@ def test_open_imported_generic_constructor_nullary_type_apply_as_value(tmp_path:
         "entry": "import lib::*\nlet z = none::[int]\nz",
     }
     cg = _check_program(tmp_path, modules)
-    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "z")) == EnumType(
-        "Choice", module_id=lib_id, type_args=(IntType(),)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "z")) == RecordType(
+        "none", scope_path=("Choice",), module_id=lib_id
     )
 
 
@@ -3152,6 +3407,25 @@ def test_cross_module_enum_type_cannot_be_called_as_a_record_constructor(tmp_pat
                 "entry": "import lib\nlib::Choice()",
             },
         )
+
+
+def test_cross_module_record_constructor_values_preserve_their_call_shape(tmp_path: Path) -> None:
+    checked = _check_program(
+        tmp_path,
+        {
+            "lib": "record Box[T]\n  value: T\nrecord Point\n  value: int",
+            "entry": (
+                "import lib\n"
+                "let generic: (int) -> lib::Box[int] = lib::Box\n"
+                "let explicit = lib::Box::[int]\n"
+                "let plain = lib::Point\n"
+                "let direct = lib::Point(value = 4)\n"
+                "direct"
+            ),
+        },
+    )
+
+    assert checked.modules[ENTRY_ID].resolved.program is not None
 
 
 def test_cross_module_non_generic_constructor_type_args_rejected(tmp_path: Path) -> None:

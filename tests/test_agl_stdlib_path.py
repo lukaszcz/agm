@@ -10,15 +10,17 @@ from typing import Protocol, cast
 import pytest
 
 from agm.agl.ir.ids import NominalId
-from agm.agl.ir.program import NominalDescriptor, NominalKind, VariantDescriptor
 from agm.agl.modules.ids import ModuleId
 from agm.agl.runtime.boundary import decode_boundary_value
 from agm.agl.runtime.externs import ExternRegistry
-from agm.agl.semantics.values import ArrayValue, EnumValue, TextValue
+from agm.agl.semantics.values import ArrayValue, RecordValue, TextValue
+from tests._agl_helpers import option_nominal_descriptors
 
 _STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 _PATH_MODULE = ModuleId(("std", "path"))
 _OPTION = NominalId(9_800_001)
+_OPTION_NONE = NominalId(9_800_002)
+_OPTION_SOME = NominalId(9_800_003)
 
 
 class _PathCompanion(Protocol):
@@ -49,14 +51,7 @@ def _path_companion() -> _PathCompanion:
     registry = ExternRegistry()
     registry.set_nominals(
         {
-            _OPTION: NominalDescriptor(
-                nominal=_OPTION,
-                module_id=ModuleId(("std", "option")),
-                scope_path=(),
-                declared_name="Option",
-                kind=NominalKind.ENUM,
-                variants=(VariantDescriptor("Some", ("value",)), VariantDescriptor("None", ())),
-            )
+            **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
         }
     )
     module: ModuleType = registry.load_companion(_PATH_MODULE, _STDLIB_ROOT / "std" / "path.py")
@@ -78,11 +73,11 @@ def test_path_operations_preserve_platform_path_semantics(
     assert companion.join(["one", "two", "three.txt"]) == os.path.join("one", "two", "three.txt")
     assert companion.dirname(file_path) == parent
     assert companion.basename(trailing_parent) == ""
-    assert decode_boundary_value(companion.extension_option(file_path)) == EnumValue(
-        _OPTION, "Option", "Some", {"value": TextValue(".txt")}
+    assert decode_boundary_value(companion.extension_option(file_path)) == RecordValue(
+        _OPTION_SOME, "Option::Some", {"value": TextValue(".txt")}
     )
-    assert decode_boundary_value(companion.extension_option(no_extension)) == EnumValue(
-        _OPTION, "Option", "None", {}
+    assert decode_boundary_value(companion.extension_option(no_extension)) == RecordValue(
+        _OPTION_NONE, "Option::None", {}
     )
     assert companion.with_extension(no_extension, ".bak") == os.path.join(parent, "file.bak")
     assert companion.absolute(os.path.join("one", "..", "two")) == str(tmp_path / "two")

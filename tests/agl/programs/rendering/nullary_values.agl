@@ -1,0 +1,20 @@
+# Nullary rendering: a fieldless record, a fieldless scoped record, a
+# nullary enum member, and a field-bearing enum member all print through the
+# same renderer. A nullary constructor is an auto-value, so its bare spelling
+# round-trips as written; every fieldless case below renders without
+# parentheses, regardless of where its record is declared.
+record Root()
+
+scope S
+record Inner()
+end S
+
+enum E
+  | A
+  | B(x: int)
+
+program def main() -> unit =
+  print Root
+  print S::Inner
+  print E::A
+  print E::B(x = 1)

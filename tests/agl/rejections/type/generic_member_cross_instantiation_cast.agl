@@ -1,0 +1,7 @@
+enum Tree[T]
+  | Leaf
+  | Node(value: T)
+
+program def main() -> unit =
+  let tree: Tree[int] = Node(value = 1)
+  let _ = tree as Tree[text]::Node

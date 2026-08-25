@@ -17,7 +17,7 @@ from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program
 from agm.agl.pipeline import PipelineDriver, RunResult
 from agm.agl.runtime.option import some_value
-from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, TextValue, Value
+from agm.agl.semantics.values import BoolValue, IntValue, RecordValue, TextValue, Value
 from agm.agl.syntax import BuiltinVarDecl, Call, Expr, VarRef, walk
 from agm.agl.syntax.constants import is_constant_expression
 from tests._agl_helpers import agent_value, run_inline_command
@@ -171,8 +171,8 @@ class TestBuiltinVarDefaults:
 
         assert result.ok, f"expected success but got: {result.error!r}"
         value = result.bindings["value"]
-        assert isinstance(value, EnumValue)
-        assert value.variant == "AgentCommand"
+        assert isinstance(value, RecordValue)
+        assert value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
         assert value.fields["command"] == TextValue("declared")
 
     def test_host_seed_overrides_the_declared_default(self, tmp_path: Path) -> None:
@@ -187,7 +187,7 @@ class TestBuiltinVarDefaults:
 
         assert result.ok, f"expected success but got: {result.error!r}"
         value = result.bindings["value"]
-        assert isinstance(value, EnumValue)
+        assert isinstance(value, RecordValue)
         assert value.fields["command"] == TextValue("seeded")
 
     def test_initializer_must_match_the_declared_type(self, tmp_path: Path) -> None:
@@ -446,8 +446,8 @@ class TestStdConfigQualified:
         )
         assert result.ok, f"expected success but got: {result.error!r}"
         bound = result.bindings["f"]
-        assert isinstance(bound, EnumValue)
-        assert bound.variant == "Some"
+        assert isinstance(bound, RecordValue)
+        assert bound.display_name.rsplit("::", maxsplit=1)[-1] == "Some"
         assert bound.fields["value"] == TextValue("x")
 
     def test_clearing_log_file_does_not_enable_logging(self) -> None:
@@ -466,8 +466,8 @@ class TestStdConfigQualified:
         result = _run_program("import std/config::*\nlet t = std/config::timeout\nprint t")
         assert result.ok
         bound = result.bindings["t"]
-        assert isinstance(bound, EnumValue)
-        assert bound.variant == "None"
+        assert isinstance(bound, RecordValue)
+        assert bound.display_name.rsplit("::", maxsplit=1)[-1] == "None"
 
     def test_timeout_write_then_read_is_some(self) -> None:
         result = _run_program(
@@ -478,8 +478,8 @@ class TestStdConfigQualified:
         )
         assert result.ok, f"expected success but got: {result.error!r}"
         bound = result.bindings["t"]
-        assert isinstance(bound, EnumValue)
-        assert bound.variant == "Some"
+        assert isinstance(bound, RecordValue)
+        assert bound.display_name.rsplit("::", maxsplit=1)[-1] == "Some"
         assert isinstance(bound.fields["value"], TextValue)
 
     def test_timeout_write_none_clears_the_shell_timeout(self) -> None:
@@ -492,8 +492,8 @@ class TestStdConfigQualified:
         )
         assert result.ok, f"expected success but got: {result.error!r}"
         bound = result.bindings["t"]
-        assert isinstance(bound, EnumValue)
-        assert bound.variant == "None"
+        assert isinstance(bound, RecordValue)
+        assert bound.display_name.rsplit("::", maxsplit=1)[-1] == "None"
 
     def test_timeout_preserves_raw_text_through_tiny_self_assignment(self) -> None:
         result = _run_program(
@@ -506,7 +506,7 @@ class TestStdConfigQualified:
 
         assert result.ok, f"expected success but got: {result.error!r}"
         bound = result.bindings["t"]
-        assert isinstance(bound, EnumValue)
+        assert isinstance(bound, RecordValue)
         assert bound.fields["value"] == TextValue("0.0001s")
 
     def test_explicit_timeout_seed_overrides_shell_timeout(self) -> None:
@@ -518,7 +518,7 @@ class TestStdConfigQualified:
 
         assert result.ok, f"expected success but got: {result.error!r}"
         bound = result.bindings["t"]
-        assert isinstance(bound, EnumValue)
+        assert isinstance(bound, RecordValue)
         assert bound.fields["value"] == TextValue("45s")
 
     def test_tiny_host_timeout_can_be_assigned_back(self) -> None:
@@ -532,7 +532,7 @@ class TestStdConfigQualified:
 
         assert result.ok, f"expected success but got: {result.error!r}"
         bound = result.bindings["t"]
-        assert isinstance(bound, EnumValue)
+        assert isinstance(bound, RecordValue)
         assert bound.fields["value"] == TextValue("0.0000001s")
 
     def test_disabled_max_iters_round_trips_without_enabling_valve(self) -> None:

@@ -3,12 +3,9 @@ import std/env::Environ
 
 program def main() -> unit =
   let child = Environ(vars = {"ONLY": "child"})
-  let explicit: text = exec(
-    "explicit",
-    env = child,
-    cwd = Option[text]::Some(value = "/work"),
-    timeout = Option[text]::Some(value = "2s"),
-  )
+  let cwd: Option[text] = Option::Some(value = "/work")
+  let timeout: Option[text] = Option::Some(value = "2s")
+  let explicit: text = exec("explicit", env = child, cwd = cwd, timeout = timeout)
   print explicit
 
   let ambient: text = exec! ambient

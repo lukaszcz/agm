@@ -11,7 +11,7 @@ Covers (per the AgL DSL contract):
    JSON with surrounding whitespace accepted.
 5. Schema validation errors → ParseResult.ok=False (missing/unknown field, wrong
    type, bad $case).
-6. Typed Value construction: RecordValue, EnumValue, ArrayValue, DictValue,
+6. Typed Value construction: RecordValue, ArrayValue, DictValue,
    scalars; int→decimal widening where the target type says decimal.
 7. Multiple JSON values / ambiguous output → failure.
 8. PipelineDriver wire-up: JsonCodec registered; checker passes json/record/enum
@@ -69,7 +69,6 @@ from agm.agl.semantics.values import (
     BoolValue,
     DecimalValue,
     DictValue,
-    EnumValue,
     IntValue,
     JsonValue,
     RecordValue,
@@ -86,6 +85,7 @@ from agm.agl.type_schema import build_decode_schema, derive_schema
 from agm.agl.typecheck.env import CheckedModule, OutputContractSpec
 from tests._agl_helpers import (
     enum_type,
+    enum_typedef,
     next_decl_id,
     prepare_inline_command,
     record_type,
@@ -294,10 +294,9 @@ class _Bindings(dict[str, object]):
 # text must still be non-empty and shell-splittable: ``IrInterpreter``
 # validates the materialized ``default-agent`` value eagerly at construction,
 # regardless of whether anything ever dispatches it.
-_TEST_DEFAULT_AGENT = EnumValue(
+_TEST_DEFAULT_AGENT = RecordValue(
     nominal=NominalId(require_reserved_nominal_id("Agent")),
-    display_name="Agent",
-    variant="AgentCommand",
+    display_name=f"{'Agent'}::{'AgentCommand'}",
     fields={"command": TextValue("unused")},
 )
 
@@ -427,7 +426,7 @@ def _variant_def(name: str, *fields: ast.Param) -> ast.VariantDef:
 
 
 def _enum_def(name: str, *variants: ast.VariantDef) -> ast.EnumDef:
-    return ast.EnumDef(name=name, variants=tuple(variants), span=_sp(), node_id=_nid())
+    return ast.EnumDef(name=name, members=tuple(variants), span=_sp(), node_id=_nid())
 
 
 # ---------------------------------------------------------------------------
@@ -716,29 +715,18 @@ class TestRecursiveSchemaDerivation:
         # Tree[int] and Tree[text] — two distinct concrete instantiations of
         # the SAME generic declaration — get distinct, non-colliding keys.
         tree_id = next_decl_id()
-        tree_def = TypeDef(
-            kind="enum",
-            name="Tree",
-            module_id=ENTRY_ID,
+        tree_def = enum_typedef(
+            "Tree",
+            {
+                "Leaf": {},
+                "Node": {
+                    "value": TypeVarType("T"),
+                    "left": EnumType(name="Tree", type_args=(TypeVarType("T"),), decl_id=tree_id),
+                    "right": EnumType(name="Tree", type_args=(TypeVarType("T"),), decl_id=tree_id),
+                },
+            },
             type_params=("T",),
-            variants=(
-                ("Leaf", ()),
-                (
-                    "Node",
-                    (
-                        ("value", TypeVarType("T")),
-                        (
-                            "left",
-                            EnumType(name="Tree", type_args=(TypeVarType("T"),), decl_id=tree_id),
-                        ),
-                        (
-                            "right",
-                            EnumType(name="Tree", type_args=(TypeVarType("T"),), decl_id=tree_id),
-                        ),
-                    ),
-                ),
-            ),
-            decl_node_id=tree_id,
+            decl_id=tree_id,
         )
         tree_int = EnumType(name="Tree", type_args=(IntType(),), decl_id=tree_id)
         tree_text = EnumType(name="Tree", type_args=(TextType(),), decl_id=tree_id)
@@ -831,34 +819,26 @@ class TestRecursiveSchemaDerivation:
             fields=(("first", TypeVarType("A")), ("second", TypeVarType("B"))),
             decl_node_id=pair_id,
         )
-        perfect_def = TypeDef(
-            kind="enum",
-            name="Perfect",
-            module_id=ENTRY_ID,
-            type_params=("T",),
-            variants=(
-                ("Single", (("value", TypeVarType("T")),)),
-                (
-                    "Succ",
-                    (
-                        (
-                            "next",
-                            EnumType(
-                                name="Perfect",
-                                type_args=(
-                                    RecordType(
-                                        name="Pair",
-                                        type_args=(TypeVarType("T"), TypeVarType("T")),
-                                        decl_id=pair_id,
-                                    ),
-                                ),
-                                decl_id=perfect_id,
+        perfect_def = enum_typedef(
+            "Perfect",
+            {
+                "Single": {"value": TypeVarType("T")},
+                "Succ": {
+                    "next": EnumType(
+                        name="Perfect",
+                        type_args=(
+                            RecordType(
+                                name="Pair",
+                                type_args=(TypeVarType("T"), TypeVarType("T")),
+                                decl_id=pair_id,
                             ),
                         ),
-                    ),
-                ),
-            ),
-            decl_node_id=perfect_id,
+                        decl_id=perfect_id,
+                    )
+                },
+            },
+            type_params=("T",),
+            decl_id=perfect_id,
         )
         table = type_table_for(pair_def, perfect_def)
         perfect_int = EnumType(name="Perfect", type_args=(IntType(),), decl_id=perfect_id)
@@ -964,13 +944,21 @@ class TestRecursiveDecodeDerivation:
 
         tree, tree_def = _tree_type_and_def()
         plan = build_decode_schema(tree, type_table_for(tree_def))
+        members = type_table_for(tree_def).enum_member_names(tree)
         tree_body = EnumDecode(
             nominal=NominalId(tree.decl_id),
             display_name="Tree",
             variants=(
-                VariantDecode(name="Leaf", fields=()),
+                VariantDecode(
+                    name="Leaf",
+                    nominal=NominalId(members["Leaf"].decl_id),
+                    display_name="Tree::Leaf",
+                    fields=(),
+                ),
                 VariantDecode(
                     name="Node",
+                    nominal=NominalId(members["Node"].decl_id),
+                    display_name="Tree::Node",
                     fields=(
                         ("value", ScalarDecode(ScalarKind.INT)),
                         ("left", RefDecode("Tree")),
@@ -1053,7 +1041,9 @@ class TestRecursiveDecodeDerivation:
         b, b_def = enum_type(
             "B", {"Nil": {}, "Cons": {"a": RecordType(name="A", decl_id=a_id)}}, decl_id=b_id
         )
-        plan = build_decode_schema(a, type_table_for(a_def, b_def))
+        table = type_table_for(a_def, b_def)
+        plan = build_decode_schema(a, table)
+        members = table.enum_member_names(b)
         a_body = RecordDecode(
             nominal=NominalId(a.decl_id), display_name="A", fields=(("b", RefDecode("B")),)
         )
@@ -1061,37 +1051,36 @@ class TestRecursiveDecodeDerivation:
             nominal=NominalId(b.decl_id),
             display_name="B",
             variants=(
-                VariantDecode(name="Nil", fields=()),
-                VariantDecode(name="Cons", fields=(("a", RefDecode("A")),)),
+                VariantDecode(
+                    name="Nil",
+                    nominal=NominalId(members["Nil"].decl_id),
+                    display_name="B::Nil",
+                    fields=(),
+                ),
+                VariantDecode(
+                    name="Cons",
+                    nominal=NominalId(members["Cons"].decl_id),
+                    display_name="B::Cons",
+                    fields=(("a", RefDecode("A")),),
+                ),
             ),
         )
         assert plan == DecodePlan(root=RefDecode("A"), defs=(("A", a_body), ("B", b_body)))
 
     def test_generic_instantiations_get_distinct_keys_matching_schema(self) -> None:
         tree_id = next_decl_id()
-        tree_def = TypeDef(
-            kind="enum",
-            name="Tree",
-            module_id=ENTRY_ID,
+        tree_def = enum_typedef(
+            "Tree",
+            {
+                "Leaf": {},
+                "Node": {
+                    "value": TypeVarType("T"),
+                    "left": EnumType(name="Tree", type_args=(TypeVarType("T"),), decl_id=tree_id),
+                    "right": EnumType(name="Tree", type_args=(TypeVarType("T"),), decl_id=tree_id),
+                },
+            },
             type_params=("T",),
-            variants=(
-                ("Leaf", ()),
-                (
-                    "Node",
-                    (
-                        ("value", TypeVarType("T")),
-                        (
-                            "left",
-                            EnumType(name="Tree", type_args=(TypeVarType("T"),), decl_id=tree_id),
-                        ),
-                        (
-                            "right",
-                            EnumType(name="Tree", type_args=(TypeVarType("T"),), decl_id=tree_id),
-                        ),
-                    ),
-                ),
-            ),
-            decl_node_id=tree_id,
+            decl_id=tree_id,
         )
         tree_int = EnumType(name="Tree", type_args=(IntType(),), decl_id=tree_id)
         tree_text = EnumType(name="Tree", type_args=(TextType(),), decl_id=tree_id)
@@ -1142,34 +1131,26 @@ class TestRecursiveDecodeDerivation:
             fields=(("first", TypeVarType("A")), ("second", TypeVarType("B"))),
             decl_node_id=pair_id,
         )
-        perfect_def = TypeDef(
-            kind="enum",
-            name="Perfect",
-            module_id=ENTRY_ID,
-            type_params=("T",),
-            variants=(
-                ("Single", (("value", TypeVarType("T")),)),
-                (
-                    "Succ",
-                    (
-                        (
-                            "next",
-                            EnumType(
-                                name="Perfect",
-                                type_args=(
-                                    RecordType(
-                                        name="Pair",
-                                        type_args=(TypeVarType("T"), TypeVarType("T")),
-                                        decl_id=pair_id,
-                                    ),
-                                ),
-                                decl_id=perfect_id,
+        perfect_def = enum_typedef(
+            "Perfect",
+            {
+                "Single": {"value": TypeVarType("T")},
+                "Succ": {
+                    "next": EnumType(
+                        name="Perfect",
+                        type_args=(
+                            RecordType(
+                                name="Pair",
+                                type_args=(TypeVarType("T"), TypeVarType("T")),
+                                decl_id=pair_id,
                             ),
                         ),
-                    ),
-                ),
-            ),
-            decl_node_id=perfect_id,
+                        decl_id=perfect_id,
+                    )
+                },
+            },
+            type_params=("T",),
+            decl_id=perfect_id,
         )
         table = type_table_for(pair_def, perfect_def)
         perfect_int = EnumType(name="Perfect", type_args=(IntType(),), decl_id=perfect_id)
@@ -1599,9 +1580,8 @@ class TestTypedValueConstruction:
         typ = _make_review_type()
         result = _parse_typed(codec, '{"$case": "Pass"}', typ, strict_json=False)
         assert result.ok is True
-        assert isinstance(result.value, EnumValue)
-        assert result.value.display_name == "Review"
-        assert result.value.variant == "Pass"
+        assert isinstance(result.value, RecordValue)
+        assert result.value.display_name == "Review::Pass"
         assert result.value.fields == {}
 
     def test_enum_payload_variant(self) -> None:
@@ -1610,8 +1590,8 @@ class TestTypedValueConstruction:
         raw = '{"$case": "Fail", "issues": ["a", "b"]}'
         result = _parse_typed(codec, raw, typ, strict_json=False)
         assert result.ok is True
-        assert isinstance(result.value, EnumValue)
-        assert result.value.variant == "Fail"
+        assert isinstance(result.value, RecordValue)
+        assert result.value.display_name.rsplit("::", maxsplit=1)[-1] == "Fail"
         issues = result.value.fields["issues"]
         assert isinstance(issues, ArrayValue)
         assert issues.elements == [TextValue("a"), TextValue("b")]
@@ -2150,8 +2130,8 @@ class TestPipelineDriverWireUp:
             agent_dispatcher=lambda req: '{"$case": "Pass"}',
         )
         r = scope.snapshot()["r"]
-        assert isinstance(r, EnumValue)
-        assert r.variant == "Pass"
+        assert isinstance(r, RecordValue)
+        assert r.display_name.rsplit("::", maxsplit=1)[-1] == "Pass"
 
     def test_array_target_accepted(self) -> None:
         let_xs = _let(
@@ -2318,8 +2298,8 @@ class TestCaseDispatch:
             table=type_table_for(typedef),
         )
         assert result.ok is True
-        assert isinstance(result.value, EnumValue)
-        assert result.value.variant == "Running"
+        assert isinstance(result.value, RecordValue)
+        assert result.value.display_name.rsplit("::", maxsplit=1)[-1] == "Running"
         assert result.value.fields["progress"] == IntValue(50)
 
     def test_bad_case_fails(self) -> None:
@@ -2345,7 +2325,7 @@ class TestCaseDispatch:
             codec, '{"$case": "Done"}', typ, strict_json=False, table=type_table_for(typedef)
         )
         assert result.ok is True
-        assert isinstance(result.value, EnumValue)
+        assert isinstance(result.value, RecordValue)
         assert result.value.fields == {}
 
 
@@ -2422,8 +2402,8 @@ issue
             codec, '{"$case": "Done"}', typ, strict_json=False, table=type_table_for(typedef)
         )
         assert result.ok is True
-        assert isinstance(result.value, EnumValue)
-        assert result.value.variant == "Done"
+        assert isinstance(result.value, RecordValue)
+        assert result.value.display_name.rsplit("::", maxsplit=1)[-1] == "Done"
 
     def test_array_param_parsed_from_json_string(self) -> None:
         rt = PipelineDriver()
@@ -2615,7 +2595,9 @@ class TestDecodeValueErrorBranches:
         schema = EnumDecode(
             nominal=NominalId(1),
             display_name="E",
-            variants=(VariantDecode(name="A", fields=()),),
+            variants=(
+                VariantDecode(name="A", nominal=NominalId(999), display_name="A", fields=()),
+            ),
         )
         with pytest.raises(ValueError, match="object for enum"):
             decode_value(schema, "oops")
@@ -2628,7 +2610,9 @@ class TestDecodeValueErrorBranches:
         schema = EnumDecode(
             nominal=NominalId(1),
             display_name="E",
-            variants=(VariantDecode(name="A", fields=()),),
+            variants=(
+                VariantDecode(name="A", nominal=NominalId(999), display_name="A", fields=()),
+            ),
         )
         with pytest.raises(ValueError, match=r"\$case"):
             decode_value(schema, {})
@@ -2641,7 +2625,9 @@ class TestDecodeValueErrorBranches:
         schema = EnumDecode(
             nominal=NominalId(1),
             display_name="E",
-            variants=(VariantDecode(name="A", fields=()),),
+            variants=(
+                VariantDecode(name="A", nominal=NominalId(999), display_name="A", fields=()),
+            ),
         )
         with pytest.raises(ValueError, match="Unknown enum variant"):
             decode_value(schema, {"$case": "X"})
@@ -2657,6 +2643,8 @@ class TestDecodeValueErrorBranches:
             variants=(
                 VariantDecode(
                     name="B",
+                    nominal=NominalId(999),
+                    display_name="B",
                     fields=(("x", ScalarDecode(kind=ScalarKind.INT)),),
                 ),
             ),

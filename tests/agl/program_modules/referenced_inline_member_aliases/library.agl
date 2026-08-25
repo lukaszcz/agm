@@ -1,0 +1,8 @@
+enum Source[T]
+  | Member(value: T)
+
+type Direct = Source::Member[int]
+type Generic[T] = Source::Member[T]
+
+enum ViaDirectAlias = ::Direct
+enum ViaGenericAlias[T] = ::Generic[T]

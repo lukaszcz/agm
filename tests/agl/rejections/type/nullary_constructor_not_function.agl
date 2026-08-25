@@ -1,0 +1,7 @@
+record R1()
+
+def invoke(factory: () -> R1) -> R1 = factory()
+
+program def main() -> unit =
+  let value = invoke(R1)
+  print(value)

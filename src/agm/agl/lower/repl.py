@@ -28,6 +28,7 @@ from agm.agl.syntax.nodes import (
     ScopeRegion,
     TypeAlias,
     VarDecl,
+    VariantDef,
     pattern_binder_candidates,
     simple_let_pattern_name,
     static_items,
@@ -219,12 +220,12 @@ def _item_declaration_ids(item: Item, checked: "CheckedModule") -> frozenset[int
     return frozenset()
 
 
-def _nominal_dependencies(typ: "Type", nominal_declaration_ids: Collection[int]) -> set[int]:
-    """Return entry nominal declarations reachable from a resolved semantic type."""
+def _nominal_dependencies(typ: "Type", nominal_dependency_ids: Mapping[int, int]) -> set[int]:
+    """Map nominal identities in *typ* to their promotable source declarations."""
     return {
-        nominal.decl_id
+        nominal_dependency_ids[nominal.decl_id]
         for nominal in iter_nominal_types(typ)
-        if nominal.module_id.is_entry and nominal.decl_id in nominal_declaration_ids
+        if nominal.module_id.is_entry and nominal.decl_id in nominal_dependency_ids
     }
 
 
@@ -232,7 +233,7 @@ def _declaration_dependencies(
     item: Item,
     checked: "CheckedModule",
     entry_declaration_ids: frozenset[int],
-    nominal_declaration_ids: Collection[int],
+    nominal_dependency_ids: Mapping[int, int],
     alias_declaration_ids: Mapping[str, frozenset[int]],
     library_module_ids: Collection[ModuleId],
 ) -> tuple[frozenset[int], frozenset[ModuleId]]:
@@ -279,15 +280,15 @@ def _declaration_dependencies(
             dependencies.add(constructor.owner_decl_node_id)
         typ = checked.node_types.get(node_id)
         if typ is not None:
-            dependencies.update(_nominal_dependencies(typ, nominal_declaration_ids))
+            dependencies.update(_nominal_dependencies(typ, nominal_dependency_ids))
 
     walk(item, collect)
     if isinstance(item, FuncDef):
         signature = checked.type_env.get_function_signature_by_node_id(item.node_id)
         assert signature is not None, f"compiler bug: no signature for {item.name!r}"
         for parameter in signature.params:
-            dependencies.update(_nominal_dependencies(parameter.type, nominal_declaration_ids))
-        dependencies.update(_nominal_dependencies(signature.result, nominal_declaration_ids))
+            dependencies.update(_nominal_dependencies(parameter.type, nominal_dependency_ids))
+        dependencies.update(_nominal_dependencies(signature.result, nominal_dependency_ids))
     typedef = (
         checked.type_env.type_table.get(
             checked.module_id,
@@ -299,18 +300,19 @@ def _declaration_dependencies(
     )
     if typedef is not None:
         for _, field_type in typedef.fields:
-            dependencies.update(_nominal_dependencies(field_type, nominal_declaration_ids))
-        for _, fields in typedef.variants:
-            for _, field_type in fields:
-                dependencies.update(_nominal_dependencies(field_type, nominal_declaration_ids))
+            dependencies.update(_nominal_dependencies(field_type, nominal_dependency_ids))
+        for member in typedef.members:
+            dependencies.update(_nominal_dependencies(member, nominal_dependency_ids))
+            for field_type in checked.type_env.type_table.record_fields(member).values():
+                dependencies.update(_nominal_dependencies(field_type, nominal_dependency_ids))
         if typedef.base is not None:
             base_typedef = checked.type_env.type_table.get_by_id(typedef.base)
             if (
                 base_typedef is not None
                 and base_typedef.module_id.is_entry
-                and base_typedef.decl_node_id in nominal_declaration_ids
+                and base_typedef.decl_node_id in nominal_dependency_ids
             ):
-                dependencies.add(base_typedef.decl_node_id)
+                dependencies.add(nominal_dependency_ids[base_typedef.decl_node_id])
     if isinstance(item, TypeAlias):
         alias_template = checked.type_env.source_type_template_qname(
             checked.module_id,
@@ -318,7 +320,7 @@ def _declaration_dependencies(
             scope_path=tuple(segment.name for segment in item.scope_path),
         )
         assert alias_template is not None, f"compiler bug: no type alias for {item.name!r}"
-        dependencies.update(_nominal_dependencies(alias_template.template, nominal_declaration_ids))
+        dependencies.update(_nominal_dependencies(alias_template.template, nominal_dependency_ids))
     return frozenset(dependencies), frozenset(imported_modules)
 
 
@@ -343,9 +345,24 @@ def _promotion_plan(
         if isinstance(item, ParamDecl)
     )
     entry_declaration_ids = frozenset().union(*source_declaration_ids, frozenset())
-    nominal_declaration_ids = frozenset(
-        item.node_id for item in leaf_items if isinstance(item, (EnumDef, ExceptionDef, RecordDef))
-    )
+    # A top-level nominal handle promotes with its own source item. Synthetic
+    # inline-member records promote with their EnumDef owner instead, so a
+    # function mentioning ``E::A`` cannot survive without ``E``.
+    nominal_dependency_ids: dict[int, int] = {}
+    for item in leaf_items:
+        if not isinstance(item, (EnumDef, ExceptionDef, RecordDef)):
+            continue
+        typedef = checked.type_env.type_table.get(
+            checked.module_id,
+            item.name,
+            tuple(segment.name for segment in item.scope_path),
+        )
+        assert typedef is not None
+        nominal_dependency_ids[typedef.decl_node_id] = item.node_id
+        if isinstance(item, EnumDef):
+            for source_member, member_handle in zip(item.members, typedef.members, strict=True):
+                if isinstance(source_member, VariantDef):
+                    nominal_dependency_ids[member_handle.decl_id] = item.node_id
     # Aliases are transparent in semantic types, so retain their syntactic
     # declaration dependency separately from nominal identity.
     alias_declaration_ids: dict[str, frozenset[int]] = {}
@@ -363,7 +380,7 @@ def _promotion_plan(
             item,
             checked,
             entry_declaration_ids,
-            nominal_declaration_ids,
+            nominal_dependency_ids,
             alias_declaration_ids,
             library_module_ids,
         )

@@ -208,7 +208,7 @@ def test_unencodable_argument_remains_an_extern_error() -> None:
     registry = ExternRegistry()
 
     with pytest.raises(AglRaise):
-        registry.invoke("take", lambda value: value, (ConstructorValue(NominalId(1), "Box", None),))
+        registry.invoke("take", lambda value: value, (ConstructorValue(NominalId(1), "Box"),))
 
 
 def test_extern_returning_a_callback_round_trips_its_agl_closure(tmp_path: Path) -> None:

@@ -40,19 +40,34 @@ from __future__ import annotations
 
 import dataclasses
 import itertools
+from collections.abc import Mapping
 from pathlib import Path
 
 from agm.agl import PipelineDriver
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.nodes import IrBind, IrExpr, IrSequence
+from agm.agl.ir.program import NominalDescriptor, NominalKind, VariantDescriptor
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, require_reserved_nominal_id
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program_seeded, wrap_inline_program
 from agm.agl.pipeline import PreparedProgram, RunResult
-from agm.agl.semantics.type_table import TypeDef, TypeTable, create_seeded_type_table
-from agm.agl.semantics.types import EnumType, ExceptionType, RecordType, Type, transform_type
-from agm.agl.semantics.values import EnumValue, TextValue
+from agm.agl.semantics.type_table import (
+    BUILTIN_PRELUDE_MEMBER_TYPE_DEFS,
+    TypeDef,
+    TypeTable,
+    create_seeded_type_table,
+)
+from agm.agl.semantics.types import (
+    EnumType,
+    ExceptionType,
+    RecordType,
+    Type,
+    TypeVarType,
+    free_type_vars,
+    transform_type,
+)
+from agm.agl.semantics.values import RecordValue, TextValue
 from agm.agl.setting_overrides import SettingOverride
 from agm.agl.syntax import (
     AssignStmt,
@@ -261,6 +276,9 @@ def strip_decl_ids(t: Type) -> Type:
     return transform_type(t, _strip)
 
 
+_ENUM_MEMBER_DEFS: dict[int, tuple[TypeDef, ...]] = {}
+
+
 def type_table_for(*defs: TypeDef) -> TypeTable:
     """Return a fresh seeded ``TypeTable`` with every given ``TypeDef`` registered.
 
@@ -273,8 +291,68 @@ def type_table_for(*defs: TypeDef) -> TypeTable:
     """
     table = create_seeded_type_table()
     for typedef in defs:
-        table.register(typedef)
+        register_typedef(table, typedef)
     return table
+
+
+def register_typedef(table: TypeTable, typedef: TypeDef) -> TypeDef:
+    """Register *typedef*, preceded by the member records of an ``enum_typedef``."""
+    for member_def in _ENUM_MEMBER_DEFS.get(typedef.decl_node_id, ()):
+        table.register(member_def)
+    table.register(typedef)
+    return typedef
+
+
+def enum_typedef(
+    name: str,
+    variants: Mapping[str, Mapping[str, Type]],
+    *,
+    module_id: ModuleId = ENTRY_ID,
+    type_params: tuple[str, ...] = (),
+    decl_id: int | None = None,
+) -> TypeDef:
+    """Build an enum ``TypeDef`` and the member record ``TypeDef``s it names.
+
+    An enum declaration names record declarations, so a hand-built fixture
+    needs both. The member declarations are remembered against the enum's
+    identity so :func:`type_table_for` and :func:`register_typedef` register
+    them alongside it.
+    """
+    enum_decl_id = next_decl_id() if decl_id is None else decl_id
+    member_defs = tuple(
+        TypeDef(
+            kind="record",
+            name=member_name,
+            module_id=module_id,
+            scope_path=(name,),
+            type_params=tuple(
+                param
+                for param in type_params
+                if any(param in free_type_vars(field_type) for field_type in fields.values())
+            ),
+            fields=tuple(fields.items()),
+            decl_node_id=next_decl_id(),
+        )
+        for member_name, fields in variants.items()
+    )
+    _ENUM_MEMBER_DEFS[enum_decl_id] = member_defs
+    return TypeDef(
+        kind="enum",
+        name=name,
+        module_id=module_id,
+        type_params=type_params,
+        members=tuple(
+            RecordType(
+                name=member.name,
+                type_args=tuple(TypeVarType(param) for param in member.type_params),
+                module_id=module_id,
+                scope_path=(name,),
+                decl_id=member.decl_node_id,
+            )
+            for member in member_defs
+        ),
+        decl_node_id=enum_decl_id,
+    )
 
 
 def record_type(
@@ -321,27 +399,64 @@ def enum_type(
 
     See :func:`record_type`.
     """
-    typedef = TypeDef(
-        kind="enum",
-        name=name,
-        module_id=module_id,
-        type_params=type_params,
-        variants=tuple((vname, tuple(vfields.items())) for vname, vfields in variants.items()),
-        decl_node_id=next_decl_id() if decl_id is None else decl_id,
+    typedef = enum_typedef(
+        name, variants, module_id=module_id, type_params=type_params, decl_id=decl_id
     )
     return typedef.handle(type_args), typedef
 
 
-def agent_value(variant: str, **fields: str) -> EnumValue:
+def option_nominal_descriptors(
+    option: NominalId, none: NominalId, some: NominalId
+) -> dict[NominalId, NominalDescriptor]:
+    """Build the ``Option`` enum and its two member-record descriptors for test FFI images."""
+    module_id = ModuleId(("std", "option"))
+    return {
+        option: NominalDescriptor(
+            nominal=option,
+            module_id=module_id,
+            scope_path=(),
+            declared_name="Option",
+            kind=NominalKind.ENUM,
+            variants=(
+                VariantDescriptor("Some", ("value",), some),
+                VariantDescriptor("None", (), none),
+            ),
+        ),
+        none: NominalDescriptor(
+            nominal=none,
+            module_id=module_id,
+            scope_path=("Option",),
+            declared_name="None",
+            kind=NominalKind.RECORD,
+        ),
+        some: NominalDescriptor(
+            nominal=some,
+            module_id=module_id,
+            scope_path=("Option",),
+            declared_name="Some",
+            kind=NominalKind.RECORD,
+            fields=("value",),
+        ),
+    }
+
+
+def agent_value(variant: str, **fields: str) -> RecordValue:
     """Build the runtime ``std/core::Agent`` enum value for *variant*.
 
     Each keyword becomes a text-valued field, matching every ``Agent``
     variant's payload shape (``command``, ``model``/``thinking``, etc.); pass
     none for a variant with no payload.
     """
-    return EnumValue(
-        nominal=NominalId(require_reserved_nominal_id("Agent")),
-        display_name="Agent",
-        variant=variant,
+    member_nominal = next(
+        (
+            NominalId(member.decl_node_id)
+            for member in BUILTIN_PRELUDE_MEMBER_TYPE_DEFS.values()
+            if member.scope_path == ("Agent",) and member.name == variant
+        ),
+        NominalId(require_reserved_nominal_id("Agent")),
+    )
+    return RecordValue(
+        nominal=member_nominal,
+        display_name=f"{'Agent'}::{variant}",
         fields={name: TextValue(value) for name, value in fields.items()},
     )

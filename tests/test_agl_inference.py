@@ -8,6 +8,7 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ModuleId
+from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
     ArrayType,
     BottomType,
@@ -203,6 +204,50 @@ class TestUnification:
                 _origin(engine, 2),
             )
 
+    def test_member_record_unifies_only_with_a_rigid_enum_target(self) -> None:
+        member = RecordType("Leaf", scope_path=("Tree",), decl_id=1)
+        tree = EnumType("Tree", (IntType(),), decl_id=2)
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="enum",
+                name="Tree",
+                module_id=tree.module_id,
+                type_params=("T",),
+                members=(member,),
+                decl_node_id=tree.decl_id,
+            )
+        )
+        engine = InferenceEngine(table)
+
+        engine.unify(member, tree, _origin(engine, 1))
+        with pytest.raises(InferenceError):
+            engine.unify(tree, member, _origin(engine, 2))
+        with pytest.raises(InferenceError):
+            engine.unify(
+                RecordType("Other", scope_path=("Tree",), decl_id=3), tree, _origin(engine, 3)
+            )
+        with pytest.raises(InferenceError):
+            engine.unify(ArrayType(member), ArrayType(tree), _origin(engine, 4))
+
+    def test_member_record_unification_solves_captured_enum_arguments(self) -> None:
+        table = TypeTable()
+        tree = TypeDef(
+            kind="enum",
+            name="Tree",
+            module_id=ModuleId.from_path("trees"),
+            type_params=("T",),
+            members=(RecordType("Leaf", (TypeVarType("T"),), scope_path=("Tree",), decl_id=1),),
+            decl_node_id=2,
+        )
+        table.register(tree)
+        engine = InferenceEngine(table)
+        value_type = RecordType("Leaf", (engine.fresh("T"),), scope_path=("Tree",), decl_id=1)
+
+        engine.unify(value_type, tree.handle((IntType(),)), _origin(engine, 1))
+
+        assert engine.zonk(value_type.type_args[0]) == IntType()
+
     @pytest.mark.parametrize(
         "wrap",
         [
@@ -268,6 +313,29 @@ class TestContextCompletion:
 
         assert engine.zonk(first) == IntType()
         assert engine.zonk(second) == TextType()
+
+    def test_member_record_context_completes_captured_enum_arguments(self) -> None:
+        table = TypeTable()
+        tree = TypeDef(
+            kind="enum",
+            name="Tree",
+            module_id=ModuleId.from_path("trees"),
+            type_params=("T",),
+            members=(RecordType("Leaf", (TypeVarType("T"),), scope_path=("Tree",), decl_id=1),),
+            decl_node_id=2,
+        )
+        table.register(tree)
+        engine = InferenceEngine(table)
+        value_type = RecordType("Leaf", (engine.fresh("T"),), scope_path=("Tree",), decl_id=1)
+
+        engine.complete_from_context(value_type, tree.handle((IntType(),)), _origin(engine, 1))
+
+        assert engine.zonk(value_type.type_args[0]) == IntType()
+        engine.complete_from_context(
+            RecordType("Other", scope_path=("Tree",), decl_id=3),
+            tree.handle((IntType(),)),
+            _origin(engine, 2),
+        )
 
     def test_context_never_overrides_actual_equality_evidence(self) -> None:
         engine = InferenceEngine()
@@ -355,6 +423,14 @@ class TestContextCompletion:
         assert engine.parent_of(variable) == engine.parent_of(other)
 
 
+def test_mixed_provisional_literal_elements_report_a_type_error() -> None:
+    with pytest.raises(AglTypeError, match="Array literal elements"):
+        resolve_and_check_inline_entry(
+            "def id[T](value: T) -> T = value\nlet values = [id(?), id(1)]\nvalues",
+            HostCapabilities(),
+        )
+
+
 def test_destructuring_let_binder_preserves_candidate_validation_provenance() -> None:
     """A generic pattern field retains its initializer's candidate-return evidence."""
     # Named "Holder", not "Option": the standard library's own Option[T] is in
@@ -391,6 +467,46 @@ def test_method_with_inferred_return_uses_receiver_header_type() -> None:
     assert signature is not None
     assert signature.result == TypeVarType("E")
     assert strip_decl_ids(signature.params[0].type) == RecordType("Box", (TypeVarType("E"),))
+
+
+def test_generic_lambda_widens_a_member_result_before_function_constraint() -> None:
+    """A lambda result widens directly before its generic function slot is unified."""
+    checked = resolve_and_check_inline_entry(
+        "def apply[U](f: (int) -> Result[U, text]) -> Result[U, text] = f(1)\n"
+        "apply(fn(value: int) => Result::Ok(value = value))",
+        HostCapabilities(),
+    )
+
+    result = checked.resolved.program.body.items[-1]
+    result_type = checked.node_types[result.node_id]
+    assert isinstance(result_type, EnumType)
+    assert result_type.name == "Result"
+    assert result_type.type_args == (IntType(), TextType())
+
+
+def test_generic_lambda_rejects_a_member_result_that_conflicts_with_prior_evidence() -> None:
+    """Direct member widening still reports conflicts from an earlier generic argument."""
+    with pytest.raises(AglTypeError):
+        resolve_and_check_inline_entry(
+            "def apply[T](value: T, f: () -> Result[T, text]) -> Result[T, text] = f()\n"
+            'apply("text", fn() => Result::Ok(value = 1))',
+            HostCapabilities(),
+        )
+
+
+def test_contextual_lambda_with_bottom_body_keeps_its_concrete_result_type() -> None:
+    """A lambda which always raises still adopts its concrete function result context."""
+    checked = resolve_and_check_inline_entry(
+        "def apply(f: (int) -> Result[int, text]) -> Result[int, text] = f(1)\n"
+        'apply(fn(value: int) => raise Abort(message = "failed"))',
+        HostCapabilities(),
+    )
+
+    result = checked.resolved.program.body.items[-1]
+    result_type = checked.node_types[result.node_id]
+    assert isinstance(result_type, EnumType)
+    assert result_type.name == "Result"
+    assert result_type.type_args == (IntType(), TextType())
 
 
 def test_bound_generic_method_pins_receiver_and_inferrs_own_type_parameter() -> None:

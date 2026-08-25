@@ -13,11 +13,12 @@ import pytest
 
 from agm.agl.eval.ir_interpreter import IrInterpreter
 from agm.agl.ir.ids import NominalId
-from agm.agl.ir.program import NominalDescriptor, NominalKind, VariantDescriptor
+from agm.agl.ir.program import NominalDescriptor, NominalKind
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.runtime.boundary import AglArrayView, AglException
 from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.semantics.values import ArrayValue, IntValue, TextValue
+from tests._agl_helpers import option_nominal_descriptors
 from tests.agl.ir_harness import extern_caps, lower_ir
 
 _STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
@@ -26,6 +27,8 @@ _RANDOM_MODULE = ModuleId(("std", "random"))
 _TIME_PARSE_ERROR = NominalId(9_600_001)
 _INDEX_ERROR = NominalId(9_600_002)
 _OPTION = NominalId(9_600_003)
+_OPTION_NONE = NominalId(9_600_004)
+_OPTION_SOME = NominalId(9_600_005)
 
 
 class _TimeCompanion(Protocol):
@@ -79,14 +82,7 @@ def _companion(
                 kind=NominalKind.EXCEPTION,
                 fields=("message", "index", "length"),
             ),
-            _OPTION: NominalDescriptor(
-                nominal=_OPTION,
-                module_id=ModuleId(("std", "option")),
-                scope_path=(),
-                declared_name="Option",
-                kind=NominalKind.ENUM,
-                variants=(VariantDescriptor("Some", ("value",)), VariantDescriptor("None", ())),
-            ),
+            **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
         }
     )
     return active_registry.load_companion(module_id, _STDLIB_ROOT / "std" / f"{name}.py")

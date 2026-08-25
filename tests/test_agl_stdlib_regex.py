@@ -11,24 +11,26 @@ from unittest.mock import Mock
 import pytest
 
 from agm.agl.ir.ids import NominalId
-from agm.agl.ir.program import NominalDescriptor, NominalKind, VariantDescriptor
+from agm.agl.ir.program import NominalDescriptor, NominalKind
 from agm.agl.modules.ids import ModuleId
 from agm.agl.runtime.boundary import AglException, decode_boundary_value
 from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.semantics.values import (
     ArrayValue,
     DictValue,
-    EnumValue,
     IntValue,
     RecordValue,
     TextValue,
 )
+from tests._agl_helpers import option_nominal_descriptors
 
 _STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 _REGEX_MODULE = ModuleId(("std", "regex"))
 _MATCH = NominalId(9_700_001)
 _REGEX_ERROR = NominalId(9_700_002)
 _OPTION = NominalId(9_700_003)
+_OPTION_NONE = NominalId(9_700_004)
+_OPTION_SOME = NominalId(9_700_005)
 
 
 class _RegexCompanion(Protocol):
@@ -66,14 +68,7 @@ def _regex_companion() -> tuple[_RegexCompanion, ModuleType]:
                 kind=NominalKind.EXCEPTION,
                 fields=("message", "pattern"),
             ),
-            _OPTION: NominalDescriptor(
-                nominal=_OPTION,
-                module_id=ModuleId(("std", "option")),
-                scope_path=(),
-                declared_name="Option",
-                kind=NominalKind.ENUM,
-                variants=(VariantDescriptor("Some", ("value",)), VariantDescriptor("None", ())),
-            ),
+            **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
         }
     )
     module = registry.load_companion(_REGEX_MODULE, _STDLIB_ROOT / "std" / "regex.py")
@@ -87,10 +82,9 @@ def test_regex_match_populates_offsets_numbered_groups_named_groups_and_nonparti
         companion.find_option(r"(?P<word>[A-Za-z]+)-(\d+)(?:-([A-Z]+))?", "ref-42")
     )
 
-    assert found == EnumValue(
-        _OPTION,
-        "Option",
-        "Some",
+    assert found == RecordValue(
+        _OPTION_SOME,
+        "Option::Some",
         {
             "value": RecordValue(
                 _MATCH,
@@ -101,9 +95,9 @@ def test_regex_match_populates_offsets_numbered_groups_named_groups_and_nonparti
                     "end": IntValue(6),
                     "groups": ArrayValue(
                         [
-                            EnumValue(_OPTION, "Option", "Some", {"value": TextValue("ref")}),
-                            EnumValue(_OPTION, "Option", "Some", {"value": TextValue("42")}),
-                            EnumValue(_OPTION, "Option", "None", {}),
+                            RecordValue(_OPTION_SOME, "Option::Some", {"value": TextValue("ref")}),
+                            RecordValue(_OPTION_SOME, "Option::Some", {"value": TextValue("42")}),
+                            RecordValue(_OPTION_NONE, "Option::None", {}),
                         ]
                     ),
                     "named-groups": DictValue({"word": TextValue("ref")}),
@@ -111,8 +105,8 @@ def test_regex_match_populates_offsets_numbered_groups_named_groups_and_nonparti
             )
         },
     )
-    assert decode_boundary_value(companion.find_option("x", "no match")) == EnumValue(
-        _OPTION, "Option", "None", {}
+    assert decode_boundary_value(companion.find_option("x", "no match")) == RecordValue(
+        _OPTION_NONE, "Option::None", {}
     )
 
 
@@ -151,10 +145,9 @@ def test_regex_invalid_pattern_raises_typed_error_and_compiles_each_pattern_once
     monkeypatch.setattr(module.re, "compile", compile_mock)
 
     assert companion.test("[0-9]+", "42")
-    assert decode_boundary_value(companion.find_option("[0-9]+", "x7")) == EnumValue(
-        _OPTION,
-        "Option",
-        "Some",
+    assert decode_boundary_value(companion.find_option("[0-9]+", "x7")) == RecordValue(
+        _OPTION_SOME,
+        "Option::Some",
         {
             "value": RecordValue(
                 _MATCH,

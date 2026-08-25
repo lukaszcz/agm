@@ -9,17 +9,20 @@ from typing import Protocol, cast
 import pytest
 
 from agm.agl.ir.ids import NominalId
-from agm.agl.ir.program import NominalDescriptor, NominalKind, VariantDescriptor
+from agm.agl.ir.program import NominalDescriptor, NominalKind
 from agm.agl.modules.ids import ModuleId
 from agm.agl.runtime.boundary import AglException, AglJson, decode_boundary_value
 from agm.agl.runtime.externs import ExternRegistry
-from agm.agl.semantics.values import EnumValue, JsonValue, TextValue
+from agm.agl.semantics.values import JsonValue, RecordValue, TextValue
+from tests._agl_helpers import option_nominal_descriptors
 
 _STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 _JSON_MODULE = ModuleId(("std", "json"))
 _JSON_PARSE_ERROR = NominalId(9_400_001)
 _KEY_ERROR = NominalId(9_400_002)
 _OPTION = NominalId(9_400_003)
+_OPTION_NONE = NominalId(9_400_004)
+_OPTION_SOME = NominalId(9_400_005)
 
 
 class _JsonCompanion(Protocol):
@@ -49,14 +52,7 @@ def _json_companion() -> _JsonCompanion:
                 kind=NominalKind.EXCEPTION,
                 fields=("message", "key"),
             ),
-            _OPTION: NominalDescriptor(
-                nominal=_OPTION,
-                module_id=ModuleId(("std", "option")),
-                scope_path=(),
-                declared_name="Option",
-                kind=NominalKind.ENUM,
-                variants=(VariantDescriptor("Some", ("value",)), VariantDescriptor("None", ())),
-            ),
+            **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
         }
     )
     module: ModuleType = registry.load_companion(_JSON_MODULE, _STDLIB_ROOT / "std" / "json.py")
@@ -67,14 +63,14 @@ def test_json_companion_get_handles_object_and_non_object_receivers() -> None:
     companion = _json_companion()
 
     assert decode_boundary_value(companion.get(AglJson({"present": 1}), "present")) == JsonValue(1)
-    assert decode_boundary_value(companion.get_option(AglJson({}), "missing")) == EnumValue(
-        _OPTION, "Option", "None", {}
+    assert decode_boundary_value(companion.get_option(AglJson({}), "missing")) == RecordValue(
+        _OPTION_NONE, "Option::None", {}
     )
 
     for raw in ([], True):
         with pytest.raises(AglException) as exc_info:
             companion.get(AglJson(raw), "missing")
         assert exc_info.value.value.fields["key"] == TextValue("missing")
-        assert decode_boundary_value(companion.get_option(AglJson(raw), "missing")) == EnumValue(
-            _OPTION, "Option", "None", {}
+        assert decode_boundary_value(companion.get_option(AglJson(raw), "missing")) == RecordValue(
+            _OPTION_NONE, "Option::None", {}
         )

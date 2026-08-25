@@ -154,6 +154,61 @@ def test_generic_record_patterns_publish_owner_without_type_arguments() -> None:
     ]
 
 
+def test_referenced_member_pattern_rejects_a_different_record_instantiation() -> None:
+    reject(
+        "record Box[T](value: T)\n"
+        "enum E = ::Box[int]\n"
+        'let subject: Box[text] = Box(value = "text")\n'
+        "let E::Box(value) = subject\n"
+        "()"
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "enum Tree[T]\n"
+        "  | Node(value: T)\n"
+        "let tree: Tree[int] = Node(value = 1)\n"
+        "case tree of | Tree[text]::Node(value) => value | _ => 0",
+        "enum E\n  | M\nlet value: E = M\ncase value of | E[Unknown]::M() => 0 | _ => 1",
+    ),
+)
+def test_qualified_enum_constructor_patterns_validate_applied_owner_arguments(source: str) -> None:
+    reject(source)
+
+
+def test_referenced_enum_member_aliases_match_in_patterns_and_is_tests() -> None:
+    accept(
+        "record R(value: int)\n"
+        "type Alias = R\n"
+        "enum E = ::Alias\n"
+        "let value: E = R(value = 1)\n"
+        "let matched = case value of | Alias(value) => value\n"
+        "let tested = value is Alias\n"
+        "matched"
+    )
+
+
+def test_generic_referenced_enum_member_patterns_validate_the_applied_owner() -> None:
+    accept(
+        "record R[T](value: T)\n"
+        "enum E[T] = ::R[T]\n"
+        "let value: E[int] = R(value = 1)\n"
+        "case value of | E[int]::R(value) => value"
+    )
+
+
+def test_enum_alias_does_not_match_a_referenced_record_member() -> None:
+    reject(
+        "record R(value: int)\n"
+        "enum E = ::R\n"
+        "type Alias = E\n"
+        "let value: E = R(value = 1)\n"
+        "case value of | Alias(value) => value"
+    )
+
+
 def test_simple_let_name_binds_even_when_it_matches_a_nullary_constructor() -> None:
     checked = accept("enum Opt\n  | none\nlet value: Opt = none\nlet none = value\nnone\n")
     let = checked.resolved.program.body.items[2]
@@ -275,6 +330,64 @@ def test_module_qualified_record_pattern_rejects_an_absent_named_owner(tmp_path:
     )
 
 
+def test_module_qualified_record_pattern_accepts_each_referencing_enum_owner(
+    tmp_path: Path,
+) -> None:
+    accept_graph(
+        tmp_path,
+        {
+            "lib": ("record Shared(value: int)\nenum First = ::Shared\nenum Second = ::Shared\n"),
+            "entry": (
+                "import lib\n"
+                "let shared: lib::Shared = lib::Shared(value = 1)\n"
+                "let lib::Second::Shared(value) = shared\n"
+                "value\n"
+            ),
+        },
+    )
+
+
+def test_module_qualified_record_pattern_rejects_an_unrelated_enum_owner(
+    tmp_path: Path,
+) -> None:
+    reject_graph(
+        tmp_path,
+        {
+            "lib": (
+                "record Shared(value: int)\n"
+                "enum First = ::Shared\n"
+                "enum Second = ::Shared\n"
+                "enum Unrelated | Other\n"
+            ),
+            "entry": (
+                "import lib\n"
+                "let shared: lib::Shared = lib::Shared(value = 1)\n"
+                "let lib::Unrelated::Shared(value) = shared\n"
+                "value\n"
+            ),
+        },
+    )
+
+
+def test_module_qualified_pattern_rejects_wrong_phantom_generic_enum_owner(
+    tmp_path: Path,
+) -> None:
+    reject_graph(
+        tmp_path,
+        {
+            "lib": "enum Other[T]\n  | none\n",
+            "entry": (
+                "import lib\n"
+                "enum Maybe[T]\n"
+                "  | none\n"
+                "case Maybe::none of\n"
+                "  | lib::Other::none => ()\n"
+                "  | _ => ()\n"
+            ),
+        },
+    )
+
+
 def test_self_qualified_record_pattern_rejects_an_absent_current_owner(tmp_path: Path) -> None:
     reject_graph(
         tmp_path,
@@ -302,7 +415,7 @@ def test_record_and_enum_constructor_spelling_collision_is_scrutinee_directed() 
     assert isinstance(pattern, ConstructorPattern)
     selected = checked.pattern_constructor_ref_for(pattern.node_id)
     assert selected is not None
-    assert selected.variant is None
+    assert selected.owner_name == "Token"
 
 
 @pytest.mark.parametrize(
@@ -432,7 +545,7 @@ def test_self_qualified_pattern_reaches_a_prelude_constructor() -> None:
     assert isinstance(pattern, ConstructorPattern)
     selected = checked.pattern_constructor_ref_for(pattern.node_id)
     assert selected is not None
-    assert selected.variant == "Retry"
+    assert selected.owner_name == "Retry"
 
 
 def test_route_qualified_pattern_naming_a_non_constructor_is_rejected(tmp_path: Path) -> None:

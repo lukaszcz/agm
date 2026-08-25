@@ -5,8 +5,8 @@ record Spec
   level: int
 
 program def main() -> unit =
-  let builder = AgentCommand("builder")
-  let critic = AgentCommand("critic")
+  let builder: Agent = AgentCommand("builder")
+  let critic: Agent = AgentCommand("critic")
   try
     let s: Spec = ask("Build the spec.", agent = builder, on_parse_error = Retry(n = 1))
     print s.name

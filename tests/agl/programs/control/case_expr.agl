@@ -8,7 +8,7 @@ enum Grade
 param bonus: int
 
 program def main() -> unit =
-  let grader = AgentCommand("grader")
+  let grader: Agent = AgentCommand("grader")
   let grade: Grade = ask("Grade the work.", agent = grader)
 
   let points: int = case grade of

@@ -122,13 +122,13 @@ def test_t3_structured_exec() -> None:
     source = 'let r: ExecResult = exec("exit 1")\nr'
     commands = {"exit 1": _fail(1, stdout="", stderr="error msg")}
     ir = evaluate_ir_with_shell(source, commands)
-    from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
     from agm.agl.semantics.values import IntValue, RecordValue
 
     assert isinstance(ir["r"], RecordValue)
     assert ir["r"].display_name == "ExecResult"
     assert ir["r"].fields["exit_code"] == IntValue(1)
-    assert ir["r"].nominal == NO_BUILTIN_DECLARATIONS.nominal("ExecResult")
+    program = lower_inline_ir(source, caps=shell_caps())
+    assert ir["r"].nominal == program.builtin_nominals.nominal("ExecResult")
 
 
 # ---------------------------------------------------------------------------
@@ -143,9 +143,8 @@ def test_t4_nonzero_exit_text() -> None:
     ir_exc = evaluate_ir_raises_with_shell(source, commands)
     assert ir_exc.display_name == "ExecError"
 
-    from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
-
-    assert ir_exc.nominal == NO_BUILTIN_DECLARATIONS.nominal("ExecError")
+    program = lower_inline_ir(source, caps=shell_caps())
+    assert ir_exc.nominal == program.builtin_nominals.nominal("ExecError")
 
 
 def test_t4a_full_pipeline_unit_exec_discards_successful_output() -> None:
@@ -354,12 +353,13 @@ def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
     from agm.agl.eval.ir_interpreter import IrInterpreter
     from agm.agl.ir.contracts import ContractRequest
     from agm.agl.ir.ids import ContractId, NominalId, SourceId
-    from agm.agl.ir.nodes import IrConstText, IrExec, IrMakeDict, IrMakeEnum, IrMakeRecord
+    from agm.agl.ir.nodes import IrConstText, IrExec, IrMakeDict, IrMakeRecord
     from agm.agl.ir.program import (
         ExecutableModule,
         ExecutableProgram,
         SourceFile,
     )
+    from agm.agl.ir.reserved_nominals import require_reserved_enum_member_id
     from agm.agl.modules.ids import ENTRY_ID
     from agm.agl.semantics.exceptions import AglRaise
     from agm.core.process import ProcessCaptureResult
@@ -395,8 +395,18 @@ def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
             display_name="Environ",
             fields=(("vars", IrMakeDict(loc, ())),),
         ),
-        cwd=IrMakeEnum(loc, NominalId(-2), "Option", "None", ()),
-        timeout=IrMakeEnum(loc, NominalId(-2), "Option", "None", ()),
+        cwd=IrMakeRecord(
+            loc,
+            NominalId(require_reserved_enum_member_id("Option", "None")),
+            "Option::None",
+            (),
+        ),
+        timeout=IrMakeRecord(
+            loc,
+            NominalId(require_reserved_enum_member_id("Option", "None")),
+            "Option::None",
+            (),
+        ),
         contract_id=cid,
         max_attempts=1,
     )

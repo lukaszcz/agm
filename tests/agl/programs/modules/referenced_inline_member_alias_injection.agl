@@ -1,0 +1,9 @@
+# Referenced enums transparently inject inline-member constructors through
+# direct and generic aliases imported from another module.
+import library::{ViaDirectAlias, ViaGenericAlias}
+
+program def main() -> unit =
+  let direct: ViaDirectAlias = Member(value = 4)
+  let generic: ViaGenericAlias[text] = Member(value = "five")
+  print direct
+  print generic

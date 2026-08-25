@@ -10,12 +10,13 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.ids import NominalId
-from agm.agl.ir.program import NominalDescriptor, NominalKind, VariantDescriptor
+from agm.agl.ir.program import NominalDescriptor, NominalKind
 from agm.agl.modules.ids import ModuleId
 from agm.agl.runtime.boundary import AglDictView, decode_boundary_value
 from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.scope import AglScopeError
-from agm.agl.semantics.values import DictValue, EnumValue, IntValue
+from agm.agl.semantics.values import DictValue, IntValue, RecordValue
+from tests._agl_helpers import option_nominal_descriptors
 from tests.agl.module_graph import resolve_and_check_inline_entry
 
 _STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
@@ -23,6 +24,8 @@ _DICT_MODULE = ModuleId(("std", "dict"))
 _KEY_ERROR = NominalId(9_200_001)
 _OPTION = NominalId(9_200_002)
 _PAIR = NominalId(9_200_003)
+_OPTION_NONE = NominalId(9_200_004)
+_OPTION_SOME = NominalId(9_200_005)
 
 
 class _DictCompanion(Protocol):
@@ -63,14 +66,7 @@ def _dict_companion() -> _DictCompanion:
                 kind=NominalKind.EXCEPTION,
                 fields=("message", "key"),
             ),
-            _OPTION: NominalDescriptor(
-                nominal=_OPTION,
-                module_id=ModuleId(("std", "option")),
-                scope_path=(),
-                declared_name="Option",
-                kind=NominalKind.ENUM,
-                variants=(VariantDescriptor("Some", ("value",)), VariantDescriptor("None", ())),
-            ),
+            **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
             _PAIR: NominalDescriptor(
                 nominal=_PAIR,
                 module_id=ModuleId(("std", "pair")),
@@ -89,17 +85,17 @@ def test_dict_companion_get_and_remove_options_preserve_the_live_dict() -> None:
     companion = _dict_companion()
     values = AglDictView(DictValue({"one": IntValue(1)}))
 
-    assert decode_boundary_value(companion.get_option(values, "one")) == EnumValue(
-        _OPTION, "Option", "Some", {"value": IntValue(1)}
+    assert decode_boundary_value(companion.get_option(values, "one")) == RecordValue(
+        _OPTION_SOME, "Option::Some", {"value": IntValue(1)}
     )
-    assert decode_boundary_value(companion.get_option(values, "missing")) == EnumValue(
-        _OPTION, "Option", "None", {}
+    assert decode_boundary_value(companion.get_option(values, "missing")) == RecordValue(
+        _OPTION_NONE, "Option::None", {}
     )
-    assert decode_boundary_value(companion.remove_option(values, "one")) == EnumValue(
-        _OPTION, "Option", "Some", {"value": IntValue(1)}
+    assert decode_boundary_value(companion.remove_option(values, "one")) == RecordValue(
+        _OPTION_SOME, "Option::Some", {"value": IntValue(1)}
     )
-    assert decode_boundary_value(companion.remove_option(values, "missing")) == EnumValue(
-        _OPTION, "Option", "None", {}
+    assert decode_boundary_value(companion.remove_option(values, "missing")) == RecordValue(
+        _OPTION_NONE, "Option::None", {}
     )
     assert _entries(values) == {}
 

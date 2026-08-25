@@ -383,6 +383,13 @@ class TestScopeRegions:
     def test_scoped_enum_variant_yields_to_an_enclosing_scope_member(self) -> None:
         parse_and_resolve("enum A::Choice = picked\ndef A::picked() -> int = 0\n()")
 
+    def test_inline_members_establish_nested_type_scopes(self) -> None:
+        resolved = parse_and_resolve("enum Tree = Leaf | Node(value: int)\n()")
+
+        assert ("Tree", "Leaf") in resolved.declared_type_paths
+        assert ("Tree", "Node") in resolved.declared_type_paths
+        assert resolved.scope_nodes[("Tree", "Node")].parent is resolved.scope_nodes[("Tree",)]
+
     def test_scoped_members_resolve_from_their_exact_path(self) -> None:
         resolved = parse_and_resolve("def A::f() -> int = 0\nA::f()")
         assert resolved.resolution
@@ -399,7 +406,6 @@ class TestScopeRegions:
             "scope Point\nend Point\ndef Point() -> int = 0",
             "record Point()\ndef Point() -> int = 0",
             "enum Point = one | one",
-            "enum Point = one\nscope Point::one\nend Point::one",
         ),
     )
     def test_same_path_declaration_collisions_are_rejected(self, source: str) -> None:
@@ -811,8 +817,8 @@ class TestScopedConstructorCandidateUnion:
         )
         pattern = self._pattern(resolved)
         candidates = resolved.pattern_constructor_candidates[pattern.node_id]
-        owners = {candidate.owner_name for candidate in candidates}
-        assert owners == {"A", "B"}
+        owners = {candidate.owner_path for candidate in candidates}
+        assert owners == {("S", "A"), ("S", "B")}
 
     def test_scope_own_constructor_and_child_enum_variant_both_stay_candidates(self) -> None:
         """A scope's own record and a child enum's variant sharing a name both survive."""
@@ -830,8 +836,8 @@ class TestScopedConstructorCandidateUnion:
         )
         pattern = self._pattern(resolved)
         candidates = resolved.pattern_constructor_candidates[pattern.node_id]
-        owners = {(candidate.owner_name, candidate.variant) for candidate in candidates}
-        assert owners == {("V", None), ("E", "V")}
+        owners = {(candidate.owner_path, candidate.owner_name) for candidate in candidates}
+        assert owners == {(("Config",), "V"), (("Config", "E"), "V")}
 
     def test_outward_walk_prefers_the_nearest_scope_layer(self) -> None:
         """A nested scope's own same-named record shadows an ancestor's."""
@@ -859,6 +865,27 @@ class TestScopedConstructorCandidateUnion:
         candidates = resolved.pattern_constructor_candidates[pattern.node_id]
         owners = {candidate.owner_path for candidate in candidates}
         assert owners == {("A", "B")}
+
+
+class TestConstructorCandidateDeduplication:
+    """``dedupe_constructor_candidates`` keeps each distinct candidate once."""
+
+    def test_keeps_first_occurrence_of_each_distinct_candidate_across_interleaving(
+        self,
+    ) -> None:
+        """A repeated candidate does not resurface after a differing same-id candidate.
+
+        Both candidates below share ``owner_decl_node_id`` but disagree on their
+        canonical metadata, so they are genuinely distinct declarations. The
+        first candidate then recurs later in the sequence; only its first
+        occurrence should survive, regardless of what was seen in between.
+        """
+        from agm.agl.scope.symbols import ConstructorRef, dedupe_constructor_candidates
+
+        first = ConstructorRef(owner_name="A", owner_decl_node_id=1, type_params=())
+        second = ConstructorRef(owner_name="B", owner_decl_node_id=1, type_params=())
+        deduped = dedupe_constructor_candidates((first, second, first))
+        assert deduped == (first, second)
 
 
 class TestScopedAssignment:
@@ -943,7 +970,7 @@ class TestScopeUseEnumOwners:
         walk(r.program, lambda node: found.append(node) if isinstance(node, IsTest) else None)
         assert len(found) == 1
         cref = r.constructor_refs[found[0].node_id]
-        assert (cref.owner_path, cref.owner_name, cref.variant) == (("A",), "Status", "Good")
+        assert (cref.owner_path, cref.owner_name) == (("A", "Status"), "Good")
 
     def test_case_pattern_resolves_enum_owner_contributed_by_a_scope_use(self) -> None:
         r = parse_and_resolve(
@@ -965,7 +992,7 @@ class TestScopeUseEnumOwners:
         good_pattern = case_node.branches[0].pattern
         assert isinstance(good_pattern, ConstructorPattern)
         cref = r.constructor_refs[good_pattern.node_id]
-        assert (cref.owner_path, cref.owner_name, cref.variant) == (("A",), "Status", "Good")
+        assert (cref.owner_path, cref.owner_name) == (("A", "Status"), "Good")
 
 
 # ---------------------------------------------------------------------------
@@ -1043,7 +1070,7 @@ class TestAcceptance:
     def test_enum_def_at_root(self) -> None:
         r = parse_and_resolve("enum E\n  | A\n  | B\n()")
         assert "A" in r.constructor_candidates
-        assert r.constructor_candidates["A"][0].owner_name == "E"
+        assert r.constructor_candidates["A"][0].owner_name == "A"
 
     def test_raise_expr(self) -> None:
         r = parse_and_resolve("raise 1\n")
@@ -1939,6 +1966,15 @@ class TestMethodReceiverClassification:
             (ENTRY_ID, (owner,), "identity"): (owner,),
         }
 
+    def test_inline_member_type_scope_allows_methods(self) -> None:
+        resolved = parse_and_resolve(
+            "enum Tree = Leaf | Node(value: int)\ndef Tree::Node::identity(self) -> int = 1\n()"
+        )
+
+        assert resolved.method_declarations == {
+            (ENTRY_ID, ("Tree", "Node"), "identity"): ("Tree", "Node"),
+        }
+
     def test_method_named_after_a_builtin_call_is_exempt_from_the_reserved_name_rule(
         self,
     ) -> None:
@@ -2629,7 +2665,7 @@ class TestDirectASTConstruction:
 
         sp = _sp()
         variant = VariantDef(name="point", fields=(), span=sp, node_id=_nid())
-        enum_def = EnumDef(name="Shape", variants=(variant,), span=sp, node_id=_nid())
+        enum_def = EnumDef(name="Shape", members=(variant,), span=sp, node_id=_nid())
         let_n = _make_let("n", _make_intlit(5))
         arg = NamedArg(name="n", value=_make_varref("n"), span=sp, node_id=_nid())
         # Constructor call: Call(callee=VarRef("point"), named_args=[n: n])
@@ -3140,12 +3176,12 @@ def _make_enum(
     line: int = 1,
 ) -> EnumDef:
     sp = _sp(line)
-    variants: list[VariantDef] = []
+    members: list[VariantDef] = []
     for vname in variant_names:
-        variants.append(VariantDef(name=vname, fields=(), span=sp, node_id=_nid()))
+        members.append(VariantDef(name=vname, fields=(), span=sp, node_id=_nid()))
     return EnumDef(
         name=name,
-        variants=tuple(variants),
+        members=tuple(members),
         type_param_slots=type_param_slots,
         span=sp,
         node_id=_nid(),
@@ -3166,7 +3202,7 @@ class TestConstructorBindings:
         candidates = r.constructor_candidates["Box"]
         assert len(candidates) == 1
         assert candidates[0].owner_name == "Box"
-        assert candidates[0].variant is None
+        assert candidates[0].owner_path == ()
 
     def test_record_constructor_lowercase_resolves(self) -> None:
         """Lowercase record names work identically (no capitalization rule)."""
@@ -3190,8 +3226,7 @@ class TestConstructorBindings:
         assert isinstance(vref, VarRef)
         assert vref.node_id in r.constructor_refs
         cref = r.constructor_refs[vref.node_id]
-        assert cref.owner_name == "Option"
-        assert cref.variant == "none"
+        assert (cref.owner_path, cref.owner_name) == (("Option",), "none")
 
     def test_payload_variant_callee_resolves(self) -> None:
         """A payload variant used as a call callee resolves as a constructor."""
@@ -3203,7 +3238,7 @@ class TestConstructorBindings:
         callee = call.callee
         assert isinstance(callee, VarRef)
         assert callee.node_id in r.constructor_refs
-        assert r.constructor_refs[callee.node_id].variant == "some"
+        assert r.constructor_refs[callee.node_id].owner_name == "some"
 
     def test_record_constructor_callee_resolves(self) -> None:
         """A record constructor used as a call callee resolves."""
@@ -3216,8 +3251,7 @@ class TestConstructorBindings:
         assert isinstance(callee, VarRef)
         assert callee.node_id in r.constructor_refs
         cref = r.constructor_refs[callee.node_id]
-        assert cref.owner_name == "Box"
-        assert cref.variant is None
+        assert (cref.owner_path, cref.owner_name) == ((), "Box")
 
     # --- Generic type_params on constructors ---
 
@@ -3226,10 +3260,9 @@ class TestConstructorBindings:
         r = parse_and_resolve("record Box[T]\n  value: int\nlet b = Box(value = 1)\nb\n")
         assert r.constructor_candidates["Box"][0].type_params == ("T",)
 
-    def test_generic_enum_variant_has_type_params(self) -> None:
-        """An enum variant from a generic enum carries the enum's type_params."""
-        r = parse_and_resolve("enum Option[T]\n  | none\n  | some\nnone\n")
-        assert r.constructor_candidates["none"][0].type_params == ("T",)
+    def test_generic_member_captures_only_referenced_type_params(self) -> None:
+        r = parse_and_resolve("enum Option[T]\n  | none\n  | some(value: T)\nnone\n")
+        assert r.constructor_candidates["none"][0].type_params == ()
         assert r.constructor_candidates["some"][0].type_params == ("T",)
 
     # --- Overload sets and ambiguity ---
@@ -3252,8 +3285,17 @@ class TestConstructorBindings:
         r = resolve_program(enum_a, enum_b, unit)
         assert "some" in r.constructor_candidates
         assert len(r.constructor_candidates["some"]) == 2
-        owners = {c.owner_name for c in r.constructor_candidates["some"]}
-        assert owners == {"A", "B"}
+        owners = {c.owner_path for c in r.constructor_candidates["some"]}
+        assert owners == {("A",), ("B",)}
+
+    def test_local_enum_member_shadows_an_automatic_prelude_constructor(self) -> None:
+        resolved = parse_and_resolve(
+            "enum Result\n  | Ok(value: int)\n  | Err(error: text)\nOk(value = 1)"
+        )
+
+        result = resolved.program.body.items[-1]
+        assert isinstance(result, Call)
+        assert resolved.constructor_refs[result.callee.node_id].owner_path == ("Result",)
 
     def test_ambiguous_bare_varref_raises(self) -> None:
         """Unqualified use of an ambiguous variant name raises an ambiguity error."""
@@ -3365,8 +3407,7 @@ class TestConstructorBindings:
         assert isinstance(call_node, Call)
         assert isinstance(call_node.callee, VarRef)
         ref = r.constructor_refs[call_node.callee.node_id]
-        assert ref.owner_name == "Option"
-        assert ref.variant == "some"
+        assert (ref.owner_path, ref.owner_name) == (("Option",), "some")
 
     # --- Qualified constructor access ---
 
@@ -3378,8 +3419,7 @@ class TestConstructorBindings:
         fa = let_decl.value
         assert isinstance(fa, VarRef)
         ref = r.constructor_refs[fa.node_id]
-        assert ref.owner_name == "Option"
-        assert ref.variant == "some"
+        assert (ref.owner_path, ref.owner_name) == (("Option",), "some")
 
     def test_qualified_access_does_not_raise_undefined_for_owner(self) -> None:
         "Option::some does NOT raise 'Option is not defined'."
@@ -3387,7 +3427,7 @@ class TestConstructorBindings:
         last = r.program.body.items[1]
         assert isinstance(last, VarRef)
         ref = r.constructor_refs[last.node_id]
-        assert ref.owner_name == "Option" and ref.variant == "some"
+        assert (ref.owner_path, ref.owner_name) == (("Option",), "some")
 
     def test_qualified_access_none_variant(self) -> None:
         "Option::none records the shared constructor reference."
@@ -3395,8 +3435,7 @@ class TestConstructorBindings:
         last = r.program.body.items[1]
         assert isinstance(last, VarRef)
         ref = r.constructor_refs[last.node_id]
-        assert ref.owner_name == "Option"
-        assert ref.variant == "none"
+        assert (ref.owner_path, ref.owner_name) == (("Option",), "none")
 
     def test_dot_access_with_type_name_is_rejected(self) -> None:
         err = reject_scope("record Box\n  value: int\nBox.value\n")
@@ -3598,7 +3637,7 @@ class TestConstructorBindings:
         """
         r = parse_and_resolve("type Local = Undeclared\n()\n")
         candidates = r.constructor_candidates["Local"]
-        assert candidates[0].variant is None
+        assert candidates[0].owner_path == ()
 
     def test_alias_with_unresolvable_qualified_target_is_presumed_constructible(
         self,
@@ -3610,7 +3649,7 @@ class TestConstructorBindings:
         """
         r = parse_and_resolve("type Local = pal::Something\n()\n")
         candidates = r.constructor_candidates["Local"]
-        assert candidates[0].variant is None
+        assert candidates[0].owner_path == ()
 
     def test_declared_type_names_excludes_variants(self) -> None:
         """Enum variant names are NOT in declared_type_names (they are values)."""
@@ -3632,7 +3671,7 @@ class TestConstructorBindings:
         )
         r = resolve_program(rec, call)
         assert "Point" in r.constructor_candidates
-        assert r.constructor_candidates["Point"][0].variant is None
+        assert r.constructor_candidates["Point"][0].owner_path == ()
 
     def test_enum_variant_binding_via_ast(self) -> None:
         """Direct AST: enum variants register as constructor candidates."""
@@ -3640,8 +3679,8 @@ class TestConstructorBindings:
         ref_ok = _make_varref("ok")
         r = resolve_program(enum, ref_ok)
         assert "ok" in r.constructor_candidates
-        assert r.constructor_candidates["ok"][0].owner_name == "Status"
-        assert r.constructor_candidates["ok"][0].variant == "ok"
+        assert r.constructor_candidates["ok"][0].owner_name == "ok"
+        assert r.constructor_candidates["ok"][0].owner_name == "ok"
         assert ref_ok.node_id in r.constructor_refs
 
     def test_constructor_binding_kind_in_scope(self) -> None:
@@ -3666,8 +3705,8 @@ class TestConstructorBindings:
         ref = r.program.body.items[1]
         assert isinstance(ref, VarRef)
         constructor = r.constructor_refs[ref.node_id]
-        assert constructor.owner_name == "Color"
-        assert constructor.variant == "red"
+        assert constructor.owner_name == "red"
+        assert constructor.owner_name == "red"
 
     def test_ordinary_field_access_not_qualified_ref(self) -> None:
         """FieldAccess on a regular value creates no constructor reference."""

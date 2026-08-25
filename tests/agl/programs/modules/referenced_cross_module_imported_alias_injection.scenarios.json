@@ -1,0 +1,1 @@
+{"scenarios": [{"name": "cross_module_imported_alias_injection", "module_roots": ["program_modules/referenced_member_alias_routes"], "expect": {"stdout": "Shared(value = 5)\n"}}]}

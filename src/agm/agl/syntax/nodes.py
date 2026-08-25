@@ -1183,7 +1183,7 @@ class RecordDef(GenericDeclaration):
 
 @dataclass(frozen=True, slots=True)
 class VariantDef:
-    """A single variant inside an ``enum`` declaration."""
+    """An inline member declaration inside an ``enum`` declaration."""
 
     name: str
     fields: tuple[Param, ...]
@@ -1192,11 +1192,21 @@ class VariantDef:
 
 
 @dataclass(frozen=True, slots=True)
+class VariantRef:
+    """A referenced record member inside an ``enum`` declaration."""
+
+    chain: QualifierChain
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+    type_args: tuple[TypeExpr, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class EnumDef(GenericDeclaration):
-    """``enum Name { variants }`` declaration."""
+    """``enum Name { members }`` declaration."""
 
     name: str
-    variants: tuple[VariantDef, ...]
+    members: tuple[VariantDef | VariantRef, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     type_param_slots: tuple[str, ...] = ()

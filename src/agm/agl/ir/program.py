@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
 from agm.agl.ir.builtin_vars import BuiltinVarKey
-from agm.agl.ir.contracts import ContractRequest, ParamDecoder
+from agm.agl.ir.contracts import ContractRequest, ExceptionFieldEncode, ParamDecoder
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import IrExpr, IrFunctionParam
 from agm.agl.modules.ids import ENTRY_ID, ModuleId, spell_scope_path
@@ -89,10 +89,12 @@ class VariantDescriptor:
     ``name``   — the variant name.
     ``fields`` — declared field names in declaration order (names only; no
                  checker ``Type`` objects — the IR is typeless).
+    ``member`` — nominal identity of the member record declaration.
     """
 
     name: str
     fields: tuple[str, ...]
+    member: NominalId
 
 
 @dataclass(frozen=True, slots=True)
@@ -339,6 +341,10 @@ class ExecutableProgram:
         declaration identities in the linked modules. This allows structural
         validation to confirm that every non-engine structured host-backed key
         names an actual declaration, including its scope path.
+      ``exception_field_encodes`` — static field encode plans for exceptions
+        the host can raise, keyed by their program-local nominal identity.
+        Reporting consults these plans from the exception value, so encoding
+        provenance survives a catch, storage, and later source-level re-raise.
       ``builtin_setting_defaults`` — builtin-var key -> a checked, constant
         IR expression declared by ``builtin var``. The evaluator uses it only
         when the host did not seed that binding. Legacy string keys remain
@@ -360,4 +366,7 @@ class ExecutableProgram:
     dry_run_inventory: "tuple[DryRunEntry, ...]" = ()
     builtin_nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS
     builtin_var_declarations: frozenset[BuiltinVarKey] = frozenset()
+    exception_field_encodes: dict[NominalId, tuple[ExceptionFieldEncode, ...]] = field(
+        default_factory=dict
+    )
     builtin_setting_defaults: dict[BuiltinVarKey | str, IrExpr] = field(default_factory=dict)

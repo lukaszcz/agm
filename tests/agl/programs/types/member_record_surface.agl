@@ -1,0 +1,53 @@
+# Inline and referenced enum members retain their complete record surface.
+record Pair[A, B](left: A, right: B)
+record Referenced[T](value: T)
+
+enum Tree[T]
+  | Leaf
+  | Node(value: T)
+
+enum Wrapped[T] = ::Referenced[T]
+
+def Tree::Node::pair[T, U](self, right: U) -> Pair[T, U] =
+  Pair(left = self.value, right = right)
+
+def Tree::Node::replace[T](self, value: T) -> Tree::Node[T] = self with value = value
+
+def Tree::describe[T](self) -> text =
+  case self of
+    | Leaf => "leaf"
+    | Node(value) => "node %{value}"
+
+def Referenced::show[T](self) -> text = "ref %{self.value}"
+def refresh(value: Referenced[text]) -> Referenced[text] = value with value = value.value + "!"
+
+record Holder(node: Tree::Node[int], nodes: array[Tree::Node[int]], ref: Referenced[text])
+def replace_in_slot(node: Tree::Node[int]) -> Tree::Node[int] = node.replace(8)
+
+program def main() -> unit =
+  let node = Node(value = 3)
+  let pair = node.pair("right")
+  let changed = replace_in_slot(node)
+  let holder = Holder(node = changed, nodes = [changed], ref = Referenced(value = "saved"))
+  let wrapped: Wrapped[text] = holder.ref
+  let leaf = Leaf
+  let int_tree: Tree[int] = leaf
+  let text_tree: Tree[text] = leaf
+  let widened: Tree[int] = changed
+  let selected = case widened of
+    | Leaf => 0
+    | Node(value) => value
+  let decoded: Tree::Node[int] = '{"value": 9}' as Tree::Node[int]
+  let encoded = decoded as json
+  print pair.left
+  print pair.right
+  print changed.value
+  print holder.nodes[0].value
+  print(refresh(holder.ref).show())
+  print widened.describe()
+  print selected
+  print int_tree
+  print text_tree
+  print decoded.value
+  print encoded
+  print(wrapped as text)

@@ -34,15 +34,14 @@ from agm.agl.matchcompile.model import (
     ConstructorCell,
     ConstructorField,
     DecisionDecompose,
-    EnumConstructor,
     FieldOccurrenceProvenance,
     LiteralConstructor,
     LiteralKind,
     MatrixRow,
+    NominalConstructor,
     Occurrence,
     OccurrenceId,
     PathDecomposition,
-    RecordConstructor,
     WildcardCell,
 )
 from agm.agl.matchcompile.normalize import (
@@ -53,7 +52,7 @@ from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import BoolType, EnumType, IntType, RecordType, TextType
-from agm.agl.semantics.values import BoolValue, EnumValue
+from agm.agl.semantics.values import BoolValue, RecordValue
 from agm.agl.syntax.nodes import Case
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck import CheckedModule, check_program
@@ -87,7 +86,9 @@ def _only_case(checked: CheckedModule | CheckedModule) -> Case:
     return cases[0]
 
 
-def _pair_case() -> tuple[CheckedModule, Case, PatternMatrix, EnumConstructor, OccurrenceAllocator]:
+def _pair_case() -> tuple[
+    CheckedModule, Case, PatternMatrix, NominalConstructor, OccurrenceAllocator
+]:
     checked = _check(
         "enum Pair\n"
         "  | pair(left: bool, right: bool)\n"
@@ -102,7 +103,7 @@ def _pair_case() -> tuple[CheckedModule, Case, PatternMatrix, EnumConstructor, O
     normalized = normalize_case(case, checked)
     matrix = matrix_from_normalized(normalized)
     head = cast(ConstructorCell, matrix.rows[0].cells[0]).constructor
-    assert isinstance(head, EnumConstructor)
+    assert isinstance(head, NominalConstructor)
     return checked, case, matrix, head, OccurrenceAllocator.for_case(normalized)
 
 
@@ -172,7 +173,7 @@ def test_record_specialization_and_validation_use_field_bearing_nominal_machiner
     normalized = normalize_case(_only_case(checked), checked)
     matrix = matrix_from_normalized(normalized)
     head = head_constructors(matrix, 0)[0]
-    assert isinstance(head, RecordConstructor)
+    assert isinstance(head, NominalConstructor)
     assert strip_decl_ids(head.record_type) == RecordType("Outer")
     allocator = OccurrenceAllocator.for_case(normalized)
 
@@ -188,7 +189,7 @@ def test_record_specialization_and_validation_use_field_bearing_nominal_machiner
     ] == ["left", "right"]
     nested = specialized.rows[0].cells[0]
     assert isinstance(nested, ConstructorCell)
-    assert isinstance(nested.constructor, RecordConstructor)
+    assert isinstance(nested.constructor, NominalConstructor)
     assert [binder.name for binder in nested.arguments[0].binders] == ["captured"]
     whole = cast(ConstructorCell, matrix.rows[0].cells[0]).binders[0]
     assert specialized.rows[0].binder_assignments == (
@@ -223,7 +224,7 @@ def test_record_compilation_validates_field_occurrences_and_reconstructs_witness
     compiled = compile_match_site(normalize_case(_only_case(checked), checked))
 
     assert isinstance(compiled.root, DecisionDecompose)
-    assert isinstance(compiled.root.constructor, RecordConstructor)
+    assert isinstance(compiled.root.constructor, NominalConstructor)
     assert len(compiled.occurrences) == 2
     issue = compiled.issues[0]
     assert isinstance(issue, NonExhaustiveIssue)
@@ -307,21 +308,26 @@ def test_paper_decomposition_partition_preserves_first_match_actions() -> None:
     pair_result = specialize(matrix, 0, pair, allocator)
     defaulted = default_matrix(matrix, 0)
     enum_type = cast(EnumType, matrix.occurrences[0].type)
-    nominal = NominalId(enum_type.decl_id)
+    nominal = NominalId(pair.record_type.decl_id)
 
     for left in (False, True):
         for right in (False, True):
-            subject = EnumValue(
-                nominal,
-                enum_type.name,
-                pair.variant,
-                {"left": BoolValue(left), "right": BoolValue(right)},
+            subject = RecordValue(
+                nominal=nominal,
+                display_name=f"{enum_type.name}::{pair.terminal_name}",
+                fields={"left": BoolValue(left), "right": BoolValue(right)},
             )
             assert matrix_action(
                 pair_result.matrix, (BoolValue(left), BoolValue(right))
             ) == reference_action(case, checked, subject)
 
-    empty = EnumValue(nominal, enum_type.name, "empty", {})
+    empty = RecordValue(
+        nominal=NominalId(
+            checked.type_env.type_table.enum_member_names(enum_type)["empty"].decl_id
+        ),
+        display_name=f"{enum_type.name}::empty",
+        fields={},
+    )
     assert matrix_action(defaulted, ()) == reference_action(case, checked, empty)
 
 
@@ -570,11 +576,7 @@ def test_matrix_rejects_bad_constructor_children_and_occurrence_provenance() -> 
     specialized = result.matrix
     first = cast(ConstructorCell, specialized.rows[0].cells[0])
     wrong_nested = ConstructorCell(
-        EnumConstructor(
-            enum_type=cast(EnumType, matrix.occurrences[0].type),
-            variant=pair.variant,
-            fields=(ConstructorField("wrong", BoolType()),),
-        ),
+        NominalConstructor(pair.record_type, (ConstructorField("wrong", BoolType()),)),
         (WildcardCell(first.provenance),),
         first.provenance,
     )
@@ -814,13 +816,9 @@ def test_allocator_rejects_incompatible_origin_and_rows_reject_duplicate_binders
 def test_invalid_manually_constructed_constructor_metadata_is_rejected() -> None:
     _, _, matrix, pair, _ = _pair_case()
     provenance = cast(ConstructorCell, matrix.rows[0].cells[0]).provenance
-    duplicate_fields = EnumConstructor(
-        pair.enum_type,
-        pair.variant,
-        (
-            ConstructorField("left", BoolType()),
-            ConstructorField("left", BoolType()),
-        ),
+    duplicate_fields = NominalConstructor(
+        pair.record_type,
+        (ConstructorField("left", BoolType()), ConstructorField("left", BoolType())),
     )
     cell = ConstructorCell(
         duplicate_fields,
@@ -839,11 +837,7 @@ def test_invalid_manually_constructed_constructor_metadata_is_rejected() -> None
 def test_same_runtime_constructor_key_must_have_identical_field_metadata() -> None:
     _, _, matrix, pair, _ = _pair_case()
     first = cast(ConstructorCell, matrix.rows[0].cells[0])
-    reversed_constructor = EnumConstructor(
-        pair.enum_type,
-        pair.variant,
-        tuple(reversed(pair.fields)),
-    )
+    reversed_constructor = NominalConstructor(pair.record_type, tuple(reversed(pair.fields)))
     reversed_cell = ConstructorCell(
         reversed_constructor,
         tuple(reversed(first.arguments)),
@@ -889,11 +883,7 @@ def test_null_constructor_compatibility_and_nullary_specialization() -> None:
 
 def test_specialization_rejects_same_key_with_different_metadata() -> None:
     _, _, matrix, pair, allocator = _pair_case()
-    incompatible_metadata = EnumConstructor(
-        pair.enum_type,
-        pair.variant,
-        tuple(reversed(pair.fields)),
-    )
+    incompatible_metadata = NominalConstructor(pair.record_type, tuple(reversed(pair.fields)))
     with pytest.raises(MatchCompileInvariantError, match="checked signature"):
         specialize(
             matrix,
@@ -919,10 +909,10 @@ def test_matrix_rejects_single_enum_head_that_disagrees_with_checked_signature(
     )
     matrix = matrix_from_normalized(normalize_case(_only_case(checked), checked))
     cell = cast(ConstructorCell, matrix.rows[0].cells[0])
-    constructor = cast(EnumConstructor, cell.constructor)
+    constructor = cast(NominalConstructor, cell.constructor)
     arguments = cell.arguments
     if defect == "unknown_variant":
-        malformed = EnumConstructor(constructor.enum_type, "missing", ())
+        malformed = NominalConstructor(replace(constructor.record_type, name="missing"), ())
         arguments = ()
     elif defect == "omitted":
         malformed = replace(constructor, fields=constructor.fields[:1])
@@ -943,7 +933,7 @@ def test_matrix_rejects_single_enum_head_that_disagrees_with_checked_signature(
         )
     malformed_cell = ConstructorCell(malformed, arguments, cell.provenance)
 
-    with pytest.raises(MatchCompileInvariantError, match="checked signature|unknown variant"):
+    with pytest.raises(MatchCompileInvariantError, match="checked signature|incompatible"):
         replace(matrix, rows=(replace(matrix.rows[0], cells=(malformed_cell,)),))
 
 
@@ -1010,7 +1000,7 @@ def test_imported_generic_signature_is_canonical_during_matrix_specialization(
 
 def _independent_box_columns() -> tuple[
     PatternMatrix,
-    EnumConstructor,
+    NominalConstructor,
     OccurrenceAllocator,
 ]:
     checked = _check(
@@ -1029,13 +1019,13 @@ def _independent_box_columns() -> tuple[
     pair = head_constructors(root, 0)[0]
     pair_result = specialize(root, 0, pair, OccurrenceAllocator.for_case(normalized))
     boxed = head_constructors(pair_result.matrix, 0)[0]
-    assert isinstance(boxed, EnumConstructor)
+    assert isinstance(boxed, NominalConstructor)
     return pair_result.matrix, boxed, pair_result.allocator
 
 
 def _decompose_independent_columns(
     matrix: PatternMatrix,
-    boxed: EnumConstructor,
+    boxed: NominalConstructor,
     allocator: OccurrenceAllocator,
     order: tuple[int, int],
 ) -> tuple[PatternMatrix, OccurrenceAllocator]:

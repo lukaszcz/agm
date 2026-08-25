@@ -57,7 +57,7 @@ program def main() -> unit =
         print(left.swap())
         print(right.swap())
 
-        let option = Option::Some(value = 2)
+        let option: Option[int] = Option::Some(value = 2)
         let none: Option[int] = Option::None
         print(
           option

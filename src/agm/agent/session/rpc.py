@@ -606,12 +606,28 @@ def _terminate_process_group(process: subprocess.Popen[bytes], process_group: in
     try:
         os.killpg(process_group, signal.SIGTERM)
     except ProcessLookupError:
-        pass
+        return
+    try:
+        process.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process_group, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+        return
+
+    deadline = time.monotonic() + 0.2
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(process_group, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.01)
     try:
         os.killpg(process_group, signal.SIGKILL)
     except ProcessLookupError:
         pass
-    process.wait()
 
 
 def _json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:

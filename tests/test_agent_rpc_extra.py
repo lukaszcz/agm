@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import io
+import os
 import queue
+import signal
 import subprocess
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -236,6 +238,30 @@ def test_terminate_closes_stdin() -> None:
     process = Process()
     rpc._terminate(rpc._RpcChild(cast(subprocess.Popen[bytes], process)))
     assert process.stdin.closed
+
+
+def test_terminate_process_group_allows_graceful_exit_before_kill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    signals: list[int] = []
+
+    class Process:
+        stdin = None
+
+        def wait(self, timeout: float | None = None) -> int:
+            assert timeout == 1
+            signals.append(signal.SIGCHLD)
+            return 0
+
+    def record_signal(_group: int, sent: int) -> None:
+        signals.append(sent)
+
+    monkeypatch.setattr(os, "killpg", record_signal)
+
+    rpc._terminate_process_group(cast(subprocess.Popen[bytes], Process()), 123)
+
+    assert signals[:2] == [signal.SIGTERM, signal.SIGCHLD]
+    assert signals[-1] == signal.SIGKILL
 
 
 def test_terminate_ignores_stdin_close_failure() -> None:

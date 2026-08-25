@@ -71,6 +71,16 @@ def test_session_statics_reject_invalid_arguments(source: str) -> None:
     _reject(source)
 
 
+def test_session_open_rejects_lookalike_option_some_record() -> None:
+    _reject(
+        "scope Fake\n"
+        "record Some[T](foo: T)\n"
+        "end Fake\n"
+        'let agent = Agent::AgentCommand(command = "agent")\n'
+        "Session::open(agent, transport = Fake::Some(SessionTransport::Rpc))"
+    )
+
+
 def test_session_unknown_static_reports_a_static_diagnostic() -> None:
     message = _reject("Session::bogus()")
     assert "unknown static" in message.lower()

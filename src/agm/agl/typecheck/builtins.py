@@ -378,6 +378,10 @@ class BuiltinCallChecker:
                 and isinstance(param.type, EnumType)
                 and argument_type.name == "Some"
                 and param.type.name == "Option"
+                and self._ctx._env.type_table.enum_member_by_decl(
+                    param.type, argument_type.decl_id
+                )
+                is not None
                 and len(argument_type.type_args) == len(param.type.type_args) == 1
                 and isinstance(argument_type.type_args[0], RecordType)
                 and isinstance(param.type.type_args[0], EnumType)

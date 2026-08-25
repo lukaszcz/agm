@@ -17,7 +17,7 @@ reviewer.ask::[Review]("Review %{artifact}", on_parse_error = Retry(n = 2))
 
 ## `ask` — the agent call function
 
-`ask` is a built-in function with the following declared-name signature:
+`ask` is a built-in function with the following effective call signature:
 
 ```text
 ask(prompt: text, agent: Agent = std/config::default-agent,

@@ -157,7 +157,8 @@ either is a static error.
 ### Agents
 
 `ask` selects an ordinary typed `Agent` value. Pass one explicitly, or omit
-`agent` to read `std/config::default-agent` at that call:
+`agent` to use the lazy default session. Its first use snapshots
+`std/config::default-agent`; later free asks reuse that agent and conversation:
 
 ```agl
 let reviewer = AgentClaude("sonnet", "medium")

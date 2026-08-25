@@ -399,7 +399,7 @@ class TestUncaughtAgentCallErrorSpan:
         assert result.ok is False
         assert result.error is not None
         assert result.error.type_name == "AgentCallError"
-        assert result.error.line == 1
+        assert result.error.line == 2
 
     def test_uncaught_agent_call_error_surfaces_at_line_in_message(
         self,
@@ -436,7 +436,7 @@ class TestUncaughtAgentCallErrorSpan:
             exec_run(args)
         assert exc_info.value.code == 2
         err = capsys.readouterr().err
-        assert "at line 2" in err
+        assert "at line 3" in err
 
 
 class TestDiagnosticType:

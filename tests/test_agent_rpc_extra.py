@@ -275,6 +275,10 @@ def test_helpers_and_spawn_edges(monkeypatch: pytest.MonkeyPatch) -> None:
         def poll(self) -> int:
             return 0
 
+        def wait(self, timeout: float | None = None) -> int:
+            del timeout
+            return 0
+
     def no_pipes(*args: object, **kwargs: object) -> NoPipes:
         return NoPipes()
 
